@@ -21,8 +21,9 @@ An offline survival and preparedness assistant for phones and computers. Everyth
 | Library | Recon concepts without the verbatim `content` field: title, summary, key facts, keywords, book title and page. Answers cite book and page. No PDFs or copied book text ship. |
 | Kiwix | ZIM files used as they are, through libzim / libkiwix. |
 | Maps (navi) | Downloadable region packs, anywhere in the world: basemap (Protomaps PMTiles), DEM (cut from the planet DEM), Valhalla road tiles, OSM geocoder in SQLite, WorldCover land cover. PAD-US and MVUM land ownership exist for the US only. |
-| Distribution | Android: APK sideload. iPhone: TestFlight or ad-hoc, through the Apple Developer Program. |
-| Build machine | The owner's desktop (Flutter, Android SDK, phone over USB). Never cortex. |
+| Distribution | Android: APK sideload. iPhone: TestFlight, through the Apple Developer Program (no device IDs to register). |
+| Build machine | Android and Windows: the owner's Windows desktop (Flutter, Android SDK, phone over USB). Never cortex. |
+| iPhone builds | GitHub Actions macOS runners: the workflow runs `flutter build ipa`, signs with a distribution certificate and provisioning profile kept in the repo's Actions secrets, and uploads to TestFlight with an App Store Connect API key. No Mac needed: the signing request is made with openssl. The iPhone job runs only on demand (manual trigger), not on every push, because macOS runner minutes cost about 10x Linux. Decided 2026-10-24. |
 
 ## Device tiers
 
@@ -46,7 +47,7 @@ Each step ends with something usable on a phone. Riskiest first.
 5. **Maps.** Offline basemap and elevation for a downloaded region (MapLibre + PMTiles).
 6. **Routing.** Valhalla road routing on the device, then off-road (navi-offroute rewritten for the device).
 7. **Pack server.** Catalog and downloads for regions, library, Kiwix and models. New infrastructure; needs the owner's approval.
-8. **iPhone.** Same app on iOS, built through a Mac build service.
+8. **iPhone.** Same app on iOS, built and sent to TestFlight by a GitHub Actions macOS workflow.
 
 ## Known facts from testing
 
@@ -57,7 +58,6 @@ Each step ends with something usable on a phone. Riskiest first.
 
 ## Open questions
 
-- iPhone builds: the owner has the Apple Developer Program but no Mac. Xcode only runs on macOS, so iPhone builds need a cloud Mac build service (for example Xcode Cloud or Codemagic). Decide before step 8.
 - On-device embedding model for library search (step 2): bge-m3 matches the existing vectors but is large; a smaller model means re-embedding the concepts.
 - Which E2B variant (huihui-ai or TrevorJS) becomes the default: decided by the quiz.
 
