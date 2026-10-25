@@ -1,5 +1,6 @@
 import 'package:cache_llama/cache_llama.dart';
 
+import 'chat_config.dart';
 import 'citations.dart';
 import 'model_backend.dart';
 import 'tool.dart';
@@ -41,11 +42,17 @@ class TurnUpdate {
 /// [kMaxToolRounds] rounds per answer), numbers every result conversation-wide and continues until the
 /// model answers.
 class ToolLoop {
-  ToolLoop({required this.backend, required List<Tool> tools, this.systemPrompt = kSystemPrompt})
+  ToolLoop({
+    required this.backend,
+    required List<Tool> tools,
+    this.systemPrompt = kSystemPrompt,
+    this.enableThinking = kEnableThinking,
+  })
       : _tools = {for (final t in tools) t.name: t};
 
   final ModelBackend backend;
   final String systemPrompt;
+  final bool enableThinking;
   final Map<String, Tool> _tools;
   final List<Map<String, dynamic>> _messages = [];
   final Map<int, NumberedResult> _results = {};
@@ -78,6 +85,7 @@ class ToolLoop {
             {'role': 'system', 'content': systemPrompt},
             ..._messages,
           ],
+          'enable_thinking': enableThinking,
           if (allowTools) 'tools': [for (final t in _tools.values) t.toSchema()],
         };
 

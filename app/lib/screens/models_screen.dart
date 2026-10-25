@@ -126,7 +126,9 @@ class ModelsScreen extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(m.name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: unsupported ? k.secondary : k.text)),
+                        Text(app.displayName(m), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: unsupported ? k.secondary : k.text)),
+                        const SizedBox(height: 2),
+                        Text(m.fileName, style: TextStyle(fontSize: 14, color: k.secondary)),
                         const SizedBox(height: 2),
                         Text('${_size(m.size)} · $status', style: TextStyle(fontSize: 15, color: statusColor)),
                       ],

@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'chat/model_name.dart';
 import 'theme.dart';
 
 /// One model file in the models folder.
@@ -40,6 +41,10 @@ class AppState extends ChangeNotifier {
   ModelEntry? loading;
   String? loadError;
   final Set<String> _unsupported = {};
+
+  /// Real model names (from the model's own metadata), by [ModelEntry.key]. Known once a model has
+  /// been loaded; until then the file name is shown.
+  final Map<String, String> _names = {};
   String? _lastModelFile;
 
   /// 0..1 while a file is being copied into the models folder, else null.
@@ -52,6 +57,9 @@ class AppState extends ChangeNotifier {
   File? _settingsFile;
 
   bool isUnsupported(ModelEntry e) => _unsupported.contains(e.key);
+
+  /// The model's real name, for example "Gemma 4 E2B · Q4_K_M"; the file name if not known yet.
+  String displayName(ModelEntry e) => _names[e.key] ?? e.name;
 
   Future<void> init() async {
     final settingsDir = settingsDirOverride ?? await getApplicationSupportDirectory();
@@ -92,6 +100,9 @@ class AppState extends ChangeNotifier {
       _unsupported
         ..clear()
         ..addAll(((j['unsupported'] as List?) ?? const []).cast<String>());
+      _names
+        ..clear()
+        ..addAll(((j['names'] as Map?) ?? const {}).cast<String, String>());
     } catch (_) {
       // A damaged settings file is ignored; defaults apply.
     }
@@ -103,6 +114,7 @@ class AppState extends ChangeNotifier {
         'lastModel': _lastModelFile,
         'theme': theme.name,
         'unsupported': _unsupported.toList(),
+        'names': _names,
       }));
     } catch (_) {}
   }
@@ -135,6 +147,8 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       final info = await session.load(entry.path);
+      final pretty = prettyModelName(info.description);
+      if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
         _unsupported.add(entry.key);
         await _writeSettings();
