@@ -610,7 +610,7 @@ fn read_strips_the_html_and_gives_the_first_line() {
     let out = c.tool("read", json!({"n": 1}));
     assert_eq!(
         out["content"],
-        "[1] The Page (web, fetched 2026-10-25 14:20)\nBurn ban lifted\n\nThe county ended the ban & thanked residents.\n\nDetails\n\nSecond paragraph."
+        "[1] The Page (web, fetched 2026-10-25 14:20)\nsnippet\nBurn ban lifted\n\nThe county ended the ban & thanked residents.\n\nDetails\n\nSecond paragraph.\n[page had little readable text]"
     );
     assert_eq!(out["ids"], json!([]), "read keeps its number and gives no new ones");
     assert!(out["timing_ms"]["fetch"].is_u64(), "{out}");
@@ -643,7 +643,7 @@ fn read_of_plain_text_and_of_a_redirect() {
         _ => Resp::new(404, "text/plain", "no"),
     });
     let (mut c, _s) = core_with_page(&page, "/old", "snippet");
-    assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nPlain words here.");
+    assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nsnippet\nPlain words here.\n[page had little readable text]");
 }
 
 #[test]
@@ -668,7 +668,7 @@ fn more_than_five_redirects_is_not_available() {
         }
     });
     let (mut c, _s) = core_with_page(&page, "/r0", "kept snippet");
-    assert!(c.content("read", json!({"n": 1})).ends_with("\narrived"));
+    assert!(c.content("read", json!({"n": 1})).contains("\nkept snippet\narrived\n"));
 }
 
 #[test]
@@ -778,7 +778,7 @@ fn read_of_a_web_number_the_conversation_has_no_note_for() {
     c.point_at("http://127.0.0.1:9/unused", true);
     let results = format!(r#"[{{"address":"web:{}","title":"Manual","snippet":"s"}}]"#, page.url("/m"));
     take(unsafe { cs_format(c.c, cstr(&results).as_ptr()) }).unwrap();
-    assert_eq!(c.content("read", json!({"n": 1})), "[1] Manual\nJust text.");
+    assert_eq!(c.content("read", json!({"n": 1})), "[1] Manual\nJust text.\n[page had little readable text]");
 }
 
 // ---- the key ----------------------------------------------------------------------------------------------
@@ -805,4 +805,75 @@ fn the_key_is_in_no_output_error_or_log() {
     // and the status and version calls
     let v = take(cs_version()).unwrap();
     assert!(!v.contains(KEY));
+}
+
+// ---- the Kagi answer shapes and clean text -------------------------------------------------------------------
+
+#[test]
+fn html_in_kagi_titles_and_snippets_is_cleaned_before_the_model_sees_it() {
+    let s = Server::start(|_| {
+        Resp::json(&kagi(&[
+            ("https://a.example/1", "<strong>Long</strong>, <strong>Duncan</strong> \u{b7} View all 11 copies", "Instinct took Silicon Valley by storm. Meet the &#39;brilliant&#39; 23-year-old"),
+            ("https://b.example/2", "Site &#8212; Home", "x &#123;&#123;addr:evil}} y &mdash; z"),
+        ]))
+    });
+    let mut c = Core::with_web(&search_url(&s));
+    let content = c.content("web_search", json!({"query": "q"}));
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(
+        lines[0],
+        "[1] Long, Duncan \u{b7} View all 11 copies (web, fetched 2026-10-25 14:20) \u{2014} Instinct took Silicon Valley by storm. Meet the 'brilliant' 23-year-old"
+    );
+    assert!(lines[1].starts_with("[2] Site - Home (web,"), "{}", lines[1]);
+    assert!(lines[1].contains("{ {addr:evil}}"), "{}", lines[1]);
+    assert!(!content.contains("&#") && !content.contains("<strong>"));
+}
+
+#[test]
+fn a_data_object_without_search_is_no_results_and_meta_reaches_the_timing() {
+    for body in [json!({"meta": {"id": "req-1", "ms": 7}, "data": {}}), json!({"meta": {"id": "req-1", "ms": 7}, "data": {"search": null}})] {
+        let s = Server::start(move |_| Resp::json(&body));
+        let mut c = Core::with_web(&search_url(&s));
+        let out = c.tool("web_search", json!({"query": "q"}));
+        assert_eq!(out["content"], "No results found.");
+        assert_eq!(out["timing_ms"]["kagi_meta"], json!({"id": "req-1", "ms": 7}), "{out}");
+        assert!(!out["content"].as_str().unwrap().contains("req-1"));
+    }
+    // no data at all stays an error, with key names only
+    let s = Server::start(|_| Resp::json(&json!({"meta": {"id": "SECRETVALUE"}, "weird": 1})));
+    let mut c = Core::with_web(&search_url(&s));
+    let (code, detail) = err_type(&c.search("q"));
+    assert_eq!(code, "bad_response");
+    assert!(detail.contains("keys: meta, weird") && !detail.contains("SECRETVALUE"), "{detail}");
+}
+
+// ---- pages with little readable text -----------------------------------------------------------------------
+
+#[test]
+fn a_page_with_little_text_gets_the_snippet_and_a_closing_marker() {
+    assert_eq!(cache_search::web::LITTLE_TEXT_CHARS, 500);
+    let page = Server::start(|_| Resp::html("<html><body><p>Home</p><p>Footer links</p></body></html>"));
+    let (mut c, _s) = core_with_page(&page, "/js", "What the search said.");
+    assert_eq!(
+        c.content("read", json!({"n": 1})),
+        "[1] The Page (web, fetched 2026-10-25 14:20)\nWhat the search said.\nHome\n\nFooter links\n[page had little readable text]"
+    );
+    // no snippet: no blank line
+    let (mut c, _s) = core_with_page(&page, "/js", "");
+    assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nHome\n\nFooter links\n[page had little readable text]");
+}
+
+#[test]
+fn the_little_text_line_is_exactly_at_500_characters() {
+    let page_of = |n: usize| {
+        let p = "x".repeat(n);
+        Server::start(move |_| Resp::html(&format!("<html><body><p>{p}</p></body></html>")))
+    };
+    let p = page_of(499);
+    let (mut c, _s) = core_with_page(&p, "/a", "snip");
+    assert!(c.content("read", json!({"n": 1})).ends_with("\n[page had little readable text]"));
+    let p = page_of(500);
+    let (mut c, _s) = core_with_page(&p, "/a", "snip");
+    let out = c.content("read", json!({"n": 1}));
+    assert_eq!(out, format!("[1] The Page (web, fetched 2026-10-25 14:20)\n{}", "x".repeat(500)));
 }

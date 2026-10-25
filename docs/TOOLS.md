@@ -295,6 +295,10 @@ If the budget runs out before the page loads, `read` returns the snippet instead
 it, and the marker is the last line. If the page cannot be had for another reason (the server refused, it is not an
 HTML or text page, or it has no text), the same output ends with `[full page not available]`. Neither is an error.
 
+If the page loads but its text is under 500 characters (a page drawn by JavaScript often gives only navigation or a
+footer), `read` returns the first line, the snippet, the text that was found (if any), and the last line
+`[page had little readable text]`. That is not an error either.
+
 Errors: `key_missing`, `fetch_failed`, `quota`, `bad_response`. Without a key, or with the phone offline, the tool is
 not in the tool list, so the model cannot call it.
 

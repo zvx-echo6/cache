@@ -397,15 +397,18 @@ from `data.search`, an array of objects with `url`, `title` and an optional `sni
 matches the request AIDA uses in production (Open WebUI kagi.py); live-verified: pending. HTTP 401/403 or an error code
 401/403 is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
 `quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
-used is `bad_response`, including a 200 with an `error` field or without `data.search` (the detail never contains the
-key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
+used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
+top-level key names (and `data`'s) but never a value, and never the key or the query. A `data` object whose `search`
+is missing or null is zero results (`No results found.`). Kagi's `meta` object (request id, timing), when present,
+goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
 mapping of a balance, credit or quota message to `quota` are a judgement from the previous API's shape, not seen from
 v1; only the 200 response shape above is known from AIDA's use.
 
 **Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
 now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
 boundary with `…`), the title to 150 characters. Repeated URLs are dropped. Text from the web is made safe for the
-line: whitespace runs become one space, `{{` becomes `{ {` so a page cannot forge an address marker, and a ` — ` in
+line: first the HTML is removed (tags stripped, named, decimal and hex entities decoded, as `html::strip` does for a
+page), then whitespace runs become one space, `{{` becomes `{ {` so a page cannot forge an address marker, and a ` — ` in
 a title becomes ` - ` (the numbering reads the title up to the first ` — `). Nothing found: `No results found.`
 
 **Read.** `read` on a `web:` number fetches the URL (GET, up to 5 redirects, `User-Agent: Cache/<version>`), strips
@@ -415,7 +418,10 @@ text, and `[truncated]` when cut (or when the download hit the cap). When the pa
 same first line, the snippet the search showed (the conversation keeps each web hit's title, snippet and fetch time
 beside its number), and a last line `[full page did not load in time]` (timeout) or `[full page not available]`
 (connection failure, bad status, a content type that is not HTML or text, a page with no text, or the phone being
-offline, in which case nothing is fetched). That is a result, not an error. Compression is not requested: the
+offline, in which case nothing is fetched). That is a result, not an error. A page that loads but whose extracted text is
+under 500 characters (`LITTLE_TEXT_CHARS`; a script-rendered shell that gives only navigation or a footer) is not
+a full page: the output is the first line, the stored snippet, the extracted text (if not empty), and a last line
+`[page had little readable text]`. This is a length rule on machine output. Compression is not requested: the
 reqwest already in the lockfile has no gzip support and the decoder crate it would need is not in the lockfile.
 
 **Budgets.** Search 6 s from the call to the result; read 8 s for connect, download and parse; a page download is

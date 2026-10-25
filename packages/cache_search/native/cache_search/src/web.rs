@@ -30,6 +30,9 @@ pub const PAGE_CAP: usize = 2 * 1024 * 1024;
 const API_CAP: usize = 1024 * 1024;
 /// Results `web_search` returns.
 pub const WEB_HITS: usize = 5;
+/// A fetched page whose extracted text is shorter than this many characters is treated as having little readable text
+/// (a script-rendered shell with only navigation or a footer): `read` adds the stored snippet and a closing marker.
+pub const LITTLE_TEXT_CHARS: usize = 500;
 /// Redirects followed.
 const MAX_REDIRECTS: usize = 5;
 /// Longest title shown, in characters.
@@ -62,25 +65,32 @@ pub struct WebHit {
 /// The `key` is the account key; a provider must send it only to its own service.
 pub trait WebSearchProvider: Send + Sync {
     fn search(&self, query: &str, limit: usize, key: &str, deadline: Instant) -> std::result::Result<Vec<WebHit>, ToolError>;
+
+    /// Debug data the service sent with the last answer (for Kagi, its `meta` object: request id, timing). It goes to
+    /// the debug timing field only and is never shown to the model. Taking it clears it.
+    fn take_meta(&self) -> Option<Value> {
+        None
+    }
 }
 
 /// Kagi's search API (v1): `POST` with a JSON body and `Authorization: Bearer <key>`. It matches the request AIDA uses in
 /// production (Open WebUI kagi.py); live-verified: pending. Tested against a local stand-in server.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct KagiProvider {
     pub base_url: String,
+    meta: Mutex<Option<Value>>,
 }
 
 impl Default for KagiProvider {
     fn default() -> Self {
-        KagiProvider { base_url: KAGI_URL.to_string() }
+        KagiProvider::with_base_url(KAGI_URL)
     }
 }
 
 impl KagiProvider {
     /// Kagi at another address (tests point it at a local server).
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        KagiProvider { base_url: base_url.into() }
+        KagiProvider { base_url: base_url.into(), meta: Mutex::new(None) }
     }
 }
 
@@ -102,7 +112,14 @@ impl WebSearchProvider for KagiProvider {
                 HttpFail::Connect => ToolError::new(ToolError::FETCH_FAILED, "could not reach the web search server"),
                 HttpFail::Other => ToolError::new(ToolError::FETCH_FAILED, "the web search request failed"),
             })?;
-        parse_kagi(reply.status, &reply.body, limit)
+        *lock(&self.meta) = None;
+        let (hits, meta) = parse_kagi_full(reply.status, &reply.body, limit)?;
+        *lock(&self.meta) = meta;
+        Ok(hits)
+    }
+
+    fn take_meta(&self) -> Option<Value> {
+        lock(&self.meta).take()
     }
 }
 
@@ -117,8 +134,21 @@ fn quota_reached() -> ToolError {
 /// Kagi's answer as hits or a tool error. The results are `data.search`, an array of objects with `url`, `title` and an
 /// optional `snippet`; other fields and other `data` members are ignored. A failure is an `error` array or object (shape
 /// unverified against the live API: a 401/403 code or status is a rejected key, a 402/429 code or a message about
-/// balance, credit or quota is `quota`). A 200 with an `error`, or without `data.search`, is `bad_response`.
+/// balance, credit or quota is `quota`). A 200 with an `error`, or without a `data` object, is `bad_response` (its
+/// detail lists the key names, never values). A `data` object whose `search` is missing or null is zero results.
 pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result<Vec<WebHit>, ToolError> {
+    parse_kagi_full(status, body, limit).map(|(hits, _)| hits)
+}
+
+/// Names of the members of a JSON object (at most 20, each cut to 40 chars, one line); never any value.
+fn key_names(v: &Value) -> String {
+    let Some(o) = v.as_object() else { return "none".to_string() };
+    let names: Vec<String> = o.keys().take(20).map(|k| one_line(&k.chars().take(40).collect::<String>())).collect();
+    if names.is_empty() { "none".to_string() } else { names.join(", ") }
+}
+
+/// `parse_kagi` plus Kagi's `meta` object, when the answer has one.
+pub fn parse_kagi_full(status: u16, body: &[u8], limit: usize) -> std::result::Result<(Vec<WebHit>, Option<Value>), ToolError> {
     if status == 401 || status == 403 {
         return Err(key_rejected());
     }
@@ -155,8 +185,23 @@ pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result
     let Some(v) = parsed else {
         return Err(ToolError::new(ToolError::BAD_RESPONSE, "web search answered with something unreadable"));
     };
-    let Some(data) = v["data"]["search"].as_array() else {
-        return Err(ToolError::new(ToolError::BAD_RESPONSE, "web search answered without a result list"));
+    let meta = v["meta"].as_object().filter(|m| !m.is_empty()).map(|_| v["meta"].clone());
+    if !v["data"].is_object() {
+        return Err(ToolError::new(
+            ToolError::BAD_RESPONSE,
+            format!("web search answered without a result list (keys: {})", key_names(&v)),
+        ));
+    }
+    let empty = Vec::new();
+    let data = match &v["data"]["search"] {
+        Value::Null => &empty,
+        Value::Array(a) => a,
+        _ => {
+            return Err(ToolError::new(
+                ToolError::BAD_RESPONSE,
+                format!("web search answered without a result list (keys: {}; data keys: {})", key_names(&v), key_names(&v["data"])),
+            ));
+        }
     };
     let mut hits = Vec::new();
     for item in data {
@@ -170,7 +215,7 @@ pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result
             break;
         }
     }
-    Ok(hits)
+    Ok((hits, meta))
 }
 
 // ---- HTTP ------------------------------------------------------------------------------------------------
@@ -406,13 +451,18 @@ impl WebState {
         std::mem::take(&mut *lock(&self.pending))
     }
 
-    /// Debug timing of the last web call: `{"search": ms}` or `{"fetch": ms}`. Never shown to the model.
+    /// Debug timing of the last web call: `{"search": ms}` (plus `"kagi_meta"` when the provider sent one) or
+    /// `{"fetch": ms}`. Never shown to the model.
     pub fn take_timing(&self) -> Option<Value> {
         lock(&self.timing).take()
     }
 
-    fn set_timing(&self, what: &str, since: Instant) {
-        *lock(&self.timing) = Some(json!({ what: since.elapsed().as_millis() as u64 }));
+    fn set_timing(&self, what: &str, since: Instant, meta: Option<Value>) {
+        let mut t = json!({ what: since.elapsed().as_millis() as u64 });
+        if let Some(m) = meta {
+            t["kagi_meta"] = m;
+        }
+        *lock(&self.timing) = Some(t);
     }
 
     /// `read` of a web result: the page as text within the read budget. Offline, nothing is fetched.
@@ -426,7 +476,7 @@ impl WebState {
         }
         let t0 = Instant::now();
         let page = fetch_page(url, t0 + budget, cap);
-        self.set_timing("fetch", t0);
+        self.set_timing("fetch", t0, None);
         page
     }
 }
@@ -444,6 +494,12 @@ pub fn fetched_stamp(now: &str) -> String {
 
 /// Text from the web made safe for a result line: one line, no address markers, and (titles) no ` — `, which
 /// the numbering reads as the end of the title.
+/// A title or snippet from the web as plain text: tags removed, entities (named, decimal, hex) decoded, whitespace
+/// collapsed. It runs before `clean`, so text that decodes to `{{` or ` — ` is still made safe there.
+fn plain_fragment(s: &str) -> String {
+    one_line(&html::strip(s))
+}
+
 fn clean(s: &str, title: bool) -> String {
     let mut t = one_line(s).replace("{{", "{ {");
     if title {
@@ -490,7 +546,7 @@ impl Tool for WebSearchTool {
         let query = args["query"].as_str().unwrap_or("");
         let t0 = Instant::now();
         let result = provider.search(query, WEB_HITS, &key, t0 + budget);
-        self.0.set_timing("search", t0);
+        self.0.set_timing("search", t0, provider.take_meta());
         let hits = result.map_err(|e| scrub(e, &key))?;
         let stamp = fetched_stamp(ctx.now);
         let mut seen: Vec<String> = Vec::new();
@@ -502,11 +558,11 @@ impl Tool for WebSearchTool {
                 continue;
             }
             seen.push(url.clone());
-            let mut title = html::snippet_from_text(&clean(&h.title, true), TITLE_CHARS);
+            let mut title = html::snippet_from_text(&clean(&plain_fragment(&h.title), true), TITLE_CHARS);
             if title.is_empty() {
                 title = clean(&url, true);
             }
-            let snippet = html::snippet_from_text(&clean(&h.snippet, false), snippet_chars);
+            let snippet = html::snippet_from_text(&clean(&plain_fragment(&h.snippet), false), snippet_chars);
             let address = format!("web:{url}");
             let mut line = format!("{} {title} (web, fetched {stamp})", text_marker(&address));
             if !snippet.is_empty() {
@@ -604,6 +660,60 @@ mod tests {
         assert_eq!(code(parse(200, r#"{"data":"x"}"#)).0, "bad_response");
         assert_eq!(code(parse(200, r#"{"data":[]}"#)).0, "bad_response");
         assert_eq!(code(parse(200, r#"{"data":{"search":"x"}}"#)).0, "bad_response");
+    }
+
+    #[test]
+    fn a_data_object_without_a_result_list_is_zero_results() {
+        assert!(parse(200, r#"{"meta":{"id":"x"},"data":{}}"#).unwrap().is_empty());
+        assert!(parse(200, r#"{"data":{"search":null}}"#).unwrap().is_empty());
+        assert!(parse(200, r#"{"data":{"related_searches":["a"]}}"#).unwrap().is_empty());
+        // an error still wins, and no data at all is still bad
+        assert_eq!(code(parse(200, r#"{"data":{},"error":[{"msg":"boom"}]}"#)).0, "bad_response");
+        assert_eq!(code(parse(200, r#"{"meta":{}}"#)).0, "bad_response");
+    }
+
+    #[test]
+    fn bad_response_detail_has_key_names_and_no_values() {
+        let (c, d) = code(parse(200, r#"{"meta":{"id":"SECRETVALUE"},"other":"SECRETVALUE2"}"#));
+        assert_eq!(c, "bad_response");
+        assert!(d.contains("keys: meta, other"), "{d}");
+        assert!(!d.contains("SECRETVALUE"), "{d}");
+        let (_, d) = code(parse(200, r#"{"data":{"search":"SECRETVALUE","zeta":1}}"#));
+        assert!(d.contains("keys: data") && d.contains("data keys: search, zeta"), "{d}");
+        assert!(!d.contains("SECRETVALUE"), "{d}");
+        let (_, d) = code(parse(200, r#"{"data":[1]}"#));
+        assert!(d.contains("keys: data") && !d.contains("data keys"), "{d}");
+        let (_, d) = code(parse(200, "[1]"));
+        assert!(d.contains("keys: none"), "{d}");
+    }
+
+    #[test]
+    fn kagi_meta_is_returned_when_present() {
+        let (hits, meta) = parse_kagi_full(200, br#"{"meta":{"id":"r1","ms":5},"data":{"search":[{"url":"https://a/"}]}}"#, 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(meta, Some(json!({"id": "r1", "ms": 5})));
+        let (_, meta) = parse_kagi_full(200, br#"{"data":{}}"#, 5).unwrap();
+        assert_eq!(meta, None);
+        let w = WebState::new();
+        w.set_timing("search", Instant::now(), Some(json!({"id": "r1"})));
+        let t = w.take_timing().unwrap();
+        assert!(t["search"].is_u64());
+        assert_eq!(t["kagi_meta"], json!({"id": "r1"}));
+        w.set_timing("fetch", Instant::now(), None);
+        assert!(w.take_timing().unwrap().get("kagi_meta").is_none());
+    }
+
+    #[test]
+    fn html_in_titles_and_snippets_becomes_plain_text() {
+        let s = "Instinct took Silicon Valley by storm. Meet the &#39;brilliant&#39; 23-year-old";
+        assert_eq!(clean(&plain_fragment(s), false), "Instinct took Silicon Valley by storm. Meet the 'brilliant' 23-year-old");
+        let s = "<strong>Long</strong>, <strong>Duncan</strong> \u{b7} View all 11 copies";
+        assert_eq!(clean(&plain_fragment(s), false), "Long, Duncan \u{b7} View all 11 copies");
+        assert_eq!(plain_fragment("a &quot;b&quot; &amp; c&#x21;  d\n<br>e"), "a \"b\" & c! d e");
+        // decoded text is still made safe afterwards
+        assert_eq!(clean(&plain_fragment("a &#123;&#x7B; b"), false), "a { { b");
+        assert_eq!(clean(&plain_fragment("Site &mdash; Home"), true), "Site - Home");
+        assert_eq!(clean(&plain_fragment("Site &#8212; Home"), true), "Site - Home");
     }
 
     #[test]
