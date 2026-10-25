@@ -27,6 +27,7 @@ struct Handle {
     common_sampler_ptr                   smpl;
     std::string                          generated;  // full generated text (parsed by cl_finish)
     std::string                          pending;    // bytes not yet returned (incomplete UTF-8)
+    size_t                               fed         = 0;        // bytes of `generated` already given to the parser
     int                                  n_past      = 0;
     int                                  n_prompt    = 0;
     int                                  n_generated = 0;
@@ -155,6 +156,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->smpl.reset();
         h->generated.clear();
         h->pending.clear();
+        h->fed = 0;
         h->n_generated = 0;
         h->stop = false;
 
@@ -245,32 +247,58 @@ int cl_next(void * hp, char * buf, int buf_len) {
     }
 }
 
+static void msg_to_json(const common_chat_msg & msg, common_json & j) {
+    j["content"] = msg.content;
+    if (!msg.reasoning_content.empty()) {
+        j["reasoning_content"] = msg.reasoning_content;
+    }
+    if (!msg.tool_calls.empty()) {
+        auto calls = common_json::array();
+        int  n     = 0;
+        for (const auto & tc : msg.tool_calls) {
+            auto c = common_json::object();
+            c["id"]   = tc.id.empty() ? "call_" + std::to_string(n) : tc.id;
+            c["type"] = std::string("function");
+            auto f = common_json::object();
+            f["name"]      = tc.name;
+            f["arguments"] = tc.arguments;  // JSON string, as in the OpenAI API
+            c["function"]  = f;
+            calls.push_back(c);
+            n++;
+        }
+        j["tool_calls"] = calls;
+    }
+}
+
+int cl_partial(void * hp, char * out_json, int len) {
+    auto * h = (Handle *) hp;
+    auto j = common_json::object();
+    j["role"] = std::string("assistant");
+    try {
+        if (!h->session) {
+            return -1;
+        }
+        // only whole UTF-8 characters go to the parser (a held-back partial character stays for later)
+        std::string chunk = h->generated.substr(h->fed);
+        chunk.resize(utf8_complete_prefix(chunk));
+        const common_chat_msg & msg = h->session->feed(common_chat_input(chunk));
+        h->fed += chunk.size();
+        msg_to_json(msg, j);
+    } catch (const std::exception & e) {
+        j["content"]     = std::string();
+        j["parse_error"] = std::string(e.what());
+    }
+    return put(j.dump(), out_json, len);
+}
+
 int cl_finish(void * hp, char * out_json, int len) {
     auto * h = (Handle *) hp;
     auto j = common_json::object();
     j["role"] = std::string("assistant");
     try {
-        const common_chat_msg & msg = h->session->finish(common_chat_input(h->generated));
-        j["content"] = msg.content;
-        if (!msg.reasoning_content.empty()) {
-            j["reasoning_content"] = msg.reasoning_content;
-        }
-        if (!msg.tool_calls.empty()) {
-            auto calls = common_json::array();
-            int  n     = 0;
-            for (const auto & tc : msg.tool_calls) {
-                auto c = common_json::object();
-                c["id"]   = tc.id.empty() ? "call_" + std::to_string(n) : tc.id;
-                c["type"] = std::string("function");
-                auto f = common_json::object();
-                f["name"]      = tc.name;
-                f["arguments"] = tc.arguments;  // JSON string, as in the OpenAI API
-                c["function"]  = f;
-                calls.push_back(c);
-                n++;
-            }
-            j["tool_calls"] = calls;
-        }
+        const common_chat_msg & msg = h->session->finish(common_chat_input(h->generated.substr(h->fed)));
+        h->fed = h->generated.size();
+        msg_to_json(msg, j);
     } catch (const std::exception & e) {
         j["content"]     = h->generated;
         j["parse_error"] = std::string(e.what());

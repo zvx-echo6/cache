@@ -41,6 +41,7 @@ android {
     externalNativeBuild {
         cmake {
             path = "../src/CMakeLists.txt"
+            // Debug llama.cpp is unusably slow, so every variant builds it as Release.
 
             // The default CMake version for the Android Gradle Plugin is 3.10.2.
             // https://developer.android.com/studio/projects/install-ndk#vanilla_cmake
@@ -58,6 +59,17 @@ android {
     }
 
     defaultConfig {
-        minSdk = 24
+        // llama.cpp needs Android API 28 (the same level the native layer was tested at).
+        minSdk = 28
+
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
     }
 }

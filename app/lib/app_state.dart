@@ -1,0 +1,216 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:cache_llama/cache_llama.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'theme.dart';
+
+/// One model file in the models folder.
+class ModelEntry {
+  ModelEntry({required this.path, required this.size});
+
+  final String path;
+  final int size;
+
+  String get fileName => path.split(RegExp(r'[\\/]')).last;
+  String get name => fileName.replaceFirst(RegExp(r'\.gguf$', caseSensitive: false), '');
+
+  /// Identifies this exact file for the "not supported" memory.
+  String get key => '$fileName|$size';
+}
+
+/// App-wide state: theme, models folder, the active model and the native session.
+class AppState extends ChangeNotifier {
+  AppState({this.settingsDirOverride, this.modelsDirOverride});
+
+  /// Test hooks.
+  final Directory? settingsDirOverride;
+  final Directory? modelsDirOverride;
+
+  final LlamaSession session = LlamaSession();
+
+  CacheThemeId theme = CacheThemeId.dark;
+  Directory? modelsDir;
+  List<ModelEntry> models = [];
+  ModelEntry? active;
+  ModelInfo? activeInfo;
+  ModelEntry? loading;
+  String? loadError;
+  final Set<String> _unsupported = {};
+  String? _lastModelFile;
+
+  /// 0..1 while a file is being copied into the models folder, else null.
+  double? copyProgress;
+  String? copyName;
+
+  /// Bumped when the active model changes so the chat can start fresh.
+  int modelGeneration = 0;
+
+  File? _settingsFile;
+
+  bool isUnsupported(ModelEntry e) => _unsupported.contains(e.key);
+
+  Future<void> init() async {
+    final settingsDir = settingsDirOverride ?? await getApplicationSupportDirectory();
+    await settingsDir.create(recursive: true);
+    _settingsFile = File('${settingsDir.path}/settings.json');
+    _readSettings();
+
+    if (modelsDirOverride != null) {
+      modelsDir = modelsDirOverride;
+    } else {
+      final base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+          await getApplicationDocumentsDirectory();
+      modelsDir = Directory('${base.path}/models');
+    }
+    await modelsDir!.create(recursive: true);
+    await refreshModels();
+    notifyListeners();
+
+    final last = _lastModelFile;
+    if (last != null) {
+      for (final e in models) {
+        if (e.fileName == last && !isUnsupported(e)) {
+          await activate(e);
+          break;
+        }
+      }
+    }
+  }
+
+  void _readSettings() {
+    try {
+      final f = _settingsFile!;
+      if (!f.existsSync()) return;
+      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      _lastModelFile = j['lastModel'] as String?;
+      final t = j['theme'] as String?;
+      theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
+      _unsupported
+        ..clear()
+        ..addAll(((j['unsupported'] as List?) ?? const []).cast<String>());
+    } catch (_) {
+      // A damaged settings file is ignored; defaults apply.
+    }
+  }
+
+  Future<void> _writeSettings() async {
+    try {
+      await _settingsFile?.writeAsString(jsonEncode({
+        'lastModel': _lastModelFile,
+        'theme': theme.name,
+        'unsupported': _unsupported.toList(),
+      }));
+    } catch (_) {}
+  }
+
+  Future<void> setTheme(CacheThemeId id) async {
+    theme = id;
+    notifyListeners();
+    await _writeSettings();
+  }
+
+  Future<void> refreshModels() async {
+    final found = <ModelEntry>[];
+    for (final f in modelsDir!.listSync().whereType<File>()) {
+      if (f.path.toLowerCase().endsWith('.gguf')) {
+        found.add(ModelEntry(path: f.path, size: f.lengthSync()));
+      }
+    }
+    found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    models = found;
+    notifyListeners();
+  }
+
+  /// Loads [entry] and makes it the active model. A model that cannot use tools is marked and not
+  /// activated; the previous model (if any) stays active.
+  Future<void> activate(ModelEntry entry) async {
+    if (loading != null || isUnsupported(entry)) return;
+    final previous = active;
+    loading = entry;
+    loadError = null;
+    notifyListeners();
+    try {
+      final info = await session.load(entry.path);
+      if (!info.supportsTools) {
+        _unsupported.add(entry.key);
+        await _writeSettings();
+        active = null;
+        activeInfo = null;
+        if (previous != null) {
+          try {
+            activeInfo = await session.load(previous.path);
+            active = previous;
+          } catch (_) {}
+        }
+      } else {
+        active = entry;
+        activeInfo = info;
+        _lastModelFile = entry.fileName;
+        await _writeSettings();
+      }
+      if (active?.path != previous?.path) modelGeneration++;
+    } catch (e) {
+      loadError = e.toString().replaceFirst('Bad state: ', '');
+      active = null;
+      activeInfo = null;
+      modelGeneration++;
+    } finally {
+      loading = null;
+      notifyListeners();
+    }
+  }
+
+  /// Lets the user pick a file and copies it into the models folder, reporting progress.
+  /// Returns the new entry, or null if cancelled.
+  Future<ModelEntry?> pickAndCopy() async {
+    final picked = await FilePicker.pickFile();
+    if (picked == null || picked.path == null) return null;
+    final src = File(picked.path!);
+    return copyIn(src, name: picked.name);
+  }
+
+  Future<ModelEntry?> copyIn(File src, {String? name}) async {
+    final fileName = name ?? src.path.split(RegExp(r'[\\/]')).last;
+    final dest = File('${modelsDir!.path}/$fileName');
+    final total = await src.length();
+    copyName = fileName;
+    copyProgress = 0;
+    notifyListeners();
+    try {
+      final sink = dest.openWrite();
+      var done = 0;
+      var lastReport = 0.0;
+      await for (final chunk in src.openRead()) {
+        sink.add(chunk);
+        done += chunk.length;
+        final p = total == 0 ? 1.0 : done / total;
+        if (p - lastReport >= 0.005) {
+          lastReport = p;
+          copyProgress = p;
+          notifyListeners();
+        }
+        // Do not let the sink buffer gigabytes in memory.
+        if (done % (64 * 1024 * 1024) < chunk.length) await sink.flush();
+      }
+      await sink.close();
+      try {
+        await FilePicker.clearTemporaryFiles();
+      } catch (_) {}
+    } catch (e) {
+      if (dest.existsSync()) dest.deleteSync();
+      copyProgress = null;
+      copyName = null;
+      loadError = 'Could not copy the file: $e';
+      notifyListeners();
+      return null;
+    }
+    copyProgress = null;
+    copyName = null;
+    await refreshModels();
+    return models.firstWhere((m) => m.path == dest.path);
+  }
+}
