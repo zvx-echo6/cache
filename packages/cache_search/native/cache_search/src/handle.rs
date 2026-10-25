@@ -2,6 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
+use crate::library::{self, LibSlot, LibrarySettings};
 use crate::zimsrc::{self, ZimSource};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -12,6 +13,9 @@ struct SourceCfg {
     kind: String,
     path: String,
     index_dir: Option<String>,
+    /// Library settings (the v1 settings object); optional, guessed when absent.
+    #[serde(default)]
+    settings: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,9 +71,9 @@ pub enum Source {
     Zim(ZimSlot),
     /// A ZIM that could not be opened (missing file, SD card out, bad format). Retried on every
     /// `set_sources`; reported by `cs_status`; skipped by search.
-    Failed { path: PathBuf, title: String, error: Error },
-    /// Recorded only in this slice: packs are not read yet.
-    Pack { path: PathBuf, title: String },
+    Failed { kind: &'static str, path: PathBuf, title: String, error: Error },
+    /// A library: a Qdrant shard opened read-only.
+    Library(LibSlot),
 }
 
 pub struct Handle {
@@ -97,6 +101,7 @@ impl Handle {
     pub fn set_sources(&mut self, config_json: &str) -> Result<()> {
         enum Plan {
             Reuse(usize, Option<PathBuf>),
+            ReuseLib(usize, Option<PathBuf>, LibrarySettings),
             New(Source),
         }
         let cfg: Config = serde_json::from_str(config_json)?;
@@ -123,7 +128,7 @@ impl Handle {
                             }
                             Err(error) => {
                                 let title = stem_title(&path);
-                                (None, Plan::New(Source::Failed { path, title, error }))
+                                (None, Plan::New(Source::Failed { kind: "zim", path, title, error }))
                             }
                         },
                     };
@@ -135,9 +140,36 @@ impl Handle {
                     }
                     plan.push(item);
                 }
-                "pack" => {
-                    let title = stem_title(&path);
-                    plan.push(Plan::New(Source::Pack { path, title }));
+                "library" => {
+                    let existing = self
+                        .sources
+                        .iter()
+                        .position(|s| matches!(s, Source::Library(l) if l.path == path));
+                    let (id, item) = match existing {
+                        Some(i) => {
+                            let Source::Library(l) = &self.sources[i] else { unreachable!() };
+                            // Settings errors fail the whole call, before anything is replaced.
+                            let st = library::resolve_settings(&l.shard, &path, sc.settings.as_ref())?;
+                            (Some(st.library_id.clone()), Plan::ReuseLib(i, index_dir, st))
+                        }
+                        None => match library::open_library(&path, index_dir, sc.settings.as_ref()) {
+                            Ok(l) => (Some(l.id().to_string()), Plan::New(Source::Library(l))),
+                            // A bad settings object is a malformed config; anything else is a library that
+                            // cannot be opened now (reported by cs_status, retried on the next set_sources).
+                            Err(error) if error.code == crate::error::ErrorCode::BadJson => return Err(error),
+                            Err(error) => {
+                                let title = stem_title(&path);
+                                (None, Plan::New(Source::Failed { kind: "library", path, title, error }))
+                            }
+                        },
+                    };
+                    if let Some(id) = id {
+                        if ids.contains(&id) {
+                            return Err(Error::bad_json(format!("duplicate source id {id} ({})", sc.path)));
+                        }
+                        ids.push(id);
+                    }
+                    plan.push(item);
                 }
                 other => return Err(Error::bad_json(format!("unknown source kind {other:?}"))),
             }
@@ -154,6 +186,14 @@ impl Handle {
                             z.index_dir = index_dir;
                             z.open = None;
                         }
+                    }
+                    s
+                }
+                Plan::ReuseLib(i, index_dir, settings) => {
+                    let mut s = old[i].take().expect("reused twice");
+                    if let Source::Library(l) = &mut s {
+                        l.index_dir = index_dir;
+                        l.settings = settings;
                     }
                     s
                 }
@@ -208,18 +248,23 @@ impl Handle {
                         "docs": docs, "embedding_model": Value::Null, "error": error,
                     })
                 }
-                Source::Failed { path, title, error } => json!({
-                    "id": Value::Null, "kind": "zim", "path": path.to_string_lossy(),
+                Source::Failed { kind, path, title, error } => json!({
+                    "id": Value::Null, "kind": kind, "path": path.to_string_lossy(),
                     "title": title, "language": Value::Null,
                     "indexed": false, "building": false, "stale": false,
                     "docs": 0, "embedding_model": Value::Null,
                     "error": {"code": error.code.as_str(), "message": error.message},
                 }),
-                Source::Pack { path, title } => json!({
-                    "id": Value::Null, "kind": "pack", "path": path.to_string_lossy(),
-                    "title": title, "language": Value::Null,
+                // `indexed` is the keyword index; libraries have none until `index_library` (a later slice), so
+                // `keyword_source` is "none" and `indexed` false. The library still answers vector searches.
+                Source::Library(l) => json!({
+                    "id": l.settings.library_id, "kind": "library", "path": l.path.to_string_lossy(),
+                    "title": l.settings.title, "language": Value::Null,
                     "indexed": false, "building": false, "stale": false,
-                    "docs": 0, "embedding_model": Value::Null, "error": Value::Null,
+                    "docs": l.docs,
+                    "embedding_model": if l.settings.embedding.model.is_empty() { Value::Null } else { json!(l.settings.embedding.model) },
+                    "library_id": l.settings.library_id, "keyword_source": "none",
+                    "settings": l.settings.to_json(), "error": Value::Null,
                 }),
             })
             .collect();
@@ -252,15 +297,19 @@ mod tests {
     }
 
     #[test]
-    fn pack_is_recorded_unindexed() {
-        let mut h = Handle::open(r#"{"sources":[{"kind":"pack","path":"/x/recon.cachepack","index_dir":"/x/i"}]}"#).unwrap();
+    fn missing_library_does_not_fail_the_handle() {
+        let mut h = Handle::open(r#"{"sources":[{"kind":"library","path":"/nonexistent/recon","index_dir":"/x/i"}]}"#).unwrap();
         let v: Value = serde_json::from_str(&h.status_json()).unwrap();
         let s = &v["sources"][0];
-        assert_eq!(s["kind"], "pack");
+        assert_eq!(s["kind"], "library");
         assert_eq!(s["indexed"], false);
         assert_eq!(s["title"], "recon");
         assert!(s["id"].is_null());
-        assert!(s["error"].is_null());
+        assert_eq!(s["error"]["code"], "not_found");
+        // bad settings are a whole-call failure
+        let bad = r#"{"sources":[{"kind":"library","path":"/nonexistent/recon","settings":{"library_id":"r"}}]}"#;
+        assert_eq!(h.set_sources(bad).unwrap_err().code, ErrorCode::BadJson);
+        assert_eq!(h.sources.len(), 1);
     }
 
     #[test]

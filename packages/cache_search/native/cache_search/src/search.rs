@@ -2,11 +2,12 @@
 
 use crate::error::{Error, Result};
 use crate::handle::{Handle, Source};
+use crate::library::{self, LibHit};
 use crate::html;
 use crate::zimsrc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{Query, QueryParser};
 use tantivy::schema::{Field, IndexRecordOption, Value as _};
@@ -24,10 +25,21 @@ struct Opts {
     offset: usize,
     #[serde(default)]
     sources: Option<Vec<String>>,
-    /// Accepted and ignored: ZIM sources are keyword-only.
+    /// Used only by libraries whose settings `embedding.model` equals `model`; other sources are keyword-only.
     #[serde(default)]
-    #[allow(dead_code)]
-    query_vector: Option<Value>,
+    query_vector: Option<QueryVec>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QueryVec {
+    model: String,
+    vector: Vec<f32>,
+}
+
+/// A merged result before its fields are built: a ZIM hit (source, hit) or a library hit (library, hit).
+enum Entry {
+    Zim(usize, usize),
+    Lib(usize, usize),
 }
 
 fn five() -> usize {
@@ -223,17 +235,104 @@ impl Handle {
 
         let lists: Vec<Vec<(f32, f32)>> =
             per.iter().map(|p| p.hits.iter().map(|h| (h.raw, h.coverage)).collect()).collect();
-        let merged = merge_keyword(&lists, min_cov, opts.offset + opts.k);
+        let need = opts.offset + opts.k;
+        let merged = merge_keyword(&lists, min_cov, need);
+
+        // Libraries: a vector list for each library whose embedding model matches the query vector. A library
+        // has no keyword list yet (`index_library` is a later slice), so without a matching vector it
+        // contributes nothing and is reported as keyword-only.
+        let mut keyword_only: Vec<String> = per.iter().map(|p| p.id.clone()).collect();
+        let mut vector_sources: Vec<String> = Vec::new();
+        let mut libs: Vec<(usize, Vec<LibHit>)> = Vec::new();
+        let base = self.candidates_per_list.max(1) as usize + opts.offset;
+        for (src_i, s) in self.sources.iter().enumerate() {
+            let Source::Library(l) = s else { continue };
+            if let Some(f) = &filter {
+                if !f.contains(&l.id().to_ascii_lowercase()) {
+                    continue;
+                }
+            }
+            let used = match &opts.query_vector {
+                Some(q) if l.accepts_vector(&q.model, q.vector.len()) => {
+                    match l.dense_search(&q.vector, need, base, snippet_chars) {
+                        Ok(h) => Some(h),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
+            };
+            match used {
+                Some(h) => {
+                    vector_sources.push(l.id().to_string());
+                    libs.push((src_i, h));
+                }
+                None => keyword_only.push(l.id().to_string()),
+            }
+        }
+
+        // Order: the keyword-merged ZIM list as it is; with library vector lists, reciprocal rank fusion
+        // (k=60) of the keyword list and each library's vector list, one entry per address.
+        let order: Vec<Entry> = if libs.is_empty() {
+            merged.iter().map(|m| Entry::Zim(m.si, m.hi)).collect()
+        } else {
+            let mut by_addr: HashMap<String, Entry> = HashMap::new();
+            let mut rank_lists: Vec<Vec<(String, f32)>> = Vec::new();
+            let mut kw: Vec<(String, f32)> = Vec::new();
+            for m in &merged {
+                let addr = zimsrc::format_address(&per[m.si].id, &per[m.si].hits[m.hi].path);
+                kw.push((addr.clone(), m.raw));
+                by_addr.entry(addr).or_insert(Entry::Zim(m.si, m.hi));
+            }
+            rank_lists.push(kw);
+            for (li, (_, hits)) in libs.iter().enumerate() {
+                let mut l: Vec<(String, f32)> = Vec::new();
+                for (hi, h) in hits.iter().enumerate() {
+                    l.push((h.address.clone(), h.score));
+                    by_addr.entry(h.address.clone()).or_insert(Entry::Lib(li, hi));
+                }
+                rank_lists.push(l);
+            }
+            rrf(&rank_lists).into_iter().filter_map(|(a, _)| by_addr.remove(&a)).collect()
+        };
+
+        // Collapse duplicate library hits after the merge (same document value + title, or without a document
+        // field the same title + snippet): the best-ranked stays, and the list fills up from the next ranked.
+        let mut seen: HashSet<&str> = HashSet::new();
+        let order: Vec<Entry> = order
+            .into_iter()
+            .filter(|e| match e {
+                Entry::Lib(li, hi) => seen.insert(libs[*li].1[*hi].key.as_str()),
+                Entry::Zim(..) => true,
+            })
+            .collect();
+
         let mut generators: HashMap<usize, Option<SnippetGenerator>> = HashMap::new();
         let mut results: Vec<Value> = Vec::new();
-        for m in merged.into_iter().skip(opts.offset).take(opts.k) {
-            let p = &per[m.si];
-            let h = &p.hits[m.hi];
+        for e in order.into_iter().skip(opts.offset).take(opts.k) {
+            let (m_si, hi) = match e {
+                Entry::Lib(li, hi) => {
+                    let h = &libs[li].1[hi];
+                    let Source::Library(l) = &self.sources[libs[li].0] else { continue };
+                    results.push(json!({
+                        "address": h.address,
+                        "title": h.title,
+                        "snippet": h.snippet,
+                        "source_id": l.id(),
+                        "source_kind": "library",
+                        "source_title": l.settings.title,
+                        "page": h.page,
+                    }));
+                    continue;
+                }
+                Entry::Zim(si, hi) => (si, hi),
+            };
+            let p = &per[m_si];
+            let h = &p.hits[hi];
             let address = zimsrc::format_address(&p.id, &h.path);
             let Ok(doc) = p.searcher.doc::<TantivyDocument>(h.addr) else { continue };
             let art_title = text_of(&doc, p.title_f);
             let lead = text_of(&doc, p.lead);
-            let gen = generators.entry(m.si).or_insert_with(|| {
+            let gen = generators.entry(m_si).or_insert_with(|| {
                 let mut g = SnippetGenerator::create(&p.searcher, &*p.query, p.lead).ok();
                 if let Some(g) = g.as_mut() {
                     g.set_max_num_chars(snippet_chars.max(1));
@@ -263,9 +362,9 @@ impl Handle {
         }
         Ok(json!({
             "results": results,
-            "total_estimate": per.iter().map(|p| p.count).sum::<usize>(),
-            "vector_sources": [],
-            "keyword_only_sources": per.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+            "total_estimate": per.iter().map(|p| p.count).sum::<usize>() + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
+            "vector_sources": vector_sources,
+            "keyword_only_sources": keyword_only,
         })
         .to_string())
     }
@@ -277,6 +376,23 @@ impl Handle {
         }
         if max_chars <= 0 {
             return Err(Error::bad_json("max_chars must be positive"));
+        }
+        if address.starts_with("lib:") {
+            let (lib_id, point_id) = library::parse_lib_address(address)?;
+            let l = self
+                .sources
+                .iter()
+                .find_map(|s| match s {
+                    Source::Library(l) if l.id() == lib_id => Some(l),
+                    _ => None,
+                })
+                .ok_or_else(|| Error::not_found(format!("no library source {lib_id:?}")))?;
+            let (r, truncated) = l.read_point(point_id, max_chars as usize)?;
+            return Ok(json!({
+                "address": address, "title": r.title, "text": r.text, "truncated": truncated,
+                "author": r.author, "page": r.page, "source_type": r.source_type,
+            })
+            .to_string());
         }
         let e = self.zim_get(address)?;
         let m = e.mime.to_ascii_lowercase();
