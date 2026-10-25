@@ -31,6 +31,11 @@ CL_API int cl_start(void * h, const char * request_json, char * err, int err_len
 // incomplete multi-byte character is held back). Returns -1 when finished, -2 on error.
 CL_API int cl_next(void * h, char * buf, int buf_len);
 
+// Partial parse of what has been generated so far (call between cl_next calls). Same JSON shape as
+// cl_finish, but content holds only the visible answer text: thinking and tool-call syntax are
+// split out into reasoning_content / tool_calls. Returns the length, or -1 if out is too small.
+CL_API int cl_partial(void * h, char * out_json, int len);
+
 // Parse everything generated so far into an OpenAI style assistant message:
 // {"role","content","tool_calls":[{"id","type":"function","function":{"name","arguments"}}]}.
 // If the output does not parse, content is the raw text and "parse_error" is set.

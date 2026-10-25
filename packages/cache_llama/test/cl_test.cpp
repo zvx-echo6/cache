@@ -14,6 +14,7 @@ static double secs(clk::time_point a, clk::time_point b) { return std::chrono::d
 struct Result {
     std::string text;      // streamed text
     std::string message;   // cl_finish JSON
+    std::string partial;   // last cl_partial JSON (polled every token)
     bool        ok = false;
 };
 
@@ -31,6 +32,7 @@ static Result run(void * h, const std::string & request, bool stream) {
     int n;
     while ((n = cl_next(h, buf.data(), (int) buf.size())) >= 0) {
         r.text.append(buf.data(), (size_t) n);
+        { std::vector<char> pj(1 << 16); if (cl_partial(h, pj.data(), (int) pj.size()) > 0) r.partial = pj.data(); }
         if (stream) { fwrite(buf.data(), 1, (size_t) n, stdout); fflush(stdout); }
     }
     auto t2 = clk::now();
@@ -91,6 +93,7 @@ int main(int argc, char ** argv) {
     std::string user1 = "Name three ways to purify water. One line each.";
     Result r2 = run(h, "{\"messages\":[{\"role\":\"user\",\"content\":" + js(user1) + "}]}", true);
     bool p2 = r2.ok && r2.text.size() > 20;
+    printf("last partial JSON: %s\n", r2.partial.c_str());
     printf("TEST 2 plain chat: %s\n\n", p2 ? "PASS" : "FAIL");
     fails += !p2;
 
@@ -102,6 +105,7 @@ int main(int argc, char ** argv) {
     printf("raw: %s\nfinish JSON: %s\n", r3.text.c_str(), r3.message.c_str());
     bool p3 = r3.ok && r3.message.find("\"name\":\"search\"") != std::string::npos &&
               r3.message.find("query") != std::string::npos;
+    printf("last partial JSON: %s\n", r3.partial.c_str());
     printf("TEST 3 tool call: %s\n\n", p3 ? "PASS" : "FAIL");
     fails += !p3;
 
