@@ -373,6 +373,23 @@ pub unsafe extern "C" fn cs_clear_location(h: *mut Handle) -> i32 {
     })
 }
 
+/// Web search settings; the key is kept in memory only.
+///
+/// # Safety
+/// `h` NULL or live; `provider` and `key` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_set_web(h: *mut Handle, provider: *const c_char, key: *const c_char, online: i32) -> i32 {
+    with_handle(h, -1, |h| {
+        let opt = |p: *const c_char, what: &str| if p.is_null() { Ok(None) } else { arg_str(p, what).map(Some) };
+        let (provider, key) = (opt(provider, "provider")?, opt(key, "key")?);
+        if online != 0 && online != 1 {
+            return Err(Error::bad_json("online must be 0 or 1"));
+        }
+        h.web.configure_named(provider, key, online == 1)?;
+        Ok(0)
+    })
+}
+
 /// # Safety
 /// `h` must be NULL or a live handle.
 #[no_mangle]
@@ -460,6 +477,7 @@ mod tests {
             assert!(cs_zim_get(ptr::null_mut(), ptr::null(), &mut m, &mut n).is_null());
             assert_eq!(cs_set_location(ptr::null_mut(), 1.0, 2.0, 3.0, ptr::null()), -1);
             assert_eq!(cs_clear_location(ptr::null_mut()), -1);
+            assert_eq!(cs_set_web(ptr::null_mut(), ptr::null(), ptr::null(), 0), -1);
             assert!(cs_tool_schemas(ptr::null_mut()).is_null());
             assert!(cs_tool(ptr::null_mut(), ptr::null_mut(), ptr::null(), ptr::null(), ptr::null()).is_null());
             cs_close(ptr::null_mut());

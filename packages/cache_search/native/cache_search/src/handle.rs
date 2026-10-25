@@ -5,6 +5,7 @@ use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
 use crate::tools::QueryEmbedder;
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
+use crate::web::{WebSearchTool, WebState};
 use crate::zimsrc::{self, ZimSource};
 use cache_tool::{Location, NoSavedPlaces, SavedPlaces, Tool};
 use serde::Deserialize;
@@ -170,6 +171,8 @@ pub struct Handle {
     pub location: Option<Location>,
     /// Embeds the query for built-in `search`; without one it is keyword-only.
     pub embedder: Option<QueryEmbedder>,
+    /// Web search settings (provider, key, online), shared with the registered `web_search` tool. See `web.rs`.
+    pub web: Arc<WebState>,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -188,7 +191,9 @@ impl Handle {
             places: Box::new(NoSavedPlaces),
             location: None,
             embedder: None,
+            web: Arc::new(WebState::new()),
         };
+        h.register_tool(Box::new(WebSearchTool(h.web.clone())));
         // Later, here: register the live-data and user-data tools from the config's "live" and "user" sections
         // (DESIGN.md, "Saved places and live data"). Those crates (cache_live, cache_user) are not dependencies yet.
         h.set_sources(config_json)?;
@@ -333,6 +338,7 @@ impl Handle {
             })
             .collect();
         self.snippet_chars = cfg.snippet_chars;
+        self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
         Ok(())

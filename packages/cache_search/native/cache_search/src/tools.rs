@@ -8,6 +8,8 @@
 use crate::conv::{one_line, Conversation};
 use crate::error::{Error, ErrorCode, Result};
 use crate::handle::Handle;
+use crate::html;
+use crate::web::Page;
 use cache_tool::{Location, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput, ADDRESS_MARKER_CLOSE, ADDRESS_MARKER_OPEN};
 use serde_json::{json, Value};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -300,7 +302,13 @@ impl Handle {
         }
         let args: Value = serde_json::from_str(args_json).map_err(|e| Error::bad_json(format!("args_json: {e}")))?;
         let mut ids: Vec<Value> = Vec::new();
-        let content = match self.run_tool(conv, name, &args, now) {
+        let result = self.run_tool(conv, name, &args, now);
+        // What web_search showed is remembered in the conversation, so a later read can fall back to the snippet.
+        for (address, note) in self.web.take_pending() {
+            conv.note_web(&address, note);
+        }
+        let timing = self.web.take_timing();
+        let content = match result {
             Ok(ToolOutput::Text(t)) => number_text(conv, &t, &mut ids),
             Ok(ToolOutput::Json(mut v)) => {
                 number_json(conv, &mut v, &mut ids);
@@ -309,7 +317,12 @@ impl Handle {
             }
             Err(e) => e.to_json().to_string(),
         };
-        Ok(json!({"content": content, "ids": ids}).to_string())
+        let mut out = json!({"content": content, "ids": ids});
+        if let Some(t) = timing {
+            // Debug only: never part of what the model sees.
+            out["timing_ms"] = t;
+        }
+        Ok(out.to_string())
     }
 
     /// Steps 1 to 3 of the dispatch: find the tool, validate the arguments, run it (a panic is `internal`).
@@ -371,6 +384,9 @@ impl Handle {
         let Some((address, _)) = conv.entry(n) else {
             return Err(ToolError::new(ToolError::NOT_FOUND, format!("no result [{n}] in this conversation")));
         };
+        if let Some(url) = address.strip_prefix("web:") {
+            return Ok(self.read_web(conv, n, address, url));
+        }
         let out = self.read(&address.clone(), READ_MAX_CHARS).map_err(tool_error)?;
         let v: Value = serde_json::from_str(&out).map_err(|e| ToolError::new(ToolError::INTERNAL, e.to_string()))?;
         let mut text = format!("[{n}] {}\n{}", one_line(v["title"].as_str().unwrap_or("")), v["text"].as_str().unwrap_or(""));
@@ -378,6 +394,37 @@ impl Handle {
             text.push_str("\n[truncated]");
         }
         Ok(ToolOutput::Text(text))
+    }
+
+    /// `read` on a `web:<url>` result: fetch the page within the read budget. When it loads, `[n] <title> (web,
+    /// fetched <time>)`, the text and `[truncated]` as for any read. When it does not, the same first line, the
+    /// snippet kept from the search, and `[full page did not load in time]` or `[full page not available]`; that is
+    /// still a result, not an error.
+    fn read_web(&mut self, conv: &Conversation, n: usize, address: &str, url: &str) -> ToolOutput {
+        let head = match conv.web_note(address) {
+            Some(w) => format!("[{n}] {} (web, fetched {})", w.title, w.fetched),
+            None => format!("[{n}] {}", conv.entry(n).map(|(_, t)| one_line(t)).unwrap_or_default()),
+        };
+        let text = match self.web.read_page(url) {
+            Page::Text { text, capped } => {
+                let (cut, was_cut) = html::cut_at_paragraph(text.trim(), READ_MAX_CHARS as usize);
+                let mut s = format!("{head}\n{cut}");
+                if was_cut || capped {
+                    s.push_str("\n[truncated]");
+                }
+                s
+            }
+            miss => {
+                let mut s = head;
+                if let Some(w) = conv.web_note(address).filter(|w| !w.snippet.is_empty()) {
+                    s.push('\n');
+                    s.push_str(&w.snippet);
+                }
+                s.push_str(if miss == Page::TimedOut { "\n[full page did not load in time]" } else { "\n[full page not available]" });
+                s
+            }
+        };
+        ToolOutput::Text(text)
     }
 }
 

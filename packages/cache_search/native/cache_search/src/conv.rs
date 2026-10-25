@@ -1,6 +1,7 @@
 //! `cs_conversation_*` and `cs_format`: the `[n]` numbering for one chat.
 
 use crate::error::{Error, Result};
+use crate::web::WebNote;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -11,6 +12,9 @@ pub struct Conversation {
     /// `(address, title)` in number order: entry `i` is number `i + 1`.
     entries: Vec<(String, String)>,
     by_address: HashMap<String, usize>,
+    /// What `web_search` showed for each `web:<url>` address (title, snippet, fetch time), so `read` can fall back to
+    /// the snippet. Lives and dies with the conversation; never written to disk.
+    web: HashMap<String, WebNote>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +49,16 @@ impl Conversation {
     /// The `(address, title)` given number `n` (from 1), if any.
     pub fn entry(&self, n: usize) -> Option<&(String, String)> {
         n.checked_sub(1).and_then(|i| self.entries.get(i))
+    }
+
+    /// Remember a web result. The first note for an address is the one kept.
+    pub fn note_web(&mut self, address: &str, note: WebNote) {
+        self.web.entry(address.to_string()).or_insert(note);
+    }
+
+    /// What was remembered of the web result at `address`.
+    pub fn web_note(&self, address: &str) -> Option<&WebNote> {
+        self.web.get(address)
     }
 
     /// The number of `address`, giving it the next number (with `title`) when it has none. The bool is true

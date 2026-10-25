@@ -153,7 +153,8 @@ void cs_conversation_free(cs_conv *c);
 /* --- tools --- */
 
 /* The tools the model can call. search and read are built in; the host registers the others in Rust
- * (Handle::register_tool: navigate, nearby, locate, live_data, web_search, ...). See docs/TOOLS.md for the
+ * (Handle::register_tool: navigate, nearby, locate, live_data, ...; web_search is registered by cs_open and switched on
+ * with cs_set_web). See docs/TOOLS.md for the
  * schemas and results, and DESIGN.md, Tools, for the dispatch. */
 
 /* The phone's GPS fix, for the tools that default to "where I am". accuracy_m < 0 means unknown. fixed_at is the
@@ -162,6 +163,16 @@ void cs_conversation_free(cs_conv *c);
  * cs_clear_location removes the fix (the tools then answer no_location). Returns 0. */
 int32_t cs_set_location(cs_handle *h, double lat, double lon, double accuracy_m, const char *fixed_at);
 int32_t cs_clear_location(cs_handle *h);
+
+/* Web search settings. provider is "kagi", or NULL for web search off; key is the provider's API key, or NULL for none;
+ * online is 0 or 1, the app's own view of whether the phone has a connection. web_search is offered in
+ * cs_tool_schemas only while a provider, a key and online=1 are all set; without them cs_tool answers it with
+ * not_set_up. Each call replaces all three settings. The key is kept in memory only: it is never written to disk,
+ * logged, or put in any result or error. Returns 0; -1 with code "bad_json" for an unknown provider or an online
+ * value other than 0 or 1 (nothing changes). Web results exist only in the conversation: nothing from the web is
+ * stored or added to a library. A cs_tool result for a web search or a read of a web result also carries a
+ * "timing_ms" field ({"search": ms} or {"fetch": ms}) for measurement; it is not part of what the model sees. */
+int32_t cs_set_web(cs_handle *h, const char *provider, const char *key, int32_t online);
 
 /* A JSON array of the function schemas ({"type":"function","function":{...}}) of the tools available now, in this
  * order where present: search, read, navigate, nearby, locate, live_data, web_search (any other registered tool

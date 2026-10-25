@@ -16,6 +16,7 @@ pub mod libupdate;
 pub mod search;
 pub mod suggest;
 pub mod tools;
+pub mod web;
 pub mod zimsrc;
 
 pub use error::{Error, ErrorCode};
