@@ -116,7 +116,7 @@ class HomeScreen extends StatelessWidget {
       modelColor = k.warning;
     }
     final cards = [
-      _StatusCard(icon: Icons.memory, title: app.active?.name ?? 'Model', value: modelValue, valueColor: modelColor),
+      _StatusCard(icon: Icons.memory, title: app.active == null ? 'Model' : app.displayName(app.active!), value: modelValue, valueColor: modelColor),
       const _StatusCard(icon: Icons.menu_book_outlined, title: 'Reading', value: 'Not set up yet'),
       const _StatusCard(icon: Icons.map_outlined, title: 'Maps', value: 'Not set up yet'),
       const _StatusCard(icon: Icons.cloud_outlined, title: 'Weather', value: 'Not set up yet'),

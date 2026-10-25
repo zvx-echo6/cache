@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../chat/answer_markdown.dart';
 import '../chat/chat_controller.dart';
 import '../chat/tool_loop.dart';
 import '../theme.dart';
@@ -72,7 +73,7 @@ class _AskScreenState extends State<AskScreen> {
             final app = widget.app;
             final name = app.loading != null
                 ? 'Loading…'
-                : app.active?.name ?? 'No model';
+                : app.active == null ? 'No model' : app.displayName(app.active!);
             return InkWell(
               onTap: _openModels,
               borderRadius: BorderRadius.circular(12),
@@ -241,7 +242,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showText && m.text.isNotEmpty)
-            SelectableText(m.text, style: TextStyle(fontSize: 18, height: 1.45, color: k.text)),
+            AnswerMarkdown(m.text),
           if (status != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),

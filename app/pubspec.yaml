@@ -38,6 +38,7 @@ dependencies:
   file_picker: ^13.2.0
   cache_llama:
     path: ../packages/cache_llama
+  flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:
   flutter_test:
