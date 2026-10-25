@@ -463,14 +463,32 @@ fn sync_tree(dir: &Path) -> Result<()> {
         if ent.file_type().map_err(|e| op(&format!("reading {}", p.display()), e))?.is_dir() {
             sync_tree(&p)?;
         } else {
-            std::fs::File::open(&p).and_then(|f| f.sync_all()).map_err(|e| op(&format!("flushing {}", p.display()), e))?;
+            sync_file(&p).map_err(|e| op(&format!("flushing {}", p.display()), e))?;
         }
     }
     sync_dir(dir)
 }
 
+/// Flush one file. Windows needs write access for `FlushFileBuffers`, so the file is opened for writing there
+/// (without truncating or changing it); unix flushes a read-only descriptor fine.
+fn sync_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    let f = std::fs::OpenOptions::new().write(true).open(path)?;
+    #[cfg(not(windows))]
+    let f = std::fs::File::open(path)?;
+    f.sync_all()
+}
+
+/// Flush a folder's entries (renames and creations in it). Windows cannot open a folder as a file and NTFS
+/// journals its metadata, so there it does nothing.
+#[cfg(not(windows))]
 fn sync_dir(dir: &Path) -> Result<()> {
     std::fs::File::open(dir).and_then(|f| f.sync_all()).map_err(|e| op(&format!("flushing {}", dir.display()), e))
+}
+
+#[cfg(windows)]
+fn sync_dir(_dir: &Path) -> Result<()> {
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------------

@@ -736,10 +736,41 @@ fn library_manifest_job_is_busy_cancellable_and_checks_its_parameters() {
 
 // ---- real-copy staging: the library is untouched until the swap, space check, crash leftovers -------------------
 
+/// (number of names, unique file identity) of a file: (nlink, inode) on unix; on Windows the link count and the
+/// 64-bit file index from `GetFileInformationByHandle`.
+#[cfg(unix)]
+fn link_info(path: &Path) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    let md = std::fs::metadata(path).unwrap();
+    (md.nlink(), md.ino())
+}
+
+#[cfg(windows)]
+fn link_info(path: &Path) -> (u64, u64) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    let f = std::fs::File::open(path).unwrap();
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `f` is an open file handle and `info` a valid, writable struct.
+    let ok = unsafe { GetFileInformationByHandle(f.as_raw_handle() as _, &mut info) };
+    assert!(ok != 0, "GetFileInformationByHandle failed: {}", std::io::Error::last_os_error());
+    (info.nNumberOfLinks as u64, ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64)
+}
+
+/// Create a symbolic link to a target that does not exist.
+#[cfg(unix)]
+fn dangling_symlink(link: &Path) {
+    std::os::unix::fs::symlink("/nonexistent", link).unwrap();
+}
+
+#[cfg(windows)]
+fn dangling_symlink(link: &Path) {
+    std::os::windows::fs::symlink_file(r"C:\nonexistent", link).unwrap();
+}
+
 /// Every file under `dir` has exactly one name (no hard links).
 fn no_hard_links(dir: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    fingerprint(dir).keys().all(|n| std::fs::metadata(dir.join(n)).unwrap().nlink() == 1)
+    fingerprint(dir).keys().all(|n| link_info(&dir.join(n)).0 == 1)
 }
 
 fn wait_progress(j: *mut Job, at_least: u64) {
@@ -829,7 +860,7 @@ fn a_failed_copy_deletes_the_partial_stage() {
     let j = start_job(job_params(&f, 3000));
     wait_progress(j, 2);
     // a file the copy cannot read: a symbolic link inside the library
-    std::os::unix::fs::symlink("/nonexistent", f.lib.join("stray-link")).unwrap();
+    dangling_symlink(&f.lib.join("stray-link"));
     let done = wait_job(j);
     assert_eq!(done["state"], "failed", "{done}");
     assert_eq!(done["error"]["code"], "unsupported", "{done}");
@@ -839,7 +870,6 @@ fn a_failed_copy_deletes_the_partial_stage() {
 
 #[test]
 fn copy_tree_makes_a_real_copy() {
-    use std::os::unix::fs::MetadataExt;
     let f = fixture("copytree", true);
     let dst = f.lib.parent().unwrap().join("copy");
     let n = libupdate::copy_tree(&f.lib, &dst).unwrap();
@@ -847,11 +877,11 @@ fn copy_tree_makes_a_real_copy() {
     assert_eq!(fingerprint(&f.lib).iter().map(|(k, v)| (k.clone(), v.0)).collect::<BTreeMap<_, _>>(), fingerprint(&dst).iter().map(|(k, v)| (k.clone(), v.0)).collect::<BTreeMap<_, _>>());
     assert!(no_hard_links(&f.lib) && no_hard_links(&dst));
     for name in fingerprint(&f.lib).keys() {
-        assert_ne!(std::fs::metadata(f.lib.join(name)).unwrap().ino(), std::fs::metadata(dst.join(name)).unwrap().ino(), "{name}");
+        assert_ne!(link_info(&f.lib.join(name)).1, link_info(&dst.join(name)).1, "{name}");
     }
     // an existing destination is refused, and so is a link
     assert!(libupdate::copy_tree(&f.lib, &dst).is_err());
-    std::os::unix::fs::symlink("/nonexistent", f.lib.join("l")).unwrap();
+    dangling_symlink(&f.lib.join("l"));
     let dst2 = f.lib.parent().unwrap().join("copy2");
     assert_eq!(libupdate::copy_tree(&f.lib, &dst2).unwrap_err().code.as_str(), "unsupported");
 }
