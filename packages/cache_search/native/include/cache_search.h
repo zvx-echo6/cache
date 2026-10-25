@@ -32,7 +32,7 @@ typedef struct cs_handle cs_handle;
 typedef struct cs_conv cs_conv;
 typedef struct cs_job cs_job;
 
-/* {"version":"0.1.0","pack_format":1,"index_format":1} */
+/* {"version":"0.1.0","pack_format":1,"index_format":2} */
 char *cs_version(void);
 
 /* --- handle and sources --- */
@@ -43,7 +43,9 @@ char *cs_version(void);
  *     {"kind":"pack", "path":"/.../recon.cachepack",    "index_dir":"/.../recon.idx"}
  *   ],
  *   "snippet_chars": 400,          optional, default 400
- *   "candidates_per_list": 50      optional, default 50
+ *   "candidates_per_list": 50,     optional, default 50
+ *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
+ *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
  * Each source gets a stable id: the ZIM's UUID, or the pack's pack_id. A source with a missing, stale or
  * building index is reported by cs_status() and skipped by search; it is not an error for cs_open. */

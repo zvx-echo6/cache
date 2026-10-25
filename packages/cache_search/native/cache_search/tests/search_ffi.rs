@@ -150,7 +150,7 @@ fn index_search_read() {
     unsafe { cs_close(h) };
     let meta: Value = serde_json::from_str(&std::fs::read_to_string(format!("{d_ready}/cache_search_index.json")).unwrap()).unwrap();
     assert_eq!(meta["state"], "done");
-    assert_eq!(meta["index_format"], 1);
+    assert_eq!(meta["index_format"], 2);
     assert_eq!(meta["tokenizer"], "en_stem");
     assert_eq!(meta["zim_uuid"], READY);
     assert_eq!(meta["next_entry"], meta["total"]);
@@ -218,9 +218,16 @@ fn index_search_read() {
     std::fs::create_dir_all(&d_stale).unwrap();
     std::fs::write(
         format!("{d_stale}/cache_search_index.json"),
-        json!({"index_format":0,"tokenizer":"en_stem","zim_uuid":READY,"state":"done","next_entry":1,"total":1}).to_string(),
+        json!({"index_format":1,"tokenizer":"en_stem","zim_uuid":READY,"state":"done","next_entry":1,"total":1}).to_string(),
     )
     .unwrap();
+
+    let hs = open(vec![json!({"kind":"zim","path":ready,"index_dir":d_stale})]);
+    let st = status(hs);
+    assert_eq!(st["sources"][0]["stale"], true, "{st}");
+    assert_eq!(st["sources"][0]["indexed"], false);
+    assert_eq!(search(hs, "flood", json!({}))["results"].as_array().unwrap().len(), 0);
+    unsafe { cs_close(hs) };
 
     // search over both, with a missing ZIM in the list
     let h = open(vec![
@@ -257,8 +264,19 @@ fn index_search_read() {
     for x in &res[..3] {
         eprintln!("  {} | {}", x["title"], x["snippet"]);
     }
+    // the best three for a query that belongs to one source all come from that source
+    for x in &res[..3] {
+        assert_eq!(x["source_id"], READY, "flood insurance top 3: {r}");
+    }
     let r = search(h, "ibuprofen side effects", json!({"k":5}));
-    assert_eq!(r["results"][0]["source_id"], nhs_id.as_str(), "{r}");
+    for x in &r["results"].as_array().unwrap()[..3] {
+        assert_eq!(x["source_id"], nhs_id.as_str(), "ibuprofen top 3: {r}");
+    }
+    // a query nothing matches well still returns k results (coverage filter relaxes)
+    let r = search(h, "zebra flood insurance xylophone quartz", json!({"k":5}));
+    assert_eq!(r["results"].as_array().unwrap().len(), 5, "{r}");
+    assert_eq!(r["results"][0]["source_id"], READY);
+    let r = search(h, "ibuprofen side effects", json!({"k":5}));
     eprintln!("ibuprofen side effects:");
     for x in &r["results"].as_array().unwrap()[..3] {
         eprintln!("  {} | {}", x["title"], x["snippet"]);
@@ -320,7 +338,7 @@ fn index_search_read() {
     assert_eq!(full["address"], addr.as_str());
     assert_eq!(full["truncated"], false);
     let text = full["text"].as_str().unwrap();
-    assert!(text.chars().count() > 300, "{text}");
+    assert!(text.chars().count() > 100, "{text}");
     assert!(!has_tag(text), "{text}");
     assert!(!full["title"].as_str().unwrap().is_empty());
     let cut = read(&addr, 600).unwrap();
@@ -338,8 +356,54 @@ fn index_search_read() {
     assert!(read("zim:00000000-0000-0000-0000-000000000000/x", 10).is_none());
     assert!(read(&format!("pack:{READY}/1"), 10).is_none());
     assert!(read(&addr, 0).is_none());
+    // page chrome is gone from snippets and read text (NHS and ready.gov pages)
+    let chrome = ["Skip to main content", "Search the NHS website", "An official website of the United States", "Here\u{2019}s how you know"];
+    let r = search(h, "ibuprofen side effects", json!({"k":3}));
+    let nhs_addr = r["results"][0]["address"].as_str().unwrap().to_string();
+    let r2 = search(h, "flood insurance", json!({"k":3}));
+    let ready_addr = r2["results"][0]["address"].as_str().unwrap().to_string();
+    for rr in [&r, &r2] {
+        for x in rr["results"].as_array().unwrap() {
+            let sn = x["snippet"].as_str().unwrap();
+            for c in chrome {
+                assert!(!sn.contains(c), "chrome {c:?} in snippet {sn:?}");
+            }
+        }
+    }
+    for a in [&nhs_addr, &ready_addr] {
+        let t = read(a, 1_000_000).unwrap();
+        let t = t["text"].as_str().unwrap();
+        eprintln!("READ300 {a}: {:?}", t.chars().take(300).collect::<String>());
+        for c in chrome {
+            assert!(!t.contains(c), "chrome {c:?} in read text of {a}: {:?}", t.chars().take(300).collect::<String>());
+        }
+        assert!(t.chars().count() > 50);
+    }
     unsafe { cs_close(h) };
     let _ = std::fs::remove_dir_all(&d_stale);
+}
+
+/// Wikipedia articles still come out complete (no index needed).
+#[test]
+fn wikipedia_read_is_complete() {
+    let (Some(zd), Some(_)) = (env("CS_TEST_ZIM_DIR"), env("CS_TEST_IDX_DIR")) else {
+        return;
+    };
+    let wiki = format!("{zd}/wikipedia_en_all_maxi_2026-02.zim");
+    let h = open(vec![json!({"kind":"zim","path":wiki})]);
+    let id = status(h)["sources"][0]["id"].as_str().unwrap().to_string();
+    let a = cstr(&format!("zim:{id}/Water_purification"));
+    let v: Value = serde_json::from_str(&take(unsafe { cs_read(h, a.as_ptr(), 10_000_000) }).unwrap()).unwrap();
+    let t = v["text"].as_str().unwrap();
+    eprintln!("WIKI300: {:?}", t.chars().take(300).collect::<String>());
+    eprintln!("WIKI len {}", t.chars().count());
+    assert_eq!(v["truncated"], false);
+    assert!(t.chars().count() > 20_000, "article too short: {}", t.chars().count());
+    assert!(t.starts_with("Water purification"), "{:?}", t.chars().take(80).collect::<String>());
+    for needle in ["Water purification is the process of removing", "Sources of water", "Chlorination", "Boiling"] {
+        assert!(t.contains(needle), "missing {needle:?}");
+    }
+    unsafe { cs_close(h) };
 }
 
 /// A `?` in a path is part of the path; links copied from HTML (fragment, %-escapes, a trailing ?query) resolve.

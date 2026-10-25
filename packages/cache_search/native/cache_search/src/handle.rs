@@ -21,6 +21,12 @@ struct Config {
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
     candidates_per_list: u32,
+    #[serde(default = "default_min_cov")]
+    min_term_coverage: f32,
+}
+
+fn default_min_cov() -> f32 {
+    0.5
 }
 
 fn default_snippet_chars() -> u32 {
@@ -70,6 +76,7 @@ pub struct Handle {
     pub sources: Vec<Source>,
     pub snippet_chars: u32,
     pub candidates_per_list: u32,
+    pub min_term_coverage: f32,
     pub last_error: Option<Error>,
 }
 
@@ -79,7 +86,7 @@ fn stem_title(path: &std::path::Path) -> String {
 
 impl Handle {
     pub fn open(config_json: &str) -> Result<Handle> {
-        let mut h = Handle { sources: vec![], snippet_chars: 400, candidates_per_list: 50, last_error: None };
+        let mut h = Handle { sources: vec![], snippet_chars: 400, candidates_per_list: 50, min_term_coverage: 0.5, last_error: None };
         h.set_sources(config_json)?;
         Ok(h)
     }
@@ -155,6 +162,7 @@ impl Handle {
             .collect();
         self.snippet_chars = cfg.snippet_chars;
         self.candidates_per_list = cfg.candidates_per_list;
+        self.min_term_coverage = cfg.min_term_coverage;
         Ok(())
     }
 

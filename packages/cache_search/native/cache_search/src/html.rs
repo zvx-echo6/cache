@@ -96,10 +96,176 @@ fn tag_end(b: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Elements with no content and no end tag.
+const VOID: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
+];
+
+/// Value of attribute `name` in the source of one start tag (`div class="x" role=main>`).
+fn attr_value(tag: &str, name: &str) -> Option<String> {
+    let b = tag.as_bytes();
+    let mut i = 0;
+    while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'>' && b[i] != b'/' {
+        i += 1; // the tag name
+    }
+    loop {
+        while i < b.len() && (b[i].is_ascii_whitespace() || b[i] == b'/') {
+            i += 1;
+        }
+        if i >= b.len() || b[i] == b'>' {
+            return None;
+        }
+        let ns = i;
+        while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'=' && b[i] != b'>' && b[i] != b'/' {
+            i += 1;
+        }
+        let an = &tag[ns..i];
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let mut val = "";
+        if i < b.len() && b[i] == b'=' {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
+                let q = b[i];
+                let vs = i + 1;
+                i = vs;
+                while i < b.len() && b[i] != q {
+                    i += 1;
+                }
+                val = &tag[vs..i.min(b.len())];
+                i += 1;
+            } else {
+                let vs = i;
+                while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'>' {
+                    i += 1;
+                }
+                val = &tag[vs..i];
+            }
+        }
+        if an.eq_ignore_ascii_case(name) {
+            return Some(val.to_string());
+        }
+    }
+}
+
+fn has_attr_hint(tag: &str) -> bool {
+    let b = tag.as_bytes();
+    find_ci(b, 0, b"role").is_some() || find_ci(b, 0, b"aria-hidden").is_some()
+}
+
+/// Start tags whose element is page chrome: `role` navigation / banner / search, or `aria-hidden="true"`.
+fn drop_by_attr(tag: &str) -> bool {
+    if !has_attr_hint(tag) {
+        return false;
+    }
+    if let Some(r) = attr_value(tag, "role") {
+        let r = r.trim().to_ascii_lowercase();
+        if r == "navigation" || r == "banner" || r == "search" {
+            return true;
+        }
+    }
+    matches!(attr_value(tag, "aria-hidden"), Some(v) if v.trim().eq_ignore_ascii_case("true"))
+}
+
+/// Byte range (content only) of the largest `<main>`, `<article>` or `role="main"` element, if any.
+fn find_main(html: &str) -> Option<(usize, usize)> {
+    let b = html.as_bytes();
+    // (name, content start, candidate?)
+    let mut stack: Vec<(String, usize, bool)> = Vec::new();
+    let mut best: Option<(usize, usize)> = None;
+    let consider = |s: usize, e: usize, best: &mut Option<(usize, usize)>| {
+        if e > s && best.map(|(bs, be)| e - s > be - bs).unwrap_or(true) {
+            *best = Some((s, e));
+        }
+    };
+    let mut i = 0usize;
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        if b[i..].starts_with(b"<!--") {
+            i = find_ci(b, i + 4, b"-->").map(|p| p + 3).unwrap_or(b.len());
+            continue;
+        }
+        let next = b.get(i + 1).copied().unwrap_or(0);
+        if next == b'!' || next == b'?' {
+            i = tag_end(b, i).unwrap_or(b.len());
+            continue;
+        }
+        if !(next == b'/' || next.is_ascii_alphabetic()) {
+            i += 1;
+            continue;
+        }
+        let Some(end) = tag_end(b, i) else { break };
+        let closing = next == b'/';
+        let ns = if closing { i + 2 } else { i + 1 };
+        let mut ne = ns;
+        while ne < end && (b[ne].is_ascii_alphanumeric() || b[ne] == b':' || b[ne] == b'-') {
+            ne += 1;
+        }
+        let name = html[ns..ne].to_ascii_lowercase();
+        let self_closing = end >= 2 && b[end - 2] == b'/';
+        if closing {
+            if let Some(pos) = stack.iter().rposition(|s| s.0 == name) {
+                for (_, cs, cand) in stack.drain(pos..) {
+                    if cand {
+                        consider(cs, i, &mut best);
+                    }
+                }
+            }
+            i = end;
+            continue;
+        }
+        if self_closing || VOID.contains(&name.as_str()) {
+            i = end;
+            continue;
+        }
+        if RAW.contains(&name.as_str()) {
+            let pat = format!("</{name}");
+            i = match find_ci(b, end, pat.as_bytes()) {
+                Some(p) => tag_end(b, p).unwrap_or(b.len()),
+                None => b.len(),
+            };
+            continue;
+        }
+        let cand = name == "main"
+            || name == "article"
+            || (find_ci(html[ns..end].as_bytes(), 0, b"role").is_some()
+                && attr_value(&html[ns..end], "role").map(|r| r.trim().eq_ignore_ascii_case("main")).unwrap_or(false));
+        stack.push((name, end, cand));
+        i = end;
+    }
+    for (_, cs, cand) in stack {
+        if cand {
+            consider(cs, b.len(), &mut best);
+        }
+    }
+    best
+}
+
+/// Plain text of a page. If it has a `<main>`, `<article>` or `role="main"` element, only the largest such
+/// element is used (so site headers, banners and menus outside it are left out); otherwise the whole
+/// document. Inside, `role` navigation / banner / search and `aria-hidden="true"` elements are dropped.
 pub fn html_to_text(html: &str) -> String {
+    if let Some((s, e)) = find_main(html) {
+        let t = strip(&html[s..e]);
+        if !t.is_empty() {
+            return t;
+        }
+    }
+    strip(html)
+}
+
+/// The streaming stripper (no main-content selection).
+pub fn strip(html: &str) -> String {
     let b = html.as_bytes();
     let mut out = Out { buf: String::with_capacity(html.len() / 3), brk: 0, space: false };
-    let mut skip: Option<(&'static str, u32)> = None;
+    let mut skip: Option<(String, u32)> = None;
     let mut i = 0usize;
     while i < b.len() {
         if b[i] == b'<' {
@@ -130,7 +296,7 @@ pub fn html_to_text(html: &str) -> String {
                 let self_closing = end >= 2 && b[end - 2] == b'/';
                 i = end;
                 if let Some((sname, depth)) = skip.as_mut() {
-                    if name == *sname {
+                    if name == sname.as_str() {
                         if closing {
                             if *depth <= 1 {
                                 skip = None;
@@ -153,8 +319,12 @@ pub fn html_to_text(html: &str) -> String {
                                 None => i = b.len(),
                             }
                         } else {
-                            skip = Some((s, 1));
+                            skip = Some((s.to_string(), 1));
                         }
+                        continue;
+                    }
+                    if !VOID.contains(&name.as_str()) && drop_by_attr(&html[ns..end]) {
+                        skip = Some((name, 1));
                         continue;
                     }
                 }
@@ -414,5 +584,50 @@ mod tests {
         assert!(l.chars().count() <= 1500 && l.chars().count() > 1400);
         assert!(l.ends_with("word"));
         assert_eq!(lead_of("tiny", 1500), "tiny");
+    }
+
+    #[test]
+    fn main_content_only() {
+        let t = html_to_text(
+            "<body><header><a>Skip to main content</a> Search the site</header><nav>menu</nav>\
+             <main><h1>Real title</h1><p>Real text.</p></main><footer>foot</footer></body>",
+        );
+        assert_eq!(t, "Real title\n\nReal text.");
+    }
+
+    #[test]
+    fn largest_main_candidate_wins_and_role_main_counts() {
+        let t = html_to_text(
+            "<div><article>card</article><div role=\"main\"><p>The big body of the page with lots of words.</p>\
+             <article>inner</article></div></div>",
+        );
+        assert_eq!(t, "The big body of the page with lots of words.\n\ninner");
+    }
+
+    #[test]
+    fn no_main_falls_back_to_whole_document_including_header() {
+        let t = html_to_text("<header>Site</header><p>Body</p><footer>f</footer>");
+        assert_eq!(t, "Site\n\nBody");
+        // a main with no text falls back too
+        assert_eq!(html_to_text("<main><img src=x></main><p>Body</p>"), "Body");
+    }
+
+    #[test]
+    fn header_inside_main_is_kept_chrome_roles_are_dropped() {
+        let t = html_to_text(
+            "<main><header><h1>Article head</h1></header>\
+             <div role=\"navigation\"><div>nested</div>links</div><div role='banner'>ban</div>\
+             <form role=search><div>find</div></form><span aria-hidden=\"true\">icon</span>\
+             <p aria-hidden=\"false\">visible</p><img aria-hidden=\"true\" src=a><p>end</p></main>",
+        );
+        assert_eq!(t, "Article head\n\nvisible\n\nend");
+    }
+
+    #[test]
+    fn attr_parsing() {
+        assert_eq!(attr_value("div class=\"a b\" role = 'main' id=x>", "role").as_deref(), Some("main"));
+        assert_eq!(attr_value("div ROLE=Main>", "role").as_deref(), Some("Main"));
+        assert_eq!(attr_value("div data-x=\"role=main\">", "role"), None);
+        assert_eq!(attr_value("input disabled aria-hidden=true >", "aria-hidden").as_deref(), Some("true"));
     }
 }

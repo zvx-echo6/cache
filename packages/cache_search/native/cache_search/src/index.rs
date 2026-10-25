@@ -25,7 +25,7 @@ use tantivy::tokenizer::{Language, LowerCaser, RemoveLongFilter, SimpleTokenizer
 use tantivy::{doc, Index, IndexReader, ReloadPolicy, TantivyDocument};
 use zim::{MimeType, Namespace, Target};
 
-pub const INDEX_FORMAT: u32 = 1;
+pub const INDEX_FORMAT: u32 = 2;
 pub const META_FILE: &str = "cache_search_index.json";
 pub const LOCK_FILE: &str = "cache_search_index.lock";
 /// Name under which the ZIM's analyzer is registered in Tantivy (stored in the schema).

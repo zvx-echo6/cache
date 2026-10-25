@@ -9,9 +9,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{Query, QueryParser};
-use tantivy::schema::{Field, Value as _};
+use tantivy::schema::{Field, IndexRecordOption, Value as _};
 use tantivy::snippet::SnippetGenerator;
-use tantivy::{DocAddress, Searcher, TantivyDocument};
+use tantivy::{DocAddress, DocSet, Searcher, TantivyDocument, Term};
 
 /// Reciprocal rank fusion constant.
 pub const RRF_K: f64 = 60.0;
@@ -34,7 +34,8 @@ fn five() -> usize {
     5
 }
 
-/// Reciprocal rank fusion over ranked lists of `(address, raw score)` (best first). Each address scores
+/// Reciprocal rank fusion, kept for fusing the keyword list with vector lists (packs, later); the
+/// keyword merge across ZIM sources uses `merge_keyword`. Over ranked lists of `(address, raw score)` (best first). Each address scores
 /// `sum 1/(RRF_K + rank)` over the lists it appears in (rank from 1; an address repeated inside one list counts
 /// once, at its best rank). Returns addresses by fused score, best first. Equal fused scores (for example two
 /// sources whose best hits are both rank 1) are ordered by the higher raw engine score, then by first seen.
@@ -69,6 +70,15 @@ pub fn rrf(lists: &[Vec<(String, f32)>]) -> Vec<(String, f64)> {
     v.into_iter().map(|(a, (f, _))| (a, f)).collect()
 }
 
+struct Hit {
+    path: String,
+    addr: DocAddress,
+    /// Raw BM25 score from the source's index.
+    raw: f32,
+    /// Fraction of distinct query terms present in the document (title, lead or body).
+    coverage: f32,
+}
+
 struct SrcHits {
     id: String,
     title: String,
@@ -76,14 +86,89 @@ struct SrcHits {
     query: Box<dyn Query>,
     lead: Field,
     title_f: Field,
-    path_f: Field,
     count: usize,
-    /// (path, doc address), best first.
-    hits: Vec<(String, DocAddress, f32)>,
+    /// Best first.
+    hits: Vec<Hit>,
 }
 
 fn text_of(doc: &TantivyDocument, f: Field) -> String {
     doc.get_first(f).and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+/// Distinct query terms (text only, as produced by the index's own analyzer when the query was parsed).
+fn query_term_texts(q: &dyn Query) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    q.query_terms(&mut |t, _| {
+        if let Some(s) = t.value().as_str() {
+            if !out.iter().any(|o| o == s) {
+                out.push(s.to_string());
+            }
+        }
+    });
+    out
+}
+
+/// Fraction of `terms` that occur in the document at `addr` in any of `fields`. 1.0 when there are no terms.
+fn term_coverage(searcher: &Searcher, addr: DocAddress, terms: &[String], fields: &[Field]) -> f32 {
+    if terms.is_empty() {
+        return 1.0;
+    }
+    let seg = searcher.segment_reader(addr.segment_ord);
+    let invs: Vec<_> = fields.iter().filter_map(|f| seg.inverted_index(*f).ok().map(|i| (*f, i))).collect();
+    let mut matched = 0usize;
+    for t in terms {
+        let hit = invs.iter().any(|(f, inv)| {
+            let term = Term::from_field_text(*f, t);
+            match inv.read_postings(&term, IndexRecordOption::Basic) {
+                Ok(Some(mut p)) => p.doc() <= addr.doc_id && (p.doc() == addr.doc_id || p.seek(addr.doc_id) == addr.doc_id),
+                _ => false,
+            }
+        });
+        if hit {
+            matched += 1;
+        }
+    }
+    matched as f32 / terms.len() as f32
+}
+
+/// A hit chosen for the merged list: (source index, hit index, merge score, passed the coverage test).
+struct Merged {
+    si: usize,
+    hi: usize,
+    score: f64,
+    raw: f32,
+    pass: bool,
+}
+
+/// Merge keyword hits across sources; `lists[source][rank] = (raw score, coverage)`. Each hit scores `raw / (best raw in its source) * coverage`. Hits with
+/// coverage below `min_cov` are dropped unless fewer than `need` hits would remain; then the best of the dropped
+/// ones fill up to `need` (after all the kept ones). Ties on score go to the higher raw score, then first seen.
+fn merge_keyword(lists: &[Vec<(f32, f32)>], min_cov: f32, need: usize) -> Vec<Merged> {
+    let mut all: Vec<Merged> = Vec::new();
+    for (si, l) in lists.iter().enumerate() {
+        let top = l.iter().map(|h| h.0).fold(f32::MIN, f32::max);
+        for (hi, &(raw, coverage)) in l.iter().enumerate() {
+            let norm = if top > 0.0 { (raw / top) as f64 } else { 1.0 };
+            all.push(Merged { si, hi, score: norm * coverage as f64, raw, pass: coverage >= min_cov });
+        }
+    }
+    let cmp = |a: &Merged, b: &Merged| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.raw.partial_cmp(&a.raw).unwrap_or(std::cmp::Ordering::Equal))
+    };
+    all.sort_by(cmp);
+    let kept = all.iter().filter(|m| m.pass).count();
+    if kept >= need {
+        all.retain(|m| m.pass);
+        all
+    } else {
+        // kept ones first, then the best of the rest
+        let (mut a, b): (Vec<_>, Vec<_>) = all.into_iter().partition(|m| m.pass);
+        a.extend(b);
+        a
+    }
 }
 
 impl Handle {
@@ -94,6 +179,7 @@ impl Handle {
         };
         let candidates = self.candidates_per_list.max(1) as usize + opts.offset;
         let snippet_chars = self.snippet_chars as usize;
+        let min_cov = self.min_term_coverage;
         let filter: Option<Vec<String>> =
             opts.sources.as_ref().map(|v| v.iter().map(|s| s.to_ascii_lowercase()).collect());
 
@@ -115,10 +201,13 @@ impl Handle {
             let Ok((top, count)) = searcher.search(&q, &(TopDocs::with_limit(candidates).order_by_score(), Count)) else {
                 continue;
             };
+            let terms = query_term_texts(&*q);
+            let fields = [oi.fields.title, oi.fields.lead, oi.fields.body];
             let mut hits = Vec::with_capacity(top.len());
-            for (score, addr) in top {
+            for (raw, addr) in top {
                 let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else { continue };
-                hits.push((text_of(&doc, oi.fields.path), addr, score));
+                let coverage = term_coverage(&searcher, addr, &terms, &fields);
+                hits.push(Hit { path: text_of(&doc, oi.fields.path), addr, raw, coverage });
             }
             per.push(SrcHits {
                 id,
@@ -127,34 +216,24 @@ impl Handle {
                 query: q,
                 lead: oi.fields.lead,
                 title_f: oi.fields.title,
-                path_f: oi.fields.path,
                 count,
                 hits,
             });
         }
 
-        let lists: Vec<Vec<(String, f32)>> = per
-            .iter()
-            .map(|p| p.hits.iter().map(|(path, _, sc)| (zimsrc::format_address(&p.id, path), *sc)).collect())
-            .collect();
-        let fused = rrf(&lists);
+        let lists: Vec<Vec<(f32, f32)>> =
+            per.iter().map(|p| p.hits.iter().map(|h| (h.raw, h.coverage)).collect()).collect();
+        let merged = merge_keyword(&lists, min_cov, opts.offset + opts.k);
         let mut generators: HashMap<usize, Option<SnippetGenerator>> = HashMap::new();
         let mut results: Vec<Value> = Vec::new();
-        for (address, _score) in fused.into_iter().skip(opts.offset).take(opts.k) {
-            // which source and doc: the first list that holds this address
-            let Some((si, di)) = per.iter().enumerate().find_map(|(si, p)| {
-                p.hits
-                    .iter()
-                    .position(|(path, _, _)| zimsrc::format_address(&p.id, path) == address)
-                    .map(|di| (si, di))
-            }) else {
-                continue;
-            };
-            let p = &per[si];
-            let Ok(doc) = p.searcher.doc::<TantivyDocument>(p.hits[di].1) else { continue };
+        for m in merged.into_iter().skip(opts.offset).take(opts.k) {
+            let p = &per[m.si];
+            let h = &p.hits[m.hi];
+            let address = zimsrc::format_address(&p.id, &h.path);
+            let Ok(doc) = p.searcher.doc::<TantivyDocument>(h.addr) else { continue };
             let art_title = text_of(&doc, p.title_f);
             let lead = text_of(&doc, p.lead);
-            let gen = generators.entry(si).or_insert_with(|| {
+            let gen = generators.entry(m.si).or_insert_with(|| {
                 let mut g = SnippetGenerator::create(&p.searcher, &*p.query, p.lead).ok();
                 if let Some(g) = g.as_mut() {
                     g.set_max_num_chars(snippet_chars.max(1));
@@ -181,7 +260,6 @@ impl Handle {
                 "source_title": p.title,
                 "page": Value::Null,
             }));
-            let _ = p.path_f;
         }
         Ok(json!({
             "results": results,
@@ -274,5 +352,43 @@ mod tests {
         let u = "17e9fb54-9554-d2cd-e15f-17cf750882d1";
         assert_eq!(h.read(&format!("zim:{u}/p"), 0).unwrap_err().code, crate::ErrorCode::BadJson);
         assert_eq!(h.read(&format!("zim:{u}/p"), 10).unwrap_err().code, crate::ErrorCode::NotFound);
+    }
+
+    fn order(m: &[Merged]) -> Vec<(usize, usize)> {
+        m.iter().map(|x| (x.si, x.hi)).collect()
+    }
+
+    #[test]
+    fn merge_keyword_drops_low_coverage_and_normalises_per_source() {
+        // source 0: strong, full coverage. source 1: weak raw scores, one hit with 2/3 coverage, one with 1/3.
+        let lists = vec![vec![(10.0, 1.0), (6.0, 1.0)], vec![(2.0, 0.67), (1.9, 0.34)]];
+        let m = merge_keyword(&lists, 0.5, 3);
+        // (1,1) has coverage 0.34 < 0.5 and is dropped; 3 remain: (0,0)=1.0, (1,0)=0.67, (0,1)=0.6
+        assert_eq!(order(&m), vec![(0, 0), (1, 0), (0, 1)]);
+        // per-source normalisation: the weak source's best hit scores 1.0*coverage, not its tiny raw score
+        assert!((m[1].score - 0.67).abs() < 1e-6);
+    }
+
+    #[test]
+    fn merge_keyword_fills_up_to_need_when_too_few_pass() {
+        let lists = vec![vec![(10.0, 0.2), (9.0, 0.4)], vec![(5.0, 0.3)]];
+        let m = merge_keyword(&lists, 0.5, 3);
+        assert_eq!(m.len(), 3, "nothing passes, so the best ones are all kept");
+        assert_eq!(order(&m), vec![(0, 1), (1, 0), (0, 0)]); // by normalised score x coverage
+        // enough pass: the rest are dropped
+        let lists = vec![vec![(10.0, 1.0), (9.0, 0.1)], vec![(5.0, 0.9)]];
+        let m = merge_keyword(&lists, 0.5, 2);
+        assert_eq!(order(&m), vec![(0, 0), (1, 0)]);
+        // passing hits stay ahead of fillers even when a filler scores higher
+        let lists = vec![vec![(10.0, 0.45), (1.0, 0.9)]];
+        let m = merge_keyword(&lists, 0.5, 2);
+        assert_eq!(order(&m), vec![(0, 1), (0, 0)]);
+    }
+
+    #[test]
+    fn merge_keyword_empty_and_ties() {
+        assert!(merge_keyword(&[], 0.5, 5).is_empty());
+        let lists = vec![vec![(4.0, 1.0)], vec![(4.0, 1.0)]];
+        assert_eq!(order(&merge_keyword(&lists, 0.5, 2)), vec![(0, 0), (1, 0)]);
     }
 }
