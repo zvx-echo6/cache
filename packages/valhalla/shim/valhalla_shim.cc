@@ -3,6 +3,7 @@
 #include <valhalla/baldr/rapidjson_utils.h>
 #include <valhalla/config.h>
 #include <valhalla/exceptions.h>
+#include <valhalla/midgard/logging.h>
 #include <valhalla/tyr/actor.h>
 
 #include <boost/property_tree/ptree.hpp>
@@ -94,6 +95,9 @@ valhalla_shim_t* valhalla_shim_init(const char* config) {
     }
     boost::property_tree::ptree pt;
     load_config(config, pt);
+    // Valhalla logs through a process-wide logger; the config's "logging" section picks where it goes
+    // ({"type": ""} is a no-op logger: nothing on stdout or in the host app's log).
+    valhalla::midgard::logging::ConfigureFromPtree(pt);
     auto h = std::make_unique<valhalla_shim>();
     // auto_cleanup = true: workers release their memory after every request (phone friendly).
     h->actor = std::make_unique<valhalla::tyr::actor_t>(pt, true);
