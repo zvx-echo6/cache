@@ -25,7 +25,7 @@ const List<Map<String, dynamic>> fakeCatalogue = [
     'source': {'url': 'https://tiles.openfreemap.org/planet', 'format': 'tilejson'},
     'recipe': 'tiles_as_is',
     'updates': 'weekly',
-    'approx_tile_bytes': 25000,
+    'approx_tile_bytes': 60000,
     ..._ofmLimits,
   },
   {

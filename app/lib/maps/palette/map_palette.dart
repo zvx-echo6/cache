@@ -85,12 +85,12 @@ final MapPalette _light = MapPalette(CacheThemeId.light, {
 
 /// Dark: low-glare blue-greys, labels light.
 final MapPalette _dark = MapPalette(CacheThemeId.dark, {
-  'land': _c(0x14171C), 'water': _c(0x1B3347), 'waterway': _c(0x28506E), 'park': _c(0x1F2D24),
+  'land': _c(0x14171C), 'water': _c(0x1F3B52), 'waterway': _c(0x2F5C80), 'park': _c(0x1F2D24),
   'parkEdge': _c(0x2A3B2F), 'wood': _c(0x1B2B21, 0.8), 'grass': _c(0x20301F), 'sand': _c(0x2B2A22),
   'ice': _c(0x2A3138), 'wetland': _c(0x1D3030), 'residential': _c(0xFFFFFF, 0.03), 'cemetery': _c(0x222C24),
   'pitch': _c(0x232E25), 'hospital': _c(0x33242B), 'school': _c(0x272719), 'aeroway': _c(0x22262C),
   'aerowayLine': _c(0x2E333B), 'building': _c(0x262A31), 'buildingEdge': _c(0x323740),
-  'roadMotorway': _c(0x7A5A34), 'roadMajor': _c(0x4A4F58), 'roadMinor': _c(0x33383F), 'roadPath': _c(0x5A606A),
+  'roadMotorway': _c(0x7A5A34), 'roadMajor': _c(0x59606B), 'roadMinor': _c(0x3E444D), 'roadPath': _c(0x5A606A),
   'roadMajorCasing': _c(0x1C1F24), 'roadMinorCasing': _c(0x20242A), 'rail': _c(0x5A6068),
   'boundary': _c(0x8A929C), 'boundaryMinor': _c(0x5A626C),
   'labelPlace': _c(0xE8EAED), 'labelMinor': _c(0xC9CED5), 'labelRoad': _c(0x9AA1AB), 'labelPath': _c(0x8A8478),
@@ -124,7 +124,7 @@ final MapPalette _parchment = MapPalette(CacheThemeId.parchment, {
 /// Tactical: black with reds only, so it does not spoil night vision. Every colour here has a red hue;
 /// features are told apart by brightness, not hue.
 final MapPalette _tactical = MapPalette(CacheThemeId.tactical, {
-  'land': _c(0x000000), 'water': _c(0x1A0505), 'waterway': _c(0x4A1010), 'park': _c(0x120303),
+  'land': _c(0x000000), 'water': _c(0x2E0909), 'waterway': _c(0x6A1612), 'park': _c(0x120303),
   'parkEdge': _c(0x2A0808), 'wood': _c(0x150404, 0.8), 'grass': _c(0x110303), 'sand': _c(0x1A0808),
   'ice': _c(0x1F0A0A), 'wetland': _c(0x180505), 'residential': _c(0x3C0A0A, 0.35), 'cemetery': _c(0x160404),
   'pitch': _c(0x160404), 'hospital': _c(0x240606), 'school': _c(0x1C0505), 'aeroway': _c(0x1A0606),
