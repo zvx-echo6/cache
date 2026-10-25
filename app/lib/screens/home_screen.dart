@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import 'sources_screen.dart';
+import 'models_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key, required this.app, required this.sources, required this.onOpenAsk});
@@ -119,7 +120,13 @@ class HomeScreen extends StatelessWidget {
       modelColor = k.warning;
     }
     final cards = [
-      _StatusCard(icon: Icons.memory, title: app.active == null ? 'Model' : app.displayName(app.active!), value: modelValue, valueColor: modelColor),
+      _StatusCard(
+        icon: Icons.memory,
+        title: app.active == null ? 'Model' : app.displayName(app.active!),
+        value: modelValue,
+        valueColor: modelColor,
+        onTap: () => openModels(context, app),
+      ),
       _StatusCard(
         icon: Icons.menu_book_outlined,
         title: 'Reading',

@@ -163,7 +163,8 @@ void _workerMain(SendPort toMain) {
           handle = nullptr;
         }
         final p = (msg['path'] as String).toNativeUtf8();
-        handle = b.clLoad(p, msg['nCtx'] as int, 4, err, _kErrLen);
+        // 0 threads: the native layer picks the fast cores itself.
+        handle = b.clLoad(p, msg['nCtx'] as int, 0, err, _kErrLen);
         malloc.free(p);
         if (handle == nullptr) {
           toMain.send({'type': 'loaded', 'id': id, 'error': err.toDartString()});

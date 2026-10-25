@@ -2,17 +2,30 @@
 
 #include "chat.h"
 #include "common.h"
+#include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "llama.h"
 #include "sampling.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
+
+#if defined(__ANDROID__)
+#include <android/log.h>
+#include <dlfcn.h>
+#include <sys/stat.h>
+#endif
 
 namespace {
 
@@ -22,6 +35,13 @@ struct Handle {
     const llama_vocab *       vocab = nullptr;
     common_chat_templates_ptr tmpls;
     int                       n_ctx = 0;
+    ggml_threadpool_t         pool  = nullptr;  // pinned threadpool (Android with several CPU clusters), else null
+    void                   (* pool_free)(ggml_threadpool_t) = nullptr;
+
+    // Tokens whose keys/values are in the KV cache, in order (the prompt of the last cl_start plus
+    // everything generated and decoded since). The next cl_start reuses the common prefix.
+    std::vector<llama_token>  cached;
+    int                       n_reused = 0;  // prompt tokens of the last cl_start taken from the cache
 
     // state of the current generation
     std::unique_ptr<common_chat_session> session;
@@ -65,10 +85,123 @@ size_t utf8_complete_prefix(const std::string & s) {
     return n;
 }
 
+void cl_logi(const char * fmt, ...) {
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "cache_llama", "%s", line);
+#else
+    (void) line;
+#endif
+}
+
 void quiet_log(enum ggml_log_level level, const char * text, void *) {
     if (level >= GGML_LOG_LEVEL_WARN) {
         fputs(text, stderr);
     }
+}
+
+#if defined(__ANDROID__)
+// Used while the CPU backend variants are loaded: lets the "loaded CPU backend from ..." line through.
+void backend_load_log(enum ggml_log_level level, const char * text, void *) {
+    if (level >= GGML_LOG_LEVEL_INFO) {
+        __android_log_print(level >= GGML_LOG_LEVEL_WARN ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "cache_llama", "%s", text);
+    }
+}
+#endif
+
+#if defined(CL_BACKEND_DL)
+// With GGML_BACKEND_DL the CPU backend is a set of libggml-cpu-*.so variants next to this library.
+// ggml scores each one against the running CPU and loads the best. Returns an error text, or "" if ok.
+std::string load_cpu_backend() {
+    static std::once_flag once;
+    static std::string    result;
+    std::call_once(once, [] {
+        Dl_info info;
+        if (!dladdr((void *) &load_cpu_backend, &info) || !info.dli_fname) {
+            result = "cannot find the folder of the native libraries";
+            return;
+        }
+        std::string dir = info.dli_fname;
+        dir = dir.substr(0, dir.rfind('/'));
+        llama_log_set(backend_load_log, nullptr);
+        ggml_backend_load_all_from_path(dir.c_str());
+        llama_log_set(quiet_log, nullptr);
+        ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (!dev) {
+            result = "no CPU backend variant could be loaded from " + dir;
+            return;
+        }
+        cl_logi("native library folder: %s", dir.c_str());
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        auto * features_fn = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+        if (features_fn) {
+            std::string f;
+            for (auto * ft = features_fn(reg); ft && ft->name; ft++) {
+                if (std::string(ft->value) != "0") f += std::string(f.empty() ? "" : " ") + ft->name;
+            }
+            cl_logi("CPU features used by the loaded variant: %s", f.c_str());
+        }
+    });
+    return result;
+}
+#endif
+
+// Which CPU cores to compute on. cpus is empty when no pinning is wanted.
+struct CpuPlan {
+    int              n_threads = 4;
+    std::vector<int> cpus;
+};
+
+// Android phones mix fast and slow ("little") cores; threads on the slow ones hold every step back.
+// Read each core's max frequency, leave out the slowest cluster when there is more than one, and use
+// at most 5 of the rest. If the files cannot be read: 4 threads, no pinning.
+CpuPlan plan_cpus() {
+    CpuPlan plan;
+#if defined(__ANDROID__)
+    std::vector<std::pair<int, long>> cores;  // (cpu, max kHz)
+    bool ok = true;
+    for (int i = 0; i < 64; i++) {
+        char dir[96], path[128];
+        snprintf(dir, sizeof(dir), "/sys/devices/system/cpu/cpu%d", i);
+        struct stat st;
+        if (stat(dir, &st) != 0) break;  // no more cores
+        snprintf(path, sizeof(path), "%s/cpufreq/cpuinfo_max_freq", dir);
+        long khz = 0;
+        if (FILE * f = fopen(path, "r")) {
+            if (fscanf(f, "%ld", &khz) != 1) khz = 0;
+            fclose(f);
+        }
+        if (khz <= 0) { ok = false; break; }
+        cores.emplace_back(i, khz);
+    }
+    if (!ok || cores.empty()) {
+        cl_logi("cannot read the CPU frequencies: %d threads, not pinned", plan.n_threads);
+        return plan;
+    }
+    std::set<long> clusters;
+    for (auto & c : cores) clusters.insert(c.second);
+    if (clusters.size() > 1) {
+        const long slowest = *clusters.begin();
+        cores.erase(std::remove_if(cores.begin(), cores.end(), [&](const std::pair<int, long> & c) { return c.second == slowest; }),
+                    cores.end());
+    }
+    // keep the fastest 5, then order by core number
+    std::stable_sort(cores.begin(), cores.end(), [](const std::pair<int, long> & a, const std::pair<int, long> & b) { return a.second > b.second; });
+    if (cores.size() > 5) cores.resize(5);
+    std::sort(cores.begin(), cores.end());
+    plan.n_threads = (int) cores.size();
+    std::string list;
+    for (auto & c : cores) {
+        plan.cpus.push_back(c.first);
+        list += (list.empty() ? "" : ",") + std::to_string(c.first);
+    }
+    cl_logi("%d CPU clusters; using %d threads pinned to cores %s", (int) clusters.size(), plan.n_threads, list.c_str());
+#endif
+    return plan;
 }
 
 }  // namespace
@@ -78,9 +211,19 @@ extern "C" {
 void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len) {
     try {
         if (n_ctx <= 0)     n_ctx = 8192;
-        if (n_threads <= 0) n_threads = 4;
         llama_log_set(quiet_log, nullptr);
+#if defined(CL_BACKEND_DL)
+        if (std::string why = load_cpu_backend(); !why.empty()) {
+            set_err(err, err_len, why);
+            return nullptr;
+        }
+#endif
         llama_backend_init();
+        CpuPlan plan;  // automatic choice, only used when the caller gives no thread count
+        if (n_threads <= 0) {
+            plan      = plan_cpus();
+            n_threads = plan.n_threads;
+        }
 
         auto h = std::make_unique<Handle>();
         llama_model_params mp = llama_model_default_params();
@@ -104,10 +247,33 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
         }
         h->n_ctx = (int) llama_n_ctx(h->ctx);
 
+        if (!plan.cpus.empty()) {
+            // A threadpool whose threads are each pinned to one of the chosen cores.
+            ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            auto * pool_new  = reg ? (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new") : nullptr;
+            auto * pool_free = reg ? (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free") : nullptr;
+            if (pool_new && pool_free) {
+                ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
+                for (int c : plan.cpus) tpp.cpumask[c] = true;
+                tpp.strict_cpu = true;
+                h->pool = pool_new(&tpp);
+                if (h->pool) {
+                    h->pool_free = pool_free;
+                    llama_attach_threadpool(h->ctx, h->pool, nullptr);
+                } else {
+                    cl_logi("cannot create the pinned threadpool: threads not pinned");
+                }
+            } else {
+                cl_logi("no threadpool support in the CPU backend: threads not pinned");
+            }
+        }
+
         h->tmpls = common_chat_templates_init(h->model, "");
         if (!h->tmpls) {
             set_err(err, err_len, "model has no usable chat template");
             llama_free(h->ctx);
+            if (h->pool) h->pool_free(h->pool);
             llama_model_free(h->model);
             return nullptr;
         }
@@ -159,6 +325,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         h->pending.clear();
         h->fed = 0;
         h->n_generated = 0;
+        h->n_reused = 0;
         h->stop = false;
 
         auto req = common_json::parse(request_json);
@@ -180,6 +347,10 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         common_params_sampling sp;
         sp.temp  = 0.7f;
         sp.top_p = 0.95f;
+        // Optional top-level "temperature" (0 = greedy, used by tests that compare outputs).
+        if (req.contains("temperature") && req.at("temperature").is_number()) {
+            sp.temp = req.at("temperature").get<float>();
+        }
         h->session->apply_sampling(sp);  // tool-call grammar (lazy) and its triggers
         h->smpl.reset(common_sampler_init(h->model, sp));
         if (!h->smpl) {
@@ -201,15 +372,36 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
             return -1;
         }
 
-        // Full re-decode every turn (prefix reuse is a later optimisation).
-        llama_memory_clear(llama_get_memory(h->ctx), true);
+        // Keep what the KV cache already holds for the start of this prompt: find the longest common
+        // token prefix, drop the cache after it and decode only the rest. At least the last prompt
+        // token is always decoded, because the first generated token needs its logits.
+        llama_memory_t mem = llama_get_memory(h->ctx);
+        size_t keep = 0;
+        {
+            const size_t limit = std::min(h->cached.size(), tokens.size() - 1);
+            while (keep < limit && h->cached[keep] == tokens[keep]) keep++;
+        }
+        if (keep == 0) {
+            llama_memory_clear(mem, true);
+        } else if (keep < h->cached.size() && !llama_memory_seq_rm(mem, 0, (llama_pos) keep, -1)) {
+            // Some caches (sliding-window attention) cannot drop just a tail: start over, correct but slower.
+            llama_memory_clear(mem, true);
+            keep = 0;
+        }
+        h->cached.resize(keep);
+        h->n_reused = (int) keep;
+
         const int n_batch = 512;
-        for (int i = 0; i < h->n_prompt; i += n_batch) {
+        for (int i = (int) keep; i < h->n_prompt; i += n_batch) {
             int n = std::min(n_batch, h->n_prompt - i);
             if (llama_decode(h->ctx, llama_batch_get_one(tokens.data() + i, n)) != 0) {
+                llama_memory_clear(mem, true);
+                h->cached.clear();
+                h->n_reused = 0;
                 set_err(err, err_len, "decode failed while reading the prompt");
                 return -1;
             }
+            h->cached.insert(h->cached.end(), tokens.begin() + i, tokens.begin() + i + n);
         }
         h->n_past   = h->n_prompt;
         h->finished = false;
@@ -242,9 +434,12 @@ int cl_next(void * hp, char * buf, int buf_len) {
         if (h->n_past + 1 >= h->n_ctx) {
             h->finished = true;  // context full: this is the last token
         } else if (llama_decode(h->ctx, llama_batch_get_one(&tok, 1)) != 0) {
+            llama_memory_clear(llama_get_memory(h->ctx), true);  // the cache no longer matches `cached`
+            h->cached.clear();
             return -2;
         } else {
             h->n_past++;
+            h->cached.push_back(tok);
         }
 
         size_t n = utf8_complete_prefix(h->pending);
@@ -321,6 +516,7 @@ int cl_finish(void * hp, char * out_json, int len) {
 
 int cl_prompt_tokens(void * hp)    { return ((Handle *) hp)->n_prompt; }
 int cl_generated_tokens(void * hp) { return ((Handle *) hp)->n_generated; }
+int cl_reused_tokens(void * hp)    { return ((Handle *) hp)->n_reused; }
 
 void cl_stop(void * hp) { ((Handle *) hp)->stop.store(true); }
 
@@ -331,6 +527,7 @@ void cl_free(void * hp) {
     h->session.reset();
     h->tmpls.reset();
     if (h->ctx)   llama_free(h->ctx);
+    if (h->pool)  h->pool_free(h->pool);
     if (h->model) llama_model_free(h->model);
     delete h;
 }

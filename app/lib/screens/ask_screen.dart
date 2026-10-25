@@ -55,10 +55,7 @@ class _AskScreenState extends State<AskScreen> {
     });
   }
 
-  void _openModels() {
-    widget.app.refreshModels();
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ModelsScreen(app: widget.app)));
-  }
+  void _openModels() => openModels(context, widget.app);
 
   @override
   Widget build(BuildContext context) {

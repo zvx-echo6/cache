@@ -26,6 +26,17 @@ android {
         versionName = flutter.versionName
     }
 
+    packaging {
+        jniLibs {
+            // The native layer finds its CPU variant libraries (libggml-cpu-*.so) by scanning the app's
+            // library folder, so they must be installed there as real files.
+            useLegacyPackaging = true
+            // Not shipped: on the Pixel 8 (Tensor G3) the SVE2 variants read prompts at about half the
+            // speed of armv8.6_1, and ggml would prefer them. Keep every armv8.x variant.
+            excludes += "**/libggml-cpu-android_armv9*.so"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

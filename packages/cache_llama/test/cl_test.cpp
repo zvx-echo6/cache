@@ -72,6 +72,29 @@ static std::string between(const std::string & s, const std::string & a, const s
     return j == std::string::npos ? "" : s.substr(i, j - i);
 }
 
+// One greedy generation (temperature 0) of at most max_tok tokens. Returns false on error.
+static bool greedy(void * h, const std::string & user, int max_tok, std::string & text, int & n_prompt, int & n_reused) {
+    static const char * LONG_SYSTEM =
+        "You are Cache, an offline survival and preparedness assistant. Answer briefly and plainly. "
+        "Use short sentences. Do not use headings. Never invent facts: if you are not sure, say so. "
+        "When a question is about safety, give the most important step first. When a question is about "
+        "water, food, shelter, fire, first aid or navigation, keep the answer practical and specific.";
+    std::string req = "{\"temperature\":0,\"enable_thinking\":false,\"messages\":[{\"role\":\"system\",\"content\":" + js(LONG_SYSTEM) +
+                      "},{\"role\":\"user\",\"content\":" + js(user) + "}]}";
+    char err[512] = "";
+    if (cl_start(h, req.c_str(), err, sizeof(err)) != 0) { printf("cl_start failed: %s\n", err); return false; }
+    n_prompt = cl_prompt_tokens(h);
+    n_reused = cl_reused_tokens(h);
+    text.clear();
+    std::vector<char> buf(256);
+    int n;
+    while ((n = cl_next(h, buf.data(), (int) buf.size())) >= 0) {
+        text.append(buf.data(), (size_t) n);
+        if (cl_generated_tokens(h) >= max_tok) cl_stop(h);
+    }
+    return n != -2;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 2) { fprintf(stderr, "usage: cl_test <model.gguf> [n_threads]\n"); return 2; }
     int threads = argc > 2 ? atoi(argv[2]) : 4;
@@ -128,6 +151,31 @@ int main(int argc, char ** argv) {
         bool p4 = r4.ok && cites && no_call;
         printf("TEST 4 tool result round (cites=%d, no new tool call=%d): %s\n", cites, no_call, p4 ? "PASS" : "FAIL");
         fails += !p4;
+    }
+
+    // (5) KV cache prefix reuse: same prompt start, different ending. The second start must decode
+    // fewer tokens and still give exactly the output a fresh context gives (greedy sampling).
+    printf("=== (5) prefix reuse ===\n");
+    {
+        const std::string qa = "Name three ways to purify water. One line each.";
+        const std::string qb = "Name three ways to start a fire without matches. One line each.";
+        const int max_tok = 40;
+        std::string ta, tb_reuse, tb_fresh, tb_again;
+        int pa = 0, ra = 0, pb = 0, rb = 0, pf = 0, rf = 0, pg = 0, rg = 0;
+        bool ok = greedy(h, qa, max_tok, ta, pa, ra) && greedy(h, qb, max_tok, tb_reuse, pb, rb);
+        void * h2 = ok ? cl_load(argv[1], 8192, threads, err, sizeof(err)) : nullptr;  // fresh context, nothing cached
+        ok = ok && h2 && greedy(h2, qb, max_tok, tb_fresh, pf, rf);
+        if (h2) cl_free(h2);
+        ok = ok && greedy(h, qb, max_tok, tb_again, pg, rg);  // identical prompt again
+        printf("A: %d prompt tokens, %d reused\nB on the same context: %d prompt tokens, %d reused, decoded %d\n"
+               "B on a fresh context: %d prompt tokens, %d reused\nB again: %d prompt tokens, %d reused, decoded %d\n",
+               pa, ra, pb, rb, pb - rb, pf, rf, pg, rg, pg - rg);
+        printf("B (reuse): %s\nB (fresh): %s\n", tb_reuse.c_str(), tb_fresh.c_str());
+        bool p5 = ok && rb > 0 && (pb - rb) < pb && rf == 0 && tb_reuse.size() > 20 && tb_reuse == tb_fresh &&
+                  rg == pg - 1 && tb_again == tb_fresh;
+        printf("TEST 5 prefix reuse (decoded %d of %d tokens, output identical to fresh=%d, repeat decodes %d): %s\n\n",
+               pb - rb, pb, (int) (tb_reuse == tb_fresh), pg - rg, p5 ? "PASS" : "FAIL");
+        fails += !p5;
     }
 
     printf("\n%s (%d failed)\n", fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED", fails);
