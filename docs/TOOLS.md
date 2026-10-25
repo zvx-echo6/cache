@@ -112,34 +112,70 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
     "to_type": {"type": "string",
                 "enum": ["emergency_room", "hospital", "urgent_care", "pharmacy", "fuel", "police", "fire_station", "campground", "trailhead", "water", "shelter"],
                 "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."},
-    "mode": {"type": "string", "enum": ["drive", "walk", "bike"]},
+    "mode": {"type": "string", "enum": ["drive", "walk", "bike", "offroad_vehicle", "offroad_foot"],
+             "description": "drive, walk and bike follow roads and paths. offroad_vehicle and offroad_foot cross open country between roads, tracks and trails; use them only when the person asks to go off-road or the place is off the road network."},
     "near": {"type": "string", "minLength": 1, "maxLength": 200,
-             "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."}},
+             "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
+    "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
+                    "description": "Off-road legs only: how private or closed land is treated. strict never crosses it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it."}},
     "required": ["mode"], "additionalProperties": false}}}
 ```
 
+`to_type` lists the categories in the installed places pack; the 11 above are the default list while no pack says otherwise.
+Give exactly one of `to` and `to_type`. `land_access` defaults to `pragmatic` and only matters for off-road legs.
 Steps are capped at 15 in the result (`steps_truncated`, `steps_omitted`), to fit the 8k context.
 
 Differences from AIDA: no Meshtastic waypoint or `pins`/`bridge` fields; the start defaults to the phone's GPS
 position instead of the sender's node; `water` and `shelter` added to the categories (from the map pack's OSM
-data). Off-road legs come in 1.x; until then a destination off the road network returns the road route plus a
-`warnings` entry `{"code": "offroad_unavailable", "gap_m": N}`.
+data); `land_access` and the two off-road modes added; the result adds `map_region` and `map_region_age`.
 
-Result (JSON): the same fields as AIDA's navigate result, plus `"n"`:
+**Off-road.** `mode` `offroad_vehicle` or `offroad_foot` always routes across open country between roads, tracks
+and trails. With `drive`, `walk` or `bike`, a start or destination away from the road network gets off-road legs
+at that end when the off-road data is installed. Without it, the road route is returned with a `warnings`
+entry `{"code": "offroad_unavailable", "gap_m": N}`. Off-road modes need the off-road pack and elevation data;
+without them the call fails with `not_set_up`.
+
+Result (JSON). Field order is the order the tool writes them. The tool writes `"address": "nav:<route_id>"`
+as the first field; the framework replaces it with `"n"` and puts `"ok": true` in front.
 
 ```json
-{"ok": true, "n": 6, "mode": "drive", "location_bias": "phone_location",
+{"ok": true, "n": 6, "mode": "offroad_vehicle", "location_bias": "phone_location",
  "from_matched": {"place_name": "current location", "lat": 42.536, "lon": -113.792},
- "to_matched": {"place_name": "Cassia Regional Hospital", "kind": "hospital", "street": "1501 Hiland Ave", "locality": "Burley", "state": "ID", "lat": 42.531, "lon": -113.785},
- "other_destination_candidates": [{"place_name": "Minidoka Memorial Hospital", "locality": "Rupert", "state": "ID", "drive_min": 14.2}],
- "nearest_search": {"to_type": "emergency_room", "ranked_by": "drive_time"},
- "distance_mi": 1.1, "distance_km": 1.8, "duration_minutes": 4.0, "major_roads": ["Overland Ave"],
- "step_count": 5, "steps": [{"index": 0, "kind": "road", "street_names": ["Main St"], "distance_mi": 0.3, "cardinal": "S", "instruction": "Head south on Main St"}],
- "steps_truncated": false, "steps_omitted": 0, "map_region": "Idaho", "map_region_age": "12 days old"}
+ "to_matched": {"place_name": "Goldbug Hot Springs", "kind": "poi", "locality": "Salmon", "state": "ID", "lat": 44.9021, "lon": -113.8316},
+ "other_destination_candidates": [{"place_name": "Goldbug Hot Springs Trailhead", "locality": "Salmon", "state": "ID"}],
+ "distance_mi": 9.4, "distance_km": 15.1, "duration_minutes": 62.0, "major_roads": ["Warm Springs Rd"],
+ "step_count": 3,
+ "steps": [
+   {"index": 0, "kind": "road", "street_names": ["Warm Springs Rd"], "distance_mi": 8.6, "cardinal": "SW", "instruction": "Head southwest on Warm Springs Rd"},
+   {"index": 1, "kind": "offroad_follow", "street_names": [], "distance_mi": 0.5, "cardinal": "W", "instruction": "Follow Goldbug Trail west for 0.5 mi",
+    "travel": "2w", "grade_class": "moderate", "elev_gain_m": 85, "elev_loss_m": 4, "terrain": "tree_cover", "follow": {"trail_kind": "trail", "name": "Goldbug Trail"}},
+   {"index": 2, "kind": "offroad", "street_names": [], "distance_mi": 0.3, "cardinal": "NW", "instruction": "Ride northwest for 0.3 mi across tree cover (steep, climbing 40 m)",
+    "travel": "2w", "grade_class": "steep", "elev_gain_m": 40, "elev_loss_m": 0, "terrain": "tree_cover"}],
+ "steps_truncated": false, "steps_omitted": 0,
+ "offroad_mi": 0.8, "offroad_note": "Part of this route leaves the road network. Off-road legs are estimated from terrain and elevation data, not from marked roads or trails; check conditions and land access before going.",
+ "warnings": [{"code": "offroad_unavailable", "gap_m": 968}],
+ "map_region": "Idaho", "map_region_age": "12 days old"}
 ```
 
+Fields that depend on the trip:
+- `other_destination_candidates` is left out when empty. On a nearest-place search each entry also has `drive_min`
+  (`walk_min` or `bike_min` for those modes): the travel time in minutes.
+- `nearest_search` (`{"to_type": ..., "ranked_by": "drive_time"}`; `ranked_by` is `<mode>_time`, or `distance`
+  when no route could be timed) is present only for a `to_type` search, after `other_destination_candidates`.
+- `from_matched` carries `place_name`, `lat`, `lon`; `to_matched` also carries `kind`, `street`, `locality`, `state`
+  when known.
+- Off-road steps (`kind` is `offroad` or `offroad_follow`) add `travel` (`foot`, `2w`, `4w` or `vehicle`),
+  `grade_class`, `elev_gain_m`, `elev_loss_m`, `terrain` (null when unknown) and, on `offroad_follow`, `follow`
+  (`trail_kind` and `name`). Their `instruction` is written by the tool; road steps carry the router's text.
+- `offroad_mi` and `offroad_note` appear only when the route has off-road legs.
+- `warnings` appears only when there is one; each entry is `{"code": "offroad_unavailable", "gap_m": N}`, `gap_m`
+  being how far in metres the route stops short of the requested end.
+
+The example above shows the optional fields together to show their shapes; a real result has only those that apply.
+
 Errors (AIDA's codes kept): `geocode_empty` (with `which`, `query`, `searched_within_km`), `origin_unknown`,
-`nearby_empty`, `same_place`, `route_failed`, plus `not_set_up` when no map region covers the area.
+`nearby_empty` (with `to_type`, `searched_within_km`), `same_place`, `route_failed` (with `reason`: the router's
+code), plus `not_set_up` when no map region covers the area or the off-road data an off-road mode needs is missing.
 
 ### nearby
 
@@ -307,10 +343,7 @@ fetched.
 
 ## 1.x additions
 
-### navigate, off-road
-
-`mode` gains `"offroad_vehicle"` and `"offroad_foot"`; results gain AIDA's off-road step fields (`travel`,
-`grade_class`, `elev_gain_m`, `elev_loss_m`, `terrain`, `follow`, `offroad_mi`, `offroad_note`).
+None at present. Off-road navigate (the `offroad_vehicle` and `offroad_foot` modes, `land_access` and the off-road step fields) is part of navigate in 1.0, above.
 
 ---
 
