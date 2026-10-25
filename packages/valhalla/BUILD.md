@@ -77,9 +77,11 @@ valhalla_shim_t* valhalla_shim_init(const char* config);   // config file path O
 char* valhalla_shim_route (valhalla_shim_t*, const char* request_json);
 char* valhalla_shim_matrix(valhalla_shim_t*, const char* request_json);   // sources_to_targets
 char* valhalla_shim_locate(valhalla_shim_t*, const char* request_json);
+char* valhalla_shim_trace_attributes(valhalla_shim_t*, const char* request_json);   // map-matching (surface changes)
 void  valhalla_shim_string_free(char*);
 void  valhalla_shim_destroy(valhalla_shim_t*);
 const char* valhalla_shim_last_error(valhalla_shim_t*);    // NULL handle = last init error on this thread
+int         valhalla_shim_last_error_code(valhalla_shim_t*); // Valhalla error_code of the last failure (442 no path, 171 no edges, 154 limit, ...), 0 if none
 const char* valhalla_shim_version(void);
 ```
 
@@ -97,7 +99,7 @@ configured behaviour, not a shim issue.
 ## Test program
 
 ```
-valhalla_shim_test <config.json> <route|matrix|locate> <request.json> [repeats] [-q] [-o out.json]
+valhalla_shim_test <config.json> <route|matrix|locate|trace_attributes> <request.json> [repeats] [-q] [-o out.json]
 ```
 
 ## Tile cutter (`tools/tilecut`)
