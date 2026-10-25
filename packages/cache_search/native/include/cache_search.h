@@ -32,31 +32,38 @@ typedef struct cs_handle cs_handle;
 typedef struct cs_conv cs_conv;
 typedef struct cs_job cs_job;
 
-/* {"version":"0.1.0","pack_format":1,"index_format":2} */
+/* {"version":"0.1.0","index_format":2} */
 char *cs_version(void);
 
 /* --- handle and sources --- */
 
 /* config_json: {
  *   "sources": [
- *     {"kind":"zim",  "path":"/.../wikimed.zim",        "index_dir":"/.../wikimed.idx"},
- *     {"kind":"pack", "path":"/.../recon.cachepack",    "index_dir":"/.../recon.idx"}
+ *     {"kind":"zim",     "path":"/.../wikimed.zim",  "index_dir":"/.../wikimed.idx"},
+ *     {"kind":"library", "path":"<shard dir>",       "index_dir":"<tantivy dir>",
+ *      "settings":{"format":1,"library_id":"...","title":"...","fields":{"text":"content",...},
+ *                  "leave_out":[...],"embedding":{"vector":"","model":"...","sha256":"...","dims":1024},
+ *                  "keyword_index":"auto"}}
  *   ],
  *   "snippet_chars": 400,          optional, default 400
  *   "candidates_per_list": 50,     optional, default 50
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
- * Each source gets a stable id: the ZIM's UUID, or the pack's pack_id. A source with a missing, stale or
+ * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
+ * "settings" is the library settings file's JSON (see DESIGN.md); it is optional, and without it (and without
+ * a settings file next to the library) the core guesses from payload field names and vector size.
+ * Each source gets a stable id: the ZIM's UUID, or the library's library_id. A source with a missing, stale or
  * building index is reported by cs_status() and skipped by search; it is not an error for cs_open. */
 cs_handle *cs_open(const char *config_json);
 
-/* Replace the source list (a ZIM or pack was added or removed). Same JSON as cs_open. 0 on success. */
+/* Replace the source list (a ZIM or library was added or removed). Same JSON as cs_open. 0 on success. */
 int32_t cs_set_sources(cs_handle *h, const char *config_json);
 
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
  *              "docs":N,"embedding_model":"..."|null,
- *              "pack_version":"..."|null (null for ZIMs),"error":null|{"code","message"}}]}
+ *              "library_id":"..."|null,"keyword_index":"own"|"device"|"none"|null (null for ZIMs),
+ *              "error":null|{"code","message"}}]}
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
  * "indexed":false and its "error"; the other sources work normally. */
 char *cs_status(cs_handle *h);
@@ -75,16 +82,18 @@ void cs_close(cs_handle *h);
  *   "sources": ["<id>", ...] | null,          null = all sources
  *   "query_vector": {"model":"<embedding model id>","vector":[...]} | null
  * }
- * The vector is used only for packs built with that embedding model; other sources are keyword-only.
+ * The vector is used only for libraries whose settings embedding.model matches this model id; other sources
+ * are keyword-only.
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);
 
-/* Text for an address ("zim:<uuid>/<path>" or "pack:<pack-id>/<ext_id>"), cut to max_chars at a
- * paragraph end. An address not in the current file (e.g. a pack replaced by a newer version) returns NULL with
- * code "not_found".
- * ZIM:  {"address","title","text","truncated":bool}
- * Pack: {"address","title","text","truncated":bool,"book_title","author","page","published_year"} */
+/* Text for an address ("zim:<uuid>/<path>" or "lib:<library-id>/<point-id>", the point id as Qdrant gives it:
+ * an integer or a UUID string), cut to max_chars at a paragraph end. An address not in the current file (e.g.
+ * a library replaced by a newer snapshot) returns NULL with code "not_found".
+ * ZIM:     {"address","title","text","truncated":bool}
+ * Library: {"address","title","text","truncated":bool,"author","page","source_type"}
+ *          (fields are null when the library's settings do not map them) */
 char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
 
 /* --- Browse: raw ZIM entries --- */
@@ -122,9 +131,10 @@ void cs_conversation_free(cs_conv *c);
 /* --- long jobs --- */
 
 /* kind "index_zim":  {"zim_path","index_dir","heap_mb":200}
- * kind "index_pack": {"pack_path","index_dir"}
+ * kind "index_library": {"library_path","index_dir","heap_mb":200}
+ *   builds the device Tantivy index from the library's mapped text field.
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
- * tokenizer (from the ZIM or pack language; English stemmer by default) are recorded in index_dir. */
+ * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);
 
 /* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"}} */
