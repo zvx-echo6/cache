@@ -464,6 +464,13 @@ class _MapsScreenState extends State<MapsScreen> {
             ),
           ),
         ),
+        if (!drawing && maps.baseProblem != null)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: NoticePill(text: maps.baseProblem!),
+            ),
+          ),
         if (!drawing) ...[
           if (fix != null)
             SafeArea(

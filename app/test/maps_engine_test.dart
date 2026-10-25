@@ -418,4 +418,60 @@ void main() {
     );
     expect(shortAttribution('x' * 200).length, 80);
   });
+
+  group('the base map comes from the published catalogue', () {
+    test('until the catalogue has a basemap entry the bundled fallback has no address and the map says so', () async {
+      final m = MapsState(engine: engine, settingsDirOverride: dir, network: _Net(allowed: true));
+      await m.init();
+      final b = engine.layer('basemap')!;
+      expect(b.isFallback, isTrue);
+      expect(b.sourceUrl, isEmpty);
+      expect(b.hasNoSource, isTrue);
+      expect(m.isOn('basemap'), isTrue);
+      expect(m.baseProblem, 'Base map not published yet');
+      // A base map that is off (or another base map) raises nothing.
+      m.setOn('basemap', false);
+      expect(m.baseProblem, isNull);
+    });
+
+    test('when the published catalogue gains the entry, it replaces the fallback and the message goes', () async {
+      final published = {
+        'format': 1,
+        'layers': [
+          {
+            'format': 1,
+            'id': 'basemap',
+            'title': 'Base map',
+            'description': 'The planet.',
+            'kind': 'basemap',
+            'layout': 'protomaps-v4',
+            'transform': 'as_is',
+            'source': {'type': 'pmtiles', 'url': 'https://cache.echo6.co/basemap/planet.pmtiles', 'minzoom': 0, 'maxzoom': 15, 'tile_format': 'mvt'},
+            'attribution': '© OpenStreetMap contributors · Protomaps',
+            'license': 'ODbL',
+            'coverage': {'bbox': [-180.0, -85.0, 180.0, 85.0]},
+            'offline': {'allowed': true},
+          },
+        ],
+      };
+      final e = FakeLayerEngine(
+        dirOverride: Directory('${dir.path}/pub'),
+        fetcher: (u) async => u.path.endsWith('catalogue.json') ? FetchedTile(utf8.encode(jsonEncode(published))) : null,
+        catalogueUrl: Uri.parse('https://example.test/catalogue.json'),
+      );
+      final m = MapsState(engine: e, settingsDirOverride: Directory('${dir.path}/pub'), network: _Net(allowed: true));
+      await m.init();
+      expect(m.baseProblem, 'Base map not published yet');
+      await e.refreshCatalogue();
+      final b = e.layer('basemap')!;
+      expect(b.isFallback, isFalse);
+      expect(b.sourceUrl, endsWith('planet.pmtiles'));
+      expect(b.layout, 'protomaps-v4');
+      expect(m.isOn('basemap'), isTrue, reason: 'it stays the one that is on');
+      expect(m.baseProblem, isNull);
+      // The bundled copy is not kept next to it.
+      expect([for (final l in e.layers) if (l.id == 'basemap') l].length, 1);
+      e.dispose();
+    });
+  });
 }

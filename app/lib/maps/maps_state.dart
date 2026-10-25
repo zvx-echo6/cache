@@ -72,6 +72,15 @@ class MapsState extends ChangeNotifier {
   /// Set by the catalogue to ask the map screen for a drawn area for this layer; the screen clears it.
   String? drawRequest;
 
+  /// Set while the base map in use has no source address, because the published catalogue has no entry for it
+  /// yet. The map screen says so instead of showing a blank map.
+  String? get baseProblem {
+    for (final u in uses) {
+      if (u.def.isBase && u.def.isFallback && u.def.hasNoSource) return 'Base map not published yet';
+    }
+    return null;
+  }
+
   /// The small line about layers that cannot draw here and now, or null.
   String? notice;
   File? _file;

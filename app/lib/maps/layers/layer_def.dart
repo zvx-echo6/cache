@@ -90,6 +90,12 @@ class LayerDef {
 
   bool get isBase => kind == LayerKind.basemap;
 
+  /// A bundled stand-in for an entry of the published catalogue (same id), used until that entry is fetched.
+  bool get isFallback => raw['fallback'] == true;
+
+  /// A definition with nowhere to read tiles from (a fallback whose catalogue entry does not exist yet).
+  bool get hasNoSource => sourceUrl.isEmpty && raw['fake_unavailable'] != true;
+
   /// The tile layout of a base map: "openmaptiles" (the OpenFreeMap style) or "protomaps-v4".
   String get layout => (raw['layout'] as String?) ?? 'openmaptiles';
 

@@ -19,8 +19,11 @@ const Map<String, dynamic> _ofmLimits = {
 const List<Map<String, dynamic>> fakeCatalogue = [
   {
     // The project's own base map: the Protomaps v4 planet in its storage bucket, z0-15, the same for everyone.
-    // The file is not published yet; the address is the expected one.
+    // The published catalogue carries the real entry (same id, with its source address) and replaces this one
+    // as soon as it is fetched. This copy is only the offline-first fallback: it has no address, and the Maps
+    // tab says the base map is not published yet instead of drawing a blank.
     'id': 'basemap',
+    'fallback': true,
     'title': 'Base map',
     'description': 'Roads, places, water and land from OpenStreetMap, drawn in the app\'s own colours.',
     'license': 'Map data ODbL 1.0 (OpenStreetMap contributors); Protomaps basemap tiles',
@@ -31,7 +34,7 @@ const List<Map<String, dynamic>> fakeCatalogue = [
     'default_on': true,
     'source': {
       'type': 'pmtiles',
-      'url': 'https://cache.echo6.co/basemap/basemap.pmtiles',
+      'url': '',
       'minzoom': 0,
       'maxzoom': 15,
       'tile_format': 'mvt',
