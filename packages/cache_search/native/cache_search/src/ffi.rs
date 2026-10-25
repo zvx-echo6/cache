@@ -4,6 +4,7 @@
 //! Errors with no handle to hold them (a failed `cs_open`, a NULL handle) are kept per thread and
 //! returned by `cs_last_error(NULL)`.
 
+use crate::conv::Conversation;
 use crate::error::{Error, Result};
 use crate::handle::Handle;
 use crate::job::Job;
@@ -280,6 +281,73 @@ pub unsafe extern "C" fn cs_job_free(j: *mut Job) {
         return;
     }
     let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(j))));
+}
+
+/// Title suggestions for the address bar. NULL `options_json` means defaults.
+///
+/// # Safety
+/// `h` NULL or live; `prefix` NULL or NUL-terminated; `options_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_suggest(h: *mut Handle, prefix: *const c_char, options_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let p = arg_str(prefix, "prefix")?;
+        let o = if options_json.is_null() { None } else { Some(arg_str(options_json, "options_json")?) };
+        out_string(h.suggest(p, o)?)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cs_conversation_new() -> *mut Conversation {
+    let r = guarded(|| Ok(Box::into_raw(Box::new(Conversation::new()))));
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
+/// NULL on error; the error is in `cs_last_error(NULL)`.
+///
+/// # Safety
+/// `c` NULL or a live conversation; `results_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_format(c: *mut Conversation, results_json: *const c_char) -> *mut c_char {
+    let r = guarded(|| {
+        if c.is_null() {
+            return Err(Error::bad_json("null conversation"));
+        }
+        let s = arg_str(results_json, "results_json")?;
+        out_string((*c).format(s)?)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
+/// # Safety
+/// `c` NULL or a live conversation.
+#[no_mangle]
+pub unsafe extern "C" fn cs_conversation_ids(c: *mut Conversation) -> *mut c_char {
+    let r = guarded(|| {
+        if c.is_null() {
+            return Err(Error::bad_json("null conversation"));
+        }
+        out_string((*c).ids_json())
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
+/// # Safety
+/// `c` NULL or a conversation from `cs_conversation_new` not used afterwards.
+#[no_mangle]
+pub unsafe extern "C" fn cs_conversation_free(c: *mut Conversation) {
+    if c.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(c))));
 }
 
 /// # Safety
