@@ -40,6 +40,9 @@ class AppState extends ChangeNotifier {
   ModelInfo? activeInfo;
   ModelEntry? loading;
   String? loadError;
+
+  /// Set when the models folder cannot be read (for example the folder belongs to another user).
+  String? modelsError;
   final Set<String> _unsupported = {};
 
   /// Real model names (from the model's own metadata), by [ModelEntry.key]. Known once a model has
@@ -74,7 +77,11 @@ class AppState extends ChangeNotifier {
           await getApplicationDocumentsDirectory();
       modelsDir = Directory('${base.path}/models');
     }
-    await modelsDir!.create(recursive: true);
+    try {
+      await modelsDir!.create(recursive: true);
+    } on FileSystemException {
+      // Reported by refreshModels below.
+    }
     await refreshModels();
     notifyListeners();
 
@@ -127,10 +134,16 @@ class AppState extends ChangeNotifier {
 
   Future<void> refreshModels() async {
     final found = <ModelEntry>[];
-    for (final f in modelsDir!.listSync().whereType<File>()) {
-      if (f.path.toLowerCase().endsWith('.gguf')) {
-        found.add(ModelEntry(path: f.path, size: f.lengthSync()));
+    try {
+      for (final f in modelsDir!.listSync().whereType<File>()) {
+        if (f.path.toLowerCase().endsWith('.gguf')) {
+          found.add(ModelEntry(path: f.path, size: f.lengthSync()));
+        }
       }
+      modelsError = null;
+    } on FileSystemException {
+      found.clear();
+      modelsError = "Can't read the models folder";
     }
     found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     models = found;

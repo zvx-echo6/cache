@@ -32,7 +32,15 @@ if (ANDROID_ABI STREQUAL "x86_64")
   set(GGML_FMA  ON CACHE BOOL "" FORCE)
   set(GGML_F16C ON CACHE BOOL "" FORCE)
 endif()
-# arm64-v8a: llama.cpp's default portable Android settings.
+if (ANDROID AND ANDROID_ABI STREQUAL "arm64-v8a")
+  # Runtime CPU dispatch: the CPU backend is built as one libggml-cpu-*.so per feature level (dotprod,
+  # i8mm, sve2 ...) and cache_llama loads the fastest one the phone's CPU supports at startup.
+  # This needs shared libraries; the Gradle build packages all of them into the APK.
+  set(BUILD_SHARED_LIBS        ON CACHE BOOL "" FORCE)
+  set(GGML_BACKEND_DL          ON CACHE BOOL "" FORCE)
+  set(GGML_CPU_ALL_VARIANTS    ON CACHE BOOL "" FORCE)
+  set(CACHE_LLAMA_BACKEND_DL   ON)
+endif()
 
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp" llama.cpp)
 
@@ -44,6 +52,12 @@ target_include_directories(cache_llama PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/common"
   "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
 set_target_properties(cache_llama PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+if (CACHE_LLAMA_BACKEND_DL)
+  target_compile_definitions(cache_llama PRIVATE CL_BACKEND_DL=1)
+endif()
+if (ANDROID)
+  target_link_libraries(cache_llama PRIVATE log)  # CPU variant and thread choice go to logcat
+endif()
 
 if (ANDROID)
   # Support Android 15 16k page size

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import 'models_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key, required this.app, required this.onOpenAsk});
@@ -116,7 +117,13 @@ class HomeScreen extends StatelessWidget {
       modelColor = k.warning;
     }
     final cards = [
-      _StatusCard(icon: Icons.memory, title: app.active == null ? 'Model' : app.displayName(app.active!), value: modelValue, valueColor: modelColor),
+      _StatusCard(
+        icon: Icons.memory,
+        title: app.active == null ? 'Model' : app.displayName(app.active!),
+        value: modelValue,
+        valueColor: modelColor,
+        onTap: () => openModels(context, app),
+      ),
       const _StatusCard(icon: Icons.menu_book_outlined, title: 'Reading', value: 'Not set up yet'),
       const _StatusCard(icon: Icons.map_outlined, title: 'Maps', value: 'Not set up yet'),
       const _StatusCard(icon: Icons.cloud_outlined, title: 'Weather', value: 'Not set up yet'),
@@ -172,33 +179,41 @@ class _QuickAction extends StatelessWidget {
 }
 
 class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.icon, required this.title, required this.value, this.valueColor});
+  const _StatusCard({required this.icon, required this.title, required this.value, this.valueColor, this.onTap});
 
   final IconData icon;
   final String title;
   final String value;
   final Color? valueColor;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Icon(icon, color: k.secondary),
-          Column(
+    return Material(
+      color: k.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
-              const SizedBox(height: 2),
-              Text(value, style: TextStyle(fontSize: 15, color: valueColor ?? k.secondary)),
+              Icon(icon, color: k.secondary),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                  const SizedBox(height: 2),
+                  Text(value, style: TextStyle(fontSize: 15, color: valueColor ?? k.secondary)),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

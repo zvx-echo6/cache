@@ -8,6 +8,12 @@ String _size(int bytes) {
   return '${(bytes / (1 << 20)).toStringAsFixed(0)} MB';
 }
 
+/// Opens the model chooser (from the Ask top bar and the Home model card).
+void openModels(BuildContext context, AppState app) {
+  app.refreshModels();
+  Navigator.of(context).push(MaterialPageRoute(builder: (_) => ModelsScreen(app: app)));
+}
+
 /// The model chooser: lists the .gguf files in the app's models folder.
 class ModelsScreen extends StatelessWidget {
   const ModelsScreen({super.key, required this.app});
@@ -30,7 +36,7 @@ class ModelsScreen extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(24),
                           child: Text(
-                            'No models yet. Choose a .gguf file to add one.',
+                            app.modelsError ?? 'No models yet. Choose a .gguf file to add one.',
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 18, color: k.secondary),
                           ),

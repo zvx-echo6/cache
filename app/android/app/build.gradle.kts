@@ -26,6 +26,14 @@ android {
         versionName = flutter.versionName
     }
 
+    packaging {
+        jniLibs {
+            // The native layer finds its CPU variant libraries (libggml-cpu-*.so) by scanning the app's
+            // library folder, so they must be installed there as real files.
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

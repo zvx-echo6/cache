@@ -68,7 +68,9 @@ android {
 
         externalNativeBuild {
             cmake {
-                arguments "-DCMAKE_BUILD_TYPE=Release"
+                // c++_shared: on arm64 the native code is several .so files (the CPU variants are
+                // loaded at run time) that must share one C++ runtime.
+                arguments "-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared"
             }
         }
     }
