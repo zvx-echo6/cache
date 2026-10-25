@@ -72,9 +72,13 @@ Risks.
 
 ### Library settings file
 
-A small plain-JSON file next to the library, written by whoever builds the library. Cache reads it when the
-library is added and asks nothing. The app's Advanced section can override each value. Without the file, Cache
-guesses from the payload field names and the vector size. v1 format:
+A small plain-JSON file written by whoever builds the library. App convention: it is named `cache-library.json`
+and ships beside the snapshot or download. The app reads it and passes its contents to the core in the
+`settings` object of the library's source entry (`cs_open`, `cs_set_sources`) and in the `index_library` job
+parameters; the core does no file discovery and never looks for the file itself. Cache asks nothing when the
+library is added. The app's Advanced section can override each value (the app edits the object it passes).
+Without the file (no `settings` object), the core guesses from the payload field names and the vector size.
+v1 format:
 
 ```
 {
