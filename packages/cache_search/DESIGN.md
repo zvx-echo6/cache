@@ -29,21 +29,22 @@ A handle is opened with a list of sources:
 
 Addresses (what a citation opens):
 - `zim:<zim-uuid>/<article path>` (the ZIM's own UUID, so renamed files still resolve)
-- `pack:<pack-id>/<concept-id>`
+- `pack:<pack-id>/<ext_id>` (the producer's stable id for the concept; the internal integer `concept_id` never appears in an address)
 
 ## Library pack format (one SQLite file)
 
 ```
 meta(key TEXT PRIMARY KEY, value TEXT)
   format_version   "1"
-  pack_id          stable id (uuid)
+  pack_id          stable id (uuid); the same across versions of one library
+  pack_version     set by the producer (e.g. the export date); shown and compared by the app
   title, description, created, builder_version
   embedding_model  e.g. "bge-m3-q8_0" with the GGUF's sha256
   embedding_dims   e.g. 1024 (or a Matryoshka cut)
   vector_encoding  "int8" | "binary+int8"
 documents(doc_id INTEGER PRIMARY KEY, doc_hash TEXT UNIQUE, title TEXT, author TEXT,
           published_year INTEGER NULL, pages INTEGER NULL)
-concepts(concept_id INTEGER PRIMARY KEY, doc_id INTEGER, page TEXT, title TEXT, summary TEXT,
+concepts(concept_id INTEGER PRIMARY KEY, ext_id TEXT NOT NULL UNIQUE, doc_id INTEGER, page TEXT, title TEXT, summary TEXT,
          key_facts TEXT /* JSON array */, keywords TEXT /* JSON array */, domain TEXT, subdomain TEXT /* JSON */)
 vectors(concept_id INTEGER PRIMARY KEY, scale REAL, v_int8 BLOB, v_bin BLOB NULL)
 ```
@@ -63,7 +64,17 @@ vectors(concept_id INTEGER PRIMARY KEY, scale REAL, v_int8 BLOB, v_bin BLOB NULL
   | 128 | 0.45 GB | 56 MB |
 
   Binary is scanned in full per query (mmapped, streamed); int8 is read only for the ~200 re-scored rows, so
-  int8 costs storage, not RAM. Packs may also be split by domain so users choose what they load.
+  int8 costs storage, not RAM. Any split of a library (by domain, or e.g. a video pack) is the producer's choice and each split is its own pack file.
+- Stable ids: `ext_id` is a producer-supplied stable string id for each concept (for recon, the Qdrant point id).
+  `concept_id` is internal (the `vectors` table joins on it). `cs_search` returns, and `cs_read` accepts, `ext_id`
+  addresses only.
+- Versions and updates: an update replaces the whole file. `pack_id` stays the same across versions of one
+  library; `meta.pack_version` (set by the producer) lets the app show and compare versions. There are no delta
+  or update files. A cited address whose `ext_id` is not in the new file returns error code `not_found` (the app
+  shows it as no longer in the library).
+- Separate packs: a separate pack, such as a video pack, is a separate file in the same format with its own
+  `pack_id`. The producer makes any split (for recon, its exporter, e.g. filtering `source_type=transcript`). The
+  core treats every pack the same.
 - Text compression (zstd dictionary) is deferred until sizes are measured.
 
 ## Keyword index (Tantivy)

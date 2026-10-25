@@ -55,7 +55,8 @@ cs_handle *cs_open(const char *config_json);
 int32_t cs_set_sources(cs_handle *h, const char *config_json);
 
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
- *              "docs":N,"embedding_model":"..."|null,"error":null|{"code","message"}}]}
+ *              "docs":N,"embedding_model":"..."|null,
+ *              "pack_version":"..."|null (null for ZIMs),"error":null|{"code","message"}}]}
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
  * "indexed":false and its "error"; the other sources work normally. */
 char *cs_status(cs_handle *h);
@@ -79,8 +80,9 @@ void cs_close(cs_handle *h);
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);
 
-/* Text for an address ("zim:<uuid>/<path>" or "pack:<pack-id>/<concept-id>"), cut to max_chars at a
- * paragraph end.
+/* Text for an address ("zim:<uuid>/<path>" or "pack:<pack-id>/<ext_id>"), cut to max_chars at a
+ * paragraph end. An address not in the current file (e.g. a pack replaced by a newer version) returns NULL with
+ * code "not_found".
  * ZIM:  {"address","title","text","truncated":bool}
  * Pack: {"address","title","text","truncated":bool,"book_title","author","page","published_year"} */
 char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
