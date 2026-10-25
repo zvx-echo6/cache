@@ -14,7 +14,7 @@ Layout (repo `packages/cache_search/`):
 - `native/` — Cargo workspace root. Crate `cache_search` (lib: `cdylib` + `staticlib` + `rlib`). Header
   `native/include/cache_search.h`.
 - `cli/` — crate `cache_search_cli`, binary `cs` (a member of the `native/` workspace as `../cli`): `cs index-zim`,
-  `unpack-library`, `index-library`, `library-manifest`, `update-library`, `search`, `read`, `status`, `serve` (HTTP). Built as described under
+  `unpack-library`, `index-library`, `library-manifest`, `update-library`, `search`, `read`, `status`, `tool`, `tool-schemas`, `serve` (HTTP). Built as described under
   Headless parity; it calls the same `cs_*` functions as the C ABI.
 
 The crate never links llama.cpp. Query vectors come from the caller (the app via cache_llama `cl_embed`; the
@@ -323,6 +323,59 @@ next [6].., an address seen before keeps its old number) and returns the exact t
 Weather and other live-source tools can pass their results through the same formatter so all numbering stays in
 one place.
 
+## Tools
+
+The model's tools (docs/TOOLS.md) run through the core, so the phone and the headless runs share one dispatch:
+`cs_tool_schemas` lists the available tools' function schemas and `cs_tool` runs one call and numbers its result
+in the conversation.
+
+**Registry.** The handle holds `Vec<Box<dyn cache_tool::Tool>>`. The host adds tools with
+`Handle::register_tool` (a tool registered again under the same name replaces the first), sets the user's saved
+places with `set_saved_places` (default `NoSavedPlaces`) and the query embedder of `search` with
+`set_query_embedder` (a callback `&str -> Option<(model id, vector)>`; with none, search is keyword-only, as
+`cs_search` is without a `query_vector`). The core does not depend on `cache_live` or `cache_user`; `cs_open` will
+register their tools from the config's "live" and "user" sections once those crates are on this branch (a comment
+marks the place). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
+web_search (a tool with another name follows, in registration order) and leaves out a tool whose `schema()` is
+None.
+
+**search and read are built in.** They are not `Tool` impls: `Tool::run` sees only the location, the saved places
+and the clock, while search needs the handle's sources and read needs the conversation's number-to-address map.
+They still use TOOLS.md's schemas (copied verbatim into `tools.rs`) and every dispatch step below. `search` runs
+`cs_search` with k=5 and the embedder's vector, and writes one line per result,
+`{{addr:<address>}} <title> — <snippet>`, with the title and snippet rules of `cs_format` (whitespace runs
+become one space; no ` — ` when the snippet is empty); no result is `No results found.`. `read` takes `n`, finds
+its address in the conversation (unknown: `not_found`, "no result [n] in this conversation"), calls `cs_read` with
+max_chars 6000 and writes `[n] <title>`, the text, and `[truncated]` on its own line when it was cut. It keeps the
+number it was given, so it writes `[n]` itself and gives no marker.
+
+**Dispatch** (`Handle::call_tool`):
+1. Find the tool. An unknown name is `bad_arguments` "no tool named <name>"; a registered tool whose schema is
+   None is `not_set_up`.
+2. Validate the arguments against the schema's `parameters` (below). A violation is `bad_arguments`, detail
+   `"<field>: <what>"`. Defaults in the schema are not filled in; the tool applies them.
+3. Run it with a `ToolCtx` (the handle's location and saved places, and `now`) inside `catch_unwind`; a panic is
+   `internal`, "<tool> failed".
+4. Number the result in the conversation (the numbering `cs_format` uses, so an address seen before keeps its
+   number): in text, each `{{addr:<address>}}` becomes `[n]` and the title is the text after the marker up to ` — `
+   or the end of the line; in JSON the value is walked depth first in document order and every object with an
+   `"address"` key gets that key replaced, in place, by `"n": <number>` (its title is its `title`, `name`,
+   `place_name` or `label`, in that order, else empty). A JSON object without `"ok"` gets `"ok": true` as its first
+   key; other key order is untouched. A `ToolError` becomes its `to_json()` unnumbered.
+5. The reply is `{"content","ids"}`; `content` is the text as it is, or the JSON serialised compactly; `ids` holds
+   only the numbers this call gave, in order.
+
+A tool's failure is its content, never a C error. Only a NULL or invalid handle or conversation, an `args_json` that
+is not JSON, or an empty `now` return NULL with `cs_last_error`.
+
+**Validator.** A small built-in subset of JSON Schema over the properties of `parameters`: `type` (string, integer,
+number, boolean, object), `enum`, `minLength`, `maxLength` (in characters), `minimum`, `maximum`, `required`, and
+`additionalProperties: false`. The arguments must be an object. Nothing else in a schema is checked.
+
+**now and location.** `now` (the local time with offset, from the caller's clock, so captures can pin it) is required
+on every call. The phone's GPS fix is set with `cs_set_location(lat, lon, accuracy_m, fixed_at)` (`accuracy_m` < 0
+is unknown) and removed with `cs_clear_location`; tools see it as `ctx.location` and answer `no_location` without it.
+
 ## ZIM reading
 
 Options to evaluate first (report before committing):
@@ -386,6 +439,11 @@ Subcommands (results on stdout as the core's JSON, errors on stderr as `{"code",
   conversation (with `--format --json`, the whole `cs_format` JSON). Plain `--json` is accepted and is the default.
 - `cs read --config <sources.json> --address <addr> [--max-chars 6000]`: the `cs_read` JSON.
 - `cs status --config <sources.json>`: the `cs_status` JSON.
+- `cs tool <name> --config <sources.json> [--args '<json>'] [--now <iso>] [--lat <deg> --lon <deg> [--accuracy <m>]] [--json] [embedder flags]`:
+  one `cs_tool` call in a fresh conversation (so `read` has nothing to open; use `serve` for a conversation across calls).
+  Prints the content, then a line `ids <json>`; `--json` prints the core's `{"content","ids"}`. `--now` defaults to the
+  local time with offset. The embedder, if configured, is also the query embedder of the built-in `search`.
+- `cs tool-schemas [--config <sources.json>]`: the `cs_tool_schemas` array.
 - `cs serve --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [embedder flags]`: HTTP, below.
 - All commands that open sources take `--open-timeout <seconds>` (default 600). `cs_open` returns at once and
   libraries open on background threads, so the wrapper polls `cs_status` until no source is `"opening"` before it
@@ -409,6 +467,10 @@ what a handle requires). JSON in, the core's JSON out byte for byte:
 | `POST /conversations/{id}/format` | `{results}` | `cs_format` on that conversation |
 | `GET /conversations/{id}/ids` | | `cs_conversation_ids` |
 | `DELETE /conversations/{id}` | | `cs_conversation_free`; returns `{"deleted":"<id>"}` |
+| `GET /tools` | | `cs_tool_schemas` |
+| `POST /location` | `{lat, lon, accuracy_m, fixed_at}` (`accuracy_m` optional) | `cs_set_location`; returns `{"ok":true}` |
+| `DELETE /location` | | `cs_clear_location`; returns `{"ok":true}` |
+| `POST /conversations/{id}/tool` | `{name, args, now}` | `cs_tool` on that conversation |
 
 Errors are the core's `{"code","message"}` with HTTP 400 (`bad_json`), 404 (`not_found`, also unknown
 endpoint or conversation), 409 (`busy`, `index_missing`, `index_stale`, `cancelled`), 422 (`unsupported`), 500 (anything else).
