@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -164,6 +165,11 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         common_chat_templates_inputs in;
         in.messages         = common_chat_msgs_parse_oaicompat(req.at("messages"));
         in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+        // Optional top-level "enable_thinking": true|false. Passed to the template as the
+        // enable_thinking variable (Gemma 4 emits its thinking switch from it). Default: true.
+        if (req.contains("enable_thinking") && req.at("enable_thinking").is_boolean()) {
+            in.enable_thinking = req.at("enable_thinking").get<bool>();
+        }
         if (req.contains("tools") && req.at("tools").is_array() && req.at("tools").size() > 0) {
             in.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
         }
@@ -179,6 +185,13 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         if (!h->smpl) {
             set_err(err, err_len, "cannot create sampler");
             return -1;
+        }
+
+        if (const char * dbg = getenv("CL_LOG_PROMPT_TAIL")) {  // debugging aid: show the end of the rendered prompt
+            const std::string & ps = h->session->prompt().str();
+            int n = atoi(dbg) > 0 ? atoi(dbg) : 400;
+            fprintf(stderr, "[cl] enable_thinking=%d prompt tail:\n%s\n[cl] end tail\n", (int) in.enable_thinking,
+                    ps.substr(ps.size() > (size_t) n ? ps.size() - (size_t) n : 0).c_str());
         }
 
         auto tokens = common_tokenize(h->vocab, h->session->prompt().str(), /*add_special*/ false, /*parse_special*/ true);
