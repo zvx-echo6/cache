@@ -1,5 +1,5 @@
 [workspace]
-members = ["cache_search", "../cli"]
+members = ["cache_search", "../cli", "cache_offroad", "offroad_pack"]
 resolver = "2"
 
 [profile.release]
