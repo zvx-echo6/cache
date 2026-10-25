@@ -222,11 +222,15 @@ impl SqlitePack {
 
     fn tile_blobs(&self, layer: Layer, tx0: i64, tx1: i64, ty0: i64, ty1: i64) -> PResult<Vec<(i64, i64, Vec<u8>)>> {
         let conn = self.conn.lock().unwrap();
-        let mut st = conn.prepare_cached("SELECT tx, ty, data FROM tiles WHERE layer=?1 AND tx BETWEEN ?2 AND ?3 AND ty BETWEEN ?4 AND ?5")?;
-        let rows = st.query_map(params![layer.name(), tx0, tx1, ty0, ty1], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        // One exact key-range scan per tx column: a tx range with a ty filter would walk every ty row of
+        // every column in between (each row is mostly overflow pages, so that is slow on a cold file).
+        let mut st = conn.prepare_cached("SELECT ty, data FROM tiles WHERE layer=?1 AND tx=?2 AND ty BETWEEN ?3 AND ?4")?;
         let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
+        for tx in tx0..=tx1 {
+            let rows = st.query_map(params![layer.name(), tx, ty0, ty1], |r| Ok((tx, r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+            for r in rows {
+                out.push(r?);
+            }
         }
         Ok(out)
     }

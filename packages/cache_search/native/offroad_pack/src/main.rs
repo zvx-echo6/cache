@@ -612,7 +612,38 @@ fn route_cmd(a: &Args) -> Result<(), String> {
         opts.max_cells = m.parse().map_err(|_| "bad --max-cells")?;
     }
     let t = Instant::now();
-    match cache_offroad::route(&pack, &cache_offroad::StubValhalla, &req, &opts) {
+    // Diagnostic: --navi-layers re-samples the u8 layers from the source rasters the way navi does per query
+    // (window onto the requested bbox, nearest, scaled to the DEM-shaped grid), to measure how much of a
+    // parity difference is layer alignment.
+    let over;
+    let res = if a.opt("navi-layers").is_some() {
+        let (south, north, west, east) = cache_offroad::router::auto_bbox(start, end, opts.bbox_pad_deg, opts.bbox_max_span_deg);
+        let meta = GridMeta::from_bbox(south, north, west, east);
+        let mk = |m: raster::Mosaic| -> Result<Vec<u8>, String> {
+            let patch = m.patch(west - 0.01, east + 0.01, south - 0.01, north + 0.01)?;
+            let (rows, cols) = (meta.rows, meta.cols);
+            let lons: Vec<f64> = (0..cols).map(|j| west + (j as f64 + 0.5) * (east - west) / cols as f64).collect();
+            let mut out = vec![0u8; rows * cols];
+            for i in 0..rows {
+                let lat = north - (i as f64 + 0.5) * (north - south) / rows as f64;
+                for j in 0..cols {
+                    out[i * cols + j] = patch.sample(lons[j], lat);
+                }
+            }
+            Ok(out)
+        };
+        let mut layers = HashMap::new();
+        layers.insert(Layer::Friction, mk(raster::Mosaic::open_dir(Path::new(a.get("friction-dir")?))?)?);
+        layers.insert(Layer::Class, mk(raster::Mosaic::open_dir(Path::new(a.get("class-dir")?))?)?);
+        layers.insert(Layer::Trails, mk(raster::Mosaic::open_files(&[PathBuf::from(a.get("trails")?)])?)?);
+        layers.insert(Layer::Barriers, mk(raster::Mosaic::open_files(&[PathBuf::from(a.get("barriers")?)])?)?);
+        layers.insert(Layer::Wilderness, mk(raster::Mosaic::open_files(&[PathBuf::from(a.get("wilderness")?)])?)?);
+        over = OverridePack { inner: &pack, row0: meta.global_row0, col0: meta.global_col0, rows: meta.rows, cols: meta.cols, layers };
+        cache_offroad::route(&over, &cache_offroad::StubValhalla, &req, &opts)
+    } else {
+        cache_offroad::route(&pack, &cache_offroad::StubValhalla, &req, &opts)
+    };
+    match res {
         Ok(r) => {
             println!(
                 "ok effort_min={:.4} distance_km={:.4} modes={} cells={} grid={}x{} trans_cells={} expanded={} ms[rasters={} layers={} trans={} search={}] total_ms={}",
@@ -668,9 +699,98 @@ fn probe_cmd(a: &Args) -> Result<(), String> {
             None => println!("  nearest {name}: none within {} m", (rad as f64 * cell_m) as i64),
         }
     }
+    // nearest "solid" road/track/trail cell (all cells within 2 cells share the value): a robust endpoint
+    for (name, v) in [("road", 5u8), ("track", 15), ("trail", 25)] {
+        let mut best: Option<(f64, usize)> = None;
+        for r in 2..n - 2 {
+            for c in 2..n - 2 {
+                let i = r * n + c;
+                if tr[i] != v || !e[i].is_finite() {
+                    continue;
+                }
+                let mut solid = true;
+                'o: for dr in -2i64..=2 {
+                    for dc in -2i64..=2 {
+                        if tr[((r as i64 + dr) as usize) * n + (c as i64 + dc) as usize] != v {
+                            solid = false;
+                            break 'o;
+                        }
+                    }
+                }
+                if solid {
+                    let (dr, dc) = (r as f64 - rad as f64, c as f64 - rad as f64);
+                    let d = (dr * dr + dc * dc).sqrt();
+                    if best.map_or(true, |b| d < b.0) {
+                        best = Some((d, i));
+                    }
+                }
+            }
+        }
+        if let Some((d, i)) = best {
+            let (rr, cc) = (r0 + (i / n) as i64, c0 + (i % n) as i64);
+            println!("  solid {name} cell at {:.5},{:.5} ({:.0} m away, elev {:.0})", merc_lat(rr as f64 + 0.5), merc_lon(cc as f64 + 0.5), d * cell_m, e[i]);
+        }
+    }
+    if a.opt("map").is_some() {
+        let step = (n / 70).max(1);
+        for r in (0..n).step_by(step * 2) {
+            let mut line = String::new();
+            for c in (0..n).step_by(step) {
+                let mut ch = '.';
+                'blk: for rr in r..(r + step * 2).min(n) {
+                    for cc in c..(c + step).min(n) {
+                        let i = rr * n + cc;
+                        let t = tr[i];
+                        if t == 5 { ch = 'R'; break 'blk; }
+                        if t == 15 { ch = 'T'; }
+                        if t == 25 && ch != 'T' { ch = 't'; }
+                        if ch == '.' && ba[i] == 255 { ch = 'B'; }
+                        if ch == '.' && wi[i] == 255 { ch = 'W'; }
+                    }
+                }
+                line.push(ch);
+            }
+            println!("  {line}");
+        }
+    }
     println!("  wilderness cells {} / barrier cells {} / nan elev {}", wi.iter().filter(|&&v| v == 255).count(), ba.iter().filter(|&&v| v == 255).count(), e.iter().filter(|v| v.is_nan()).count());
     let mut cc = [0usize; 256];
     for &v in &cl { cc[v as usize] += 1; }
     println!("  classes: {:?}", cc.iter().enumerate().filter(|(_, &c)| c > 0).map(|(k, c)| format!("{k}:{c}")).collect::<Vec<_>>());
     Ok(())
+}
+
+/// Pack wrapper that serves pre-sampled u8 layers for exactly one window (diagnostic only).
+struct OverridePack<'a> {
+    inner: &'a SqlitePack,
+    row0: i64,
+    col0: i64,
+    rows: usize,
+    cols: usize,
+    layers: HashMap<Layer, Vec<u8>>,
+}
+impl PackSource for OverridePack<'_> {
+    fn has_layer(&self, l: Layer) -> bool {
+        self.layers.contains_key(&l) || self.inner.has_layer(l)
+    }
+    fn read_u8(&self, l: Layer, r0: i64, c0: i64, rows: usize, cols: usize) -> PResult<Vec<u8>> {
+        if let Some(v) = self.layers.get(&l) {
+            if (r0, c0, rows, cols) == (self.row0, self.col0, self.rows, self.cols) {
+                return Ok(v.clone());
+            }
+        }
+        self.inner.read_u8(l, r0, c0, rows, cols)
+    }
+    fn read_elevation(&self, r0: i64, c0: i64, rows: usize, cols: usize) -> PResult<Vec<f32>> {
+        self.inner.read_elevation(r0, c0, rows, cols)
+    }
+    fn parking_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
+        self.inner.parking_in_box(a, b, c, d)
+    }
+    fn trailheads_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
+        self.inner.trailheads_in_box(a, b, c, d)
+    }
+    fn mvum_in_box(&self, s: f64, n: f64, w: f64, e: f64) -> PResult<Vec<MvumFeature>> {
+        self.inner.mvum_in_box(s, n, w, e)
+    }
 }
