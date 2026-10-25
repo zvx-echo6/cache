@@ -84,10 +84,16 @@ The job, in order:
 3. Apply with `recover_partial_snapshot`. A write, so it only happens while the library is closed.
 4. It rewrites `segments_manifest.json` from the `segments/` folders on disk (the server snapshot does not
    carry it and the library's `EdgeShard::load` does not write it unless a Qdrant feature flag is on).
-5. It opens the shard read-only once to check it opens and drops it. When the job ends (done, failed or
-   cancelled) the library stops being `updating`, its generation goes up, and each handle that had it opens it
-   again on a background thread (`"opening":true` until ready). If that open fails the source is listed with its
-   error, like any source that cannot be opened.
+5. It opens the shard read-only once. That one open is both the check that the library opens and the shard the
+   handles use afterwards: the job hands the opened shard (shared, an `Arc`) to the cell of every handle that
+   had the library open, and each such handle only refreshes its numbers (point count, settings) when it next
+   looks: there is no second open (a test counts the opens). The open is warmed for the vectors the handles
+   search with (their load profiles merged); with no handle open it uses the cheap scroll profile and the shard
+   is dropped. A handle that had already turned the library into an `updating` source keeps its cell, so it
+   gets the shard too. When the job ends (done, failed or cancelled) the library stops being `updating` and its
+   generation goes up. Only a handle with nothing handed back (the job failed or was cancelled after the close)
+   opens the library again, on a background thread (`"opening":true` until ready); if that open fails the
+   source is listed with its error, like any source that cannot be opened.
 Progress is `done`/`total` steps, total 5. Cancelling is honoured before step 3 and ignored after it. On any
 failure the job ends `failed` with the error and the library is reopened from whatever is on disk.
 How the job finds the library: `cs_job_start(kind, params)` has no handle argument and a handle is used from one

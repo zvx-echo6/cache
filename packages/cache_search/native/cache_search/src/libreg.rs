@@ -7,15 +7,22 @@
 //! - an update job marks the path `updating` (new opens and searches then refuse it), waits for opens that are
 //!   still running, and takes the shard out of every registered cell (that is the "close"): a search that is
 //!   using a shard finishes first, because the cell is a mutex;
+//! - at the end the job opens the library once, read-only (this is also its check that the library opens), and
+//!   hands that one shard (an `Arc`, shared) back to every cell it closed; a handle that finds its cell filled
+//!   again just refreshes its numbers and does not open the library a second time. Only when there is nothing
+//!   to hand back (the job failed or was cancelled after the close) does a handle reopen the library from disk;
 //! - when the job ends, `generation` goes up and `updating` goes down; a handle that sees a newer generation than
-//!   the one its library was opened at reopens the library from disk.
+//!   the one its library was opened at looks at its cell as above.
+//!
+//! A cell must stay alive for the handle to get the shard back, so a handle that drops its slot because of an
+//! update keeps the cell (`OpeningLib::held`).
 //!
 //! An `index_library` job holds a [`BuildToken`] for as long as it runs; an update refuses to start while one
 //! exists, and an index build refuses to start during an update.
 
 use crate::error::{Error, ErrorCode, Result};
 use crate::library::Shard;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -25,11 +32,16 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// An open library's shard. Taken out (`None`) while an update job owns the library.
-pub struct ShardCell(Mutex<Option<Shard>>);
+/// An open library's shard. Taken out (`None`) while an update job owns the library. The shard is shared: after
+/// an update every handle's cell holds the same opened shard.
+pub struct ShardCell {
+    shard: Mutex<Option<Arc<Shard>>>,
+    /// The vector name the handle searches this library with (it decides which parts of the shard are warmed).
+    vector: String,
+}
 
 /// The shard, held locked: the update job cannot close the library while a guard exists.
-pub struct ShardGuard<'a>(MutexGuard<'a, Option<Shard>>);
+pub struct ShardGuard<'a>(MutexGuard<'a, Option<Arc<Shard>>>);
 
 impl Deref for ShardGuard<'_> {
     type Target = Shard;
@@ -39,13 +51,13 @@ impl Deref for ShardGuard<'_> {
 }
 
 impl ShardCell {
-    pub fn new(shard: Shard) -> ShardCell {
-        ShardCell(Mutex::new(Some(shard)))
+    pub fn new(shard: Arc<Shard>, vector: String) -> ShardCell {
+        ShardCell { shard: Mutex::new(Some(shard)), vector }
     }
 
     /// The shard, or `busy` when the library has been closed for an update.
     pub fn get(&self) -> Result<ShardGuard<'_>> {
-        let g = lock(&self.0);
+        let g = lock(&self.shard);
         if g.is_none() {
             return Err(Error::new(ErrorCode::Busy, "the library is being updated"));
         }
@@ -53,12 +65,17 @@ impl ShardCell {
     }
 
     fn close(&self) {
-        let old = lock(&self.0).take();
+        let old = lock(&self.shard).take();
         drop(old);
     }
 
-    fn is_open(&self) -> bool {
-        lock(&self.0).is_some()
+    /// Put the shard an update opened into the (closed) cell.
+    fn fill(&self, shard: Arc<Shard>) {
+        *lock(&self.shard) = Some(shard);
+    }
+
+    pub fn is_open(&self) -> bool {
+        lock(&self.shard).is_some()
     }
 }
 
@@ -176,6 +193,28 @@ impl LibEntry {
     pub fn open_shards(&self) -> bool {
         let s = lock(&self.state);
         s.opens > 0 || s.cells.iter().filter_map(Weak::upgrade).any(|c| c.is_open())
+    }
+
+    /// The vector names the registered cells search with (the shard an update opens is warmed for all of them).
+    pub fn vectors(&self) -> BTreeSet<String> {
+        let s = lock(&self.state);
+        s.cells.iter().filter_map(Weak::upgrade).map(|c| c.vector.clone()).collect()
+    }
+
+    /// Hand the shard an update opened to every registered cell that is closed. Returns how many got it.
+    pub fn hand_back(&self, shard: &Arc<Shard>) -> usize {
+        let cells: Vec<Arc<ShardCell>> = {
+            let s = lock(&self.state);
+            s.cells.iter().filter_map(Weak::upgrade).collect()
+        };
+        let mut n = 0;
+        for c in cells {
+            if !c.is_open() {
+                c.fill(shard.clone());
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Close the library for the update: wait for background opens to finish, then take the shard out of every

@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
-use crate::libreg;
+use crate::libreg::{self, ShardCell};
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
 use crate::zimsrc::{self, ZimSource};
 use serde::Deserialize;
@@ -97,6 +97,9 @@ pub struct OpeningLib {
     pub settings: Option<LibrarySettings>,
     /// The running open; `None` for an `Updating` source.
     cell: Option<Arc<OpenCell>>,
+    /// For an `Updating` source: the cell the library's shard was in. The update job fills it again when it
+    /// is done (the same shard for every handle), so this source can pick it up without opening the library.
+    held: Option<Arc<ShardCell>>,
 }
 
 impl OpeningLib {
@@ -110,6 +113,7 @@ impl OpeningLib {
             title: self.title.clone(),
             settings: self.settings.clone(),
             cell: None,
+            held: None,
         }
     }
 
@@ -125,7 +129,7 @@ impl OpeningLib {
     ) -> Source {
         let cell = library::open_in_background(path.clone(), index_dir.clone(), given.clone(), delay_ms);
         let updating = cell.is_none();
-        let o = OpeningLib { path, index_dir, given, id, title, settings, cell };
+        let o = OpeningLib { path, index_dir, given, id, title, settings, cell, held: None };
         if updating {
             Source::Updating(o)
         } else {
@@ -319,10 +323,15 @@ impl Handle {
                             slot.index_dir = o.index_dir.clone();
                             slot.given = o.given.clone();
                             if entry.updating() {
-                                Some(Source::Updating(OpeningLib { cell: None, ..o.clone_info() }))
+                                Some(Source::Updating(OpeningLib { cell: None, held: Some(slot.shard.clone()), ..o.clone_info() }))
                             } else if slot.seen_gen != entry.generation() {
-                                // an update changed the files while this was opening
+                                // an update changed the files while this was opening: take the shard it handed
+                                // back, or open the library again
+                                if slot.shard.is_open() && slot.refresh_after_update() {
+                                    Some(Source::Library(slot))
+                                } else {
                                 Some(OpeningLib::start(o.path.clone(), o.index_dir.clone(), o.given.clone(), o.id.clone(), o.title.clone(), o.settings.clone(), 0))
+                                }
                             } else {
                                 Some(Source::Library(slot))
                             }
@@ -348,8 +357,12 @@ impl Handle {
                             title: l.settings.title.clone(),
                             settings: l.given.as_ref().map(|_| l.settings.clone()),
                             cell: None,
+                            held: Some(l.shard.clone()),
                         }))
                     } else if l.entry.generation() != l.seen_gen {
+                        if l.shard.is_open() && l.refresh_after_update() {
+                            None
+                        } else {
                         Some(OpeningLib::start(
                             l.path.clone(),
                             l.index_dir.clone(),
@@ -359,13 +372,20 @@ impl Handle {
                             l.given.as_ref().map(|_| l.settings.clone()),
                             0,
                         ))
+                        }
                     } else {
                         None
                     }
                 }
                 Source::Updating(o) => {
-                    if libreg::entry_for(&o.path).updating() {
+                    let entry = libreg::entry_for(&o.path);
+                    if entry.updating() {
                         None
+                    } else if let Some(slot) = o.held.take().filter(|c| c.is_open()).and_then(|c| {
+                        library::slot_from_cell(&o.path, o.index_dir.clone(), o.given.clone(), c, entry.clone())
+                    }) {
+                        // the update handed the library's shard back: no second open
+                        Some(Source::Library(slot))
                     } else {
                         Some(OpeningLib::start(o.path.clone(), o.index_dir.clone(), o.given.clone(), o.id.clone(), o.title.clone(), o.settings.clone(), 0))
                     }

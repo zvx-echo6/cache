@@ -1,6 +1,9 @@
 //! Library updates: the snapshot manifest of a library (what a Qdrant server needs to cut a partial snapshot for
 //! it) and the `update_library` job body (apply a partial snapshot to the shard folder).
 //!
+//! The job ends with one read-only open of the library, which is the check that it opens and whose shard is handed
+//! to the handles that had the library open (see `libreg`); there is no second open.
+//!
 //! Facts from the Qdrant sources at the pinned rev (see DESIGN.md, Libraries / Updates):
 //! - `EdgeShard::snapshot_manifest` exists only on the read-write `EdgeShard`; `ReadOnlyEdgeShard` has none.
 //!   `EdgeShard::load` is a write: it saves `edge_config.json`, replays the WAL and may create an appendable
@@ -83,6 +86,14 @@ pub fn library_manifest(library: &Path) -> Result<(String, usize)> {
     Ok((json, manifest.len()))
 }
 
+/// Open the library read-only once and hand that shard to every handle's cell the job closed (see `libreg`).
+/// This open is the job's check that the library opens; there is no second open.
+fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
+    let shard = library::open_shard_for_handoff(library, &entry.vectors())?;
+    entry.hand_back(&shard);
+    Ok(())
+}
+
 /// A checked `update_library` request.
 pub struct UpdateRequest {
     pub library: PathBuf,
@@ -157,7 +168,8 @@ fn unpack_dir(library: &Path) -> Result<PathBuf> {
 /// 2. unpack the snapshot next to the library and check it is a partial snapshot;
 /// 3. apply it with `recover_partial_snapshot` (after this point there is no cancelling);
 /// 4. rewrite `segments_manifest.json` from the segments on disk;
-/// 5. open the library read-only once to check that it opens.
+/// 5. open the library read-only once: that checks it opens, and the opened shard is handed to every handle that
+///    had the library open (no second open).
 ///
 /// Cancelling is honoured before step 3 starts and then ignored. Nothing here changes the library before step 3.
 /// A failure in step 3 or later can leave the folder half-merged (Qdrant's merge is not atomic); the remedy is a
@@ -212,8 +224,8 @@ pub fn apply_update(
     // 4
     write_segments_manifest(&req.library)?;
     progress(4, STEPS);
-    // 5
-    drop(library::open_shard_for_scroll(&req.library)?);
+    // 5: the one read-only open; it is the check and the shard the handles get
+    hand_back_open(&req.library, entry)?;
     progress(5, STEPS);
     Ok(Outcome::Done)
 }

@@ -10,7 +10,7 @@
 use cache_search::ffi::*;
 use cache_search::job::Job;
 use cache_search::libupdate;
-use cache_search::library::{ensure_init, MANIFEST_FILE};
+use cache_search::library::{ensure_init, shard_open_count, MANIFEST_FILE};
 use common::tar_ext::BuilderExt;
 use edge::{
     Distance, EdgeConfig, EdgeOptimizersConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations,
@@ -572,5 +572,62 @@ fn library_manifest_refuses_an_open_library_and_matches_the_segments() {
     // the library still opens read-only afterwards
     let h = open(&f.lib);
     assert_eq!(status(h)["sources"][0]["docs"], 300);
+    unsafe { cs_close(h) };
+}
+
+// ---- one open per update, the shard handed to every handle ----------------------------------------------------
+
+#[test]
+fn update_opens_the_library_exactly_once_for_every_handle() {
+    let f = fixture("once", false);
+    // two handles with the library open, and a third source-less run below; h2 is never looked at while the job runs
+    let (h1, h2) = (open(&f.lib), open(&f.lib));
+    let before = shard_open_count(&f.lib);
+    assert_eq!(before, 2, "one open per handle");
+    let j = start_job(job_params(&f, 300));
+    // h1 looks while the update runs (it turns into an updating source); h2 does not
+    assert_eq!(status(h1)["sources"][0]["updating"], true);
+    let done = wait_job(j);
+    assert_eq!(done["state"], "done", "{done}");
+    unsafe { cs_job_free(j) };
+    wait_ready(h1);
+    wait_ready(h2);
+    check_updated(&f, h1);
+    check_updated(&f, h2);
+    assert_eq!(shard_open_count(&f.lib), before + 1, "the job's verifying open is the only open: no handle reopened the library");
+    // both handles search the same, updated shard
+    assert_eq!(first_addr(&search(h2, &random_vec(320), 3)), "lib:t/320");
+    // a handle that opens afterwards opens for itself
+    let h3 = open(&f.lib);
+    assert_eq!(shard_open_count(&f.lib), before + 2);
+    check_updated(&f, h3);
+    for h in [h1, h2, h3] {
+        unsafe { cs_close(h) };
+    }
+}
+
+#[test]
+fn update_without_handles_opens_once_and_a_failed_update_makes_the_handle_open_again() {
+    let f = fixture("once2", false);
+    let before = shard_open_count(&f.lib);
+    let j = start_job(job_params(&f, 0));
+    assert_eq!(wait_job(j)["state"], "done");
+    unsafe { cs_job_free(j) };
+    assert_eq!(shard_open_count(&f.lib), before + 1, "the check open, with nobody to hand it to");
+
+    // a failed job (not a tar) hands nothing back: the handle opens the library itself, once
+    let f = fixture("once3", false);
+    let h = open(&f.lib);
+    let before = shard_open_count(&f.lib);
+    let bad = f.lib.parent().unwrap().join("bad.snapshot");
+    std::fs::write(&bad, vec![7u8; 4096]).unwrap();
+    let mut p = job_params(&f, 0);
+    p["snapshot_path"] = json!(bad.to_str().unwrap());
+    let j = start_job(p);
+    assert_eq!(wait_job(j)["state"], "failed");
+    unsafe { cs_job_free(j) };
+    wait_ready(h);
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    assert_eq!(shard_open_count(&f.lib), before + 1);
     unsafe { cs_close(h) };
 }

@@ -164,6 +164,8 @@ void cs_conversation_free(cs_conv *c);
  *   after that the job runs to the end. A failed job leaves the library reopened from whatever is on disk (a
  *   failed apply can leave it half-merged: replace it from a full snapshot) or, if that does not open, listed in
  *   cs_status with its error. Freeing a running update_library job waits for it to finish.
+ *   The last step opens the library read-only once; that shard is handed to every handle that had the library
+ *   open (no second open).
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);

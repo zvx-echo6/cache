@@ -466,6 +466,29 @@ pub fn detect_own_scoring(shard: &Shard, settings: &LibrarySettings) -> bool {
     )
 }
 
+/// Opens of library shards per (canonical) folder, since the process started. A test hook (not in the header):
+/// the update jobs promise to open the library exactly once.
+fn open_counts() -> &'static Mutex<std::collections::HashMap<PathBuf, u64>> {
+    static C: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, u64>>> = std::sync::OnceLock::new();
+    C.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// How many times the library at `path` has been opened read-only in this process.
+#[doc(hidden)]
+pub fn shard_open_count(path: &Path) -> u64 {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    open_counts().lock().ok().and_then(|m| m.get(&key).copied()).unwrap_or(0)
+}
+
+/// The one place that opens a library shard.
+fn open_counted(path: &Path, profile: LoadProfile) -> Result<Shard> {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(mut m) = open_counts().lock() {
+        *m.entry(key).or_insert(0) += 1;
+    }
+    Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))
+}
+
 /// Open a library's shard read-only with the scroll load profile (for `index_library`). Like `open_library`, it
 /// writes nothing except a missing `segments_manifest.json`.
 pub fn open_shard_for_scroll(path: &Path) -> Result<Shard> {
@@ -474,8 +497,27 @@ pub fn open_shard_for_scroll(path: &Path) -> Result<Shard> {
         return Err(Error::not_found(format!("library folder {} not found", path.display())));
     }
     ensure_segments_manifest(path)?;
-    let profile = LoadProfile::for_scroll(None, None, true);
-    Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))
+    open_counted(path, LoadProfile::for_scroll(None, None, true))
+}
+
+/// The read-only open that ends an update job: it checks that the library opens, and its shard is what the
+/// handles get (see `libreg`). Warmed for the vectors the handles search with (the profiles merged); with no
+/// handle to hand it to, the cheap scroll profile.
+pub fn open_shard_for_handoff(path: &Path, vectors: &std::collections::BTreeSet<String>) -> Result<Arc<Shard>> {
+    ensure_init();
+    if !path.is_dir() {
+        return Err(Error::not_found(format!("library folder {} not found", path.display())));
+    }
+    ensure_segments_manifest(path)?;
+    let profile = vectors
+        .iter()
+        .map(|v| LoadProfile::for_search(v, None, true))
+        .reduce(|mut a, b| {
+            a.merge(b);
+            a
+        })
+        .unwrap_or_else(|| LoadProfile::for_scroll(None, None, true));
+    Ok(Arc::new(open_counted(path, profile)?))
 }
 
 /// Open a library read-only. Writes nothing to the shard except `segments_manifest.json` when it is missing.
@@ -491,13 +533,50 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     ensure_segments_manifest(path)?;
     let vector = pre.as_ref().map(|s| s.embedding.vector.clone()).unwrap_or_default();
     let profile = LoadProfile::for_search(&vector, None, true);
-    let shard = Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))?;
+    let shard = open_counted(path, profile)?;
     let settings = resolve_settings(&shard, path, settings)?;
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
     let own_scoring = detect_own_scoring(&shard, &settings);
-    let shard = Arc::new(ShardCell::new(shard));
+    let shard = Arc::new(ShardCell::new(Arc::new(shard), vector));
     entry.register(&shard);
     Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, entry, seen_gen, given: None, docs, kw: None, own_scoring })
+}
+
+/// A slot for a cell that an update job filled again (see `libreg`): no open, only the numbers that an update
+/// can change are worked out again. `None` when the cell is empty or the library no longer gives settings (the
+/// caller then opens the library from disk).
+pub fn slot_from_cell(
+    path: &Path,
+    index_dir: Option<PathBuf>,
+    given: Option<Value>,
+    cell: Arc<ShardCell>,
+    entry: Arc<LibEntry>,
+) -> Option<LibSlot> {
+    let seen_gen = entry.generation();
+    let (settings, docs, own_scoring) = {
+        let g = cell.get().ok()?;
+        let settings = resolve_settings(&g, path, given.as_ref()).ok()?;
+        let docs = EdgeShardRead::count(&*g, CountRequest::new()).ok()?;
+        let own = detect_own_scoring(&g, &settings);
+        (settings, docs, own)
+    };
+    Some(LibSlot { path: path.to_path_buf(), index_dir, settings, shard: cell, entry, seen_gen, given, docs, kw: None, own_scoring })
+}
+
+impl LibSlot {
+    /// After an update that handed this slot's cell a new shard: work the numbers out again and take the
+    /// current generation. `false` when that fails (the caller then opens the library from disk).
+    pub fn refresh_after_update(&mut self) -> bool {
+        let Ok(g) = self.shard.get() else { return false };
+        let Ok(settings) = resolve_settings(&g, &self.path, self.given.as_ref()) else { return false };
+        let Ok(docs) = EdgeShardRead::count(&*g, CountRequest::new()) else { return false };
+        self.own_scoring = detect_own_scoring(&g, &settings);
+        drop(g);
+        self.settings = settings;
+        self.docs = docs;
+        self.seen_gen = self.entry.generation();
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
