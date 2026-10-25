@@ -21,8 +21,10 @@ enum LayerKind {
 }
 
 /// One entry of the layer catalogue: a definition (data, never code). The engine owns the catalogue; this
-/// is the app's view of it. Fields the app does not know are kept in [raw] so editing a definition by hand
-/// (Advanced) never drops them.
+/// is the app's view of it. It reads the catalogue's own schema (format 1: `license`, `coverage.bbox`,
+/// `source {type, url, minzoom, maxzoom, tile_format}`, `offline.allowed`, `style_hints.layers[].name`,
+/// optional `layout`, `enabled_by_default`) and the shorter field names of earlier hand-written definitions.
+/// The original JSON is kept in [raw], so editing a definition by hand (Advanced) never drops a field.
 class LayerDef {
   LayerDef({
     required this.id,
@@ -33,15 +35,16 @@ class LayerDef {
     required this.coverage,
     required this.kind,
     this.styleRole = '',
-    this.sourceLayer = '',
-    this.geometry = 'line',
+    this.sourceLayers = const [],
     this.plural = false,
     this.minZoom = 0,
     this.maxZoom = 14,
     this.tileSize = 256,
     this.onlineOnly = false,
     this.defaultOn = false,
+    this.enabledByDefault = true,
     this.sourceUrl = '',
+    this.sourceType = '',
     Map<String, dynamic>? raw,
   }) : raw = raw ?? {};
 
@@ -53,16 +56,15 @@ class LayerDef {
   /// The credit line shown on the map while the layer is visible.
   final String attribution;
 
-  /// Where the layer has data, in words ("Worldwide", "United States").
+  /// Where the layer has data, in words.
   final String coverage;
   final LayerKind kind;
 
   /// For [LayerKind.vector]: which palette colour family ("public_lands", "trail", "mvum", "blm").
   final String styleRole;
-  final String sourceLayer;
 
-  /// For [LayerKind.vector]: "line" or "polygon".
-  final String geometry;
+  /// The vector tile layers to draw (from the definition's style hints).
+  final List<String> sourceLayers;
 
   /// True when the title is plural, so the notice reads "Contours need" and not "Contours needs".
   final bool plural;
@@ -72,13 +74,50 @@ class LayerDef {
 
   /// A live service whose terms do not allow keeping it offline.
   final bool onlineOnly;
+
+  /// Drawn the first time the map opens.
   final bool defaultOn;
+
+  /// False for a definition that stays in the catalogue but is off until the user switches it on (Advanced).
+  final bool enabledByDefault;
 
   /// The layer's original public source (address), for the Advanced editor.
   final String sourceUrl;
+
+  /// "pmtiles", "tilejson", "xyz" and so on.
+  final String sourceType;
   final Map<String, dynamic> raw;
 
   bool get isBase => kind == LayerKind.basemap;
+
+  /// The tile layout of a base map: "openmaptiles" (the OpenFreeMap style) or "protomaps-v4".
+  String get layout => (raw['layout'] as String?) ?? 'openmaptiles';
+
+  /// Where the layer has data, as one box (`coverage.bbox` as west, south, east, north), or null for everywhere.
+  GeoBounds? get coverageBox {
+    final c = raw['coverage'];
+    final b = c is Map ? c['bbox'] : null;
+    if (b is! List || b.length != 4) return null;
+    final v = [for (final e in b) (e as num).toDouble()];
+    return GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]);
+  }
+
+  /// True when [area] lies wholly inside the layer's coverage box (any area, if it has none).
+  bool covers(GeoBounds area) {
+    final b = coverageBox;
+    if (b == null) return true;
+    return area.south >= b.south && area.north <= b.north && area.west >= b.west && area.east <= b.east;
+  }
+
+  /// A rough size of the coverage box in square degrees (smaller means more specific).
+  double get coverageSize {
+    final b = coverageBox;
+    return b == null ? double.infinity : (b.north - b.south) * (b.east - b.west);
+  }
+
+  /// Definitions that are the same layer cut for different regions share a title and kind; the catalogue shows
+  /// them as one card and a download uses the most specific one that covers the area.
+  String get groupKey => '${kind.name}|$title';
 
   /// "Contours need a connection or a download here".
   String get missingNotice {
@@ -86,35 +125,77 @@ class LayerDef {
     return onlineOnly ? '$title $verb a connection here' : '$title $verb a connection or a download here';
   }
 
-  static LayerKind _kind(String? s) =>
-      LayerKind.values.firstWhere((k) => k.name == s, orElse: () => LayerKind.vector);
+  static LayerKind _kind(String? kind, String? transform) {
+    switch (transform) {
+      case 'elevation_to_hillshade':
+        return LayerKind.hillshade;
+      case 'elevation_to_contours':
+        return LayerKind.contours;
+    }
+    return LayerKind.values.firstWhere((k) => k.name == kind, orElse: () => LayerKind.vector);
+  }
+
+  static String _words(Map<String, dynamic> j) {
+    final c = j['coverage'];
+    if (c is String) return c;
+    if (c is Map && c['name'] is String) return c['name'] as String;
+    if (c is Map && c['bbox'] is List && (c['bbox'] as List).length == 4) {
+      final b = [for (final e in c['bbox'] as List) (e as num).toDouble()];
+      String d(double v, String pos, String neg) => '${v.abs().toStringAsFixed(v.abs() % 1 == 0 ? 0 : 1)}° ${v < 0 ? neg : pos}';
+      return '${d(b[1], 'N', 'S')} to ${d(b[3], 'N', 'S')}, ${d(b[0], 'E', 'W')} to ${d(b[2], 'E', 'W')}';
+    }
+    return 'Worldwide';
+  }
+
+  /// The colour family of a vector layer: stated in the definition, else read from its id.
+  static String _role(Map<String, dynamic> j, String id) {
+    final hints = j['style_hints'];
+    final stated = (j['style_role'] as String?) ?? (hints is Map ? hints['role'] as String? : null);
+    if (stated != null && stated.isNotEmpty) return stated;
+    if (id.contains('mvum')) return 'mvum';
+    if (id.contains('blm')) return 'blm';
+    if (id.contains('trail')) return 'trail';
+    if (id.contains('lands')) return 'public_lands';
+    return '';
+  }
 
   factory LayerDef.fromJson(Map<String, dynamic> j) {
     String s(String k, [String d = '']) => (j[k] as String?) ?? d;
-    int i(String k, int d) => (j[k] as num?)?.toInt() ?? d;
     final id = s('id');
     if (id.isEmpty || !RegExp(r'^[a-z0-9_-]+$').hasMatch(id)) {
       throw const FormatException('A layer needs an id of lower-case letters, digits, - and _');
     }
     if (s('title').isEmpty) throw const FormatException('A layer needs a title');
+    final src = j['source'] is Map ? Map<String, dynamic>.from(j['source'] as Map) : <String, dynamic>{};
+    int zoom(String longKey, String shortKey, int d) => ((src[longKey] ?? j[shortKey]) as num?)?.toInt() ?? d;
+    final hints = j['style_hints'];
+    final hinted = <String>[
+      if (hints is Map && hints['layers'] is List)
+        for (final l in hints['layers'] as List)
+          if (l is Map && l['name'] is String) l['name'] as String,
+    ];
+    final single = s('source_layer');
+    final kind = _kind(j['kind'] as String?, j['transform'] as String?);
+    final offline = j['offline'];
     return LayerDef(
       id: id,
       title: s('title'),
       description: s('description'),
-      licence: s('licence'),
+      licence: s('license', s('licence')),
       attribution: s('attribution'),
-      coverage: s('coverage', 'Worldwide'),
-      kind: _kind(j['kind'] as String?),
-      styleRole: s('style_role'),
-      sourceLayer: s('source_layer'),
-      geometry: s('geometry', 'line'),
+      coverage: _words(j),
+      kind: kind,
+      styleRole: kind == LayerKind.vector ? _role(j, id) : '',
+      sourceLayers: hinted.isNotEmpty ? hinted : (single.isEmpty ? const [] : [single]),
       plural: j['plural'] == true,
-      minZoom: i('min_zoom', 0),
-      maxZoom: i('max_zoom', 14),
-      tileSize: i('tile_size', 256),
-      onlineOnly: j['online_only'] == true,
+      minZoom: zoom('minzoom', 'min_zoom', 0),
+      maxZoom: zoom('maxzoom', 'max_zoom', 14),
+      tileSize: ((src['tile_size'] ?? j['tile_size']) as num?)?.toInt() ?? 256,
+      onlineOnly: j['online_only'] == true || (offline is Map && offline['allowed'] == false),
       defaultOn: j['default_on'] == true,
-      sourceUrl: ((j['source'] as Map?)?['url'] as String?) ?? '',
+      enabledByDefault: j['enabled_by_default'] != false,
+      sourceUrl: (src['url'] as String?) ?? '',
+      sourceType: (src['type'] as String?) ?? (src['format'] as String?) ?? '',
       raw: Map<String, dynamic>.from(j),
     );
   }
@@ -125,25 +206,8 @@ class LayerDef {
     return LayerDef.fromJson(Map<String, dynamic>.from(j));
   }
 
-  Map<String, dynamic> toJson() => {
-        ...raw,
-        'id': id,
-        'title': title,
-        'description': description,
-        'licence': licence,
-        'attribution': attribution,
-        'coverage': coverage,
-        'kind': kind.name,
-        if (styleRole.isNotEmpty) 'style_role': styleRole,
-        if (sourceLayer.isNotEmpty) 'source_layer': sourceLayer,
-        'geometry': geometry,
-        'plural': plural,
-        'min_zoom': minZoom,
-        'max_zoom': maxZoom,
-        'tile_size': tileSize,
-        'online_only': onlineOnly,
-        'default_on': defaultOn,
-      };
+  /// The definition as written (what the Advanced editor shows and saves).
+  Map<String, dynamic> toJson() => Map<String, dynamic>.from(raw);
 
   String prettyJson() => const JsonEncoder.withIndent('  ').convert(toJson());
 }

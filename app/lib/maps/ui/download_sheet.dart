@@ -84,10 +84,15 @@ class _ConfirmState extends State<_Confirm> {
   String? _error;
   bool _starting = false;
 
+  /// The layer that really downloads: for the base map, the regional one where it covers the area.
+  late final LayerDef _target = widget.maps.downloadDefFor(widget.def, widget.area);
+  late final String _label =
+      _target.id == widget.def.id ? widget.label : '${widget.label} · ${_target.coverage}';
+
   @override
   void initState() {
     super.initState();
-    widget.maps.engine.estimate(widget.def.id, widget.area).then((e) {
+    widget.maps.engine.estimate(_target.id, widget.area).then((e) {
       if (mounted) setState(() => _est = e);
     }).catchError((Object e) {
       if (mounted) setState(() => _error = 'Could not work out the size');
@@ -98,7 +103,7 @@ class _ConfirmState extends State<_Confirm> {
   Future<void> _start() async {
     setState(() => _starting = true);
     try {
-      await widget.maps.engine.download(widget.def.id, widget.area, label: widget.label);
+      await widget.maps.engine.download(_target.id, widget.area, label: _label);
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
@@ -124,7 +129,7 @@ class _ConfirmState extends State<_Confirm> {
           children: [
             Text('Download ${widget.def.title}', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 4),
-            Text(widget.label, style: Theme.of(context).textTheme.bodySmall),
+            Text(_label, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 16),
             if (est == null && _error == null)
               const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))

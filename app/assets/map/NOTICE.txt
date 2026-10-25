@@ -11,3 +11,9 @@ layers that need a sprite sheet are left out.
 
 fonts/ holds glyph ranges of Noto Sans (Regular, Bold, Italic) as served by OpenFreeMap,
 released under the SIL Open Font License, Version 1.1 (https://openfontlicense.org/).
+
+protomaps_v4_template.json is the layer structure of the official @protomaps/basemaps package (version 5.7.2,
+https://github.com/protomaps/basemaps), for Protomaps basemap tiles v4, with every colour replaced by a palette
+field (tool/make_protomaps_template.cjs). Layers that need the sprite sheet are left out.
+  - Package code: BSD 3-Clause License, Copyright (c) Protomaps LLC.
+  - Map data: (c) OpenStreetMap contributors, ODbL 1.0.

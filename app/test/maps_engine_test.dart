@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/fake_layer_engine.dart';
 import 'package:cache/maps/layers/layer_def.dart';
+import 'package:cache/maps/layers/pmtiles.dart';
+import 'pmtiles_test.dart' show PmWriter;
 import 'package:cache/maps/layers/tile_math.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/network_access.dart';
@@ -20,6 +22,9 @@ class Host {
 
   Future<FetchedTile?> fetch(Uri u) async {
     if (offline) throw const SocketException('no route');
+    if (u.path.endsWith('catalogue.json')) {
+      return FetchedTile(File('test/fixtures/catalogue.json').readAsBytesSync());
+    }
     calls.add(u);
     await gate?.future;
     if (u.path == '/planet') {
@@ -56,7 +61,12 @@ void main() {
   setUp(() async {
     dir = Directory.systemTemp.createTempSync('mapsengine');
     host = Host();
-    engine = FakeLayerEngine(dirOverride: dir, fetcher: host.fetch, onlineProbe: () async => !host.offline);
+    engine = FakeLayerEngine(
+      dirOverride: dir,
+      fetcher: host.fetch,
+      rangeFetcher: (u, o, l) async => throw PmTilesMissing(u),
+      onlineProbe: () async => !host.offline,
+    );
     await engine.start();
   });
   tearDown(() {
@@ -194,7 +204,7 @@ void main() {
     });
 
     test('says what is missing only when a visible layer has no tiles here and there is no connection', () async {
-      maps.setOn('openfreemap', false);
+      maps.setOn('basemap', false);
       maps.setOn('hillshade', true);
       maps.setOn('contours', true);
       await maps.checkCoverage(home, 10);
@@ -209,7 +219,7 @@ void main() {
     });
 
     test('a layer that is downloaded here raises no notice; one that is off never does', () async {
-      maps.setOn('openfreemap', false);
+      maps.setOn('basemap', false);
       maps.setOn('hillshade', true);
       final a = await engine.download('hillshade', home, label: 'This region');
       await until(() => a.phase == AreaPhase.done);
@@ -224,7 +234,7 @@ void main() {
     });
 
     test('online-only layers say they need a connection, and several are listed together', () async {
-      maps.setOn('openfreemap', false);
+      maps.setOn('basemap', false);
       maps.setOn('satellite', true);
       host.offline = true;
       await engine.refreshOnline(force: true);
@@ -254,7 +264,105 @@ void main() {
       expect(again.isOn('hillshade'), isTrue);
       expect(again.opacityOf('hillshade'), 0.4);
       expect(again.savedCamera!.zoom, 11);
-      expect(again.isOn('openfreemap'), isTrue);
+      expect(again.isOn('basemap'), isTrue);
+      expect(again.isOn('openfreemap'), isFalse);
+      again.engine.dispose();
+    });
+  });
+
+  group('catalogue cuts and definitions', () {
+    late FakeLayerEngine live;
+    late MapsState maps;
+    setUp(() async {
+      live = FakeLayerEngine(
+        dirOverride: Directory('${dir.path}/live'),
+        fetcher: host.fetch,
+        rangeFetcher: (u, o, l) async => throw PmTilesMissing(u),
+        catalogueUrl: Uri.parse('https://example.test/catalogue.json'),
+      );
+      maps = MapsState(engine: live, settingsDirOverride: Directory('${dir.path}/live'), network: _Net(allowed: true));
+      await maps.init();
+      await live.refreshCatalogue();
+    });
+
+    test('the published catalogue is fetched, kept, and merged with the bundled definitions', () async {
+      expect(live.layer('mvum'), isNotNull);
+      expect(live.layer('basemap'), isNotNull);
+      expect(File('${dir.path}/live/catalogue.json').existsSync(), isTrue);
+      // Next start, offline: the kept copy is used.
+      live.dispose();
+      host.offline = true;
+      final again = FakeLayerEngine(dirOverride: Directory('${dir.path}/live'), fetcher: host.fetch, catalogueUrl: Uri.parse('https://example.test/catalogue.json'));
+      await again.start();
+      expect(again.layer('mvum'), isNotNull);
+      again.dispose();
+      live = FakeLayerEngine(dirOverride: Directory('${dir.path}/live2'));
+    });
+
+    test('the catalogue shows one card per layer; a download takes the most specific cut that covers the area', () {
+      final cards = [for (final l in maps.catalogueLayers) l.id];
+      expect(cards, containsAll(['basemap', 'blm-routes', 'mvum', 'usfs-trails-roads']));
+      expect(cards, isNot(contains('blm-routes-idaho')));
+      final card = live.layer('blm-routes')!;
+      expect(maps.downloadDefFor(card, home).id, 'blm-routes-idaho');
+      const colorado = GeoBounds(south: 39.0, west: -105.1, north: 39.2, east: -104.9);
+      expect(maps.downloadDefFor(card, colorado).id, 'blm-routes');
+      const acrossBorder = GeoBounds(south: 48.5, west: -119.0, north: 49.4, east: -117.0);
+      expect(maps.downloadDefFor(card, acrossBorder).id, 'blm-routes');
+      expect([for (final l in maps.groupOf(card)) l.id], ['blm-routes', 'blm-routes-idaho']);
+      // Other layers are never switched.
+      expect(maps.downloadDefFor(live.layer('hillshade')!, home).id, 'hillshade');
+    });
+
+    test('a cut that is downloaded serves the layer, and shows under the card', () async {
+      final card = live.layer('blm-routes')!;
+      final cut = maps.downloadDefFor(card, home);
+      // PMTiles are read by byte ranges; give the fake host a tiny archive for the Idaho cut.
+      final w = PmWriter(minZoom: 6, maxZoom: 14);
+      for (final t in TileMath.tiles(home, 6, 9)) {
+        w.add(t.$1, t.$2, t.$3, [1, 2, 3, 4]);
+      }
+      final file = w.build();
+      final e = FakeLayerEngine(
+        dirOverride: Directory('${dir.path}/cuts'),
+        fetcher: host.fetch,
+        rangeFetcher: (u, o, l) async => file.sublist(o, (o + l).clamp(0, file.length)),
+        catalogueUrl: Uri.parse('https://example.test/catalogue.json'),
+      );
+      final m = MapsState(engine: e, settingsDirOverride: Directory('${dir.path}/cuts'), network: _Net(allowed: true));
+      await m.init();
+      await e.refreshCatalogue();
+      final area = await e.download(cut.id, home, label: 'This region');
+      await until(() => area.phase == AreaPhase.done);
+      expect(area.doneTiles, greaterThan(0));
+      expect(m.areasOfCard(card), [area]);
+      expect(m.storageOfCard(card), greaterThan(0));
+      // The map asks for the broad layer; the downloaded cut answers.
+      host.offline = true;
+      await e.refreshOnline(force: true);
+      expect(await e.hasTiles('blm-routes', home, 8), isTrue);
+      e.dispose();
+    });
+
+    test('a definition that is off by default stays in the catalogue and is switched on under Advanced', () async {
+      expect(live.layer('openfreemap'), isNotNull);
+      expect(maps.isDefinitionEnabled(live.layer('openfreemap')!), isFalse);
+      expect([for (final l in maps.catalogueLayers) l.id], isNot(contains('openfreemap')));
+      maps.setOn('openfreemap', true);
+      expect(maps.isOn('openfreemap'), isFalse, reason: 'a definition that is off cannot be drawn');
+      maps.setDefinitionEnabled('openfreemap', true);
+      expect([for (final l in maps.catalogueLayers) l.id], contains('openfreemap'));
+      maps.setOn('openfreemap', true);
+      expect(maps.isOn('openfreemap'), isTrue);
+      expect(maps.isOn('basemap'), isFalse, reason: 'one base map at a time');
+      expect(maps.uses.where((u) => u.def.isBase).single.def.id, 'openfreemap');
+      // Switching a definition off takes it off the map, and the choice is remembered.
+      maps.setDefinitionEnabled('openfreemap', false);
+      expect(maps.isOn('openfreemap'), isFalse);
+      await maps.flush();
+      final again = MapsState(engine: FakeLayerEngine(dirOverride: Directory('${dir.path}/live')), settingsDirOverride: Directory('${dir.path}/live'), network: _Net(allowed: true));
+      await again.init();
+      expect(again.isDefinitionEnabled(again.engine.layer('openfreemap')!), isFalse);
       again.engine.dispose();
     });
   });
@@ -272,7 +380,7 @@ void main() {
       expect(net.asked, 1);
       expect(m.needsNetworkAccess, isFalse);
       expect(fresh.ready, isTrue);
-      expect(m.isOn('openfreemap'), isTrue);
+      expect(m.isOn('basemap'), isTrue);
       fresh.dispose();
     });
 
@@ -290,5 +398,24 @@ void main() {
       expect(m.networkRefused, isFalse);
       fresh.dispose();
     });
+  });
+
+
+  test('a base map saved as on whose definition is now off falls back to the default base map', () async {
+    File('${dir.path}/maps.json').writeAsStringSync(jsonEncode({'enabled': ['openfreemap', 'hillshade'], 'opacity': {}}));
+    final m = MapsState(engine: engine, settingsDirOverride: dir, network: _Net(allowed: true));
+    await m.init();
+    expect(m.isOn('openfreemap'), isFalse);
+    expect(m.isOn('basemap'), isTrue);
+    expect(m.isOn('hillshade'), isTrue, reason: 'other choices are kept');
+  });
+
+  test('credits on the map are short; a long credit is cut after its first sentence', () {
+    expect(shortAttribution('© OpenStreetMap contributors · Protomaps'), '© OpenStreetMap contributors · Protomaps');
+    expect(
+      shortAttribution('Source: Bureau of Land Management (BLM National GTLF public datasets). Data were clipped to the region.'),
+      'Source: Bureau of Land Management (BLM National GTLF public datasets)',
+    );
+    expect(shortAttribution('x' * 200).length, 80);
   });
 }

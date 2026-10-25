@@ -10,7 +10,16 @@ import 'layers/layer_def.dart';
 import 'layers/layer_engine.dart';
 import 'network_access.dart';
 import 'palette/map_palette.dart';
+import 'style/protomaps_layout.dart';
 import 'style/style_generator.dart';
+
+/// The first sentence of a credit, without its final full stop, and at most 80 characters.
+String shortAttribution(String credit) {
+  final end = credit.indexOf(RegExp(r'[.;] '));
+  var t = (end < 0 ? credit : credit.substring(0, end)).trim();
+  if (t.endsWith('.')) t = t.substring(0, t.length - 1);
+  return t.length > 80 ? '${t.substring(0, 79).trimRight()}…' : t;
+}
 
 /// How the camera follows the phone.
 enum FollowMode {
@@ -67,6 +76,7 @@ class MapsState extends ChangeNotifier {
   String? notice;
   File? _file;
   Map<String, dynamic>? _template;
+  Map<String, dynamic>? _protomapsTemplate;
   Timer? _saveTimer;
   int _coverageSeq = 0;
 
@@ -84,6 +94,8 @@ class MapsState extends ChangeNotifier {
         _opacity
           ..clear()
           ..addAll({for (final e in (j['opacity'] as Map).entries) e.key as String: (e.value as num).toDouble()});
+        final defs = j['definitions'];
+        if (defs is Map) _definitions..clear()..addAll({for (final e in defs.entries) e.key as String: e.value == true});
         final c = j['camera'];
         if (c is Map) {
           savedCamera = SavedCamera((c['lat'] as num).toDouble(), (c['lon'] as num).toDouble(), (c['zoom'] as num).toDouble());
@@ -103,7 +115,15 @@ class MapsState extends ChangeNotifier {
       return;
     }
     if (!_hadSettings) {
-      _enabled.addAll([for (final l in engine.layers) if (l.defaultOn) l.id]);
+      _enabled.addAll([for (final l in activeDefinitions) if (l.defaultOn) l.id]);
+    } else {
+      // A base map that was saved as on but whose definition is now off (the default base map changed): fall back
+      // to the default one rather than opening on no map.
+      final gone = [for (final id in _enabled) if (engine.layer(id) case final d? when d.isBase && !isDefinitionEnabled(d)) id];
+      if (gone.isNotEmpty) {
+        _enabled.removeAll(gone);
+        _enabled.addAll([for (final l in activeDefinitions) if (l.isBase && l.defaultOn) l.id]);
+      }
     }
     notifyListeners();
   }
@@ -125,6 +145,52 @@ class MapsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- definitions and region downloads -------------------------------------------------------------------
+
+  /// Definitions the user switched on or off (Advanced); the rest follow the definition's own default.
+  final Map<String, bool> _definitions = {};
+
+  bool isDefinitionEnabled(LayerDef d) => _definitions[d.id] ?? d.enabledByDefault;
+
+  /// Advanced: a definition that is off stays in the catalogue but is not offered or drawn.
+  void setDefinitionEnabled(String id, bool on) {
+    _definitions[id] = on;
+    if (!on) _enabled.remove(id);
+    _save();
+    notifyListeners();
+  }
+
+  /// The definitions in use, in the catalogue's order.
+  List<LayerDef> get activeDefinitions => [for (final l in engine.layers) if (isDefinitionEnabled(l)) l];
+
+  /// The layers the catalogue and the layer sheet show: one per layer, however many region cuts the catalogue
+  /// holds of it. The card is the broadest cut; a download takes the most specific cut that covers the area.
+  List<LayerDef> get catalogueLayers {
+    final cards = <String, LayerDef>{};
+    for (final l in activeDefinitions) {
+      final known = cards[l.groupKey];
+      if (known == null || l.coverageSize > known.coverageSize) cards[l.groupKey] = l;
+    }
+    return cards.values.toList();
+  }
+
+  /// The card's layer and the region cuts of it.
+  List<LayerDef> groupOf(LayerDef card) => [for (final l in activeDefinitions) if (l.groupKey == card.groupKey) l];
+
+  /// The definition a download of [card] for [area] uses: the most specific cut whose coverage holds the whole
+  /// area (for example an Idaho extract), else the card itself.
+  LayerDef downloadDefFor(LayerDef card, GeoBounds area) {
+    LayerDef best = card;
+    for (final l in groupOf(card)) {
+      if (l.covers(area) && l.coverageSize < best.coverageSize) best = l;
+    }
+    return best;
+  }
+
+  List<DownloadedArea> areasOfCard(LayerDef card) => [for (final l in groupOf(card)) ...engine.areasOf(l.id)];
+
+  int storageOfCard(LayerDef card) => groupOf(card).fold(0, (s, l) => s + engine.storageOf(l.id));
+
   // ---- layers -------------------------------------------------------------------------------------------
 
   bool isOn(String id) => _enabled.contains(id);
@@ -133,7 +199,7 @@ class MapsState extends ChangeNotifier {
 
   void setOn(String id, bool on) {
     final def = engine.layer(id);
-    if (def == null) return;
+    if (def == null || !isDefinitionEnabled(def)) return;
     if (on) {
       // One base map at a time.
       if (def.isBase) {
@@ -157,16 +223,17 @@ class MapsState extends ChangeNotifier {
 
   /// The layers to draw, bottom first (the catalogue's order).
   List<StyleLayerUse> get uses => [
-        for (final l in engine.layers)
+        for (final l in activeDefinitions)
           if (_enabled.contains(l.id)) StyleLayerUse(l, opacityOf(l.id)),
       ];
 
-  /// Credit lines of what is on screen (shown on the map; the credits sheet adds the licences).
+  /// Credit lines of what is on screen, short enough for the strip on the map (the credits sheet has the full
+  /// text and the licences). A long credit is cut after its first sentence.
   List<String> get attributions {
     final seen = <String>{};
     return [
       for (final u in uses)
-        if (u.def.attribution.isNotEmpty && seen.add(u.def.attribution)) u.def.attribution,
+        if (u.def.attribution.isNotEmpty && seen.add(shortAttribution(u.def.attribution))) shortAttribution(u.def.attribution),
     ];
   }
 
@@ -181,9 +248,11 @@ class MapsState extends ChangeNotifier {
 
   /// The style JSON for the visible layers in [palette].
   Future<String> styleJson(MapPalette palette, String glyphsUrl, {Map<String, dynamic>? template}) async {
+    final needsProtomaps = uses.any((u) => u.def.isBase && MapLayout.parse(u.def.raw['layout']) == MapLayout.protomapsV4);
     final style = buildMapStyle(
       palette: palette,
       omtTemplate: template ?? await _omt(),
+      protomapsTemplate: needsProtomaps ? (_protomapsTemplate ??= await loadProtomapsTemplate()) : null,
       layers: uses,
       tilesUrl: (d) => engine.tilesUrl(d.id),
       glyphsUrl: glyphsUrl,
@@ -227,7 +296,7 @@ class MapsState extends ChangeNotifier {
       }
       // The base map first: without it nothing else matters.
       if (uses.any((u) => u.def.kind == LayerKind.basemap) && !await _hasBase(view, zoom)) {
-        text = engine.layers.firstWhere((l) => l.isBase).missingNotice;
+        text = uses.firstWhere((u) => u.def.isBase).def.missingNotice;
       } else if (missing.isNotEmpty) {
         text = _join(missing);
       }
@@ -271,6 +340,7 @@ class MapsState extends ChangeNotifier {
       await _file?.writeAsString(jsonEncode({
         'enabled': _enabled.toList(),
         'opacity': _opacity,
+        'definitions': _definitions,
         if (savedCamera != null)
           'camera': {'lat': savedCamera!.lat, 'lon': savedCamera!.lon, 'zoom': savedCamera!.zoom},
       }));

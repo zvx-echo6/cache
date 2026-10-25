@@ -4,6 +4,7 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../layers/layer_def.dart';
 import '../palette/map_palette.dart';
+import 'protomaps_layout.dart';
 
 /// The map style generator. One generator and four palettes make every style the map shows:
 ///
@@ -14,8 +15,8 @@ import '../palette/map_palette.dart';
 ///    from their layer definition, with their colours from the same palette;
 ///  * the phone's position (accuracy circle, dot, heading marker) is a GeoJSON source the screen updates.
 ///
-/// The Protomaps-layout generator that comes later (for servers that use that layout) plugs in beside
-/// [_baseLayers]: it takes the same palette roles and returns that layout's layers.
+/// A base-map definition says which layout its tiles use (`layout`): OpenMapTiles (OpenFreeMap, the default)
+/// or Protomaps v4 (protomaps_layout.dart). Both are filled from the same palette roles.
 
 /// The source id the screen updates with the phone's position.
 const String kPositionSource = 'cache-position';
@@ -43,14 +44,25 @@ List<String> overlayLayerIds(LayerDef d) {
   switch (d.kind) {
     case LayerKind.basemap:
       return const [];
+    // Ids carry a suffix so an overlay can never collide with a layer of the base map ("landcover").
     case LayerKind.hillshade:
+      return ['${d.id}-shade'];
     case LayerKind.raster:
-      return [d.id];
+      return ['${d.id}-raster'];
     case LayerKind.contours:
       return ['${d.id}-minor', '${d.id}-index', '${d.id}-label'];
     case LayerKind.vector:
-      return d.geometry == 'polygon' ? ['${d.id}-fill', '${d.id}-outline'] : ['${d.id}-casing', '${d.id}-line'];
+      return [
+        for (final t in _vectorTags(d)) ...['$t-fill', '$t-casing', '$t-line'],
+      ];
   }
+}
+
+/// One id prefix per vector tile layer of a definition (the definition's own id when it has just one).
+List<String> _vectorTags(LayerDef d) {
+  final sls = d.sourceLayers;
+  if (sls.length <= 1) return [d.id];
+  return [for (final sl in sls) '${d.id}-$sl'];
 }
 
 String sourceIdOf(LayerDef d) => 'src-${d.id}';
@@ -62,6 +74,7 @@ String sourceIdOf(LayerDef d) => 'src-${d.id}';
 Map<String, dynamic> buildMapStyle({
   required MapPalette palette,
   required Map<String, dynamic> omtTemplate,
+  Map<String, dynamic>? protomapsTemplate,
   required List<StyleLayerUse> layers,
   required String Function(LayerDef) tilesUrl,
   required String glyphsUrl,
@@ -71,10 +84,19 @@ Map<String, dynamic> buildMapStyle({
   final overlays = [for (final u in layers) if (u.def.kind != LayerKind.basemap) u];
 
   List<Map<String, dynamic>> base;
+  var groundPrefix = 'tunnel_';
+  var labelsId = 'waterway_line_label';
   if (basemap != null) {
     final src = sourceIdOf(basemap.def);
     sources[src] = _source(basemap.def, 'vector', tilesUrl(basemap.def), tileSize: null);
-    base = _baseLayers(palette, omtTemplate, src);
+    if (MapLayout.parse(basemap.def.raw['layout']) == MapLayout.protomapsV4) {
+      if (protomapsTemplate == null) throw ArgumentError('A Protomaps base map needs the Protomaps template');
+      base = protomapsLayers(palette, protomapsTemplate, src);
+      groundPrefix = protomapsGroundAt;
+      labelsId = protomapsLabelsAt;
+    } else {
+      base = _baseLayers(palette, omtTemplate, src);
+    }
   } else {
     base = [
       {
@@ -89,11 +111,9 @@ Map<String, dynamic> buildMapStyle({
   final above = <Map<String, dynamic>>[]; // over roads, under labels
   final top = <Map<String, dynamic>>[]; // over everything (contour labels)
 
-  // Polygons first, then lines, so a trail is never hidden by a land fill.
-  final ordered = [
-    ...overlays.where((u) => u.def.kind == LayerKind.vector && u.def.geometry == 'polygon'),
-    ...overlays.where((u) => !(u.def.kind == LayerKind.vector && u.def.geometry == 'polygon')),
-  ];
+  // Land areas first, then lines, so a trail is never hidden by a land fill.
+  bool isArea(StyleLayerUse u) => u.def.kind == LayerKind.vector && u.def.styleRole == 'public_lands';
+  final ordered = [...overlays.where(isArea), ...overlays.where((u) => !isArea(u))];
   for (final u in ordered) {
     final d = u.def;
     final src = sourceIdOf(d);
@@ -106,7 +126,7 @@ Map<String, dynamic> buildMapStyle({
       case LayerKind.raster:
         sources[src] = _source(d, 'raster', tilesUrl(d), tileSize: d.tileSize);
         ground.add({
-          'id': d.id,
+          'id': '${d.id}-raster',
           'type': 'raster',
           'source': src,
           'paint': {'raster-opacity': u.opacity},
@@ -122,8 +142,8 @@ Map<String, dynamic> buildMapStyle({
     }
   }
 
-  final groundAt = base.indexWhere((l) => (l['id'] as String).startsWith('tunnel_'));
-  final labelAt = base.indexWhere((l) => l['id'] == 'waterway_line_label');
+  final groundAt = base.indexWhere((l) => (l['id'] as String).startsWith(groundPrefix));
+  final labelAt = base.indexWhere((l) => l['id'] == labelsId);
   final List<Map<String, dynamic>> all;
   if (basemap == null) {
     all = [...base, ...ground, ...above, ...top];
@@ -178,7 +198,7 @@ List<Map<String, dynamic>> _baseLayers(MapPalette p, Map<String, dynamic> templa
 }
 
 Map<String, dynamic> _hillshade(MapPalette p, LayerDef d, String src, double o) => {
-      'id': d.id,
+      'id': '${d.id}-shade',
       'type': 'hillshade',
       'source': src,
       'paint': {
@@ -192,7 +212,7 @@ Map<String, dynamic> _hillshade(MapPalette p, LayerDef d, String src, double o) 
 
 /// Minor lines, index lines, and the index lines' labels in feet. Returns [minor, index, label].
 List<Map<String, dynamic>> _contours(MapPalette p, LayerDef d, String src, double o) {
-  final sl = d.sourceLayer.isEmpty ? 'contours' : d.sourceLayer;
+  final sl = d.sourceLayers.isEmpty ? 'contours' : d.sourceLayers.first;
   return [
     {
       'id': '${d.id}-minor',
@@ -262,58 +282,58 @@ List<Map<String, dynamic>> _contours(MapPalette p, LayerDef d, String src, doubl
 
 List<Map<String, dynamic>> _vectorOverlay(MapPalette p, LayerDef d, String src, double o) {
   final colors = _roleColors(d.styleRole);
-  final base = {'source': src, if (d.sourceLayer.isNotEmpty) 'source-layer': d.sourceLayer};
-  if (d.geometry == 'polygon') {
-    return [
-      {
-        'id': '${d.id}-fill',
-        'type': 'fill',
-        ...base,
-        'paint': {'fill-color': p.css(colors.fill), 'fill-opacity': o},
-      },
-      {
-        'id': '${d.id}-outline',
-        'type': 'line',
-        ...base,
-        'paint': {
-          'line-color': p.css('publicLandsLine'),
-          'line-opacity': o,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.4, 12, 1.4],
-        },
-      },
-    ];
-  }
   final dash = switch (d.styleRole) {
     'trail' => [2.0, 1.2],
     'blm' => [4.0, 2.0],
     _ => null,
   };
+  final sls = d.sourceLayers.isEmpty ? [''] : d.sourceLayers;
+  final tags = _vectorTags(d);
+  const polygon = ['==', ['geometry-type'], 'Polygon'];
+  const line = ['==', ['geometry-type'], 'LineString'];
   return [
-    {
-      'id': '${d.id}-casing',
-      'type': 'line',
-      ...base,
-      'minzoom': 8,
-      'layout': {'line-cap': 'round', 'line-join': 'round'},
-      'paint': {
-        'line-color': p.css('labelHalo'),
-        'line-opacity': o,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.2, 16, 4.5],
-      },
-    },
-    {
-      'id': '${d.id}-line',
-      'type': 'line',
-      ...base,
-      'minzoom': 8,
-      'layout': {'line-cap': dash == null ? 'round' : 'butt', 'line-join': 'round'},
-      'paint': {
-        'line-color': p.css(colors.line),
-        'line-opacity': o,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 16, 2.4],
-        'line-dasharray': ?dash,
-      },
-    },
+    for (var i = 0; i < sls.length; i++) ...[
+      () {
+        final base = {'source': src, if (sls[i].isNotEmpty) 'source-layer': sls[i]};
+        return <Map<String, dynamic>>[
+          // Areas (public lands): a tint and an outline.
+          {
+            'id': '${tags[i]}-fill',
+            'type': 'fill',
+            ...base,
+            'filter': polygon,
+            'paint': {'fill-color': p.css(colors.fill), 'fill-opacity': o},
+          },
+          // Routes: a pale casing under the line so it reads on any ground.
+          {
+            'id': '${tags[i]}-casing',
+            'type': 'line',
+            ...base,
+            'minzoom': 8,
+            'filter': line,
+            'layout': {'line-cap': 'round', 'line-join': 'round'},
+            'paint': {
+              'line-color': p.css('labelHalo'),
+              'line-opacity': o,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.2, 16, 4.5],
+            },
+          },
+          // The line itself (and the outline of an area).
+          {
+            'id': '${tags[i]}-line',
+            'type': 'line',
+            ...base,
+            'layout': {'line-cap': dash == null ? 'round' : 'butt', 'line-join': 'round'},
+            'paint': {
+              'line-color': p.css(colors.line),
+              'line-opacity': o,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.4, 8, 0.8, 16, 2.6],
+              'line-dasharray': ?dash,
+            },
+          },
+        ];
+      }()
+    ].expand((l) => l),
   ];
 }
 
@@ -361,10 +381,13 @@ List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
     ];
 
 /// All layer ids [buildMapStyle] produces for these inputs (for tests and for the screen's opacity changes).
-List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerUse> layers) {
-  final hasBase = layers.any((u) => u.def.kind == LayerKind.basemap);
+List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerUse> layers,
+    {Map<String, dynamic>? protomapsTemplate}) {
+  final base = layers.where((u) => u.def.kind == LayerKind.basemap).firstOrNull;
+  final template =
+      base != null && MapLayout.parse(base.def.raw['layout']) == MapLayout.protomapsV4 ? protomapsTemplate! : omtTemplate;
   return [
-    if (hasBase) for (final l in omtTemplate['layers'] as List) (l as Map)['id'] as String else 'background',
+    if (base != null) for (final l in template['layers'] as List) (l as Map)['id'] as String else 'background',
     for (final u in layers) ...overlayLayerIds(u.def),
     kPositionAccuracyFill,
     kPositionAccuracyLine,

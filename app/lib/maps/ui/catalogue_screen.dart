@@ -22,7 +22,7 @@ class CatalogueScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Layers')),
       body: ListenableBuilder(
-        listenable: engine,
+        listenable: maps,
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
@@ -33,9 +33,9 @@ class CatalogueScreen extends StatelessWidget {
                 style: TextStyle(fontSize: 15, color: k.secondary),
               ),
             ),
-            for (final l in engine.layers) _LayerCard(maps: maps, def: l),
+            for (final l in maps.catalogueLayers) _LayerCard(key: ValueKey(l.id), maps: maps, def: l),
             const SizedBox(height: 8),
-            _Advanced(maps: maps),
+            _Advanced(key: const ValueKey('advanced'), maps: maps),
           ],
         ),
       ),
@@ -44,7 +44,7 @@ class CatalogueScreen extends StatelessWidget {
 }
 
 class _LayerCard extends StatelessWidget {
-  const _LayerCard({required this.maps, required this.def});
+  const _LayerCard({super.key, required this.maps, required this.def});
 
   final MapsState maps;
   final LayerDef def;
@@ -53,8 +53,8 @@ class _LayerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final engine = maps.engine;
-    final areas = engine.areasOf(def.id);
-    final stored = engine.storageOf(def.id);
+    final areas = maps.areasOfCard(def);
+    final stored = maps.storageOfCard(def);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Container(
@@ -188,7 +188,7 @@ class _AreaRow extends StatelessWidget {
 /// Closed by default: the few levers stay out of the way. Layer definitions are data; editing one changes
 /// where the layer comes from (its source address) and how it is described.
 class _Advanced extends StatelessWidget {
-  const _Advanced({required this.maps});
+  const _Advanced({super.key, required this.maps});
 
   final MapsState maps;
 
@@ -208,17 +208,26 @@ class _Advanced extends StatelessWidget {
           children: [
             Text(
               'Each layer is a definition: what it is, its licence, and the address of its original source. '
-              'Edit one to point Cache at your own server, or add a new one.',
+              'Switch one off to leave it out, edit one to point Cache at your own server, or add a new one.',
               style: TextStyle(fontSize: 14, color: k.secondary),
             ),
             const SizedBox(height: 8),
             for (final l in maps.engine.layers)
-              ListTile(
+              SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text(l.title),
-                subtitle: Text(l.sourceUrl.isEmpty ? 'No source address' : l.sourceUrl, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: const Icon(Icons.edit_outlined),
-                onTap: () => _edit(context, l),
+                subtitle: Text(
+                  '${l.id} · ${l.sourceUrl.isEmpty ? 'no source address' : l.sourceUrl}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                secondary: IconButton(
+                  tooltip: 'Edit the definition of ${l.title}',
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => _edit(context, l),
+                ),
+                value: maps.isDefinitionEnabled(l),
+                onChanged: (v) => maps.setDefinitionEnabled(l.id, v),
               ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
@@ -294,7 +303,8 @@ class _DefinitionEditorState extends State<DefinitionEditor> {
       appBar: AppBar(
         title: Text(widget.def?.title ?? 'New layer'),
         actions: [
-          if (widget.def != null) IconButton(tooltip: 'Remove this definition', icon: const Icon(Icons.delete_outline), onPressed: _remove),
+          if (widget.def != null && widget.maps.engine.canRemove(widget.def!.id))
+            IconButton(tooltip: 'Remove my version of this definition', icon: const Icon(Icons.delete_outline), onPressed: _remove),
         ],
       ),
       body: SafeArea(

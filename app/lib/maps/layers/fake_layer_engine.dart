@@ -19,6 +19,7 @@ import '../geo.dart';
 import 'fake_catalogue.dart';
 import 'layer_def.dart';
 import 'layer_engine.dart';
+import 'pmtiles.dart';
 import 'tile_math.dart';
 
 /// One tile as fetched from a public host.
@@ -66,9 +67,23 @@ Future<FetchedTile?> defaultTileFetcher(Uri url) async {
 }
 
 class FakeLayerEngine extends LayerEngine {
-  FakeLayerEngine({this.dirOverride, TileFetcher? fetcher, Future<bool> Function()? onlineProbe, this.canBind})
-      : _fetch = fetcher ?? defaultTileFetcher,
+  FakeLayerEngine({
+    this.dirOverride,
+    TileFetcher? fetcher,
+    RangeFetcher? rangeFetcher,
+    Future<bool> Function()? onlineProbe,
+    this.canBind,
+    this.catalogueUrl,
+  })  : _fetch = fetcher ?? defaultTileFetcher,
+        _range = rangeFetcher ?? httpRangeFetcher,
         _probe = onlineProbe;
+
+  /// Where the project's published catalogue lives (kCatalogueUrl). When set, the catalogue is fetched at start
+  /// and kept for offline use; the definitions below are what the app has until then.
+  final Uri? catalogueUrl;
+  final RangeFetcher _range;
+  final Map<String, PmTilesReader> _readers = {};
+  final Map<String, DateTime> _missingUntil = {};
 
   /// Test hook: false pretends the system refuses the server socket.
   final bool Function()? canBind;
@@ -123,6 +138,7 @@ class FakeLayerEngine extends LayerEngine {
       }
       _ready = true;
       await refreshOnline(force: true);
+      unawaited(refreshCatalogue());
     } catch (e, st) {
       debugPrint('FakeLayerEngine.start failed: $e\n$st');
       // EPERM on the server socket: the system has network access switched off for the app.
@@ -143,36 +159,83 @@ class FakeLayerEngine extends LayerEngine {
   File get _defsFile => File('${_dir.path}/definitions.json');
   File get _areasFile => File('${_dir.path}/areas.json');
 
-  void _loadDefs() {
-    List<Map<String, dynamic>> raw = fakeCatalogue;
+  File get _liveFile => File('${_dir.path}/catalogue.json');
+
+  List<Map<String, dynamic>> _readList(File f, [String? key]) {
     try {
-      if (_defsFile.existsSync()) {
-        raw = [for (final e in jsonDecode(_defsFile.readAsStringSync()) as List) Map<String, dynamic>.from(e as Map)];
+      if (f.existsSync()) {
+        final j = jsonDecode(f.readAsStringSync());
+        final list = key == null ? j : (j as Map)[key];
+        return [for (final e in list as List) Map<String, dynamic>.from(e as Map)];
       }
     } catch (_) {}
-    _layers = [for (final j in raw) LayerDef.fromJson(j)];
+    return [];
   }
 
-  void _saveDefs() => _defsFile.writeAsStringSync(jsonEncode([for (final l in _layers) l.toJson()]));
+  final List<Map<String, dynamic>> _user = [];
+
+  /// Bundled definitions, then the published catalogue, then the user's own (each replaces an earlier one with
+  /// the same id).
+  void _loadDefs() {
+    _user
+      ..clear()
+      ..addAll(_readList(_defsFile));
+    _rebuildLayers(_readList(_liveFile, 'layers'));
+  }
+
+  void _rebuildLayers(List<Map<String, dynamic>> live) {
+    final byId = <String, Map<String, dynamic>>{};
+    for (final j in [...fakeCatalogue, ...live, ..._user]) {
+      byId[j['id'] as String] = j;
+    }
+    final out = <LayerDef>[];
+    for (final j in byId.values) {
+      try {
+        out.add(LayerDef.fromJson(j));
+      } catch (_) {
+        // One bad definition does not take the others down.
+      }
+    }
+    _layers = out;
+  }
+
+  void _saveDefs() => _defsFile.writeAsStringSync(jsonEncode(_user));
+
+  /// Fetches the published catalogue and keeps it. Offline, the last copy stays in use.
+  Future<void> refreshCatalogue() async {
+    final url = catalogueUrl;
+    if (url == null) return;
+    try {
+      final t = await _fetch(url);
+      if (t == null) return;
+      final body = utf8.decode(t.gzip ? gzip.decode(t.bytes) : t.bytes);
+      final layers = [for (final e in (jsonDecode(body) as Map)['layers'] as List) Map<String, dynamic>.from(e as Map)];
+      await _liveFile.writeAsString(body);
+      _rebuildLayers(layers);
+      notifyListeners();
+    } catch (_) {}
+  }
 
   @override
   Future<void> saveDefinition(String json) async {
     final def = LayerDef.parse(json);
-    final i = _layers.indexWhere((l) => l.id == def.id);
-    if (i >= 0) {
-      _layers[i] = def;
-    } else {
-      _layers.add(def);
-    }
+    _user.removeWhere((j) => j['id'] == def.id);
+    _user.add(def.toJson());
     _tileJsonTemplates.remove(def.id);
+    _readers.remove(def.id);
     _saveDefs();
+    _rebuildLayers(_readList(_liveFile, 'layers'));
     notifyListeners();
   }
 
   @override
+  bool canRemove(String id) => _user.any((j) => j['id'] == id);
+
+  @override
   Future<void> removeDefinition(String id) async {
-    _layers.removeWhere((l) => l.id == id);
+    _user.removeWhere((j) => j['id'] == id);
     _saveDefs();
+    _rebuildLayers(_readList(_liveFile, 'layers'));
     notifyListeners();
   }
 
@@ -274,8 +337,10 @@ class FakeLayerEngine extends LayerEngine {
   File _areaFile(String areaId, int z, int x, int y) => File('${_dir.path}/areas/$areaId/$z/$x/$y');
 
   File? _localTile(LayerDef def, int z, int x, int y) {
+    // A layer cut for regions is one layer to the map: tiles of any of its cuts serve it.
+    final cuts = {for (final l in _layers) if (l.groupKey == def.groupKey) l.id};
     for (final a in _areas) {
-      if (a.layerId != def.id || a.phase == AreaPhase.failed && a.doneTiles == 0) continue;
+      if (!cuts.contains(a.layerId) || a.phase == AreaPhase.failed && a.doneTiles == 0) continue;
       final f = _areaFile(a.id, z, x, y);
       if (f.existsSync()) return f;
     }
@@ -287,19 +352,39 @@ class FakeLayerEngine extends LayerEngine {
     final local = _localTile(def, z, x, y);
     if (local != null) {
       return FetchedTile(await local.readAsBytes(),
-          contentType: _isVector(def) ? 'application/x-protobuf' : _contentTypeOf(def, await _upstream(def, z, x, y)),
+          contentType: _isVector(def) ? 'application/x-protobuf' : _contentTypeOf(def, Uri.tryParse(def.sourceUrl)),
           gzip: _isVector(def));
     }
-    final up = await _upstream(def, z, x, y);
-    if (up == null) return null;
-    final t = await _fetch(up);
+    final t = await _remote(def, z, x, y);
     if (t == null) return null;
     // Tiles seen on the map are kept (the app caches what is viewed).
     final f = _cacheFile(def.id, z, x, y);
     await f.parent.create(recursive: true);
     await f.writeAsBytes(_isVector(def) ? _gz(t) : t.bytes);
     return FetchedTile(_isVector(def) ? _gz(t) : t.bytes,
-        contentType: t.contentType ?? _contentTypeOf(def, up), gzip: _isVector(def));
+        contentType: t.contentType ?? _contentTypeOf(def, null), gzip: _isVector(def));
+  }
+
+  /// One tile from the layer's public source: a PMTiles archive (byte ranges), or a tile template.
+  Future<FetchedTile?> _remote(LayerDef def, int z, int x, int y) async {
+    if (def.raw['fake_unavailable'] == true || def.sourceUrl.isEmpty) return null;
+    if (def.sourceType == 'pmtiles' || def.sourceUrl.endsWith('.pmtiles')) {
+      final until = _missingUntil[def.id];
+      if (until != null && DateTime.now().isBefore(until)) return null;
+      try {
+        final r = _readers[def.id] ??= PmTilesReader(Uri.parse(def.sourceUrl), _range);
+        final t = await r.tile(z, x, y);
+        if (t == null) return null;
+        return FetchedTile(t.bytes,
+            contentType: t.header.contentType, gzip: t.header.tileCompression == PmCompression.gzip);
+      } on PmTilesMissing {
+        // Not published (yet): do not ask again for a minute.
+        _missingUntil[def.id] = DateTime.now().add(const Duration(minutes: 1));
+        return null;
+      }
+    }
+    final up = await _upstream(def, z, x, y);
+    return up == null ? null : _fetch(up);
   }
 
   List<int> _gz(FetchedTile t) => t.gzip ? t.bytes : gzip.encode(t.bytes);
@@ -460,9 +545,7 @@ class FakeLayerEngine extends LayerEngine {
         final file = File('${_dir.path}/areas/$folder/$z/$x/$y');
         try {
           if (!file.existsSync() || isUpdate) {
-            final up = await _upstream(def, z, x, y);
-            if (up == null) throw const HttpException('no source');
-            final t = await _fetch(up);
+            final t = await _remote(def, z, x, y);
             if (t != null) {
               await file.parent.create(recursive: true);
               final data = _isVector(def) ? _gz(t) : t.bytes;

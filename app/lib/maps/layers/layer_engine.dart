@@ -71,5 +71,8 @@ abstract class LayerEngine extends ChangeNotifier {
   /// Advanced: adds or replaces a definition from its JSON.
   Future<void> saveDefinition(String json);
 
+  /// True for a definition the user added or edited (removing it brings back the catalogue's own version, if any).
+  bool canRemove(String id) => false;
+
   Future<void> removeDefinition(String id);
 }

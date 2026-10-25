@@ -361,8 +361,11 @@ class _MapsScreenState extends State<MapsScreen> {
                 style: TextStyle(fontSize: 14, color: k.secondary)),
             const SizedBox(height: 8),
             Text(
-              'Map style derived from OpenFreeMap Liberty, OSM Bright and Mapbox Open Styles (BSD-3-Clause code, CC BY 4.0 design). '
-              'Map fonts: Noto Sans, SIL Open Font License 1.1.',
+              maps.uses.any((u) => u.def.isBase && u.def.layout == 'protomaps-v4')
+                  ? 'Base map: Protomaps basemap tiles and the @protomaps/basemaps style layers (BSD-3-Clause). '
+                      'Map fonts: Noto Sans, SIL Open Font License 1.1.'
+                  : 'Map style derived from OpenFreeMap Liberty, OSM Bright and Mapbox Open Styles (BSD-3-Clause code, CC BY 4.0 design). '
+                      'Map fonts: Noto Sans, SIL Open Font License 1.1.',
               style: TextStyle(fontSize: 14, color: k.secondary),
             ),
           ],

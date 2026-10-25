@@ -6,6 +6,7 @@ import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
 import 'location/location_service.dart';
+import 'maps/layers/fake_catalogue.dart' show kCatalogueUrl;
 import 'maps/layers/fake_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'search/core_numbering.dart';
@@ -30,7 +31,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SourcesState sources = SourcesState();
   late final LocationService location = LocationService();
   // FAKE layer engine until the core's layer engine (layers-core) is bound; see lib/maps/layers/layer_engine.dart.
-  late final MapsState maps = MapsState(engine: FakeLayerEngine());
+  late final MapsState maps = MapsState(engine: FakeLayerEngine(catalogueUrl: Uri.parse(kCatalogueUrl)));
   late final ChatController chat = ChatController(
     tools: [SearchTool(sources), ReadTool(sources)],
     newNumbering: () => sources.coreReady ? CoreNumbering(sources.newConversation) : null,

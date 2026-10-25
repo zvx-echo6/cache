@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/fake_layer_engine.dart';
 import 'package:cache/maps/layers/layer_def.dart';
+import 'package:cache/maps/layers/pmtiles.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/maps/network_access.dart';
 import 'package:cache/maps/ui/catalogue_screen.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/location/location_service.dart';
@@ -14,6 +16,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const GeoBounds home = GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
+
+class _Allowed implements NetworkAccess {
+  @override
+  Future<bool> request() async => true;
+}
 
 class _NoSource implements PositionSource {
   @override
@@ -33,6 +40,7 @@ class _NoSource implements PositionSource {
 }
 
 Future<FetchedTile?> _host(Uri u) async {
+  if (u.path.endsWith('catalogue.json')) return FetchedTile(File('test/fixtures/catalogue.json').readAsBytesSync());
   if (u.path == '/planet') {
     return FetchedTile(utf8.encode(jsonEncode({'tiles': ['https://tiles.example/planet/v1/{z}/{x}/{y}.pbf']})));
   }
@@ -52,16 +60,21 @@ void main() {
 
   Future<void> boot(WidgetTester tester, Widget Function() home) async {
     await tester.runAsync(() async {
-      maps = MapsState(
-        engine: FakeLayerEngine(dirOverride: dir, fetcher: _host, onlineProbe: () async => true),
-        settingsDirOverride: dir,
+      final engine = FakeLayerEngine(
+        dirOverride: dir,
+        fetcher: _host,
+        rangeFetcher: (u, o, l) async => throw PmTilesMissing(u),
+        onlineProbe: () async => true,
+        catalogueUrl: Uri.parse('https://example.test/catalogue.json'),
       );
+      maps = MapsState(engine: engine, settingsDirOverride: dir, network: _Allowed());
       await maps.init();
+      await engine.refreshCatalogue();
     });
     addTearDown(maps.dispose);
     maps.viewBounds = const GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
     // A tall screen, so the whole list is on it.
-    tester.view.physicalSize = const Size(800, 3200);
+    tester.view.physicalSize = const Size(800, 9000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: home()));
@@ -80,11 +93,12 @@ void main() {
   testWidgets('the catalogue lists every layer with title, description, licence, coverage and a Download button', (tester) async {
     await boot(tester, () => CatalogueScreen(maps: maps));
     await tester.pump();
-    for (final l in maps.engine.layers.take(2)) {
+    for (final l in maps.catalogueLayers.take(2)) {
       expect(find.text(l.title), findsOneWidget);
       expect(find.text(l.description), findsOneWidget);
       expect(find.text(l.licence), findsOneWidget);
     }
+    
     expect(find.text('Worldwide'), findsWidgets);
     expect(find.text('Download'), findsWidgets);
     // The satellite layer is online only: no Download button, and it says so.
@@ -111,7 +125,7 @@ void main() {
     await tester.tap(find.text('This region'));
     await tester.pumpAndSettle();
     // The cost is on screen before anything is downloaded.
-    expect(find.textContaining(' tiles'), findsOneWidget);
+    expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining(' tiles')), findsOneWidget);
     expect(find.textContaining('About '), findsOneWidget);
     expect(maps.engine.areasOf('hillshade'), isEmpty);
 
@@ -137,10 +151,48 @@ void main() {
     expect(find.byTooltip('Delete'), findsNothing);
   });
 
+  testWidgets('a layer cut for regions is one card; its download names the cut that covers the area', (tester) async {
+    await boot(tester, () => CatalogueScreen(maps: maps));
+    expect(find.text('BLM roads and trails'), findsOneWidget, reason: 'one card for the global and the Idaho cut');
+    expect(find.text('Base map (OpenFreeMap)'), findsNothing, reason: 'off by default');
+    await tester.tap(find.byKey(const Key('download-blm-routes')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('This region'));
+    await tester.pumpAndSettle();
+    // The area is in Idaho: the Idaho cut is the one that downloads, and the sheet says so.
+    expect(find.textContaining('This region · '), findsOneWidget);
+    expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining('118')), findsOneWidget);
+    expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining(' tiles')), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    // Elsewhere in the United States the broad cut is used and nothing extra is said.
+    maps.viewBounds = const GeoBounds(south: 39.0, west: -105.1, north: 39.2, east: -104.9);
+    await tester.tap(find.byKey(const Key('download-blm-routes')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('This region'));
+    await tester.pumpAndSettle();
+    expect(find.text('This region'), findsOneWidget);
+  });
+
+  testWidgets('Advanced lists every definition with a switch; the base map from OpenFreeMap is off until switched on', (tester) async {
+    await boot(tester, () => CatalogueScreen(maps: maps));
+    await tester.tap(find.text('Advanced'));
+    await tester.pumpAndSettle();
+    final tile = find.widgetWithText(SwitchListTile, 'Base map (OpenFreeMap)');
+    expect(tile, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(tile).value, isFalse);
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    expect(maps.isDefinitionEnabled(maps.engine.layer('openfreemap')!), isTrue);
+    expect(find.text('Base map (OpenFreeMap)'), findsWidgets);
+    expect(tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, 'Base map (OpenFreeMap)')).value, isTrue);
+  });
+
   testWidgets('an area that is too big says so and does not offer the download', (tester) async {
     await boot(tester, () => CatalogueScreen(maps: maps));
-    maps.viewBounds = const GeoBounds(south: 30, west: -125, north: 49, east: -100);
-    await tester.tap(find.byKey(const Key('download-openfreemap')));
+    // Too big for one download and outside the area the US map covers.
+    maps.viewBounds = const GeoBounds(south: 40, west: -5, north: 55, east: 20);
+    await tester.tap(find.byKey(const Key('download-basemap')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('This region'));
     await tester.pumpAndSettle();
@@ -182,7 +234,7 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.text('Layers'), findsOneWidget);
-    for (final l in maps.engine.layers) {
+    for (final l in maps.catalogueLayers) {
       expect(find.text(l.title), findsOneWidget);
     }
     // Base map is on by default and has no opacity slider; turning Hillshade on shows one.

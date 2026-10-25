@@ -29,8 +29,8 @@ class LayerSheet extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([maps, location]),
       builder: (context, _) {
-        final base = [for (final l in maps.engine.layers) if (l.isBase) l];
-        final overlays = [for (final l in maps.engine.layers) if (!l.isBase) l];
+        final base = [for (final l in maps.catalogueLayers) if (l.isBase) l];
+        final overlays = [for (final l in maps.catalogueLayers) if (!l.isBase) l];
         return SafeArea(
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -71,7 +71,7 @@ class LayerSheet extends StatelessWidget {
   Widget _row(BuildContext context, LayerDef l) {
     final k = context.t;
     final on = maps.isOn(l.id);
-    final held = maps.engine.areasOf(l.id).where((a) => a.phase == AreaPhase.done).isNotEmpty;
+    final held = maps.areasOfCard(l).where((a) => a.phase == AreaPhase.done).isNotEmpty;
     final status = l.onlineOnly ? 'Needs a connection' : (held ? 'Downloaded for offline' : 'Streams when online');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

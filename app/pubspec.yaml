@@ -71,6 +71,7 @@ flutter:
   assets:
     # The base-map template (colours are palette roles) and the map fonts that ship with the app.
     - assets/map/omt_template.json
+    - assets/map/protomaps_v4_template.json
     - assets/map/fonts/NotoSans-Regular/
     - assets/map/fonts/NotoSans-Bold/
     - assets/map/fonts/NotoSans-Italic/
