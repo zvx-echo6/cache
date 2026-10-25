@@ -26,6 +26,11 @@ struct SourceCfg {
 #[derive(Debug, Deserialize)]
 struct Config {
     sources: Vec<SourceCfg>,
+    /// Saved places and live data (see ext.rs). A later cs_set_sources config without these keeps the earlier ones.
+    #[serde(default)]
+    user: Option<crate::ext::UserCfg>,
+    #[serde(default)]
+    live: Option<cache_live::LiveCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -173,6 +178,8 @@ pub struct Handle {
     pub embedder: Option<QueryEmbedder>,
     /// Web search settings (provider, key, online), shared with the registered `web_search` tool. See `web.rs`.
     pub web: Arc<WebState>,
+    /// Saved places and live data, configured from the `user` and `live` sections (ext.rs).
+    pub ext: crate::ext::Ext,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -192,10 +199,11 @@ impl Handle {
             location: None,
             embedder: None,
             web: Arc::new(WebState::new()),
+            ext: Default::default(),
         };
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
-        // Later, here: register the live-data and user-data tools from the config's "live" and "user" sections
-        // (DESIGN.md, "Saved places and live data"). Those crates (cache_live, cache_user) are not dependencies yet.
+        // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
+        // live_data tool: set_sources does it (ext.rs), so a later cs_set_sources can add them too.
         h.set_sources(config_json)?;
         Ok(h)
     }
@@ -341,6 +349,7 @@ impl Handle {
         self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
+        self.configure_ext(cfg.user, cfg.live);
         Ok(())
     }
 

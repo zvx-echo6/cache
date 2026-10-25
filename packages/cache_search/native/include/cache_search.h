@@ -20,6 +20,11 @@
  *   "no_space"       not enough free disk space for an update_library job; the job error also has the numbers
  *                    "needed" and "available" (bytes)
  *   "damaged"        a library's files are incomplete; nothing was changed
+ *   "not_configured" the cs_open config has no "user" section (saved places) or no "live" section (live data)
+ *   "fetch_failed"   a live-source download failed (network, HTTP status); the last good copy is kept
+ *   "quota"          a live source reached its per-minute, per-day or per-month download cap
+ *   "key_missing"    a live source needs an API key and the request gave none
+ *   "bad_response"   a live-source response was not what its definition expects; the last good copy is kept
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -50,6 +55,9 @@ char *cs_version(void);
  *   ],
  *   "snippet_chars": 400,          optional, default 400
  *   "candidates_per_list": 50,     optional, default 50
+ *   "user": {"db_path": ".../user.sqlite"},          optional: where saved places are stored (cs_places_*)
+ *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
+ *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
@@ -196,6 +204,55 @@ char *cs_tool_schemas(cs_handle *h);
  * object), enum, minLength, maxLength, minimum, maximum, required and additionalProperties:false. Defaults are not
  * filled in. */
 char *cs_tool(cs_handle *h, cs_conv *c, const char *name, const char *args_json, const char *now);
+
+/* --- saved places (user.sqlite; logic in the cache_user crate) ---
+ *
+ * Tools and live data resolve a place name against saved places first (by key, then by name, ignoring case).
+ * All three fail with "not_configured" when the cs_open config has no "user" section. */
+
+/* {"places":[{"key","name","lat","lon","label"?}]}, oldest first. */
+char *cs_places_list(cs_handle *h);
+
+/* place_json: {"key"?:"home","name":"Home","lat":42.536,"lon":-113.792,"label"?:"home"}. Inserts, or updates the
+ * place with that key. Without a key one is made from the name ("home", then "home-2", ...); a key is letters,
+ * digits and _ - . : , + (it is used inside addresses). Returns the saved place, same shape as above. */
+char *cs_place_save(cs_handle *h, const char *place_json);
+
+/* Deletes the saved place and the live data downloaded for it. {"deleted":"<key>"}, or "not_found". */
+char *cs_place_delete(cs_handle *h, const char *key);
+
+/* --- live data (live.sqlite; logic in the cache_live crate) ---
+ *
+ * One general engine: a source is a definition file (data, never code; format in DESIGN.md, "Live sources"). The
+ * core has no scheduler: the app calls cs_live_fetch when it is online. All three fail with "not_configured" when
+ * the cs_open config has no "live" section. */
+
+/* {"sources":[{"id","title","provider","description","attribution","refresh_minutes",
+ *              "api_key":null|{"alias","required"},"quota":{"per_minute","per_day","per_month"}}],
+ *  "errors":[{"file","message"}]}   (definition files that could not be read) */
+char *cs_live_sources(cs_handle *h);
+
+/* request_json: {"source":"weather","place":<place>,"api_key"?:"...","force"?:false,"now"?:"<ISO 8601 with offset>"}
+ * <place> is a saved place's key or name (a string) or {"key","name","lat","lon"} (the app passes the phone's
+ * position this way; for "where the phone is" use the key "at:<lat>,<lon>" rounded to 2 decimals, which is the key the
+ * live_data tool looks for). "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
+ * unless the stored copy is younger than the source's refresh interval and still valid (then "fetched":false and no
+ * network); maps the response with the definition and stores it with the raw response. The API key is used for this
+ * call only and never stored. A failed download returns NULL (codes fetch_failed, quota, key_missing, bad_response,
+ * not_found, bad_json) and keeps the last good copy; cs_live_get then shows it with "last_error".
+ * Returns what cs_live_get returns plus "fetched":true|false. */
+char *cs_live_fetch(cs_handle *h, const char *request_json);
+
+/* request_json: {"source","place","now"?}. The stored data for Home cards and map layers, expired or not:
+ * {"source":{"id","title","provider","description","attribution"},"place":{"key","name","lat","lon"},
+ *  "fetched_at","valid_until","age":"2 hours old","age_seconds","expired":bool,"not_covered_after":null|"<date>",
+ *  "last_error":null|{"code","message","at"},
+ *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
+ *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>}]}
+ * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
+ * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
+ * was ever downloaded for that source and place. */
+char *cs_live_get(cs_handle *h, const char *request_json);
 
 /* --- long jobs --- */
 

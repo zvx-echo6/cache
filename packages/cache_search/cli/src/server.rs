@@ -16,6 +16,12 @@
 //!   POST   /web             {provider, key, online}              -> cs_set_web ({"ok":true}; the key is never echoed or logged)
 //!   DELETE /web                                                  -> web search off, key cleared ({"ok":true})
 //!   POST   /conversations/{id}/tool  {name, args, now}           -> cs_tool ({"content","ids"})
+//!   GET    /places                                               -> cs_places_list
+//!   POST   /places                       {place}                 -> cs_place_save (the body is the place JSON)
+//!   DELETE /places/{key}                                         -> cs_place_delete
+//!   GET    /live/sources                                         -> cs_live_sources
+//!   POST   /live/fetch                   {request}               -> cs_live_fetch (the body is the request JSON)
+//!   POST   /live/get                     {request}               -> cs_live_get (the body is the request JSON)
 //! Errors are `{"code","message"}` (the core's error) with a matching HTTP status.
 
 use crate::engine::{ApiError, Conv, Engine};
@@ -162,6 +168,12 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             st.convs.remove(*id).ok_or_else(|| conv_not_found(id))?;
             Ok(json!({"deleted": id}).to_string())
         }
+        (Method::Get, ["places"]) => st.engine.core.places_list(),
+        (Method::Post, ["places"]) => st.engine.core.place_save(body),
+        (Method::Delete, ["places", key]) => st.engine.core.place_delete(key),
+        (Method::Get, ["live", "sources"]) => st.engine.core.live_sources(),
+        (Method::Post, ["live", "fetch"]) => st.engine.core.live_fetch(body),
+        (Method::Post, ["live", "get"]) => st.engine.core.live_get(body),
         _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
     }
 }

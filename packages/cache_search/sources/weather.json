@@ -1,0 +1,192 @@
+{
+  "format": 1,
+  "id": "weather",
+  "title": "Weather forecast",
+  "provider": "Open-Meteo",
+  "description": "weather forecast, current conditions and daily outlook for up to 16 days",
+  "attribution": "Weather data by Open-Meteo.com (CC BY 4.0)",
+  "request": {
+    "url": "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=16"
+  },
+  "refresh_minutes": 180,
+  "quota": {
+    "per_minute": 30,
+    "per_day": 2000,
+    "per_month": 30000
+  },
+  "validity": {
+    "end_path": "daily.time[-1]",
+    "end_of_day": true,
+    "not_covered_after": true
+  },
+  "require": [
+    "current",
+    "daily.time"
+  ],
+  "timezone_path": "timezone",
+  "utc_offset_path": "utc_offset_seconds",
+  "items": [
+    {
+      "key": {
+        "const": "now"
+      },
+      "label": {
+        "const": "Now"
+      },
+      "time": {
+        "path": "current.time",
+        "time": {
+          "in": "local"
+        }
+      },
+      "fields": [
+        {
+          "label": "Temperature",
+          "path": "current.temperature_2m",
+          "round": 0,
+          "suffix": " °F"
+        },
+        {
+          "label": "Feels like",
+          "path": "current.apparent_temperature",
+          "round": 0,
+          "suffix": " °F"
+        },
+        {
+          "label": "Wind",
+          "template": "{speed} mph {dir}, gusts {gust} mph",
+          "vars": {
+            "speed": {
+              "path": "current.wind_speed_10m",
+              "round": 0
+            },
+            "dir": {
+              "path": "current.wind_direction_10m",
+              "compass": true
+            },
+            "gust": {
+              "path": "current.wind_gusts_10m",
+              "round": 0
+            }
+          }
+        },
+        {
+          "label": "Conditions",
+          "path": "current.weather_code",
+          "lookup": {
+            "0": "clear sky",
+            "1": "mainly clear",
+            "2": "partly cloudy",
+            "3": "overcast",
+            "45": "fog",
+            "48": "freezing fog",
+            "51": "light drizzle",
+            "53": "drizzle",
+            "55": "heavy drizzle",
+            "56": "light freezing drizzle",
+            "57": "freezing drizzle",
+            "61": "light rain",
+            "63": "rain",
+            "65": "heavy rain",
+            "66": "light freezing rain",
+            "67": "freezing rain",
+            "71": "light snow",
+            "73": "snow",
+            "75": "heavy snow",
+            "77": "snow grains",
+            "80": "light rain showers",
+            "81": "rain showers",
+            "82": "violent rain showers",
+            "85": "light snow showers",
+            "86": "heavy snow showers",
+            "95": "thunderstorm",
+            "96": "thunderstorm with hail",
+            "99": "thunderstorm with heavy hail",
+            "*": "unknown conditions"
+          }
+        }
+      ]
+    },
+    {
+      "each": "daily.time",
+      "key": {
+        "path": "@"
+      },
+      "label": {
+        "path": "@",
+        "time": {
+          "in": "local",
+          "out": "%a %d %b"
+        }
+      },
+      "time": {
+        "path": "@",
+        "time": {
+          "in": "local",
+          "out": "date"
+        }
+      },
+      "fields": [
+        {
+          "label": "High",
+          "path": "^daily.temperature_2m_max[#]",
+          "round": 0,
+          "suffix": " °F"
+        },
+        {
+          "label": "Low",
+          "path": "^daily.temperature_2m_min[#]",
+          "round": 0,
+          "suffix": " °F"
+        },
+        {
+          "label": "Chance of rain",
+          "path": "^daily.precipitation_probability_max[#]",
+          "round": 0,
+          "suffix": "%"
+        },
+        {
+          "label": "Wind max",
+          "path": "^daily.wind_speed_10m_max[#]",
+          "round": 0,
+          "suffix": " mph"
+        },
+        {
+          "label": "Conditions",
+          "path": "^daily.weather_code[#]",
+          "lookup": {
+            "0": "clear sky",
+            "1": "mainly clear",
+            "2": "partly cloudy",
+            "3": "overcast",
+            "45": "fog",
+            "48": "freezing fog",
+            "51": "light drizzle",
+            "53": "drizzle",
+            "55": "heavy drizzle",
+            "56": "light freezing drizzle",
+            "57": "freezing drizzle",
+            "61": "light rain",
+            "63": "rain",
+            "65": "heavy rain",
+            "66": "light freezing rain",
+            "67": "freezing rain",
+            "71": "light snow",
+            "73": "snow",
+            "75": "heavy snow",
+            "77": "snow grains",
+            "80": "light rain showers",
+            "81": "rain showers",
+            "82": "violent rain showers",
+            "85": "light snow showers",
+            "86": "heavy snow showers",
+            "95": "thunderstorm",
+            "96": "thunderstorm with hail",
+            "99": "thunderstorm with heavy hail",
+            "*": "unknown conditions"
+          }
+        }
+      ]
+    }
+  ]
+}

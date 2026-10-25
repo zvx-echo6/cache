@@ -1,0 +1,156 @@
+{
+  "@context": {
+    "@version": "1.1"
+  },
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.example1",
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -113.9,
+              42.7
+            ],
+            [
+              -113.7,
+              42.7
+            ],
+            [
+              -113.7,
+              42.8
+            ],
+            [
+              -113.9,
+              42.8
+            ],
+            [
+              -113.9,
+              42.7
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.example1",
+        "areaDesc": "Cassia County; Minidoka County; Twin Falls County",
+        "sent": "2026-10-25T13:40:00-06:00",
+        "effective": "2026-10-25T13:40:00-06:00",
+        "onset": "2026-10-25T14:00:00-06:00",
+        "expires": "2026-10-25T15:00:00-06:00",
+        "ends": "2026-10-25T15:00:00-06:00",
+        "status": "Actual",
+        "severity": "Severe",
+        "certainty": "Likely",
+        "urgency": "Expected",
+        "event": "Red Flag Warning",
+        "headline": "Red Flag Warning issued October 25 at 1:40PM MDT until October 25 at 3:00PM MDT by NWS Pocatello ID",
+        "description": "* WHAT...Critical fire weather conditions.\n\n* WIND...Southwest 20 to 30 mph.",
+        "instruction": "A Red Flag Warning means that critical fire weather conditions are either occurring now, or will shortly.\nAvoid outdoor burning.",
+        "response": "Prepare"
+      }
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.example2",
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -113.9,
+              42.4
+            ],
+            [
+              -113.6,
+              42.4
+            ],
+            [
+              -113.6,
+              42.7
+            ],
+            [
+              -113.9,
+              42.7
+            ],
+            [
+              -113.9,
+              42.4
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.example2",
+        "areaDesc": "Burley",
+        "sent": "2026-10-25T09:00:00-06:00",
+        "expires": "2026-10-25T15:30:00-06:00",
+        "ends": null,
+        "severity": "Minor",
+        "certainty": "Likely",
+        "urgency": "Expected",
+        "event": "Wind Advisory",
+        "headline": "Wind Advisory until 3:30 PM MDT today",
+        "instruction": null
+      }
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.example3",
+      "type": "Feature",
+      "geometry": null,
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.example3",
+        "areaDesc": "Cassia County",
+        "sent": "2026-10-25T08:00:00-06:00",
+        "expires": "2026-10-25T10:30:00-06:00",
+        "ends": "2026-10-25T10:30:00-06:00",
+        "severity": "Unknown",
+        "event": "Special Weather Statement",
+        "headline": "Already over"
+      }
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.example4",
+      "type": "Feature",
+      "geometry": null,
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.example4",
+        "areaDesc": "Cassia County",
+        "sent": "2026-10-25T14:05:00-06:00",
+        "onset": "2026-10-25T14:10:00-06:00",
+        "expires": "2026-10-25T15:20:00-06:00",
+        "ends": "2026-10-25T15:20:00-06:00",
+        "severity": "Extreme",
+        "certainty": "Likely",
+        "urgency": "Immediate",
+        "event": "Tornado Warning",
+        "headline": "Tornado Warning for Cassia County",
+        "instruction": "Take shelter now."
+      }
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.example5",
+      "type": "Feature",
+      "geometry": null,
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.example5",
+        "areaDesc": "Cassia County",
+        "sent": "2026-10-25T11:00:00-06:00",
+        "onset": "2026-10-25T12:00:00-06:00",
+        "expires": "2026-10-25T16:00:00-06:00",
+        "ends": "2026-10-25T16:00:00-06:00",
+        "severity": "Severe",
+        "certainty": "Likely",
+        "urgency": "Immediate",
+        "event": "Flash Flood Watch",
+        "headline": "Flash Flood Watch until 4 PM",
+        "instruction": "Take shelter now."
+      }
+    }
+  ],
+  "title": "Current watches, warnings, and advisories for 42.536 N, 113.792 W",
+  "updated": "2026-10-25T16:45:06+00:00"
+}

@@ -26,12 +26,19 @@ cs: command line and HTTP wrapper over the cache_search core
                      (web_search needs CACHE_WEB_PROVIDER=kagi and CACHE_WEB_KEY in the environment; CACHE_WEB_BASE_URL
                      replaces Kagi's address, for runs against a local stand-in server)
   cs tool-schemas    [--config <sources.json>] [--open-timeout 600]
+  cs places list     --config <sources.json>
+  cs places save     --config <sources.json> --place <json {key?,name,lat,lon,label?}>
+  cs places delete   --config <sources.json> --key <key>
+  cs live-sources    --config <sources.json>
+  cs live-fetch      --config <sources.json> --request <json {source,place,api_key?,force?,now?}>
+  cs live-get        --config <sources.json> --request <json {source,place,now?}>
   cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [EMBED] [--open-timeout 600]
 
   EMBED: --embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
          [--embed-model-id <id>] [--embed-threads 4]
 
-sources.json is the cs_open config JSON. A library entry may carry \"settings_file\": \"<cache-library.json>\" in
+sources.json is the cs_open config JSON (\"user\": {\"db_path\"} for saved places, \"live\": {\"db_path\",\"sources_dir\"} for live data;
+the live_data tool is then reached with cs tool live_data). A library entry may carry \"settings_file\": \"<cache-library.json>\" in
 place of \"settings\"; the file is read and passed to the core as \"settings\".
 Results go to stdout as the core's JSON; errors go to stderr as {\"code\",\"message\"} with exit status 1.";
 
@@ -295,6 +302,49 @@ pub fn tool_schemas(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+pub fn places(argv: &[String]) -> Result<(), ApiError> {
+    let Some(sub) = argv.first() else { return Err(usage_err("cs places needs list, save or delete")) };
+    let rest = &argv[1..];
+    match sub.as_str() {
+        "list" => {
+            let a = parse(rest, &["config", "open-timeout"], &[], false)?;
+            print(&open_engine(&a)?.core.places_list()?);
+        }
+        "save" => {
+            let a = parse(rest, &["config", "place", "open-timeout"], &[], false)?;
+            let p = a.req("place").map_err(usage_err)?.to_string();
+            print(&open_engine(&a)?.core.place_save(&p)?);
+        }
+        "delete" => {
+            let a = parse(rest, &["config", "key", "open-timeout"], &[], false)?;
+            let k = a.req("key").map_err(usage_err)?.to_string();
+            print(&open_engine(&a)?.core.place_delete(&k)?);
+        }
+        other => return Err(usage_err(format!("unknown cs places subcommand {other:?}"))),
+    }
+    Ok(())
+}
+
+pub fn live_sources(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "open-timeout"], &[], false)?;
+    print(&open_engine(&a)?.core.live_sources()?);
+    Ok(())
+}
+
+pub fn live_fetch(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "request", "open-timeout"], &[], false)?;
+    let r = a.req("request").map_err(usage_err)?.to_string();
+    print(&open_engine(&a)?.core.live_fetch(&r)?);
+    Ok(())
+}
+
+pub fn live_get(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "request", "open-timeout"], &[], false)?;
+    let r = a.req("request").map_err(usage_err)?.to_string();
+    print(&open_engine(&a)?.core.live_get(&r)?);
+    Ok(())
+}
+
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "listen", "open-timeout"], &["allow-non-loopback"], true)?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
@@ -321,6 +371,10 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "status" => status(rest),
         "tool" => tool(rest),
         "tool-schemas" => tool_schemas(rest),
+        "places" => places(rest),
+        "live-sources" => live_sources(rest),
+        "live-fetch" => live_fetch(rest),
+        "live-get" => live_get(rest),
         "serve" => serve(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
