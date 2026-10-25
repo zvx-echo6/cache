@@ -50,9 +50,18 @@ not contain that file and the read-only open requires it. Single-shard collectio
 Opening. Always read-only: `ReadOnlyEdgeShard` with `MmapFs` and a cold `LoadProfile` for search. Opening never
 modifies the library files (measured: identical file listings before and after).
 
-Updates. v1 replaces the library from a new snapshot. A cited address whose point id is not in the new library
-returns error code `not_found` (the app shows it as no longer in the library). Partial snapshots are a later
-option and an open question (see Open).
+Updates. A library is updated from a partial snapshot (`POST .../shards/0/snapshot/partial/create` with the
+shard's snapshot manifest) by an `update_library` job (see Jobs):
+1. The job closes the library (its read-only shard is dropped).
+2. It applies the partial snapshot to the shard directory with `recover_partial_snapshot`. This is a write,
+   so it happens only while the library is closed; searching never writes.
+3. It rewrites `segments_manifest.json`.
+4. It reopens the library read-only.
+While the job runs, queries on that library are answered from the old copy if one is kept; otherwise the
+source reports `building` and is skipped by search (as for an index build). The full replace from a new
+snapshot stays as the fallback (for example when the partial snapshot cannot be applied). A cited address
+whose point id is not in the updated library returns error code `not_found` (the app shows it as no longer in
+the library).
 
 Risks.
 - The `segments_manifest.json` format is internal to Qdrant. The core writes it by hand, so a Qdrant change to
@@ -104,6 +113,8 @@ guesses from the payload field names and the vector size. v1 format:
   The `query_vector` model id from the caller must match `model`.
 - `keyword_index`: `"auto"` = use the library's own BM25-scored text index if the collection has one on the
   text field, otherwise build a Tantivy index on the device; `"on"` / `"off"` force the device index on or off.
+  This is the setting. What a library actually uses is reported by `cs_status` as `keyword_source`:
+  `"own"`, `"device"` or `"none"` (null for ZIMs).
 
 ## Keyword index (Tantivy)
 
@@ -114,7 +125,7 @@ ZIM: fields `title` (positions, stored), `lead` (first ~1,500 chars of article t
   stored, for snippets), `body` (indexed, no positions, not stored), `path` (stored). Library (device index only): `point_id` (raw, stored),
 `title` (text, stored, with positions), `body` (text from the mapped text field, frequencies only, not stored),
 `source_type` (string, stored, fast). English stemmer as for ZIMs. Points matching a `leave_out` rule are skipped
-at index time. If the library has its own scored text index (`keyword_index` "own"), no device index is built.
+at index time. If the library has its own scored text index (`keyword_source` "own"), no device index is built.
 - Body text is read from the ZIM (or the library's text field) at index time and never duplicated in the index.
 - Phrase search only on `title`.
 
@@ -178,9 +189,11 @@ Options to evaluate first (report before committing):
 
 ## Jobs
 
-`index_zim` and `index_library` run as jobs: start, poll progress, cancel; checkpoints every N articles
+`index_zim`, `index_library` and `update_library` run as jobs: start, poll progress, cancel; checkpoints every N articles
 (Tantivy commit + last article or point index) so a cancelled or killed job resumes. `index_library` takes `library_path`, `index_dir` and `heap_mb` (default 200) and builds the device Tantivy
-index from the mapped text field; it is resumable via checkpoints like `index_zim`. Memory cap via Tantivy
+index from the mapped text field; it is resumable via checkpoints like `index_zim`. `update_library` takes `library_path`,
+`snapshot_path` (the partial snapshot file) and `snapshot_manifest_path` (the manifest the snapshot was made
+against); it runs the update steps under Libraries / Updates. Memory cap via Tantivy
 writer heap size (default 200 MB on phones). "Only while charging" is the app's policy, not the core's.
 
 ## Threads
@@ -224,9 +237,12 @@ may have cached reads.
 
 ## Open (needs decisions)
 
-- Partial-snapshot updates: `POST .../shards/0/snapshot/partial/create` with the shard's snapshot manifest,
-  applied with `recover_partial_snapshot`. Applying them needs a read-write open, which v1 does not do. Whether
-  and how to support them is undecided; until then an update replaces the library.
 - Multi-shard collections (v1 is single-shard only).
 - On-phone latency and build time (open, dense search, `index_library`): to measure on the emulator and a phone.
 - Whether 28 GB-class libraries need quantized vectors on the device later.
+
+## To verify
+
+- The contents of `segments_manifest.json` after `recover_partial_snapshot`: whether the core must rewrite it,
+  and whether segments added or removed by the partial snapshot are listed correctly.
+- A test of the `update_library` flow against a live Qdrant 1.19.1 server's partial snapshot.

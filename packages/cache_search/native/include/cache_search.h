@@ -62,7 +62,7 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
 
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
  *              "docs":N,"embedding_model":"..."|null,
- *              "library_id":"..."|null,"keyword_index":"own"|"device"|"none"|null (null for ZIMs),
+ *              "library_id":"..."|null,"keyword_source":"own"|"device"|"none"|null (null for ZIMs),
  *              "error":null|{"code","message"}}]}
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
  * "indexed":false and its "error"; the other sources work normally. */
@@ -133,6 +133,9 @@ void cs_conversation_free(cs_conv *c);
 /* kind "index_zim":  {"zim_path","index_dir","heap_mb":200}
  * kind "index_library": {"library_path","index_dir","heap_mb":200}
  *   builds the device Tantivy index from the library's mapped text field.
+ * kind "update_library": {"library_path","snapshot_path","snapshot_manifest_path"}
+ *   closes the library, applies a partial snapshot to its shard directory, rewrites segments_manifest.json and
+ *   reopens it read-only (see DESIGN.md, Libraries / Updates).
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);
