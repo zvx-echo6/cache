@@ -1,0 +1,7 @@
+/* Linker version script: the shared library exports only the C ABI (cs_*), nothing from its dependencies. */
+{
+  global:
+    cs_*;
+  local:
+    *;
+};
