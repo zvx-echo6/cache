@@ -12,7 +12,10 @@
 //!   `library_manifest` job closes the library first, as `update_library` does.
 //! - `EdgeShard::recover_partial_snapshot(shard_path, current_manifest, unpacked_dir, snapshot_manifest)` takes
 //!   the snapshot UNPACKED (not the archive), merges it into `shard_path` by moving files, and finishes with a
-//!   read-write `EdgeShard::load`, which it returns. It is not atomic.
+//!   read-write `EdgeShard::load`, which it returns. It is not atomic. Making it atomic with a hard-link staging
+//!   copy was evaluated and NOT shipped: the merge (fs_extra's `move_dir`) and the load both write into existing
+//!   inodes, which hard links would share with the original (DESIGN.md, Libraries / Updates; the
+//!   `hard_link_staging_*` tests in tests/update_ffi.rs measure it).
 //! - `current_manifest` is the manifest the snapshot was cut against, which is the library's own manifest at
 //!   that time; the job reads it from `snapshot_manifest_path`. `snapshot_manifest` comes from the unpacked
 //!   snapshot itself (`SnapshotManifest::load_from_snapshot`).

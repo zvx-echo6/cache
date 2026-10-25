@@ -731,3 +731,249 @@ fn library_manifest_job_is_busy_cancellable_and_checks_its_parameters() {
     unsafe { cs_job_free(j) };
     assert!(out.exists());
 }
+
+// ---- evidence for DESIGN.md, Libraries / Updates: why the update is not staged with hard links -------------------
+//
+// A staging copy made of hard links (cp -al) would make the swap atomic at almost no disk cost, but only if
+// nothing in the update path writes into an existing inode. These tests measure that on the pinned Qdrant rev:
+// every file of the original is hashed (content) and stat-ed (mtime) before and after the work on the linked copy.
+
+use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
+
+type Fingerprint = BTreeMap<String, (u64, u128)>;
+
+fn fingerprint(dir: &Path) -> Fingerprint {
+    fn walk(base: &Path, dir: &Path, out: &mut Fingerprint) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(base, &p, out);
+            } else {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::fs::read(&p).unwrap().hash(&mut h);
+                let m = std::fs::metadata(&p).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+                out.insert(p.strip_prefix(base).unwrap().to_string_lossy().into_owned(), (h.finish(), m));
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// (files whose content changed, files whose content is the same but whose mtime moved, files added or removed)
+fn compare(before: &Fingerprint, after: &Fingerprint) -> (Vec<String>, Vec<String>, usize) {
+    let (mut content, mut mtime) = (vec![], vec![]);
+    for (k, (h, m)) in before {
+        if let Some((h2, m2)) = after.get(k) {
+            if h != h2 {
+                content.push(k.clone());
+            } else if m != m2 {
+                mtime.push(k.clone());
+            }
+        }
+    }
+    let gone_or_new = before.keys().filter(|k| !after.contains_key(*k)).count() + after.keys().filter(|k| !before.contains_key(*k)).count();
+    (content, mtime, gone_or_new)
+}
+
+/// Bytes in the named files of `dir`, and in all of its files.
+fn sizes(dir: &Path, names: &[String]) -> (u64, u64) {
+    let sel = names.iter().map(|n| std::fs::metadata(dir.join(n)).map(|m| m.len()).unwrap_or(0)).sum();
+    let all = fingerprint(dir).keys().map(|n| std::fs::metadata(dir.join(n)).map(|m| m.len()).unwrap_or(0)).sum();
+    (sel, all)
+}
+
+fn link_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let t = to.join(e.file_name());
+        if e.path().is_dir() {
+            link_tree(&e.path(), &t);
+        } else {
+            std::fs::hard_link(e.path(), &t).unwrap();
+        }
+    }
+}
+
+/// A library with payload indexes of three kinds (so the index files exist), as v1 of the staging experiments.
+fn build_v1_indexed(dir: &Path, optimize: bool) {
+    use edge::{CreateIndex, FieldIndexOperations, PayloadFieldSchema, PayloadSchemaType};
+    ensure_init();
+    let shard = EdgeShard::new(dir, config(optimize)).unwrap();
+    for (f, t) in [("title", PayloadSchemaType::Keyword), ("_start_page", PayloadSchemaType::Integer), ("content", PayloadSchemaType::Text)] {
+        shard
+            .update(UpdateOperation::FieldIndexOperation(FieldIndexOperations::CreateIndex(CreateIndex {
+                field_name: f.parse().unwrap(),
+                field_schema: Some(PayloadFieldSchema::FieldType(t)),
+            })))
+            .unwrap();
+    }
+    upsert(&shard, 1..=150, "Original text.");
+    upsert(&shard, 151..=300, "Original text.");
+    if optimize {
+        shard.optimize().unwrap();
+    }
+    shard.flush().unwrap();
+    drop(shard);
+    let _ = std::fs::remove_file(dir.join(MANIFEST_FILE));
+}
+
+struct StageFixture {
+    _tmp: TempDir,
+    root: PathBuf,
+    v1: PathBuf,
+    against: SnapshotManifest,
+    snapshot: PathBuf,
+}
+
+fn stage_fixture(name: &str, optimize: bool) -> StageFixture {
+    let tmp = TempDir::new(name);
+    let root = tmp.0.clone();
+    let v1 = root.join("v1");
+    build_v1_indexed(&v1, optimize);
+    let (json_text, _) = libupdate::library_manifest(&v1).unwrap();
+    let v2 = root.join("v2");
+    copy_dir(&v1, &v2);
+    {
+        let shard = EdgeShard::load(&v2, None).unwrap();
+        upsert(&shard, 301..=320, "Brand new text.");
+        delete(&shard, 1..=10);
+        upsert(&shard, 50..=50, "Rewritten text CHANGED.");
+        if optimize {
+            shard.optimize().unwrap();
+        }
+        shard.flush().unwrap();
+    }
+    let against: SnapshotManifest = serde_json::from_str(&json_text).unwrap();
+    let snapshot = root.join("partial.snapshot");
+    make_partial_snapshot(&v2, &against, &snapshot);
+    StageFixture { _tmp: tmp, root, v1, against, snapshot }
+}
+
+impl StageFixture {
+    /// A fresh, independent copy of v1 (real copies, not links).
+    fn fresh(&self, name: &str) -> PathBuf {
+        let d = self.root.join(name);
+        copy_dir(&self.v1, &d);
+        d
+    }
+
+    fn unpacked(&self, name: &str) -> (PathBuf, SnapshotManifest) {
+        let d = self.root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        EdgeShard::unpack_snapshot(&self.snapshot, &d).unwrap();
+        let m = SnapshotManifest::load_from_snapshot(&d, Some(shard::snapshots::snapshot_manifest::RecoveryType::Partial)).unwrap();
+        (d, m)
+    }
+}
+
+fn count_points(dir: &Path) -> usize {
+    cache_search::library::write_segments_manifest(dir).unwrap();
+    let ro = cache_search::library::open_shard_for_scroll(dir).unwrap();
+    edge::EdgeShardRead::count(&ro, edge::CountRequest::new()).unwrap()
+}
+
+#[test]
+fn hard_link_staging_a_the_qdrant_merge_overwrites_linked_files_in_place() {
+    // v2 is v1 plus changes in the same (appendable) segment, so the snapshot carries files the library already
+    // has. `recover_partial_snapshot` merges the segments folder with fs_extra's move_dir, which copies over an
+    // existing file (open + truncate), i.e. writes into the inode that the original shares.
+    let f = stage_fixture("stage-a", false);
+    let original = f.fresh("original");
+    let staging = f.root.join("staging");
+    link_tree(&original, &staging);
+    let before = fingerprint(&original);
+    let (unp, sm) = f.unpacked("unp");
+    drop(EdgeShard::recover_partial_snapshot(&staging, &f.against, &unp, &sm).unwrap());
+    let (content, mtime, _) = compare(&before, &fingerprint(&original));
+    let (bytes, total) = sizes(&original, &[content.clone(), mtime.clone()].concat());
+    eprintln!(
+        "hard-link staging, recover_partial_snapshot: {} original files changed content, {} changed mtime only ({bytes} of {total} bytes)",
+        content.len(),
+        mtime.len()
+    );
+    assert!(!content.is_empty(), "if this fails the merge no longer writes in place: re-evaluate hard-link staging");
+}
+
+#[test]
+fn hard_link_staging_b_the_read_write_load_writes_linked_files_in_place() {
+    // The read-write load alone (what library_manifest and the end of recover_partial_snapshot do) opens flags,
+    // trackers, deleted bitmaps and id-tracker files writable and mmaps them: mtimes move on files that are
+    // shared with the original (content stays equal on an unchanged library).
+    let f = stage_fixture("stage-b", true);
+    let original = f.fresh("original");
+    let staging = f.root.join("staging");
+    link_tree(&original, &staging);
+    let before = fingerprint(&original);
+    drop(EdgeShard::load(&staging, None).unwrap());
+    let (content, mtime, gone_or_new) = compare(&before, &fingerprint(&original));
+    let (bytes, total) = sizes(&original, &mtime);
+    eprintln!(
+        "hard-link staging, read-write load: {} of {} original files changed mtime, {} content ({bytes} of {total} bytes)",
+        mtime.len(),
+        before.len(),
+        content.len()
+    );
+    for m in &mtime {
+        eprintln!("  mtime moved: {m}");
+    }
+    assert_eq!(gone_or_new, 0);
+    assert!(!mtime.is_empty() || !content.is_empty(), "if this fails the load no longer writes in place: re-evaluate hard-link staging");
+}
+
+#[test]
+fn hard_link_staging_c_rename_only_merge_without_load_leaves_the_original_untouched() {
+    // The variant that would be safe: execute the merge plan with rename/unlink only (every changed file gets a
+    // new inode), skip the read-write load, verify with the read-only open. Measured on both library shapes:
+    // the original is identical in content and mtime, and the result has the same points as recover + load.
+    for (name, optimize) in [("stage-c1", false), ("stage-c2", true)] {
+        let f = stage_fixture(name, optimize);
+        let original = f.fresh("original");
+        let staging = f.root.join("staging");
+        link_tree(&original, &staging);
+        let before = fingerprint(&original);
+        let (unp, sm) = f.unpacked("unp");
+        let plan = shard::snapshots::snapshot_utils::SnapshotUtils::partial_snapshot_merge_plan(&staging, &f.against, &unp, &sm);
+        for (from, to) in plan.move_files {
+            std::fs::rename(from, to).unwrap();
+        }
+        for (from, to) in plan.replace_directories {
+            if to.exists() {
+                std::fs::remove_dir_all(&to).unwrap();
+            }
+            std::fs::rename(from, to).unwrap();
+        }
+        fn merge_dir(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap() {
+                let e = e.unwrap();
+                if e.path().is_dir() {
+                    merge_dir(&e.path(), &to.join(e.file_name()));
+                } else {
+                    std::fs::rename(e.path(), to.join(e.file_name())).unwrap();
+                }
+            }
+        }
+        for (from, to) in plan.merge_directories {
+            merge_dir(&from, &to);
+        }
+        for file in plan.delete_files {
+            std::fs::remove_file(file).unwrap();
+        }
+        for dir in plan.delete_directories {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        let n = count_points(&staging);
+        let (content, mtime, gone_or_new) = compare(&before, &fingerprint(&original));
+        assert_eq!((content.len(), mtime.len(), gone_or_new), (0, 0, 0), "{name}: the original must be untouched");
+        // the same update through recover_partial_snapshot on an independent copy
+        let other = f.fresh("other");
+        let (unp2, sm2) = f.unpacked("unp2");
+        drop(EdgeShard::recover_partial_snapshot(&other, &f.against, &unp2, &sm2).unwrap());
+        assert_eq!(n, count_points(&other), "{name}");
+        assert_eq!(n, 310, "{name}");
+    }
+}
