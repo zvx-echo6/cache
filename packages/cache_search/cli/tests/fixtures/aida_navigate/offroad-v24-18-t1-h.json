@@ -1,0 +1,278 @@
+{
+ "request": {
+  "from": "Almo",
+  "mode": "drive",
+  "near": "Almo, Idaho",
+  "to": "City of Rocks"
+ },
+ "result": {
+  "distance_km": 20.4,
+  "distance_mi": 12.68,
+  "duration_minutes": 76.3,
+  "from_matched": {
+   "county": "Cassia",
+   "distance_km": 9.7,
+   "kind": "poi",
+   "locality": null,
+   "near": {
+    "county": "Cassia",
+    "distance_m": 0,
+    "housenumber": null,
+    "locality": null,
+    "name": "Almo Park",
+    "state": "Idaho",
+    "street": null
+   },
+   "place_name": "Almo Park",
+   "snap_distance_m": 16,
+   "state": "Idaho",
+   "street": null
+  },
+  "location_bias": "near:Almo, Cassia, Idaho, United States",
+  "major_roads": [
+   {
+    "distance_km": 10.83,
+    "name": "Skyline Road"
+   },
+   {
+    "distance_km": 4.26,
+    "name": "Emery Canyon Road"
+   }
+  ],
+  "mode": "drive",
+  "offroad_mi": 3.15,
+  "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
+  "offroad_steps_omitted": 14,
+  "ok": true,
+  "other_destination_candidates": [
+   {
+    "county": "Cassia",
+    "distance_km": 6.9,
+    "kind": "poi",
+    "locality": null,
+    "place_name": "City of Rocks Campsites",
+    "state": "Idaho",
+    "street": "City of Rocks Road"
+   },
+   {
+    "county": "Gooding",
+    "distance_km": 144.7,
+    "kind": "poi",
+    "locality": null,
+    "place_name": "Little City of Rocks Wilderness Study Area",
+    "state": "Idaho",
+    "street": null
+   }
+  ],
+  "pins": "30 map pins prepared, one per step; the radio bridge sends them to the asker",
+  "road_steps_omitted": 4,
+  "route_id": "c6ecf5624b5958be",
+  "step_count": 30,
+  "steps": [
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.08,
+    "elev_gain_m": 1,
+    "elev_loss_m": 2,
+    "grade_class": "flat",
+    "index": 14,
+    "instruction": "By ATV: Off-road NE 0.08 mi, flat, tree cover (+1 m -2 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.1,
+    "elev_gain_m": 0,
+    "elev_loss_m": 5,
+    "follow": {
+     "name": "Skyline Road",
+     "trail_kind": "road"
+    },
+    "grade_class": "flat",
+    "index": 15,
+    "instruction": "By ATV: Follow Skyline Road N 0.1 mi, flat, tree cover (-5 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "NW",
+    "distance_mi": 0.02,
+    "elev_gain_m": 4,
+    "elev_loss_m": 0,
+    "grade_class": "uphill",
+    "index": 16,
+    "instruction": "By ATV: Off-road NW 0.02 mi, uphill, tree cover (+4 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.12,
+    "elev_gain_m": 6,
+    "elev_loss_m": 6,
+    "follow": {
+     "name": "Skyline Road",
+     "trail_kind": "road"
+    },
+    "grade_class": "flat",
+    "index": 17,
+    "instruction": "By ATV: Follow Skyline Road N 0.12 mi, flat, tree cover (+6 m -6 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.09,
+    "elev_gain_m": 0,
+    "elev_loss_m": 11,
+    "grade_class": "downhill",
+    "index": 18,
+    "instruction": "By ATV: Off-road N 0.09 mi, downhill, tree cover (-11 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.37,
+    "elev_gain_m": 28,
+    "elev_loss_m": 9,
+    "grade_class": "flat",
+    "index": 19,
+    "instruction": "By ATV: Off-road N 0.37 mi, flat, tree cover (+28 m -9 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "E",
+    "distance_mi": 0.1,
+    "elev_gain_m": 0,
+    "elev_loss_m": 18,
+    "follow": {
+     "name": "Skyline Road",
+     "trail_kind": "road"
+    },
+    "grade_class": "downhill",
+    "index": 20,
+    "instruction": "By ATV: Follow Skyline Road E 0.1 mi, downhill, grassland (-18 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "grassland",
+    "travel": "4w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.13,
+    "elev_gain_m": 10,
+    "elev_loss_m": 3,
+    "grade_class": "flat",
+    "index": 21,
+    "instruction": "By ATV: Off-road NE 0.13 mi, flat, tree cover (+10 m -3 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.09,
+    "elev_gain_m": 22,
+    "elev_loss_m": 0,
+    "follow": {
+     "name": "Skyline Road",
+     "trail_kind": "road"
+    },
+    "grade_class": "uphill",
+    "index": 22,
+    "instruction": "By ATV: Follow Skyline Road NE 0.09 mi, uphill, tree cover (+22 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.04,
+    "elev_gain_m": 6,
+    "elev_loss_m": 0,
+    "grade_class": "uphill",
+    "index": 23,
+    "instruction": "By ATV: Off-road NE 0.04 mi, uphill, tree cover (+6 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "4w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.02,
+    "elev_gain_m": 1,
+    "elev_loss_m": 1,
+    "grade_class": "flat",
+    "index": 28,
+    "instruction": "On foot: Off-road NE 0.02 mi, flat, shrubland (+1 m -1 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "shrubland",
+    "travel": "foot",
+    "type": "mode_change"
+   },
+   {
+    "cardinal": "E",
+    "distance_mi": 0.11,
+    "elev_gain_m": 0,
+    "elev_loss_m": 25,
+    "grade_class": "downhill",
+    "index": 29,
+    "instruction": "On foot: Off-road E 0.11 mi, downhill, shrubland (-25 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "shrubland",
+    "travel": "foot",
+    "type": "offroad_leg"
+   }
+  ],
+  "steps_truncated": true,
+  "to_matched": {
+   "county": "Cassia",
+   "distance_km": 6.7,
+   "kind": "poi",
+   "locality": null,
+   "near": {
+    "county": "Cassia",
+    "distance_m": 0,
+    "housenumber": null,
+    "locality": null,
+    "name": "City of Rocks National Reserve",
+    "state": "Idaho",
+    "street": null
+   },
+   "place_name": "City of Rocks National Reserve",
+   "snap_distance_m": 6,
+   "state": "Idaho",
+   "street": null
+  }
+ }
+}
