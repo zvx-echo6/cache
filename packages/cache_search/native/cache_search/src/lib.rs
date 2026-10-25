@@ -9,6 +9,7 @@ pub mod handle;
 pub mod html;
 pub mod index;
 pub mod job;
+pub mod libindex;
 pub mod library;
 pub mod search;
 pub mod suggest;

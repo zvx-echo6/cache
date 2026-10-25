@@ -51,7 +51,7 @@ pub fn read_meta(dir: &Path) -> Option<IndexMeta> {
     serde_json::from_str(&s).ok()
 }
 
-fn write_meta(dir: &Path, m: &IndexMeta) -> Result<()> {
+pub(crate) fn write_meta(dir: &Path, m: &IndexMeta) -> Result<()> {
     let tmp = dir.join(format!("{META_FILE}.tmp"));
     let s = serde_json::to_string(m).map_err(|e| Error::internal(e.to_string()))?;
     std::fs::write(&tmp, s).map_err(|e| Error::io(format!("{}: {e}", tmp.display())))?;
@@ -142,7 +142,7 @@ pub fn fields_of(index: &Index) -> Result<Fields> {
     Ok(Fields { path: f("path")?, title: f("title")?, lead: f("lead")?, body: f("body")? })
 }
 
-fn tv<T>(r: std::result::Result<T, tantivy::TantivyError>) -> Result<T> {
+pub(crate) fn tv<T>(r: std::result::Result<T, tantivy::TantivyError>) -> Result<T> {
     r.map_err(|e| Error::io(format!("tantivy: {e}")))
 }
 
@@ -334,7 +334,7 @@ pub struct OpenIndex {
     stamp: Option<(SystemTime, u64)>,
 }
 
-fn stamp_of(dir: &Path) -> Option<(SystemTime, u64)> {
+pub(crate) fn stamp_of(dir: &Path) -> Option<(SystemTime, u64)> {
     let m = std::fs::metadata(dir.join("meta.json")).ok()?;
     Some((m.modified().ok()?, m.len()))
 }
@@ -370,7 +370,7 @@ pub enum Outcome {
     Cancelled,
 }
 
-fn wipe_dir(dir: &Path) {
+pub(crate) fn wipe_dir(dir: &Path) {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             if e.file_name() == LOCK_FILE {
@@ -544,7 +544,7 @@ fn body_text<'a>(text: &'a str, title: &str) -> &'a str {
     }
 }
 
-fn cap_bytes(s: &str, max: usize) -> &str {
+pub(crate) fn cap_bytes(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
     }

@@ -151,6 +151,54 @@ impl LibrarySettings {
         })
     }
 
+    /// The payload fields the core reads: text, title(s), summary, page, source_type, author, document and the
+    /// fields the leave-out rules look at.
+    pub fn payload_fields(&self) -> Vec<String> {
+        let f = &self.fields;
+        let mut v: Vec<String> = vec![f.text.clone()];
+        for x in [&f.title, &f.title_fallback, &f.summary, &f.page, &f.source_type, &f.author, &f.document] {
+            if let Some(n) = x {
+                v.push(n.clone());
+            }
+        }
+        for r in &self.leave_out {
+            v.push(r.field().to_string());
+        }
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    pub fn payload_selector(&self) -> WithPayloadInterface {
+        let parsed: std::result::Result<Vec<JsonPath>, ()> =
+            self.payload_fields().iter().map(|s| s.parse::<JsonPath>().map_err(|_| ())).collect();
+        match parsed {
+            Ok(p) => WithPayloadInterface::Fields(p),
+            Err(()) => WithPayloadInterface::Bool(true),
+        }
+    }
+
+    /// Whether any leave-out rule matches the payload.
+    pub fn left_out(&self, p: &Map<String, Value>) -> bool {
+        self.leave_out.iter().any(|r| r.matches(p))
+    }
+
+    /// A mapped text field of the payload as text (None when unmapped, missing or blank).
+    pub fn field_text(&self, p: &Map<String, Value>, name: &Option<String>) -> Option<String> {
+        name.as_ref().and_then(|n| get_path(p, n)).and_then(scalar_text)
+    }
+
+    /// The point's title: the mapped title, else the fallback.
+    pub fn base_title(&self, p: &Map<String, Value>) -> String {
+        let f = &self.fields;
+        self.field_text(p, &f.title).or_else(|| self.field_text(p, &f.title_fallback)).unwrap_or_default()
+    }
+
+    /// The mapped main text of the payload.
+    pub fn main_text(&self, p: &Map<String, Value>) -> Option<String> {
+        get_path(p, &self.fields.text).and_then(scalar_text)
+    }
+
     /// Parse the v1 settings object. Unknown keys are ignored.
     pub fn parse(v: &Value) -> Result<LibrarySettings> {
         let o = v.as_object().ok_or_else(|| Error::bad_json("library settings must be an object"))?;
@@ -333,6 +381,8 @@ pub struct LibSlot {
     pub settings: LibrarySettings,
     pub shard: Shard,
     pub docs: usize,
+    /// The opened device keyword index (reopened when it changes on disk).
+    pub kw: Option<crate::libindex::LibOpenIndex>,
 }
 
 /// The library's folder name, used as its id and title when settings are guessed.
@@ -394,6 +444,18 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
     })
 }
 
+/// Open a library's shard read-only with the scroll load profile (for `index_library`). Like `open_library`, it
+/// writes nothing except a missing `segments_manifest.json`.
+pub fn open_shard_for_scroll(path: &Path) -> Result<Shard> {
+    ensure_init();
+    if !path.is_dir() {
+        return Err(Error::not_found(format!("library folder {} not found", path.display())));
+    }
+    ensure_segments_manifest(path)?;
+    let profile = LoadProfile::for_scroll(None, None, true);
+    Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))
+}
+
 /// Open a library read-only. Writes nothing to the shard except `segments_manifest.json` when it is missing.
 pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&Value>) -> Result<LibSlot> {
     ensure_init();
@@ -408,7 +470,7 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     let shard = Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))?;
     let settings = resolve_settings(&shard, path, settings)?;
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
-    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, docs })
+    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, docs, kw: None })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -446,36 +508,16 @@ impl LibSlot {
         !model.is_empty() && e.model == model && e.dims.map(|d| d == len).unwrap_or(true)
     }
 
-    fn payload_fields(&self) -> Vec<String> {
-        let f = &self.settings.fields;
-        let mut v: Vec<String> = vec![f.text.clone()];
-        for x in [&f.title, &f.title_fallback, &f.summary, &f.page, &f.source_type, &f.author, &f.document] {
-            if let Some(n) = x {
-                v.push(n.clone());
-            }
-        }
-        for r in &self.settings.leave_out {
-            v.push(r.field().to_string());
-        }
-        v.sort();
-        v.dedup();
-        v
-    }
-
     fn payload_selector(&self) -> WithPayloadInterface {
-        let parsed: std::result::Result<Vec<JsonPath>, ()> = self.payload_fields().iter().map(|s| s.parse::<JsonPath>().map_err(|_| ())).collect();
-        match parsed {
-            Ok(p) => WithPayloadInterface::Fields(p),
-            Err(()) => WithPayloadInterface::Bool(true),
-        }
+        self.settings.payload_selector()
     }
 
     fn left_out(&self, p: &Map<String, Value>) -> bool {
-        self.settings.leave_out.iter().any(|r| r.matches(p))
+        self.settings.left_out(p)
     }
 
     fn text_field(&self, p: &Map<String, Value>, name: &Option<String>) -> Option<String> {
-        name.as_ref().and_then(|n| get_path(p, n)).and_then(scalar_text)
+        self.settings.field_text(p, name)
     }
 
     fn page_value(&self, p: &Map<String, Value>) -> Value {
@@ -495,8 +537,7 @@ impl LibSlot {
     }
 
     fn base_title(&self, p: &Map<String, Value>) -> String {
-        let f = &self.settings.fields;
-        self.text_field(p, &f.title).or_else(|| self.text_field(p, &f.title_fallback)).unwrap_or_default()
+        self.settings.base_title(p)
     }
 
     /// The result title: the mapped title (else the fallback), with ", p. <page>" when a page is mapped and set.
@@ -517,6 +558,34 @@ impl LibSlot {
 
     fn address(&self, id: &PointId) -> String {
         format!("lib:{}/{}", self.settings.library_id, id)
+    }
+
+    /// A hit for the point `id` with payload `p`: title, snippet, page and the duplicate-collapse key.
+    pub fn make_hit(&self, id: &PointId, score: f32, p: &Map<String, Value>, snippet_chars: usize) -> LibHit {
+        let title = self.hit_title(p);
+        let snippet = self.snippet(p, snippet_chars);
+        let key = match self.text_field(p, &self.settings.fields.document) {
+            Some(d) => format!("d\u{1}{d}\u{1}{title}"),
+            None => format!("t\u{1}{title}\u{1}{snippet}"),
+        };
+        LibHit { address: self.address(id), score, title, snippet, page: self.page_value(p), key }
+    }
+
+    /// The hit for a point found by the keyword index, read from the shard payload. `None` when the point is
+    /// gone from the library or is now left out.
+    pub fn hit_for_point(&self, point_id: &str, score: f32, snippet_chars: usize) -> Result<Option<LibHit>> {
+        let Ok(id) = point_id.parse::<PointId>() else { return Ok(None) };
+        let mut req = RetrieveRequest::new(vec![id]);
+        req.with_payload = Some(self.payload_selector());
+        req.with_vector = Some(WithVector::Bool(false));
+        let recs = EdgeShardRead::retrieve(&self.shard, req).map_err(|e| op_internal("reading point", e))?;
+        let Some(rec) = recs.into_iter().next() else { return Ok(None) };
+        let empty = Map::new();
+        let p = rec.payload.as_ref().map(|p| &p.0).unwrap_or(&empty);
+        if self.left_out(p) {
+            return Ok(None);
+        }
+        Ok(Some(self.make_hit(&rec.id, score, p, snippet_chars)))
     }
 
     /// Dense search with `vector`. Fetches `base` candidates, drops left-out points, and if fewer than `need`
@@ -551,16 +620,11 @@ impl LibSlot {
                 if self.left_out(p) {
                     continue;
                 }
-                let title = self.hit_title(p);
-                let snippet = self.snippet(p, snippet_chars);
-                let key = match self.text_field(p, &self.settings.fields.document) {
-                    Some(d) => format!("d\u{1}{d}\u{1}{title}"),
-                    None => format!("t\u{1}{title}\u{1}{snippet}"),
-                };
-                if !keys.contains(&key) {
-                    keys.push(key.clone());
+                let hit = self.make_hit(&sp.id, sp.score, p, snippet_chars);
+                if !keys.contains(&hit.key) {
+                    keys.push(hit.key.clone());
                 }
-                hits.push(LibHit { address: self.address(&sp.id), score: sp.score, title, snippet, page: self.page_value(p), key });
+                hits.push(hit);
             }
             if keys.len() >= need || returned < width {
                 break;

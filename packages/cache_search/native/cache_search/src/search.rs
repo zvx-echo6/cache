@@ -108,7 +108,7 @@ fn text_of(doc: &TantivyDocument, f: Field) -> String {
 }
 
 /// Distinct query terms (text only, as produced by the index's own analyzer when the query was parsed).
-fn query_term_texts(q: &dyn Query) -> Vec<String> {
+pub(crate) fn query_term_texts(q: &dyn Query) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     q.query_terms(&mut |t, _| {
         if let Some(s) = t.value().as_str() {
@@ -121,7 +121,7 @@ fn query_term_texts(q: &dyn Query) -> Vec<String> {
 }
 
 /// Fraction of `terms` that occur in the document at `addr` in any of `fields`. 1.0 when there are no terms.
-fn term_coverage(searcher: &Searcher, addr: DocAddress, terms: &[String], fields: &[Field]) -> f32 {
+pub(crate) fn term_coverage(searcher: &Searcher, addr: DocAddress, terms: &[String], fields: &[Field]) -> f32 {
     if terms.is_empty() {
         return 1.0;
     }
@@ -193,7 +193,7 @@ const TIE_CAP: usize = 8192;
 /// address, which depends on how the index was built (a resumed build has other segments than a clean one), so
 /// the window is widened until the documents tied with the last one are all in, then sorted by key and cut.
 /// Returns (score, address, key) and the total match count.
-fn top_deterministic(
+pub(crate) fn top_deterministic(
     searcher: &Searcher,
     q: &dyn Query,
     limit: usize,
