@@ -1,0 +1,28 @@
+name: cache_search
+description: "Cache search core: the Rust search engine (ZIMs and libraries) behind a small Dart API."
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.12.2
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# Android only for now. TODO(ios): build the core for iOS (aarch64-apple-ios as an xcframework through the
+# podspec) and add `ios: ffiPlugin: true` here. TODO(windows): build cache_search.dll and add `windows:
+# ffiPlugin: true`. Until then the app builds on those platforms without the core and Search says it is
+# not available (see README.md).
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true

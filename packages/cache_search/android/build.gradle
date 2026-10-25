@@ -1,0 +1,78 @@
+// Builds the Rust search core (../native) with cargo-ndk and packages the .so files into the app.
+
+group = "co.cache.cache_search"
+version = "1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath("com.android.tools.build:gradle:9.0.1")
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+// ABIs the core is built for. arm64 is every real phone; add x86_64 for the emulator with
+// -PcacheSearchAbis=arm64-v8a,x86_64 (an ABI without the core still runs, Search just says it is not available).
+def coreAbis = (project.findProperty("cacheSearchAbis") ?: "arm64-v8a").toString().split(",").collect { it.trim() }
+def nativeDir = file("../native")
+def jniOut = layout.buildDirectory.dir("cargo-ndk/jniLibs").get().asFile
+
+android {
+    namespace = "co.cache.cache_search"
+    compileSdk = 36
+    ndkVersion = android.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        // The same level as cache_llama.
+        minSdk = 28
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs += jniOut
+        }
+    }
+}
+
+// cargo and cargo-ndk live in the Rust toolchain's bin folder, which is not always on the Gradle daemon's PATH.
+def cargoHome = System.getenv("CARGO_HOME") ?: (System.getProperty("user.home") + File.separator + ".cargo")
+def cargoBin = new File(cargoHome, "bin")
+
+tasks.register("cargoNdkBuild", Exec) {
+    group = "build"
+    description = "Builds libcache_search.so with cargo-ndk"
+    workingDir nativeDir
+    // The release profile always: a debug Rust core is unusably slow.
+    def cmd = ["cargo", "ndk", "--platform", "28", "-o", jniOut.absolutePath]
+    coreAbis.each { cmd += ["-t", it] }
+    cmd += ["build", "--release", "-p", "cache_search"]
+    commandLine cmd
+    doFirst {
+        def sep = File.pathSeparator
+        environment("PATH", cargoBin.absolutePath + sep + System.getenv("PATH"))
+        def ndk = android.ndkDirectory
+        if (ndk != null) environment("ANDROID_NDK_HOME", ndk.absolutePath)
+    }
+}
+
+// Run before Gradle merges the native libraries (the task name differs per variant, so hook all of them).
+tasks.configureEach { t ->
+    if (t.name == "preBuild") t.dependsOn("cargoNdkBuild")
+}
