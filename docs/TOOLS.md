@@ -1,6 +1,8 @@
-# Cache assistant tools (v1, 2026-10-25)
+# Cache assistant tools: draft v2 (2026-10-25)
 
-The tools the Cache assistant has, as OpenAI-style function schemas, plus the exact result each one returns. Training and test examples are written against this file. 1.0 tools are pinned; 1.x tools are sketched and may still change.
+Draft by ref-a5 for training and test examples. These are the tools the Cache assistant will have, as
+OpenAI-style function schemas, plus the exact result each one returns. 1.0 tools are pinned; 1.x tools are
+sketched so examples can be written, and may still change.
 
 ## Conventions (all tools)
 
@@ -13,6 +15,10 @@ dropped by the app.
 **Two result shapes.**
 - `search` and `read` return plain text (cheapest in tokens).
 - Every other tool returns one JSON object. Each citable item in it carries `"n"`.
+
+**Fixed and expandable tools.** Five fixed tools (search, read, navigate, nearby, locate) and one generic
+`live_data` tool whose sources come from what is installed on the phone, so new data sources never need new
+tool definitions or retraining.
 
 **Errors (every tool).** `{"ok": false, "error": {"type": "<code>", "detail": "<short text>"}}`. Shared codes:
 `bad_arguments`, `no_location` (the tool needs a place and none was given or known), `not_set_up` (the needed
@@ -105,6 +111,8 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
     "required": ["mode"], "additionalProperties": false}}}
 ```
 
+Steps are capped at 15 in the result (`steps_truncated`, `steps_omitted`), to fit the 8k context.
+
 Differences from AIDA: no Meshtastic waypoint or `pins`/`bridge` fields; the start defaults to the phone's GPS
 position instead of the sender's node; `water` and `shelter` added to the categories (from the map pack's OSM
 data). Off-road legs come in 1.x; until then a destination off the road network returns the road route plus a
@@ -120,7 +128,7 @@ Result (JSON): the same fields as AIDA's navigate result, plus `"n"`:
  "nearest_search": {"to_type": "emergency_room", "ranked_by": "drive_time"},
  "distance_mi": 1.1, "distance_km": 1.8, "duration_minutes": 4.0, "major_roads": ["Overland Ave"],
  "step_count": 5, "steps": [{"index": 0, "kind": "road", "street_names": ["Main St"], "distance_mi": 0.3, "cardinal": "S", "instruction": "Head south on Main St"}],
- "steps_truncated": false, "map_region": "Idaho", "map_region_age": "12 days old"}
+ "steps_truncated": false, "steps_omitted": 0, "map_region": "Idaho", "map_region_age": "12 days old"}
 ```
 
 Errors (AIDA's codes kept): `geocode_empty` (with `which`, `query`, `searched_within_km`), `origin_unknown`,
@@ -177,123 +185,74 @@ Result (1.0 gives latitude/longitude; 1.x adds the other formats shown):
 
 `what3words` only when it was fetched online or cached for a saved place. Errors: `geocode_empty`, `no_location`.
 
-### weather
+### live_data (one generic tool for every live source)
+
+Live sources (weather, alerts, and later fuel prices, repeaters, earthquakes, river levels, avalanche, space
+weather, wildfires, road conditions, satellite passes, outages, or anything a user adds) are all reached
+through this one tool. The app fills the `source` enum at runtime from the source definitions installed on that
+phone, with each source's one-line description appended to the tool description. Adding a source never needs
+retraining: the model picks a source from the list and answers from the labelled fields it gets back.
+
+Schema as the app builds it (example with three installed sources):
 
 ```json
 {"type": "function", "function": {
-  "name": "weather",
-  "description": "The downloaded weather forecast for a place: current conditions, hourly for the next days and daily up to about 16 days. Forecasts are downloaded while online and expire.",
+  "name": "live_data",
+  "description": "Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: weather = weather forecast, current conditions, hourly and daily; alerts = active emergency alerts and evacuation levels; fuel_prices = fuel prices by area and station.",
   "parameters": {"type": "object", "properties": {
-    "place": {"type": "string", "minLength": 1, "maxLength": 200,
-              "description": "A saved place or town. Omit for the phone's current location."},
-    "days": {"type": "integer", "minimum": 1, "maximum": 16, "default": 3}},
-    "required": [], "additionalProperties": false}}}
-```
-
-Result:
-
-```json
-{"ok": true, "n": 10, "place": "Burley, ID", "source": "Open-Meteo",
- "fetched_at": "2026-10-24T06:00:00-06:00", "valid_until": "2026-11-01T00:00:00-06:00", "age": "1 day old", "expired": false,
- "units": {"temperature": "°F", "wind": "mph", "precipitation": "in"},
- "now": {"time": "2026-10-25T14:00-06:00", "temperature": 54, "feels_like": 51, "wind": 12, "wind_direction": "NW", "gusts": 20, "conditions": "partly cloudy"},
- "daily": [{"date": "2026-10-25", "high": 58, "low": 31, "precip_chance": 10, "precip": 0.0, "wind_max": 18, "conditions": "partly cloudy"}],
- "hourly_note": "hourly data available for the next 72 hours; ask for a specific time"}
-```
-
-Days past the downloaded range are left out and reported as `"not_covered_after": "<date>"`. Errors:
-`expired`, `no_data`, `no_location`.
-
-### alerts
-
-```json
-{"type": "function", "function": {
-  "name": "alerts",
-  "description": "Active emergency alerts (weather warnings, wildfire evacuation levels and similar) downloaded for a place, newest first. Alerts arrive only while the phone is online.",
-  "parameters": {"type": "object", "properties": {
+    "source": {"type": "string", "enum": ["weather", "alerts", "fuel_prices"],
+               "description": "Which source to read."},
     "place": {"type": "string", "minLength": 1, "maxLength": 200,
               "description": "A saved place or town. Omit for the phone's current location."}},
-    "required": [], "additionalProperties": false}}}
+    "required": ["source"], "additionalProperties": false}}}
 ```
 
-Result:
+Result (one self-describing shape for every source):
 
 ```json
-{"ok": true, "place": "Home (Burley, ID)", "fetched_at": "2026-10-25T13:55:00-06:00", "age": "25 minutes old",
- "alerts": [
-  {"n": 11, "event": "Wildfire evacuation: SET (prepare to leave)", "severity": "severe", "source": "county emergency management via NWS",
-   "area": "Cassia County south of I-84", "distance_mi": 6.2, "direction": "S",
-   "issued": "2026-10-25T13:40:00-06:00", "expires": "2026-10-25T22:00:00-06:00", "expired": false,
-   "headline": "Prepare to evacuate due to the Rock Creek fire.",
-   "instructions": "Prepare to leave at a moment's notice. Gather medications, documents and pets."}],
- "none_active": false}
+{"ok": true,
+ "source": {"id": "weather", "title": "Weather forecast", "provider": "Open-Meteo"},
+ "place": "Burley, ID",
+ "fetched_at": "2026-10-24T06:00:00-06:00", "valid_until": "2026-11-01T00:00:00-06:00", "age": "1 day old", "expired": false,
+ "items": [
+  {"n": 10, "label": "Now", "time": "2026-10-25T14:00-06:00",
+   "fields": {"Temperature": "54 °F", "Feels like": "51 °F", "Wind": "12 mph NW, gusts 20 mph", "Conditions": "partly cloudy"}},
+  {"n": 11, "label": "Sun 26 Oct", "time": "2026-10-26",
+   "fields": {"High": "58 °F", "Low": "31 °F", "Chance of rain": "10%", "Wind max": "18 mph"}}],
+ "not_covered_after": "2026-11-01"}
 ```
 
-No alerts: `{"ok": true, ..., "alerts": [], "none_active": true}` (only meaningful if `age` is recent; the
-assistant states the age). Errors: `expired` (all downloaded alerts have expired), `no_data`, `not_set_up`.
-
-The "Ask about this alert" button starts a chat whose first user turn carries the alert as source [1] in this
-same shape.
-
----
-
-## 1.x tools (sketch; may change)
-
-### fuel_prices
+The same shape for alerts:
 
 ```json
-{"type": "function", "function": {
-  "name": "fuel_prices",
-  "description": "Downloaded fuel prices: regional weekly averages, and per-station prices when available.",
-  "parameters": {"type": "object", "properties": {
-    "place": {"type": "string", "minLength": 1, "maxLength": 200},
-    "grade": {"type": "string", "enum": ["regular", "midgrade", "premium", "diesel"], "default": "regular"}},
-    "required": [], "additionalProperties": false}}}
+{"ok": true,
+ "source": {"id": "alerts", "title": "Emergency alerts", "provider": "NWS"},
+ "place": "Home (Burley, ID)",
+ "fetched_at": "2026-10-25T13:55:00-06:00", "valid_until": "2026-10-25T22:00:00-06:00", "age": "25 minutes old", "expired": false,
+ "items": [
+  {"n": 12, "label": "Wildfire evacuation: SET (prepare to leave)", "time": "2026-10-25T13:40:00-06:00",
+   "fields": {"Severity": "severe", "Area": "Cassia County south of I-84", "Distance": "6.2 mi S",
+              "Expires": "2026-10-25 22:00", "Headline": "Prepare to evacuate due to the Rock Creek fire.",
+              "Instructions": "Prepare to leave at a moment's notice. Gather medications, documents and pets."}}]}
 ```
 
-Result (EIA format):
+Rules:
+- `fields` keys are plain labels and values carry their units, so no source needs special handling by the model.
+- Items are capped (about 12 per result) to fit the 8k context; `"more": N` says how many were left out.
+- Nothing to report (for example no active alerts): `"items": []` with `"none": true`; the assistant states the age.
+- All downloaded data expired: `{"ok": false, "error": {"type": "expired", "detail": "weather data expired 2026-11-01"}}`;
+  nothing ever downloaded: type `no_data`; source not installed: type `unknown_source`. The assistant says plainly
+  that it needs to go online (for example "I no longer have weather data. We need to go online for more.").
+- "Ask about this alert" starts a chat whose first user turn carries the alert as source [1] in this shape.
 
-```json
-{"ok": true, "grade": "regular",
- "regional": {"n": 12, "area": "Rocky Mountain (PADD 4)", "price": 4.605, "unit": "USD/gal", "period": "week of 2026-10-19", "series": "EMM_EPM0_PTE_R40_DPG", "source": "U.S. EIA",
-              "fetched_at": "2026-10-22T09:00:00-06:00", "valid_until": "2026-10-29T00:00:00-06:00", "age": "3 days old", "expired": false},
- "stations": [{"n": 13, "name": "Maverik", "locality": "Burley", "price": 4.39, "updated": "2 hours ago", "distance_mi": 1.2}]}
-```
+Sources planned for 1.0: `weather`, `alerts`. Sources for 1.x (installed as source definitions): fuel prices,
+repeaters (from imported lists), earthquakes, river levels, avalanche, space weather, wildfires, road conditions,
+satellite passes, outages. Training uses a deliberately varied mix of sources, including made-up ones, so the
+behaviour generalises to sources added later.
 
-`stations` appears only with a per-station source (online Google Places results are shown live and never
-stored).
+## 1.x additions
 
-### repeaters
-
-```json
-{"type": "function", "function": {
-  "name": "repeaters",
-  "description": "Radio repeaters from the lists imported on this phone, nearest first.",
-  "parameters": {"type": "object", "properties": {
-    "near": {"type": "string", "minLength": 1, "maxLength": 200},
-    "band": {"type": "string", "enum": ["2m", "70cm", "6m", "10m", "1.25m", "gmrs", "any"], "default": "any"},
-    "mode": {"type": "string", "enum": ["fm", "dmr", "dstar", "fusion", "p25", "any"], "default": "any"},
-    "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}},
-    "required": [], "additionalProperties": false}}}
-```
-
-Result: `{"ok": true, "list": "<imported file name>", "repeaters": [{"n": 14, "callsign": "...", "output_mhz": 146.94, "offset": "-0.6", "tone": "100.0", "mode": "fm", "location": "...", "distance_mi": 8.4, "notes": "..."}]}`.
-Errors: `not_set_up` (no list imported), `nearby_empty`.
-
-### Other live-source tools (same dated-data conventions)
-
-| Tool | Arguments | Items |
-|---|---|---|
-| `earthquakes` | place?, days?, min_magnitude? | magnitude, place, time, depth, distance |
-| `river_levels` | place?, river? | gauge name, stage/flow, flood stage, trend, time |
-| `avalanche` | place? | zone, danger rating, problems, valid period |
-| `space_weather` | (none) | Kp index, alerts, HF radio conditions, valid period |
-| `wildfires` | place? | incident name, size, containment, distance, hotspots near |
-| `road_conditions` | place? or route? | closures, chain controls, work zones, time |
-| `satellite_passes` | satellite?, place?, hours? | pass times, max elevation, direction |
-| `outages` | place? | utility, customers out, area, estimated restore |
-
-### navigate, off-road (1.x)
+### navigate, off-road
 
 `mode` gains `"offroad_vehicle"` and `"offroad_foot"`; results gain AIDA's off-road step fields (`travel`,
 `grade_class`, `elev_gain_m`, `elev_loss_m`, `terrain`, `follow`, `offroad_mi`, `offroad_note`).
