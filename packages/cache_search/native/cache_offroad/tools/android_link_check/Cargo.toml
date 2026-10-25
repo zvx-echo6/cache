@@ -1,0 +1,9 @@
+[package]
+name = "offroad_android_check"
+version = "0.0.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+cache_offroad = { path = "../..", features = ["shim"] }
+[workspace]

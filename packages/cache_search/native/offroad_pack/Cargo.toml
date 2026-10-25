@@ -1,0 +1,22 @@
+[package]
+name = "offroad_pack"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Desktop builder for cache_offroad region packs (offroad.sqlite) from navi's data"
+workspace = "../"
+
+[[bin]]
+name = "offroad_pack"
+path = "src/main.rs"
+
+[dependencies]
+cache_offroad = { path = "../cache_offroad", features = ["shim"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+zstd = "0.13"
+rayon = "1"
+tiff = "0.9"
+weezl = "0.1"
+flate2 = "1"
+sha2 = "0.10"
+serde_json = "1"

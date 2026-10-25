@@ -333,9 +333,8 @@ in the conversation.
 `Handle::register_tool` (a tool registered again under the same name replaces the first), sets the user's saved
 places with `set_saved_places` (default `NoSavedPlaces`) and the query embedder of `search` with
 `set_query_embedder` (a callback `&str -> Option<(model id, vector)>`; with none, search is keyword-only, as
-`cs_search` is without a `query_vector`). The core does not depend on `cache_live` or `cache_user`; `cs_open` will
-register their tools from the config's "live" and "user" sections once those crates are on this branch (a comment
-marks the place). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
+`cs_search` is without a `query_vector`). `cs_open` registers the tools of the config's "user", "live" and "routing"
+sections (see Wiring and headless, and navigate below). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
 web_search (a tool with another name follows, in registration order) and leaves out a tool whose `schema()` is
 None.
 
@@ -722,6 +721,36 @@ Through `cs_tool` its items carry `"n"` (numbered with the conversation's other 
 reached like any other, with `cs tool live_data`, `POST /conversations/{id}/tool` and `cs tool-schemas`. The test
 `cli/tests/features.rs` runs one sequence through the CLI, serve and the C ABI on three separate states and requires
 byte-identical output at every step, and runs `search` then `live_data` in one conversation through serve and the C ABI.
+
+### navigate
+
+`cs_open` with a `"routing"` section registers `cache_navigate::NavigateTool` (docs/TOOLS.md, "navigate"):
+`{"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll", "region": "Idaho"}, "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles", "max_cells": 8000000}}`
+(`region`, `offroad` and `max_cells` optional; `region` defaults to the tiles' folder name, "Idaho" for `packs/idaho/valhalla/tiles.tar`).
+
+- **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
+  (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
+- **Arguments.** TOOLS.md's `from`, `to`, `to_type`, `mode`, `near`, plus `land_access` (strict, pragmatic = default, emergency; off-road legs only).
+  `mode` is drive, walk, bike, offroad_vehicle or offroad_foot. The first three route on roads and paths and, when the off-road pack and elevation
+  exist, add an off-road lead-in or tail where an end is more than 150 m from the road network (`cache_offroad`'s directions). The off-road
+  modes route the whole trip with the unified off-road search (roads and tracks are used where they help). Without the off-road files an off-road
+  mode is `not_set_up`, and a road mode whose end is off the road network gets the road route plus a `warnings` entry `offroad_unavailable`.
+- **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
+  `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` (`which`, `query`,
+  `searched_within_km` null) and `to_type` is `not_set_up`; the `to_type` enum is TOOLS.md's list until a pack supplies its categories. The nearest
+  place of a type is chosen by routing to the pack's 5 nearest by straight line (`ranked_by` `<mode>_time`), the others go in
+  `other_destination_candidates` with `<mode>_min`.
+- **Origin.** `from` omitted means the phone's position (`location_bias` `phone_location`); with no position, the `near` town if it resolves
+  (`location_bias` `near`), else `origin_unknown` (a `near` was given) or `no_location`.
+- **Result.** TOOLS.md's shape with `address` (`nav:<route id>`) on the route object, so the framework numbers it: `from_matched`, `to_matched`,
+  `distance_mi` / `distance_km`, `duration_minutes`, `major_roads` (names), `steps` capped at 15 with `steps_truncated` / `steps_omitted`,
+  `map_region`, `map_region_age` (the tiles file's age against `now`). Off-road steps add `travel` (foot, 2w, 4w, vehicle), `grade_class`,
+  `elev_gain_m`, `elev_loss_m`, `terrain` and `follow`; a route with off-road legs adds `offroad_mi` and `offroad_note`. The router gives fields,
+  not text, so the tool writes an `instruction` sentence for each off-road step.
+- **Errors.** `geocode_empty`, `origin_unknown`, `nearby_empty`, `same_place` (under 30 m), `route_failed` (with `reason`, the router's code),
+  `no_location`, `not_set_up` (no tiles, no off-road data, an end where no map is installed), `bad_arguments`.
+- **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
+  requires byte-identical output (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
 
 ## Open (needs decisions)
 

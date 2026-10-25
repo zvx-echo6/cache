@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub mod places;
+
 /// Start of an address marker in tool text.
 /// A citable line starts with `{{addr:<address>}}`; the framework replaces the marker with `[n]`.
 pub const ADDRESS_MARKER_OPEN: &str = "{{addr:";
