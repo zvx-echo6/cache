@@ -19,6 +19,7 @@ path = "src/main.rs"
 cache_search = { path = "../native/cache_search" }
 serde_json.workspace = true
 libloading = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tiny_http = "0.12"
 sha2 = "0.10"
 

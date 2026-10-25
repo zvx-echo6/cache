@@ -7,6 +7,7 @@ use crate::server;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const USAGE: &str = "\
@@ -20,6 +21,9 @@ cs: command line and HTTP wrapper over the cache_search core
   cs search          --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [EMBED] [--open-timeout 600]
   cs read            --config <sources.json> --address <addr> [--max-chars 6000] [--open-timeout 600]
   cs status          --config <sources.json> [--open-timeout 600]
+  cs tool <name>     --config <sources.json> [--args '<json>'] [--now <iso8601>] [--lat <deg> --lon <deg> [--accuracy <m>]]
+                     [--json] [EMBED] [--open-timeout 600]
+  cs tool-schemas    [--config <sources.json>] [--open-timeout 600]
   cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [EMBED] [--open-timeout 600]
 
   EMBED: --embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
@@ -88,10 +92,23 @@ fn embedder_from(a: &Args) -> Result<Option<Embedder>, ApiError> {
 
 fn open_engine(a: &Args) -> Result<Engine, ApiError> {
     let cfg = load_config(a.req("config").map_err(usage_err)?)?;
-    let embedder = embedder_from(a)?;
-    let mut core = Core::open(&cfg)?;
+    open_engine_with(a, &cfg)
+}
+
+/// The core opened from `cfg`, with the query embedder (if any) also registered for the core's built-in `search` tool.
+fn open_engine_with(a: &Args, cfg: &str) -> Result<Engine, ApiError> {
+    let embedder = embedder_from(a)?.map(|e| Arc::new(Mutex::new(e)));
+    let mut core = Core::open(cfg)?;
+    if let Some(e) = &embedder {
+        core.set_query_embedder(e.clone());
+    }
     core.wait_ready(Duration::from_secs(a.num("open-timeout", 600u64).map_err(usage_err)?))?;
     Ok(Engine { core, embedder })
+}
+
+/// The current local time, ISO 8601 with offset.
+fn now_local() -> String {
+    chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
 fn print(s: &str) {
@@ -219,6 +236,51 @@ pub fn status(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// One tool call in a fresh conversation (so `read` has no earlier result to open): prints the tool message, then
+/// a line `ids <json>` with the numbers the call gave. `--json` prints the core's `{"content","ids"}` instead.
+pub fn tool(argv: &[String]) -> Result<(), ApiError> {
+    let Some(name) = argv.first().filter(|a| !a.starts_with("--")) else {
+        return Err(usage_err("cs tool needs a tool name, e.g. cs tool search --args '{\"query\":\"...\"}'"));
+    };
+    let a = parse(&argv[1..], &["config", "args", "now", "lat", "lon", "accuracy", "open-timeout"], &["json"], true)?;
+    let now = a.get("now").map(str::to_string).unwrap_or_else(now_local);
+    let mut e = open_engine(&a)?;
+    match (a.get("lat"), a.get("lon")) {
+        (None, None) => {
+            if a.get("accuracy").is_some() {
+                return Err(usage_err("--accuracy needs --lat and --lon"));
+            }
+        }
+        (Some(_), Some(_)) => {
+            let (lat, lon) = (a.num("lat", 0f64).map_err(usage_err)?, a.num("lon", 0f64).map_err(usage_err)?);
+            e.core.set_location(lat, lon, a.num("accuracy", -1f64).map_err(usage_err)?, &now)?;
+        }
+        _ => return Err(usage_err("--lat and --lon go together")),
+    }
+    let mut conv = Conv::new()?;
+    let out = e.core.tool(&mut conv, name, a.get("args").unwrap_or("{}"), &now)?;
+    if a.flag("json") {
+        print(&out);
+    } else {
+        let v: Value = serde_json::from_str(&out).map_err(|e| ApiError::new("internal", e.to_string()))?;
+        print(v["content"].as_str().unwrap_or(""));
+        print(&format!("ids {}", v["ids"]));
+    }
+    Ok(())
+}
+
+/// The function schemas of the available tools (`--config` is optional: they do not depend on the sources).
+pub fn tool_schemas(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "open-timeout"], &[], false)?;
+    let cfg = match a.get("config") {
+        Some(p) => load_config(p)?,
+        None => r#"{"sources":[]}"#.to_string(),
+    };
+    let mut e = open_engine_with(&a, &cfg)?;
+    print(&e.core.tool_schemas()?);
+    Ok(())
+}
+
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "listen", "open-timeout"], &["allow-non-loopback"], true)?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
@@ -243,6 +305,8 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "search" => search(rest),
         "read" => read(rest),
         "status" => status(rest),
+        "tool" => tool(rest),
+        "tool-schemas" => tool_schemas(rest),
         "serve" => serve(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");

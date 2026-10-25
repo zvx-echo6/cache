@@ -10,6 +10,10 @@
 //!   POST   /conversations/{id}/format    {results}               -> cs_format
 //!   GET    /conversations/{id}/ids                               -> cs_conversation_ids
 //!   DELETE /conversations/{id}                                   -> cs_conversation_free
+//!   GET    /tools                                                -> cs_tool_schemas
+//!   POST   /location        {lat, lon, accuracy_m, fixed_at}     -> cs_set_location ({"ok":true}; accuracy_m optional)
+//!   DELETE /location                                             -> cs_clear_location ({"ok":true})
+//!   POST   /conversations/{id}/tool  {name, args, now}           -> cs_tool ({"content","ids"})
 //! Errors are `{"code","message"}` (the core's error) with a matching HTTP status.
 
 use crate::engine::{ApiError, Conv, Engine};
@@ -117,6 +121,26 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.format(&v["results"].to_string())
         }
         (Method::Get, ["conversations", id, "ids"]) => st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.ids(),
+        (Method::Get, ["tools"]) => st.engine.core.tool_schemas(),
+        (Method::Post, ["location"]) => {
+            let v = body_json(body)?;
+            let num = |key: &str| v[key].as_f64().ok_or_else(|| ApiError::new("bad_json", format!("\"{key}\" (number) is required")));
+            let accuracy = if v["accuracy_m"].is_null() { -1.0 } else { num("accuracy_m")? };
+            st.engine.core.set_location(num("lat")?, num("lon")?, accuracy, need_str(&v, "fixed_at")?)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Delete, ["location"]) => {
+            st.engine.core.clear_location()?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["conversations", id, "tool"]) => {
+            let v = body_json(body)?;
+            let name = need_str(&v, "name")?;
+            let args = if v["args"].is_null() { json!({}) } else { v["args"].clone() };
+            let now = v["now"].as_str().unwrap_or("");
+            let conv = st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?;
+            st.engine.core.tool(conv, name, &args.to_string(), now)
+        }
         (Method::Delete, ["conversations", id]) => {
             st.convs.remove(*id).ok_or_else(|| conv_not_found(id))?;
             Ok(json!({"deleted": id}).to_string())

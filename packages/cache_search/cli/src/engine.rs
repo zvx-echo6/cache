@@ -10,6 +10,7 @@ use cache_search::job::Job;
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// An error as the core reports it: `{"code","message"}`.
@@ -113,6 +114,43 @@ impl Core {
         self.result(p)
     }
 
+    /// `cs_set_location`; `accuracy_m < 0` means unknown.
+    pub fn set_location(&mut self, lat: f64, lon: f64, accuracy_m: f64, fixed_at: &str) -> Result<(), ApiError> {
+        let at = cstring(fixed_at, "fixed_at")?;
+        if unsafe { cs_set_location(self.h, lat, lon, accuracy_m, at.as_ptr()) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    pub fn clear_location(&mut self) -> Result<(), ApiError> {
+        if unsafe { cs_clear_location(self.h) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    pub fn tool_schemas(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_tool_schemas(self.h) };
+        self.result(p)
+    }
+
+    /// `cs_tool`: `{"content","ids"}`.
+    pub fn tool(&mut self, conv: &mut Conv, name: &str, args_json: &str, now: &str) -> Result<String, ApiError> {
+        let (n, a, t) = (cstring(name, "name")?, cstring(args_json, "args")?, cstring(now, "now")?);
+        let p = unsafe { cs_tool(self.h, conv.c, n.as_ptr(), a.as_ptr(), t.as_ptr()) };
+        self.result(p)
+    }
+
+    /// Make built-in `search` embed its query with `embedder` (the core never links an embedder itself).
+    pub fn set_query_embedder(&mut self, embedder: Arc<Mutex<Embedder>>) {
+        // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.
+        unsafe { &mut *self.h }.set_query_embedder(Box::new(move |q: &str| {
+            let e = embedder.lock().ok()?;
+            e.embed(q).ok().map(|v| (e.model_id.clone(), v))
+        }));
+    }
+
     /// Poll `cs_status` until no source is `"opening"` (libraries open on background threads inside the core).
     pub fn wait_ready(&mut self, timeout: Duration) -> Result<(), ApiError> {
         let t0 = Instant::now();
@@ -195,7 +233,7 @@ impl Drop for JobRun {
 /// The core plus the optional query embedder: what `cs search` and `cs serve` share.
 pub struct Engine {
     pub core: Core,
-    pub embedder: Option<Embedder>,
+    pub embedder: Option<Arc<Mutex<Embedder>>>,
 }
 
 impl Engine {
@@ -207,6 +245,7 @@ impl Engine {
         };
         if let Some(emb) = &self.embedder {
             if map.get("query_vector").map(Value::is_null).unwrap_or(true) {
+                let emb = emb.lock().map_err(|_| ApiError::new("internal", "the embedder lock is poisoned"))?;
                 let v = emb.embed(query)?;
                 map.insert("query_vector".into(), json!({"model": emb.model_id, "vector": v}));
             }

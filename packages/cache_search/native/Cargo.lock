@@ -482,6 +482,7 @@ name = "cache_search_cli"
 version = "0.1.0"
 dependencies = [
  "cache_search",
+ "chrono",
  "edge",
  "libloading",
  "serde_json",

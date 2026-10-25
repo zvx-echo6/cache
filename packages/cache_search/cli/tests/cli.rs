@@ -4,7 +4,8 @@
 
 use cache_search_cli::embed::{Embedder, DECIDED_MODEL_FILE, DECIDED_MODEL_SHA256};
 use edge::{
-    Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
+    CreateIndex, Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, FieldIndexOperations, PayloadFieldSchema, PayloadSchemaParams,
+    PointInsertOperations, PointOperations, PointStruct, TextIndexParams, TextScoringParams, UpdateOperation,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -425,4 +426,143 @@ fn library_manifest_and_update_library_commands() {
     let st = j(&cs_ok(&["status", "--config", &config]));
     assert_eq!(st["sources"][0]["docs"], 20, "{st}");
     assert_eq!(st["sources"][0]["updating"], false);
+}
+
+// ---- tools -------------------------------------------------------------------------------------------------------
+
+const NOW: &str = "2026-10-25T14:20:05-06:00";
+
+/// A small library with a BM25-scored text index of its own (keyword search needs no index job); returns the
+/// path of its sources.json.
+fn tool_fixture(tmp: &TempDir) -> String {
+    let shard = tmp.path("shard");
+    {
+        cache_search::library::ensure_init();
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(4, Distance::Cosine).build()).build();
+        let sh = EdgeShard::new(Path::new(&shard), cfg).unwrap();
+        let schema = PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
+            scoring: Some(TextScoringParams::default()),
+            ..TextIndexParams::default()
+        }));
+        sh.update(UpdateOperation::FieldIndexOperation(FieldIndexOperations::CreateIndex(CreateIndex {
+            field_name: "content".parse().unwrap(),
+            field_schema: Some(schema),
+        })))
+        .unwrap();
+        let pts: Vec<_> = (1..=6u64)
+            .map(|i| {
+                let content = if i == 3 { "The sesquipedalian word appears once".to_string() } else { format!("Alpha text number {i} here") };
+                PointStruct::new(i, vec![1.0, i as f32, 0.5, 0.25], json!({"title": format!("Doc {i}"), "content": content})).0
+            })
+            .collect();
+        sh.update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts)))).unwrap();
+        sh.flush().unwrap();
+        drop(sh);
+        cache_search::library::write_segments_manifest(Path::new(&shard)).unwrap();
+    }
+    let settings = json!({"format": 1, "library_id": "fx", "title": "Fixture", "fields": {"title": "title", "text": "content"},
+        "embedding": {"vector": "", "model": "m", "sha256": "x", "dims": 4}, "keyword_index": "auto"});
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, json!({"sources": [{"kind": "library", "path": shard, "settings": settings}]}).to_string()).unwrap();
+    config
+}
+
+#[test]
+fn tool_command_search_schemas_and_errors() {
+    let tmp = TempDir::new("tool");
+    let config = tool_fixture(&tmp);
+
+    // the tool message, then the ids line
+    let out = cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#, "--now", NOW]);
+    assert_eq!(out.lines().count(), 2, "{out}");
+    assert!(out.starts_with("[1] Doc 3 \u{2014} "), "{out}");
+    assert_eq!(out.lines().nth(1).unwrap(), r#"ids [{"n":1,"address":"lib:fx/3","title":"Doc 3"}]"#);
+    // --json is the core's {"content","ids"}
+    let full = j(&cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#, "--now", NOW, "--json"]));
+    assert_eq!(full["content"], out.lines().next().unwrap());
+    assert_eq!(full["ids"][0]["address"], "lib:fx/3");
+    // no --now: the current local time is used
+    assert!(cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#]).starts_with("[1] Doc 3"));
+    // nothing found
+    assert!(cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"qqqqzzzz"}"#]).starts_with("No results found.\nids []"));
+
+    // a tool's failure is its content, with exit status 0
+    let bad = cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":""}"#, "--json"]);
+    assert_eq!(
+        j(&bad)["content"],
+        r#"{"ok":false,"error":{"type":"bad_arguments","detail":"query: must be at least 1 characters"}}"#
+    );
+    let none = j(&cs_ok(&["tool", "navigate", "--config", &config, "--json"]));
+    assert_eq!(none["content"], r#"{"ok":false,"error":{"type":"bad_arguments","detail":"no tool named navigate"}}"#);
+    // a fresh conversation has no result to read
+    let rd = j(&cs_ok(&["tool", "read", "--config", &config, "--args", r#"{"n":1}"#, "--json"]));
+    assert!(rd["content"].as_str().unwrap().contains("not_found"));
+    // --lat/--lon are accepted; one alone, or malformed args, are errors
+    cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"alpha"}"#, "--lat", "42.5", "--lon", "-113.7", "--accuracy", "10"]);
+    assert!(!cs(&["tool", "search", "--config", &config, "--lat", "42.5"]).ok);
+    let o = cs(&["tool", "search", "--config", &config, "--args", "{"]);
+    assert!(!o.ok);
+    assert_eq!(j(o.stderr.trim())["code"], "bad_json");
+    let o = cs(&["tool", "--config", &config]);
+    assert!(!o.ok && j(o.stderr.trim())["code"] == "bad_json", "{}", o.stderr);
+
+    // tool-schemas: with and without a config
+    for args in [vec!["tool-schemas", "--config", config.as_str()], vec!["tool-schemas"]] {
+        let s = j(&cs_ok(&args));
+        let names: Vec<&str> = s.as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["search", "read"]);
+    }
+}
+
+#[test]
+fn serve_tool_endpoints() {
+    let tmp = TempDir::new("servetool");
+    let config = tool_fixture(&tmp);
+    let s = Serve::start(&["--config", &config]);
+
+    // GET /tools is cs tool-schemas
+    let (code, body) = s.req("GET", "/tools", None);
+    assert_eq!(code, 200);
+    assert_eq!(body, cs_ok(&["tool-schemas"]));
+
+    // a conversation: search numbers [1], read opens it
+    let (_, b) = s.req("POST", "/conversations", None);
+    let id = j(&b)["id"].as_str().unwrap().to_string();
+    let path = format!("/conversations/{id}/tool");
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "search", "args": {"query": "sesquipedalian"}, "now": NOW})));
+    assert_eq!(code, 200, "{body}");
+    let v = j(&body);
+    assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids"]);
+    assert!(v["content"].as_str().unwrap().starts_with("[1] Doc 3 \u{2014} "), "{body}");
+    assert_eq!(v["ids"][0]["address"], "lib:fx/3");
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "read", "args": {"n": 1}, "now": NOW})));
+    assert_eq!((code, j(&body)["content"].as_str().unwrap()), (200, "[1] Doc 3\nThe sesquipedalian word appears once"));
+    // the same call through the CLI gives the same bytes (fresh conversation, same search)
+    let (_, body) = s.req("POST", "/conversations", None);
+    let id2 = j(&body)["id"].as_str().unwrap().to_string();
+    let (_, body) = s.req("POST", &format!("/conversations/{id2}/tool"), Some(&json!({"name": "search", "args": {"query": "sesquipedalian"}, "now": NOW})));
+    assert_eq!(body, cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#, "--now", NOW, "--json"]));
+
+    // a tool's failure is a 200 with the error as content; a missing now, or an unknown conversation, are errors
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "nope", "now": NOW})));
+    assert_eq!(code, 200);
+    assert!(j(&body)["content"].as_str().unwrap().contains("no tool named nope"));
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "search", "args": {"query": "x"}})));
+    assert_eq!((code, j(&body)["code"].as_str().unwrap().to_string()), (400, "bad_json".to_string()), "{body}");
+    let (code, _) = s.req("POST", &path, Some(&json!({"args": {}, "now": NOW})));
+    assert_eq!(code, 400);
+    let (code, _) = s.req("POST", "/conversations/zzz/tool", Some(&json!({"name": "search", "args": {"query": "x"}, "now": NOW})));
+    assert_eq!(code, 404);
+
+    // location: set, clear, and a value out of range
+    let (code, body) = s.req("POST", "/location", Some(&json!({"lat": 42.5, "lon": -113.7, "accuracy_m": 12.0, "fixed_at": NOW})));
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+    let (code, _) = s.req("POST", "/location", Some(&json!({"lat": 42.5, "lon": -113.7, "fixed_at": NOW})));
+    assert_eq!(code, 200, "accuracy_m is optional");
+    let (code, body) = s.req("POST", "/location", Some(&json!({"lat": 95.0, "lon": 0.0, "fixed_at": NOW})));
+    assert_eq!((code, j(&body)["code"].as_str().unwrap().to_string()), (400, "bad_json".to_string()), "{body}");
+    let (code, _) = s.req("POST", "/location", Some(&json!({"lat": 1.0, "fixed_at": NOW})));
+    assert_eq!(code, 400);
+    let (code, body) = s.req("DELETE", "/location", None);
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
 }
