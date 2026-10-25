@@ -142,27 +142,28 @@ def run_case(name, seed, scenarios, rows=64, cols=96):
             "trails": trails.reshape(-1).tolist(), "barriers": bar.reshape(-1).tolist(), "wilderness": wild.reshape(-1).tolist(),
             "parking": park, "trailheads": ths, "scenarios": out_sc}
 
-S = lambda **k: k
-cases = [
- run_case("A", 1, [
-   S(start=(50, 10), end=(30, 90), boundary="pragmatic", start_modes=["foot"], end_modes=["foot", "2w", "4w", "vehicle"]),
-   S(start=(50, 10), end=(30, 90), boundary="strict", start_modes=["foot"], end_modes=["foot", "2w", "4w", "vehicle"]),
-   S(start=(50, 10), end=(30, 90), boundary="emergency", start_modes=["foot", "2w"], end_modes=["foot", "2w", "4w", "vehicle"]),
-   S(start=(12, 8), end=(55, 80), boundary="pragmatic", start_modes=["foot"], end_modes=["foot"]),
-   S(start=(30, 22), end=(30, 92), boundary="pragmatic", start_modes=["foot", "2w", "4w", "vehicle"], end_modes=["foot", "2w", "4w", "vehicle"]),
-   S(start=(12, 8), end=(44, 61), boundary="pragmatic", start_modes=["foot", "2w"], end_modes=["foot", "2w", "4w"], affinity={"foot": 3.0, "2w": 0.5, "4w": 2.0}),
- ]),
- run_case("B", 7, [
-   S(start=(58, 5), end=(8, 90), boundary="pragmatic", start_modes=["foot"], end_modes=["foot", "4w", "2w"]),
-   S(start=(30, 25), end=(46, 60), boundary="strict", start_modes=["foot", "2w", "4w", "vehicle"], end_modes=["foot", "2w", "4w"]),
-   S(start=(3, 3), end=(60, 90), boundary="pragmatic", start_modes=["foot"], end_modes=["foot", "2w", "4w", "vehicle"]),
-   S(start=(14, 40), end=(36, 40), boundary="strict", start_modes=["foot"], end_modes=["foot"]),
-   S(start=(14, 40), end=(36, 40), boundary="pragmatic", start_modes=["foot"], end_modes=["foot"]),
-   S(start=(14, 40), end=(36, 40), boundary="emergency", start_modes=["foot"], end_modes=["foot"]),
- ], rows=64, cols=96),
-]
-import gzip
-json.dump(cases, gzip.open('fix/oracle_cases.json.gz', 'wt', compresslevel=9))
-for c in cases:
-    for s in c["scenarios"]:
-        r = s["res"]; print(c["name"], s["sc"]["start"], s["sc"]["end"], s["sc"]["boundary"], r["status"], r["selected_mode_set"], r["total_effort_minutes"], len(r["combined"]), len(s["cap"].get("trans", [])), r["message"])
+if __name__ == '__main__':
+    S = lambda **k: k
+    cases = [
+     run_case("A", 1, [
+       S(start=(50, 10), end=(30, 90), boundary="pragmatic", start_modes=["foot"], end_modes=["foot", "2w", "4w", "vehicle"]),
+       S(start=(50, 10), end=(30, 90), boundary="strict", start_modes=["foot"], end_modes=["foot", "2w", "4w", "vehicle"]),
+       S(start=(50, 10), end=(30, 90), boundary="emergency", start_modes=["foot", "2w"], end_modes=["foot", "2w", "4w", "vehicle"]),
+       S(start=(12, 8), end=(55, 80), boundary="pragmatic", start_modes=["foot"], end_modes=["foot"]),
+       S(start=(30, 22), end=(30, 92), boundary="pragmatic", start_modes=["foot", "2w", "4w", "vehicle"], end_modes=["foot", "2w", "4w", "vehicle"]),
+       S(start=(12, 8), end=(44, 61), boundary="pragmatic", start_modes=["foot", "2w"], end_modes=["foot", "2w", "4w"], affinity={"foot": 3.0, "2w": 0.5, "4w": 2.0}),
+     ]),
+     run_case("B", 7, [
+       S(start=(58, 5), end=(8, 90), boundary="pragmatic", start_modes=["foot"], end_modes=["foot", "4w", "2w"]),
+       S(start=(30, 25), end=(46, 60), boundary="strict", start_modes=["foot", "2w", "4w", "vehicle"], end_modes=["foot", "2w", "4w"]),
+       S(start=(3, 3), end=(60, 90), boundary="pragmatic", start_modes=["foot"], end_modes=["foot", "2w", "4w", "vehicle"]),
+       S(start=(14, 40), end=(36, 40), boundary="strict", start_modes=["foot"], end_modes=["foot"]),
+       S(start=(14, 40), end=(36, 40), boundary="pragmatic", start_modes=["foot"], end_modes=["foot"]),
+       S(start=(14, 40), end=(36, 40), boundary="emergency", start_modes=["foot"], end_modes=["foot"]),
+     ], rows=64, cols=96),
+    ]
+    import gzip
+    json.dump(cases, gzip.open('fix/oracle_cases.json.gz', 'wt', compresslevel=9))
+    for c in cases:
+        for s in c["scenarios"]:
+            r = s["res"]; print(c["name"], s["sc"]["start"], s["sc"]["end"], s["sc"]["boundary"], r["status"], r["selected_mode_set"], r["total_effort_minutes"], len(r["combined"]), len(s["cap"].get("trans", [])), r["message"])
