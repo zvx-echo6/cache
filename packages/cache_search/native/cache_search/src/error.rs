@@ -12,6 +12,7 @@ pub enum ErrorCode {
     Unsupported,
     Io,
     Cancelled,
+    NoSpace,
     Internal,
 }
 
@@ -27,6 +28,7 @@ impl ErrorCode {
             ErrorCode::Unsupported => "unsupported",
             ErrorCode::Io => "io",
             ErrorCode::Cancelled => "cancelled",
+            ErrorCode::NoSpace => "no_space",
             ErrorCode::Internal => "internal",
         }
     }
@@ -37,13 +39,16 @@ impl ErrorCode {
 pub struct Error {
     pub code: ErrorCode,
     pub message: String,
+    /// `(needed, available)` in bytes, set only for `no_space`; it becomes the numeric `needed` and `available`
+    /// fields of the error JSON.
+    pub space: Option<(u64, u64)>,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Error { code, message: message.into() }
+        Error { code, message: message.into(), space: None }
     }
     pub fn bad_json(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::BadJson, m)
@@ -60,10 +65,25 @@ impl Error {
     pub fn internal(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, m)
     }
+    /// Not enough free space: `needed` and `available` are bytes, and are also numeric fields of the error JSON.
+    pub fn no_space(message: impl Into<String>, needed: u64, available: u64) -> Self {
+        Error { code: ErrorCode::NoSpace, message: message.into(), space: Some((needed, available)) }
+    }
 
-    /// `{"code","message"}`, the shape returned by `cs_last_error`.
+    /// `{"code","message"}`, the shape returned by `cs_last_error` and in job errors; `no_space` adds the numbers
+    /// `"needed"` and `"available"`.
+    pub fn to_value(&self) -> serde_json::Value {
+        let mut v = json!({"code": self.code.as_str(), "message": self.message});
+        if let Some((needed, available)) = self.space {
+            v["needed"] = json!(needed);
+            v["available"] = json!(available);
+        }
+        v
+    }
+
+    /// [`Error::to_value`] as text.
     pub fn to_json(&self) -> String {
-        json!({"code": self.code.as_str(), "message": self.message}).to_string()
+        self.to_value().to_string()
     }
 }
 
@@ -104,6 +124,7 @@ mod tests {
             (ErrorCode::Unsupported, "unsupported"),
             (ErrorCode::Io, "io"),
             (ErrorCode::Cancelled, "cancelled"),
+            (ErrorCode::NoSpace, "no_space"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {
@@ -118,6 +139,12 @@ mod tests {
         assert_eq!(v["code"], "not_found");
         assert_eq!(v["message"], "no such \"entry\"\n");
         assert_eq!(v.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn no_space_json_carries_the_numbers() {
+        let v = Error::no_space("short", 10, 4).to_value();
+        assert_eq!(v, json!({"code":"no_space","message":"short","needed":10,"available":4}));
     }
 
     #[test]

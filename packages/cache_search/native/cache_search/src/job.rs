@@ -92,6 +92,9 @@ struct UpdateLibraryParams {
     /// cancellably) after the staging copy is updated and before the swap.
     #[serde(default)]
     hold_swap_file: Option<String>,
+    /// Not in the header: a test hook that replaces the free space statvfs reports, in bytes.
+    #[serde(default)]
+    fake_available_bytes: Option<u64>,
     /// Not in the header: a test hook that makes the job fail at a named point: "after_copy", "before_swap" or
     /// "after_swap".
     #[serde(default)]
@@ -197,6 +200,7 @@ impl Job {
         let hooks = libupdate::TestHooks {
             hold_ms: p.hold_ms,
             hold_swap_file: p.hold_swap_file,
+            fake_available_bytes: p.fake_available_bytes,
             fail_at: p.fail_at,
         };
         let req = libupdate::prepare(&p.library_path, &p.snapshot_path, &p.snapshot_manifest_path, hooks)?;
@@ -279,7 +283,7 @@ impl Job {
     pub fn progress_json(&self) -> String {
         let (st, err) = self.shared.state.lock().map(|g| g.clone()).unwrap_or((State::Failed, Some(Error::internal("poisoned"))));
         let err_v = match &err {
-            Some(e) => json!({"code": e.code.as_str(), "message": e.message}),
+            Some(e) => e.to_value(),
             None => serde_json::Value::Null,
         };
         json!({

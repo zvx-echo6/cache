@@ -222,6 +222,8 @@ pub struct TestHooks {
     /// While this file exists, wait (at most two minutes, not cancellable) after the staging copy is updated and
     /// before the swap.
     pub hold_swap_file: Option<String>,
+    /// Use this instead of what statvfs says is available.
+    pub fake_available_bytes: Option<u64>,
     /// Fail at a named point: "after_copy", "before_swap" or "after_swap".
     pub fail_at: Option<String>,
 }
@@ -318,6 +320,75 @@ pub fn stage_path(library: &Path) -> Result<PathBuf> {
 /// The folder the old library is parked in during the swap: `<library>.cs-old`.
 pub fn old_path(library: &Path) -> Result<PathBuf> {
     sibling(library, OLD_SUFFIX)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Free space
+
+/// The smallest safety margin of the free-space check: 256 MiB.
+pub const MARGIN_MIN_BYTES: u64 = 256 * 1024 * 1024;
+/// The margin as a share of the library size: 5 percent. The margin is the larger of this and
+/// [`MARGIN_MIN_BYTES`]. It covers the filesystem's own overhead (directories, partly used blocks), the files the
+/// load adds, and other writers on the same disk.
+pub const MARGIN_PERCENT: u64 = 5;
+
+/// `max(5% of the library size, 256 MiB)`.
+pub fn margin_for(library_bytes: u64) -> u64 {
+    (library_bytes / 100 * MARGIN_PERCENT).max(MARGIN_MIN_BYTES)
+}
+
+/// The sum of the file sizes under `dir` (symbolic links are not followed; a link counts by its own size).
+pub fn tree_size(dir: &Path) -> Result<u64> {
+    let mut total = 0u64;
+    let rd = std::fs::read_dir(dir).map_err(|e| op(&format!("reading {}", dir.display()), e))?;
+    for ent in rd {
+        let ent = ent.map_err(|e| op(&format!("reading {}", dir.display()), e))?;
+        let md = ent.metadata().map_err(|e| op(&format!("reading {}", ent.path().display()), e))?;
+        if md.is_dir() {
+            total += tree_size(&ent.path())?;
+        } else {
+            total += md.len();
+        }
+    }
+    Ok(total)
+}
+
+/// Bytes available to an unprivileged writer on the file system that holds `path` (`statvfs`: `f_bavail` blocks
+/// of `f_frsize` bytes).
+pub fn available_bytes(path: &Path) -> Result<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::bad_json("path contains a NUL byte"))?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a valid NUL-terminated path and `st` a valid, writable statvfs.
+    let rc = unsafe { libc::statvfs(c.as_ptr(), &mut st) };
+    if rc != 0 {
+        return Err(op(&format!("reading the free space of {}", path.display()), std::io::Error::last_os_error()));
+    }
+    Ok((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+}
+
+/// The free-space check of an update: needed = library size + partial snapshot size + margin must fit in what
+/// is available on the library's file system. Creates and changes nothing. Fails with `no_space`.
+fn check_space(req: &UpdateRequest) -> Result<()> {
+    let lib_bytes = tree_size(&req.library)?;
+    let snap_bytes = std::fs::metadata(&req.snapshot).map_err(|e| op(&format!("reading {}", req.snapshot.display()), e))?.len();
+    let margin = margin_for(lib_bytes);
+    let needed = lib_bytes.saturating_add(snap_bytes).saturating_add(margin);
+    let available = match req.hooks.fake_available_bytes {
+        Some(n) => n,
+        None => available_bytes(&req.library)?,
+    };
+    if needed > available {
+        return Err(Error::no_space(
+            format!(
+                "not enough free space to update {}: {needed} bytes needed (library {lib_bytes} + snapshot {snap_bytes} + margin {margin}), {available} available",
+                req.library.display()
+            ),
+            needed,
+            available,
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -450,6 +521,8 @@ pub fn recover_if_leftovers(library: &Path) -> Result<()> {
 ///
 /// The library is never written to by the merge. The update is applied to a REAL copy of it and swapped in:
 ///
+/// 0. space check: library size + snapshot size + margin must fit on the library's file system, else `no_space`
+///    (nothing has been created or changed);
 /// 1. close: wait for background opens, take the shard out of every open handle's cell;
 /// 2. unpack the snapshot next to the library and check it is a partial snapshot;
 /// 3. copy the library to `<library>.cs-stage` (same parent, so the swap is a rename), apply the snapshot to the
@@ -478,6 +551,8 @@ pub fn apply_update(
 ) -> Result<Outcome> {
     ensure_init();
     progress(0, STEPS);
+    // 0: before anything is closed or created
+    check_space(req)?;
     // 1
     if !entry.close_all(cancelled)? || cancelled() {
         return Ok(Outcome::Cancelled);

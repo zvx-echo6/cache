@@ -12,6 +12,8 @@ zim = "0.5.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+# statvfs for the free-space check of update_library (already in the lockfile through other crates).
+libc = "0.2"
 tantivy = "0.27"
 html-escape = "0.3"
 # Same xz2 the zim crate uses; enabling "static" (feature unification) builds liblzma into the library instead of linking liblzma.so.5.
