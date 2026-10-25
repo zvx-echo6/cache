@@ -458,6 +458,10 @@ mod tests {
             assert!(cs_zim_main_page(ptr::null_mut(), ptr::null()).is_null());
             let (mut m, mut n): (*mut c_char, i64) = (ptr::null_mut(), 0);
             assert!(cs_zim_get(ptr::null_mut(), ptr::null(), &mut m, &mut n).is_null());
+            assert_eq!(cs_set_location(ptr::null_mut(), 1.0, 2.0, 3.0, ptr::null()), -1);
+            assert_eq!(cs_clear_location(ptr::null_mut()), -1);
+            assert!(cs_tool_schemas(ptr::null_mut()).is_null());
+            assert!(cs_tool(ptr::null_mut(), ptr::null_mut(), ptr::null(), ptr::null(), ptr::null()).is_null());
             cs_close(ptr::null_mut());
             cs_free_string(ptr::null_mut());
             cs_free_bytes(ptr::null_mut(), 0);
