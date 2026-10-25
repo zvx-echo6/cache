@@ -142,13 +142,21 @@ fn zims_through_the_c_abi() {
     assert_eq!(unsafe { cs_set_sources(h, cfg2.as_ptr()) }, 0);
     assert!(get(h, &format!("zim:{WIKI}/Water_purification")).is_none());
     assert_eq!(last_code(h), "not_found");
-    // failed set_sources leaves the list unchanged
-    let cfg3 = CString::new(r#"{"sources":[{"kind":"zim","path":"/nonexistent.zim"}]}"#).unwrap();
-    assert_eq!(unsafe { cs_set_sources(h, cfg3.as_ptr()) }, -1);
-    assert_eq!(last_code(h), "not_found");
+    // malformed JSON fails the whole call and leaves the list unchanged
+    let bad = CString::new("{").unwrap();
+    assert_eq!(unsafe { cs_set_sources(h, bad.as_ptr()) }, -1);
+    assert_eq!(last_code(h), "bad_json");
     let st: Value = serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap();
     assert_eq!(st["sources"].as_array().unwrap().len(), 1);
-
+    // a missing ZIM does not: the rest still opens, the failed one reports its error
+    let cfg3 = CString::new(serde_json::json!({"sources":[
+        {"kind":"zim","path":"/nonexistent.zim"},{"kind":"zim","path":ready}]}).to_string()).unwrap();
+    assert_eq!(unsafe { cs_set_sources(h, cfg3.as_ptr()) }, 0);
+    let st: Value = serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap();
+    assert_eq!(st["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(st["sources"][0]["error"]["code"], "not_found");
+    assert_eq!(st["sources"][1]["id"], READY);
+    
     // repeated get/free loop: no growth in resident memory
     let before = rss_kb();
     for _ in 0..200 {
@@ -163,11 +171,17 @@ fn zims_through_the_c_abi() {
 }
 
 #[test]
-fn missing_zim_fails_open_with_not_found() {
+fn missing_zim_does_not_fail_open() {
     let cfg = CString::new(r#"{"sources":[{"kind":"zim","path":"/nonexistent/x.zim"}]}"#).unwrap();
     let h = unsafe { cs_open(cfg.as_ptr()) };
-    assert!(h.is_null());
-    assert_eq!(last_code(ptr::null_mut()), "not_found");
+    assert!(!h.is_null());
+    let st: Value = serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap();
+    assert_eq!(st["sources"][0]["error"]["code"], "not_found");
+    assert_eq!(st["sources"][0]["indexed"], false);
+    unsafe { cs_close(h) };
+    let bad = CString::new("{").unwrap();
+    assert!(unsafe { cs_open(bad.as_ptr()) }.is_null());
+    assert_eq!(last_code(ptr::null_mut()), "bad_json");
 }
 
 fn rss_kb() -> u64 {

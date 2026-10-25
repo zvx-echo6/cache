@@ -53,10 +53,14 @@ cs_handle *cs_open(const char *config_json);
 int32_t cs_set_sources(cs_handle *h, const char *config_json);
 
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
- *              "docs":N,"embedding_model":"..."|null}]} */
+ *              "docs":N,"embedding_model":"..."|null,"error":null|{"code","message"}}]}
+ * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
+ * "indexed":false and its "error"; the other sources work normally. */
 char *cs_status(cs_handle *h);
 
-/* Last error on this handle: {"code","message"}, or NULL if none. */
+/* Last error on this handle: {"code","message"}, or NULL if none.
+ * cs_last_error(NULL) returns the calling thread's last handle-less error (a failed cs_open or cs_job_start,
+ * or a call made with a NULL handle), or NULL if there is none. */
 char *cs_last_error(cs_handle *h);
 
 void cs_close(cs_handle *h);
@@ -82,6 +86,10 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
 /* --- Browse: raw ZIM entries --- */
 
 /* Raw bytes of a ZIM entry (HTML, CSS, image, ...), following redirects.
+ * Path lookup order (paths copied from links in ZIM HTML work as they are): 1. a "#fragment" is stripped;
+ * 2. the percent-decoded path (UTF-8) is looked up; 3. then the path as given; 4. if it contains "?", steps 2-3
+ * are repeated with the "?query" removed. Each lookup tries namespace 'C', then 'A', 'I' and '-' (old ZIMs).
+ * cs_read uses the same lookup. Relative links must be made absolute by the caller. */
  * address: "zim:<uuid>/<path>". *mime_out is set to a string freed with cs_free_string.
  * Returns NULL on error (cs_last_error). Free the buffer with cs_free_bytes. */
 uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t *len_out);

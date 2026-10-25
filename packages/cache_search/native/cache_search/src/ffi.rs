@@ -6,6 +6,7 @@
 
 use crate::error::{Error, Result};
 use crate::handle::Handle;
+use crate::job::Job;
 use std::cell::RefCell;
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -192,6 +193,93 @@ pub unsafe extern "C" fn cs_zim_main_page(h: *mut Handle, zim_id: *const c_char)
         let id = arg_str(zim_id, "zim_id")?;
         out_string(h.zim_main_page(id)?)
     })
+}
+
+/// # Safety
+/// `h` NULL or live; `query` NULL or NUL-terminated; `options_json` NULL (defaults) or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_search(h: *mut Handle, query: *const c_char, options_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let q = arg_str(query, "query")?;
+        let o = if options_json.is_null() { None } else { Some(arg_str(options_json, "options_json")?) };
+        out_string(h.search(q, o)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `address` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_read(h: *mut Handle, address: *const c_char, max_chars: i32) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let a = arg_str(address, "address")?;
+        out_string(h.read(a, max_chars)?)
+    })
+}
+
+/// Start a job. NULL on error (`cs_last_error(NULL)`): `bad_json`, `not_found`/`io` for an unreadable ZIM,
+/// `busy` if another job is building that `index_dir`, `unsupported` for kind `index_pack`.
+///
+/// # Safety
+/// `kind` and `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_job_start(kind: *const c_char, params_json: *const c_char) -> *mut Job {
+    let r = guarded(|| {
+        let k = arg_str(kind, "kind")?;
+        let p = arg_str(params_json, "params_json")?;
+        Job::start(k, p)
+    });
+    match r {
+        Ok(j) => Box::into_raw(Box::new(j)),
+        Err(e) => {
+            set_thread_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// # Safety
+/// `j` NULL or a live job.
+#[no_mangle]
+pub unsafe extern "C" fn cs_job_progress(j: *mut Job) -> *mut c_char {
+    let r = guarded(|| {
+        if j.is_null() {
+            return Err(Error::bad_json("null job"));
+        }
+        out_string((*j).progress_json())
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
+/// # Safety
+/// `j` NULL or a live job.
+#[no_mangle]
+pub unsafe extern "C" fn cs_job_cancel(j: *mut Job) -> i32 {
+    let r = guarded(|| {
+        if j.is_null() {
+            return Err(Error::bad_json("null job"));
+        }
+        (*j).cancel();
+        Ok(0)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        -1
+    })
+}
+
+/// Free a job. A job still running is cancelled and waited for (until its next checkpoint).
+///
+/// # Safety
+/// `j` NULL or a job from `cs_job_start` not used afterwards.
+#[no_mangle]
+pub unsafe extern "C" fn cs_job_free(j: *mut Job) {
+    if j.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(j))));
 }
 
 /// # Safety

@@ -52,8 +52,70 @@ pub fn parse_address(addr: &str) -> Result<ZimAddress> {
     Ok(ZimAddress { id: id.to_ascii_lowercase(), path: path.to_string() })
 }
 
+/// Build `zim:<uuid>/<path>`. `%` and `#` in the path are percent-encoded so that the address resolves back
+/// to exactly this entry (`#` would otherwise start a fragment, `%` an escape).
 pub fn format_address(id: &str, path: &str) -> String {
-    format!("zim:{id}/{path}")
+    let mut s = String::with_capacity(path.len() + 41);
+    s.push_str("zim:");
+    s.push_str(id);
+    s.push('/');
+    for c in path.chars() {
+        match c {
+            '%' => s.push_str("%25"),
+            '#' => s.push_str("%23"),
+            _ => s.push(c),
+        }
+    }
+    s
+}
+
+/// Percent-decode `s` as UTF-8. `None` when nothing was decoded (no valid `%XX` escape) or the result is not
+/// UTF-8. A malformed escape (`%zz`) stays literal; `+` is not a space.
+pub fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    let mut changed = false;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                changed = true;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    if !changed {
+        return None;
+    }
+    String::from_utf8(out).ok()
+}
+
+/// The paths to try for the path part of a `zim:` address, in order (see `cs_zim_get` in the header):
+/// strip a `#fragment`; then the percent-decoded path, then the path as given; then, if it has a `?`, the same
+/// two without the `?query`. The `?` is never stripped first: real entries have `?` in their paths.
+pub fn path_candidates(path: &str) -> Vec<String> {
+    let p = path.split('#').next().unwrap_or("");
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |x: &str| {
+        if let Some(d) = percent_decode(x) {
+            if !d.is_empty() && !out.contains(&d) {
+                out.push(d);
+            }
+        }
+        if !x.is_empty() && !out.iter().any(|o| o == x) {
+            out.push(x.to_string());
+        }
+    };
+    add(p);
+    if let Some(q) = p.find('?') {
+        add(&p[..q]);
+    }
+    out
 }
 
 /// Raw entry content after following redirects.
@@ -62,7 +124,14 @@ pub struct RawEntry {
     pub mime: String,
     /// Path of the entry that actually held the content (after redirects).
     pub path: String,
+    /// Title of that entry (its path when the entry has no title).
+    pub title: String,
 }
+
+/// Namespaces tried for a path, in order: `C` (current scheme), then the old scheme's `A` (articles),
+/// `I` (images) and `-` (layout: CSS, JS).
+const LOOKUP_NAMESPACES: [Namespace; 4] =
+    [Namespace::UserContent, Namespace::Articles, Namespace::ImagesFile, Namespace::Layout];
 
 impl ZimSource {
     pub fn open(path: &Path) -> Result<ZimSource> {
@@ -109,13 +178,24 @@ impl ZimSource {
         Err(Error::internal(format!("redirect chain longer than {MAX_REDIRECT_HOPS} hops")))
     }
 
-    /// Look up `path` in the content namespace ('C') and follow redirects.
-    fn lookup(&self, path: &str) -> Result<DirectoryEntry> {
-        let entry = self
-            .zim
-            .get_by_path(Namespace::UserContent, path)?
-            .ok_or_else(|| Error::not_found(format!("no entry {path:?} in zim {}", self.id)))?;
-        self.follow(entry)
+    /// Find `path` exactly (no decoding) in the namespaces of `LOOKUP_NAMESPACES`, first match wins.
+    fn find_exact(&self, path: &str) -> Result<Option<DirectoryEntry>> {
+        for ns in LOOKUP_NAMESPACES {
+            if let Some(e) = self.zim.get_by_path(ns, path)? {
+                return Ok(Some(e));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Look up the path part of an address (see `path_candidates` for the order) and follow redirects.
+    pub fn lookup(&self, path: &str) -> Result<DirectoryEntry> {
+        for cand in path_candidates(path) {
+            if let Some(e) = self.find_exact(&cand)? {
+                return self.follow(e);
+            }
+        }
+        Err(Error::not_found(format!("no entry {path:?} in zim {}", self.id)))
     }
 
     /// Bytes and mime type of the entry at `path`, following redirects.
@@ -130,7 +210,8 @@ impl ZimSource {
             .entry_content(&entry)?
             .ok_or_else(|| Error::not_found(format!("entry {path:?} has no content")))?;
         let bytes = content.to_vec()?;
-        Ok(RawEntry { bytes, mime, path: entry.url })
+        let title = if entry.title.is_empty() { entry.url.clone() } else { entry.title.clone() };
+        Ok(RawEntry { bytes, mime, path: entry.url, title })
     }
 
     /// Path of the main page (redirect followed), or `not_found` if the ZIM has none.
@@ -203,5 +284,41 @@ mod tests {
     fn open_missing_file_is_not_found() {
         let e = ZimSource::open(Path::new("/nonexistent/none.zim")).err().unwrap();
         assert_eq!(e.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn address_encodes_percent_and_hash() {
+        let s = format_address(U, "a%b#c?d");
+        assert_eq!(s, format!("zim:{U}/a%25b%23c?d"));
+        let p = parse_address(&s).unwrap().path;
+        assert_eq!(path_candidates(&p)[0], "a%b#c?d");
+    }
+
+    #[test]
+    fn percent_decoding() {
+        assert_eq!(percent_decode("caf%C3%A9").as_deref(), Some("café"));
+        assert_eq!(percent_decode("a%23b").as_deref(), Some("a#b"));
+        assert_eq!(percent_decode("plain"), None);
+        assert_eq!(percent_decode("bad%zz"), None);
+        assert_eq!(percent_decode("end%4"), None);
+        assert_eq!(percent_decode("x%41").as_deref(), Some("xA"));
+        assert_eq!(percent_decode("%FF%FE"), None); // not UTF-8
+        assert_eq!(percent_decode("a+b%20c").as_deref(), Some("a+b c"));
+    }
+
+    #[test]
+    fn candidates_order() {
+        // fragment stripped, then decoded, then raw
+        assert_eq!(path_candidates("A/caf%C3%A9#sec"), vec!["A/café", "A/caf%C3%A9"]);
+        // a '#' only ever starts a fragment; an encoded one is part of the path
+        assert_eq!(path_candidates("a%23b"), vec!["a#b", "a%23b"]);
+        assert_eq!(path_candidates("plain"), vec!["plain"]);
+        // '?' kept first, stripped later
+        assert_eq!(path_candidates("a/b?x=1"), vec!["a/b?x=1", "a/b"]);
+        assert_eq!(
+            path_candidates("a%20b?x=%41#f"),
+            vec!["a b?x=A", "a%20b?x=%41", "a b", "a%20b"]
+        );
+        assert!(path_candidates("#only").is_empty());
     }
 }
