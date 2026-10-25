@@ -51,19 +51,33 @@ char *cs_version(void);
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
- * "settings" is the library settings file's JSON (see DESIGN.md); it is optional, and without it (and without
- * a settings file next to the library) the core guesses from payload field names and vector size.
+ * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it
+ * here, the core never looks for the file); it is optional, and without it the core guesses from payload field
+ * names and vector size.
+ * cs_open returns at once. A ZIM is opened before it returns; each library is opened on a background thread
+ * inside the core and is listed by cs_status with "opening":true until it is ready. Search skips a library
+ * that is still opening, as it skips a source that is being built; cs_read for it fails with code "busy". A
+ * library that fails to open is recorded on its source in cs_status like any other source error ("opening"
+ * false, "id":null, "error" set), not as a failure of cs_open. A malformed settings object is a failure of
+ * cs_open ("bad_json"). Closing the handle while a library is still opening is safe.
  * Each source gets a stable id: the ZIM's UUID, or the library's library_id. A source with a missing, stale or
  * building index is reported by cs_status() and skipped by search; it is not an error for cs_open. */
 cs_handle *cs_open(const char *config_json);
 
-/* Replace the source list (a ZIM or library was added or removed). Same JSON as cs_open. 0 on success. */
+/* Replace the source list (a ZIM or library was added or removed). Same JSON as cs_open, and like cs_open it
+ * returns at once: a newly added library opens on a background thread ("opening":true in cs_status until
+ * ready); libraries already open (or opening) at the same path are kept. 0 on success. */
 int32_t cs_set_sources(cs_handle *h, const char *config_json);
 
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
- *              "docs":N,"embedding_model":"..."|null,
- *              "library_id":"..."|null,"keyword_source":"own"|"device"|"none"|null (null for ZIMs),
+ *              "opening":bool,"docs":N,"embedding_model":"..."|null,
+ *              "library_id":"..."|null,"keyword_source":"own"|"device"|"none"|null,
+ *              "settings":{...}|null (libraries: the settings in use, with "guessed":bool),
  *              "error":null|{"code","message"}}]}
+ * "opening" is true for a library whose background open (see cs_open) has not finished: until then it has no
+ * docs, no embedding_model unless settings were given, "indexed" false, and "keyword_source" null; search
+ * skips it. "opening" is false for everything else, and always for ZIMs. "keyword_source" is null for ZIMs and
+ * for a library that is still opening. A library that finished opening is reported as before.
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
  * "indexed":false and its "error"; the other sources work normally. */
 char *cs_status(cs_handle *h);

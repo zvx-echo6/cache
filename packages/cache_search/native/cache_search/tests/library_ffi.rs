@@ -200,14 +200,34 @@ fn open(path: &Path, settings: Option<Value>) -> *mut Handle {
 }
 
 fn open_idx(path: &Path, settings: Option<Value>, index_dir: &str) -> *mut Handle {
+    let h = open_nowait(path, settings, index_dir, 0);
+    wait_ready(h);
+    h
+}
+
+/// cs_open without waiting for the background open. `delay_ms` makes the open thread sleep first (test hook).
+fn open_nowait(path: &Path, settings: Option<Value>, index_dir: &str, delay_ms: u64) -> *mut Handle {
     let mut src = json!({"kind":"library","path":path.to_str().unwrap(),"index_dir":index_dir});
     if let Some(s) = settings {
         src["settings"] = s;
     }
-    let cfg = cstr(&json!({"sources":[src]}).to_string());
+    let cfg = cstr(&json!({"sources":[src],"open_delay_ms":delay_ms}).to_string());
     let h = unsafe { cs_open(cfg.as_ptr()) };
     assert!(!h.is_null(), "cs_open failed: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
     h
+}
+
+/// Poll cs_status until no source is opening.
+fn wait_ready(h: *mut Handle) -> Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let v = status(h);
+        if v["sources"].as_array().unwrap().iter().all(|s| s["opening"] == false) {
+            return v;
+        }
+        assert!(t0.elapsed().as_secs() < 120, "library did not finish opening: {v}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn status(h: *mut Handle) -> Value {
@@ -895,5 +915,109 @@ fn a_library_with_its_own_scored_index_uses_it() {
     // an unscored text index is not used: "auto" falls back to the device index
     let h = open_idx(&plain, Some(own_settings("auto")), "/nonexistent/idx");
     assert_eq!(status(h)["sources"][0]["keyword_source"], "none");
+    unsafe { cs_close(h) };
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Background opening
+
+#[test]
+fn cs_open_returns_at_once_and_the_library_opens_in_the_background() {
+    let f = shared();
+    let t0 = std::time::Instant::now();
+    let h = open_nowait(&f.dir, Some(settings(default_leave_out(), true)), "/nonexistent/idx", 1500);
+    assert!(t0.elapsed().as_millis() < 1000, "cs_open waited for the library: {:?}", t0.elapsed());
+    // listed as opening, with what is known without the shard
+    let v = status(h);
+    let s = &v["sources"][0];
+    assert_eq!(s["opening"], true, "{v}");
+    assert_eq!(s["kind"], "library");
+    assert_eq!(s["id"], "t");
+    assert_eq!(s["title"], "Test Lib");
+    assert_eq!(s["indexed"], false);
+    assert_eq!(s["docs"], 0);
+    assert!(s["error"].is_null());
+    assert!(s["keyword_source"].is_null());
+    assert_eq!(s["settings"]["guessed"], false);
+    // search during opening skips the library without an error: no results, listed in neither source list
+    let r = search(h, &random_vec(500), MODEL, 5, 0);
+    assert_eq!(r["results"], json!([]));
+    assert_eq!(r["vector_sources"], json!([]));
+    assert_eq!(r["keyword_only_sources"], json!([]));
+    let r = ksearch(h, "xylophonic", 5);
+    assert_eq!(r["results"], json!([]));
+    // reading from it is "busy", not "not_found"
+    assert!(read(h, "lib:t/500", 100).is_none());
+    assert_eq!(handle_code(h), "busy");
+    // it becomes ready and searchable
+    let v = wait_ready(h);
+    let s = &v["sources"][0];
+    assert_eq!(s["opening"], false);
+    assert_eq!(s["docs"], TOTAL);
+    assert_eq!(s["settings"]["guessed"], false);
+    assert!(s["error"].is_null());
+    assert_eq!(s["keyword_source"], "none");
+    let r = search(h, &random_vec(500), MODEL, 3, 0);
+    assert_eq!(r["vector_sources"], json!(["t"]));
+    assert_eq!(addrs(&r)[0], "lib:t/500");
+    assert!(read(h, "lib:t/500", 100).is_some());
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn set_sources_also_returns_at_once_and_keeps_an_open_library() {
+    let f = shared();
+    let h = open_nowait(&f.dir, Some(settings(default_leave_out(), true)), "/nonexistent/idx", 0);
+    wait_ready(h);
+    // the same library again plus a second source entry for a missing ZIM: the open library is kept, not reopened
+    let src = json!({"kind":"library","path":f.dir.to_str().unwrap(),"index_dir":"/nonexistent/idx","settings":settings(default_leave_out(), true)});
+    let cfg = cstr(&json!({"sources":[src.clone(), {"kind":"zim","path":"/nonexistent/a.zim"}],"open_delay_ms":3000}).to_string());
+    let t0 = std::time::Instant::now();
+    assert_eq!(unsafe { cs_set_sources(h, cfg.as_ptr()) }, 0);
+    assert!(t0.elapsed().as_millis() < 1000);
+    let v = status(h);
+    assert_eq!(v["sources"][0]["opening"], false, "kept: {v}");
+    assert_eq!(v["sources"][0]["docs"], TOTAL);
+    assert_eq!(v["sources"][1]["opening"], false);
+    // a library at a new path opens in the background; the old list is replaced
+    let tmp = TempDir::new("setsrc");
+    let copy = tmp.0.join("copy");
+    std::fs::create_dir_all(&copy).unwrap();
+    let cfg = cstr(&json!({"sources":[{"kind":"library","path":copy.to_str().unwrap()}],"open_delay_ms":800}).to_string());
+    assert_eq!(unsafe { cs_set_sources(h, cfg.as_ptr()) }, 0);
+    let v = status(h);
+    assert_eq!(v["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(v["sources"][0]["opening"], true, "{v}");
+    assert_eq!(v["sources"][0]["id"], "copy");
+    // an empty folder is not a shard: the failure is recorded on the source
+    let v = wait_ready(h);
+    assert_eq!(v["sources"][0]["opening"], false);
+    assert!(v["sources"][0]["id"].is_null());
+    assert!(!v["sources"][0]["error"].is_null(), "{v}");
+    assert_eq!(v["sources"][0]["indexed"], false);
+    // bad settings still fail the call at once
+    let bad = cstr(&json!({"sources":[{"kind":"library","path":f.dir.to_str().unwrap(),"settings":{"library_id":"x"}}]}).to_string());
+    assert_eq!(unsafe { cs_set_sources(h, bad.as_ptr()) }, -1);
+    assert_eq!(handle_code(h), "bad_json");
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn closing_the_handle_while_a_library_is_still_opening_is_safe() {
+    let f = shared();
+    for _ in 0..3 {
+        let h = open_nowait(&f.dir, None, "/nonexistent/idx", 300);
+        assert_eq!(status(h)["sources"][0]["opening"], true);
+        unsafe { cs_close(h) };
+    }
+    // and with the open already running (no delay): close at once
+    for _ in 0..3 {
+        let h = open_nowait(&f.dir, Some(settings(default_leave_out(), true)), "/nonexistent/idx", 0);
+        unsafe { cs_close(h) };
+    }
+    // let the detached threads finish and drop their shards; the process must still be fine
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let h = open(&f.dir, None);
+    assert_eq!(status(h)["sources"][0]["docs"], TOTAL);
     unsafe { cs_close(h) };
 }

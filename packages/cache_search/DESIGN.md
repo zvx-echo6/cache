@@ -204,6 +204,15 @@ writer heap size (default 200 MB on phones). "Only while charging" is the app's 
 
 A handle is used from one thread at a time. A source whose index a job is building is not searched until the
 job is done. Jobs run on their own threads inside the core and are polled.
+
+Opening a library can take tens of seconds (13-37 s measured on the 28 GB recon library), so `cs_open` and
+`cs_set_sources` never wait for it. Each library opens on a background thread inside the core; `cs_status` lists
+it with `"opening":true` until it is ready (`"opening":false` for every other source, ZIMs included), and search
+skips it meanwhile, the same as a source whose index is being built. An open failure is recorded on that source
+like other source errors (`id` null, `error` set; retried on the next `cs_set_sources`). A library already open
+at the same path is kept by `cs_set_sources`. Closing a handle while a library is still opening is safe: the
+thread finishes on its own and drops the result.
+
 Strings returned by the core are freed with `cs_free_string`.
 
 ## Headless parity

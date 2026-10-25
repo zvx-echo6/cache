@@ -233,6 +233,7 @@ pub(crate) fn top_deterministic(
 
 impl Handle {
     pub fn search(&mut self, query: &str, options_json: Option<&str>) -> Result<String> {
+        self.poll_opening();
         let opts: Opts = match options_json.map(str::trim) {
             None | Some("") | Some("null") => serde_json::from_str("{}")?,
             Some(s) => serde_json::from_str(s)?,
@@ -470,6 +471,7 @@ impl Handle {
 
     /// Plain text of an address, cut to `max_chars` at a paragraph end.
     pub fn read(&mut self, address: &str, max_chars: i32) -> Result<String> {
+        self.poll_opening();
         if address.starts_with("pack:") {
             return Err(Error::unsupported("pack addresses are not supported yet"));
         }
@@ -485,7 +487,13 @@ impl Handle {
                     Source::Library(l) if l.id() == lib_id => Some(l),
                     _ => None,
                 })
-                .ok_or_else(|| Error::not_found(format!("no library source {lib_id:?}")))?;
+                .ok_or_else(|| {
+                    if self.sources.iter().any(|s| matches!(s, Source::Opening(o) if o.id == lib_id)) {
+                        Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is still opening"))
+                    } else {
+                        Error::not_found(format!("no library source {lib_id:?}"))
+                    }
+                })?;
             let (r, truncated) = l.read_point(point_id, max_chars as usize)?;
             return Ok(json!({
                 "address": address, "title": r.title, "text": r.text, "truncated": truncated,

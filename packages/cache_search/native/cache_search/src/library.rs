@@ -16,7 +16,7 @@ use edge::{
 };
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::sync::{Arc, Mutex, Once};
 
 pub type Shard = ReadOnlyEdgeShard<MmapFile>;
 
@@ -389,7 +389,7 @@ pub struct LibSlot {
 }
 
 /// The library's folder name, used as its id and title when settings are guessed.
-fn dir_name(path: &Path) -> String {
+pub(crate) fn dir_name(path: &Path) -> String {
     path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
@@ -486,6 +486,42 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
     let own_scoring = detect_own_scoring(&shard, &settings);
     Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, docs, kw: None, own_scoring })
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Opening in the background
+
+/// Where a background open leaves its result. The handle takes it (once) when it next looks.
+pub struct OpenCell(Mutex<Option<Result<LibSlot>>>);
+
+impl OpenCell {
+    /// The result, if the open has finished; `None` while it is running or after it was taken.
+    pub fn take(&self) -> Option<Result<LibSlot>> {
+        self.0.lock().ok().and_then(|mut g| g.take())
+    }
+}
+
+/// Open a library on its own thread and return at once. The thread owns everything it needs; if the handle is
+/// closed first, the result is simply dropped with the cell. `delay_ms` is a test hook (sleep before opening).
+pub fn open_in_background(path: PathBuf, index_dir: Option<PathBuf>, settings: Option<Value>, delay_ms: u64) -> Arc<OpenCell> {
+    let cell = Arc::new(OpenCell(Mutex::new(None)));
+    let c = cell.clone();
+    let spawned = std::thread::Builder::new().name("cs-open-library".into()).spawn(move || {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open_library(&path, index_dir, settings.as_ref())))
+            .unwrap_or_else(|_| Err(Error::internal("panic while opening the library")));
+        if let Ok(mut g) = c.0.lock() {
+            *g = Some(r);
+        }
+    });
+    if let Err(e) = spawned {
+        if let Ok(mut g) = cell.0.lock() {
+            *g = Some(Err(Error::internal(format!("cannot start thread: {e}"))));
+        }
+    }
+    cell
 }
 
 // ---------------------------------------------------------------------------------------------------------
