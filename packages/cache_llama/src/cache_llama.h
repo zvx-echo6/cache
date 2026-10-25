@@ -23,7 +23,7 @@ CL_API void * cl_load(const char * model_path, int n_ctx, int n_threads, char * 
 // Writes JSON {"description","n_ctx","chat_format","supports_tools"}. Returns the length, or -1 if out is too small.
 CL_API int cl_info(void * h, char * out_json, int len);
 
-// Start a generation. request_json is OpenAI style: {"messages":[...],"tools":[...]} (tools optional).
+// Start a generation. request_json is OpenAI style: {"messages":[...],"tools":[...]} (tools optional) plus an optional top-level "enable_thinking": true|false (default true).
 // Builds the prompt with the model's chat template and decodes it. Returns 0 or -1 (reason in err).
 CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
 

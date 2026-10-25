@@ -55,3 +55,12 @@ if (CACHE_LLAMA_TEST_CLI)
   target_include_directories(cl_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
   target_link_libraries(cl_test PRIVATE cache_llama)
 endif()
+
+if (CACHE_LLAMA_TEST_CLI)
+  # Baseline case runner: C API + the JSON library vendored in llama.cpp only.
+  add_executable(cl_cases "${CMAKE_CURRENT_LIST_DIR}/../test/cl_cases.cpp")
+  target_include_directories(cl_cases PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp/vendor")
+  target_link_libraries(cl_cases PRIVATE cache_llama)
+endif()
