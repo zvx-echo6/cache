@@ -90,6 +90,11 @@ impl ToolError {
     pub const EXPIRED: &'static str = "expired";
     pub const NO_DATA: &'static str = "no_data";
     pub const UNKNOWN_SOURCE: &'static str = "unknown_source";
+    pub const NOT_CONFIGURED: &'static str = "not_configured";
+    pub const FETCH_FAILED: &'static str = "fetch_failed";
+    pub const QUOTA: &'static str = "quota";
+    pub const KEY_MISSING: &'static str = "key_missing";
+    pub const BAD_RESPONSE: &'static str = "bad_response";
 
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
         ToolError { code: code.into(), detail: detail.into(), extra: Map::new() }
@@ -154,6 +159,30 @@ mod tests {
             m.insert(k.into(), Value::Bool(true));
         }
         assert_eq!(serde_json::to_string(&Value::Object(m)).unwrap(), r#"{"z":true,"a":true,"m":true}"#);
+    }
+
+    #[test]
+    fn shared_error_codes_are_stable() {
+        let codes = [
+            ToolError::BAD_ARGUMENTS,
+            ToolError::NO_LOCATION,
+            ToolError::NOT_SET_UP,
+            ToolError::INTERNAL,
+            ToolError::NOT_FOUND,
+            ToolError::EXPIRED,
+            ToolError::NO_DATA,
+            ToolError::UNKNOWN_SOURCE,
+            ToolError::NOT_CONFIGURED,
+            ToolError::FETCH_FAILED,
+            ToolError::QUOTA,
+            ToolError::KEY_MISSING,
+            ToolError::BAD_RESPONSE,
+        ];
+        assert_eq!(
+            codes,
+            ["bad_arguments", "no_location", "not_set_up", "internal", "not_found", "expired", "no_data", "unknown_source",
+             "not_configured", "fetch_failed", "quota", "key_missing", "bad_response"]
+        );
     }
 
     #[test]

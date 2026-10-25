@@ -3,8 +3,10 @@
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
+use crate::tools::QueryEmbedder;
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
 use crate::zimsrc::{self, ZimSource};
+use cache_tool::{Location, NoSavedPlaces, SavedPlaces, Tool};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -160,6 +162,14 @@ pub struct Handle {
     pub candidates_per_list: u32,
     pub min_term_coverage: f32,
     pub last_error: Option<Error>,
+    /// The tools registered by the host (see `tools.rs`); `search` and `read` are built in and not listed here.
+    pub tools: Vec<Box<dyn Tool>>,
+    /// The user's saved places, for tools. None until the host sets them.
+    pub places: Box<dyn SavedPlaces>,
+    /// The phone's last GPS fix (`cs_set_location`), for tools.
+    pub location: Option<Location>,
+    /// Embeds the query for built-in `search`; without one it is keyword-only.
+    pub embedder: Option<QueryEmbedder>,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -168,7 +178,19 @@ fn stem_title(path: &std::path::Path) -> String {
 
 impl Handle {
     pub fn open(config_json: &str) -> Result<Handle> {
-        let mut h = Handle { sources: vec![], snippet_chars: 400, candidates_per_list: 50, min_term_coverage: 0.5, last_error: None };
+        let mut h = Handle {
+            sources: vec![],
+            snippet_chars: 400,
+            candidates_per_list: 50,
+            min_term_coverage: 0.5,
+            last_error: None,
+            tools: Vec::new(),
+            places: Box::new(NoSavedPlaces),
+            location: None,
+            embedder: None,
+        };
+        // Later, here: register the live-data and user-data tools from the config's "live" and "user" sections
+        // (DESIGN.md, "Saved places and live data"). Those crates (cache_live, cache_user) are not dependencies yet.
         h.set_sources(config_json)?;
         Ok(h)
     }

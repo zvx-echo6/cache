@@ -150,6 +150,42 @@ char *cs_conversation_ids(cs_conv *c);
 
 void cs_conversation_free(cs_conv *c);
 
+/* --- tools --- */
+
+/* The tools the model can call. search and read are built in; the host registers the others in Rust
+ * (Handle::register_tool: navigate, nearby, locate, live_data, web_search, ...). See docs/TOOLS.md for the
+ * schemas and results, and DESIGN.md, Tools, for the dispatch. */
+
+/* The phone's GPS fix, for the tools that default to "where I am". accuracy_m < 0 means unknown. fixed_at is the
+ * time of the fix, ISO 8601 with offset, e.g. "2026-10-25T14:20:05-06:00". lat must be in -90..90 and lon in
+ * -180..180. Returns 0; -1 with code "bad_json" for a value out of range or a missing fixed_at.
+ * cs_clear_location removes the fix (the tools then answer no_location). Returns 0. */
+int32_t cs_set_location(cs_handle *h, double lat, double lon, double accuracy_m, const char *fixed_at);
+int32_t cs_clear_location(cs_handle *h);
+
+/* A JSON array of the function schemas ({"type":"function","function":{...}}) of the tools available now, in this
+ * order where present: search, read, navigate, nearby, locate, live_data, web_search (any other registered tool
+ * after them). A tool that is registered but has nothing installed to work with (its schema is None) is left out. */
+char *cs_tool_schemas(cs_handle *h);
+
+/* Run one tool call. name is the tool's name; args_json the call's arguments (a JSON object); now the local
+ * date and time of the call, ISO 8601 with offset (required, not empty).
+ * Returns {"content":"<exactly the tool message the model sees>","ids":[{"n","address","title"}]}.
+ *   - content of search and read is their plain text; of every other tool the result JSON, compact.
+ *   - The call's sources are numbered in c like cs_format does: a source already numbered keeps its number, and
+ *     "ids" holds only the numbers this call gave, in order. The tool never numbers anything itself.
+ *   - A failure of the tool is not an error of this function: content is the error JSON
+ *     {"ok":false,"error":{"type","detail",...}}, with type one of bad_arguments (also an unknown tool name or
+ *     arguments that break the tool's schema: the detail names the field), no_location, not_set_up (the tool is
+ *     registered but its data is not installed), not_found (read of a number not in c), internal (the tool
+ *     failed), expired, no_data, unknown_source, not_configured, fetch_failed, quota, key_missing, bad_response.
+ *   - NULL (cs_last_error) only for a NULL or invalid handle or conv, an args_json that is not JSON, or an empty
+ *     now.
+ * The arguments are checked against the tool's schema before it runs: type (string, integer, number, boolean,
+ * object), enum, minLength, maxLength, minimum, maximum, required and additionalProperties:false. Defaults are not
+ * filled in. */
+char *cs_tool(cs_handle *h, cs_conv *c, const char *name, const char *args_json, const char *now);
+
 /* --- long jobs --- */
 
 /* kind "index_zim":  {"zim_path","index_dir","heap_mb":200}

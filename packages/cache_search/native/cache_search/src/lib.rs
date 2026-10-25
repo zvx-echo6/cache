@@ -15,6 +15,7 @@ pub mod libreg;
 pub mod libupdate;
 pub mod search;
 pub mod suggest;
+pub mod tools;
 pub mod zimsrc;
 
 pub use error::{Error, ErrorCode};

@@ -353,6 +353,58 @@ pub unsafe extern "C" fn cs_conversation_free(c: *mut Conversation) {
 }
 
 /// # Safety
+/// `h` NULL or live; `fixed_at` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_set_location(h: *mut Handle, lat: f64, lon: f64, accuracy_m: f64, fixed_at: *const c_char) -> i32 {
+    with_handle(h, -1, |h| {
+        let at = arg_str(fixed_at, "fixed_at")?;
+        h.set_location(lat, lon, accuracy_m, at)?;
+        Ok(0)
+    })
+}
+
+/// # Safety
+/// `h` must be NULL or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn cs_clear_location(h: *mut Handle) -> i32 {
+    with_handle(h, -1, |h| {
+        h.clear_location();
+        Ok(0)
+    })
+}
+
+/// # Safety
+/// `h` must be NULL or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn cs_tool_schemas(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.tool_schemas_json()))
+}
+
+/// A bad call is the tool's content, not an error: only a NULL handle or conversation, a NULL or malformed
+/// argument, or an empty `now` returns NULL.
+///
+/// # Safety
+/// `h` NULL or live; `c` NULL or a live conversation; `name`, `args_json` and `now` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_tool(
+    h: *mut Handle,
+    c: *mut Conversation,
+    name: *const c_char,
+    args_json: *const c_char,
+    now: *const c_char,
+) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        if c.is_null() {
+            return Err(Error::bad_json("null conversation"));
+        }
+        let name = arg_str(name, "name")?;
+        let args = arg_str(args_json, "args_json")?;
+        let now = arg_str(now, "now")?;
+        out_string(h.call_tool(&mut *c, name, args, now)?)
+    })
+}
+
+/// # Safety
 /// `s` must be NULL or a string returned by this library, not freed before.
 #[no_mangle]
 pub unsafe extern "C" fn cs_free_string(s: *mut c_char) {

@@ -23,7 +23,7 @@ struct Item {
 }
 
 /// One line of text: every run of whitespace (including line breaks) becomes a single space.
-fn one_line(s: &str) -> String {
+pub fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -37,6 +37,27 @@ impl Conversation {
         json!({"n": i + 1, "address": a, "title": t})
     }
 
+    /// `{"n","address","title"}` for number `n` (from 1); `n` must have been given.
+    pub fn id_value(&self, n: usize) -> Value {
+        self.id_json(n - 1)
+    }
+
+    /// The `(address, title)` given number `n` (from 1), if any.
+    pub fn entry(&self, n: usize) -> Option<&(String, String)> {
+        n.checked_sub(1).and_then(|i| self.entries.get(i))
+    }
+
+    /// The number of `address`, giving it the next number (with `title`) when it has none. The bool is true
+    /// when the number is new. The first title seen is the one kept.
+    pub fn number(&mut self, address: &str, title: &str) -> (usize, bool) {
+        if let Some(&i) = self.by_address.get(address) {
+            return (i + 1, false);
+        }
+        self.entries.push((address.to_string(), title.to_string()));
+        self.by_address.insert(address.to_string(), self.entries.len() - 1);
+        (self.entries.len(), true)
+    }
+
     /// Number the results and build the tool message. Input is validated before anything is numbered, so a
     /// bad call changes nothing.
     pub fn format(&mut self, results_json: &str) -> Result<String> {
@@ -48,14 +69,7 @@ impl Conversation {
         let mut seen: Vec<usize> = Vec::new();
         let mut lines: Vec<String> = Vec::new();
         for it in items {
-            let idx = match self.by_address.get(&it.address) {
-                Some(&i) => i,
-                None => {
-                    self.entries.push((it.address.clone(), it.title.clone()));
-                    self.by_address.insert(it.address.clone(), self.entries.len() - 1);
-                    self.entries.len() - 1
-                }
-            };
+            let idx = self.number(&it.address, &it.title).0 - 1;
             if seen.contains(&idx) {
                 continue;
             }
