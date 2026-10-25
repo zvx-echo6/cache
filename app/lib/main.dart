@@ -6,6 +6,8 @@ import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
 import 'location/location_service.dart';
+import 'maps/layers/fake_layer_engine.dart';
+import 'maps/maps_state.dart';
 import 'search/core_numbering.dart';
 import 'sources/sources_state.dart';
 import 'screens/shell.dart';
@@ -27,6 +29,8 @@ class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
   late final LocationService location = LocationService();
+  // FAKE layer engine until the core's layer engine (layers-core) is bound; see lib/maps/layers/layer_engine.dart.
+  late final MapsState maps = MapsState(engine: FakeLayerEngine());
   late final ChatController chat = ChatController(
     tools: [SearchTool(sources), ReadTool(sources)],
     newNumbering: () => sources.coreReady ? CoreNumbering(sources.newConversation) : null,
@@ -41,6 +45,7 @@ class _CacheAppState extends State<CacheApp> {
     app.init();
     sources.init();
     location.init();
+    maps.init();
   }
 
   void _onApp() {
@@ -58,6 +63,7 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     sources.dispose();
     location.dispose();
+    maps.dispose();
     super.dispose();
   }
 
@@ -69,7 +75,7 @@ class _CacheAppState extends State<CacheApp> {
         title: 'CACHE',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
-        home: Shell(app: app, chat: chat, sources: sources, location: location),
+        home: Shell(app: app, chat: chat, sources: sources, location: location, maps: maps),
       ),
     );
   }
