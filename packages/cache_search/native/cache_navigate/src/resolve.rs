@@ -3,9 +3,10 @@
 use cache_offroad::navigate::Waypoint;
 use cache_tool::places::{GeocodeQuery, PlaceMatch, PlaceSource};
 use cache_tool::{ToolCtx, ToolError};
+use serde_json::Value;
 use std::sync::Arc;
 
-/// A start or destination as the tool resolved it.
+/// A start or destination as the tool resolved it (AIDA's `_place` fields; what the source does not know is None).
 #[derive(Clone, Debug)]
 pub(crate) struct Resolved {
     pub name: String,
@@ -14,18 +15,35 @@ pub(crate) struct Resolved {
     pub kind: Option<String>,
     pub street: Option<String>,
     pub locality: Option<String>,
+    pub county: Option<String>,
     pub state: Option<String>,
+    pub distance_km: Option<f64>,
+    pub er_tier: Option<i64>,
     pub osm: Option<String>,
     /// Other matches the places pack found for the same text.
     pub others: Vec<PlaceMatch>,
 }
 
 impl Resolved {
-    pub fn here(lat: f64, lon: f64) -> Resolved {
-        Resolved { name: "current location".into(), lat, lon, kind: None, street: None, locality: None, state: None, osm: None, others: vec![] }
-    }
     pub fn point(name: String, lat: f64, lon: f64) -> Resolved {
-        Resolved { name, lat, lon, kind: None, street: None, locality: None, state: None, osm: None, others: vec![] }
+        Resolved {
+            name,
+            lat,
+            lon,
+            kind: None,
+            street: None,
+            locality: None,
+            county: None,
+            state: None,
+            distance_km: None,
+            er_tier: None,
+            osm: None,
+            others: vec![],
+        }
+    }
+    /// AIDA's "sender node position", on the phone: the GPS fix.
+    pub fn here(lat: f64, lon: f64) -> Resolved {
+        Resolved::point("current location".into(), lat, lon)
     }
     pub fn from_match(m: PlaceMatch) -> Resolved {
         Resolved {
@@ -35,7 +53,10 @@ impl Resolved {
             kind: m.kind,
             street: m.street,
             locality: m.locality,
+            county: m.county,
             state: m.state,
+            distance_km: m.distance_km,
+            er_tier: m.er_tier,
             osm: m.osm_category,
             others: vec![],
         }
@@ -86,7 +107,8 @@ impl Resolver<'_, '_> {
         ans.matches.into_iter().next().map(Resolved::from_match)
     }
 
-    /// A place by name. `which` is "from" or "to" for the error. Nothing found is `geocode_empty`.
+    /// A place by name. `which` is "from" or "to" for the error. Nothing found is `geocode_empty` (AIDA's fields: which,
+    /// query, searched_within_km; no detail).
     pub fn named(&self, text: &str, which: &str, near: Option<&str>, bias: Option<(f64, f64)>, with_others: bool) -> Result<Resolved, ToolError> {
         if let Some(r) = self.exact(text) {
             return Ok(r);
@@ -104,15 +126,10 @@ impl Resolver<'_, '_> {
                 return Ok(r);
             }
         }
-        let detail = if self.source.is_some() {
-            format!("no place matching {text:?} was found")
-        } else {
-            format!("no saved place or coordinates match {text:?}; the places data is not installed on this phone, so other names cannot be looked up")
-        };
-        Err(ToolError::new("geocode_empty", detail)
+        Err(ToolError::new("geocode_empty", "")
             .with("which", which)
             .with("query", text)
-            .with("searched_within_km", searched.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null)))
+            .with("searched_within_km", searched.map(Value::from).unwrap_or(Value::Null)))
     }
 }
 

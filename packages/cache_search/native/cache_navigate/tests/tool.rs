@@ -1,7 +1,7 @@
 //! The navigate tool against a fake Valhalla: argument handling, name resolution, errors, the result shape.
 //! The real routes (Idaho tiles, off-road pack) are tested through cs_tool in the cache_search_cli crate.
 
-use cache_navigate::{NavigateCfg, NavigateTool, OffroadCfg, PlaceSlot, ValhallaCfg};
+use cache_navigate::{NavigateCfg, NavigateTool, PlaceSlot, ValhallaCfg};
 use cache_offroad::valhalla::{LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
 use cache_tool::places::{GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource};
 use cache_tool::{Location, SavedPlace, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput};
@@ -137,6 +137,12 @@ fn code(r: Result<Value, ToolError>) -> String {
     r.expect_err("an error").code
 }
 
+fn keys(v: &Value) -> Vec<&str> {
+    v.as_object().unwrap().keys().map(String::as_str).collect()
+}
+
+const PLACE_KEYS: [&str; 7] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km"];
+
 #[test]
 fn schema_needs_the_routing_data_and_lists_the_modes_and_types() {
     let slot: PlaceSlot = Default::default();
@@ -147,110 +153,124 @@ fn schema_needs_the_routing_data_and_lists_the_modes_and_types() {
     let s = tool(fake(), None).schema().unwrap();
     let p = &s["function"]["parameters"]["properties"];
     assert_eq!(s["function"]["name"], "navigate");
-    assert_eq!(p["mode"]["enum"], json!(["drive", "walk", "bike", "offroad_vehicle", "offroad_foot"]));
-    // no places pack: TOOLS.md's list
+    // AIDA's modes; off-road legs come inside the result
+    assert_eq!(p["mode"]["enum"], json!(["drive", "walk", "bike"]));
     assert_eq!(p["to_type"]["enum"][0], "emergency_room");
     assert_eq!(p["to_type"]["enum"].as_array().unwrap().len(), 11);
     assert_eq!(s["function"]["parameters"]["required"], json!(["mode"]));
-    assert_eq!(p.as_object().unwrap().keys().collect::<Vec<_>>(), ["from", "to", "to_type", "mode", "near", "land_access"]);
-    // a places pack: its categories
+    // land_access is the one new argument, last
+    assert_eq!(keys(p), ["from", "to", "to_type", "mode", "near", "land_access"]);
+    assert_eq!(p["land_access"]["enum"], json!(["strict", "pragmatic", "emergency"]));
     let s = tool(fake(), Some(Arc::new(Pack { empty: false }))).schema().unwrap();
     assert_eq!(s["function"]["parameters"]["properties"]["to_type"]["enum"], json!(["hospital", "fuel"]));
 }
 
 #[test]
-fn road_route_has_the_documented_shape() {
+fn road_route_has_aidas_shape() {
     let t = tool(fake(), None);
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
-    let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(
-        keys,
-        ["address", "mode", "location_bias", "from_matched", "to_matched", "distance_mi", "distance_km", "duration_minutes", "major_roads", "step_count", "steps", "steps_truncated", "steps_omitted", "map_region", "map_region_age"]
+        keys(&v),
+        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "major_roads", "step_count", "steps", "steps_truncated", "map_region", "map_region_age"]
     );
     assert!(v["address"].as_str().unwrap().starts_with("nav:"));
+    assert_eq!(v["address"], format!("nav:{}", v["route_id"].as_str().unwrap()));
     assert_eq!(v["mode"], "drive");
-    assert_eq!(v["location_bias"], "phone_location");
-    assert_eq!(v["from_matched"], json!({"place_name": "current location", "lat": 42.536, "lon": -113.792}));
-    assert_eq!(v["to_matched"], json!({"place_name": "42.60,-113.70", "lat": 42.6, "lon": -113.7}));
+    assert_eq!(v["location_bias"], "sender_node_position");
+    let mut want: Vec<&str> = PLACE_KEYS.to_vec();
+    want.extend(["near", "snap_distance_m"]);
+    assert_eq!(keys(&v["from_matched"]), want);
+    assert_eq!(v["from_matched"]["place_name"], "current location");
+    assert_eq!(v["to_matched"]["place_name"], "42.60,-113.70");
+    assert_eq!(v["from_matched"]["snap_distance_m"], 0);
+    assert_eq!(v["other_destination_candidates"], json!([]));
     assert_eq!(v["step_count"], 5);
     assert_eq!(v["steps_truncated"], false);
-    assert_eq!(v["steps_omitted"], 0);
     assert_eq!(v["distance_km"], 7.5);
     assert_eq!(v["duration_minutes"], 7.5);
-    assert_eq!(v["major_roads"], json!(["Road 0", "Road 1", "Road 2"]));
+    assert_eq!(v["major_roads"][0], json!({"name": "Road 0", "distance_km": 3.0}));
     assert_eq!(v["map_region"], "Idaho");
-    // the tiles file does not exist, so its age is not known
     assert_eq!(v["map_region_age"], "unknown");
     let s0 = &v["steps"][0];
-    assert_eq!(s0.as_object().unwrap().keys().collect::<Vec<_>>(), ["index", "kind", "street_names", "distance_mi", "cardinal", "instruction"]);
-    assert_eq!(s0["kind"], "road");
-    assert_eq!(s0["cardinal"], "E");
+    assert_eq!(keys(s0), ["index", "kind", "type", "street_names", "distance_mi", "cardinal", "instruction"]);
+    assert_eq!((s0["kind"].clone(), s0["type"].clone()), (json!("road"), json!("start")));
     assert_eq!(s0["instruction"], "Continue on Road 0");
-    assert_eq!(s0["distance_mi"], 0.9);
+    assert_eq!(s0["distance_mi"], 0.93);
 }
 
 #[test]
-fn steps_are_capped_at_15() {
+fn steps_are_capped_at_12_with_aidas_omitted_counts() {
     let t = tool(Fake { maneuvers: 20, ..fake() }, None);
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     assert_eq!(v["step_count"], 20);
-    assert_eq!(v["steps"].as_array().unwrap().len(), 15);
+    assert_eq!(v["steps"].as_array().unwrap().len(), 12);
     assert_eq!(v["steps_truncated"], true);
-    assert_eq!(v["steps_omitted"], 5);
-    assert_eq!(v["steps"][14]["index"], 14);
+    assert_eq!(v["road_steps_omitted"], 8);
+    assert!(v.get("offroad_steps_omitted").is_none());
+    assert!(v.get("steps_omitted").is_none());
+    let k = keys(&v);
+    let (a, b) = (k.iter().position(|x| *x == "steps_truncated").unwrap(), k.iter().position(|x| *x == "road_steps_omitted").unwrap());
+    assert_eq!(b, a + 1);
 }
 
 #[test]
 fn names_resolve_through_coordinates_saved_places_and_the_places_pack() {
     let t = tool(fake(), None);
-    // a saved place, case-insensitively, as the start
     let v = run(&t, None, json!({"from": "home", "to": "42.60,-113.70", "mode": "walk"})).unwrap();
     assert_eq!(v["from_matched"]["place_name"], "Home");
-    assert_eq!(v["location_bias"], "none");
+    // no fix and no near: the matched start is the area
+    assert_eq!(v["location_bias"], "from_place");
     assert_eq!(v["mode"], "walk");
-    // a name nothing knows
+    // a name nothing knows: AIDA's fields, no detail, no matched places
     let e = run(&t, Some(&here()), json!({"to": "Cassia Regional Hospital", "mode": "drive"})).unwrap_err();
-    assert_eq!(e.code, "geocode_empty");
-    assert_eq!(e.extra["which"], "to");
-    assert_eq!(e.extra["query"], "Cassia Regional Hospital");
-    assert_eq!(e.extra["searched_within_km"], Value::Null);
+    assert_eq!(e.to_json(), json!({"ok": false, "error": {"type": "geocode_empty", "which": "to", "query": "Cassia Regional Hospital", "searched_within_km": null}}));
+    // a from that is not found says to omit it, because the phone's position is known
     let e = run(&t, Some(&here()), json!({"from": "Nowhere", "to": "Home", "mode": "drive"})).unwrap_err();
-    assert_eq!((e.code.as_str(), e.extra["which"].clone()), ("geocode_empty", json!("from")));
+    assert_eq!(keys(&e.to_json()["error"]), ["type", "which", "query", "searched_within_km", "hint"]);
+    assert_eq!(e.extra["which"], "from");
+    let e = run(&t, None, json!({"from": "Nowhere", "to": "Home", "mode": "drive"})).unwrap_err();
+    assert!(e.extra.get("hint").is_none());
 
     // with a places pack: the match, its details, and the other candidates
     let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
     let v = run(&t, Some(&here()), json!({"to": "Cassia Regional Hospital", "mode": "drive", "near": "Burley, Idaho"})).unwrap();
-    assert_eq!(
-        v["to_matched"],
-        json!({"place_name": "Cassia Regional Hospital", "kind": "hospital", "street": "1501 Hiland Ave", "locality": "Burley", "state": "ID", "lat": 42.531, "lon": -113.785})
-    );
-    assert_eq!(v["other_destination_candidates"], json!([{"place_name": "Cassia Hospital Annex", "locality": "Declo"}]));
-    assert_eq!(v["location_bias"], "near");
+    assert_eq!(v["to_matched"]["place_name"], "Cassia Regional Hospital");
+    assert_eq!(v["to_matched"]["street"], "1501 Hiland Ave");
+    assert_eq!(v["to_matched"]["locality"], "Burley");
+    assert_eq!(v["other_destination_candidates"][0]["place_name"], "Cassia Hospital Annex");
+    assert_eq!(keys(&v["other_destination_candidates"][0]), PLACE_KEYS);
     let t = tool(fake(), Some(Arc::new(Pack { empty: true })));
     let e = run(&t, Some(&here()), json!({"to": "Zzz", "mode": "drive"})).unwrap_err();
     assert_eq!((e.code.as_str(), e.extra["searched_within_km"].clone()), ("geocode_empty", json!(50.0)));
 }
 
 #[test]
+fn location_bias_values() {
+    let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
+    // the phone's position wins over near
+    let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive", "near": "Rupert, Idaho"})).unwrap();
+    assert_eq!(v["location_bias"], "sender_node_position");
+    // no fix: near, by the name the pack gave it
+    let v = run(&t, None, json!({"from": "42.5,-113.8", "to": "42.60,-113.70", "mode": "drive", "near": "Rupert, Idaho"})).unwrap();
+    assert_eq!(v["location_bias"], "near:Rupert");
+}
+
+#[test]
 fn origin_errors() {
     let t = tool(fake(), None);
-    assert_eq!(code(run(&t, None, json!({"to": "42.60,-113.70", "mode": "drive"}))), "no_location");
-    // near names the town but nothing can find it
+    let e = run(&t, None, json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap_err();
+    assert_eq!(e.to_json(), json!({"ok": false, "error": {"type": "origin_unknown", "detail": "no from and no phone location"}}));
     assert_eq!(code(run(&t, None, json!({"to": "42.60,-113.70", "mode": "drive", "near": "Burley, Idaho"}))), "origin_unknown");
-    // a places pack finds the town, so it is the start
-    let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
-    let v = run(&t, None, json!({"to": "42.60,-113.70", "mode": "drive", "near": "Rupert, Idaho"})).unwrap();
-    assert_eq!(v["from_matched"]["place_name"], "Rupert");
-    assert_eq!(v["location_bias"], "near");
 }
 
 #[test]
 fn argument_errors() {
     let t = tool(fake(), None);
     for (args, field) in [
-        (json!({"mode": "drive"}), "give either to"),
-        (json!({"to": "Home", "to_type": "fuel", "mode": "drive"}), "not both"),
+        (json!({"mode": "drive"}), "give exactly one of to or to_type"),
+        (json!({"to": "Home", "to_type": "fuel", "mode": "drive"}), "give exactly one of to or to_type"),
         (json!({"to": "Home", "mode": "teleport"}), "mode"),
+        (json!({"to": "Home", "mode": "offroad_foot"}), "mode"),
         (json!({"to": "Home", "mode": "drive", "bogus": 1}), "bogus"),
         (json!({"to": "Home", "mode": "drive", "land_access": "reckless"}), "land_access"),
         (json!({"to": "Home"}), "mode"),
@@ -262,61 +282,53 @@ fn argument_errors() {
 }
 
 #[test]
-fn same_place() {
+fn same_place_carries_both_places() {
     let t = tool(fake(), None);
-    assert_eq!(code(run(&t, Some(&here()), json!({"to": "Home", "mode": "drive"}))), "same_place");
+    let e = run(&t, Some(&here()), json!({"to": "Home", "mode": "drive"})).unwrap_err();
+    let j = e.to_json();
+    assert_eq!(keys(&j), ["ok", "error", "from_matched", "to_matched"]);
+    assert_eq!(keys(&j["error"]), ["type", "detail", "hint"]);
+    assert_eq!(j["error"]["detail"], "start and destination matched the same spot");
+    assert_eq!(keys(&j["from_matched"]), PLACE_KEYS);
+    assert_eq!(j["to_matched"]["place_name"], "Home");
     assert_eq!(code(run(&t, Some(&here()), json!({"to": "42.5361,-113.7921", "mode": "drive"}))), "same_place");
 }
 
 #[test]
 fn nearest_of_a_type_is_ranked_by_travel_time() {
-    // no places pack
     let t = tool(fake(), None);
     let e = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"})).unwrap_err();
     assert_eq!(e.code, "not_set_up");
-    // with one: the listed-first "Far Hospital" is farther in minutes, so the near one wins
     let t = tool(Fake { per_deg_s: 6000.0, ..fake() }, Some(Arc::new(Pack { empty: false })));
     let v = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"})).unwrap();
     assert_eq!(v["to_matched"]["place_name"], "Near Hospital");
-    assert_eq!(v["nearest_search"], json!({"to_type": "hospital", "ranked_by": "drive_time"}));
-    assert_eq!(v["other_destination_candidates"], json!([{"place_name": "Far Hospital", "drive_min": 57.5}]));
-    // nothing of that type
+    assert_eq!(v["nearest_search"], json!({"to_type": "hospital", "ranked_by": "drive", "warnings": null}));
+    let c = &v["other_destination_candidates"][0];
+    assert_eq!(keys(c), ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "drive_min"]);
+    assert_eq!((c["place_name"].clone(), c["drive_min"].clone()), (json!("Far Hospital"), json!(57.5)));
+    let k = keys(&v);
+    assert_eq!(k[k.iter().position(|x| *x == "other_destination_candidates").unwrap() + 1], "nearest_search");
+    // nothing of that type: AIDA's fields, and the start beside the error
     let t = tool(fake(), Some(Arc::new(Pack { empty: true })));
     let e = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"})).unwrap_err();
-    assert_eq!(e.code, "nearby_empty");
-    assert_eq!((e.extra["to_type"].clone(), e.extra["searched_within_km"].clone()), (json!("hospital"), json!(80.0)));
-    // a type the pack does not have
+    let j = e.to_json();
+    assert_eq!(j["error"], json!({"type": "nearby_empty", "to_type": "hospital", "warnings": null}));
+    assert_eq!(keys(&j), ["ok", "error", "from_matched"]);
     let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
     assert_eq!(code(run(&t, Some(&here()), json!({"to_type": "pharmacy", "mode": "drive"}))), "bad_arguments");
 }
 
 #[test]
-fn route_failures() {
+fn router_errors_pass_through_with_both_places() {
     let t = tool(Fake { fail: Some(442), ..fake() }, None);
     let e = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap_err();
-    assert_eq!(e.code, "route_failed");
-    assert_eq!(e.extra["reason"], "no_route");
-    // no road near an end and no map there: not set up
+    let j = e.to_json();
+    assert_eq!(j["error"]["type"], "no_route");
+    assert_eq!(j["error"]["detail"], "No path could be found for input");
+    assert_eq!(keys(&j), ["ok", "error", "from_matched", "to_matched"]);
     let t = tool(Fake { fail: Some(171), no_edges: true, ..fake() }, None);
     let e = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap_err();
-    assert_eq!(e.code, "not_set_up");
-    assert!(e.detail.contains("start"), "{}", e.detail);
-}
-
-#[test]
-fn off_road_modes_need_the_off_road_data() {
-    let t = tool(fake(), None);
-    for mode in ["offroad_vehicle", "offroad_foot"] {
-        let e = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": mode})).unwrap_err();
-        assert_eq!(e.code, "not_set_up");
-        assert!(e.detail.contains("off-road"), "{}", e.detail);
-    }
-    // a pack and elevation that are configured but missing are also not set up
-    let mut c = cfg();
-    c.offroad = Some(OffroadCfg { pack: "/nonexistent/offroad.sqlite".into(), elevation: "/nonexistent/elevation.pmtiles".into(), max_cells: None });
-    let slot: PlaceSlot = Default::default();
-    let t = NavigateTool::with_valhalla(c, slot, Arc::new(fake()));
-    assert_eq!(code(run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "offroad_foot"}))), "not_set_up");
+    assert_eq!(e.code, "too_far");
 }
 
 #[test]
@@ -326,7 +338,10 @@ fn an_end_off_the_road_network_without_off_road_data_is_a_warning() {
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     let w = v["warnings"].as_array().unwrap();
     assert_eq!(w.len(), 2);
-    assert_eq!(w[0]["code"], "offroad_unavailable");
+    assert_eq!(keys(&w[0]), ["code", "end", "road_point", "gap_m"]);
+    assert_eq!((w[0]["code"].clone(), w[0]["end"].clone(), w[1]["end"].clone()), (json!("offroad_unavailable"), json!("from"), json!("to")));
     assert!(w[0]["gap_m"].as_i64().unwrap() > 1000);
-    assert_eq!(w[0].as_object().unwrap().keys().collect::<Vec<_>>(), ["code", "gap_m"]);
+    assert_eq!(keys(&w[0]["road_point"]), ["lat", "lon"]);
+    let k = keys(&v);
+    assert_eq!(k[k.len() - 3..], ["warnings", "map_region", "map_region_age"]);
 }

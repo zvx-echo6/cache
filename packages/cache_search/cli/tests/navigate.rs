@@ -176,49 +176,54 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
     assert_eq!(drive["ok"], true);
     assert_eq!(drive["n"], 1);
     assert_eq!(drive["mode"], "drive");
-    assert_eq!(drive["location_bias"], "phone_location");
+    assert_eq!(drive["location_bias"], "sender_node_position");
     assert_eq!(drive["from_matched"]["place_name"], "current location");
     assert_eq!(drive["map_region"], "Idaho");
     assert!(drive["map_region_age"].as_str().unwrap().ends_with("old"), "{}", drive["map_region_age"]);
     let km = drive["distance_km"].as_f64().unwrap();
     assert!((200.0..300.0).contains(&km), "{km}");
     assert!(drive.get("offroad_mi").is_none());
-    assert_eq!(drive["steps"].as_array().unwrap().len(), 15.min(drive["step_count"].as_u64().unwrap() as usize));
+    assert_eq!(drive["steps"].as_array().unwrap().len(), 12.min(drive["step_count"].as_u64().unwrap() as usize));
+    assert_eq!(drive["route_id"].as_str().unwrap().len(), 16);
 
-    // 2. walk from a point in the Sawtooths out to the nearest road and on to Stanley (off-road at the start)
+    // 2. walk from a point in the Sawtooths out to the nearest road and on to Stanley (off-road legs come back inside the route)
     let walk = d.content("walk-sawtooths-stanley", json!({"from": "44.0543,-115.4237", "to": "44.2210,-114.9318", "mode": "walk"}), None);
     assert_eq!(walk["ok"], true, "{walk}");
-    assert_eq!(walk["location_bias"], "none");
+    assert_eq!(walk["location_bias"], "from_place");
     assert!(walk["offroad_mi"].as_f64().unwrap() > 0.0);
     assert!(walk["offroad_note"].as_str().is_some());
     assert_eq!(walk["steps"][0]["kind"], "offroad");
+    assert_eq!(walk["steps"].as_array().unwrap().len(), 12);
+    assert!(walk.get("road_steps_omitted").is_some());
     for k in ["travel", "grade_class", "elev_gain_m", "elev_loss_m", "terrain"] {
         assert!(walk["steps"][0].get(k).is_some(), "{k}");
     }
 
     // 3. a strict land-access foot route from the off-road parity set (R08)
-    let strict = d.content("strict-foot-r08", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "offroad_foot", "land_access": "strict"}), None);
+    let strict = d.content("strict-foot-r08", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "walk", "land_access": "strict"}), None);
     assert_eq!(strict["ok"], true, "{strict}");
-    assert_eq!(strict["mode"], "offroad_foot");
-    assert!(strict["steps"].as_array().unwrap().iter().all(|s| s["kind"] != "road"));
-    // the same trip with the other land-access modes is a different request (the route may differ)
-    let _ = d.content("pragmatic-foot-r08", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "offroad_foot", "land_access": "pragmatic"}), None);
+    assert_eq!(strict["mode"], "walk");
+    assert!(strict["offroad_mi"].as_f64().unwrap() > 0.0);
+    let _ = d.content("pragmatic-foot-r08", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "walk", "land_access": "pragmatic"}), None);
 
     // 4. errors, in every door
     let e = d.content("err-no-location", json!({"to": "43.615,-116.202", "mode": "drive"}), None);
-    assert_eq!(err_type(&e), "no_location");
+    assert_eq!(err_type(&e), "origin_unknown");
     let e = d.content("err-geocode", json!({"to": "Cassia Regional Hospital", "mode": "drive"}), Some(burley));
     assert_eq!(err_type(&e), "geocode_empty");
     assert_eq!(e["error"]["which"], "to");
+    assert!(e["error"].get("detail").is_none());
     let e = d.content("err-to-type", json!({"to_type": "hospital", "mode": "drive"}), Some(burley));
     assert_eq!(err_type(&e), "not_set_up");
     let e = d.content("err-same-place", json!({"to": "42.536,-113.792", "mode": "drive"}), Some(burley));
     assert_eq!(err_type(&e), "same_place");
+    assert!(e["from_matched"].is_object() && e["to_matched"].is_object());
     let e = d.content("err-bad-mode", json!({"to": "43.615,-116.202", "mode": "fly"}), Some(burley));
     assert_eq!(err_type(&e), "bad_arguments");
-    // a trip outside the installed region
+    // a trip outside the installed region: the router's own code, with both places beside it
     let e = d.content("err-outside", json!({"from": "47.6062,-122.3321", "to": "47.25,-122.44", "mode": "drive"}), None);
-    assert_eq!(err_type(&e), "not_set_up", "{e}");
+    assert!(["no_route", "too_far", "out_of_coverage"].contains(&err_type(&e)), "{e}");
+    assert!(e["from_matched"].is_object() && e["to_matched"].is_object(), "{e}");
 
     // numbering: a second route in the same conversation continues from [2]
     let id = serde_json::from_str::<Value>(&d.http.req("POST", "/conversations", "")).unwrap()["id"].as_str().unwrap().to_string();
@@ -232,7 +237,7 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
 }
 
 #[test]
-fn without_the_off_road_data_roads_still_route_and_off_road_is_a_clear_error() {
+fn without_the_off_road_data_roads_still_route_and_the_gap_is_a_warning() {
     if data().is_none() {
         eprintln!("skipped: the Idaho data is not set");
         return;
@@ -241,13 +246,11 @@ fn without_the_off_road_data_roads_still_route_and_off_road_is_a_clear_error() {
     let mut d = Doors::new(&t, false);
     let drive = d.content("roadonly-drive", json!({"from": "42.536,-113.792", "to": "42.617,-113.675", "mode": "drive"}), None);
     assert_eq!(drive["ok"], true);
-    let e = d.content("roadonly-offroad", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "offroad_foot"}), None);
-    assert_eq!(err_type(&e), "not_set_up");
-    assert!(e["error"]["detail"].as_str().unwrap().contains("off-road"));
     // a destination far from any road still gets the road route, with a warning
     let w = d.content("roadonly-gap", json!({"from": "44.0543,-115.4237", "to": "44.2210,-114.9318", "mode": "walk"}), None);
     assert_eq!(w["ok"], true, "{w}");
     assert_eq!(w["warnings"][0]["code"], "offroad_unavailable");
+    assert!(w["warnings"][0]["road_point"]["lat"].is_number());
 }
 
 #[test]
@@ -265,4 +268,170 @@ fn navigate_is_not_offered_without_the_routing_data() {
     assert!(!s2.contains("navigate"));
     let r = d2.core.tool(&mut Conv::new().unwrap(), "navigate", r#"{"to":"1,2","mode":"drive"}"#, NOW).unwrap();
     assert!(r.contains("not_set_up"), "{r}");
+}
+
+
+// ---- AIDA's recorded navigate results (cli/tests/fixtures/aida_navigate) ----------------------------------------------
+
+/// AIDA's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
+/// two own fields last. The recorded rows are serialised with sorted keys, so order is checked against this list.
+const RESULT_ORDER: [&str; 23] = [
+    "ok", "n", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "nearest_search",
+    "distance_mi", "distance_km", "duration_minutes", "major_roads", "step_count", "steps", "steps_truncated", "road_steps_omitted",
+    "offroad_steps_omitted", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
+];
+const STEP_ORDER: [&str; 13] =
+    ["index", "kind", "type", "street_names", "distance_mi", "cardinal", "instruction", "travel", "grade_class", "elev_gain_m", "elev_loss_m", "terrain", "follow"];
+const PLACE_ORDER: [&str; 9] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "near", "snap_distance_m"];
+
+fn kind_of(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn names(v: &Value) -> Vec<String> {
+    v.as_object().unwrap().keys().cloned().collect()
+}
+
+/// `got` lists keys in `order`'s order (it may leave some out).
+fn in_order(got: &[String], order: &[&str], what: &str) {
+    let mut at = 0;
+    for k in got {
+        let i = order.iter().position(|o| o == k).unwrap_or_else(|| panic!("{what}: unexpected key {k}"));
+        assert!(i >= at, "{what}: {k} is out of order in {got:?}");
+        at = i;
+    }
+}
+
+/// Same types for every key both have (null stands in for anything: an unknown value).
+fn same_types(got: &Value, want: &Value, what: &str) {
+    for (k, g) in got.as_object().unwrap() {
+        if let Some(w) = want.get(k) {
+            if !g.is_null() && !w.is_null() {
+                assert_eq!(kind_of(g), kind_of(w), "{what}.{k}: Cache {g} vs AIDA {w}");
+            }
+        }
+    }
+}
+
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
+}
+
+/// What Cache cannot fill, and why (the values are null, the keys stay):
+///  county, distance_km (the geocoder's county and distance to the bias point), and the `near` of from_matched / to_matched
+///  (navi's reverse geocode of the end): no places pack yet; kind, street, locality, state of a place given as coordinates.
+///  er_tier: only the places pack knows it.  pins, bridge: Meshtastic radio features, not on the phone.
+fn compare_to_aida(example: &str, cache: &Value) {
+    let rec: Value = serde_json::from_str(&std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/aida_navigate").join(example)).unwrap()).unwrap();
+    let aida = &rec["result"];
+    assert_eq!(cache["ok"], true, "{example}: {cache}");
+    let got = names(cache);
+    in_order(&got, &RESULT_ORDER, example);
+    // every key of AIDA's result is in Cache's, except the radio's `pins` and the ones that depend on the route
+    let conditional = ["pins", "road_steps_omitted", "offroad_steps_omitted", "offroad_mi", "offroad_note", "warnings", "nearest_search"];
+    for k in names(aida) {
+        if !conditional.contains(&k.as_str()) {
+            assert!(got.contains(&k), "{example}: AIDA has {k}, Cache does not ({got:?})");
+        }
+    }
+    for k in &got {
+        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
+    }
+    same_types(cache, aida, example);
+    for end in ["from_matched", "to_matched"] {
+        in_order(&names(&cache[end]), &PLACE_ORDER, end);
+        // AIDA's `_place` fields, `near` and `snap_distance_m`, plus er_tier when the source has one
+        let want: Vec<String> = names(&aida[end]).into_iter().filter(|k| k != "er_tier").collect();
+        let have: Vec<String> = names(&cache[end]).into_iter().filter(|k| k != "er_tier").collect();
+        assert_eq!(sorted(have), sorted(want), "{example}.{end}");
+        same_types(&cache[end], &aida[end], end);
+    }
+    for c in cache["other_destination_candidates"].as_array().unwrap() {
+        let want: Vec<String> = names(&aida["other_destination_candidates"][0]);
+        assert_eq!(sorted(names(c)), sorted(want), "{example}: candidate");
+    }
+    for m in cache["major_roads"].as_array().unwrap() {
+        assert_eq!(sorted(names(m)), ["distance_km", "name"], "{example}");
+    }
+    assert!(cache["steps"].as_array().unwrap().len() <= 12);
+    for st in cache["steps"].as_array().unwrap() {
+        in_order(&names(st), &STEP_ORDER, "step");
+        let kind = st["kind"].as_str().unwrap();
+        // an AIDA step of the same kind, if its shown steps have one: the same keys (terrain depends on the data) and types
+        if let Some(a) = aida["steps"].as_array().unwrap().iter().find(|a| a["kind"] == kind) {
+            let strip = |v: &Value| sorted(names(v)).into_iter().filter(|k| k != "terrain").collect::<Vec<_>>();
+            assert_eq!(strip(st), strip(a), "{example}: step keys of a {kind} step");
+            same_types(st, a, "step");
+            if let Some(f) = st.get("follow") {
+                assert_eq!(names(f), ["name", "trail_kind"]);
+            }
+        }
+        if kind != "road" {
+            assert!(["offroad_leg", "mode_change", "offroad_follow"].contains(&st["type"].as_str().unwrap()), "{st}");
+            assert!(st["instruction"].as_str().unwrap().contains("mi"));
+        }
+    }
+    if let Some(w) = cache.get("warnings") {
+        assert_eq!(names(&w[0]), ["code", "end", "road_point", "gap_m"]);
+        if let Some(aw) = aida.get("warnings") {
+            assert_eq!(sorted(names(&w[0])), sorted(names(&aw[0])));
+        }
+    }
+    if let Some(n) = cache.get("offroad_note") {
+        assert_eq!(n, &aida["offroad_note"], "{example}: AIDA's note text");
+    }
+}
+
+#[test]
+fn results_match_aidas_recorded_navigate_results() {
+    if data().is_none() {
+        eprintln!("skipped: the Idaho data is not set");
+        return;
+    }
+    let t = Tmp::new("golden");
+    let (_, cfg) = config_file(&t, "config.json", Some(routing(true)));
+    let mut core = Core::open(&cfg).unwrap();
+    // AIDA's requests with the place names turned into coordinates (Cache has no geocoder yet); values differ, names and types must not
+    let cases: [(&str, Value); 3] = [
+        ("offroad-v24-12-t1-h.json", json!({"from": "43.4868,-116.4166", "to": "43.4575,-116.4180", "mode": "drive", "near": "Kuna, Idaho"})),
+        ("offroad-v24-18-t1-h.json", json!({"from": "42.1167,-113.6339", "to": "42.0728,-113.7020", "mode": "drive", "near": "Almo, Idaho"})),
+        ("v25-nav-offroad-010-r.json", json!({"from": "45.1763,-113.8956", "to": "45.0000,-113.9500", "mode": "drive", "near": "Salmon"})),
+    ];
+    let mut kinds = std::collections::BTreeSet::new();
+    for (example, args) in &cases {
+        let reply: Value = serde_json::from_str(&core.tool(&mut Conv::new().unwrap(), "navigate", &args.to_string(), NOW).unwrap()).unwrap();
+        let v: Value = serde_json::from_str(reply["content"].as_str().unwrap()).unwrap();
+        if let Ok(dir) = std::env::var("NAVIGATE_OUT_DIR") {
+            std::fs::write(PathBuf::from(dir).join(format!("golden-{example}")), serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        }
+        // the wire form of the c-abi result itself is `ok:true, n:1` first
+        assert_eq!(names(&v)[..2], ["ok", "n"]);
+        compare_to_aida(example, &v);
+        for s in v["steps"].as_array().unwrap() {
+            kinds.insert(s["kind"].as_str().unwrap().to_string());
+        }
+    }
+    // the off-road step fields were compared against AIDA's recorded ones somewhere in these routes
+    assert!(kinds.contains("offroad") || kinds.contains("offroad_follow"), "no off-road legs in any golden route: {kinds:?}");
+
+    // the warning example needs a road-only config: the road route stands in for the off-road leg
+    let t2 = Tmp::new("golden-road");
+    let (_, cfg2) = config_file(&t2, "config.json", Some(routing(false)));
+    let mut road = Core::open(&cfg2).unwrap();
+    let args = json!({"from": "44.1359,-114.9145", "to": "44.1047,-114.9447", "mode": "walk"});
+    let reply: Value = serde_json::from_str(&road.tool(&mut Conv::new().unwrap(), "navigate", &args.to_string(), NOW).unwrap()).unwrap();
+    let v: Value = serde_json::from_str(reply["content"].as_str().unwrap()).unwrap();
+    if let Ok(dir) = std::env::var("NAVIGATE_OUT_DIR") {
+        std::fs::write(PathBuf::from(dir).join("golden-warning.json"), serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    }
+    compare_to_aida("warning-v25-offroad-v24-01-t1-r.json", &v);
+    assert!(v.get("warnings").is_some(), "{v}");
 }

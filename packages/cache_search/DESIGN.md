@@ -730,27 +730,27 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 - **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
   (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
-- **Arguments.** TOOLS.md's `from`, `to`, `to_type`, `mode`, `near`, plus `land_access` (strict, pragmatic = default, emergency; off-road legs only).
-  `mode` is drive, walk, bike, offroad_vehicle or offroad_foot. The first three route on roads and paths and, when the off-road pack and elevation
-  exist, add an off-road lead-in or tail where an end is more than 150 m from the road network (`cache_offroad`'s directions). The off-road
-  modes route the whole trip with the unified off-road search (roads and tracks are used where they help). Without the off-road files an off-road
-  mode is `not_set_up`, and a road mode whose end is off the road network gets the road route plus a `warnings` entry `offroad_unavailable`.
+- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
+  Off-road legs come back inside the route, as in AIDA: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
+  off-road lead-in or tail (drive uses the vehicle-class modes, walk foot, bike a two-wheeler), and a trip with no road gets a whole off-road route. Without the
+  off-road files the road route is returned with an `offroad_unavailable` warning.
 - **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
-  `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` (`which`, `query`,
-  `searched_within_km` null) and `to_type` is `not_set_up`; the `to_type` enum is TOOLS.md's list until a pack supplies its categories. The nearest
-  place of a type is chosen by routing to the pack's 5 nearest by straight line (`ranked_by` `<mode>_time`), the others go in
-  `other_destination_candidates` with `<mode>_min`.
-- **Origin.** `from` omitted means the phone's position (`location_bias` `phone_location`); with no position, the `near` town if it resolves
-  (`location_bias` `near`), else `origin_unknown` (a `near` was given) or `no_location`.
-- **Result.** TOOLS.md's shape with `address` (`nav:<route id>`) on the route object, so the framework numbers it: `from_matched`, `to_matched`,
-  `distance_mi` / `distance_km`, `duration_minutes`, `major_roads` (names), `steps` capped at 15 with `steps_truncated` / `steps_omitted`,
-  `map_region`, `map_region_age` (the tiles file's age against `now`). Off-road steps add `travel` (foot, 2w, 4w, vehicle), `grade_class`,
-  `elev_gain_m`, `elev_loss_m`, `terrain` and `follow`; a route with off-road legs adds `offroad_mi` and `offroad_note`. The router gives fields,
-  not text, so the tool writes an `instruction` sentence for each off-road step.
-- **Errors.** `geocode_empty`, `origin_unknown`, `nearby_empty`, `same_place` (under 30 m), `route_failed` (with `reason`, the router's code),
-  `no_location`, `not_set_up` (no tiles, no off-road data, an end where no map is installed), `bad_arguments`.
+  `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` and `to_type` is `not_set_up`; the `to_type`
+  enum is TOOLS.md's list until a pack supplies its categories. The nearest place of a type is chosen by routing to the pack's 5 nearest by straight line.
+- **Result = AIDA's navigate contract** (`nav_runtime.py navigate()`), in its build order: `ok`, `n` (from `address` = `nav:<route_id>`), `mode`, `location_bias`
+  (`sender_node_position` for the phone's fix, `near:<name>`, `from_place`, null), `route_id`, `from_matched`, `to_matched` (place_name, kind, street, locality,
+  county, state, distance_km, [er_tier], near, snap_distance_m), `other_destination_candidates` (always, at most 2; `drive_min` on a nearest search),
+  `nearest_search` {to_type, ranked_by, warnings}, `distance_mi`, `distance_km`, `duration_minutes`, `major_roads` [{name, distance_km}], `step_count`, `steps`
+  (at most 12; every off-road step is kept, the first road steps fill the rest), `steps_truncated`, `road_steps_omitted` / `offroad_steps_omitted`,
+  `offroad_mi` + `offroad_note` (AIDA's text), `warnings` [{code, end, road_point, gap_m}]; then Cache's `map_region`, `map_region_age`. A step is index, kind,
+  type, street_names, distance_mi, cardinal, instruction; off-road steps add travel, grade_class, elev_gain_m, elev_loss_m, terrain (only when known, underscores
+  to spaces), follow {name, trail_kind}. Off-road instruction text is generated from the fields exactly as AIDA's `_step_text` does. Not filled (null): county and
+  distance_km (the geocoder's), `near` (navi's reverse geocode of the end), kind/street/locality/state of a place given as coordinates, er_tier. Not present: `pins`, `bridge`.
+- **Errors** (`ok:false`, `error`, then top-level `from_matched` / `to_matched` where AIDA attaches them): `geocode_empty` {which, query, searched_within_km, hint}
+  (no detail), `origin_unknown` (no from and no fix), `bad_arguments`, `nearby_empty` {to_type, warnings} + from_matched, `same_place` + both places, the router's own
+  code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
 - **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
-  requires byte-identical output (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
+  requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
 
 ## Open (needs decisions)
 

@@ -3,8 +3,9 @@
 //! Road routing is Valhalla (the C shim, tiles from the installed map region); off-road legs are the off-road
 //! router (`cache_offroad`, the pack and the elevation file). `schema()` is built from what is installed:
 //! nothing without the Valhalla tiles and the shim library; the `to_type` enum from the places pack's categories
-//! (TOOLS.md's list while no places pack is installed); the off-road modes are always listed, and asking for one
-//! without the off-road pack and elevation file is a clear `not_set_up`.
+//! (TOOLS.md's list while no places pack is installed). The result is AIDA's navigate contract (build.rs). Off-road
+//! legs come back inside the route when an end is away from the roads and the off-road pack and elevation exist;
+//! without them the road route is returned with an `offroad_unavailable` warning.
 //!
 //! Names (`to`, `from`, `near`) are resolved by [`resolve`](crate) in this order: "lat,lon" text, the user's saved
 //! places, then the places pack through `cache_tool::places::PlaceSource` (plugged in with [`PlaceSlot`]).
@@ -90,14 +91,13 @@ impl ElevationSource for NoElevation {
     }
 }
 
-/// The modes of the tool and what they ask of the router.
+/// The modes of the tool (AIDA's): drive, walk, bike. Off-road legs come back inside the result when an end is away from
+/// the road network (drive searches with the vehicle-class modes, walk on foot, bike on a two-wheeler).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ModeArg {
     Drive,
     Walk,
     Bike,
-    OffroadVehicle,
-    OffroadFoot,
 }
 
 impl ModeArg {
@@ -106,29 +106,18 @@ impl ModeArg {
             "drive" => ModeArg::Drive,
             "walk" => ModeArg::Walk,
             "bike" => ModeArg::Bike,
-            "offroad_vehicle" => ModeArg::OffroadVehicle,
-            "offroad_foot" => ModeArg::OffroadFoot,
             _ => return None,
         })
     }
     pub(crate) fn name(self) -> &'static str {
-        match self {
-            ModeArg::Drive => "drive",
-            ModeArg::Walk => "walk",
-            ModeArg::Bike => "bike",
-            ModeArg::OffroadVehicle => "offroad_vehicle",
-            ModeArg::OffroadFoot => "offroad_foot",
-        }
+        self.travel().name()
     }
     pub(crate) fn travel(self) -> TravelMode {
         match self {
-            ModeArg::Drive | ModeArg::OffroadVehicle => TravelMode::Drive,
-            ModeArg::Walk | ModeArg::OffroadFoot => TravelMode::Walk,
+            ModeArg::Drive => TravelMode::Drive,
+            ModeArg::Walk => TravelMode::Walk,
             ModeArg::Bike => TravelMode::Bike,
         }
-    }
-    fn is_offroad(self) -> bool {
-        matches!(self, ModeArg::OffroadVehicle | ModeArg::OffroadFoot)
     }
 }
 
@@ -211,7 +200,7 @@ impl Tool for NavigateTool {
         }
         Some(json!({"type": "function", "function": {
             "name": "navigate",
-            "description": "Directions in one call, to a named place (to) or to the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns the places actually matched, so a wrong match can be seen.",
+            "description": "Directions in one call, to a named place (to) or to the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns the places actually matched, so a wrong match can be seen. When an end is away from roads, the route includes off-road legs (straight lines with heading, length and climb).",
             "strict": true,
             "parameters": {"type": "object", "properties": {
                 "from": {"type": "string", "maxLength": 300,
@@ -220,8 +209,7 @@ impl Tool for NavigateTool {
                        "description": "Destination place name, for a named place. For \"nearest X\" give to_type instead."},
                 "to_type": {"type": "string", "enum": self.to_types(),
                             "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."},
-                "mode": {"type": "string", "enum": ["drive", "walk", "bike", "offroad_vehicle", "offroad_foot"],
-                         "description": "drive, walk and bike follow roads and paths. offroad_vehicle and offroad_foot cross open country between roads, tracks and trails; use them only when the person asks to go off-road or the place is off the road network."},
+                "mode": {"type": "string", "enum": ["drive", "walk", "bike"]},
                 "near": {"type": "string", "minLength": 1, "maxLength": 200,
                          "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
                 "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
@@ -234,37 +222,35 @@ impl Tool for NavigateTool {
         if !self.routing_installed() {
             return Err(err(ToolError::NOT_SET_UP, "navigate is not set up: no map region is installed"));
         }
-        let have_offroad = match self.offroad() {
-            Ok(o) => o,
-            Err(e) if a.mode.is_offroad() => return Err(e),
-            Err(_) => None,
-        };
-        if a.mode.is_offroad() && have_offroad.is_none() {
-            return Err(err(ToolError::NOT_SET_UP, "off-road routing is not set up: the off-road pack and elevation data are not installed on this phone"));
-        }
+        // off-road legs need the pack and the elevation file; without them road routing still works
+        let have_offroad = self.offroad().ok().flatten();
         let valhalla = self.valhalla()?;
         let r = resolve::Resolver { ctx, source: self.place_source() };
+        let start_hint = ctx.location.is_some();
+        let hint = |e: ToolError| if start_hint { e.with("hint", "The phone's location is known: omit from to start there.") } else { e };
 
-        // the town the trip is in, and where to prefer matches
-        let near_pt = a.near.as_deref().and_then(|t| r.near_point(t));
-        let bias = near_pt.as_ref().map(|p| (p.lat, p.lon)).or(ctx.location.map(|l| (l.lat, l.lon)));
-        let location_bias = if near_pt.is_some() {
-            "near"
-        } else if ctx.location.is_some() {
-            "phone_location"
-        } else {
-            "none"
-        };
+        // where to prefer matches: the phone's position, else the town in `near`, else (below) the matched start
+        let mut bias: Option<(f64, f64)> = ctx.location.map(|l| (l.lat, l.lon));
+        let mut bias_source: Option<String> = bias.map(|_| "sender_node_position".to_string());
+        if bias.is_none() {
+            if let Some(p) = a.near.as_deref().and_then(|t| r.near_point(t)) {
+                bias = Some((p.lat, p.lon));
+                bias_source = Some(format!("near:{}", p.name));
+            }
+        }
 
         let from = match a.from.as_deref() {
-            Some(t) => r.named(t, "from", a.near.as_deref(), bias, false)?,
-            None => match (ctx.location, near_pt) {
-                (Some(l), _) => resolve::Resolved::here(l.lat, l.lon),
-                (None, Some(p)) => p,
-                (None, None) if a.near.is_some() => {
-                    return Err(err("origin_unknown", format!("the start is not known: no starting place was given, the phone's location is not known, and {:?} could not be found", a.near.as_deref().unwrap_or(""))))
+            Some(t) => {
+                let o = r.named(t, "from", a.near.as_deref(), bias, false).map_err(hint)?;
+                if bias.is_none() {
+                    bias = Some((o.lat, o.lon));
+                    bias_source = Some("from_place".into());
                 }
-                (None, None) => return Err(err(ToolError::NO_LOCATION, "no starting place was given and the phone's location is not known")),
+                o
+            }
+            None => match ctx.location {
+                Some(l) => resolve::Resolved::here(l.lat, l.lon),
+                None => return Err(err("origin_unknown", "no from and no phone location")),
             },
         };
 
@@ -273,14 +259,14 @@ impl Tool for NavigateTool {
         let to = match (a.to.as_deref(), a.to_type.as_deref()) {
             (Some(t), None) => {
                 let mut to = r.named(t, "to", a.near.as_deref(), bias, true)?;
-                for o in std::mem::take(&mut to.others) {
-                    others.push(build::candidate(&o, None, a.mode));
+                for o in std::mem::take(&mut to.others).into_iter().take(2) {
+                    others.push(build::candidate(&resolve::Resolved::from_match(o), None));
                 }
                 to
             }
             (None, Some(cat)) => {
-                let (to, ranked_by, rest) = self.nearest(&r, &*valhalla, &a, cat, (from.lat, from.lon))?;
-                nearest_search = Some(json!({"to_type": cat, "ranked_by": ranked_by}));
+                let (to, ranked_by, rest) = self.nearest(&*valhalla, &a, cat, &from)?;
+                nearest_search = Some(json!({"to_type": cat, "ranked_by": ranked_by, "warnings": Value::Null}));
                 others = rest;
                 to
             }
@@ -288,15 +274,11 @@ impl Tool for NavigateTool {
         };
 
         if cache_offroad::grid::haversine_m(from.lat, from.lon, to.lat, to.lon) < SAME_PLACE_M {
-            return Err(err("same_place", format!("the start and the destination are the same place ({})", to.name)));
+            return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to)));
         }
 
         let mut req = NavigateRequest::new(from.waypoint(), to.waypoint(), a.mode.travel(), a.land_access);
-        req.offroad = match (a.mode.is_offroad(), have_offroad.is_some()) {
-            (true, _) => cache_offroad::directions::OffroadChoice::Always,
-            (false, true) => cache_offroad::directions::OffroadChoice::Auto,
-            (false, false) => cache_offroad::directions::OffroadChoice::Never,
-        };
+        req.offroad = if have_offroad.is_some() { cache_offroad::directions::OffroadChoice::Auto } else { cache_offroad::directions::OffroadChoice::Never };
         let (no_pack, no_elev) = (NoPack, NoElevation);
         let (pack, elev): (&dyn PackSource, &dyn ElevationSource) = match &have_offroad {
             Some(o) => (&o.pack, &o.elevation),
@@ -306,11 +288,20 @@ impl Tool for NavigateTool {
         nav.options = self.route_options();
         let d = nav.navigate(&req).map_err(|e| err(ToolError::BAD_ARGUMENTS, e.to_string()))?;
         if !d.ok {
-            return Err(build::route_error(&d, &*valhalla, (from.lat, from.lon), (to.lat, to.lon), a.mode));
+            return Err(build::route_error(&d, &from, &to));
         }
-        let region = self.region_info(ctx.now);
-        let gap_warnings = have_offroad.is_none();
-        Ok(ToolOutput::Json(build::result(&d, &from, &to, a.mode, location_bias, others, nearest_search, region, gap_warnings, DEFAULT_OFFROAD_SNAP_M)))
+        if d.distance_km < SAME_PLACE_M / 1000.0 {
+            return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to)));
+        }
+        let x = build::Extras {
+            location_bias: bias_source,
+            others,
+            nearest_search,
+            region: self.region_info(ctx.now),
+            synth_warnings: have_offroad.is_none(),
+            snap_m: DEFAULT_OFFROAD_SNAP_M,
+        };
+        Ok(ToolOutput::Json(build::result(&d, &from, &to, a.mode.name(), x)))
     }
 }
 
@@ -323,22 +314,19 @@ impl NavigateTool {
         o
     }
 
-    /// The nearest place of a category by travel time from `origin`: the winner, how the ranking was done, and the others.
-    fn nearest(&self, r: &resolve::Resolver, valhalla: &dyn Valhalla, a: &Args, cat: &str, origin: (f64, f64)) -> Result<(resolve::Resolved, String, Vec<Value>), ToolError> {
-        let Some(src) = self.place_source() else {
-            return Err(err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone"));
-        };
-        let Some(cats) = src.categories() else {
-            return Err(err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone"));
-        };
+    /// The nearest place of a category by travel time from `from`: the winner, how the ranking was done, and the others
+    /// (at most 2, with `drive_min`).
+    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, String, Vec<Value>), ToolError> {
+        let not_set_up = || err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone");
+        let src = self.place_source().ok_or_else(not_set_up)?;
+        let cats = src.categories().ok_or_else(not_set_up)?;
         if !cats.iter().any(|c| c == cat) {
             return Err(err(ToolError::BAD_ARGUMENTS, format!("to_type: {cat:?} is not a category on this phone")));
         }
-        let _ = r;
+        let origin = (from.lat, from.lon);
         let ans = src.nearest(&cache_tool::places::NearestQuery { category: cat, from: origin, limit: NEAREST_CANDIDATES })?;
         if ans.matches.is_empty() {
-            let km = ans.searched_within_km.map(Value::from).unwrap_or(Value::Null);
-            return Err(err("nearby_empty", format!("no {cat} was found near the start")).with("to_type", cat).with("searched_within_km", km));
+            return Err(build::with_ends(err("nearby_empty", "").with("to_type", cat).with("warnings", Value::Null), from, None));
         }
         let costing = a.mode.travel().costing();
         let mut ranked: Vec<(Option<f64>, cache_tool::places::PlaceMatch)> = ans
@@ -358,9 +346,8 @@ impl NavigateTool {
         }
         let mut it = ranked.into_iter();
         let (_, best) = it.next().expect("non-empty");
-        let rest: Vec<Value> = it.map(|(t, m)| build::candidate(&m, t, a.mode)).collect();
-        let ranked_by = if any_time { format!("{}_time", a.mode.travel().name()) } else { "distance".to_string() };
-        Ok((resolve::Resolved::from_match(best), ranked_by, rest))
+        let rest: Vec<Value> = it.take(2).map(|(t, m)| build::candidate(&resolve::Resolved::from_match(m), Some(t))).collect();
+        Ok((resolve::Resolved::from_match(best), a.mode.name().to_string(), rest))
     }
 
     /// Name and age of the installed map region (the tiles file).
@@ -406,15 +393,15 @@ impl Args {
             }
         };
         let mode = s("mode")?.ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "mode: required"))?;
-        let mode = ModeArg::parse(&mode).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "mode: must be one of drive, walk, bike, offroad_vehicle, offroad_foot"))?;
+        let mode = ModeArg::parse(&mode).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "mode: must be one of drive, walk, bike"))?;
         let land_access = match s("land_access")? {
             None => Boundary::Pragmatic,
             Some(x) => Boundary::from_name(&x).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "land_access: must be one of strict, pragmatic, emergency"))?,
         };
         let (to, to_type) = (s("to")?, s("to_type")?);
         match (&to, &to_type) {
-            (None, None) => return Err(err(ToolError::BAD_ARGUMENTS, "give either to (a place name) or to_type (the nearest place of a kind)")),
-            (Some(_), Some(_)) => return Err(err(ToolError::BAD_ARGUMENTS, "give either to or to_type, not both")),
+            (None, None) => return Err(err(ToolError::BAD_ARGUMENTS, "give exactly one of to or to_type")),
+            (Some(_), Some(_)) => return Err(err(ToolError::BAD_ARGUMENTS, "give exactly one of to or to_type")),
             _ => {}
         }
         Ok(Args { from: s("from")?, to, to_type, mode, near: s("near")?, land_access })

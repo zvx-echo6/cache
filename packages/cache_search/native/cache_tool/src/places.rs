@@ -12,7 +12,12 @@ pub struct PlaceMatch {
     pub kind: Option<String>,
     pub street: Option<String>,
     pub locality: Option<String>,
+    pub county: Option<String>,
     pub state: Option<String>,
+    /// How far the match is from the search's bias point, in km (AIDA's geocoder gives it).
+    pub distance_km: Option<f64>,
+    /// Emergency rooms only: the evidence tier (1 = a hospital with an emergency department listing).
+    pub er_tier: Option<i64>,
     pub lat: f64,
     pub lon: f64,
     /// The place's OSM "key:value" (for example "highway:path"), which seeds the off-road travel modes at that end.
@@ -21,7 +26,19 @@ pub struct PlaceMatch {
 
 impl PlaceMatch {
     pub fn new(place_name: impl Into<String>, lat: f64, lon: f64) -> PlaceMatch {
-        PlaceMatch { place_name: place_name.into(), kind: None, street: None, locality: None, state: None, lat, lon, osm_category: None }
+        PlaceMatch {
+            place_name: place_name.into(),
+            kind: None,
+            street: None,
+            locality: None,
+            county: None,
+            state: None,
+            distance_km: None,
+            er_tier: None,
+            lat,
+            lon,
+            osm_category: None,
+        }
     }
 }
 

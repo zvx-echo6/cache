@@ -1,0 +1,193 @@
+{
+ "request": {
+  "from": "Redfish Lake Lodge",
+  "mode": "walk",
+  "to": "Bench Lakes"
+ },
+ "result": {
+  "distance_km": 9.21,
+  "distance_mi": 5.72,
+  "duration_minutes": 61.4,
+  "from_matched": {
+   "county": "Custer",
+   "distance_km": null,
+   "kind": "poi",
+   "locality": null,
+   "near": {
+    "county": "Custer",
+    "distance_m": 0,
+    "housenumber": null,
+    "locality": null,
+    "name": "Redfish Lake Lodge",
+    "state": "Idaho",
+    "street": "Redfish Point Campground Road"
+   },
+   "place_name": "Redfish Lake Lodge",
+   "snap_distance_m": 16,
+   "state": "Idaho",
+   "street": "Redfish Point Campground Road"
+  },
+  "location_bias": "from_place",
+  "major_roads": [
+   {
+    "distance_km": 5.66,
+    "name": "Redfish Lake Hiker Boat Shuttle"
+   },
+   {
+    "distance_km": 1.74,
+    "name": "Grand Mogul Trail"
+   },
+   {
+    "distance_km": 1.52,
+    "name": "Redfish Creek-Baron Creek Trail"
+   }
+  ],
+  "mode": "walk",
+  "ok": true,
+  "other_destination_candidates": [
+   {
+    "county": "Custer",
+    "distance_km": 3.9,
+    "kind": "street",
+    "locality": null,
+    "place_name": "Bench Lakes Trail",
+    "state": "Idaho",
+    "street": null
+   }
+  ],
+  "pins": "10 map pins prepared, one per step; the radio bridge sends them to the asker",
+  "route_id": "b966b9b4a4e98b6b",
+  "step_count": 10,
+  "steps": [
+   {
+    "cardinal": "W",
+    "distance_mi": 0.01,
+    "index": 0,
+    "instruction": "Walk west on the walkway.",
+    "kind": "road",
+    "street_names": [],
+    "type": "start_left"
+   },
+   {
+    "cardinal": "S",
+    "distance_mi": 0.04,
+    "index": 1,
+    "instruction": "Turn left.",
+    "kind": "road",
+    "street_names": [],
+    "type": "left"
+   },
+   {
+    "cardinal": "E",
+    "distance_mi": 0.01,
+    "index": 2,
+    "instruction": "Turn left.",
+    "kind": "road",
+    "street_names": [],
+    "type": "left"
+   },
+   {
+    "cardinal": "S",
+    "distance_mi": 0.05,
+    "index": 3,
+    "instruction": "Turn right onto the walkway.",
+    "kind": "road",
+    "street_names": [],
+    "type": "right"
+   },
+   {
+    "cardinal": "S",
+    "distance_mi": 3.52,
+    "index": 4,
+    "instruction": "Take the Redfish Lake Hiker Boat Shuttle Ferry.",
+    "kind": "road",
+    "street_names": [
+     "Redfish Lake Hiker Boat Shuttle"
+    ],
+    "type": "ferry_enter"
+   },
+   {
+    "cardinal": "W",
+    "distance_mi": 0.0,
+    "index": 5,
+    "instruction": "Walk west on the walkway.",
+    "kind": "road",
+    "street_names": [],
+    "type": "ferry_exit"
+   },
+   {
+    "cardinal": "NW",
+    "distance_mi": 0.07,
+    "index": 6,
+    "instruction": "Bear right.",
+    "kind": "road",
+    "street_names": [],
+    "type": "slight_right"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 1.08,
+    "index": 7,
+    "instruction": "Turn right onto Grand Mogul Trail/TR 7045.",
+    "kind": "road",
+    "street_names": [
+     "Grand Mogul Trail",
+     "TR 7045"
+    ],
+    "type": "right"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.94,
+    "index": 8,
+    "instruction": "Make a sharp right onto Redfish Creek-Baron Creek Trail/TR 7101.",
+    "kind": "road",
+    "street_names": [
+     "Redfish Creek-Baron Creek Trail",
+     "TR 7101"
+    ],
+    "type": "sharp_right"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.0,
+    "index": 9,
+    "instruction": "Your destination is on the left.",
+    "kind": "road",
+    "street_names": [],
+    "type": "destination_left"
+   }
+  ],
+  "steps_truncated": false,
+  "to_matched": {
+   "county": "Custer",
+   "distance_km": 4.0,
+   "kind": "poi",
+   "locality": null,
+   "near": {
+    "county": "Custer",
+    "distance_m": 0,
+    "housenumber": null,
+    "locality": null,
+    "name": "Bench Lakes",
+    "state": "Idaho",
+    "street": null
+   },
+   "place_name": "Bench Lakes",
+   "snap_distance_m": 968,
+   "state": "Idaho",
+   "street": null
+  },
+  "warnings": [
+   {
+    "code": "offroad_unavailable",
+    "end": "to",
+    "gap_m": 968,
+    "road_point": {
+     "lat": 44.113375,
+     "lon": -114.944744
+    }
+   }
+  ]
+ }
+}
