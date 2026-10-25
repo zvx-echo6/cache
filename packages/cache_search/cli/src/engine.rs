@@ -130,6 +130,27 @@ impl Core {
         Ok(())
     }
 
+    /// `cs_set_web`: `provider` "kagi" or None (off), `key` None for none, `online` as the app says. The key goes
+    /// straight to the core; it is not kept, printed or put in an error here.
+    pub fn set_web(&mut self, provider: Option<&str>, key: Option<&str>, online: bool) -> Result<(), ApiError> {
+        let p = provider.map(|s| cstring(s, "provider")).transpose()?;
+        let k = key.map(|s| cstring(s, "key")).transpose()?;
+        let rc = unsafe {
+            cs_set_web(self.h, p.as_ref().map_or(ptr::null(), |c| c.as_ptr()), k.as_ref().map_or(ptr::null(), |c| c.as_ptr()), online as i32)
+        };
+        if rc != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    /// Web search with Kagi at another address (for runs against a stand-in server; set by CACHE_WEB_BASE_URL).
+    pub fn set_web_kagi_at(&mut self, base_url: &str, key: &str, online: bool) {
+        // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.
+        let h = unsafe { &*self.h };
+        h.web.configure(Some(Arc::new(cache_search::web::KagiProvider::with_base_url(base_url))), Some(key), online);
+    }
+
     pub fn tool_schemas(&mut self) -> Result<String, ApiError> {
         let p = unsafe { cs_tool_schemas(self.h) };
         self.result(p)

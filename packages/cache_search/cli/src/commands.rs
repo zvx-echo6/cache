@@ -23,6 +23,8 @@ cs: command line and HTTP wrapper over the cache_search core
   cs status          --config <sources.json> [--open-timeout 600]
   cs tool <name>     --config <sources.json> [--args '<json>'] [--now <iso8601>] [--lat <deg> --lon <deg> [--accuracy <m>]]
                      [--json] [EMBED] [--open-timeout 600]
+                     (web_search needs CACHE_WEB_PROVIDER=kagi and CACHE_WEB_KEY in the environment; CACHE_WEB_BASE_URL
+                     replaces Kagi's address, for runs against a local stand-in server)
   cs tool-schemas    [--config <sources.json>] [--open-timeout 600]
   cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [EMBED] [--open-timeout 600]
 
@@ -101,6 +103,15 @@ fn open_engine_with(a: &Args, cfg: &str) -> Result<Engine, ApiError> {
     let mut core = Core::open(cfg)?;
     if let Some(e) = &embedder {
         core.set_query_embedder(e.clone());
+    }
+    // Web search: on when both variables are set, and the app is then taken to be online.
+    let env_set = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    if let (Some(provider), Some(key)) = (env_set("CACHE_WEB_PROVIDER"), env_set("CACHE_WEB_KEY")) {
+        match env_set("CACHE_WEB_BASE_URL").filter(|_| provider.eq_ignore_ascii_case("kagi")) {
+            // test runs only: Kagi's address replaced by a local stand-in server
+            Some(base) => core.set_web_kagi_at(&base, &key, true),
+            None => core.set_web(Some(&provider), Some(&key), true)?,
+        }
     }
     core.wait_ready(Duration::from_secs(a.num("open-timeout", 600u64).map_err(usage_err)?))?;
     Ok(Engine { core, embedder })
@@ -265,6 +276,9 @@ pub fn tool(argv: &[String]) -> Result<(), ApiError> {
         let v: Value = serde_json::from_str(&out).map_err(|e| ApiError::new("internal", e.to_string()))?;
         print(v["content"].as_str().unwrap_or(""));
         print(&format!("ids {}", v["ids"]));
+        if let Some(t) = v.get("timing_ms") {
+            eprintln!("timing_ms {t}");
+        }
     }
     Ok(())
 }

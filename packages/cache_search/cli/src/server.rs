@@ -13,6 +13,8 @@
 //!   GET    /tools                                                -> cs_tool_schemas
 //!   POST   /location        {lat, lon, accuracy_m, fixed_at}     -> cs_set_location ({"ok":true}; accuracy_m optional)
 //!   DELETE /location                                             -> cs_clear_location ({"ok":true})
+//!   POST   /web             {provider, key, online}              -> cs_set_web ({"ok":true}; the key is never echoed or logged)
+//!   DELETE /web                                                  -> web search off, key cleared ({"ok":true})
 //!   POST   /conversations/{id}/tool  {name, args, now}           -> cs_tool ({"content","ids"})
 //! Errors are `{"code","message"}` (the core's error) with a matching HTTP status.
 
@@ -131,6 +133,21 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
         }
         (Method::Delete, ["location"]) => {
             st.engine.core.clear_location()?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["web"]) => {
+            let v = body_json(body)?;
+            let opt = |key: &str| match &v[key] {
+                Value::Null => Ok(None),
+                Value::String(s) => Ok(Some(s.as_str())),
+                _ => Err(ApiError::new("bad_json", format!("\"{key}\" must be a string"))),
+            };
+            let online = v["online"].as_bool().ok_or_else(|| ApiError::new("bad_json", "\"online\" (boolean) is required"))?;
+            st.engine.core.set_web(opt("provider")?, opt("key")?, online)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Delete, ["web"]) => {
+            st.engine.core.set_web(None, None, false)?;
             Ok(json!({"ok": true}).to_string())
         }
         (Method::Post, ["conversations", id, "tool"]) => {
