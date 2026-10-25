@@ -13,6 +13,8 @@ cache_tool = { path = "../cache_tool" }
 # Saved places and live data live in their own crates; this crate wires them into the handle and exports their C ABI.
 cache_user = { path = "../cache_user" }
 cache_live = { path = "../cache_live" }
+# The navigate tool (Valhalla road routing and off-road legs), registered from the "routing" section of the config.
+cache_navigate = { path = "../cache_navigate" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "1"

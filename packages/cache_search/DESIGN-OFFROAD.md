@@ -157,7 +157,7 @@ cap is about 470 MB. Timing, 107 km route (12.3 M cells), release build on the d
 3. Valhalla: the real library through the C shim. The shim's `actor_t` exceptions carry Valhalla's `error_code`; the
    directions error mapping (442/443 no_route, 170/171 too_far or out_of_coverage, 154 too_far) reads it through the new
    `valhalla_shim_last_error_code`. Valhalla requests use `"units": "km"` for every route call (navi uses
-   `directions_options.units` for the bypass; same result). Logging: the shim prints Valhalla's INFO lines to stdout.
+   `directions_options.units` for the bypass; same result). Logging: the shim reads the config's `logging` section (`ConfigureFromPtree`); `valhalla_config.json` sets `{"type": ""}`, Valhalla's no-op logger, so nothing reaches stdout.
 4. MVUM is rasterized from the pack's feature table onto the query grid at query time with navi's Bresenham, using
    the query grid's linear meta (navi uses the requested bbox scaled to the grid; same offset effect as section 2).
    Verified cell-for-cell against navi's `_rasterize_feature` on the same geometry.
@@ -341,9 +341,8 @@ seeds the travel modes at that end. No C ABI or tool wrapper yet.
 
 ## 8. What is left
 
-1. The C ABI / tool wrapper over `Navigator::navigate` (the framework session), pack and elevation download and versioning
+1. (The tool wrapper is done: `cache_navigate`, see DESIGN.md "navigate".) Pack and elevation download and versioning
    (`meta.mode_profile_hash` and `src_*` are there for staleness checks), where the shim library and the Valhalla tiles live on the phone.
 2. Follow-leg names and end descriptions offline (navi uses PostGIS `entry_points` and navi-geo): `Env.namer` is the hook; the pack
    has no road-name table.
-3. Silence or redirect Valhalla's own logging in the shim (config `logging`), and size work on the pack (trailhead points, MVUM
-   geometry) if a phone-sized region needs it.
+3. Size work on the pack (trailhead points, MVUM geometry) if a phone-sized region needs it. (Valhalla's logging is silenced: done.)

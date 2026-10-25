@@ -1,7 +1,6 @@
 {
  "logging": {
-  "type": "std_out",
-  "color": false
+  "type": ""
  },
  "mjolnir": {
   "max_cache_size": 300000000,

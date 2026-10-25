@@ -58,6 +58,8 @@ char *cs_version(void);
  *   "user": {"db_path": ".../user.sqlite"},          optional: where saved places are stored (cs_places_*)
  *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
  *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
+ *   "routing": {"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll"},   optional: the navigate tool
+ *               "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles"}},  (see DESIGN.md)
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
