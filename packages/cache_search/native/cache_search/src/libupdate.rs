@@ -139,6 +139,7 @@ pub fn prepare_manifest(library_path: &str, out_path: &str, hold_ms: u64) -> Res
     if !library.is_dir() {
         return Err(Error::not_found(format!("library folder {} not found", library.display())));
     }
+    library::check_not_damaged(&library, false)?;
     segment_dirs(&library)?;
     let out = PathBuf::from(out_path);
     if out.is_dir() {
@@ -168,6 +169,8 @@ pub fn apply_manifest(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Outcome> {
     ensure_init();
+    // a damaged library (a segment whose files are gone) is refused before anything is closed or written
+    library::check_not_damaged(&req.library, true)?;
     progress(0, MANIFEST_STEPS);
     if !entry.close_all(cancelled)? || cancelled() {
         return Ok(Outcome::Cancelled);
@@ -273,6 +276,7 @@ pub fn prepare(library_path: &str, snapshot_path: &str, manifest_path: &str, hoo
     if current.is_empty() {
         return Err(Error::bad_json(format!("{} lists no segments", mpath.display())));
     }
+    library::check_not_damaged(&library, false)?;
     let listed: BTreeSet<String> = current.iter().map(|(id, _)| id.clone()).collect();
     let on_disk = segment_dirs(&library)?;
     if listed != on_disk {
@@ -450,12 +454,8 @@ fn sync_dir(dir: &Path) -> Result<()> {
 /// It cannot tell a library with the right contents from one with other contents; only that it is whole enough to
 /// be opened.
 pub fn library_is_complete(library: &Path) -> bool {
-    let Ok(text) = std::fs::read(library.join(library::MANIFEST_FILE)) else { return false };
-    let Ok(serde_json::Value::Object(m)) = serde_json::from_slice::<serde_json::Value>(&text) else { return false };
-    if m.is_empty() || !m.keys().all(|id| library.join("segments").join(id).is_dir()) {
-        return false;
-    }
-    library::opens_read_only(library).is_ok_and(|n| n == m.len())
+    let Some(l) = library::manifest_listed(library) else { return false };
+    l.count > 0 && l.present == l.count && library::opens_read_only(library).is_ok_and(|n| n == l.count)
 }
 
 /// Whether a staging folder or an old-library folder sits beside the library (a cheap look, no reading).
@@ -550,6 +550,8 @@ pub fn apply_update(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Outcome> {
     ensure_init();
+    // a damaged library (a segment whose files are gone) is refused before anything is closed or written
+    library::check_not_damaged(&req.library, true)?;
     progress(0, STEPS);
     // 0: before anything is closed or created
     check_space(req)?;

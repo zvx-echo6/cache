@@ -13,6 +13,7 @@ pub enum ErrorCode {
     Io,
     Cancelled,
     NoSpace,
+    Damaged,
     Internal,
 }
 
@@ -29,6 +30,7 @@ impl ErrorCode {
             ErrorCode::Io => "io",
             ErrorCode::Cancelled => "cancelled",
             ErrorCode::NoSpace => "no_space",
+            ErrorCode::Damaged => "damaged",
             ErrorCode::Internal => "internal",
         }
     }
@@ -61,6 +63,10 @@ impl Error {
     }
     pub fn io(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Io, m)
+    }
+    /// A library's files are incomplete (the manifest lists segments that are missing). Nothing was changed.
+    pub fn damaged(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Damaged, m)
     }
     pub fn internal(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, m)
@@ -125,6 +131,7 @@ mod tests {
             (ErrorCode::Io, "io"),
             (ErrorCode::Cancelled, "cancelled"),
             (ErrorCode::NoSpace, "no_space"),
+            (ErrorCode::Damaged, "damaged"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

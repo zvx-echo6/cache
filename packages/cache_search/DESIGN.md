@@ -147,6 +147,15 @@ sources at the pinned rev say (read in full, 2026-10-25):
     drops a segment whose files are gone without an error; found by a test). It does not prove that the contents are the
     intended ones. The open is only done when `.cs-old` exists. The check cannot see other processes: it assumes
     the caller owns the library.
+  - An incomplete library with no `.cs-old` is never deleted or repaired, only reported as `damaged`. When a
+    library is opened for search (`cs_open`, `cs_set_sources`), and at the start of `update_library` and
+    `library_manifest`, an existing `segments_manifest.json` is compared with what is there: a listed segment
+    folder that is missing, or an open that finds fewer segments than the manifest lists (the open drops a segment
+    whose files are gone), fails with code `damaged` ("opening" false, "id" null, "error" set in `cs_status`; the
+    job fails). Nothing is deleted or rewritten (the manifest is not regenerated) and nothing is kept open. A
+    library with no manifest (a freshly dropped-in server snapshot) gets one written from its segment folders, as
+    before, so it cannot be checked for missing segments. The update jobs make this check with one extra
+    read-only open (uncounted, scroll profile) before they close anything.
 
 The job, in order:
 0. Space check (above). Fails with `no_space` before anything is closed or created.

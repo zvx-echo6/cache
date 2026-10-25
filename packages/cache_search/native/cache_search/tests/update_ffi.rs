@@ -1277,3 +1277,101 @@ fn hard_link_staging_c_rename_only_merge_without_load_leaves_the_original_untouc
         assert_eq!(n, 310, "{name}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// A library with missing segments is reported as damaged and left alone
+
+/// Remove one segment's folder (`false`) or only the files inside it (`true`).
+fn damage(f: &Fixture, empty_only: bool) -> String {
+    let seg = segment_ids(&f.lib).into_iter().next().unwrap();
+    let dir = f.lib.join("segments").join(&seg);
+    if empty_only {
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() { std::fs::remove_dir_all(p).unwrap() } else { std::fs::remove_file(p).unwrap() }
+        }
+    } else {
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    seg
+}
+
+fn assert_damaged_source(h: *mut cache_search::handle::Handle, lib: &Path) {
+    let v = status(h);
+    let s = &v["sources"][0];
+    assert_eq!(s["opening"], false, "{v}");
+    assert!(s["id"].is_null(), "{v}");
+    assert_eq!(s["error"]["code"], "damaged", "{v}");
+    let msg = s["error"]["message"].as_str().unwrap();
+    assert!(msg.contains(lib.to_str().unwrap()), "{msg}");
+    assert!(msg.contains("lists"), "{msg}");
+    let r = search(h, &random_vec(5), 3);
+    assert!(r["results"].as_array().unwrap().is_empty(), "{r}");
+}
+
+#[test]
+fn a_manifest_segment_whose_folder_is_gone_is_damaged_and_nothing_is_touched() {
+    let f = fixture("damaged-folder", false);
+    damage(&f, false);
+    let before = fingerprint(&f.lib);
+    let h = open(&f.lib);
+    assert_damaged_source(h, &f.lib);
+    unsafe { cs_close(h) };
+    assert_eq!(fingerprint(&f.lib), before, "byte-identical, manifest not regenerated");
+    assert!(!is_clean_leftovers(&f.lib));
+}
+
+fn is_clean_leftovers(lib: &Path) -> bool {
+    libupdate::has_leftovers(lib)
+}
+
+#[test]
+fn a_segment_folder_with_its_files_gone_is_damaged_and_nothing_is_touched() {
+    let f = fixture("damaged-files", false);
+    damage(&f, true);
+    let before = fingerprint(&f.lib);
+    let h = open(&f.lib);
+    assert_damaged_source(h, &f.lib);
+    unsafe { cs_close(h) };
+    assert_eq!(fingerprint(&f.lib), before);
+}
+
+#[test]
+fn update_and_manifest_jobs_on_a_damaged_library_fail_with_damaged_and_change_nothing() {
+    // folder gone: refused by cs_job_start
+    let f = fixture("damaged-job-folder", false);
+    damage(&f, false);
+    let before = fingerprint(&f.lib);
+    assert_eq!(start_err(job_params(&f, 0))["code"], "damaged");
+    let out = f.lib.parent().unwrap().join("m.json");
+    assert_eq!(start_kind_err("library_manifest", manifest_params(&f, &out, 0))["code"], "damaged");
+    assert!(!out.exists());
+    assert_eq!(fingerprint(&f.lib), before);
+    // files gone: the job fails before it closes or writes anything
+    let g = fixture("damaged-job-files", false);
+    damage(&g, true);
+    let before = fingerprint(&g.lib);
+    let j = start_job(job_params(&g, 0));
+    let done = wait_job(j);
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(done["error"]["code"], "damaged", "{done}");
+    unsafe { cs_job_free(j) };
+    let out = g.lib.parent().unwrap().join("m2.json");
+    let j = start_kind("library_manifest", manifest_params(&g, &out, 0));
+    let done = wait_job(j);
+    assert_eq!(done["error"]["code"], "damaged", "{done}");
+    unsafe { cs_job_free(j) };
+    assert!(!out.exists());
+    assert_eq!(fingerprint(&g.lib), before);
+    assert!(is_clean(&g));
+}
+
+#[test]
+fn a_library_with_no_manifest_still_gets_one_written_on_open() {
+    let f = fixture("no-manifest", false);
+    std::fs::remove_file(f.lib.join(MANIFEST_FILE)).unwrap();
+    let h = open(&f.lib);
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    unsafe { cs_close(h) };
+    assert_eq!(listed_in_manifest_file(&f.lib), segment_ids(&f.lib));
+}

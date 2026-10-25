@@ -19,6 +19,7 @@
  *   "cancelled"      a job was cancelled
  *   "no_space"       not enough free disk space for an update_library job; the job error also has the numbers
  *                    "needed" and "available" (bytes)
+ *   "damaged"        a library's files are incomplete; nothing was changed
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -60,7 +61,8 @@ char *cs_version(void);
  * inside the core and is listed by cs_status with "opening":true until it is ready. Search skips a library
  * that is still opening, as it skips a source that is being built; cs_read for it fails with code "busy". A
  * library that fails to open is recorded on its source in cs_status like any other source error ("opening"
- * false, "id":null, "error" set), not as a failure of cs_open. A malformed settings object is a failure of
+ * false, "id":null, "error" set), not as a failure of cs_open; a library whose segments_manifest.json lists
+ * segments that are missing is reported with code "damaged" and is neither used nor changed. A malformed settings object is a failure of
  * cs_open ("bad_json"). Closing the handle while a library is still opening is safe.
  * Each source gets a stable id: the ZIM's UUID, or the library's library_id. A source with a missing, stale or
  * building index is reported by cs_status() and skipped by search; it is not an error for cs_open. */
@@ -80,6 +82,7 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * docs, no embedding_model unless settings were given, "indexed" false, and "keyword_source" null; search
  * skips it. "opening" is false for everything else, and always for ZIMs. "keyword_source" is null for ZIMs and
  * for a library that is still opening. A library that finished opening is reported as before.
+ * "error" codes of a library source include "damaged" (see above) as well as "not_found" and "io".
  * "updating" is true for a library an update_library job owns (see cs_job_start): its shard is closed, search skips
  * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
  * thread ("opening":true until ready). "updating" is false for everything else.

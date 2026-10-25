@@ -364,6 +364,49 @@ pub fn ensure_segments_manifest(shard_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// What `segments_manifest.json` lists, checked against the folders: `count` segments listed, `present` of them
+/// are folders under `segments/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Listed {
+    pub count: usize,
+    pub present: usize,
+}
+
+/// Read `segments_manifest.json` without writing anything. `None` when the file is missing, unreadable or not a
+/// JSON object (a library with no manifest cannot be checked for missing segments).
+pub fn manifest_listed(shard_dir: &Path) -> Option<Listed> {
+    let text = std::fs::read(shard_dir.join(MANIFEST_FILE)).ok()?;
+    let Value::Object(m) = serde_json::from_slice::<Value>(&text).ok()? else { return None };
+    let present = m.keys().filter(|id| shard_dir.join("segments").join(id).is_dir()).count();
+    Some(Listed { count: m.len(), present })
+}
+
+/// The `damaged` error: the manifest lists `listed` segments and only `found` are there (or opened).
+pub fn damaged_error(shard_dir: &Path, listed: usize, found: usize) -> Error {
+    Error::damaged(format!(
+        "the library is incomplete: segments_manifest.json lists {listed} segments and {found} were found in {}; nothing was changed",
+        shard_dir.display()
+    ))
+}
+
+/// The cheap check before a library is touched: `damaged` when the manifest lists a segment whose folder is
+/// missing. With `open`, also opens the library read-only once (the cheap scroll profile, uncounted, nothing
+/// kept) and compares the segments the open found (it drops a segment whose files are gone without an error).
+/// No manifest, no check. Writes nothing.
+pub fn check_not_damaged(shard_dir: &Path, open: bool) -> Result<()> {
+    let Some(l) = manifest_listed(shard_dir) else { return Ok(()) };
+    if l.present < l.count {
+        return Err(damaged_error(shard_dir, l.count, l.present));
+    }
+    if open && l.count > 0 {
+        let n = opens_read_only(shard_dir)?;
+        if n < l.count {
+            return Err(damaged_error(shard_dir, l.count, n));
+        }
+    }
+    Ok(())
+}
+
 /// Unpack a Qdrant shard snapshot into `dir` (created if missing) and write its manifest.
 /// Returns the number of segments. For jobs and the CLI.
 pub fn unpack_library(snapshot_file: &Path, dir: &Path) -> Result<usize> {
@@ -530,7 +573,8 @@ pub fn opens_read_only(path: &Path) -> Result<usize> {
         .map_err(|e| op_io(&format!("opening {}", path.display()), e))
 }
 
-/// Open a library read-only. Writes nothing to the shard except `segments_manifest.json` when it is missing,
+/// Open a library read-only. A library whose existing manifest lists more segments than are there (a folder
+/// missing, or an open that drops a segment) is not used: `damaged`, nothing changed or kept open. Writes nothing to the shard except `segments_manifest.json` when it is missing,
 /// and except that it first puts right what a crashed update left beside the library (`.cs-stage`, `.cs-old`;
 /// see `libupdate::recover_leftovers`), which only happens when such a folder exists.
 pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&Value>) -> Result<LibSlot> {
@@ -543,10 +587,23 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     }
     let entry = libreg::entry_for(path);
     let seen_gen = entry.generation();
+    // Read before `ensure_segments_manifest` can write one: a manifest that exists says what must be there.
+    let listed = manifest_listed(path);
+    if let Some(l) = listed {
+        if l.present < l.count {
+            return Err(damaged_error(path, l.count, l.present));
+        }
+    }
     ensure_segments_manifest(path)?;
     let vector = pre.as_ref().map(|s| s.embedding.vector.clone()).unwrap_or_default();
     let profile = LoadProfile::for_search(&vector, None, true);
     let shard = open_counted(path, profile)?;
+    if let Some(l) = listed {
+        let n = shard.segments_count();
+        if n < l.count {
+            return Err(damaged_error(path, l.count, n));
+        }
+    }
     let settings = resolve_settings(&shard, path, settings)?;
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
     let own_scoring = detect_own_scoring(&shard, &settings);
