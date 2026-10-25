@@ -1,17 +1,18 @@
 //! Library sources: a Qdrant collection's shard opened read-only with Qdrant Edge.
 //!
-//! This slice covers settings, unpacking, the segment manifest, opening, dense (vector) search with the
-//! leave-out post-filter, and reading a point. A library has no keyword list yet: the device keyword index
-//! (`index_library`, the next slice) is not built, so until then a library contributes only its vector list
-//! to a search, and only when the caller's query vector matches the library's embedding model.
+//! Settings, unpacking, the segment manifest, opening, dense (vector) search with the leave-out post-filter,
+//! keyword lists (the library's own scored text index, or the device Tantivy index built by `index_library`)
+//! and reading a point.
 
 use crate::error::{Error, Result};
 use crate::html;
+use crate::index::{self, IndexState};
+use crate::libindex::{self, LibOpenIndex};
 use common::universal_io::{MmapFile, MmapFs};
 use edge::{
-    CountRequest, EdgeShard, EdgeShardRead, JsonPath, LoadProfile, NamedQuery, PointId, QueryEnum, QueryRequestBuilder,
-    ReadOnlyEdgeShard, RetrieveRequest, ScoringQuery, ScrollRequest, SearchParams, VectorInternal, WithPayloadInterface,
-    WithVector,
+    CountRequest, EdgeShard, EdgeShardRead, JsonPath, LoadProfile, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
+    QueryRequest, QueryRequestBuilder, ReadOnlyEdgeShard, RetrieveRequest, ScoringQuery, ScrollRequest, SearchParams,
+    TextIndexParams, TextQueryBuilder, VectorInternal, WithPayloadInterface, WithVector,
 };
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -382,7 +383,9 @@ pub struct LibSlot {
     pub shard: Shard,
     pub docs: usize,
     /// The opened device keyword index (reopened when it changes on disk).
-    pub kw: Option<crate::libindex::LibOpenIndex>,
+    pub kw: Option<LibOpenIndex>,
+    /// The collection has a BM25-scored text index on the mapped text field.
+    pub own_scoring: bool,
 }
 
 /// The library's folder name, used as its id and title when settings are guessed.
@@ -444,6 +447,17 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
     })
 }
 
+/// Whether the collection has a text index with BM25 scoring on the mapped text field. Any failure to find out
+/// counts as "no".
+pub fn detect_own_scoring(shard: &Shard, settings: &LibrarySettings) -> bool {
+    let Ok(field) = settings.fields.text.parse::<JsonPath>() else { return false };
+    let Ok(info) = EdgeShardRead::info(shard) else { return false };
+    matches!(
+        info.payload_schema.get(&field).and_then(|i| i.params.as_ref()),
+        Some(PayloadSchemaParams::Text(TextIndexParams { scoring: Some(_), .. }))
+    )
+}
+
 /// Open a library's shard read-only with the scroll load profile (for `index_library`). Like `open_library`, it
 /// writes nothing except a missing `segments_manifest.json`.
 pub fn open_shard_for_scroll(path: &Path) -> Result<Shard> {
@@ -470,7 +484,8 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     let shard = Shard::open(MmapFs, path, None, Some(profile)).map_err(|e| op_io(&format!("opening {}", path.display()), e))?;
     let settings = resolve_settings(&shard, path, settings)?;
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
-    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, docs, kw: None })
+    let own_scoring = detect_own_scoring(&shard, &settings);
+    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, docs, kw: None, own_scoring })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -487,6 +502,17 @@ pub struct LibHit {
     /// The key duplicates collapse on: document value + title when a document field is mapped and set,
     /// else title + snippet.
     pub key: String,
+}
+
+/// A keyword hit of a library before its fields are built. `hit` is set when the source already returned the
+/// payload (the library's own scored index); a device-index hit is resolved from the shard when it is shown.
+#[derive(Debug, Clone)]
+pub struct LibKwHit {
+    pub address: String,
+    pub point_id: String,
+    pub raw: f32,
+    pub coverage: f32,
+    pub hit: Option<LibHit>,
 }
 
 pub struct ReadOut {
@@ -588,27 +614,21 @@ impl LibSlot {
         Ok(Some(self.make_hit(&rec.id, score, p, snippet_chars)))
     }
 
-    /// Dense search with `vector`. Fetches `base` candidates, drops left-out points, and if fewer than `need`
-    /// distinct hits survive, widens to 2x then 4x `base` and stops. Hits are in rank order.
-    pub fn dense_search(&self, vector: &[f32], need: usize, base: usize, snippet_chars: usize) -> Result<Vec<LibHit>> {
-        let name = &self.settings.embedding.vector;
-        let selector = self.payload_selector();
+    /// Run a query at widths `base`, 2x, 4x (stopping early), drop left-out points, and return the survivors in
+    /// rank order (score descending, ties by address). Stops widening once `need` distinct hits survive or the
+    /// shard returned fewer than asked.
+    fn ranked(
+        &self,
+        make: &dyn Fn(usize) -> QueryRequest,
+        what: &str,
+        need: usize,
+        base: usize,
+        snippet_chars: usize,
+    ) -> Result<Vec<LibHit>> {
         let base = base.max(need).max(1);
         let mut hits: Vec<LibHit> = Vec::new();
         for width in [base, base * 2, base * 4] {
-            let nq = if name.is_empty() {
-                NamedQuery::default_dense(vector.to_vec())
-            } else {
-                NamedQuery::new(VectorInternal::Dense(vector.to_vec()), name.clone())
-            };
-            let mut params = SearchParams::default();
-            params.hnsw_ef = Some(HNSW_EF);
-            let req = QueryRequestBuilder::new(width)
-                .query(ScoringQuery::Vector(QueryEnum::Nearest(nq)))
-                .params(params)
-                .with_payload(selector.clone())
-                .build();
-            let mut res = EdgeShardRead::query(&self.shard, req).map_err(|e| op_internal("dense search", e))?;
+            let mut res = EdgeShardRead::query(&self.shard, make(width)).map_err(|e| op_internal(what, e))?;
             let returned = res.len();
             // equal scores: the smaller address (string compare) first
             res.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.to_string().cmp(&b.id.to_string())));
@@ -631,6 +651,118 @@ impl LibSlot {
             }
         }
         Ok(hits)
+    }
+
+    /// Dense search with `vector`. Fetches `base` candidates, drops left-out points, and if fewer than `need`
+    /// distinct hits survive, widens to 2x then 4x `base` and stops. Hits are in rank order.
+    pub fn dense_search(&self, vector: &[f32], need: usize, base: usize, snippet_chars: usize) -> Result<Vec<LibHit>> {
+        let name = &self.settings.embedding.vector;
+        let selector = self.payload_selector();
+        let make = |width: usize| {
+            let nq = if name.is_empty() {
+                NamedQuery::default_dense(vector.to_vec())
+            } else {
+                NamedQuery::new(VectorInternal::Dense(vector.to_vec()), name.clone())
+            };
+            let mut params = SearchParams::default();
+            params.hnsw_ef = Some(HNSW_EF);
+            QueryRequestBuilder::new(width)
+                .query(ScoringQuery::Vector(QueryEnum::Nearest(nq)))
+                .params(params)
+                .with_payload(selector.clone())
+                .build()
+        };
+        self.ranked(&make, "dense search", need, base, snippet_chars)
+    }
+
+    /// BM25 over the library's own scored text index on the mapped text field (Edge's text scoring query).
+    /// Same widening and leave-out post-filter as `dense_search`.
+    pub fn own_search(&self, query: &str, need: usize, base: usize, snippet_chars: usize) -> Result<Vec<LibHit>> {
+        let field: JsonPath =
+            self.settings.fields.text.parse().map_err(|_| Error::internal("the text field is not a valid path"))?;
+        let selector = self.payload_selector();
+        let make = |width: usize| {
+            QueryRequestBuilder::new(width)
+                .query(TextQueryBuilder::new(field.clone(), query).build())
+                .with_payload(selector.clone())
+                .build()
+        };
+        self.ranked(&make, "text search", need, base, snippet_chars)
+    }
+
+    /// Replace the settings (a later `set_sources` with other settings for the same folder).
+    pub fn set_settings(&mut self, settings: LibrarySettings) {
+        self.own_scoring = detect_own_scoring(&self.shard, &settings);
+        self.settings = settings;
+    }
+
+    /// Whether the keyword index is wanted at all (`keyword_index` "auto" or "on").
+    pub fn keyword_wanted(&self) -> bool {
+        matches!(self.settings.keyword_index.as_str(), "auto" | "on")
+    }
+
+    /// State of the device keyword index in `index_dir`.
+    pub fn device_state(&self) -> IndexState {
+        index::index_state(self.index_dir.as_deref(), &libindex::source_key(self.id()))
+    }
+
+    /// The opened device index if (and only if) it is `done`.
+    pub fn device_index(&mut self) -> Result<Option<&LibOpenIndex>> {
+        let IndexState::Done(meta) = self.device_state() else {
+            self.kw = None;
+            return Ok(None);
+        };
+        let dir = self.index_dir.clone().expect("done implies index_dir");
+        if self.kw.as_ref().map(|o| o.is_outdated(&dir)).unwrap_or(true) {
+            self.kw = None;
+            self.kw = Some(LibOpenIndex::open(&dir, &meta.tokenizer)?);
+        }
+        Ok(self.kw.as_ref())
+    }
+
+    /// What this library uses for keyword search: "own" (its scored text index; only with keyword_index "auto"),
+    /// "device" (the built Tantivy index; "auto" without an own index, or "on") or "none".
+    pub fn keyword_source(&mut self) -> &'static str {
+        match self.settings.keyword_index.as_str() {
+            "off" => "none",
+            "auto" if self.own_scoring => "own",
+            _ => match self.device_index() {
+                Ok(Some(_)) => "device",
+                _ => "none",
+            },
+        }
+    }
+
+    /// The library's keyword list for `query`, best first, and the number of matches; `None` when it has no
+    /// keyword source (off, or the device index is missing, stale or building).
+    pub fn keyword_list(&mut self, query: &str, candidates: usize, snippet_chars: usize) -> Result<Option<(Vec<LibKwHit>, usize)>> {
+        let lib_id = self.id().to_string();
+        let addr = |pid: &str| format!("lib:{lib_id}/{pid}");
+        match self.keyword_source() {
+            "own" => {
+                let hits = self.own_search(query, candidates, candidates, snippet_chars)?;
+                let n = hits.len();
+                let out = hits
+                    .into_iter()
+                    .map(|h| {
+                        let point_id = h.address.rsplit('/').next().unwrap_or("").to_string();
+                        // BM25 only: there is no term list to measure coverage with
+                        LibKwHit { address: h.address.clone(), point_id, raw: h.score, coverage: 1.0, hit: Some(h) }
+                    })
+                    .collect();
+                Ok(Some((out, n)))
+            }
+            "device" => {
+                let Some(oi) = self.device_index()? else { return Ok(None) };
+                let (hits, count) = libindex::keyword_hits(oi, query, candidates)?;
+                let out = hits
+                    .into_iter()
+                    .map(|h| LibKwHit { address: addr(&h.point_id), point_id: h.point_id, raw: h.raw, coverage: h.coverage, hit: None })
+                    .collect();
+                Ok(Some((out, count)))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Read a point by its id as given in an address.

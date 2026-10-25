@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::handle::{Handle, Source};
-use crate::library::{self, LibHit};
+use crate::library::{self, LibHit, LibKwHit};
 use crate::html;
 use crate::zimsrc;
 use serde::Deserialize;
@@ -39,7 +39,17 @@ struct QueryVec {
 /// A merged result before its fields are built: a ZIM hit (source, hit) or a library hit (library, hit).
 enum Entry {
     Zim(usize, usize),
+    /// A dense (vector) hit: (index into `libs`, hit).
     Lib(usize, usize),
+    /// A library keyword hit: (index into `lib_kw`, hit).
+    LibKw(usize, usize),
+}
+
+/// One library's keyword list.
+struct LibKw {
+    src_i: usize,
+    hits: Vec<LibKwHit>,
+    count: usize,
 }
 
 fn five() -> usize {
@@ -270,16 +280,36 @@ impl Handle {
             });
         }
 
-        let lists: Vec<Vec<(f32, f32, String)>> = per
+        // Libraries' keyword lists (own scored index or device index) join the cross-source keyword merge.
+        let mut lib_kw: Vec<LibKw> = Vec::new();
+        for (src_i, s) in self.sources.iter_mut().enumerate() {
+            let Source::Library(l) = s else { continue };
+            if let Some(f) = &filter {
+                if !f.contains(&l.id().to_ascii_lowercase()) {
+                    continue;
+                }
+            }
+            if let Ok(Some((hits, count))) = l.keyword_list(query, candidates, snippet_chars) {
+                lib_kw.push(LibKw { src_i, hits, count });
+            }
+        }
+
+        let mut lists: Vec<Vec<(f32, f32, String)>> = per
             .iter()
             .map(|p| p.hits.iter().map(|h| (h.raw, h.coverage, zimsrc::format_address(&p.id, &h.path))).collect())
             .collect();
+        lists.extend(lib_kw.iter().map(|k| k.hits.iter().map(|h| (h.raw, h.coverage, h.address.clone())).collect()));
         let need = opts.offset + opts.k;
         let merged = merge_keyword(&lists, min_cov, need);
+        let entry_of = |m: &Merged| {
+            if m.si < per.len() {
+                Entry::Zim(m.si, m.hi)
+            } else {
+                Entry::LibKw(m.si - per.len(), m.hi)
+            }
+        };
 
-        // Libraries: a vector list for each library whose embedding model matches the query vector. A library
-        // has no keyword list yet (`index_library` is a later slice), so without a matching vector it
-        // contributes nothing and is reported as keyword-only.
+        // Libraries: a vector list for each library whose embedding model matches the query vector.
         let mut keyword_only: Vec<String> = per.iter().map(|p| p.id.clone()).collect();
         let mut vector_sources: Vec<String> = Vec::new();
         let mut libs: Vec<(usize, Vec<LibHit>)> = Vec::new();
@@ -309,25 +339,25 @@ impl Handle {
             }
         }
 
-        // Order: the keyword-merged ZIM list as it is; with library vector lists, reciprocal rank fusion
-        // (k=60) of the keyword list and each library's vector list, one entry per address.
+        // Order: the keyword-merged list as it is; with library vector lists, reciprocal rank fusion (k=60) of
+        // the keyword list and each library's vector list, one entry per address (a point found by both is
+        // taken from the vector list, which carries its payload).
         let order: Vec<Entry> = if libs.is_empty() {
-            merged.iter().map(|m| Entry::Zim(m.si, m.hi)).collect()
+            merged.iter().map(|m| entry_of(m)).collect()
         } else {
             let mut by_addr: HashMap<String, Entry> = HashMap::new();
             let mut rank_lists: Vec<Vec<(String, f32)>> = Vec::new();
             let mut kw: Vec<(String, f32)> = Vec::new();
             for m in &merged {
-                let addr = zimsrc::format_address(&per[m.si].id, &per[m.si].hits[m.hi].path);
-                kw.push((addr.clone(), m.raw));
-                by_addr.entry(addr).or_insert(Entry::Zim(m.si, m.hi));
+                kw.push((m.addr.clone(), m.raw));
+                by_addr.entry(m.addr.clone()).or_insert_with(|| entry_of(m));
             }
             rank_lists.push(kw);
             for (li, (_, hits)) in libs.iter().enumerate() {
                 let mut l: Vec<(String, f32)> = Vec::new();
                 for (hi, h) in hits.iter().enumerate() {
                     l.push((h.address.clone(), h.score));
-                    by_addr.entry(h.address.clone()).or_insert(Entry::Lib(li, hi));
+                    by_addr.insert(h.address.clone(), Entry::Lib(li, hi));
                 }
                 rank_lists.push(l);
             }
@@ -335,23 +365,51 @@ impl Handle {
         };
 
         // Collapse duplicate library hits after the merge (same document value + title, or without a document
-        // field the same title + snippet): the best-ranked stays, and the list fills up from the next ranked.
-        let mut seen: HashSet<&str> = HashSet::new();
-        let order: Vec<Entry> = order
-            .into_iter()
-            .filter(|e| match e {
-                Entry::Lib(li, hi) => seen.insert(libs[*li].1[*hi].key.as_str()),
-                Entry::Zim(..) => true,
-            })
-            .collect();
+        // field the same title + snippet): the best-ranked stays (on an exact tie the smaller address, which the
+        // ordering already puts first), and the list fills up from the next ranked. Keyword-only library hits
+        // are read from the shard payload as they are reached, so only the hits that can be shown are read.
+        enum Shown {
+            Zim(usize, usize),
+            Lib(usize, LibHit),
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut shown: Vec<Shown> = Vec::new();
+        for e in order {
+            if shown.len() >= need {
+                break;
+            }
+            match e {
+                Entry::Zim(si, hi) => shown.push(Shown::Zim(si, hi)),
+                Entry::Lib(li, hi) => {
+                    let h = &libs[li].1[hi];
+                    if seen.insert(h.key.clone()) {
+                        shown.push(Shown::Lib(libs[li].0, h.clone()));
+                    }
+                }
+                Entry::LibKw(ki, hi) => {
+                    let (src_i, kw) = (lib_kw[ki].src_i, &lib_kw[ki].hits[hi]);
+                    let hit = match &kw.hit {
+                        Some(h) => Some(h.clone()),
+                        None => match &self.sources[src_i] {
+                            Source::Library(l) => l.hit_for_point(&kw.point_id, kw.raw, snippet_chars).ok().flatten(),
+                            _ => None,
+                        },
+                    };
+                    if let Some(h) = hit {
+                        if seen.insert(h.key.clone()) {
+                            shown.push(Shown::Lib(src_i, h));
+                        }
+                    }
+                }
+            }
+        }
 
         let mut generators: HashMap<usize, Option<SnippetGenerator>> = HashMap::new();
         let mut results: Vec<Value> = Vec::new();
-        for e in order.into_iter().skip(opts.offset).take(opts.k) {
+        for e in shown.into_iter().skip(opts.offset).take(opts.k) {
             let (m_si, hi) = match e {
-                Entry::Lib(li, hi) => {
-                    let h = &libs[li].1[hi];
-                    let Source::Library(l) = &self.sources[libs[li].0] else { continue };
+                Shown::Lib(src_i, h) => {
+                    let Source::Library(l) = &self.sources[src_i] else { continue };
                     results.push(json!({
                         "address": h.address,
                         "title": h.title,
@@ -363,7 +421,7 @@ impl Handle {
                     }));
                     continue;
                 }
-                Entry::Zim(si, hi) => (si, hi),
+                Shown::Zim(si, hi) => (si, hi),
             };
             let p = &per[m_si];
             let h = &p.hits[hi];
@@ -401,7 +459,9 @@ impl Handle {
         }
         Ok(json!({
             "results": results,
-            "total_estimate": per.iter().map(|p| p.count).sum::<usize>() + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
+            "total_estimate": per.iter().map(|p| p.count).sum::<usize>()
+                + lib_kw.iter().map(|k| k.count).sum::<usize>()
+                + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
             "vector_sources": vector_sources,
             "keyword_only_sources": keyword_only,
         })

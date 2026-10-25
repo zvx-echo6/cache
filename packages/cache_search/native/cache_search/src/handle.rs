@@ -193,7 +193,8 @@ impl Handle {
                     let mut s = old[i].take().expect("reused twice");
                     if let Source::Library(l) = &mut s {
                         l.index_dir = index_dir;
-                        l.settings = settings;
+                        l.kw = None;
+                        l.set_settings(settings);
                     }
                     s
                 }
@@ -255,17 +256,22 @@ impl Handle {
                     "docs": 0, "embedding_model": Value::Null,
                     "error": {"code": error.code.as_str(), "message": error.message},
                 }),
-                // `indexed` is the keyword index; libraries have none until `index_library` (a later slice), so
-                // `keyword_source` is "none" and `indexed` false. The library still answers vector searches.
-                Source::Library(l) => json!({
-                    "id": l.settings.library_id, "kind": "library", "path": l.path.to_string_lossy(),
-                    "title": l.settings.title, "language": Value::Null,
-                    "indexed": false, "building": false, "stale": false,
-                    "docs": l.docs,
-                    "embedding_model": if l.settings.embedding.model.is_empty() { Value::Null } else { json!(l.settings.embedding.model) },
-                    "library_id": l.settings.library_id, "keyword_source": "none",
-                    "settings": l.settings.to_json(), "error": Value::Null,
-                }),
+                // `indexed` is the keyword index: the library's own scored index or the built device index.
+                Source::Library(l) => {
+                    let st = l.device_state();
+                    let wanted = l.keyword_wanted();
+                    let source = l.keyword_source();
+                    let (building, stale) = (wanted && st == IndexState::Building, wanted && st == IndexState::Stale);
+                    json!({
+                        "id": l.settings.library_id, "kind": "library", "path": l.path.to_string_lossy(),
+                        "title": l.settings.title, "language": Value::Null,
+                        "indexed": source != "none", "building": building, "stale": stale,
+                        "docs": l.docs,
+                        "embedding_model": if l.settings.embedding.model.is_empty() { Value::Null } else { json!(l.settings.embedding.model) },
+                        "library_id": l.settings.library_id, "keyword_source": source,
+                        "settings": l.settings.to_json(), "error": Value::Null,
+                    })
+                }
             })
             .collect();
         json!({ "sources": list }).to_string()
