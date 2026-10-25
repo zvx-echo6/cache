@@ -79,7 +79,7 @@ pub extern "C" fn cs_version() -> *mut c_char {
     let r = guarded(|| {
         out_string(
             serde_json::json!({
-                "version": env!("CARGO_PKG_VERSION"), "pack_format": 1, "index_format": crate::index::INDEX_FORMAT
+                "version": env!("CARGO_PKG_VERSION"), "index_format": crate::index::INDEX_FORMAT
             })
             .to_string(),
         )
@@ -389,8 +389,8 @@ mod tests {
     fn version_json() {
         let v: serde_json::Value = serde_json::from_str(&take(cs_version()).unwrap()).unwrap();
         assert_eq!(v["version"], "0.1.0");
-        assert_eq!(v["pack_format"], 1);
         assert_eq!(v["index_format"], 2);
+        assert_eq!(v.as_object().unwrap().len(), 2, "only what the header documents: {v}");
     }
 
     #[test]

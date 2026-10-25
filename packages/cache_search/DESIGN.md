@@ -13,8 +13,9 @@ phone and the headless runs return identical results for identical data and quer
 Layout (repo `packages/cache_search/`):
 - `native/` — Cargo workspace root. Crate `cache_search` (lib: `cdylib` + `staticlib` + `rlib`). Header
   `native/include/cache_search.h`.
-- `cli/` — crate `cache_search_cli`: `cs index-zim`, `cs index-library`, `cs search`, `cs read`, `cs serve`
-  (HTTP: `POST /search`, `POST /read`, both calling the same functions as the C ABI).
+- `cli/` — crate `cache_search_cli`, binary `cs` (a member of the `native/` workspace as `../cli`): `cs index-zim`,
+  `unpack-library`, `index-library`, `search`, `read`, `status`, `serve` (HTTP). Built as described under
+  Headless parity; it calls the same `cs_*` functions as the C ABI.
 
 The crate never links llama.cpp. Query vectors come from the caller (the app via cache_llama `cl_embed`; the
 Linux CLI via the same cache_llama C library built for Linux). A library's vectors are computed off-device by whoever builds it, with the embedding model named in the
@@ -217,9 +218,71 @@ Strings returned by the core are freed with `cs_free_string`.
 
 ## Headless parity
 
-`cs serve` exposes the same search/read/format. The test and capture harness call it with query vectors from
-cache_llama built for Linux. Until `cl_embed` exists, the interim is llama.cpp's own embedding code at the same
-commit cache_llama pins (v0.7.0, 620d2225c) and the same GGUF; to be replaced by cache_llama before any training capture.
+`cs` (crate `cache_search_cli`, `packages/cache_search/cli/`) is the Linux command line and HTTP wrapper for headless
+test runs and training capture. It is a thin layer over the same C ABI functions the app calls: it links the
+`cache_search` crate and calls the `cs_*` functions themselves (`cs_open`, `cs_status`, `cs_search`, `cs_read`,
+`cs_suggest`, `cs_format`, `cs_conversation_*`, `cs_job_*`), passing JSON in and printing the JSON that comes
+out, untouched. It does no ranking, snippeting, numbering or filtering of its own, so for identical data and
+identical query vectors its output is the phone's output. The one thing it calls that has no C ABI function is the
+core's `library::unpack_library` helper (`cs unpack-library`).
+
+Subcommands (results on stdout as the core's JSON, errors on stderr as `{"code","message"}`, exit status 1):
+- `cs index-zim --zim <path> --index-dir <dir> [--heap-mb 200]`: runs an `index_zim` job, prints `state done/total`
+  to stderr as it changes and the final progress JSON to stdout. Resumes from the checkpoint in `index_dir`.
+- `cs unpack-library --snapshot <file> --dir <dir>`: unpacks a Qdrant shard snapshot and writes
+  `segments_manifest.json`; prints `{"dir","segments"}`.
+- `cs index-library --library <dir> --index-dir <dir> [--settings <cache-library.json>] [--heap-mb 200]`: an
+  `index_library` job; `--settings` is passed as the job's `settings` object.
+- `cs search --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [embedder flags]`:
+  prints the `cs_search` JSON. With `--format` it prints the `tool_message` that `cs_format` gives a fresh
+  conversation (with `--format --json`, the whole `cs_format` JSON). Plain `--json` is accepted and is the default.
+- `cs read --config <sources.json> --address <addr> [--max-chars 6000]`: the `cs_read` JSON.
+- `cs status --config <sources.json>`: the `cs_status` JSON.
+- `cs serve --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [embedder flags]`: HTTP, below.
+- All commands that open sources take `--open-timeout <seconds>` (default 600). `cs_open` returns at once and
+  libraries open on background threads, so the wrapper polls `cs_status` until no source is `"opening"` before it
+  searches or serves, and stops with a `busy` error on timeout.
+- `sources.json` is exactly the `cs_open` config JSON. One convenience: a library entry may carry
+  `"settings_file": "cache-library.json"` (path relative to `sources.json`) instead of `"settings"`; the wrapper
+  reads the file and passes its contents as `settings`, the same thing the app does. The core still never looks
+  for the file itself.
+
+HTTP (`cs serve`, tiny_http; binds 127.0.0.1 by default and refuses any non-loopback address unless
+`--allow-non-loopback` is given; prints `listening <addr>` on stdout when ready; one request at a time, which is
+what a handle requires). JSON in, the core's JSON out byte for byte:
+
+| Endpoint | Body | Calls |
+|---|---|---|
+| `POST /search` | `{query, options}` | `cs_search` |
+| `POST /read` | `{address, max_chars}` (default 6000) | `cs_read` |
+| `POST /suggest` | `{prefix, options}` | `cs_suggest` |
+| `GET /status` | | `cs_status` |
+| `POST /conversations` | | `cs_conversation_new`; returns `{"id"}` |
+| `POST /conversations/{id}/format` | `{results}` | `cs_format` on that conversation |
+| `GET /conversations/{id}/ids` | | `cs_conversation_ids` |
+| `DELETE /conversations/{id}` | | `cs_conversation_free`; returns `{"deleted":"<id>"}` |
+
+Errors are the core's `{"code","message"}` with HTTP 400 (`bad_json`), 404 (`not_found`, also unknown
+endpoint or conversation), 409 (`busy`, `index_missing`, `index_stale`, `cancelled`), 422 (`unsupported`), 500 (anything else).
+
+Query embedding. Embedder flags: `--embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
+[--embed-model-id <id>] [--embed-threads 4]`. The core never links llama.cpp, and cache_llama's `cl_embed`
+lives on another branch, so the wrapper loads the built `libcache_llama.so` at run time with the `libloading`
+crate from the given path and looks up `cl_embed_load`, `cl_embed_info`, `cl_embed` and `cl_embed_free`. No
+llama.cpp code is compiled into `cs`, and the same C functions the app calls produce the vector. When an
+embedder is configured and the request has no `options.query_vector`, `cs search` and `POST /search` embed the
+query and add `query_vector: {"model": <id>, "vector": [...]}`; a `query_vector` given by the caller is passed
+through unchanged. The model id is `--embed-model-id`, default the GGUF file name, and must equal the library's
+settings `embedding.model` for vectors to be used (otherwise the library is keyword-only and the response says
+so). `--embed-sha256` makes the wrapper hash the GGUF and stop on a mismatch. The settings that define the
+vector are constants in one place (`cli/src/embed.rs`, marked as having to match the app): `n_ctx` 512,
+`normalize` on, no query prefix, pooling read from the model's metadata and required to be `cls`, and the decided
+model bge-m3 Q8_0 (`bge-m3-Q8_0.gguf`, sha256 `c98c7c90...c158bb`). Threads only affect speed.
+
+Tests (`cli/tests/cli.rs`) spawn the binary: status, search, `--format`, read over the small NHS ZIM (index built
+with `cs index-zim`); `cs serve` answers `/search`, `/read` and `/status` byte for byte like the CLI, and [n]
+numbering continues across two `/format` calls; and, with the embedding library and model mounted, a generated
+bge-m3 library found by a paraphrased query through both the CLI and the server.
 
 ## Measured on the recon library (2026-10-25)
 
