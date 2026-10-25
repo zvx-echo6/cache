@@ -1,0 +1,57 @@
+{
+ "total": 2,
+ "data": [
+  {
+   "url": "https://example.org/video-channels/survival-kitchen-1930",
+   "name": "survival-kitchen-1930",
+   "host": "example.org",
+   "avatars": [],
+   "id": 162,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-03-27T05:07:50.413Z",
+   "banners": [],
+   "displayName": "(YT)Survival Kitchen 1930",
+   "description": null,
+   "support": "Mirrored from YouTube",
+   "isLocal": true,
+   "updatedAt": "2026-08-08T15:21:18.227Z",
+   "ownerAccount": {
+    "url": "https://example.org/accounts/root",
+    "name": "root",
+    "host": "example.org",
+    "avatars": [],
+    "id": 2,
+    "hostRedundancyAllowed": false,
+    "displayName": "root"
+   }
+  },
+  {
+   "url": "https://example.org/video-channels/scl-general-survival",
+   "name": "scl-general-survival",
+   "host": "example.org",
+   "avatars": [],
+   "id": 172,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-04-15T16:17:51.764Z",
+   "banners": [],
+   "displayName": "SCL-General-Survival",
+   "description": "Survival Companion Library — SCL-General-Survival",
+   "support": null,
+   "isLocal": true,
+   "updatedAt": "2026-04-15T18:55:22.258Z",
+   "ownerAccount": {
+    "url": "https://example.org/accounts/root",
+    "name": "root",
+    "host": "example.org",
+    "avatars": [],
+    "id": 2,
+    "hostRedundancyAllowed": false,
+    "displayName": "root"
+   }
+  }
+ ]
+}

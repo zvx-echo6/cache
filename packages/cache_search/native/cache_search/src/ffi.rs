@@ -41,7 +41,7 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
 
 /// Run `f` against a handle. On error the error is stored on the handle (or on the thread when the
 /// handle is NULL) and `fail` is returned. A call clears the handle's previous error first.
-fn with_handle<T>(h: *mut Handle, fail: T, f: impl FnOnce(&mut Handle) -> Result<T>) -> T {
+pub(crate) fn with_handle<T>(h: *mut Handle, fail: T, f: impl FnOnce(&mut Handle) -> Result<T>) -> T {
     if h.is_null() {
         set_thread_error(Error::bad_json("null handle"));
         return fail;
@@ -58,7 +58,7 @@ fn with_handle<T>(h: *mut Handle, fail: T, f: impl FnOnce(&mut Handle) -> Result
     }
 }
 
-fn arg_str<'a>(p: *const c_char, what: &str) -> Result<&'a str> {
+pub(crate) fn arg_str<'a>(p: *const c_char, what: &str) -> Result<&'a str> {
     if p.is_null() {
         return Err(Error::bad_json(format!("{what} is null")));
     }
@@ -68,7 +68,7 @@ fn arg_str<'a>(p: *const c_char, what: &str) -> Result<&'a str> {
         .map_err(|_| Error::bad_json(format!("{what} is not valid UTF-8")))
 }
 
-fn out_string(s: String) -> Result<*mut c_char> {
+pub(crate) fn out_string(s: String) -> Result<*mut c_char> {
     CString::new(s)
         .map(CString::into_raw)
         .map_err(|_| Error::internal("string contains NUL"))

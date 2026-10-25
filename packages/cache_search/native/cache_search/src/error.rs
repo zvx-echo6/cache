@@ -14,6 +14,12 @@ pub enum ErrorCode {
     Cancelled,
     NoSpace,
     Damaged,
+    NotConfigured,
+    FetchFailed,
+    Quota,
+    BadResponse,
+    AuthFailed,
+    OtpRequired,
     Internal,
 }
 
@@ -31,7 +37,35 @@ impl ErrorCode {
             ErrorCode::Cancelled => "cancelled",
             ErrorCode::NoSpace => "no_space",
             ErrorCode::Damaged => "damaged",
+            ErrorCode::NotConfigured => "not_configured",
+            ErrorCode::FetchFailed => "fetch_failed",
+            ErrorCode::Quota => "quota",
+            ErrorCode::BadResponse => "bad_response",
+            ErrorCode::AuthFailed => "auth_failed",
+            ErrorCode::OtpRequired => "otp_required",
             ErrorCode::Internal => "internal",
+        }
+    }
+}
+
+impl ErrorCode {
+    /// The code for a stable code string from `cache_video`; anything unknown is `internal`.
+    pub fn from_str_code(s: &str) -> ErrorCode {
+        match s {
+            "bad_json" => ErrorCode::BadJson,
+            "not_found" => ErrorCode::NotFound,
+            "io" => ErrorCode::Io,
+            "unsupported" => ErrorCode::Unsupported,
+            "no_space" => ErrorCode::NoSpace,
+            "damaged" => ErrorCode::Damaged,
+            "cancelled" => ErrorCode::Cancelled,
+            "not_configured" => ErrorCode::NotConfigured,
+            "fetch_failed" => ErrorCode::FetchFailed,
+            "quota" => ErrorCode::Quota,
+            "bad_response" => ErrorCode::BadResponse,
+            "auth_failed" => ErrorCode::AuthFailed,
+            "otp_required" => ErrorCode::OtpRequired,
+            _ => ErrorCode::Internal,
         }
     }
 }
@@ -132,6 +166,12 @@ mod tests {
             (ErrorCode::Cancelled, "cancelled"),
             (ErrorCode::NoSpace, "no_space"),
             (ErrorCode::Damaged, "damaged"),
+            (ErrorCode::NotConfigured, "not_configured"),
+            (ErrorCode::FetchFailed, "fetch_failed"),
+            (ErrorCode::Quota, "quota"),
+            (ErrorCode::BadResponse, "bad_response"),
+            (ErrorCode::AuthFailed, "auth_failed"),
+            (ErrorCode::OtpRequired, "otp_required"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

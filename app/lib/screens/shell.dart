@@ -4,18 +4,20 @@ import '../app_state.dart';
 import '../chat/chat_controller.dart';
 import '../location/location_service.dart';
 import '../sources/sources_state.dart';
+import '../video/video_state.dart';
+import 'browse_screen.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
-import 'placeholder_screen.dart';
 
 class Shell extends StatefulWidget {
-  const Shell({super.key, required this.app, required this.chat, required this.sources, required this.location});
+  const Shell({super.key, required this.app, required this.chat, required this.sources, required this.location, required this.video});
 
   final AppState app;
   final ChatController chat;
   final SourcesState sources;
   final LocationService location;
+  final VideoState video;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -33,7 +35,7 @@ class _ShellState extends State<Shell> {
         children: [
           HomeScreen(app: widget.app, sources: widget.sources, onOpenAsk: () => setState(() => _index = 1)),
           AskScreen(app: widget.app, chat: widget.chat),
-          const PlaceholderScreen(title: 'Browse', message: 'Browse comes in step 3'),
+          BrowseScreen(video: widget.video),
           MapsScreen(location: widget.location),
         ],
       ),

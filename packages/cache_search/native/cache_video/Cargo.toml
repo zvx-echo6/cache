@@ -1,0 +1,24 @@
+[package]
+name = "cache_video"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's video connector: generic PeerTube instances through the official REST API, offline downloads, citation link resolution"
+
+[dependencies]
+# HTTPS: blocking, rustls with bundled root certificates (same client as cache_live; no async runtime).
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# Dates for manifests (no clock feature: the clock is read through std).
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+percent-encoding = "2"
+url = "2"
+sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+
+# Free-space check before a download: statvfs on unix, GetDiskFreeSpaceExW on Windows (both already in the lockfile).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

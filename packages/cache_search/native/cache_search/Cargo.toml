@@ -9,6 +9,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 zim = "0.5.0"
+# Video sources (PeerTube): instances, browse, offline downloads, citation links; wired in video_glue.rs and job.rs.
+cache_video = { path = "../cache_video" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

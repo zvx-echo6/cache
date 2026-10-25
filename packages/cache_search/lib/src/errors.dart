@@ -1,7 +1,8 @@
 import 'dart:convert';
 
 /// An error from the search core: [code] is one of the core's stable codes (bad_json, not_found,
-/// index_missing, index_stale, busy, unsupported, io, cancelled, no_space, damaged, internal).
+/// index_missing, index_stale, busy, unsupported, io, cancelled, no_space, damaged, not_configured, fetch_failed,
+/// quota, bad_response, auth_failed, otp_required, internal).
 class CacheSearchException implements Exception {
   const CacheSearchException(this.code, this.message);
 

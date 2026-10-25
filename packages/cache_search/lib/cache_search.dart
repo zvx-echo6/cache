@@ -6,3 +6,5 @@ export 'src/errors.dart' show CacheSearchException;
 export 'src/models.dart';
 export 'src/native.dart' show CsNative, FfiCsNative, ZimBytes;
 export 'src/search_core.dart' show SearchCore, CoreConversation, CoreJobHandle, CsNativeFactory;
+export 'src/video_core.dart' show VideoCore, VideoJob;
+export 'src/video_models.dart';

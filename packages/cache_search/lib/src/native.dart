@@ -38,6 +38,11 @@ abstract class CsNative {
   String? conversationIds(int conv);
   void conversationFree(int conv);
 
+  /// The video connector (cs_video_*). [op] is the function's name after `cs_video_`: instances, instance_add,
+  /// instance_remove, login, refresh, me, channels, list, search, get, downloads, delete, resolve.
+  /// [requestJson] is ignored for instances and downloads.
+  String? video(int handle, String op, String requestJson);
+
   int jobStart(String kind, String paramsJson);
   String? jobProgress(int job);
   int jobCancel(int job);
@@ -91,6 +96,19 @@ class FfiCsNative implements CsNative {
         _format = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_format'),
         _conversationIds = lib.lookupFunction<_HStrC, _HStr>('cs_conversation_ids'),
         _conversationFree = lib.lookupFunction<_VoidHC, _VoidH>('cs_conversation_free'),
+        _videoInstances = lib.lookupFunction<_HStrC, _HStr>('cs_video_instances'),
+        _videoInstanceAdd = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_instance_add'),
+        _videoInstanceRemove = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_instance_remove'),
+        _videoLogin = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_login'),
+        _videoRefresh = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_refresh'),
+        _videoMe = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_me'),
+        _videoChannels = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_channels'),
+        _videoList = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_list'),
+        _videoSearch = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_search'),
+        _videoGet = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_get'),
+        _videoDownloads = lib.lookupFunction<_HStrC, _HStr>('cs_video_downloads'),
+        _videoDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_delete'),
+        _videoResolve = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_resolve'),
         _jobStart = lib.lookupFunction<_JobStartC, _JobStart>('cs_job_start'),
         _jobProgress = lib.lookupFunction<_HStrC, _HStr>('cs_job_progress'),
         _jobCancel = lib.lookupFunction<_JobCancelC, _JobCancel>('cs_job_cancel'),
@@ -128,6 +146,19 @@ class FfiCsNative implements CsNative {
   final _HStrStr _format;
   final _HStr _conversationIds;
   final _VoidH _conversationFree;
+  final _HStr _videoInstances;
+  final _HStrStr _videoInstanceAdd;
+  final _HStrStr _videoInstanceRemove;
+  final _HStrStr _videoLogin;
+  final _HStrStr _videoRefresh;
+  final _HStrStr _videoMe;
+  final _HStrStr _videoChannels;
+  final _HStrStr _videoList;
+  final _HStrStr _videoSearch;
+  final _HStrStr _videoGet;
+  final _HStr _videoDownloads;
+  final _HStrStr _videoDelete;
+  final _HStrStr _videoResolve;
   final _JobStart _jobStart;
   final _HStr _jobProgress;
   final _JobCancel _jobCancel;
@@ -209,6 +240,27 @@ class FfiCsNative implements CsNative {
 
   @override
   void conversationFree(int conv) => _conversationFree(_p(conv));
+
+  @override
+  String? video(int handle, String op, String requestJson) => using((a) {
+        final req = requestJson.toNativeUtf8(allocator: a);
+        return switch (op) {
+      'instances' => _take(_videoInstances(_p(handle))),
+      'instance_add' => _take(_videoInstanceAdd(_p(handle), req)),
+      'instance_remove' => _take(_videoInstanceRemove(_p(handle), req)),
+      'login' => _take(_videoLogin(_p(handle), req)),
+      'refresh' => _take(_videoRefresh(_p(handle), req)),
+      'me' => _take(_videoMe(_p(handle), req)),
+      'channels' => _take(_videoChannels(_p(handle), req)),
+      'list' => _take(_videoList(_p(handle), req)),
+      'search' => _take(_videoSearch(_p(handle), req)),
+      'get' => _take(_videoGet(_p(handle), req)),
+      'downloads' => _take(_videoDownloads(_p(handle))),
+      'delete' => _take(_videoDelete(_p(handle), req)),
+      'resolve' => _take(_videoResolve(_p(handle), req)),
+      _ => throw ArgumentError('Unknown video call $op'),
+        };
+      });
 
   @override
   int jobStart(String kind, String paramsJson) =>

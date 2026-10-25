@@ -21,6 +21,12 @@ class FakeNative implements CsNative {
   }
 
   @override
+  String? video(int handle, String op, String requestJson) {
+    calls.add('video:$op:$requestJson');
+    return replies['video:$op'];
+  }
+
+  @override
   String? version() => _r('version');
   @override
   int open(String configJson) {

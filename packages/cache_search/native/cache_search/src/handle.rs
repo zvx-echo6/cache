@@ -23,6 +23,9 @@ struct SourceCfg {
 #[derive(Debug, Deserialize)]
 struct Config {
     sources: Vec<SourceCfg>,
+    /// The video connector (cache_video): `{"dir": ".../videos"}`. A later cs_set_sources config without it keeps the earlier one.
+    #[serde(default)]
+    video: Option<cache_video::VideoCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -160,6 +163,8 @@ pub struct Handle {
     pub candidates_per_list: u32,
     pub min_term_coverage: f32,
     pub last_error: Option<Error>,
+    /// The video connector, set by the `video` section of the config (see video_glue.rs).
+    pub video: Option<cache_video::Video>,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -168,7 +173,7 @@ fn stem_title(path: &std::path::Path) -> String {
 
 impl Handle {
     pub fn open(config_json: &str) -> Result<Handle> {
-        let mut h = Handle { sources: vec![], snippet_chars: 400, candidates_per_list: 50, min_term_coverage: 0.5, last_error: None };
+        let mut h = Handle { sources: vec![], snippet_chars: 400, candidates_per_list: 50, min_term_coverage: 0.5, last_error: None, video: None };
         h.set_sources(config_json)?;
         Ok(h)
     }
@@ -313,6 +318,9 @@ impl Handle {
         self.snippet_chars = cfg.snippet_chars;
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
+        if let Some(v) = cfg.video {
+            self.video = Some(cache_video::Video::new(&v));
+        }
         Ok(())
     }
 
