@@ -1,0 +1,28 @@
+[package]
+name = "cache_live"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's live data engine: source definitions, fetch, live.sqlite, the app-facing get and the live_data tool"
+
+[dependencies]
+# SQLite compiled into the library ("bundled"): nothing linked from the system, same on Android, Windows and Linux.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# HTTPS: blocking, rustls with bundled root certificates (no platform certificate store, so it works the same on
+# Android), no async runtime.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# Dates and UTC offsets for the field mapping (no clock feature: "now" is always passed in).
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+percent-encoding = "2"
+# Offline latitude/longitude to time zone: tzf-rs (MIT) with its lite embedded boundary file (data from
+# timezone-boundary-builder, ODbL-1.0), queried in place without expanding it; chrono-tz (MIT OR Apache-2.0) for the
+# offsets, including daylight saving.
+tzf-rs = { version = "2", default-features = false, features = ["bundled"] }
+chrono-tz = { version = "0.10", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+cache_tool = { path = "../cache_tool" }
+
+[dev-dependencies]
+tiny_http = "0.12"
+cache_user = { path = "../cache_user" }

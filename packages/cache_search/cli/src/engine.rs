@@ -36,6 +36,10 @@ impl ApiError {
             "not_found" => 404,
             "busy" | "index_missing" | "index_stale" | "cancelled" => 409,
             "unsupported" => 422,
+            "not_configured" => 409,
+            "key_missing" => 400,
+            "quota" => 429,
+            "fetch_failed" | "bad_response" => 502,
             _ => 500,
         }
     }
@@ -149,6 +153,40 @@ impl Core {
             let e = embedder.lock().ok()?;
             e.embed(q).ok().map(|v| (e.model_id.clone(), v))
         }));
+    }
+
+    pub fn places_list(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_places_list(self.h) };
+        self.result(p)
+    }
+
+    pub fn place_save(&mut self, place_json: &str) -> Result<String, ApiError> {
+        let c = cstring(place_json, "place")?;
+        let p = unsafe { cs_place_save(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn place_delete(&mut self, key: &str) -> Result<String, ApiError> {
+        let c = cstring(key, "key")?;
+        let p = unsafe { cs_place_delete(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn live_sources(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_live_sources(self.h) };
+        self.result(p)
+    }
+
+    pub fn live_fetch(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_live_fetch(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn live_get(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_live_get(self.h, c.as_ptr()) };
+        self.result(p)
     }
 
     /// Poll `cs_status` until no source is `"opening"` (libraries open on background threads inside the core).

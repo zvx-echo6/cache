@@ -521,6 +521,138 @@ may have cached reads.
   Keyword query top 10: median 25 ms first pass, 3 ms warm.
 - Binary size: test binary with Edge 37.5 MB stripped (Linux x86_64).
 
+## Saved places and live data (crates `cache_user` and `cache_live`)
+
+Two small crates in the `native/` workspace, compiled into the library; their C functions are exported by
+`cache_search` (`ffi.rs`, glue in `ext.rs`). The tool contract (`cache_tool`) comes from the tool framework; these
+crates implement `SavedPlaces` (`cache_user`) and the `live_data` `Tool` (`cache_live`).
+
+### Saved places (`cache_user`, user.sqlite)
+
+`cs_open` config `"user": {"db_path": ".../user.sqlite"}`. `cs_places_list`, `cs_place_save`, `cs_place_delete` (header
+has the shapes). A place is `{key, name, lat, lon, label?}`; the key is stable across renames, is part of every live-data
+address, and is letters, digits and `_ - . : , +`. A name given to a tool or to live data is matched against saved places
+first (key, then name ignoring case); map-pack place search comes later and plugs in after it. Deleting a place deletes
+the live data stored for it.
+
+### Live sources (`cache_live`)
+
+"Every API data point works this way": one engine, no per-source code. A source is one JSON file; the app points
+`"live": {"db_path", "sources_dir"}` at a folder of them. The files that ship are in `packages/cache_search/sources/`
+(`weather.json`: Open-Meteo, `alerts.json`: NWS); the app copies them into its sources folder on install, and a user adds
+or shares more by dropping files there. An unreadable file is listed under `errors` by `cs_live_sources` and does not stop
+the others.
+
+Definition (format 1; unknown keys are errors, so typos show):
+
+```
+{ "format": 1, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
+  "description": "one line: what the model and the Home card see of this source",
+  "attribution": "optional credit line",
+  "request": { "url": "https://...?lat={lat}&lon={lon}", "headers": {"Accept": "..."} },
+  "api_key": { "alias": "eia", "required": true },      optional; "{api_key}" in url/headers
+  "refresh_minutes": 180,                                a fetch inside this time returns the stored copy
+  "quota": { "per_minute": 30, "per_day": 2000, "per_month": 30000 },       all optional
+  "validity": { "fixed_hours": 6 }                       or { "end_path": "daily.time[-1]", "end_of_day": true,
+                                                              "not_covered_after": true }
+  "require": ["current", "daily.time"],                  paths that must exist, else bad_response
+  "timezone_path": "timezone",                           optional: IANA zone name in the response (best)
+  "utc_offset_path": "utc_offset_seconds",               optional: fixed offset; without either, the offline lookup
+  "items": [ <item group>, ... ] }
+```
+
+URL placeholders: `{lat}` `{lon}` (4 decimals; `{lat:2}` for another count), `{name}`, `{place_key}`, `{api_key}`; values
+are percent-encoded. https only (plain http only to 127.0.0.1/localhost, for tests). Every fetch sends the User-Agent
+`Cache/<version>` and nothing personal. The key value arrives in the fetch request, is used for that call and is never stored
+or written to an error message (the alias is what the app keeps in secure storage).
+
+Item group: `{ "each": "<path to an array>", "key": V, "label": V, "time": V?, "ends": V?, "fields": [ V+label ],
+"sort": [..]?, "point": {"lat": V, "lon": V}?, "area": "<path to a GeoJSON geometry>"? }`. One item per element of `each` (without `each`,
+one item from the response root). `key` is the item's stable id (it ends up in its address); `ends` is when the item stops
+being true (an alert's end; ended items are left out); `fields` are the labelled values, in order, a field with no value
+is left out; `point` and `area` are for map layers and Home cards (not given to the model).
+
+A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that
+has a value) or `distance`, then formatted by these steps, in this order: `time` (`{"in": "local"|"rfc3339"|"unix", "out":
+"datetime"|"datetime_s"|"date"|"<strftime>", "zone": "place"?}`) or `scale`, `offset`, `round` (decimals), `compass`
+(degrees to N/NE/...); `lookup` (a fixed table from a code to text, `"*"` is the fallback; replaces the result);
+`omit_if`; `case`; `max_chars`; `prefix`, `suffix`. No scripting.
+
+Paths are dot-separated keys with `[n]` indexes (`[-1]` last). A path starts at the current element (the `each` element),
+`^` starts at the response root, `@` is the element itself and `[#]` is its index, so a response with one array per column
+reads as `"each": "daily.time"` plus `"path": "^daily.temperature_2m_max[#]"`.
+
+Times: every time the core writes (`fetched_at`, `valid_until`, `age` bases, item times, `last_error.at`) is in the place's
+local offset, as TOOLS.md says. The place's time zone is, in this order: the IANA name at `timezone_path` in the response
+(Open-Meteo `timezone`), a fixed offset at `utc_offset_path`, the offline lookup of the place's position, UTC. A named zone
+knows daylight saving, so a forecast that crosses the change (1 Nov) shows -06:00 before it and -07:00 after, and its
+`valid_until` (local midnight at the end of the last day) is exact. A time the provider wrote with its own offset is
+converted with `"zone": "place"` in its `time` step (the NWS definition does), otherwise it keeps the provider's offset.
+The zone is stored with the row, so a stored response is re-read in the same zone.
+
+Offline zone lookup: `tzf-rs` 2.1 (MIT) with its lite embedded boundary file, queried in place (`EmbeddedFinder`, no
+expansion into memory), and `chrono-tz` 0.10 (MIT OR Apache-2.0) for the offsets. The boundary data is from
+timezone-boundary-builder (ODbL-1.0): the app's credits need a line for it. Both add to the library size, reported with the
+release build.
+
+Distance: a field value `{"distance": {"geometry": "<path to a GeoJSON geometry>", "unit": "mi"|"km"}}` is the distance from
+the place to the nearest point of the area and the compass direction of that point (`6.2 mi S`), or `inside the area` when
+the place is within it (holes count). An item with no geometry has no such field; nothing is estimated from the area name.
+
+Sorting: an item group may have `"sort": [{"by": <value>, "rank": [..] | "time": true, "desc": false}, ...]` (first key
+first; missing values last). The alerts definition sorts by NWS severity (Extreme, Severe, Moderate, Minor, Unknown), then by
+onset.
+
+Rows for the phone's position (`at:` keys) are pruned: after a fetch for one, the other `at:` rows of that source are deleted
+unless they are still within their validity, so only the newest fetch plus any still-valid row is kept. Saved places are
+never pruned.
+
+Validity: `fixed_hours` after the fetch, or the end of the day found at `end_path` (a forecast is valid until its last day
+ends; `not_covered_after` then reports that date). After `valid_until` the data is expired.
+
+### Store and calls
+
+live.sqlite: one row per (source id, place key): `fetched_at`, `valid_until`, the mapped items, the raw response and a hash
+of the definition file. A changed definition re-maps the stored response on the next read without a download. A failed
+download (network, HTTP status, a response that is not JSON or lacks a `require` path, a quota) changes nothing and is
+recorded as the row's `last_error`. Quota caps count every attempt in a log table and refuse with `quota`.
+
+`cs_live_fetch` is called by the app's scheduler (or `cs live-fetch`); it skips the network when the stored copy is younger
+than `refresh_minutes`. `cs_live_get` gives the screens everything stored, expired or not. The `live_data` tool gives the
+model the same items through the same code, at most 12, with `more` for the rest, and refuses expired data with the
+`expired` error. All of them take "now" from the caller (`now` in the request, `ctx.now` in the tool), so captures
+reproduce; only a missing `now` falls back to the system clock.
+
+The phone's own position as a place: the key `at:<lat>,<lon>` with both rounded to 2 decimals (about 1 km) and the name
+`current location`. The `live_data` tool uses it when no place is given and a location is known, so the app fetches
+for the current position with a place object carrying that key.
+
+HTTP is `ureq` (blocking, rustls with bundled root certificates, no async runtime): the app's scheduler or the CLI calls
+fetch from a worker thread, so a blocking client is enough and it adds far fewer crates than reqwest (tokio, hyper).
+SQLite is `rusqlite` with the `bundled` feature (compiled in, nothing linked from the system).
+
+### Addresses of live items
+
+`live:<source-id>/<place-key>/<item-key>`, for example `live:weather/home/now`, `live:weather/home/2026-10-26`,
+`live:alerts/home/urn:oid:2.49.0.1.840.0.example1`. Every item that `cs_live_get` and the `live_data` tool return carries
+its address (the tool framework swaps it for `n`). An address stays valid across refreshes as long as the item key is
+stable; a citation whose item is gone says so. Other address schemes in the core: `zim:<uuid>/<path>` and
+`lib:<library-id>/<point-id>`.
+
+### Wiring and headless
+
+`cs_open` with a `"user"` section sets the handle's saved places to `cache_user`'s store (what every tool resolves a
+place name against); with a `"live"` section it registers `cache_live::LiveDataTool` as the `live_data` tool. The tool
+leaves itself out of `cs_tool_schemas` while `sources_dir` holds no valid definition, and a call then gives `not_set_up`.
+Through `cs_tool` its items carry `"n"` (numbered with the conversation's other sources, so numbers continue after a
+`search` and a known address keeps its number); the `ids` of the result map each `n` to its `live:` address.
+
+`cs places list|save|delete`, `cs live-sources`, `cs live-fetch --request`, `cs live-get --request`; `cs serve` has
+`GET/POST /places`, `DELETE /places/{key}`, `GET /live/sources`, `POST /live/fetch`, `POST /live/get`. The tool itself is
+reached like any other, with `cs tool live_data`, `POST /conversations/{id}/tool` and `cs tool-schemas`. The test
+`cli/tests/features.rs` runs one sequence through the CLI, serve and the C ABI on three separate states and requires
+byte-identical output at every step, and runs `search` then `live_data` in one conversation through serve and the C ABI.
+
 ## Open (needs decisions)
 
 - Multi-shard collections (v1 is single-shard only).

@@ -404,6 +404,50 @@ pub unsafe extern "C" fn cs_tool(
     })
 }
 
+// ---- saved places and live data (logic in cache_user / cache_live; see ext.rs) ----
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_places_list(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.places_list()?))
+}
+
+/// # Safety
+/// `h` NULL or live; `place_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_place_save(h: *mut Handle, place_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.place_save(arg_str(place_json, "place_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `key` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_place_delete(h: *mut Handle, key: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.place_delete(arg_str(key, "key")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_sources(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_sources()?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_fetch(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_fetch(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_get(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_get(arg_str(request_json, "request_json")?)?))
+}
+
 /// # Safety
 /// `s` must be NULL or a string returned by this library, not freed before.
 #[no_mangle]
@@ -462,6 +506,12 @@ mod tests {
             assert_eq!(cs_clear_location(ptr::null_mut()), -1);
             assert!(cs_tool_schemas(ptr::null_mut()).is_null());
             assert!(cs_tool(ptr::null_mut(), ptr::null_mut(), ptr::null(), ptr::null(), ptr::null()).is_null());
+            assert!(cs_places_list(ptr::null_mut()).is_null());
+            assert!(cs_place_save(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_place_delete(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_live_sources(ptr::null_mut()).is_null());
+            assert!(cs_live_fetch(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_live_get(ptr::null_mut(), ptr::null()).is_null());
             cs_close(ptr::null_mut());
             cs_free_string(ptr::null_mut());
             cs_free_bytes(ptr::null_mut(), 0);

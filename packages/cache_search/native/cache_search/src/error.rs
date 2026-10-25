@@ -14,6 +14,11 @@ pub enum ErrorCode {
     Cancelled,
     NoSpace,
     Damaged,
+    NotConfigured,
+    FetchFailed,
+    Quota,
+    KeyMissing,
+    BadResponse,
     Internal,
 }
 
@@ -31,6 +36,11 @@ impl ErrorCode {
             ErrorCode::Cancelled => "cancelled",
             ErrorCode::NoSpace => "no_space",
             ErrorCode::Damaged => "damaged",
+            ErrorCode::NotConfigured => "not_configured",
+            ErrorCode::FetchFailed => "fetch_failed",
+            ErrorCode::Quota => "quota",
+            ErrorCode::KeyMissing => "key_missing",
+            ErrorCode::BadResponse => "bad_response",
             ErrorCode::Internal => "internal",
         }
     }
@@ -109,6 +119,23 @@ impl From<zim::Error> for Error {
     }
 }
 
+impl ErrorCode {
+    /// The code for a stable code string from `cache_live` or `cache_user`; anything unknown is `internal`.
+    pub fn from_str_code(s: &str) -> ErrorCode {
+        match s {
+            "bad_json" => ErrorCode::BadJson,
+            "not_found" => ErrorCode::NotFound,
+            "io" => ErrorCode::Io,
+            "not_configured" => ErrorCode::NotConfigured,
+            "fetch_failed" => ErrorCode::FetchFailed,
+            "quota" => ErrorCode::Quota,
+            "key_missing" => ErrorCode::KeyMissing,
+            "bad_response" => ErrorCode::BadResponse,
+            _ => ErrorCode::Internal,
+        }
+    }
+}
+
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::bad_json(e.to_string())
@@ -132,6 +159,11 @@ mod tests {
             (ErrorCode::Cancelled, "cancelled"),
             (ErrorCode::NoSpace, "no_space"),
             (ErrorCode::Damaged, "damaged"),
+            (ErrorCode::NotConfigured, "not_configured"),
+            (ErrorCode::FetchFailed, "fetch_failed"),
+            (ErrorCode::Quota, "quota"),
+            (ErrorCode::KeyMissing, "key_missing"),
+            (ErrorCode::BadResponse, "bad_response"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

@@ -4,6 +4,7 @@
 
 pub mod conv;
 pub mod error;
+pub mod ext;
 pub mod ffi;
 pub mod handle;
 pub mod html;
