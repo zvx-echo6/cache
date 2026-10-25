@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'geo.dart';
 import 'layers/layer_def.dart';
 import 'layers/layer_engine.dart';
+import 'network_access.dart';
 import 'palette/map_palette.dart';
 import 'style/style_generator.dart';
 
@@ -34,9 +35,18 @@ class SavedCamera {
 /// The Maps tab's state: which layers are on and how opaque, the camera, the offline notice. The layer
 /// engine owns the catalogue and the tiles; this owns what the user chose to look at.
 class MapsState extends ChangeNotifier {
-  MapsState({required this.engine, this.settingsDirOverride});
+  MapsState({required this.engine, this.settingsDirOverride, NetworkAccess? network})
+      : _network = network ?? PlatformNetworkAccess();
 
   final LayerEngine engine;
+  final NetworkAccess _network;
+
+  /// True while the app lacks network access and has not been allowed to ask yet or was refused: the map
+  /// screen shows why and a button, because nothing on the Maps tab works without it.
+  bool needsNetworkAccess = false;
+
+  /// The user said no to the system prompt (so the way back is the phone's settings).
+  bool networkRefused = false;
 
   /// Test hook.
   final Directory? settingsDirOverride;
@@ -81,7 +91,17 @@ class MapsState extends ChangeNotifier {
       }
     } catch (_) {}
     engine.addListener(_onEngine);
+    await _startEngine();
+  }
+
+  Future<void> _startEngine() async {
     await engine.start();
+    // The system refuses the layers' server socket: network access is off for the app.
+    needsNetworkAccess = engine.blockedByPermission;
+    if (needsNetworkAccess) {
+      notifyListeners();
+      return;
+    }
     if (!_hadSettings) {
       _enabled.addAll([for (final l in engine.layers) if (l.defaultOn) l.id]);
     }
@@ -89,6 +109,21 @@ class MapsState extends ChangeNotifier {
   }
 
   void _onEngine() => notifyListeners();
+
+  /// Called when the app comes back to the screen (for example from the phone's settings).
+  Future<void> recheckNetwork() async {
+    if (!needsNetworkAccess) return;
+    await _startEngine();
+    if (!needsNetworkAccess) networkRefused = false;
+  }
+
+  /// The button on the map screen: asks the system for network access, then starts the layers again.
+  Future<void> allowNetwork() async {
+    await _network.request();
+    await _startEngine();
+    networkRefused = needsNetworkAccess;
+    notifyListeners();
+  }
 
   // ---- layers -------------------------------------------------------------------------------------------
 

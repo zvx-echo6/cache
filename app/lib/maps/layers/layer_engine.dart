@@ -17,6 +17,10 @@ abstract class LayerEngine extends ChangeNotifier {
 
   bool get ready;
 
+  /// True when the tile server could not start because the system refuses the app network access (Android can
+  /// switch it off). The screen then asks the user, and calls [start] again.
+  bool get blockedByPermission => false;
+
   /// Every catalogue layer, in drawing order (bottom first).
   List<LayerDef> get layers;
 

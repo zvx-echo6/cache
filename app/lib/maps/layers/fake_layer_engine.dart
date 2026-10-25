@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:path_provider/path_provider.dart';
 
 import '../geo.dart';
@@ -65,16 +66,19 @@ Future<FetchedTile?> defaultTileFetcher(Uri url) async {
 }
 
 class FakeLayerEngine extends LayerEngine {
-  FakeLayerEngine({this.dirOverride, TileFetcher? fetcher, Future<bool> Function()? onlineProbe})
+  FakeLayerEngine({this.dirOverride, TileFetcher? fetcher, Future<bool> Function()? onlineProbe, this.canBind})
       : _fetch = fetcher ?? defaultTileFetcher,
         _probe = onlineProbe;
+
+  /// Test hook: false pretends the system refuses the server socket.
+  final bool Function()? canBind;
 
   /// Test hook: where tiles and settings live.
   final Directory? dirOverride;
   final TileFetcher _fetch;
   final Future<bool> Function()? _probe;
 
-  late final Directory _dir;
+  late Directory _dir;
   HttpServer? _server;
   List<LayerDef> _layers = [];
   final List<DownloadedArea> _areas = [];
@@ -84,11 +88,14 @@ class FakeLayerEngine extends LayerEngine {
   bool _online = true;
   DateTime _lastProbe = DateTime.fromMillisecondsSinceEpoch(0);
   String? _problem;
+  bool _blocked = false;
 
   @override
   String? get problem => _problem;
   @override
   bool get ready => _ready;
+  @override
+  bool get blockedByPermission => _blocked;
   @override
   List<LayerDef> get layers => List.unmodifiable(_layers);
   @override
@@ -98,16 +105,28 @@ class FakeLayerEngine extends LayerEngine {
 
   @override
   Future<void> start() async {
+    _problem = null;
+    _blocked = false;
     try {
       _dir = dirOverride ?? Directory('${(await getApplicationSupportDirectory()).path}/fake_layers');
       await _dir.create(recursive: true);
-      _loadDefs();
-      _loadAreas();
-      _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      _server!.listen(_handle, onError: (Object _) {});
+      if (_layers.isEmpty) {
+        _loadDefs();
+        _loadAreas();
+      }
+      if (_server == null) {
+        if (canBind != null && !canBind!()) {
+          throw const SocketException('Failed to create server socket', osError: OSError('Operation not permitted', 1));
+        }
+        _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        _server!.listen(_handle, onError: (Object _) {});
+      }
       _ready = true;
       await refreshOnline(force: true);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('FakeLayerEngine.start failed: $e\n$st');
+      // EPERM on the server socket: the system has network access switched off for the app.
+      _blocked = e is SocketException && e.osError?.errorCode == 1;
       _problem = 'Layers are not available on this device';
     }
     notifyListeners();

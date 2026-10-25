@@ -49,6 +49,7 @@ class _MapsScreenState extends State<MapsScreen> {
   Offset? _downAt;
 
   String? _drawFor;
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork());
 
   MapsState get maps => widget.maps;
   LocationService get location => widget.location;
@@ -60,6 +61,7 @@ class _MapsScreenState extends State<MapsScreen> {
     super.initState();
     maps.addListener(_onMaps);
     location.addListener(_onLocation);
+    _lifecycle;
     final c = maps.savedCamera;
     if (c != null) {
       _lat = c.lat;
@@ -77,6 +79,7 @@ class _MapsScreenState extends State<MapsScreen> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     maps.removeListener(_onMaps);
     location.removeListener(_onLocation);
     _restyleTimer?.cancel();
@@ -390,16 +393,37 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget _waiting(BuildContext context) {
     final k = context.t;
     final problem = maps.engine.problem;
-    return SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: problem != null
-              ? Text(problem, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.secondary))
-              : const CircularProgressIndicator(),
-        ),
-      ),
-    );
+    final Widget body;
+    if (maps.needsNetworkAccess) {
+      body = Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.public_off, size: 40, color: k.secondary),
+          const SizedBox(height: 16),
+          Text('Maps need network access',
+              textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(
+            maps.networkRefused
+                ? 'Network access is switched off for Cache. Allow it in the settings of this phone to see the map.'
+                : 'Cache streams map tiles when you are online and keeps downloaded areas for when you are not. '
+                    'The map cannot start without network access.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 16, color: k.secondary),
+          ),
+          const SizedBox(height: 16),
+          if (maps.networkRefused)
+            FilledButton(onPressed: location.openAppSettings, child: const Text('Open settings'))
+          else
+            FilledButton(onPressed: maps.allowNetwork, child: const Text('Allow')),
+        ],
+      );
+    } else if (problem != null) {
+      body = Text(problem, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.secondary));
+    } else {
+      body = const CircularProgressIndicator();
+    }
+    return SafeArea(child: Center(child: Padding(padding: const EdgeInsets.all(24), child: body)));
   }
 
   Widget _mapStack(BuildContext context, String style, CacheTokens k) {

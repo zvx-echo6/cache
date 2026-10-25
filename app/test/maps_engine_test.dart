@@ -7,6 +7,7 @@ import 'package:cache/maps/layers/fake_layer_engine.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/layers/tile_math.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/maps/network_access.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const GeoBounds home = GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
@@ -33,6 +34,18 @@ Future<void> until(bool Function() ok) async {
     await Future<void>.delayed(const Duration(milliseconds: 25));
   }
   expect(ok(), isTrue, reason: 'timed out');
+}
+
+class _Net implements NetworkAccess {
+  _Net({this.allowed = false, this.willAllow = false});
+  bool allowed;
+  bool willAllow;
+  int asked = 0;
+  @override
+  Future<bool> request() async {
+    asked++;
+    return allowed = willAllow;
+  }
 }
 
 void main() {
@@ -175,7 +188,7 @@ void main() {
   group('the offline notice', () {
     late MapsState maps;
     setUp(() async {
-      maps = MapsState(engine: engine, settingsDirOverride: dir);
+      maps = MapsState(engine: engine, settingsDirOverride: dir, network: _Net(allowed: true));
       // MapsState owns the engine it is given; keep the test's tearDown from disposing it twice.
       await maps.init();
     });
@@ -235,13 +248,47 @@ void main() {
       maps.setOpacity('hillshade', 0.4);
       maps.rememberCamera(42.5, -113.8, 11);
       await maps.flush();
-      final again = MapsState(engine: FakeLayerEngine(dirOverride: dir, fetcher: host.fetch), settingsDirOverride: dir);
+      final again = MapsState(
+          engine: FakeLayerEngine(dirOverride: dir, fetcher: host.fetch), settingsDirOverride: dir, network: _Net(allowed: true));
       await again.init();
       expect(again.isOn('hillshade'), isTrue);
       expect(again.opacityOf('hillshade'), 0.4);
       expect(again.savedCamera!.zoom, 11);
       expect(again.isOn('openfreemap'), isTrue);
       again.engine.dispose();
+    });
+  });
+
+  group('network access (Android can switch it off, and the tile server needs it)', () {
+    test('without it the layers are not started and the screen is told why; allowing starts them', () async {
+      final net = _Net(willAllow: true);
+      final fresh = FakeLayerEngine(dirOverride: Directory('${dir.path}/net1'), fetcher: host.fetch, canBind: () => net.allowed);
+      final m = MapsState(engine: fresh, settingsDirOverride: dir, network: net);
+      await m.init();
+      expect(m.needsNetworkAccess, isTrue);
+      expect(fresh.ready, isFalse);
+      expect(net.asked, 0, reason: 'never asks until the user taps Allow');
+      await m.allowNetwork();
+      expect(net.asked, 1);
+      expect(m.needsNetworkAccess, isFalse);
+      expect(fresh.ready, isTrue);
+      expect(m.isOn('openfreemap'), isTrue);
+      fresh.dispose();
+    });
+
+    test('a refusal is remembered, and allowing it later in settings starts the layers on return', () async {
+      final net = _Net();
+      final fresh = FakeLayerEngine(dirOverride: Directory('${dir.path}/net2'), fetcher: host.fetch, canBind: () => net.allowed);
+      final m = MapsState(engine: fresh, settingsDirOverride: dir, network: net);
+      await m.init();
+      await m.allowNetwork();
+      expect(m.networkRefused, isTrue);
+      expect(fresh.ready, isFalse);
+      net.allowed = true;
+      await m.recheckNetwork();
+      expect(fresh.ready, isTrue);
+      expect(m.networkRefused, isFalse);
+      fresh.dispose();
     });
   });
 }
