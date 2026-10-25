@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 cache_search = { path = "../native/cache_search" }
-serde_json = "1"
+serde_json.workspace = true
 libloading = "0.8"
 tiny_http = "0.12"
 sha2 = "0.10"
