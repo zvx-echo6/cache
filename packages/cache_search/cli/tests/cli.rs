@@ -566,3 +566,132 @@ fn serve_tool_endpoints() {
     let (code, body) = s.req("DELETE", "/location", None);
     assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
 }
+
+// ---- web search ------------------------------------------------------------------------------------------------
+
+const WEB_KEY: &str = "CLI-TESTKEY-31337-do-not-leak";
+
+/// `cs` with extra environment variables.
+fn cs_env(args: &[&str], env: &[(&str, &str)]) -> Out {
+    let o = Command::new(env!("CARGO_BIN_EXE_cs"))
+        .args(args)
+        .env_remove("CACHE_WEB_PROVIDER")
+        .env_remove("CACHE_WEB_KEY")
+        .env_remove("CACHE_WEB_BASE_URL")
+        .envs(env.iter().copied())
+        .output()
+        .expect("run cs");
+    Out { ok: o.status.success(), stdout: String::from_utf8(o.stdout).unwrap(), stderr: String::from_utf8(o.stderr).unwrap() }
+}
+
+/// A one-answer HTTP server standing in for Kagi (no real network is touched). Returns its base address; it records
+/// the Authorization header of each request.
+fn stand_in_kagi(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> String {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/api/v0/search", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut s in l.incoming().flatten() {
+            let mut buf = vec![0u8; 4096];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let auth = req.lines().find(|l| l.to_ascii_lowercase().starts_with("authorization:")).unwrap_or("").to_string();
+            seen.lock().unwrap().push(auth);
+            let body = json!({"meta": {}, "data": [
+                {"t": 0, "url": "https://a.example/1", "title": "Burn ban lifted", "snippet": "Ended on Friday."},
+                {"t": 1, "list": ["x"]}]})
+            .to_string();
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    base
+}
+
+#[test]
+fn web_search_through_the_cli_needs_the_environment() {
+    // without the variables: not in the schemas, and a call is not_set_up
+    let names = |o: &Out| -> Vec<String> {
+        j(o.stdout.trim()).as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[])), ["search", "read"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "kagi")])), ["search", "read"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_KEY", WEB_KEY)])), ["search", "read"]);
+    let o = cs_env(&["tool", "web_search", "--config", &empty_config(), "--args", r#"{"query":"x"}"#, "--json"], &[]);
+    assert!(o.ok, "{}", o.stderr);
+    assert_eq!(j(o.stdout.trim())["content"], r#"{"ok":false,"error":{"type":"not_set_up","detail":"web_search is not set up"}}"#);
+    // both set: offered
+    let both = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", WEB_KEY)];
+    assert_eq!(names(&cs_env(&["tool-schemas"], &both)), ["search", "read", "web_search"]);
+    // an unknown provider is refused at start
+    let o = cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "bing"), ("CACHE_WEB_KEY", WEB_KEY)]);
+    assert!(!o.ok && j(o.stderr.trim())["code"] == "bad_json", "{}", o.stderr);
+    assert!(!o.stderr.contains(WEB_KEY) && !o.stdout.contains(WEB_KEY));
+}
+
+fn empty_config() -> String {
+    let p = std::env::temp_dir().join(format!("cs-clitest-web-{}.json", std::process::id()));
+    std::fs::write(&p, r#"{"sources":[]}"#).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn cs_tool_web_search_against_a_stand_in_server() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let base = stand_in_kagi(seen.clone());
+    let cfg = empty_config();
+    let env = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", WEB_KEY), ("CACHE_WEB_BASE_URL", base.as_str())];
+    let args = ["tool", "web_search", "--config", cfg.as_str(), "--args", r#"{"query":"burn ban"}"#, "--now", NOW];
+    let o = cs_env(&args, &env);
+    assert!(o.ok, "{}", o.stderr);
+    let lines: Vec<&str> = o.stdout.lines().collect();
+    assert_eq!(lines[0], "[1] Burn ban lifted (web, fetched 2026-10-25 14:20) \u{2014} Ended on Friday.");
+    assert_eq!(lines[1], r#"ids [{"n":1,"address":"web:https://a.example/1","title":"Burn ban lifted (web, fetched 2026-10-25 14:20)"}]"#);
+    assert!(o.stderr.starts_with("timing_ms {\"search\":"), "{}", o.stderr);
+    // --json carries the timing next to content and ids
+    let mut json_args = args.to_vec();
+    json_args.push("--json");
+    let o = cs_env(&json_args, &env);
+    let v = j(o.stdout.trim());
+    assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
+    assert!(v["timing_ms"]["search"].is_u64());
+    // the key went out as a header, and appears in nothing cs printed
+    assert_eq!(seen.lock().unwrap()[0].to_ascii_lowercase(), format!("authorization: bot {}", WEB_KEY.to_ascii_lowercase()));
+    assert!(!o.stdout.contains(WEB_KEY) && !o.stderr.contains(WEB_KEY));
+}
+
+#[test]
+fn serve_web_endpoints_set_and_clear_search_without_echoing_the_key() {
+    let tmp = TempDir::new("serveweb");
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, r#"{"sources":[]}"#).unwrap();
+    let s = Serve::start(&["--config", &config]);
+    let names = |s: &Serve| -> Vec<String> {
+        j(&s.req("GET", "/tools", None).1).as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&s), ["search", "read"]);
+
+    // on: provider, key and online
+    let (code, body) = s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": true})));
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+    assert_eq!(names(&s), ["search", "read", "web_search"]);
+    // offline: gone; online again: back
+    s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": false})));
+    assert_eq!(names(&s), ["search", "read"]);
+    s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": true})));
+    assert_eq!(names(&s), ["search", "read", "web_search"]);
+    // an unknown provider, a missing online, a wrong type: errors that do not echo the key
+    for bad in [json!({"provider": "bing", "key": WEB_KEY, "online": true}), json!({"provider": "kagi", "key": WEB_KEY}), json!({"provider": "kagi", "key": 5, "online": true})] {
+        let (code, body) = s.req("POST", "/web", Some(&bad));
+        assert_eq!(code, 400, "{body}");
+        assert!(!body.contains(WEB_KEY), "{body}");
+    }
+    assert_eq!(names(&s), ["search", "read", "web_search"], "a refused request changes nothing");
+    // clear
+    let (code, body) = s.req("DELETE", "/web", None);
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+    assert_eq!(names(&s), ["search", "read"]);
+    let (_, b) = s.req("POST", "/conversations", None);
+    let id = j(&b)["id"].as_str().unwrap().to_string();
+    let (_, body) = s.req("POST", &format!("/conversations/{id}/tool"), Some(&json!({"name": "web_search", "args": {"query": "x"}, "now": NOW})));
+    assert!(j(&body)["content"].as_str().unwrap().contains("not_set_up"));
+    assert!(!body.contains(WEB_KEY));
+}
