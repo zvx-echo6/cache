@@ -91,7 +91,7 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
  * Path lookup order (paths copied from links in ZIM HTML work as they are): 1. a "#fragment" is stripped;
  * 2. the percent-decoded path (UTF-8) is looked up; 3. then the path as given; 4. if it contains "?", steps 2-3
  * are repeated with the "?query" removed. Each lookup tries namespace 'C', then 'A', 'I' and '-' (old ZIMs).
- * cs_read uses the same lookup. Relative links must be made absolute by the caller. */
+ * cs_read uses the same lookup. Relative links must be made absolute by the caller.
  * address: "zim:<uuid>/<path>". *mime_out is set to a string freed with cs_free_string.
  * Returns NULL on error (cs_last_error). Free the buffer with cs_free_bytes. */
 uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t *len_out);
