@@ -391,13 +391,16 @@ and `read` (built in, it has the conversation) handles `web:` addresses. A host 
 
 **Provider interface.** `trait WebSearchProvider: Send + Sync { fn search(&self, query, limit, key, deadline) ->
 Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provider maps its own failures to the shared
-error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v0/search`, overridable for tests) sends
-`GET ?q=<query>&limit=<n>` with `Authorization: Bot <key>`, reads `data` (objects with `t: 0` are results with `url`,
-`title`, `snippet`; other `t` values are skipped) and the `error` list. HTTP 401/403 or an error code 401/403 is
-`key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is `quota`; a
-timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be used is
-`bad_response`. **The Kagi parser is unverified against the live API:** it was written from Kagi's documented v0
-response shape and tested only against a local stand-in server, until the owner approves a live test.
+error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/search`, overridable for tests) sends
+`POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
+from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
+matches the request AIDA uses in production (Open WebUI kagi.py); live-verified: pending. HTTP 401/403 or an error code
+401/403 is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
+`quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
+used is `bad_response`, including a 200 with an `error` field or without `data.search` (the detail never contains the
+key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
+mapping of a balance, credit or quota message to `quota` are a judgement from the previous API's shape, not seen from
+v1; only the 200 response shape above is known from AIDA's use.
 
 **Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
 now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
