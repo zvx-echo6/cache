@@ -72,6 +72,44 @@ sources at the pinned rev say (read in full, 2026-10-25):
   half-way (disk full, truncated archive) can leave the folder half-merged, and then the remedy is a full replace
   from a full snapshot. `current_manifest` is the manifest the snapshot was cut against, which is what the job
   takes from `snapshot_manifest_path`; `snapshot_manifest` is read from the unpacked snapshot itself.
+- Atomic update through a hard-link staging copy (evaluated 2026-10-25, NOT shipped). The idea: make a sibling
+  folder of hard links to every library file, recover the snapshot into it, verify, swap with renames, delete
+  the old folder; on a failure delete the staging folder and the original is untouched. It is safe only if
+  nothing in the update path writes into an existing inode. At the pinned rev (0f8c4d79) it does:
+  - Merge (`lib/edge/src/edge_shard/snapshots.rs:40-61`): `move_file` (`lib/common/common/src/fs/move.rs:38-60`)
+    renames (new name, safe) and `remove_file`/`remove_dir_all` only drop names (safe), and the WAL folder is
+    replaced by remove + rename (safe). But the segments folder is merged with `move_dir`
+    (`snapshots.rs:51-53`, `snapshot_utils.rs:125`): `rename` of a folder onto a non-empty one fails
+    (`move.rs:16-18`), so it falls back to `fs_extra::dir::move_dir` (`move.rs:24-26`; fs_extra 1.3.0
+    `dir.rs:1119-1148`), which per file calls `file::move_file`, i.e. `std::fs::copy` over the existing
+    destination (`file.rs:245-260`, `file.rs:127`): open, truncate, write, into the shared inode. Every file the
+    snapshot carries that the library already has is overwritten in place. Measured: 35 of 52 files of the
+    original changed content through the links.
+  - The read-write `EdgeShard::load` that ends `recover_partial_snapshot` (`snapshots.rs:63`), and the one
+    `library_manifest` uses (`edge_shard/mod.rs:130-205`), opens components writable: `DynamicStoredFlags`
+    (`flags_a.dat`, `status.dat`: `segment/src/common/flags/dynamic_stored_flags.rs:118-126`, `157-171`, `OpenOptions
+    ... write(true)`, `set_len`, mmap `writeable: true`), the Gridstore trackers (`blobstore/src/tracker/mod.rs:44-46`,
+    `writeable`), chunked vector storage (`chunked_vectors/chunks.rs:124`, `writeable: true`), then `check_consistency_and_repair`, pending-change recovery and a flush on drop
+    (`edge_shard/mod.rs:535`, `547`, `325`). Seen in the measurements though not traced to a line: the mutable id
+    tracker files and `vector_storage/deleted.dat` are written too. `segment.json` and `edge_config.json` are written with write-new-then-rename
+    (`common/fs/ops.rs:13-36, 45` via `atomicwrites`; `SaveOnDisk` the same), which is safe. Measured on an unchanged optimized library: 21 of 96
+    files changed mtime through the links (payload `tracker.dat`, every `flags_a.dat`, `vector_storage/deleted*`,
+    `vectors/status.dat`), content equal; after a merge one id-tracker file changed content.
+  - So the set to copy instead of link is not small or knowable from file names: it is every file of each
+    mutable component across segment types, and it includes the big data files (Gridstore pages, vector chunks)
+    of appendable segments, which are opened writable too and would be written if the load had anything to
+    repair. Rule applied: do not ship staging. `update_library` keeps its fall-back to a full replace after a
+    failed apply. The three `hard_link_staging_*` tests record the measurements and fail if a Qdrant bump changes
+    them (then re-evaluate).
+  - Proposed, not approved (needs the owner's go): a variant that is safe by construction. Execute the merge plan
+    (`SnapshotUtils::partial_snapshot_merge_plan`, public) ourselves with rename/unlink only, so every changed file
+    gets a new inode, do NOT run the read-write load on the staging copy, and verify with the read-only open
+    (which writes nothing). Measured: the original stays identical in content and mtime, and the result has the
+    same points as `recover_partial_snapshot` + load. The cost is giving up what that load does after a merge
+    (`check_consistency_and_repair`, an appendable segment, `edge_config.json`); a later `library_manifest` runs it
+    in place. If approved: staging folder `<library>.cs-stage`, swap by `library -> library.cs-old`, `stage ->
+    library`, delete the old one; on startup, if `library.cs-old` exists and the library is complete delete it, if
+    only `library.cs-old` exists rename it back, and always delete a staging folder.
 
 The job, in order:
 1. The library is marked as updating before `cs_job_start` returns. Search skips it, `cs_read` answers `busy` and
@@ -386,7 +424,10 @@ manifest, which is what the server passes) plus a `wal/` folder. The test builde
 code path. Covered: searches skip the library during the update and find the new points after; deleted points
 are `not_found`; segments_manifest.json lists exactly the segments on disk; cancel before apply; corrupt,
 truncated and full (non-partial) snapshots fail with the library intact; a library that cannot reopen is reported
-as a failed source; busy rules; manifest refusal on an open library.
+as a failed source; busy rules; manifest refusal on an open library; the library opened exactly once per
+update, with every handle (also one that was not looked at during the update) getting the shared shard; the
+`library_manifest` job (state while it runs, busy and cancel rules, parameter errors, a file equal byte for byte
+to the one `cs library-manifest` writes); and the hard-link staging measurements above.
 
 ## To verify
 
