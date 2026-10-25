@@ -2,6 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
+use crate::libreg;
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
 use crate::zimsrc::{self, ZimSource};
 use serde::Deserialize;
@@ -81,6 +82,9 @@ pub enum Source {
     /// A library being opened on a background thread. Turns into `Library` or `Failed` when the handle next
     /// looks and the open has finished; skipped by search meanwhile.
     Opening(OpeningLib),
+    /// A library an `update_library` job owns (its shard is closed). Skipped by search; the handle opens it
+    /// again, on a background thread, when it next looks and the update has ended.
+    Updating(OpeningLib),
 }
 
 pub struct OpeningLib {
@@ -91,7 +95,59 @@ pub struct OpeningLib {
     pub id: String,
     pub title: String,
     pub settings: Option<LibrarySettings>,
-    cell: Arc<OpenCell>,
+    /// The running open; `None` for an `Updating` source.
+    cell: Option<Arc<OpenCell>>,
+}
+
+impl OpeningLib {
+    /// A copy of the description (not of the running open).
+    fn clone_info(&self) -> OpeningLib {
+        OpeningLib {
+            path: self.path.clone(),
+            index_dir: self.index_dir.clone(),
+            given: self.given.clone(),
+            id: self.id.clone(),
+            title: self.title.clone(),
+            settings: self.settings.clone(),
+            cell: None,
+        }
+    }
+
+    /// Start opening the library on a background thread, or, when an update job owns it, list it as updating.
+    fn start(
+        path: PathBuf,
+        index_dir: Option<PathBuf>,
+        given: Option<Value>,
+        id: String,
+        title: String,
+        settings: Option<LibrarySettings>,
+        delay_ms: u64,
+    ) -> Source {
+        let cell = library::open_in_background(path.clone(), index_dir.clone(), given.clone(), delay_ms);
+        let updating = cell.is_none();
+        let o = OpeningLib { path, index_dir, given, id, title, settings, cell };
+        if updating {
+            Source::Updating(o)
+        } else {
+            Source::Opening(o)
+        }
+    }
+
+    fn status(&self, updating: bool) -> Value {
+        json!({
+            "id": self.id, "kind": "library", "path": self.path.to_string_lossy(),
+            "title": self.title, "language": Value::Null,
+            "indexed": false, "building": false, "stale": false, "opening": !updating, "updating": updating,
+            "docs": 0,
+            "embedding_model": match &self.settings {
+                Some(st) if !st.embedding.model.is_empty() => json!(st.embedding.model),
+                _ => Value::Null,
+            },
+            "library_id": self.id, "keyword_source": Value::Null,
+            "settings": self.settings.as_ref().map(|st| st.to_json()).unwrap_or(Value::Null),
+            "error": Value::Null,
+        })
+    }
 }
 
 pub struct Handle {
@@ -119,7 +175,7 @@ impl Handle {
     pub fn set_sources(&mut self, config_json: &str) -> Result<()> {
         enum Plan {
             Reuse(usize, Option<PathBuf>),
-            ReuseLib(usize, Option<PathBuf>, LibrarySettings),
+            ReuseLib(usize, Option<PathBuf>, LibrarySettings, Option<Value>),
             ReuseOpening(usize, Option<PathBuf>),
             /// A library to open on a background thread (started only once the whole call has succeeded).
             OpenLib { path: PathBuf, index_dir: Option<PathBuf>, given: Option<Value>, id: String, title: String, settings: Option<LibrarySettings> },
@@ -167,17 +223,17 @@ impl Handle {
                     let parsed = sc.settings.as_ref().map(LibrarySettings::parse).transpose()?;
                     let existing = self.sources.iter().position(|s| match s {
                         Source::Library(l) => l.path == path,
-                        Source::Opening(o) => o.path == path && o.given == sc.settings,
+                        Source::Opening(o) | Source::Updating(o) => o.path == path && o.given == sc.settings,
                         _ => false,
                     });
                     let (id, item) = match existing {
                         Some(i) => match &self.sources[i] {
                             Source::Library(l) => {
                                 // Settings errors fail the whole call, before anything is replaced.
-                                let st = library::resolve_settings(&l.shard, &path, sc.settings.as_ref())?;
-                                (Some(st.library_id.clone()), Plan::ReuseLib(i, index_dir, st))
+                                let st = library::resolve_settings(&*l.shard.get()?, &path, sc.settings.as_ref())?;
+                                (Some(st.library_id.clone()), Plan::ReuseLib(i, index_dir, st, sc.settings.clone()))
                             }
-                            Source::Opening(o) => (Some(o.id.clone()), Plan::ReuseOpening(i, index_dir)),
+                            Source::Opening(o) | Source::Updating(o) => (Some(o.id.clone()), Plan::ReuseOpening(i, index_dir)),
                             _ => unreachable!(),
                         },
                         None if !path.is_dir() => {
@@ -221,10 +277,11 @@ impl Handle {
                     }
                     s
                 }
-                Plan::ReuseLib(i, index_dir, settings) => {
+                Plan::ReuseLib(i, index_dir, settings, given) => {
                     let mut s = old[i].take().expect("reused twice");
                     if let Source::Library(l) = &mut s {
                         l.index_dir = index_dir;
+                        l.given = given;
                         l.kw = None;
                         l.set_settings(settings);
                     }
@@ -232,14 +289,13 @@ impl Handle {
                 }
                 Plan::ReuseOpening(i, index_dir) => {
                     let mut s = old[i].take().expect("reused twice");
-                    if let Source::Opening(o) = &mut s {
+                    if let Source::Opening(o) | Source::Updating(o) = &mut s {
                         o.index_dir = index_dir;
                     }
                     s
                 }
                 Plan::OpenLib { path, index_dir, given, id, title, settings } => {
-                    let cell = library::open_in_background(path.clone(), index_dir.clone(), given.clone(), cfg.open_delay_ms);
-                    Source::Opening(OpeningLib { path, index_dir, given, id, title, settings, cell })
+                    OpeningLib::start(path, index_dir, given, id, title, settings, cfg.open_delay_ms)
                 }
                 Plan::New(s) => s,
             })
@@ -250,18 +306,75 @@ impl Handle {
         Ok(())
     }
 
-    /// Turn libraries whose background open has finished into `Library` (or `Failed`) sources.
+    /// Bring the library sources up to date with what happened since the last call: an open that finished becomes
+    /// `Library` (or `Failed`); a library an `update_library` job owns becomes `Updating` (its shard is dropped);
+    /// a library whose update has ended, or that an update changed while it was opening, is opened again.
     pub fn poll_opening(&mut self) {
         for s in self.sources.iter_mut() {
-            let Source::Opening(o) = s else { continue };
-            let Some(r) = o.cell.take() else { continue };
-            *s = match r {
-                Ok(mut slot) => {
-                    slot.index_dir = o.index_dir.clone();
-                    Source::Library(slot)
+            let next: Option<Source> = match s {
+                Source::Opening(o) => {
+                    let entry = libreg::entry_for(&o.path);
+                    match o.cell.as_ref().and_then(|c| c.take()) {
+                        Some(Ok(mut slot)) => {
+                            slot.index_dir = o.index_dir.clone();
+                            slot.given = o.given.clone();
+                            if entry.updating() {
+                                Some(Source::Updating(OpeningLib { cell: None, ..o.clone_info() }))
+                            } else if slot.seen_gen != entry.generation() {
+                                // an update changed the files while this was opening
+                                Some(OpeningLib::start(o.path.clone(), o.index_dir.clone(), o.given.clone(), o.id.clone(), o.title.clone(), o.settings.clone(), 0))
+                            } else {
+                                Some(Source::Library(slot))
+                            }
+                        }
+                        Some(Err(error)) => {
+                            if entry.updating() {
+                                Some(Source::Updating(OpeningLib { cell: None, ..o.clone_info() }))
+                            } else {
+                                Some(Source::Failed { kind: "library", path: o.path.clone(), title: stem_title(&o.path), error })
+                            }
+                        }
+                        None if entry.updating() => Some(Source::Updating(OpeningLib { cell: None, ..o.clone_info() })),
+                        None => None,
+                    }
                 }
-                Err(error) => Source::Failed { kind: "library", path: o.path.clone(), title: stem_title(&o.path), error },
+                Source::Library(l) => {
+                    if l.entry.updating() {
+                        Some(Source::Updating(OpeningLib {
+                            path: l.path.clone(),
+                            index_dir: l.index_dir.clone(),
+                            given: l.given.clone(),
+                            id: l.settings.library_id.clone(),
+                            title: l.settings.title.clone(),
+                            settings: l.given.as_ref().map(|_| l.settings.clone()),
+                            cell: None,
+                        }))
+                    } else if l.entry.generation() != l.seen_gen {
+                        Some(OpeningLib::start(
+                            l.path.clone(),
+                            l.index_dir.clone(),
+                            l.given.clone(),
+                            l.settings.library_id.clone(),
+                            l.settings.title.clone(),
+                            l.given.as_ref().map(|_| l.settings.clone()),
+                            0,
+                        ))
+                    } else {
+                        None
+                    }
+                }
+                Source::Updating(o) => {
+                    if libreg::entry_for(&o.path).updating() {
+                        None
+                    } else {
+                        Some(OpeningLib::start(o.path.clone(), o.index_dir.clone(), o.given.clone(), o.id.clone(), o.title.clone(), o.settings.clone(), 0))
+                    }
+                }
+                _ => None,
             };
+            if let Some(n) = next {
+                *s = n;
+            }
         }
     }
 
@@ -304,32 +417,21 @@ impl Handle {
                     json!({
                         "id": z.src.id, "kind": "zim", "path": z.src.path.to_string_lossy(),
                         "title": z.src.title, "language": z.src.language,
-                        "indexed": indexed, "building": building, "stale": stale, "opening": false,
+                        "indexed": indexed, "building": building, "stale": stale, "opening": false, "updating": false,
                         "docs": docs, "embedding_model": Value::Null, "error": error,
                     })
                 }
                 Source::Failed { kind, path, title, error } => json!({
                     "id": Value::Null, "kind": kind, "path": path.to_string_lossy(),
                     "title": title, "language": Value::Null,
-                    "indexed": false, "building": false, "stale": false, "opening": false,
+                    "indexed": false, "building": false, "stale": false, "opening": false, "updating": false,
                     "docs": 0, "embedding_model": Value::Null,
                     "error": {"code": error.code.as_str(), "message": error.message},
                 }),
                 // `indexed` is the keyword index: the library's own scored index or the built device index.
                 // Still opening: what is known without the shard. Its settings are shown when they were given.
-                Source::Opening(o) => json!({
-                    "id": o.id, "kind": "library", "path": o.path.to_string_lossy(),
-                    "title": o.title, "language": Value::Null,
-                    "indexed": false, "building": false, "stale": false, "opening": true,
-                    "docs": 0,
-                    "embedding_model": match &o.settings {
-                        Some(st) if !st.embedding.model.is_empty() => json!(st.embedding.model),
-                        _ => Value::Null,
-                    },
-                    "library_id": o.id, "keyword_source": Value::Null,
-                    "settings": o.settings.as_ref().map(|st| st.to_json()).unwrap_or(Value::Null),
-                    "error": Value::Null,
-                }),
+                Source::Opening(o) => o.status(false),
+                Source::Updating(o) => o.status(true),
                 Source::Library(l) => {
                     let st = l.device_state();
                     let wanted = l.keyword_wanted();
@@ -338,7 +440,7 @@ impl Handle {
                     json!({
                         "id": l.settings.library_id, "kind": "library", "path": l.path.to_string_lossy(),
                         "title": l.settings.title, "language": Value::Null,
-                        "indexed": source != "none", "building": building, "stale": stale, "opening": false,
+                        "indexed": source != "none", "building": building, "stale": stale, "opening": false, "updating": false,
                         "docs": l.docs,
                         "embedding_model": if l.settings.embedding.model.is_empty() { Value::Null } else { json!(l.settings.embedding.model) },
                         "library_id": l.settings.library_id, "keyword_source": source,

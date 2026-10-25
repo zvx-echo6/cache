@@ -218,7 +218,9 @@ pub unsafe extern "C" fn cs_read(h: *mut Handle, address: *const c_char, max_cha
 }
 
 /// Start a job. NULL on error (`cs_last_error(NULL)`): `bad_json`, `not_found`/`io` for an unreadable ZIM,
-/// `busy` if another job is building that `index_dir`, `unsupported` for kind `index_pack`.
+/// `busy` if another job is building that `index_dir` (or, for `update_library`, is using that library),
+/// `unsupported` for kind `index_pack`. An `update_library` job finds the library through the process-wide
+/// registry in `libreg` (no handle argument).
 ///
 /// # Safety
 /// `kind` and `params_json` NULL or NUL-terminated.

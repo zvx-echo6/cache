@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::html;
 use crate::index::{self, IndexState};
 use crate::libindex::{self, LibOpenIndex};
+use crate::libreg::{self, LibEntry, ShardCell};
 use common::universal_io::{MmapFile, MmapFs};
 use edge::{
     CountRequest, EdgeShard, EdgeShardRead, JsonPath, LoadProfile, NamedQuery, PayloadSchemaParams, PointId, QueryEnum,
@@ -380,7 +381,14 @@ pub struct LibSlot {
     pub path: PathBuf,
     pub index_dir: Option<PathBuf>,
     pub settings: LibrarySettings,
-    pub shard: Shard,
+    /// The read-only shard. An `update_library` job takes it out of the cell (see `libreg`); use `shard.get()`.
+    pub shard: Arc<ShardCell>,
+    /// This library's entry in the process-wide registry, and the generation it was opened at: a handle that sees
+    /// a newer generation reopens the library (an update changed its files).
+    pub entry: Arc<LibEntry>,
+    pub seen_gen: u64,
+    /// The settings object as the handle was given it (`None` when guessed); set by the handle.
+    pub given: Option<Value>,
     pub docs: usize,
     /// The opened device keyword index (reopened when it changes on disk).
     pub kw: Option<LibOpenIndex>,
@@ -478,6 +486,8 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     if !path.is_dir() {
         return Err(Error::not_found(format!("library folder {} not found", path.display())));
     }
+    let entry = libreg::entry_for(path);
+    let seen_gen = entry.generation();
     ensure_segments_manifest(path)?;
     let vector = pre.as_ref().map(|s| s.embedding.vector.clone()).unwrap_or_default();
     let profile = LoadProfile::for_search(&vector, None, true);
@@ -485,7 +495,9 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     let settings = resolve_settings(&shard, path, settings)?;
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
     let own_scoring = detect_own_scoring(&shard, &settings);
-    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, docs, kw: None, own_scoring })
+    let shard = Arc::new(ShardCell::new(shard));
+    entry.register(&shard);
+    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, entry, seen_gen, given: None, docs, kw: None, own_scoring })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -503,7 +515,16 @@ impl OpenCell {
 
 /// Open a library on its own thread and return at once. The thread owns everything it needs; if the handle is
 /// closed first, the result is simply dropped with the cell. `delay_ms` is a test hook (sleep before opening).
-pub fn open_in_background(path: PathBuf, index_dir: Option<PathBuf>, settings: Option<Value>, delay_ms: u64) -> Arc<OpenCell> {
+///
+/// `None` when an `update_library` job owns the library: nothing may open it then (the handle lists it as
+/// updating and opens it again when the update has ended).
+pub fn open_in_background(
+    path: PathBuf,
+    index_dir: Option<PathBuf>,
+    settings: Option<Value>,
+    delay_ms: u64,
+) -> Option<Arc<OpenCell>> {
+    let token = libreg::entry_for(&path).begin_open()?;
     let cell = Arc::new(OpenCell(Mutex::new(None)));
     let c = cell.clone();
     let spawned = std::thread::Builder::new().name("cs-open-library".into()).spawn(move || {
@@ -515,13 +536,15 @@ pub fn open_in_background(path: PathBuf, index_dir: Option<PathBuf>, settings: O
         if let Ok(mut g) = c.0.lock() {
             *g = Some(r);
         }
+        // after the result is posted: the update job waits for this
+        drop(token);
     });
     if let Err(e) = spawned {
         if let Ok(mut g) = cell.0.lock() {
             *g = Some(Err(Error::internal(format!("cannot start thread: {e}"))));
         }
     }
-    cell
+    Some(cell)
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -640,7 +663,7 @@ impl LibSlot {
         let mut req = RetrieveRequest::new(vec![id]);
         req.with_payload = Some(self.payload_selector());
         req.with_vector = Some(WithVector::Bool(false));
-        let recs = EdgeShardRead::retrieve(&self.shard, req).map_err(|e| op_internal("reading point", e))?;
+        let recs = EdgeShardRead::retrieve(&*self.shard.get()?, req).map_err(|e| op_internal("reading point", e))?;
         let Some(rec) = recs.into_iter().next() else { return Ok(None) };
         let empty = Map::new();
         let p = rec.payload.as_ref().map(|p| &p.0).unwrap_or(&empty);
@@ -664,7 +687,7 @@ impl LibSlot {
         let base = base.max(need).max(1);
         let mut hits: Vec<LibHit> = Vec::new();
         for width in [base, base * 2, base * 4] {
-            let mut res = EdgeShardRead::query(&self.shard, make(width)).map_err(|e| op_internal(what, e))?;
+            let mut res = EdgeShardRead::query(&*self.shard.get()?, make(width)).map_err(|e| op_internal(what, e))?;
             let returned = res.len();
             // equal scores: the smaller address (string compare) first
             res.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.to_string().cmp(&b.id.to_string())));
@@ -728,7 +751,7 @@ impl LibSlot {
 
     /// Replace the settings (a later `set_sources` with other settings for the same folder).
     pub fn set_settings(&mut self, settings: LibrarySettings) {
-        self.own_scoring = detect_own_scoring(&self.shard, &settings);
+        self.own_scoring = self.shard.get().map(|g| detect_own_scoring(&g, &settings)).unwrap_or(false);
         self.settings = settings;
     }
 
@@ -807,7 +830,7 @@ impl LibSlot {
         let mut req = RetrieveRequest::new(vec![id]);
         req.with_payload = Some(self.payload_selector());
         req.with_vector = Some(WithVector::Bool(false));
-        let recs = EdgeShardRead::retrieve(&self.shard, req).map_err(|e| op_internal("reading point", e))?;
+        let recs = EdgeShardRead::retrieve(&*self.shard.get()?, req).map_err(|e| op_internal("reading point", e))?;
         let rec = recs
             .into_iter()
             .next()

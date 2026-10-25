@@ -11,6 +11,8 @@ pub mod index;
 pub mod job;
 pub mod libindex;
 pub mod library;
+pub mod libreg;
+pub mod libupdate;
 pub mod search;
 pub mod suggest;
 pub mod zimsrc;

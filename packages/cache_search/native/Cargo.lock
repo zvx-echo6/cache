@@ -463,10 +463,13 @@ dependencies = [
  "common",
  "edge",
  "html-escape",
+ "segment",
  "serde",
  "serde_json",
+ "shard",
  "tantivy",
  "thiserror 1.0.69",
+ "uuid",
  "xz2",
  "zim",
 ]

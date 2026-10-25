@@ -1,8 +1,10 @@
-//! Long jobs: `index_zim` and `index_library` run on their own threads and are polled.
+//! Long jobs: `index_zim`, `index_library` and `update_library` run on their own threads and are polled.
 
 use crate::error::{Error, Result};
 use crate::index::{self, BuildParams, Lock, Outcome};
 use crate::libindex::{self, LibBuildParams};
+use crate::libreg;
+use crate::libupdate;
 use crate::library::LibrarySettings;
 use crate::zimsrc::ZimSource;
 use serde::Deserialize;
@@ -77,6 +79,16 @@ struct IndexLibraryParams {
     checkpoint_docs: usize,
 }
 
+#[derive(Deserialize)]
+struct UpdateLibraryParams {
+    library_path: String,
+    snapshot_path: String,
+    snapshot_manifest_path: String,
+    /// Not in the header: a test hook that pauses the job (cancellably) before the apply step.
+    #[serde(default)]
+    hold_ms: u64,
+}
+
 fn default_lib_checkpoint() -> usize {
     libindex::DEFAULT_CHECKPOINT_DOCS
 }
@@ -95,6 +107,7 @@ impl Job {
         match kind {
             "index_zim" => Self::start_index_zim(params_json),
             "index_library" => Self::start_index_library(params_json),
+            "update_library" => Self::start_update_library(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -135,9 +148,11 @@ impl Job {
             return Err(Error::not_found(format!("library folder {} not found", lib_path.display())));
         }
         let dir = PathBuf::from(&p.index_dir);
+        // an update owns the library while it runs: `busy`; and an update cannot start while this build runs
+        let token = libreg::entry_for(&lib_path).begin_build()?;
         let lock = Lock::acquire(&dir)?;
         let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
-        Self::spawn("cs-index-library", lock, 0, move |sh| {
+        Self::spawn("cs-index-library", (lock, token), 0, move |sh| {
             libindex::build_library_index(
                 &LibBuildParams {
                     library_path: &lib_path,
@@ -152,10 +167,30 @@ impl Job {
         })
     }
 
-    /// Run `work` on a new thread holding the build `lock`; the job's state follows its result.
-    fn spawn(
+    /// Start an `update_library` job. Parameter errors, a snapshot manifest that does not describe the library
+    /// and a library that is busy (another update, or an index build) are reported here and no job exists. The
+    /// library is marked as updating before this returns, so a search or `cs_status` right after sees it.
+    fn start_update_library(params_json: &str) -> Result<Job> {
+        let p: UpdateLibraryParams = serde_json::from_str(params_json)?;
+        let req = libupdate::prepare(&p.library_path, &p.snapshot_path, &p.snapshot_manifest_path, p.hold_ms)?;
+        let entry = libreg::entry_for(&req.library);
+        let guard = entry.begin_update()?;
+        Self::spawn("cs-update-library", guard, libupdate::STEPS, move |sh| {
+            libupdate::apply_update(
+                &req,
+                &entry,
+                &|d, t| sh.set_progress(d, t),
+                // cancelling is honoured only before the apply step; `apply_update` asks at the right places
+                &|| sh.cancel.load(Ordering::SeqCst),
+            )
+        })
+    }
+
+    /// Run `work` on a new thread holding `guard` (a build lock, an update mark, ...); the job's state follows
+    /// its result.
+    fn spawn<G: Send + 'static>(
         name: &str,
-        lock: Lock,
+        guard: G,
         total: u64,
         work: impl FnOnce(&Shared) -> Result<Outcome> + Send + 'static,
     ) -> Result<Job> {
@@ -169,7 +204,7 @@ impl Job {
         let th = std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
-                let lock = lock;
+                let guard = guard;
                 let r = catch_unwind(AssertUnwindSafe(|| work(&sh)));
                 let st = match r {
                     Ok(Ok(Outcome::Done)) => (State::Done, None),
@@ -184,9 +219,9 @@ impl Job {
                         (State::Failed, Some(Error::internal(format!("panic: {msg}"))))
                     }
                 };
-                // release the build lock before the state flips, so a poller that sees a finished job also
-                // sees the source as no longer building
-                drop(lock);
+                // release the build lock (or the update mark) before the state flips, so a poller that sees a
+                // finished job also sees the source as no longer building or updating
+                drop(guard);
                 if let Ok(mut g) = sh.state.lock() {
                     *g = st;
                 }

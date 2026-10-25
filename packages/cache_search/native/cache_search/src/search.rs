@@ -490,6 +490,8 @@ impl Handle {
                 .ok_or_else(|| {
                     if self.sources.iter().any(|s| matches!(s, Source::Opening(o) if o.id == lib_id)) {
                         Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is still opening"))
+                    } else if self.sources.iter().any(|s| matches!(s, Source::Updating(o) if o.id == lib_id)) {
+                        Error::new(crate::ErrorCode::Busy, format!("library {lib_id:?} is being updated"))
                     } else {
                         Error::not_found(format!("no library source {lib_id:?}"))
                     }

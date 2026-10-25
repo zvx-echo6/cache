@@ -14,7 +14,7 @@ Layout (repo `packages/cache_search/`):
 - `native/` — Cargo workspace root. Crate `cache_search` (lib: `cdylib` + `staticlib` + `rlib`). Header
   `native/include/cache_search.h`.
 - `cli/` — crate `cache_search_cli`, binary `cs` (a member of the `native/` workspace as `../cli`): `cs index-zim`,
-  `unpack-library`, `index-library`, `search`, `read`, `status`, `serve` (HTTP). Built as described under
+  `unpack-library`, `index-library`, `library-manifest`, `update-library`, `search`, `read`, `status`, `serve` (HTTP). Built as described under
   Headless parity; it calls the same `cs_*` functions as the C ABI.
 
 The crate never links llama.cpp. Query vectors come from the caller (the app via cache_llama `cl_embed`; the
@@ -51,18 +51,54 @@ not contain that file and the read-only open requires it. Single-shard collectio
 Opening. Always read-only: `ReadOnlyEdgeShard` with `MmapFs` and a cold `LoadProfile` for search. Opening never
 modifies the library files (measured: identical file listings before and after).
 
-Updates. A library is updated from a partial snapshot (`POST .../shards/0/snapshot/partial/create` with the
-shard's snapshot manifest) by an `update_library` job (see Jobs):
-1. The job closes the library (its read-only shard is dropped).
-2. It applies the partial snapshot to the shard directory with `recover_partial_snapshot`. This is a write,
-   so it happens only while the library is closed; searching never writes.
-3. It rewrites `segments_manifest.json`.
-4. It reopens the library read-only.
-While the job runs, queries on that library are answered from the old copy if one is kept; otherwise the
-source reports `building` and is skipped by search (as for an index build). The full replace from a new
-snapshot stays as the fallback (for example when the partial snapshot cannot be applied). A cited address
-whose point id is not in the updated library returns error code `not_found` (the app shows it as no longer in
-the library).
+Updates. A library is updated from a partial snapshot by an `update_library` job (see Jobs). What the Qdrant
+sources at the pinned rev say (read in full, 2026-10-25):
+- The server makes one with `POST /collections/{c}/shards/{s}/snapshot/partial/create`; the body is the client's
+  snapshot manifest (`SnapshotManifest`, JSON: segment id -> segment version + file versions). It streams a tar
+  of the changed files only (format "streamable": `segments/<id>/files/...` plus a `segment_manifest.json`
+  per segment, an empty `wal/`, clocks). If the manifest is exactly the server's, it answers with an
+  "empty partial snapshot" error instead.
+- Qdrant Edge cannot create a snapshot, full or partial. The creation code (`snapshot_all_segments`, `LocalShard::get_snapshot_creator`) is in
+  `lib/collection`, which Edge does not use. What Edge has: `EdgeShard::unpack_snapshot`,
+  `EdgeShard::snapshot_manifest` and `EdgeShard::recover_partial_snapshot` (`lib/edge/src/edge_shard/snapshots.rs`).
+  Tests build a partial snapshot from the lower-level per-segment function (see Tests below).
+- `snapshot_manifest` exists only on the read-write `EdgeShard`, not on `ReadOnlyEdgeShard`, and
+  `EdgeShard::load` is a write (it saves `edge_config.json`, replays the WAL and may add an appendable
+  segment). The core therefore computes the manifest only while the library is closed (`cs library-manifest`, see
+  Headless parity); it refuses when the library is open in the same process.
+- `recover_partial_snapshot(shard_path, current_manifest, unpacked_dir, snapshot_manifest)` takes the snapshot
+  already unpacked, merges it into the shard folder by moving files (it deletes segments and files the server no
+  longer has) and ends with a read-write `EdgeShard::load`, which it returns. It is not atomic: a failure
+  half-way (disk full, truncated archive) can leave the folder half-merged, and then the remedy is a full replace
+  from a full snapshot. `current_manifest` is the manifest the snapshot was cut against, which is what the job
+  takes from `snapshot_manifest_path`; `snapshot_manifest` is read from the unpacked snapshot itself.
+
+The job, in order:
+1. The library is marked as updating before `cs_job_start` returns. Search skips it, `cs_read` answers `busy` and
+   `cs_status` shows `"updating":true` (no old copy is kept for queries). The job waits for background opens of
+   the library to finish, then closes it: the shard is taken out of every open handle's cell (a search that is
+   using it finishes first).
+2. It unpacks the snapshot into a sibling folder (`<library>.cs-update-tmp`, same file system) and checks it is a
+   partial snapshot (every segment has a segment manifest, there is a `wal/` folder). Corrupt or full snapshots
+   fail here, with the library untouched.
+3. Apply with `recover_partial_snapshot`. A write, so it only happens while the library is closed.
+4. It rewrites `segments_manifest.json` from the `segments/` folders on disk (the server snapshot does not
+   carry it and the library's `EdgeShard::load` does not write it unless a Qdrant feature flag is on).
+5. It opens the shard read-only once to check it opens and drops it. When the job ends (done, failed or
+   cancelled) the library stops being `updating`, its generation goes up, and each handle that had it opens it
+   again on a background thread (`"opening":true` until ready). If that open fails the source is listed with its
+   error, like any source that cannot be opened.
+Progress is `done`/`total` steps, total 5. Cancelling is honoured before step 3 and ignored after it. On any
+failure the job ends `failed` with the error and the library is reopened from whatever is on disk.
+How the job finds the library: `cs_job_start(kind, params)` has no handle argument and a handle is used from one
+thread, so the job and the handles meet in a process-wide registry keyed by the library's canonical path
+(`libreg.rs`). Each open library keeps its shard in a mutex cell registered there; the job takes shards out of
+the cells and a handle notices the change the next time it is called (every call starts by looking). No ABI
+change was needed. The manifest of the library is NOT available through the ABI; if the app needs it, the
+proposal is a job kind `library_manifest` {"library_path","out_path"} that closes the library like
+`update_library` does, writes the JSON and reopens (proposed, not approved).
+The full replace from a new snapshot stays as the fallback. A cited address whose point id is not in the updated
+library returns error code `not_found` (the app shows it as no longer in the library).
 
 Risks.
 - The `segments_manifest.json` format is internal to Qdrant. The core writes it by hand, so a Qdrant change to
@@ -195,10 +231,13 @@ Options to evaluate first (report before committing):
 ## Jobs
 
 `index_zim`, `index_library` and `update_library` run as jobs: start, poll progress, cancel; checkpoints every N articles
-(Tantivy commit + last article or point index) so a cancelled or killed job resumes. `index_library` takes `library_path`, `index_dir` and `heap_mb` (default 200) and builds the device Tantivy
+(Tantivy commit + last article or point index) so a cancelled or killed job resumes (`update_library` does not
+checkpoint: it restarts from the snapshot file). `index_library` takes `library_path`, `index_dir` and `heap_mb` (default 200) and builds the device Tantivy
 index from the mapped text field; it is resumable via checkpoints like `index_zim`. `update_library` takes `library_path`,
 `snapshot_path` (the partial snapshot file) and `snapshot_manifest_path` (the manifest the snapshot was made
-against); it runs the update steps under Libraries / Updates. Memory cap via Tantivy
+against: the library's snapshot manifest as it was sent to the server; it must list exactly the segments on
+disk); it runs the update steps under Libraries / Updates. An update and an `index_library` job on the same
+library refuse each other with `busy`. Memory cap via Tantivy
 writer heap size (default 200 MB on phones). "Only while charging" is the app's policy, not the core's.
 
 ## Threads
@@ -208,7 +247,7 @@ job is done. Jobs run on their own threads inside the core and are polled.
 
 Opening a library can take tens of seconds (13-37 s measured on the 28 GB recon library), so `cs_open` and
 `cs_set_sources` never wait for it. Each library opens on a background thread inside the core; `cs_status` lists
-it with `"opening":true` until it is ready (`"opening":false` for every other source, ZIMs included), and search
+it with `"opening":true` until it is ready (`"updating":true` while an `update_library` job owns it) (`"opening":false` for every other source, ZIMs included), and search
 skips it meanwhile, the same as a source whose index is being built. An open failure is recorded on that source
 like other source errors (`id` null, `error` set; retried on the next `cs_set_sources`). A library already open
 at the same path is kept by `cs_set_sources`. Closing a handle while a library is still opening is safe: the
@@ -223,14 +262,20 @@ test runs and training capture. It is a thin layer over the same C ABI functions
 `cache_search` crate and calls the `cs_*` functions themselves (`cs_open`, `cs_status`, `cs_search`, `cs_read`,
 `cs_suggest`, `cs_format`, `cs_conversation_*`, `cs_job_*`), passing JSON in and printing the JSON that comes
 out, untouched. It does no ranking, snippeting, numbering or filtering of its own, so for identical data and
-identical query vectors its output is the phone's output. The one thing it calls that has no C ABI function is the
-core's `library::unpack_library` helper (`cs unpack-library`).
+identical query vectors its output is the phone's output. The two things it calls that have no C ABI function are the
+core's `library::unpack_library` helper (`cs unpack-library`) and `libupdate::library_manifest` (`cs library-manifest`).
 
 Subcommands (results on stdout as the core's JSON, errors on stderr as `{"code","message"}`, exit status 1):
 - `cs index-zim --zim <path> --index-dir <dir> [--heap-mb 200]`: runs an `index_zim` job, prints `state done/total`
   to stderr as it changes and the final progress JSON to stdout. Resumes from the checkpoint in `index_dir`.
 - `cs unpack-library --snapshot <file> --dir <dir>`: unpacks a Qdrant shard snapshot and writes
   `segments_manifest.json`; prints `{"dir","segments"}`.
+- `cs library-manifest --library <dir> [--out <file>]`: the library's snapshot manifest, the body to POST to the
+  server's partial snapshot endpoint; prints it (or writes `--out` and prints `{"out","segments"}`). A core helper
+  (`libupdate::library_manifest`), not an ABI call. It loads the shard read-write: run it only while the library
+  is closed.
+- `cs update-library --library <dir> --snapshot <file> --manifest <file>`: an `update_library` job, progress as
+  for `index-zim`.
 - `cs index-library --library <dir> --index-dir <dir> [--settings <cache-library.json>] [--heap-mb 200]`: an
   `index_library` job; `--settings` is passed as the job's `settings` object.
 - `cs search --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [embedder flags]`:
@@ -317,8 +362,43 @@ may have cached reads.
 - On-phone latency and build time (open, dense search, `index_library`): to measure on the emulator and a phone.
 - Whether 28 GB-class libraries need quantized vectors on the device later.
 
+## Tests of the update flow
+
+`native/cache_search/tests/update_ffi.rs`, no server. A real partial snapshot is built locally: shard v1 is built
+with the read-write `EdgeShard`, its manifest taken with `library_manifest`, the folder copied and changed (points
+added, deleted, one rewritten; a variant with the optimizer run so whole segments are added and removed), and
+the partial snapshot written with Qdrant's own per-segment `take_snapshot` (streamable format, against v1's
+manifest, which is what the server passes) plus a `wal/` folder. The test builder is test code, not the server's
+code path. Covered: searches skip the library during the update and find the new points after; deleted points
+are `not_found`; segments_manifest.json lists exactly the segments on disk; cancel before apply; corrupt,
+truncated and full (non-partial) snapshots fail with the library intact; a library that cannot reopen is reported
+as a failed source; busy rules; manifest refusal on an open library.
+
 ## To verify
 
-- The contents of `segments_manifest.json` after `recover_partial_snapshot`: whether the core must rewrite it,
-  and whether segments added or removed by the partial snapshot are listed correctly.
-- A test of the `update_library` flow against a live Qdrant 1.19.1 server's partial snapshot.
+- A real server's partial snapshot. Not done: it needs a Qdrant 1.19.1 server (or the pinned rev built as a
+  server) holding a collection, which was not available. Steps and sizes are in the test plan below.
+- Whether the server's real partial snapshot differs in layout from the locally built one (the test builder uses
+  the same per-segment function and format, but not the proxying and flushing the server does on a live shard, nor
+  the clocks files).
+- `segments_manifest.json` after a real `recover_partial_snapshot`: the core rewrites it from the segment folders
+  in every case (the check passes for the local snapshot, including segments added and removed); the open
+  question is only whether a server snapshot ever carries its own `segments_manifest.json` (the server code
+  archives one when its feature flag is on) and whether unpacking it could clash with the rewrite. The merge plan
+  ignores it.
+- The double open at the end of the job (step 5 checks the library opens, then the handle opens it again): on a
+  28 GB library that is a second 13-37 s open (the second is warm). Handing the opened shard to the handle would
+  avoid it; not done.
+
+### Real-server test plan
+
+1. Take a Qdrant 1.19.1 server with a collection (single shard) and a full shard snapshot of it
+   (`GET /collections/{c}/shards/0/snapshot`, 29.9 GB for the recon library; any small collection is enough for a
+   first run, a few MB).
+2. `cs unpack-library` the full snapshot, then `cs library-manifest --library <dir> --out m.json` (closed library).
+3. Change the collection on the server (upserts, deletes, a payload change; run the optimizer so segments are
+   replaced).
+4. `POST /collections/{c}/shards/0/snapshot/partial/create` with `m.json` as the body, save the response
+   (the changed files only; for a small collection a few MB, for recon expected far below 29.9 GB).
+5. `cs update-library --library <dir> --snapshot <file> --manifest m.json`; then compare points with the server
+   (ids and payloads of the changed and deleted points) and check segments_manifest.json against the folders.

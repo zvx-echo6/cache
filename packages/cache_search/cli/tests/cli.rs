@@ -360,3 +360,69 @@ fn embedder_finds_the_query_point_and_serve_matches() {
     assert_eq!(code, 200);
     assert_eq!(body, cs_ok(&["read", "--config", &config, "--address", "lib:fx/3"]));
 }
+
+// ---- library-manifest and update-library ---------------------------------------------------------------------
+
+#[test]
+fn library_manifest_and_update_library_commands() {
+    let tmp = TempDir::new("upd");
+    let shard = tmp.path("shard");
+    {
+        cache_search::library::ensure_init();
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(4, Distance::Cosine).build()).build();
+        let sh = EdgeShard::new(Path::new(&shard), cfg).unwrap();
+        let pts: Vec<_> = (1..=20u64)
+            .map(|i| PointStruct::new(i, vec![1.0, i as f32, 0.5, 0.25], json!({"title": format!("T{i}"), "content": format!("text {i}")})).0)
+            .collect();
+        sh.update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts)))).unwrap();
+        sh.flush().unwrap();
+    }
+    let seg_dirs = |d: &str| -> Vec<String> {
+        let mut v: Vec<String> =
+            std::fs::read_dir(format!("{d}/segments")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    };
+    // to stdout: the manifest JSON, keyed by segment id
+    let m = j(&cs_ok(&["library-manifest", "--library", &shard]));
+    let mut keys: Vec<String> = m.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, seg_dirs(&shard));
+    for (_, seg) in m.as_object().unwrap() {
+        assert!(seg["segment_version"].is_number() && seg["file_versions"].is_object(), "{seg}");
+    }
+    // the library manifest function also leaves segments_manifest.json in step with the folders
+    let sm = j(&std::fs::read_to_string(format!("{shard}/segments_manifest.json")).unwrap());
+    let mut listed: Vec<String> = sm.as_object().unwrap().keys().cloned().collect();
+    listed.sort();
+    assert_eq!(listed, seg_dirs(&shard));
+    // to a file
+    let out = tmp.path("m.json");
+    let r = j(&cs_ok(&["library-manifest", "--library", &shard, "--out", &out]));
+    assert_eq!(r["segments"], keys.len());
+    assert_eq!(j(&std::fs::read_to_string(&out).unwrap()), m);
+    // errors
+    let o = cs(&["library-manifest", "--library", "/nonexistent/shard"]);
+    assert!(!o.ok);
+    assert_eq!(j(o.stderr.trim())["code"], "not_found");
+
+    // update-library: a missing snapshot, then a corrupt one; the library is untouched by both
+    let o = cs(&["update-library", "--library", &shard, "--snapshot", "/nonexistent/s.snapshot", "--manifest", &out]);
+    assert!(!o.ok);
+    assert_eq!(j(o.stderr.trim())["code"], "not_found", "{}", o.stderr);
+    let bad = tmp.path("bad.snapshot");
+    std::fs::write(&bad, vec![9u8; 2048]).unwrap();
+    let o = cs(&["update-library", "--library", &shard, "--snapshot", &bad, "--manifest", &out]);
+    assert!(!o.ok);
+    let last = o.stderr.lines().last().unwrap();
+    assert_eq!(j(last)["code"], "io", "{}", o.stderr);
+    assert!(o.stderr.contains("failed"), "progress lines go to stderr: {}", o.stderr);
+    assert_eq!(j(o.stdout.trim())["state"], "failed");
+    assert_eq!(seg_dirs(&shard), keys);
+    // and the library still opens
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, json!({"sources": [{"kind": "library", "path": shard}]}).to_string()).unwrap();
+    let st = j(&cs_ok(&["status", "--config", &config]));
+    assert_eq!(st["sources"][0]["docs"], 20, "{st}");
+    assert_eq!(st["sources"][0]["updating"], false);
+}

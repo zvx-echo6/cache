@@ -70,7 +70,7 @@ cs_handle *cs_open(const char *config_json);
 int32_t cs_set_sources(cs_handle *h, const char *config_json);
 
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
- *              "opening":bool,"docs":N,"embedding_model":"..."|null,
+ *              "opening":bool,"updating":bool,"docs":N,"embedding_model":"..."|null,
  *              "library_id":"..."|null,"keyword_source":"own"|"device"|"none"|null,
  *              "settings":{...}|null (libraries: the settings in use, with "guessed":bool),
  *              "error":null|{"code","message"}}]}
@@ -78,6 +78,9 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * docs, no embedding_model unless settings were given, "indexed" false, and "keyword_source" null; search
  * skips it. "opening" is false for everything else, and always for ZIMs. "keyword_source" is null for ZIMs and
  * for a library that is still opening. A library that finished opening is reported as before.
+ * "updating" is true for a library an update_library job owns (see cs_job_start): its shard is closed, search skips
+ * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
+ * thread ("opening":true until ready). "updating" is false for everything else.
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
  * "indexed":false and its "error"; the other sources work normally. */
 char *cs_status(cs_handle *h);
@@ -149,7 +152,18 @@ void cs_conversation_free(cs_conv *c);
  *   builds the device Tantivy index from the library's mapped text field.
  * kind "update_library": {"library_path","snapshot_path","snapshot_manifest_path"}
  *   closes the library, applies a partial snapshot to its shard directory, rewrites segments_manifest.json and
- *   reopens it read-only (see DESIGN.md, Libraries / Updates).
+ *   reopens it read-only (see DESIGN.md, Libraries / Updates). snapshot_manifest_path is the library's snapshot
+ *   manifest JSON that was sent to the server when the partial snapshot was requested; it must list exactly the
+ *   segments in library_path/segments. The job finds the library through its (canonical) path, not through a
+ *   handle: every handle that has it open sees it as "updating" and opens it again afterwards. The library is
+ *   marked updating before cs_job_start returns. cs_job_start fails with "busy" if another update or an
+ *   index_library job is using that library, "not_found" if a path does not exist and "bad_json" for a manifest
+ *   that is not valid or does not match the library. Progress is in steps (done/total, total 5): closed,
+ *   snapshot unpacked and checked, applied, segments_manifest.json rewritten, library reopened (checked).
+ *   cs_job_cancel is honoured only before the apply step starts (the library is then reopened unchanged);
+ *   after that the job runs to the end. A failed job leaves the library reopened from whatever is on disk (a
+ *   failed apply can leave it half-merged: replace it from a full snapshot) or, if that does not open, listed in
+ *   cs_status with its error. Freeing a running update_library job waits for it to finish.
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);

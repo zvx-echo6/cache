@@ -15,6 +15,8 @@ cs: command line and HTTP wrapper over the cache_search core
   cs index-zim       --zim <path> --index-dir <dir> [--heap-mb 200]
   cs unpack-library  --snapshot <file> --dir <dir>
   cs index-library   --library <dir> --index-dir <dir> [--settings <cache-library.json>] [--heap-mb 200]
+  cs library-manifest --library <dir> [--out <file>]
+  cs update-library  --library <dir> --snapshot <file> --manifest <file>
   cs search          --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [EMBED] [--open-timeout 600]
   cs read            --config <sources.json> --address <addr> [--max-chars 6000] [--open-timeout 600]
   cs status          --config <sources.json> [--open-timeout 600]
@@ -152,6 +154,34 @@ pub fn unpack_library(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The library's snapshot manifest, the body to POST to a server's partial snapshot endpoint. Core helper
+/// `libupdate::library_manifest` (no C ABI function): it loads the shard READ-WRITE, so run it only while the
+/// library is closed (no handle, no running app on that folder).
+pub fn library_manifest(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["library", "out"], &[], false)?;
+    let lib = a.req("library").map_err(usage_err)?;
+    let (json, n) = cache_search::libupdate::library_manifest(Path::new(lib))
+        .map_err(|e| ApiError::new(e.code.as_str(), e.message))?;
+    match a.get("out") {
+        Some(out) => {
+            std::fs::write(out, &json).map_err(|e| ApiError::new("io", format!("writing {out}: {e}")))?;
+            print(&json!({"out": out, "segments": n}).to_string());
+        }
+        None => print(&json),
+    }
+    Ok(())
+}
+
+/// An `update_library` job: apply a partial snapshot to a closed library folder.
+pub fn update_library(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["library", "snapshot", "manifest"], &[], false)?;
+    run_job(
+        "update_library",
+        json!({"library_path": a.req("library").map_err(usage_err)?, "snapshot_path": a.req("snapshot").map_err(usage_err)?,
+               "snapshot_manifest_path": a.req("manifest").map_err(usage_err)?}),
+    )
+}
+
 pub fn search(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "query", "k", "offset", "open-timeout"], &["format", "json"], true)?;
     let query = a.req("query").map_err(usage_err)?.to_string();
@@ -208,6 +238,8 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "index-zim" => index_zim(rest),
         "unpack-library" => unpack_library(rest),
         "index-library" => index_library(rest),
+        "library-manifest" => library_manifest(rest),
+        "update-library" => update_library(rest),
         "search" => search(rest),
         "read" => read(rest),
         "status" => status(rest),
