@@ -1,0 +1,10 @@
+[package]
+name = "cache_tool"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: object fields keep insertion order, so tools emit fields in TOOLS.md order.
+serde_json = { version = "1", features = ["preserve_order"] }

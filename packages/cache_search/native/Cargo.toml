@@ -1,5 +1,5 @@
 [workspace]
-members = ["cache_search", "../cli"]
+members = ["cache_search", "cache_tool", "../cli"]
 resolver = "2"
 
 [profile.release]
