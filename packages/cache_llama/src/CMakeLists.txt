@@ -44,6 +44,16 @@ endif()
 
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp" llama.cpp)
 
+if (CACHE_LLAMA_BACKEND_DL)
+  # Keep only the armv8.x CPU variants. On the Pixel 8 (Tensor G3) the SVE2 variant (armv9.*) read
+  # prompts at about half the speed of armv8.6_1, and ggml prefers it because it scores higher.
+  foreach (v android_armv9.0_1 android_armv9.2_1 android_armv9.2_2)
+    if (TARGET ggml-cpu-${v})
+      set_target_properties(ggml-cpu-${v} PROPERTIES EXCLUDE_FROM_ALL ON)
+    endif()
+  endforeach()
+endif()
+
 add_library(cache_llama SHARED cache_llama.cpp)
 target_link_libraries(cache_llama PRIVATE llama llama-common)
 # common/ does not export its include path, so add it (chat.h, common.h, sampling.h, json.h ...)
