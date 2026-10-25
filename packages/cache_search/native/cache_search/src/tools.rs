@@ -674,6 +674,24 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_error_keeps_top_level_fields_in_order_and_omits_an_empty_detail() {
+        let mut h = handle();
+        let mut c = Conversation::new();
+        h.register_tool(dummy(
+            "locate",
+            Box::new(|_, _| {
+                Err(ToolError::new("no_route", "").with_top("from_matched", json!({"place_name": "A"})).with_top("to_matched", json!(null)))
+            }),
+        ));
+        let v = call(&mut h, &mut c, "locate", "{}");
+        assert_eq!(
+            v["content"],
+            r#"{"ok":false,"error":{"type":"no_route"},"from_matched":{"place_name":"A"},"to_matched":null}"#
+        );
+        assert_eq!(v["ids"], json!([]));
+    }
+
+    #[test]
     fn a_panicking_tool_is_an_internal_error() {
         let mut h = handle();
         let mut c = Conversation::new();
