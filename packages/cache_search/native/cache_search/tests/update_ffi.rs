@@ -326,6 +326,8 @@ fn check_updated(f: &Fixture, h: *mut cache_search::handle::Handle) {
     // no leftovers beside the library
     let sibling = f.lib.parent().unwrap().join("lib_shard.cs-update-tmp");
     assert!(!sibling.exists(), "unpack folder left behind");
+    assert!(!libupdate::stage_path(&f.lib).unwrap().exists(), "staging copy left behind");
+    assert!(!libupdate::old_path(&f.lib).unwrap().exists(), "old library left behind");
 }
 
 #[test]
@@ -732,6 +734,304 @@ fn library_manifest_job_is_busy_cancellable_and_checks_its_parameters() {
     assert!(out.exists());
 }
 
+// ---- real-copy staging: the library is untouched until the swap, space check, crash leftovers -------------------
+
+/// Every file under `dir` has exactly one name (no hard links).
+fn no_hard_links(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    fingerprint(dir).keys().all(|n| std::fs::metadata(dir.join(n)).unwrap().nlink() == 1)
+}
+
+fn wait_progress(j: *mut Job, at_least: u64) {
+    let t0 = Instant::now();
+    while progress(j)["done"].as_u64().unwrap() < at_least {
+        assert!(t0.elapsed().as_secs() < 60, "job did not reach step {at_least}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn is_clean(f: &Fixture) -> bool {
+    let p = f.lib.parent().unwrap();
+    !libupdate::stage_path(&f.lib).unwrap().exists() && !libupdate::old_path(&f.lib).unwrap().exists() && !p.join("lib_shard.cs-update-tmp").exists()
+}
+
+#[test]
+fn the_library_is_byte_identical_until_the_swap_and_the_swap_gives_the_new_points() {
+    let f = fixture("untouched", false);
+    let h = open(&f.lib);
+    let before = fingerprint(&f.lib);
+    let (stage, old) = (libupdate::stage_path(&f.lib).unwrap(), libupdate::old_path(&f.lib).unwrap());
+    assert!(stage.to_str().unwrap().ends_with("lib_shard.cs-stage"));
+    // the job pauses after the staging copy has been updated (recover + load done on it), before the swap
+    let hold = f.lib.parent().unwrap().join("hold-swap");
+    std::fs::write(&hold, b"").unwrap();
+    let mut p = job_params(&f, 0);
+    p["hold_swap_file"] = json!(hold.to_str().unwrap());
+    let j = start_job(p);
+    wait_progress(j, 3);
+    // the staging copy exists, has the update (the original does not), and shares no inode with the original
+    assert!(stage.is_dir() && !old.exists());
+    assert_ne!(fingerprint(&stage), before, "the staging copy was changed");
+    assert!(no_hard_links(&f.lib) && no_hard_links(&stage), "a real copy: no file has a second name");
+    let (c, m, g) = compare(&before, &fingerprint(&f.lib));
+    assert_eq!((c.len(), m.len(), g), (0, 0, 0), "content and mtime of every file of the library are as before the job: content {c:?}, mtime {m:?}");
+    assert_eq!(segment_ids(&f.lib), f.v1_segments);
+    std::fs::remove_file(&hold).unwrap(); // release the job
+    let done = wait_job(j);
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(done["done"], 5);
+    unsafe { cs_job_free(j) };
+    wait_ready(h);
+    check_updated(&f, h); // 310 points, new ones found, deleted ones gone, nothing left beside the library
+    assert!(is_clean(&f));
+    assert_eq!(count_points(&f.lib), 310);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn a_failure_after_the_copy_leaves_the_library_unchanged_and_no_stage() {
+    // before_swap: the staging copy is fully updated, then the job fails; after_copy: right after the copy;
+    // after_swap: the swap is done and then fails (before the open), so the swap is undone
+    for point in ["after_copy", "before_swap", "after_swap"] {
+        let f = fixture(&format!("fail-{point}"), false);
+        let h = open(&f.lib);
+        let before = fingerprint(&f.lib);
+        let mut p = job_params(&f, 0);
+        p["fail_at"] = json!(point);
+        let j = start_job(p);
+        let done = wait_job(j);
+        assert_eq!(done["state"], "failed", "{point}: {done}");
+        assert_eq!(done["error"]["code"], "internal", "{point}: {done}");
+        assert!(done["error"]["message"].as_str().unwrap().contains(point), "{done}");
+        unsafe { cs_job_free(j) };
+        assert!(is_clean(&f), "{point}: no stage, old or unpack folder left");
+        assert_eq!(fingerprint(&f.lib), before, "{point}: the library is as it was");
+        // the handle opens the unchanged library again
+        wait_ready(h);
+        let v = status(h);
+        assert_eq!(v["sources"][0]["docs"], 300, "{point}: {v}");
+        assert_eq!(v["sources"][0]["error"], Value::Null);
+        assert_eq!(first_addr(&search(h, &random_vec(5), 3)), "lib:t/5");
+        // and the update still works afterwards
+        let j = start_job(job_params(&f, 0));
+        assert_eq!(wait_job(j)["state"], "done");
+        unsafe { cs_job_free(j) };
+        wait_ready(h);
+        check_updated(&f, h);
+        unsafe { cs_close(h) };
+    }
+}
+
+#[test]
+fn a_failed_copy_deletes_the_partial_stage() {
+    // the library vanishes after the job started its hold: the copy fails and nothing is left
+    let f = fixture("copyfail", false);
+    let j = start_job(job_params(&f, 3000));
+    wait_progress(j, 2);
+    // a file the copy cannot read: a symbolic link inside the library
+    std::os::unix::fs::symlink("/nonexistent", f.lib.join("stray-link")).unwrap();
+    let done = wait_job(j);
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(done["error"]["code"], "unsupported", "{done}");
+    unsafe { cs_job_free(j) };
+    assert!(is_clean(&f));
+}
+
+#[test]
+fn copy_tree_makes_a_real_copy() {
+    use std::os::unix::fs::MetadataExt;
+    let f = fixture("copytree", true);
+    let dst = f.lib.parent().unwrap().join("copy");
+    let n = libupdate::copy_tree(&f.lib, &dst).unwrap();
+    assert_eq!(n, libupdate::tree_size(&f.lib).unwrap());
+    assert_eq!(fingerprint(&f.lib).iter().map(|(k, v)| (k.clone(), v.0)).collect::<BTreeMap<_, _>>(), fingerprint(&dst).iter().map(|(k, v)| (k.clone(), v.0)).collect::<BTreeMap<_, _>>());
+    assert!(no_hard_links(&f.lib) && no_hard_links(&dst));
+    for name in fingerprint(&f.lib).keys() {
+        assert_ne!(std::fs::metadata(f.lib.join(name)).unwrap().ino(), std::fs::metadata(dst.join(name)).unwrap().ino(), "{name}");
+    }
+    // an existing destination is refused, and so is a link
+    assert!(libupdate::copy_tree(&f.lib, &dst).is_err());
+    std::os::unix::fs::symlink("/nonexistent", f.lib.join("l")).unwrap();
+    let dst2 = f.lib.parent().unwrap().join("copy2");
+    assert_eq!(libupdate::copy_tree(&f.lib, &dst2).unwrap_err().code.as_str(), "unsupported");
+}
+
+// ---- the free-space check ---------------------------------------------------------------------------------------
+
+#[test]
+fn margin_and_free_space_helpers() {
+    let mib = 1024 * 1024u64;
+    assert_eq!(libupdate::margin_for(0), 256 * mib);
+    assert_eq!(libupdate::margin_for(1024 * mib), 256 * mib, "5% of 1 GiB is below the floor");
+    assert_eq!(libupdate::margin_for(100 * 1024 * mib), 100 * 1024 * mib / 100 * 5, "5% of 100 GiB");
+    let t = TempDir::new("statvfs");
+    assert!(libupdate::available_bytes(&t.0).unwrap() > 0);
+    assert!(libupdate::available_bytes(Path::new("/nonexistent/x")).is_err());
+}
+
+#[test]
+fn no_space_fails_the_job_and_changes_nothing_on_disk() {
+    let f = fixture("nospace", false);
+    let h = open(&f.lib);
+    let root = f._tmp.0.clone();
+    let before = fingerprint(&root);
+    let entries = std::fs::read_dir(&root).unwrap().count();
+    let lib_bytes = libupdate::tree_size(&f.lib).unwrap();
+    let snap_bytes = std::fs::metadata(&f.snapshot).unwrap().len();
+    let needed = lib_bytes + snap_bytes + libupdate::margin_for(lib_bytes);
+    let mut p = job_params(&f, 0);
+    p["fake_available_bytes"] = json!(needed - 1);
+    let j = start_job(p);
+    let done = wait_job(j);
+    assert_eq!(done["state"], "failed", "{done}");
+    let e = &done["error"];
+    assert_eq!(e["code"], "no_space", "{done}");
+    assert_eq!(e["needed"], needed, "{done}");
+    assert_eq!(e["available"], needed - 1, "{done}");
+    let msg = e["message"].as_str().unwrap();
+    assert!(msg.contains(&needed.to_string()) && msg.contains(&(needed - 1).to_string()), "{msg}");
+    assert_eq!(e.as_object().unwrap().len(), 4, "code, message, needed, available: {e}");
+    unsafe { cs_job_free(j) };
+    // nothing on disk changed: every file of the whole tree (library, snapshot, manifest, v2) is as before, and
+    // no folder was created beside the library
+    assert_eq!(fingerprint(&root), before);
+    assert!(is_clean(&f));
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), entries);
+    // the library comes back for the handle
+    wait_ready(h);
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    // exactly what is needed is enough
+    let mut p = job_params(&f, 0);
+    p["fake_available_bytes"] = json!(needed);
+    let j = start_job(p);
+    assert_eq!(wait_job(j)["state"], "done");
+    unsafe { cs_job_free(j) };
+    wait_ready(h);
+    check_updated(&f, h);
+    unsafe { cs_close(h) };
+}
+
+// ---- crash leftovers --------------------------------------------------------------------------------------------
+
+/// A folder that stands for a crashed update's staging copy: a partly copied library.
+fn fake_stage(f: &Fixture) {
+    let stage = libupdate::stage_path(&f.lib).unwrap();
+    std::fs::create_dir_all(stage.join("segments")).unwrap();
+    std::fs::write(stage.join("segments").join("half-copied"), b"x").unwrap();
+}
+
+#[test]
+fn leftover_stage_only_is_deleted_when_the_library_is_opened() {
+    let f = fixture("left-stage", false);
+    fake_stage(&f);
+    let before = fingerprint(&f.lib);
+    let h = open(&f.lib);
+    assert!(is_clean(&f));
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    assert_eq!(fingerprint(&f.lib), before);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn leftover_old_with_a_complete_library_is_deleted() {
+    let f = fixture("left-old", false);
+    // the swap finished, the crash came before the old library was deleted
+    let old = libupdate::old_path(&f.lib).unwrap();
+    copy_dir(&f.v2, &old);
+    assert!(libupdate::library_is_complete(&f.lib));
+    let before = fingerprint(&f.lib);
+    let h = open(&f.lib);
+    assert!(is_clean(&f));
+    assert_eq!(status(h)["sources"][0]["docs"], 300, "the library is what it was");
+    assert_eq!(fingerprint(&f.lib), before);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn leftover_old_alone_is_renamed_back() {
+    let f = fixture("left-only-old", false);
+    // the crash came between the two renames: no library, only .cs-old
+    let old = libupdate::old_path(&f.lib).unwrap();
+    let before = fingerprint(&f.lib);
+    std::fs::rename(&f.lib, &old).unwrap();
+    assert!(!f.lib.exists());
+    let h = open(&f.lib);
+    assert!(is_clean(&f));
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    assert_eq!(fingerprint(&f.lib), before);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn leftover_old_with_an_incomplete_library_is_restored() {
+    let f = fixture("left-bad", false);
+    // the swap finished but what is now the library is not usable: the old one comes back
+    let old = libupdate::old_path(&f.lib).unwrap();
+    let before = fingerprint(&f.lib);
+    std::fs::rename(&f.lib, &old).unwrap();
+    std::fs::create_dir_all(f.lib.join("segments")).unwrap();
+    std::fs::write(f.lib.join("segments").join("junk"), b"x").unwrap();
+    assert!(!libupdate::library_is_complete(&f.lib));
+    let h = open(&f.lib);
+    assert!(is_clean(&f));
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    assert_eq!(fingerprint(&f.lib), before);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn completeness_is_manifest_listed_segments_and_a_read_only_open() {
+    let f = fixture("complete", false);
+    assert!(libupdate::library_is_complete(&f.lib));
+    assert!(!libupdate::library_is_complete(Path::new("/nonexistent/lib")));
+    let c = f.lib.parent().unwrap().join("c");
+    // no manifest file
+    copy_dir(&f.lib, &c);
+    std::fs::remove_file(c.join(MANIFEST_FILE)).unwrap();
+    assert!(!libupdate::library_is_complete(&c));
+    // a listed segment is missing
+    std::fs::write(c.join(MANIFEST_FILE), json!({"00000000-0000-0000-0000-000000000000": "active"}).to_string()).unwrap();
+    assert!(!libupdate::library_is_complete(&c));
+    // the manifest is not an object
+    std::fs::write(c.join(MANIFEST_FILE), b"[]").unwrap();
+    assert!(!libupdate::library_is_complete(&c));
+    // everything listed is there, but the shard does not open (its segment folder is emptied)
+    let seg = segment_ids(&f.lib).into_iter().next().unwrap();
+    std::fs::write(c.join(MANIFEST_FILE), json!({seg.clone(): "active"}).to_string()).unwrap();
+    for e in std::fs::read_dir(c.join("segments").join(&seg)).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() { std::fs::remove_dir_all(p).unwrap() } else { std::fs::remove_file(p).unwrap() }
+    }
+    assert!(!libupdate::library_is_complete(&c));
+}
+
+#[test]
+fn an_update_start_puts_leftovers_right_first() {
+    // stage + old + complete library: the update starts clean and finishes
+    let f = fixture("left-start", false);
+    fake_stage(&f);
+    copy_dir(&f.v2, &libupdate::old_path(&f.lib).unwrap());
+    let j = start_job(job_params(&f, 0));
+    assert_eq!(wait_job(j)["state"], "done");
+    unsafe { cs_job_free(j) };
+    assert!(is_clean(&f));
+    let h = open(&f.lib);
+    check_updated(&f, h);
+    unsafe { cs_close(h) };
+
+    // a crash between the renames: only .cs-old. The update job would say not_found for the missing library
+    // without the recovery
+    let f = fixture("left-start2", false);
+    std::fs::rename(&f.lib, libupdate::old_path(&f.lib).unwrap()).unwrap();
+    let j = start_job(job_params(&f, 0));
+    assert_eq!(wait_job(j)["state"], "done");
+    unsafe { cs_job_free(j) };
+    assert!(is_clean(&f));
+    let h = open(&f.lib);
+    check_updated(&f, h);
+    unsafe { cs_close(h) };
+}
+
 // ---- evidence for DESIGN.md, Libraries / Updates: why the update is not staged with hard links -------------------
 //
 // A staging copy made of hard links (cp -al) would make the swap atomic at almost no disk cost, but only if
@@ -751,8 +1051,8 @@ fn fingerprint(dir: &Path) -> Fingerprint {
                 walk(base, &p, out);
             } else {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                std::fs::read(&p).unwrap().hash(&mut h);
-                let m = std::fs::metadata(&p).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+                std::fs::read(&p).unwrap_or_else(|e| panic!("reading {}: {e}", p.display())).hash(&mut h);
+                let m = std::fs::metadata(&p).unwrap_or_else(|e| panic!("stat {}: {e}", p.display())).modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
                 out.insert(p.strip_prefix(base).unwrap().to_string_lossy().into_owned(), (h.finish(), m));
             }
         }

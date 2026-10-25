@@ -17,6 +17,8 @@
  *   "unsupported"    the file or feature is not supported (e.g. an unknown ZIM compression)
  *   "io"             a file could not be read or written
  *   "cancelled"      a job was cancelled
+ *   "no_space"       not enough free disk space for an update_library job; the job error also has the numbers
+ *                    "needed" and "available" (bytes)
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -151,21 +153,36 @@ void cs_conversation_free(cs_conv *c);
  * kind "index_library": {"library_path","index_dir","heap_mb":200}
  *   builds the device Tantivy index from the library's mapped text field.
  * kind "update_library": {"library_path","snapshot_path","snapshot_manifest_path"}
- *   closes the library, applies a partial snapshot to its shard directory, rewrites segments_manifest.json and
- *   reopens it read-only (see DESIGN.md, Libraries / Updates). snapshot_manifest_path is the library's snapshot
+ *   closes the library, applies a partial snapshot to a REAL COPY of its shard directory
+ *   (<library_path>.cs-stage, beside it, no hard links), rewrites the copy's segments_manifest.json, swaps the copy
+ *   in with two renames (library -> <library_path>.cs-old, copy -> library, then deletes .cs-old) and opens the
+ *   library read-only (see DESIGN.md, Libraries / Updates). The library folder is not written to until the
+ *   swap: a job that fails before it deletes the copy and leaves the library exactly as it was (the handles open
+ *   it again); a library can no longer be left half-merged, so there is no replace-from-a-full-snapshot remedy
+ *   for a failed update. snapshot_manifest_path is the library's snapshot
  *   manifest JSON that was sent to the server when the partial snapshot was requested; it must list exactly the
  *   segments in library_path/segments. The job finds the library through its (canonical) path, not through a
  *   handle: every handle that has it open sees it as "updating" and opens it again afterwards. The library is
  *   marked updating before cs_job_start returns. cs_job_start fails with "busy" if another update or an
  *   index_library job is using that library, "not_found" if a path does not exist and "bad_json" for a manifest
- *   that is not valid or does not match the library. Progress is in steps (done/total, total 5): closed,
- *   snapshot unpacked and checked, applied, segments_manifest.json rewritten, library reopened (checked).
- *   cs_job_cancel is honoured only before the apply step starts (the library is then reopened unchanged);
- *   after that the job runs to the end. A failed job leaves the library reopened from whatever is on disk (a
- *   failed apply can leave it half-merged: replace it from a full snapshot) or, if that does not open, listed in
- *   cs_status with its error. Freeing a running update_library job waits for it to finish.
+ *   that is not valid or does not match the library.
+ *   Free space: before it closes the library or creates anything the job needs library size + snapshot file size
+ *   + a margin of max(5% of the library size, 256 MiB) free on the library's file system (the staging copy, the
+ *   unpacked snapshot and the old library exist side by side at the end). If not, the job fails at once with code
+ *   "no_space", {"code","message","needed","available"} (bytes), and has changed nothing on disk.
+ *   Progress is in steps (done/total, total 5): closed, snapshot unpacked and checked, staging copy updated
+ *   (copied, snapshot applied, segments_manifest.json rewritten), swapped, library opened once at its final path
+ *   (checked). cs_job_cancel is honoured only before the staging copy starts (the library is then reopened
+ *   unchanged); after that the job runs to the end. A failed job leaves the library as it was and the handles
+ *   open it again (or, if that does not open, list it in cs_status with its error). If the last open fails the
+ *   swap is undone. Freeing a running update_library job waits for it to finish.
  *   The last step opens the library read-only once; that shard is handed to every handle that had the library
  *   open (no second open).
+ *   Crash leftovers beside the library are put right when a library is opened (cs_open) and when an update
+ *   starts: a <library_path>.cs-stage folder is always deleted; <library_path>.cs-old is deleted if the library
+ *   is complete (segments_manifest.json lists at least one segment, every listed segment folder exists, and the
+ *   library opens read-only), renamed back to the library if the library is missing, and, if the library is there
+ *   but not complete, the library is deleted and .cs-old renamed back.
  * kind "library_manifest": {"library_path","out_path"}
  *   writes the library's snapshot manifest (JSON, the body of the server's partial snapshot request) to
  *   out_path, which must not be inside the library folder. Like update_library it closes the library in every

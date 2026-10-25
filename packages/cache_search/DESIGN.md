@@ -69,13 +69,12 @@ sources at the pinned rev say (read in full, 2026-10-25):
 - `recover_partial_snapshot(shard_path, current_manifest, unpacked_dir, snapshot_manifest)` takes the snapshot
   already unpacked, merges it into the shard folder by moving files (it deletes segments and files the server no
   longer has) and ends with a read-write `EdgeShard::load`, which it returns. It is not atomic: a failure
-  half-way (disk full, truncated archive) can leave the folder half-merged, and then the remedy is a full replace
-  from a full snapshot. `current_manifest` is the manifest the snapshot was cut against, which is what the job
+  half-way (disk full, truncated archive) leaves its target half-merged. So the core never runs it on the
+  library: it runs it on a real copy (below), and a failed update leaves the library as it was. `current_manifest` is the manifest the snapshot was cut against, which is what the job
   takes from `snapshot_manifest_path`; `snapshot_manifest` is read from the unpacked snapshot itself.
-- Atomic update through a hard-link staging copy (evaluated 2026-10-25, NOT shipped). The idea: make a sibling
-  folder of hard links to every library file, recover the snapshot into it, verify, swap with renames, delete
-  the old folder; on a failure delete the staging folder and the original is untouched. It is safe only if
-  nothing in the update path writes into an existing inode. At the pinned rev (0f8c4d79) it does:
+- Hard-link staging was evaluated (2026-10-25) and rejected. The idea: make a sibling folder of hard links to
+  every library file, recover the snapshot into it, verify, swap with renames, delete the old folder. It is safe
+  only if nothing in the update path writes into an existing inode. At the pinned rev (0f8c4d79) it does:
   - Merge (`lib/edge/src/edge_shard/snapshots.rs:40-61`): `move_file` (`lib/common/common/src/fs/move.rs:38-60`)
     renames (new name, safe) and `remove_file`/`remove_dir_all` only drop names (safe), and the WAL folder is
     replaced by remove + rename (safe). But the segments folder is merged with `move_dir`
@@ -98,20 +97,59 @@ sources at the pinned rev say (read in full, 2026-10-25):
   - So the set to copy instead of link is not small or knowable from file names: it is every file of each
     mutable component across segment types, and it includes the big data files (Gridstore pages, vector chunks)
     of appendable segments, which are opened writable too and would be written if the load had anything to
-    repair. Rule applied: do not ship staging. `update_library` keeps its fall-back to a full replace after a
-    failed apply. The three `hard_link_staging_*` tests record the measurements and fail if a Qdrant bump changes
+    repair. The three `hard_link_staging_*` tests record the measurements and fail if a Qdrant bump changes
     them (then re-evaluate).
-  - Proposed, not approved (needs the owner's go): a variant that is safe by construction. Execute the merge plan
-    (`SnapshotUtils::partial_snapshot_merge_plan`, public) ourselves with rename/unlink only, so every changed file
-    gets a new inode, do NOT run the read-write load on the staging copy, and verify with the read-only open
-    (which writes nothing). Measured: the original stays identical in content and mtime, and the result has the
-    same points as `recover_partial_snapshot` + load. The cost is giving up what that load does after a merge
-    (`check_consistency_and_repair`, an appendable segment, `edge_config.json`); a later `library_manifest` runs it
-    in place. If approved: staging folder `<library>.cs-stage`, swap by `library -> library.cs-old`, `stage ->
-    library`, delete the old one; on startup, if `library.cs-old` exists and the library is complete delete it, if
-    only `library.cs-old` exists rename it back, and always delete a staging folder.
+  - A rename-only merge without the read-write load (execute `SnapshotUtils::partial_snapshot_merge_plan`
+    ourselves) would be safe on links, but it gives up what that load does after a merge
+    (`check_consistency_and_repair`, an appendable segment, `edge_config.json`); not done.
+- Real-copy staging (shipped). `update_library` copies the whole library folder to `<library>.cs-stage` beside it
+  (same parent, so the swap is a rename; every file is read and written to a new file, no hard links,
+  `libupdate::copy_tree`), runs Qdrant's own `recover_partial_snapshot` (merge + read-write load) on the copy,
+  rewrites the copy's `segments_manifest.json`, flushes the copy to disk, and swaps: rename `library` to
+  `<library>.cs-old`, rename the copy to `library`, open `library` read-only once (the check, and the shard for
+  the handles), delete `.cs-old`. The library is not written to until the first rename, so:
+  - Failure before the swap (copy, merge, load, flush, an injected test failure): the copy is deleted, the
+    library is as it was byte for byte (tested by content hash and mtime of every file), and the handles open it
+    again. There is no half-merged library and no replace-from-a-full-snapshot step.
+  - Failure of the last open, after the swap: the swap is undone (the new library renamed to the staging name and
+    deleted, `.cs-old` renamed back) and the job fails.
+  - Which path the handed-over shard is opened at. The Edge API keeps paths in the opened shard:
+    `ReadOnlyEdgeShard` stores the path it was opened with (`read_only/mod.rs:55`, `path()` at `91`, and the
+    `LocalSegmentEnumerator`/`ManifestSegmentEnumerator` built from it, `lifecycle.rs:127-130`), and every
+    `ReadOnlySegment` stores its `segment_path`, which `live_reload` and `config_reload` reopen files by
+    (`segment/src/segment/read_only/config_reload.rs:112-226`, `read_only/live_reload.rs:152-157`). Open files and
+    mmaps would survive the rename of their folder, but the stored paths would not, and the API does not say
+    which later operations use them. So the shard is opened at the FINAL path after the swap, not at the staging
+    path before it: it is correct whatever happens to the staging name. The verify-before-swap this gives up is
+    replaced by verify-then-undo, and a crash in that window is handled by the leftover rules below.
+  - Cost: the swap needs library + snapshot + staging copy on disk at the same time, plus `.cs-old` for a moment
+    (library size twice), hence the space check below; and the copy time (a
+    28 GB library is read and written once: not yet measured at that size).
+- Free-space check. Before the job closes the library or creates anything it computes needed = library size (sum
+  of the file sizes) + partial snapshot file size + margin, where margin = max(5% of the library size,
+  256 MiB) (`libupdate::MARGIN_PERCENT`, `MARGIN_MIN_BYTES`: the file system's own overhead, files the load adds,
+  other writers on the same disk). Available is `statvfs` (`f_bavail * f_frsize`) on the library's file system
+  (the `libc` crate, already in the lockfile). If needed is larger than available the job fails at once with code
+  `no_space`; the error JSON is `{"code":"no_space","message":...,"needed":N,"available":N}` (bytes) and the
+  disk is unchanged. Tests fake the available bytes with a hook (`fake_available_bytes`) and compare the hash of
+  the whole tree before and after.
+- Crash leftovers. A crash can leave `<library>.cs-stage` and/or `<library>.cs-old`. They are put right when a
+  library is opened (`cs_open`, with the library marked updating meanwhile; a missing library is handled when the
+  source is added) and when an `update_library` job starts, and nowhere else:
+  - `.cs-stage` is always deleted.
+  - `.cs-old` and a complete `library`: the swap finished, `.cs-old` is deleted.
+  - `.cs-old` and no `library` (crash between the two renames): `.cs-old` is renamed back to `library`.
+  - `.cs-old` and a `library` that is not complete (the swap finished but the new library does not work): the
+    `library` is deleted and `.cs-old` renamed back. (This case is an addition to the three rules asked for.)
+  - "Complete" is what the code can check: `segments_manifest.json` is a file holding a JSON object that lists at
+    least one segment, every listed segment is a folder under `segments/`, and the library opens read-only (the
+    cheap scroll profile, not counted as an open, nothing kept) with as many segments as the manifest lists (the open
+    drops a segment whose files are gone without an error; found by a test). It does not prove that the contents are the
+    intended ones. The open is only done when `.cs-old` exists. The check cannot see other processes: it assumes
+    the caller owns the library.
 
 The job, in order:
+0. Space check (above). Fails with `no_space` before anything is closed or created.
 1. The library is marked as updating before `cs_job_start` returns. Search skips it, `cs_read` answers `busy` and
    `cs_status` shows `"updating":true` (no old copy is kept for queries). The job waits for background opens of
    the library to finish, then closes it: the shard is taken out of every open handle's cell (a search that is
@@ -119,21 +157,25 @@ The job, in order:
 2. It unpacks the snapshot into a sibling folder (`<library>.cs-update-tmp`, same file system) and checks it is a
    partial snapshot (every segment has a segment manifest, there is a `wal/` folder). Corrupt or full snapshots
    fail here, with the library untouched.
-3. Apply with `recover_partial_snapshot`. A write, so it only happens while the library is closed.
-4. It rewrites `segments_manifest.json` from the `segments/` folders on disk (the server snapshot does not
-   carry it and the library's `EdgeShard::load` does not write it unless a Qdrant feature flag is on).
-5. It opens the shard read-only once. That one open is both the check that the library opens and the shard the
-   handles use afterwards: the job hands the opened shard (shared, an `Arc`) to the cell of every handle that
-   had the library open, and each such handle only refreshes its numbers (point count, settings) when it next
-   looks: there is no second open (a test counts the opens). The open is warmed for the vectors the handles
-   search with (their load profiles merged); with no handle open it uses the cheap scroll profile and the shard
-   is dropped. A handle that had already turned the library into an `updating` source keeps its cell, so it
-   gets the shard too. When the job ends (done, failed or cancelled) the library stops being `updating` and its
+3. Staging: copy the library to `<library>.cs-stage`, apply the snapshot to the copy with
+   `recover_partial_snapshot` (a write, so only ever on the copy), rewrite the copy's `segments_manifest.json`
+   from the `segments/` folders (the server snapshot does not carry it and `EdgeShard::load` does not write it
+   unless a Qdrant feature flag is on), flush the copy.
+4. Swap: `library` -> `<library>.cs-old`, copy -> `library`.
+5. It opens the shard read-only once, at the final path. That one open is both the check that the library opens
+   and the shard the handles use afterwards: the job hands the opened shard (shared, an `Arc`) to the cell of
+   every handle that had the library open, and each such handle only refreshes its numbers (point count,
+   settings) when it next looks: there is no second open (a test counts the opens). The open is warmed for the
+   vectors the handles search with (their load profiles merged); with no handle open it uses the cheap scroll
+   profile and the shard is dropped. A handle that had already turned the library into an `updating` source keeps
+   its cell, so it gets the shard too. Then `.cs-old` is deleted (best effort; the leftover rules delete it
+   otherwise). When the job ends (done, failed or cancelled) the library stops being `updating` and its
    generation goes up. Only a handle with nothing handed back (the job failed or was cancelled after the close)
    opens the library again, on a background thread (`"opening":true` until ready); if that open fails the
    source is listed with its error, like any source that cannot be opened.
-Progress is `done`/`total` steps, total 5. Cancelling is honoured before step 3 and ignored after it. On any
-failure the job ends `failed` with the error and the library is reopened from whatever is on disk.
+Progress is `done`/`total` steps, total 5 (closed, unpacked, staging copy updated, swapped, opened). Cancelling is
+honoured before the staging copy starts and ignored after it. On any failure the job ends `failed` with the
+error and the library is as it was (reopened from disk).
 How the job finds the library: `cs_job_start(kind, params)` has no handle argument and a handle is used from one
 thread, so the job and the handles meet in a process-wide registry keyed by the library's canonical path
 (`libreg.rs`). Each open library keeps its shard in a mutex cell registered there; the job takes shards out of
@@ -148,7 +190,7 @@ rewritten, reopened (checked). Cancelling is honoured before the read-write load
 `busy` while an update, another manifest job or an index build uses the library. The file is byte for byte what
 `cs library-manifest --out` writes for the same library (tested; both use the same function, which writes the
 keys sorted because the manifest holds hash maps and the same library should give the same bytes every time).
-The full replace from a new snapshot stays as the fallback. A cited address whose point id is not in the updated
+A cited address whose point id is not in the updated
 library returns error code `not_found` (the app shows it as no longer in the library).
 
 Risks.
@@ -283,11 +325,11 @@ Options to evaluate first (report before committing):
 
 `index_zim`, `index_library`, `update_library` and `library_manifest` run as jobs: start, poll progress, cancel; checkpoints every N articles
 (Tantivy commit + last article or point index) so a cancelled or killed job resumes (`update_library` does not
-checkpoint: it restarts from the snapshot file). `index_library` takes `library_path`, `index_dir` and `heap_mb` (default 200) and builds the device Tantivy
+checkpoint: it restarts from the snapshot file, and leaves the library as it was if it fails). `index_library` takes `library_path`, `index_dir` and `heap_mb` (default 200) and builds the device Tantivy
 index from the mapped text field; it is resumable via checkpoints like `index_zim`. `update_library` takes `library_path`,
 `snapshot_path` (the partial snapshot file) and `snapshot_manifest_path` (the manifest the snapshot was made
 against: the library's snapshot manifest as it was sent to the server; it must list exactly the segments on
-disk); it runs the update steps under Libraries / Updates. `library_manifest` takes `library_path` and `out_path` and
+disk); it runs the update steps under Libraries / Updates (including the free-space check: error code `no_space`). `library_manifest` takes `library_path` and `out_path` and
 writes the library's snapshot manifest (the body to send to the server's partial snapshot endpoint) to `out_path`. An update and an `index_library` job on the same
 library refuse each other with `busy`. Memory cap via Tantivy
 writer heap size (default 200 MB on phones). "Only while charging" is the app's policy, not the core's.
@@ -427,7 +469,13 @@ truncated and full (non-partial) snapshots fail with the library intact; a libra
 as a failed source; busy rules; manifest refusal on an open library; the library opened exactly once per
 update, with every handle (also one that was not looked at during the update) getting the shared shard; the
 `library_manifest` job (state while it runs, busy and cancel rules, parameter errors, a file equal byte for byte
-to the one `cs library-manifest` writes); and the hard-link staging measurements above.
+to the one `cs library-manifest` writes); real-copy staging (the library hashed after the merge and load ran on the
+copy and before the swap is identical in content and mtime and the copy shares no inode with it; the swap gives the
+expected 310 points; an injected failure after the copy, before the swap and after the swap leaves the library
+unchanged and no stage or old folder, and the update works afterwards); the space check (`no_space` with the numbers
+and the whole tree hashed before and after, exactly `needed` bytes is enough, `needed - 1` is not); each crash
+leftover case (stage only, old plus complete library, old only, old plus incomplete library, at open and at update
+start) and the completeness check; and the hard-link staging measurements above.
 
 ## To verify
 
