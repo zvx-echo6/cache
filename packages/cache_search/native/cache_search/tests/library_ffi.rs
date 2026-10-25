@@ -3,10 +3,12 @@
 
 use cache_search::ffi::*;
 use cache_search::handle::Handle;
+use cache_search::job::Job;
 use cache_search::library::{ensure_init, MANIFEST_FILE};
 use edge::{
-    Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations,
-    PointStruct, UpdateOperation,
+    CreateIndex, Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, FieldIndexOperations, PayloadFieldSchema,
+    PayloadSchemaParams, PointId, PointInsertOperations, PointOperations, PointStruct, TextIndexParams,
+    TextScoringParams, UpdateOperation,
 };
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
@@ -98,6 +100,13 @@ fn base_payload(i: u64) -> Value {
     if i % 2 == 0 {
         p["summary"] = json!(format!("Summary {i}. More."));
     }
+    // rare words for the keyword tests: 1234 is kept, 1233 is left out (junk), 5 has a copy at 2005
+    match i {
+        1234 => p["content"] = json!("Paragraph 1234. The xylophonic quartz resonates softly. Another sentence follows here."),
+        1233 => p["content"] = json!("Paragraph 1233. A zygomorphic flower that nobody may find. Another sentence."),
+        5 => p["content"] = json!("Paragraph 5. The quokkaesque marsupial hops about. Another sentence follows here."),
+        _ => {}
+    }
     p
 }
 
@@ -187,7 +196,11 @@ fn default_leave_out() -> Value {
 }
 
 fn open(path: &Path, settings: Option<Value>) -> *mut Handle {
-    let mut src = json!({"kind":"library","path":path.to_str().unwrap(),"index_dir":"/nonexistent/idx"});
+    open_idx(path, settings, "/nonexistent/idx")
+}
+
+fn open_idx(path: &Path, settings: Option<Value>, index_dir: &str) -> *mut Handle {
+    let mut src = json!({"kind":"library","path":path.to_str().unwrap(),"index_dir":index_dir});
     if let Some(s) = settings {
         src["settings"] = s;
     }
@@ -509,4 +522,378 @@ fn opening_and_searching_leave_the_shard_files_alone() {
     unsafe { cs_close(h) };
     assert_eq!(std::fs::metadata(f.dir.join(MANIFEST_FILE)).unwrap().modified().unwrap(), m_time);
     assert_eq!(listing(&f.dir), before, "shard files changed");
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Keyword index: the index_library job and keyword search over a library
+
+fn start_job(params: Value) -> *mut Job {
+    unsafe { cs_job_start(cstr("index_library").as_ptr(), cstr(&params.to_string()).as_ptr()) }
+}
+
+fn progress(j: *mut Job) -> Value {
+    serde_json::from_str(&take(unsafe { cs_job_progress(j) }).unwrap()).unwrap()
+}
+
+fn wait_not_running(j: *mut Job) -> Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let p = progress(j);
+        if p["state"] != "running" {
+            return p;
+        }
+        assert!(t0.elapsed().as_secs() < 300, "job did not finish: {p}");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+fn index_params(lib: &Path, idx: &Path, checkpoint: usize) -> Value {
+    json!({"library_path": lib.to_str().unwrap(), "index_dir": idx.to_str().unwrap(), "heap_mb": 50,
+           "settings": settings(default_leave_out(), true), "checkpoint_docs": checkpoint})
+}
+
+fn build_index(lib: &Path, idx: &Path, checkpoint: usize) -> Value {
+    let j = start_job(index_params(lib, idx, checkpoint));
+    assert!(!j.is_null(), "job start failed: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
+    let p = wait_not_running(j);
+    unsafe { cs_job_free(j) };
+    p
+}
+
+fn ksearch(h: *mut Handle, q: &str, k: usize) -> Value {
+    let opts = json!({"k": k});
+    serde_json::from_str(&take(unsafe { cs_search(h, cstr(q).as_ptr(), cstr(&opts.to_string()).as_ptr()) }).expect("search result")).unwrap()
+}
+
+fn index_docs(idx: &Path) -> u64 {
+    tantivy::Index::open_in_dir(idx).unwrap().reader().unwrap().searcher().num_docs()
+}
+
+fn expected_indexed() -> u64 {
+    let kept = (1..=BASE + 10).filter(|&i| !is_left_out(i)).count() + (0..150).filter(|j| !is_left_out(CLUSTER + j)).count();
+    kept as u64 + 1 // the UUID point
+}
+
+struct KwFixture {
+    f: Fixture,
+    idx: PathBuf,
+}
+
+/// A fixture shard plus a finished device index in a folder beside it.
+fn kw_fixture(name: &str) -> KwFixture {
+    let f = make_fixture(name);
+    let idx = f._tmp.0.join("kw_idx");
+    let p = build_index(&f.dir, &idx, 300);
+    assert_eq!(p["state"], "done", "{p}");
+    KwFixture { f, idx }
+}
+
+fn shared_kw() -> &'static KwFixture {
+    static F: OnceLock<KwFixture> = OnceLock::new();
+    F.get_or_init(|| kw_fixture("shared-kw"))
+}
+
+#[test]
+fn index_library_builds_and_skips_leave_out_points() {
+    let f = make_fixture("idxbuild");
+    let idx = f._tmp.0.join("idx");
+    // argument errors are reported by cs_job_start
+    assert!(start_job(json!({"library_path": f.dir.to_str().unwrap()})).is_null());
+    assert_eq!(last_code(), "bad_json");
+    assert!(start_job(json!({"library_path": "/nonexistent/lib", "index_dir": idx.to_str().unwrap()})).is_null());
+    assert_eq!(last_code(), "not_found");
+    let mut bad = index_params(&f.dir, &idx, 300);
+    bad["settings"] = json!({"library_id": "x"});
+    assert!(start_job(bad).is_null());
+    assert_eq!(last_code(), "bad_json");
+
+    let p = build_index(&f.dir, &idx, 300);
+    assert_eq!(p["state"], "done", "{p}");
+    assert!(p["error"].is_null());
+    assert_eq!(p["done"], p["total"]);
+    assert_eq!(p["total"], TOTAL);
+    assert_eq!(index_docs(&idx), expected_indexed());
+    assert!(expected_indexed() < TOTAL);
+    let meta: Value = serde_json::from_str(&std::fs::read_to_string(idx.join("cache_search_index.json")).unwrap()).unwrap();
+    assert_eq!(meta["state"], "done");
+    assert_eq!(meta["index_format"], 2);
+    assert_eq!(meta["tokenizer"], "en_stem");
+    assert_eq!(meta["zim_uuid"], "lib:t");
+    assert!(!idx.join("cache_search_index.lock").exists());
+    // building again over a finished index is a no-op that reports done
+    let p = build_index(&f.dir, &idx, 300);
+    assert_eq!(p["state"], "done");
+    assert_eq!(index_docs(&idx), expected_indexed());
+    // an index for another library id is rebuilt, not mixed
+    let mut other = index_params(&f.dir, &idx, 300);
+    other["settings"]["library_id"] = json!("other");
+    let j = start_job(other);
+    assert_eq!(wait_not_running(j)["state"], "done");
+    unsafe { cs_job_free(j) };
+    let meta: Value = serde_json::from_str(&std::fs::read_to_string(idx.join("cache_search_index.json")).unwrap()).unwrap();
+    assert_eq!(meta["zim_uuid"], "lib:other");
+    assert_eq!(index_docs(&idx), expected_indexed());
+}
+
+#[test]
+fn keyword_query_finds_a_rare_word_and_skips_left_out_points() {
+    let k = shared_kw();
+    let h = open_idx(&k.f.dir, Some(settings(default_leave_out(), true)), k.idx.to_str().unwrap());
+    let r = ksearch(h, "xylophonic", 5);
+    assert_eq!(addrs(&r), vec!["lib:t/1234"], "{r}");
+    assert_eq!(r["vector_sources"], json!([]));
+    assert_eq!(r["keyword_only_sources"], json!(["t"]));
+    // a keyword-only hit has its title, page and snippet from the shard payload (summary is mapped on even ids)
+    let x = &r["results"][0];
+    assert_eq!(x["title"], "Book 61, p. 235");
+    assert_eq!(x["snippet"], "Summary 1234. More.");
+    assert_eq!(x["page"], 235);
+    assert_eq!(x["source_id"], "t");
+    assert_eq!(x["source_kind"], "library");
+    assert_eq!(x["source_title"], "Test Lib");
+    // stemming: "resonate" finds "resonates"
+    assert_eq!(addrs(&ksearch(h, "resonate", 5)), vec!["lib:t/1234"]);
+    // a left-out point (junk) is never found
+    let r = ksearch(h, "zygomorphic", 5);
+    assert!(addrs(&r).is_empty(), "{r}");
+    // a UUID point id comes back as the UUID
+    let r = ksearch(h, "uuid", 5);
+    assert_eq!(addrs(&r), vec![format!("lib:t/{UUID_POINT}")], "{r}");
+    // the title field is searched too
+    let r = ksearch(h, "\"Uuid book\"", 5);
+    assert_eq!(addrs(&r), vec![format!("lib:t/{UUID_POINT}")], "{r}");
+    // a point read from a keyword hit
+    let v = read(h, "lib:t/1234", 1000).unwrap();
+    assert!(v["text"].as_str().unwrap().contains("xylophonic"));
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn identical_points_collapse_to_the_smaller_address() {
+    let k = shared_kw();
+    // 5 and its copy 2005 have the same payload, so the same score; the collapse keeps the smaller address
+    // by string compare, "lib:t/2005" < "lib:t/5"
+    for with_doc in [true, false] {
+        let h = open_idx(&k.f.dir, Some(settings(default_leave_out(), with_doc)), k.idx.to_str().unwrap());
+        let r = ksearch(h, "quokkaesque", 5);
+        assert_eq!(addrs(&r), vec!["lib:t/2005"], "{r}");
+        unsafe { cs_close(h) };
+    }
+}
+
+#[test]
+fn keyword_and_vector_together_put_the_point_found_by_both_first() {
+    let k = shared_kw();
+    let h = open_idx(&k.f.dir, Some(settings(default_leave_out(), true)), k.idx.to_str().unwrap());
+    // vector near point 777, keyword for point 1234
+    let opts = json!({"k": 10, "query_vector": {"model": MODEL, "vector": random_vec(777)}});
+    let run = |q: &str, opts: &Value| -> Value {
+        serde_json::from_str(&take(unsafe { cs_search(h, cstr(q).as_ptr(), cstr(&opts.to_string()).as_ptr()) }).unwrap()).unwrap()
+    };
+    let r = run("xylophonic", &opts);
+    assert_eq!(r["vector_sources"], json!(["t"]));
+    let a = addrs(&r);
+    assert!(a.contains(&"lib:t/777".to_string()) && a.contains(&"lib:t/1234".to_string()), "{a:?}");
+    // found by both: the vector of point 1234 itself plus its rare word
+    let opts = json!({"k": 10, "query_vector": {"model": MODEL, "vector": random_vec(1234)}});
+    let r = run("xylophonic", &opts);
+    let a = addrs(&r);
+    assert_eq!(a[0], "lib:t/1234", "{a:?}");
+    assert_eq!(a.iter().filter(|x| *x == "lib:t/1234").count(), 1, "one entry per address");
+    // a query with no keyword match leaves the vector list alone
+    let vector_only = run("qqqqnomatch", &opts);
+    assert_eq!(addrs(&vector_only)[0], "lib:t/1234");
+    // repeated queries give the same list
+    assert_eq!(addrs(&run("xylophonic", &opts)), a);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn keyword_source_in_status() {
+    let k = shared_kw();
+    let idx = k.idx.to_str().unwrap();
+    // no index yet: none, not indexed
+    let h = open_idx(&k.f.dir, Some(settings(default_leave_out(), true)), "/nonexistent/idx");
+    let s = &status(h)["sources"][0];
+    assert_eq!(s["keyword_source"], "none");
+    assert_eq!(s["indexed"], false);
+    assert_eq!(s["building"], false);
+    assert_eq!(s["stale"], false);
+    unsafe { cs_close(h) };
+    // index built: device
+    let h = open_idx(&k.f.dir, Some(settings(default_leave_out(), true)), idx);
+    let st = status(h);
+    assert_eq!(st["sources"][0]["keyword_source"], "device");
+    assert_eq!(st["sources"][0]["indexed"], true);
+    unsafe { cs_close(h) };
+    // "on" forces the device index; "off" gives no keyword list
+    for (mode, source, indexed) in [("on", "device", true), ("off", "none", false)] {
+        let mut st = settings(default_leave_out(), true);
+        st["keyword_index"] = json!(mode);
+        let h = open_idx(&k.f.dir, Some(st), idx);
+        let v = status(h);
+        assert_eq!(v["sources"][0]["keyword_source"], source, "{mode}");
+        assert_eq!(v["sources"][0]["indexed"], indexed, "{mode}");
+        let r = ksearch(h, "xylophonic", 5);
+        assert_eq!(addrs(&r).len(), if indexed { 1 } else { 0 }, "{mode}");
+        unsafe { cs_close(h) };
+    }
+    // a stale index (another index format) is reported and skipped
+    let f = make_fixture("kwstale");
+    let sidx = f._tmp.0.join("idx");
+    assert_eq!(build_index(&f.dir, &sidx, 300)["state"], "done");
+    let mp = sidx.join("cache_search_index.json");
+    let mut meta: Value = serde_json::from_str(&std::fs::read_to_string(&mp).unwrap()).unwrap();
+    meta["index_format"] = json!(1);
+    std::fs::write(&mp, meta.to_string()).unwrap();
+    let h = open_idx(&f.dir, Some(settings(default_leave_out(), true)), sidx.to_str().unwrap());
+    let v = status(h);
+    assert_eq!(v["sources"][0]["stale"], true);
+    assert_eq!(v["sources"][0]["indexed"], false);
+    assert_eq!(v["sources"][0]["keyword_source"], "none");
+    assert!(addrs(&ksearch(h, "xylophonic", 5)).is_empty());
+    unsafe { cs_close(h) };
+}
+
+const QUERIES: [&str; 6] = ["text topic", "topic 12", "paragraph about", "xylophonic", "sentence follows", "Book 25 text"];
+
+fn all_results(h: *mut Handle) -> Vec<Vec<String>> {
+    QUERIES.iter().map(|q| addrs(&ksearch(h, q, 30))).collect()
+}
+
+#[test]
+fn resume_after_cancel_gives_the_same_results_as_a_clean_build() {
+    let f = make_fixture("resume");
+    let clean = f._tmp.0.join("clean_idx");
+    assert_eq!(build_index(&f.dir, &clean, 100)["state"], "done");
+    let mut cancelled_mid = false;
+    let resumed = f._tmp.0.join("resumed_idx");
+    for attempt in 0..30 {
+        let _ = std::fs::remove_dir_all(&resumed);
+        let j = start_job(index_params(&f.dir, &resumed, 100));
+        assert!(!j.is_null());
+        // cancel as soon as the first page has been scrolled
+        let t0 = std::time::Instant::now();
+        loop {
+            let p = progress(j);
+            if p["state"] != "running" || p["done"].as_u64().unwrap() > 0 || t0.elapsed().as_secs() > 60 {
+                break;
+            }
+        }
+        unsafe { cs_job_cancel(j) };
+        let p = wait_not_running(j);
+        unsafe { cs_job_free(j) };
+        if p["state"] == "cancelled" && p["done"].as_u64().unwrap() > 0 && p["done"].as_u64().unwrap() < TOTAL {
+            let meta: Value = serde_json::from_str(&std::fs::read_to_string(resumed.join("cache_search_index.json")).unwrap()).unwrap();
+            assert_eq!(meta["state"], "building");
+            assert!(meta["next_entry"].as_u64().unwrap() > 0, "a checkpoint was written");
+            assert!(!resumed.join("cache_search_index.lock").exists());
+            // a handle reports it as not searchable (incomplete), not as indexed
+            let h = open_idx(&f.dir, Some(settings(default_leave_out(), true)), resumed.to_str().unwrap());
+            assert_eq!(status(h)["sources"][0]["indexed"], false);
+            unsafe { cs_close(h) };
+            cancelled_mid = true;
+            eprintln!("cancelled mid-build on attempt {attempt}: {}", p["done"]);
+            break;
+        }
+    }
+    assert!(cancelled_mid, "could not cancel the build part-way in 30 attempts");
+    // resume to the end
+    let p = build_index(&f.dir, &resumed, 100);
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(index_docs(&resumed), expected_indexed());
+    assert_eq!(index_docs(&clean), expected_indexed());
+    let hc = open_idx(&f.dir, Some(settings(default_leave_out(), true)), clean.to_str().unwrap());
+    let hr = open_idx(&f.dir, Some(settings(default_leave_out(), true)), resumed.to_str().unwrap());
+    let (a, b) = (all_results(hc), all_results(hr));
+    assert!(a.iter().all(|l| !l.is_empty()), "{a:?}");
+    assert_eq!(a, b, "a resumed build must rank like a clean one, ties included");
+    unsafe { cs_close(hc) };
+    unsafe { cs_close(hr) };
+}
+
+#[test]
+fn keyword_search_leaves_the_shard_files_alone() {
+    let f = make_fixture("kwunchanged");
+    let before = listing(&f.dir);
+    let idx = f._tmp.0.join("idx");
+    assert_eq!(build_index(&f.dir, &idx, 300)["state"], "done");
+    let h = open_idx(&f.dir, Some(settings(default_leave_out(), true)), idx.to_str().unwrap());
+    for q in QUERIES {
+        ksearch(h, q, 10);
+    }
+    search(h, &random_vec(1234), MODEL, 10, 0);
+    read(h, "lib:t/1234", 100).unwrap();
+    status(h);
+    unsafe { cs_close(h) };
+    assert_eq!(listing(&f.dir), before, "shard files changed");
+    assert!(!idx.starts_with(&f.dir), "the index lives outside the shard");
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// A library whose collection has its own BM25-scored text index
+
+fn build_own_shard(dir: &Path, scored: bool) {
+    ensure_init();
+    let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(DIMS, Distance::Cosine).build()).build();
+    let shard = EdgeShard::new(dir, cfg).unwrap();
+    let schema = PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
+        scoring: if scored { Some(TextScoringParams::default()) } else { None },
+        ..TextIndexParams::default()
+    }));
+    shard
+        .update(UpdateOperation::FieldIndexOperation(FieldIndexOperations::CreateIndex(CreateIndex {
+            field_name: "content".parse().unwrap(),
+            field_schema: Some(schema),
+        })))
+        .unwrap();
+    let mut pts = Vec::new();
+    for i in 1..=40u64 {
+        let content = if i == 7 { "The sesquipedalian word appears once".to_string() } else { format!("Alpha text number {i} here") };
+        pts.push(PointStruct::new(i, random_vec(i), json!({"title": format!("Doc {i}"), "content": content, "junk": i == 9})));
+    }
+    // a left-out point that matches the rare word as well
+    pts.push(PointStruct::new(41u64, random_vec(41), json!({"title": "Hidden", "content": "sesquipedalian hidden", "junk": true})));
+    upsert(&shard, pts);
+    shard.flush().unwrap();
+    drop(shard);
+    let _ = std::fs::remove_file(dir.join(MANIFEST_FILE));
+}
+
+fn own_settings(mode: &str) -> Value {
+    json!({"format":1,"library_id":"own","title":"Own","fields":{"title":"title","text":"content"},
+           "leave_out":[{"field":"junk","equals":true}],
+           "embedding":{"vector":"","model":MODEL,"sha256":"x","dims":DIMS},"keyword_index":mode})
+}
+
+#[test]
+fn a_library_with_its_own_scored_index_uses_it() {
+    let tmp = TempDir::new("own");
+    let scored = tmp.0.join("scored");
+    let plain = tmp.0.join("plain");
+    build_own_shard(&scored, true);
+    build_own_shard(&plain, false);
+    // scored, "auto": own, with no device index at all
+    let h = open_idx(&scored, Some(own_settings("auto")), "/nonexistent/idx");
+    let s = &status(h)["sources"][0];
+    assert_eq!(s["keyword_source"], "own", "{s}");
+    assert_eq!(s["indexed"], true);
+    let r = ksearch(h, "sesquipedalian", 5);
+    assert_eq!(addrs(&r), vec!["lib:own/7"], "left-out point 41 is filtered: {r}");
+    assert_eq!(r["results"][0]["title"], "Doc 7");
+    assert_eq!(r["results"][0]["snippet"], "The sesquipedalian word appears once");
+    unsafe { cs_close(h) };
+    // "off": nothing
+    let h = open_idx(&scored, Some(own_settings("off")), "/nonexistent/idx");
+    assert_eq!(status(h)["sources"][0]["keyword_source"], "none");
+    assert!(addrs(&ksearch(h, "sesquipedalian", 5)).is_empty());
+    unsafe { cs_close(h) };
+    // "on": the device index is wanted even though the collection scores: none until it is built
+    let h = open_idx(&scored, Some(own_settings("on")), "/nonexistent/idx");
+    assert_eq!(status(h)["sources"][0]["keyword_source"], "none");
+    unsafe { cs_close(h) };
+    // an unscored text index is not used: "auto" falls back to the device index
+    let h = open_idx(&plain, Some(own_settings("auto")), "/nonexistent/idx");
+    assert_eq!(status(h)["sources"][0]["keyword_source"], "none");
+    unsafe { cs_close(h) };
 }
