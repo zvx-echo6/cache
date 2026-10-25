@@ -6,6 +6,8 @@ Cache is a framework. No data and no models ship inside the app: people add the 
 
 Cache is built to pull data while online and then work offline for long periods, until it can get back online. Data with a clear end date, such as weather forecasts and alerts, carries the time it was fetched and when it stops being valid. Once it has expired, the app and the assistant say so plainly (for example: "I no longer have weather data. We need to go online for more.") instead of using it, and the app refreshes it when a connection returns.
 
+Cache aims to be an all-in-one emergency app: install it, configure it while things are normal, and not find out in a crisis that some other app should have been installed beforehand.
+
 - **Repo:** github.com/zvx-echo6/cache (private)
 - **Board:** GitHub project "C.A.C.H.E." (owner zvx-echo6). Status lives on the board.
 - **Audience:** the owner, family and close friends first; the app stores possibly later.
@@ -58,7 +60,7 @@ Test phones: Pixel 8 (8 GB, Tensor G3, weakest), iPhone 15 Pro Max (8 GB, A17 Pr
 
 ## Cache 1.0
 
-Everything in this plan stays in it, but the work is ordered so a usable app reaches the family's phones first. Cache 1.0 is the line; everything else is labelled 1.x and comes after. Decided 2026-10-25.
+Everything in this plan stays in it, but the work is ordered so a usable app reaches the family's phones first. Cache 1.0 is the line; everything else is labelled 1.x and comes after. Decided 2026-10-25. PeerTube moved into 1.0 on 2026-10-25 at the owner's request.
 
 **In 1.0**
 - Step 1: chat with the tool loop and citation check.
@@ -72,6 +74,7 @@ Everything in this plan stays in it, but the work is ordered so a usable app rea
 - Step 9: offline map, place search, nearby (hospital, ER, fuel, water and the rest), latitude and longitude. Land cover, land ownership, USNG/MGRS, Plus Codes, what3words and imported repeaters are 1.x.
 - Step 10: road routing. Off-road routing is 1.x.
 - Step 11: iPhone.
+- Step 12: Videos, PeerTube part: connect to an instance (login where needed), browse and search, stream when online, offline downloads with resolution choice, offline player, and video library pack citations that open the video at the cited time. The YouTube connector is 1.x.
 
 **1.x (after 1.0)**
 - Network models (local Wi-Fi or internet), including Windows Cache as a household model server.
@@ -81,7 +84,7 @@ Everything in this plan stays in it, but the work is ordered so a usable app rea
 - Imported repeater lists.
 - Full navi layer parity (land cover, PAD-US, MVUM) and off-road routing.
 - The worldwide region pack pipeline.
-- Step 12: Videos (PeerTube, offline downloads, YouTube).
+- The optional YouTube connector (step 12).
 - The Windows version.
 
 ## Build order
