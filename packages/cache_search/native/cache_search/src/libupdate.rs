@@ -12,10 +12,11 @@
 //!   `library_manifest` job closes the library first, as `update_library` does.
 //! - `EdgeShard::recover_partial_snapshot(shard_path, current_manifest, unpacked_dir, snapshot_manifest)` takes
 //!   the snapshot UNPACKED (not the archive), merges it into `shard_path` by moving files, and finishes with a
-//!   read-write `EdgeShard::load`, which it returns. It is not atomic. Making it atomic with a hard-link staging
-//!   copy was evaluated and NOT shipped: the merge (fs_extra's `move_dir`) and the load both write into existing
-//!   inodes, which hard links would share with the original (DESIGN.md, Libraries / Updates; the
-//!   `hard_link_staging_*` tests in tests/update_ffi.rs measure it).
+//!   read-write `EdgeShard::load`, which it returns. It is not atomic, and it writes into files that already
+//!   exist. So `update_library` never runs it on the library: it runs it on a REAL copy of the library (no hard
+//!   links: the merge's `fs_extra::dir::move_dir` and the load both write into existing inodes, which links would
+//!   share with the original; DESIGN.md, Libraries / Updates; the `hard_link_staging_*` tests in
+//!   tests/update_ffi.rs measure it) and swaps the copy in with two renames. See [`apply_update`].
 //! - `current_manifest` is the manifest the snapshot was cut against, which is the library's own manifest at
 //!   that time; the job reads it from `snapshot_manifest_path`. `snapshot_manifest` comes from the unpacked
 //!   snapshot itself (`SnapshotManifest::load_from_snapshot`).
@@ -30,8 +31,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Steps of an `update_library` job, as `done`/`total` progress: closed, snapshot unpacked and checked, applied,
-/// `segments_manifest.json` rewritten, library reopened (checked).
+/// Steps of an `update_library` job, as `done`/`total` progress: closed, snapshot unpacked and checked, the
+/// staging copy updated (copied, snapshot applied, `segments_manifest.json` rewritten), swapped in, library
+/// opened once at its final path (checked).
 pub const STEPS: u64 = 5;
 
 fn busy(m: &str) -> Error {
@@ -212,19 +214,39 @@ fn hold(ms: u64, cancelled: &dyn Fn() -> bool) -> bool {
     !cancelled()
 }
 
+/// Test hooks of an `update_library` job (none of them is in the header).
+#[derive(Default, Clone, Debug)]
+pub struct TestHooks {
+    /// Sleep this long, cancellably, before the staging copy.
+    pub hold_ms: u64,
+    /// While this file exists, wait (at most two minutes, not cancellable) after the staging copy is updated and
+    /// before the swap.
+    pub hold_swap_file: Option<String>,
+    /// Fail at a named point: "after_copy", "before_swap" or "after_swap".
+    pub fail_at: Option<String>,
+}
+
+impl TestHooks {
+    fn inject(&self, point: &str) -> Result<()> {
+        if self.fail_at.as_deref() == Some(point) {
+            return Err(Error::internal(format!("injected failure {point}")));
+        }
+        Ok(())
+    }
+}
+
 /// A checked `update_library` request.
 pub struct UpdateRequest {
     pub library: PathBuf,
     pub snapshot: PathBuf,
     pub current: SnapshotManifest,
-    /// Test hook (not in the header): sleep this long, cancellably, before the apply step.
-    pub hold_ms: u64,
+    pub hooks: TestHooks,
 }
 
 /// Check the job parameters without touching the library: the three paths exist, the manifest parses, and it
 /// describes exactly the segments that are on disk (a wrong manifest would make the merge delete or keep the
 /// wrong segments).
-pub fn prepare(library_path: &str, snapshot_path: &str, manifest_path: &str, hold_ms: u64) -> Result<UpdateRequest> {
+pub fn prepare(library_path: &str, snapshot_path: &str, manifest_path: &str, hooks: TestHooks) -> Result<UpdateRequest> {
     if library_path.is_empty() || snapshot_path.is_empty() || manifest_path.is_empty() {
         return Err(Error::bad_json("library_path, snapshot_path and snapshot_manifest_path must not be empty"));
     }
@@ -259,7 +281,7 @@ pub fn prepare(library_path: &str, snapshot_path: &str, manifest_path: &str, hol
             mpath.display()
         )));
     }
-    Ok(UpdateRequest { library, snapshot, current, hold_ms })
+    Ok(UpdateRequest { library, snapshot, current, hooks })
 }
 
 /// Removes a folder when dropped.
@@ -271,27 +293,183 @@ impl Drop for RemoveDir {
     }
 }
 
+fn sibling(library: &Path, suffix: &str) -> Result<PathBuf> {
+    let name = library.file_name().ok_or_else(|| Error::bad_json("library_path has no folder name"))?;
+    let parent = library.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    Ok(parent.join(format!("{}{suffix}", name.to_string_lossy())))
+}
+
 /// Where the snapshot is unpacked: a sibling of the library folder (the merge moves files, so it must be on the
 /// same file system).
 fn unpack_dir(library: &Path) -> Result<PathBuf> {
-    let name = library.file_name().ok_or_else(|| Error::bad_json("library_path has no folder name"))?;
-    let parent = library.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    Ok(parent.join(format!("{}.cs-update-tmp", name.to_string_lossy())))
+    sibling(library, ".cs-update-tmp")
 }
+
+/// Suffix of the staging folder: the real copy of the library that the update is applied to.
+pub const STAGE_SUFFIX: &str = ".cs-stage";
+/// Suffix of the folder the old library is renamed to during the swap.
+pub const OLD_SUFFIX: &str = ".cs-old";
+
+/// The staging folder beside a library: `<library>.cs-stage`.
+pub fn stage_path(library: &Path) -> Result<PathBuf> {
+    sibling(library, STAGE_SUFFIX)
+}
+
+/// The folder the old library is parked in during the swap: `<library>.cs-old`.
+pub fn old_path(library: &Path) -> Result<PathBuf> {
+    sibling(library, OLD_SUFFIX)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The staging copy
+
+/// A real copy of the directory tree `src` at `dst` (which must not exist): every file is read and written to a
+/// new file, so nothing is shared with the original (no hard links, no reflinks asked for). Returns the bytes
+/// copied. Only regular files and folders are copied: anything else (a symbolic link) is `unsupported`, because
+/// a shard folder has none. On an error the partial copy is left for the caller to delete.
+pub fn copy_tree(src: &Path, dst: &Path) -> Result<u64> {
+    std::fs::create_dir(dst).map_err(|e| op(&format!("creating {}", dst.display()), e))?;
+    let mut total = 0u64;
+    let rd = std::fs::read_dir(src).map_err(|e| op(&format!("reading {}", src.display()), e))?;
+    for ent in rd {
+        let ent = ent.map_err(|e| op(&format!("reading {}", src.display()), e))?;
+        let from = ent.path();
+        let to = dst.join(ent.file_name());
+        let ft = ent.file_type().map_err(|e| op(&format!("reading {}", from.display()), e))?;
+        if ft.is_dir() {
+            total += copy_tree(&from, &to)?;
+        } else if ft.is_file() {
+            total += std::fs::copy(&from, &to).map_err(|e| op(&format!("copying {}", from.display()), e))?;
+        } else {
+            return Err(Error::unsupported(format!("{} is not a regular file or folder: cannot copy it", from.display())));
+        }
+    }
+    Ok(total)
+}
+
+/// Flush every file and folder under `dir` to disk, so the renames that follow cannot make a half-written copy
+/// the library after a crash.
+fn sync_tree(dir: &Path) -> Result<()> {
+    let rd = std::fs::read_dir(dir).map_err(|e| op(&format!("reading {}", dir.display()), e))?;
+    for ent in rd {
+        let ent = ent.map_err(|e| op(&format!("reading {}", dir.display()), e))?;
+        let p = ent.path();
+        if ent.file_type().map_err(|e| op(&format!("reading {}", p.display()), e))?.is_dir() {
+            sync_tree(&p)?;
+        } else {
+            std::fs::File::open(&p).and_then(|f| f.sync_all()).map_err(|e| op(&format!("flushing {}", p.display()), e))?;
+        }
+    }
+    sync_dir(dir)
+}
+
+fn sync_dir(dir: &Path) -> Result<()> {
+    std::fs::File::open(dir).and_then(|f| f.sync_all()).map_err(|e| op(&format!("flushing {}", dir.display()), e))
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Crash leftovers
+
+/// Whether the library folder is complete, as far as the code can check. All of:
+/// 1. `segments_manifest.json` is a file holding a JSON object that lists at least one segment;
+/// 2. every segment it lists is a folder under `segments/`;
+/// 3. the library opens read-only (the open that search uses, with the cheap scroll profile; it is not counted by
+///    `shard_open_count` and it keeps nothing open) and the open finds every listed segment (the open drops a
+///    segment whose files are gone without an error, so the count is compared).
+/// It cannot tell a library with the right contents from one with other contents; only that it is whole enough to
+/// be opened.
+pub fn library_is_complete(library: &Path) -> bool {
+    let Ok(text) = std::fs::read(library.join(library::MANIFEST_FILE)) else { return false };
+    let Ok(serde_json::Value::Object(m)) = serde_json::from_slice::<serde_json::Value>(&text) else { return false };
+    if m.is_empty() || !m.keys().all(|id| library.join("segments").join(id).is_dir()) {
+        return false;
+    }
+    library::opens_read_only(library).is_ok_and(|n| n == m.len())
+}
+
+/// Whether a staging folder or an old-library folder sits beside the library (a cheap look, no reading).
+pub fn has_leftovers(library: &Path) -> bool {
+    [stage_path(library), old_path(library)].into_iter().flatten().any(|p| std::fs::symlink_metadata(p).is_ok())
+}
+
+/// Put right what a crash during an update can leave beside the library, and report what was done. Rules:
+/// - a leftover `<library>.cs-stage` is always deleted (it is a copy the update had not swapped in);
+/// - `<library>.cs-old` with a complete `library` (see [`library_is_complete`]): the swap finished, so
+///   `.cs-old` is deleted;
+/// - `<library>.cs-old` and no `library` (a crash between the two renames): `.cs-old` is renamed back to `library`;
+/// - `<library>.cs-old` with a `library` that is not complete (the swap finished but the new library is
+///   unusable): `library` is deleted and `.cs-old` renamed back.
+/// The caller must own the library (no open handle in this process, no update running); this cannot know about
+/// other processes.
+pub fn recover_leftovers(library: &Path) -> Result<Vec<String>> {
+    let mut done = Vec::new();
+    let (stage, old) = (stage_path(library)?, old_path(library)?);
+    if std::fs::symlink_metadata(&stage).is_ok() {
+        std::fs::remove_dir_all(&stage).map_err(|e| op(&format!("deleting {}", stage.display()), e))?;
+        done.push(format!("deleted {}", stage.display()));
+    }
+    if std::fs::symlink_metadata(&old).is_ok() {
+        if library.is_dir() {
+            if library_is_complete(library) {
+                std::fs::remove_dir_all(&old).map_err(|e| op(&format!("deleting {}", old.display()), e))?;
+                done.push(format!("deleted {}", old.display()));
+            } else {
+                std::fs::remove_dir_all(library).map_err(|e| op(&format!("deleting {}", library.display()), e))?;
+                std::fs::rename(&old, library).map_err(|e| op(&format!("restoring {}", library.display()), e))?;
+                done.push(format!("{} was not complete: restored it from {}", library.display(), old.display()));
+            }
+        } else {
+            std::fs::rename(&old, library).map_err(|e| op(&format!("restoring {}", library.display()), e))?;
+            done.push(format!("restored {} from {}", library.display(), old.display()));
+        }
+        if let Some(parent) = library.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let _ = sync_dir(parent);
+        }
+    }
+    Ok(done)
+}
+
+/// [`recover_leftovers`] when there is anything to recover, with the library marked as updating meanwhile
+/// (nothing in this process opens it). Does nothing when the library is busy (an update or an index build owns
+/// it) or when there are no leftovers.
+pub fn recover_if_leftovers(library: &Path) -> Result<()> {
+    if library.as_os_str().is_empty() || !has_leftovers(library) {
+        return Ok(());
+    }
+    let entry = libreg::entry_for(library);
+    // leftovers beside a library that a handle has open can only come from an update that is running, and
+    // that holds the update mark, so `begin_update` refuses here
+    let Ok(_guard) = entry.begin_update() else { return Ok(()) };
+    recover_leftovers(library).map(|_| ())
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The job
 
 /// Run the update on a library the caller has marked as updating (it holds the `UpdateGuard`).
 ///
-/// Steps (progress `done` counts them, `total` is [`STEPS`]):
+/// The library is never written to by the merge. The update is applied to a REAL copy of it and swapped in:
+///
 /// 1. close: wait for background opens, take the shard out of every open handle's cell;
 /// 2. unpack the snapshot next to the library and check it is a partial snapshot;
-/// 3. apply it with `recover_partial_snapshot` (after this point there is no cancelling);
-/// 4. rewrite `segments_manifest.json` from the segments on disk;
-/// 5. open the library read-only once: that checks it opens, and the opened shard is handed to every handle that
-///    had the library open (no second open).
+/// 3. copy the library to `<library>.cs-stage` (same parent, so the swap is a rename), apply the snapshot to the
+///    copy with `recover_partial_snapshot`, rewrite its `segments_manifest.json`, flush it to disk;
+/// 4. swap: rename `library` to `<library>.cs-old`, rename the copy to `library`;
+/// 5. open `library` read-only once: that checks it opens, and the opened shard is handed to every handle that
+///    had the library open (no second open). Then `<library>.cs-old` is deleted (best effort; a leftover is
+///    removed by [`recover_leftovers`]).
 ///
-/// Cancelling is honoured before step 3 starts and then ignored. Nothing here changes the library before step 3.
-/// A failure in step 3 or later can leave the folder half-merged (Qdrant's merge is not atomic); the remedy is a
-/// full replace from a full snapshot.
+/// Cancelling is honoured before step 3 starts and then ignored. Until the swap the library is not touched:
+/// any failure before it deletes the copy and the unpack folder and leaves the library as it was (the handles
+/// open it again). If the open in step 5 fails, the swap is undone (the new library is deleted, the old one
+/// renamed back) and the job fails.
+///
+/// Why step 5 opens the library AFTER the swap and not the copy before it: a `ReadOnlyEdgeShard` keeps the path
+/// it was opened with (`ReadOnlyEdgeShard::path`, `LocalSegmentEnumerator`, and every `ReadOnlySegment` keeps its
+/// `segment_path`, which `live_reload` and `config_reload` reopen files by). A shard opened at
+/// `<library>.cs-stage` would keep reporting and re-resolving that name after the rename. Opened at the final
+/// path it is correct whatever happens to the stage name. Open files and mmaps would survive the rename, but the
+/// stored paths would not, and the Edge API does not document which operations use them.
 pub fn apply_update(
     req: &UpdateRequest,
     entry: &LibEntry,
@@ -322,20 +500,57 @@ pub fn apply_update(
     }
     progress(2, STEPS);
     // test hook: a pause before the point of no return
-    if !hold(req.hold_ms, cancelled) {
+    if !hold(req.hooks.hold_ms, cancelled) {
         return Ok(Outcome::Cancelled);
     }
-    // 3: no cancelling from here
-    let shard = EdgeShard::recover_partial_snapshot(&req.library, &req.current, &tmp, &snapshot_manifest)
+    // 3: no cancelling from here. The copy is deleted on any failure (and a stale one from a crash first).
+    let stage = stage_path(&req.library)?;
+    let old = old_path(&req.library)?;
+    let _ = std::fs::remove_dir_all(&stage);
+    let _stage_cleanup = RemoveDir(stage.clone());
+    copy_tree(&req.library, &stage)?;
+    req.hooks.inject("after_copy")?;
+    let shard = EdgeShard::recover_partial_snapshot(&stage, &req.current, &tmp, &snapshot_manifest)
         .map_err(|e| op("applying the partial snapshot", e))?;
     // recover_partial_snapshot returns the shard it loaded read-write; it is closed (and flushed) here
     drop(shard);
+    write_segments_manifest(&stage)?;
+    sync_tree(&stage)?;
     progress(3, STEPS);
-    // 4
-    write_segments_manifest(&req.library)?;
+    // test hook: a pause with the copy ready and the library untouched
+    if let Some(f) = &req.hooks.hold_swap_file {
+        let t0 = std::time::Instant::now();
+        while Path::new(f).exists() && t0.elapsed() < Duration::from_secs(120) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    req.hooks.inject("before_swap")?;
+    // 4: the swap. The library is not changed until the first rename succeeds.
+    let _ = std::fs::remove_dir_all(&old);
+    std::fs::rename(&req.library, &old).map_err(|e| op("swapping: moving the library aside", e))?;
+    if let Err(e) = std::fs::rename(&stage, &req.library) {
+        let back = std::fs::rename(&old, &req.library);
+        return Err(op(
+            &format!("swapping: moving the copy into place (library {})", if back.is_ok() { "restored" } else { "NOT restored: it is in the .cs-old folder" }),
+            e,
+        ));
+    }
+    if let Some(parent) = req.library.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let _ = sync_dir(parent);
+    }
     progress(4, STEPS);
-    // 5: the one read-only open; it is the check and the shard the handles get
-    hand_back_open(&req.library, entry)?;
+    // 5: the one read-only open, at the final path; it is the check and the shard the handles get
+    let opened = req.hooks.inject("after_swap").and_then(|_| hand_back_open(&req.library, entry));
+    if let Err(e) = opened {
+        // undo the swap: the new library goes to the staging name (deleted by `_stage_cleanup`), the old one comes back
+        let undone = std::fs::rename(&req.library, &stage).and_then(|_| std::fs::rename(&old, &req.library));
+        return Err(match undone {
+            Ok(()) => Error::new(e.code, format!("{}; the update was undone and the library is as it was", e.message)),
+            Err(u) => Error::io(format!("{}; undoing the swap failed ({u}): the old library is in {}", e.message, old.display())),
+        });
+    }
+    // the swap is good: the old library goes (best effort; a failure leaves a .cs-old that the next open or update deletes)
+    let _ = std::fs::remove_dir_all(&old);
     progress(5, STEPS);
     Ok(Outcome::Done)
 }

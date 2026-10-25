@@ -225,6 +225,12 @@ impl Handle {
                 "library" => {
                     // A bad settings object is a malformed config: the whole call fails, before anything starts.
                     let parsed = sc.settings.as_ref().map(LibrarySettings::parse).transpose()?;
+                    // a crash between the two renames of an update leaves only `<library>.cs-old`: rename it back
+                    // now (cheap), so the library is not reported as missing; the rest of the leftover rules run in
+                    // the background open
+                    if !path.is_dir() {
+                        crate::libupdate::recover_if_leftovers(&path)?;
+                    }
                     let existing = self.sources.iter().position(|s| match s {
                         Source::Library(l) => l.path == path,
                         Source::Opening(o) | Source::Updating(o) => o.path == path && o.given == sc.settings,

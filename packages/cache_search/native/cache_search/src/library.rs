@@ -520,11 +520,24 @@ pub fn open_shard_for_handoff(path: &Path, vectors: &std::collections::BTreeSet<
     Ok(Arc::new(open_counted(path, profile)?))
 }
 
-/// Open a library read-only. Writes nothing to the shard except `segments_manifest.json` when it is missing.
+/// Whether the library at `path` opens read-only (the cheap scroll profile); returns the number of segments the
+/// open found (a segment whose files are gone is dropped by the open, not an error); the shard is dropped at once. Not
+/// counted by `shard_open_count`. Used by the crash-leftover check (`libupdate::library_is_complete`).
+pub fn opens_read_only(path: &Path) -> Result<usize> {
+    ensure_init();
+    Shard::open(MmapFs, path, None, Some(LoadProfile::for_scroll(None, None, true)))
+        .map(|s| s.segments_count())
+        .map_err(|e| op_io(&format!("opening {}", path.display()), e))
+}
+
+/// Open a library read-only. Writes nothing to the shard except `segments_manifest.json` when it is missing,
+/// and except that it first puts right what a crashed update left beside the library (`.cs-stage`, `.cs-old`;
+/// see `libupdate::recover_leftovers`), which only happens when such a folder exists.
 pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&Value>) -> Result<LibSlot> {
     ensure_init();
     // A bad settings object is reported first, before the folder check and the (slow) open.
     let pre = settings.map(LibrarySettings::parse).transpose()?;
+    crate::libupdate::recover_if_leftovers(path)?;
     if !path.is_dir() {
         return Err(Error::not_found(format!("library folder {} not found", path.display())));
     }

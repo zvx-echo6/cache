@@ -85,9 +85,17 @@ struct UpdateLibraryParams {
     library_path: String,
     snapshot_path: String,
     snapshot_manifest_path: String,
-    /// Not in the header: a test hook that pauses the job (cancellably) before the apply step.
+    /// Not in the header: a test hook that pauses the job (cancellably) before the copy and apply steps.
     #[serde(default)]
     hold_ms: u64,
+    /// Not in the header: a test hook. While this file exists the job waits (at most two minutes, not
+    /// cancellably) after the staging copy is updated and before the swap.
+    #[serde(default)]
+    hold_swap_file: Option<String>,
+    /// Not in the header: a test hook that makes the job fail at a named point: "after_copy", "before_swap" or
+    /// "after_swap".
+    #[serde(default)]
+    fail_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -183,7 +191,15 @@ impl Job {
     /// library is marked as updating before this returns, so a search or `cs_status` right after sees it.
     fn start_update_library(params_json: &str) -> Result<Job> {
         let p: UpdateLibraryParams = serde_json::from_str(params_json)?;
-        let req = libupdate::prepare(&p.library_path, &p.snapshot_path, &p.snapshot_manifest_path, p.hold_ms)?;
+        // a crash can have left a staging folder or the old library beside it: put that right first
+        // (the library is marked as updating meanwhile, so nothing in this process opens it)
+        libupdate::recover_if_leftovers(std::path::Path::new(&p.library_path))?;
+        let hooks = libupdate::TestHooks {
+            hold_ms: p.hold_ms,
+            hold_swap_file: p.hold_swap_file,
+            fail_at: p.fail_at,
+        };
+        let req = libupdate::prepare(&p.library_path, &p.snapshot_path, &p.snapshot_manifest_path, hooks)?;
         let entry = libreg::entry_for(&req.library);
         let guard = entry.begin_update()?;
         Self::spawn("cs-update-library", guard, libupdate::STEPS, move |sh| {
