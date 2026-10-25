@@ -291,7 +291,9 @@ Nothing found: `No results found.`
 ```
 
 If the budget runs out before the page loads, `read` returns the snippet instead, followed by the line
-`[full page did not load in time]`.
+`[full page did not load in time]`. The first line is kept (`[3] <title> (web, fetched <time>)`), the snippet follows
+it, and the marker is the last line. If the page cannot be had for another reason (the server refused, it is not an
+HTML or text page, or it has no text), the same output ends with `[full page not available]`. Neither is an error.
 
 Errors: `key_missing`, `fetch_failed`, `quota`, `bad_response`. Without a key, or with the phone offline, the tool is
 not in the tool list, so the model cannot call it.

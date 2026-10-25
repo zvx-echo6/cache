@@ -376,6 +376,67 @@ number, boolean, object), `enum`, `minLength`, `maxLength` (in characters), `min
 on every call. The phone's GPS fix is set with `cs_set_location(lat, lon, accuracy_m, fixed_at)` (`accuracy_m` < 0
 is unknown) and removed with `cs_clear_location`; tools see it as `ctx.location` and answer `no_location` without it.
 
+### Web search
+
+`web_search` and `read` on a web result live in `web.rs`. Settings: `cs_set_web(h, provider, key, online)`
+(provider "kagi", or NULL for off; key or NULL; online 0/1; each call replaces all three).
+
+**Availability.** `web_search` is a registered `cache_tool::Tool` (`WebSearchTool`), registered by `Handle::open`
+and sharing the handle's `WebState`. Its `schema()` is Some only while a provider, a key and `online` are all set;
+otherwise it is left out of `cs_tool_schemas` and a call gives `not_set_up`. It is a registered tool rather than
+built in because it needs only `ToolCtx` (the clock) plus its own state; the two things a plain tool cannot do are
+done by the dispatch: `call_tool` moves the hits the tool left in `WebState` into the conversation after the call,
+and `read` (built in, it has the conversation) handles `web:` addresses. A host that registers its own tool named
+`web_search` replaces it.
+
+**Provider interface.** `trait WebSearchProvider: Send + Sync { fn search(&self, query, limit, key, deadline) ->
+Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provider maps its own failures to the shared
+error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v0/search`, overridable for tests) sends
+`GET ?q=<query>&limit=<n>` with `Authorization: Bot <key>`, reads `data` (objects with `t: 0` are results with `url`,
+`title`, `snippet`; other `t` values are skipped) and the `error` list. HTTP 401/403 or an error code 401/403 is
+`key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is `quota`; a
+timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be used is
+`bad_response`. **The Kagi parser is unverified against the live API:** it was written from Kagi's documented v0
+response shape and tested only against a local stand-in server, until the owner approves a live test.
+
+**Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
+now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
+boundary with `…`), the title to 150 characters. Repeated URLs are dropped. Text from the web is made safe for the
+line: whitespace runs become one space, `{{` becomes `{ {` so a page cannot forge an address marker, and a ` — ` in
+a title becomes ` - ` (the numbering reads the title up to the first ` — `). Nothing found: `No results found.`
+
+**Read.** `read` on a `web:` number fetches the URL (GET, up to 5 redirects, `User-Agent: Cache/<version>`), strips
+HTML with the same rules as a ZIM article (`html_to_text`: headings kept, script and style removed; plain text is
+used as it is), and cuts to 6,000 characters at a paragraph end. Output: `[n] <title> (web, fetched <time>)`, the
+text, and `[truncated]` when cut (or when the download hit the cap). When the page cannot be had, the output is the
+same first line, the snippet the search showed (the conversation keeps each web hit's title, snippet and fetch time
+beside its number), and a last line `[full page did not load in time]` (timeout) or `[full page not available]`
+(connection failure, bad status, a content type that is not HTML or text, a page with no text, or the phone being
+offline, in which case nothing is fetched). That is a result, not an error. Compression is not requested: the
+reqwest already in the lockfile has no gzip support and the decoder crate it would need is not in the lockfile.
+
+**Budgets.** Search 6 s from the call to the result; read 8 s for connect, download and parse; a page download is
+capped at 2 MB (the rest is dropped). Each network call runs on its own thread and the caller waits only until the
+deadline, so a stalled name lookup or a slow body cannot hold the handle longer; the abandoned thread ends when its
+own request times out. The client is `reqwest` 0.13.5 (blocking API, rustls), already in the lockfile through
+Qdrant's object store; no crate was added.
+
+**Never stored.** Nothing from the web is written to disk or added to a library. Hits and their snippets live in the
+`Conversation` and die with it.
+
+**The key.** `WebState` holds it in memory only. It is sent only as the provider's `Authorization` header (marked
+sensitive in the client), never in a URL; it is not written to disk, not logged (the core has no logging), and is
+removed from any error detail built from a server's reply (`***`). `WebState` has no `Debug`. The tests search every
+output, error and status for the test key.
+
+**Timing.** A `cs_tool` reply for a web search or a web read also has `"timing_ms": {"search": ms}` or
+`{"fetch": ms}` after `content` and `ids`: a debug field for speed measurement, never part of what the model sees.
+`cs tool` prints it on stderr (and in `--json`).
+
+**CLI.** `cs` turns web search on when both `CACHE_WEB_PROVIDER` and `CACHE_WEB_KEY` are set in the environment (it
+then assumes online); `CACHE_WEB_BASE_URL` points Kagi at another address for runs against a stand-in server.
+`cs serve` has `POST /web {"provider","key","online"}` and `DELETE /web`; the key is never echoed.
+
 ## ZIM reading
 
 Options to evaluate first (report before committing):
