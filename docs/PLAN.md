@@ -2,7 +2,7 @@
 
 An offline survival and preparedness assistant for phones and computers. Everything runs on the device with no network: a local LLM, a library, Kiwix, maps and routing.
 
-Cache is a framework. No data and no models ship inside the app: people add the sources they want (models, ZIMs, library packs, region packs). The app must never depend on hosting run by the owner, so it can go to the app stores later.
+Cache is a framework. No data and no models ship inside the app: people add the sources they want (models, ZIMs, libraries, region packs). The app must never depend on hosting run by the owner, so it can go to the app stores later.
 
 Cache is built to pull data while online and then work offline for long periods, until it can get back online. Data with a clear end date, such as weather forecasts and alerts, carries the time it was fetched and when it stops being valid. Once it has expired, the app and the assistant say so plainly (for example: "I no longer have weather data. We need to go online for more.") instead of using it, and the app refreshes it when a connection returns.
 
@@ -11,7 +11,7 @@ Cache aims to be an all-in-one emergency app: install it, configure it while thi
 - **Repo:** github.com/zvx-echo6/cache (private)
 - **Board:** GitHub project "C.A.C.H.E." (owner zvx-echo6). Status lives on the board.
 - **Audience:** the owner, family and close friends first; the app stores possibly later.
-- **Decided 2026-10-20 to 2026-10-24.**
+- **Decided 2026-10-20 to 2026-10-25.**
 
 ## Decisions
 
@@ -30,10 +30,11 @@ Cache aims to be an all-in-one emergency app: install it, configure it while thi
 | Tool-capable models only | Every model, on-device or network, must support tool calls, so the model always decides what to search and every answer can cite the phone's data. On-device: the GGUF's chat template must support tool calls (read through llama.cpp's chat engine); models without it are marked "Not supported" and can't be activated, flagged in Hugging Face search where the template is visible, otherwise checked right after download. Network: on connecting, the app sends one test request asking the model to call a test tool; a model that doesn't return a proper tool call is marked as not supporting Cache's tools and can't be picked (Ollama also reports tool support directly). There is no fallback for models without tool support. Decided 2026-10-24. |
 | Assistant tools | Defined in docs/TOOLS.md: 1.0 search, read, navigate (from AIDA's navigate, without the Meshtastic waypoint), nearby, locate, weather, alerts; 1.x fuel_prices, repeaters and the other live-source tools, and off-road navigate. Conversation-wide [n] numbering by the app; dated data carries its age and validity; expired or missing data is said plainly. Decided 2026-10-25. |
 | Answer style | Complete answers are fine. Cache is not the mesh, so the 300-byte mesh limit does not apply. |
-| Library | User-loaded library packs. The pack format follows recon concepts without the verbatim `content` field: title, summary, key facts, keywords, book title and page. Answers cite book and page. The app ships no library; the owner's recon library is loaded privately like any other pack. The owner's recon PeerTube (video) concepts become a separate video library pack; their citations open the video at the right time. The recon code is to be published on GitHub so people can build their own library packs; this is a to-do before any public release and needs the owner's go. The owner's recon library goes on the phone complete and unchanged (all concepts and kept fields, nothing split or trimmed), with recon's existing bge-m3 vectors at full quality (int8 plus binary for the scan); the phone embeds queries with bge-m3 so they match. Measured 2026-10-25: 105,256 books, 3,555,930 concepts, 1.95 GB of kept text uncompressed; vectors about 4 GB; to be confirmed to fit once the pack is built. |
-| Browse (Kiwix) | An offline browser: ZIMs and library packs open like websites, with a start page of sites, an address bar, tabs, back and forward, bookmarks, history and one search. ZIMs come from Kiwix's public catalogue, from any other catalogue in Kiwix's catalogue (OPDS) format added as a source (for example the owner's recon ZIMs, privately), or imported from a file on the device or SD card. ZIMs are used as they are, through libzim / libkiwix. |
-| Search | One search box across all ZIMs and library packs, with Tantivy-quality full-text indexing. The phone indexes each newly added ZIM itself, slowly and in the background. Ready-made indexes for large, popular ZIMs are published with the region packs. Keyword search (Tantivy) and meaning search (vectors in the library packs) run together and merge into one ranked list; the assistant uses the same search. |
-| Videos | Video source connectors, starting with PeerTube through its official REST API (for example the owner's stream.echo6.co, with login where the instance needs it). Browse and search a connected instance, stream when online, and download videos for offline use where the instance allows downloads, choosing the resolution (or audio only) to save space. Downloaded videos play offline. The assistant can cite video concepts (from a video library pack) and open the video at the cited time, offline if downloaded, otherwise streamed. Optional YouTube connector, online only: the user follows in-app instructions to connect with their own YouTube Data API key; it can search, play in YouTube's official embedded player and bookmark. No YouTube downloads (YouTube's terms forbid them, and store rules reject downloaders); the assistant can cite bookmarked YouTube videos by title and description only. Only sources with an official API; no scraping. Decided 2026-10-24. |
+| Library | Libraries are vector databases, used as they are: Qdrant collections, opened inside the app by Qdrant Edge (Qdrant's embedded engine, Apache-2.0, in beta). No server, no conversion, no splitting. A library is added from a Qdrant server (address, collection name, optional API key; the app downloads a snapshot of the collection), from a download link, or from a file on the device or SD card. When adding it, the user sets which payload fields hold the title, text, page, source type and link (with presets), and picks the embedding model the collection was built with (a GGUF run by llama.cpp), so queries match its vectors. Each point's payload decides what its citation shows and opens: for example a transcript point opens its video at the cited time, and a point taken from a ZIM opens that ZIM's article when the ZIM is on the device. A library bigger than the phone's memory must still open, with vectors and indexes read from storage. The app ships no library. The recon code is to be published on GitHub so people can build their own libraries; this is a to-do before any public release and needs the owner's go. Decided 2026-10-25. |
+| Updates | Every source has an update action; what it does depends on where the source came from. Qdrant server: the app sends the collection's segment manifest and downloads only the changed segments (Qdrant partial snapshots). Download link: the app checks whether the file is newer and downloads it whole. Catalogue ZIM: the app checks the catalogue for a newer dated release of the same title and downloads it whole, then uses a ready-made index if one is offered or rebuilds the ZIM's keyword index on the device. Imported file: Replace, choosing the newer file. The old copy stays in use until the new one is downloaded and checked, and the app checks free space first (an update can briefly need room for both). Citations keep working across updates; one whose item is gone says so. Update settings, with defaults for everything and an override per source: how often (off, daily, weekly, monthly), notify only or download automatically, ask before downloads over a set size, Wi-Fi only, only while charging, quiet hours, and Update all now. Android runs scheduled updates within these conditions; iOS runs background work when the system allows (usually overnight while charging), so a schedule there is approximate. Weather and alerts refresh through the same scheduler with their own intervals. Decided 2026-10-25. |
+| Browse (Kiwix) | An offline browser: ZIMs open like websites and library items open as pages, with a start page of sites, an address bar, tabs, back and forward, bookmarks, history and one search. ZIMs come from Kiwix's public catalogue, from any other catalogue in Kiwix's catalogue (OPDS) format added as a source, or imported from a file on the device or SD card. ZIMs are used as they are, through libzim / libkiwix. |
+| Search | One search box across all ZIMs and libraries. ZIMs get Tantivy keyword indexes: the device indexes each newly added ZIM itself, slowly and in the background, and ready-made indexes for large, popular ZIMs are published with the region packs. Libraries are searched by Qdrant Edge with the collection's own vectors (dense, plus sparse where the collection has them and the device can make sparse query vectors). Both run in the Rust search core, which links Qdrant Edge's Rust crate, and merge into one ranked list; the assistant uses the same search. |
+| Videos | Video source connectors, starting with PeerTube through its official REST API (for example the owner's stream.echo6.co, with login where the instance needs it). Browse and search a connected instance, stream when online, and download videos for offline use where the instance allows downloads, choosing the resolution (or audio only) to save space. Downloaded videos play offline. The assistant can cite transcript points from a library and open the video at the cited time, offline if downloaded, otherwise streamed. Optional YouTube connector, online only: the user follows in-app instructions to connect with their own YouTube Data API key; it can search, play in YouTube's official embedded player and bookmark. No YouTube downloads (YouTube's terms forbid them, and store rules reject downloaders); the assistant can cite bookmarked YouTube videos by title and description only. Only sources with an official API; no scraping. Decided 2026-10-24. |
 | Maps | Full parity with navi's layers, places and features: basemap, hillshade and terrain, land cover, land ownership (US: PAD-US, MVUM), places and geocoder, nearby (hospital, ER, fuel, trailhead and the rest), road and off-road routing. Delivered as downloadable region packs. |
 | Region packs | Built by the owner from public open data and published to free hosting (Hugging Face datasets; GitHub Releases caps files at 2 GB). The owner builds and maintains a baseline set; nothing is served from owner-run hosting. State- and country-sized regions build on GitHub Actions; continent-sized ones (about 14 GB disk and 6 h limits on free runners) build on the owner's machines and are only uploaded. OSM data needs ODbL attribution in the app's credits. |
 | Map data sources | Basemap: Protomaps planet builds (PMTiles). Terrain: Copernicus DEM (AWS Open Data). Land cover: ESA WorldCover (AWS Open Data). Places: Overture Maps (AWS/Azure Open Data). Roads, routing and geocoder: OSM regional extracts (Geofabrik). US land ownership: PAD-US (USGS), MVUM (Forest Service). No public host offers ready-made Valhalla tiles, so the packs carry them. |
@@ -65,9 +66,9 @@ Everything in this plan stays in it, but the work is ordered so a usable app rea
 
 **In 1.0**
 - Step 1: chat with the tool loop and citation check.
-- Step 2: library packs.
-- Step 3: Browse (ZIMs and library packs, Kiwix catalogue, import).
-- Step 4: one search across ZIMs and library packs.
+- Step 2: libraries (Qdrant collections through Qdrant Edge), updates and update settings.
+- Step 3: Browse (ZIMs and library items, Kiwix catalogue, import).
+- Step 4: one search across ZIMs and libraries.
 - Step 5: model library (Hugging Face, Cached models, tool check). The network model connector is 1.x.
 - Step 6: the assistant's brain (training for tool use and citations).
 - Step 7: region packs for a baseline set of regions chosen by the owner. The worldwide pack pipeline is 1.x.
@@ -75,7 +76,7 @@ Everything in this plan stays in it, but the work is ordered so a usable app rea
 - Step 9: offline map, place search, nearby (hospital, ER, fuel, water and the rest), latitude and longitude. Land cover, land ownership, USNG/MGRS, Plus Codes, what3words and imported repeaters are 1.x.
 - Step 10: road routing. Off-road routing is 1.x.
 - Step 11: iPhone.
-- Step 12: Videos, PeerTube part: connect to an instance (login where needed), browse and search, stream when online, offline downloads with resolution choice, offline player, and video library pack citations that open the video at the cited time. The YouTube connector is 1.x.
+- Step 12: Videos, PeerTube part: connect to an instance (login where needed), browse and search, stream when online, offline downloads with resolution choice, offline player, and citations of transcript points that open the video at the cited time. The YouTube connector is 1.x.
 
 **1.x (after 1.0)**
 - Network models (local Wi-Fi or internet), including Windows Cache as a household model server.
@@ -93,9 +94,9 @@ Everything in this plan stays in it, but the work is ordered so a usable app rea
 Each step ends with something usable on a phone. Riskiest first. Updated 2026-10-24.
 
 1. **Chat on the phone.** Flutter app with a chat screen running uncensored E2B in llama.cpp, fully offline. Proves the model on the Pixel 8 and the iPhone 15 Pro Max. Built inside the app shell from the mockups (four tabs; tabs other than Ask are placeholders). It includes the tool loop and citation check: the model calls a search tool, results come back tagged with numbered IDs, the model cites them, and the app shows only citations that match a real result (others are dropped and the answer is marked as not from your sources). Citations always open local content: each result's ID maps to its local address (ZIM article, library page, map point), and the model never writes the links. A small test-only search tool with test data proves this; nothing ships with it. The chat engine has a pluggable model backend (llama.cpp now, remote connectors later) so the tool loop and citations work the same with either. Code and builds on the owner's desktop in `C:\src\cache`.
-2. **Library.** Load a library pack (one SQLite file: recon concepts without `content`, plus vectors). The on-device embedding model is chosen in this step. Answers cite book and page.
-3. **Browse.** The offline browser: ZIMs and library packs open like websites. Kiwix's public catalogue (showing mini, no-pictures and full variants with sizes), added catalogues (OPDS), import from a file; start page, tabs, bookmarks, history. Web links the model writes (for example Wikipedia URLs) open the local ZIM copy when one exists, otherwise they are marked not available offline.
-4. **Search.** Tantivy (Rust) index across ZIMs and library packs, one search box. Background indexing of each new ZIM on the phone; ready-made indexes for large ZIMs published with the packs.
+2. **Library.** Open a library (Qdrant collection) through Qdrant Edge: add it from a Qdrant server, a link or a file; set the payload field mapping and the matching embedding model (GGUF in llama.cpp) for queries; answers cite from each point's payload. Proven first with a small collection, then with one bigger than the phone's memory. Updates (partial snapshots from a Qdrant server, newer files from links, Replace for imported files) and the update settings and scheduler are built here and reused by every later source.
+3. **Browse.** The offline browser: ZIMs open like websites and library items open as pages. Kiwix's public catalogue (showing mini, no-pictures and full variants with sizes), added catalogues (OPDS), import from a file; start page, tabs, bookmarks, history. Web links the model writes (for example Wikipedia URLs) open the local ZIM copy when one exists, otherwise they are marked not available offline.
+4. **Search.** One search box: Tantivy (Rust) keyword indexes for ZIMs, merged with library search through Qdrant Edge in the same Rust core. Background indexing of each new ZIM on the device; ready-made indexes for large ZIMs published with the region packs.
 5. **Model library.** Hugging Face search and download inside the app, with size and RAM fit. Cached models (the owner's trained models) listed at the top. Also the optional network model connector (OpenAI-compatible, local Wi-Fi or internet; mDNS discovery or IP address and port), picked here as on-device or network. Tool check for every model (on-device and network); only models that pass can be used.
 6. **The assistant's brain.** Train E2B on a C.A.C.H.E. version of the AIDA course (same tool use, complete answers), quiz it, then wire its tools to the library, Kiwix and search. Then E4B, 12B, and last Qwen (needs the course converted to ChatML). Published on Hugging Face as Cached models.
 7. **Region packs.** The build pipeline from public open data (see Map data sources) and publishing to Hugging Face datasets. Baseline regions chosen by the owner.
@@ -103,7 +104,7 @@ Each step ends with something usable on a phone. Riskiest first. Updated 2026-10
 9. **Maps.** Offline maps from region packs at full navi parity: basemap, hillshade and terrain, land cover, land ownership, places, geocoder, nearby (MapLibre + PMTiles). Coordinates: lat/long, USNG/MGRS and Plus Codes offline; what3words online with cached words for saved places. Imported repeater lists on the map and in nearby.
 10. **Routing.** Valhalla road routing on the device, then off-road (navi-offroute rewritten to run on the device, without PostGIS).
 11. **iPhone.** Same app on iOS, built and sent to TestFlight by a GitHub Actions macOS workflow.
-12. **Videos.** PeerTube connector (official API, login), browse and search an instance, streaming, offline downloads with resolution choice, offline player, optional YouTube connector (online only: search, play, bookmark; user's own API key with in-app setup instructions), video library pack with citations that open the video at the cited time.
+12. **Videos.** PeerTube connector (official API, login), browse and search an instance, streaming, offline downloads with resolution choice, offline player, optional YouTube connector (online only: search, play, bookmark; user's own API key with in-app setup instructions), citations of transcript points that open the video at the cited time.
 
 ## Size and compression
 
@@ -114,10 +115,9 @@ Each step ends with something usable on a phone. Riskiest first. Updated 2026-10
 - Places: only the columns the app uses, columnar with zstd.
 - Valhalla: leave out transit and other unused data.
 - ZIMs: offer the mini, no-pictures and full variants with their sizes.
-- Library vectors: int8 or 1-bit (binary) with re-checking of the top results; fewer dimensions where the embedding model supports it.
-- Library text: zstd with a dictionary trained on the concepts.
+- Libraries: used as they are. Any compression (for example Qdrant's own vector quantization) is set by whoever builds the collection.
 - Tantivy: no word positions on fields that never need phrase search.
-- Packs can live on an SD card where the phone has one.
+- Large files (ZIMs, libraries, region packs) can live on an SD card where the phone has one.
 - Videos: download at a chosen resolution or audio only; show the size before downloading.
 
 ## Known facts from testing
@@ -135,10 +135,11 @@ Each step ends with something usable on a phone. Riskiest first. Updated 2026-10
 - Overture places size per region, to keep packs a sensible size (step 7).
 - Open-Meteo's terms for app-store distribution (their terms name free apps without subscriptions or ads as non-commercial but don't mention app stores), and the licence of the self-hosted Open-Meteo software (step 8).
 - EIA API terms; Google Places (New) fuel price coverage, pricing and the exact caching terms (step 8).
+- Qdrant Edge: opening a collection bigger than the phone's memory (vectors and indexes read from storage, not RAM), loading snapshots from current Qdrant server versions, and API changes while it is in beta (step 2).
+- Whether sparse query vectors (for example bge-m3's sparse vectors) can be made on the device through llama.cpp; if not, libraries are searched with dense vectors only (step 2).
 
 ## Open questions
 
-- Embedding model for packs other than the owner's recon pack (step 2): benchmark of bge-m3, EmbeddingGemma-300M, nomic-embed v1.5 and bge-small/e5-small at several dimensions; the recon pack itself uses bge-m3.
 - Which E2B variant (huihui-ai or TrevorJS) becomes the recommended model: decided by the quiz.
 - When the Windows version (and its model server for phones on the same Wi-Fi) gets its own build step.
 
@@ -148,7 +149,7 @@ Each step ends with something usable on a phone. Riskiest first. Updated 2026-10
 - Custom-area (draw a box) map packs, after the standard region packs.
 - Online mode: stream and cache map tiles and other data from public sources when there is a connection, alongside region packs.
 - Voice conversations in Ask (the owner wants to look into this).
-- Import your own video files from the phone or SD card, to play offline and add to a video library pack.
+- Import your own video files from the phone or SD card, to play offline.
 - "My supplies": a list of what the user has on hand, so alert checklists can say what is missing (the owner considers it scope creep for now).
 - A tick-off checklist saved with an alert.
 - Point family phones at the owner's Conduit for sources that need keys, so the keys stay on the server and quotas are shared.
