@@ -55,7 +55,7 @@ fn zims_through_the_c_abi() {
     let cfg = serde_json::json!({"sources":[
         {"kind":"zim","path":ready,"index_dir":"/tmp/none-ready.idx"},
         {"kind":"zim","path":wiki,"index_dir":"/tmp/none-wiki.idx"},
-        {"kind":"pack","path":"/tmp/none.cachepack","index_dir":"/tmp/none-pack.idx"}
+        {"kind":"library","path":"/tmp/none-library","index_dir":"/tmp/none-lib.idx"}
     ]})
     .to_string();
     let cfg = CString::new(cfg).unwrap();
@@ -79,7 +79,7 @@ fn zims_through_the_c_abi() {
     }
     assert_eq!(src[0]["docs"], 6738);
     assert_eq!(src[1]["docs"], 27199921u64);
-    assert_eq!(src[2]["kind"], "pack");
+    assert_eq!(src[2]["kind"], "library");
     assert_eq!(src[2]["indexed"], false);
     eprintln!("status: {}", serde_json::to_string(&st).unwrap());
 

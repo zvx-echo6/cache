@@ -50,7 +50,7 @@ fn five() -> usize {
 /// keyword merge across ZIM sources uses `merge_keyword`. Over ranked lists of `(address, raw score)` (best first). Each address scores
 /// `sum 1/(RRF_K + rank)` over the lists it appears in (rank from 1; an address repeated inside one list counts
 /// once, at its best rank). Returns addresses by fused score, best first. Equal fused scores (for example two
-/// sources whose best hits are both rank 1) are ordered by the higher raw engine score, then by first seen.
+/// sources whose best hits are both rank 1) are ordered by the higher raw engine score, then by address.
 pub fn rrf(lists: &[Vec<(String, f32)>]) -> Vec<(String, f64)> {
     let mut score: HashMap<&str, (f64, f32)> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
@@ -70,14 +70,14 @@ pub fn rrf(lists: &[Vec<(String, f32)>]) -> Vec<(String, f64)> {
         }
     }
     let mut v: Vec<(String, (f64, f32))> = order.iter().map(|a| (a.to_string(), score[a])).collect();
-    // stable sort: ties beyond the raw score keep first-seen order
+    // total order: fused score (compared at 1e-12 resolution, so float summation order cannot matter), then
+    // the higher raw score, then the address (string compare), so the output never depends on arrival order
+    let q = |f: f64| (f * 1e12).round() as i64;
     v.sort_by(|a, b| {
-        let (fa, fb) = (a.1 .0, b.1 .0);
-        if (fa - fb).abs() > 1e-12 {
-            fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            b.1 .1.partial_cmp(&a.1 .1).unwrap_or(std::cmp::Ordering::Equal)
-        }
+        q(b.1 .0)
+            .cmp(&q(a.1 .0))
+            .then(b.1 .1.total_cmp(&a.1 .1))
+            .then_with(|| a.0.cmp(&b.0))
     });
     v.into_iter().map(|(a, (f, _))| (a, f)).collect()
 }
@@ -147,6 +147,7 @@ fn term_coverage(searcher: &Searcher, addr: DocAddress, terms: &[String], fields
 struct Merged {
     si: usize,
     hi: usize,
+    addr: String,
     score: f64,
     raw: f32,
     pass: bool,
@@ -154,21 +155,22 @@ struct Merged {
 
 /// Merge keyword hits across sources; `lists[source][rank] = (raw score, coverage)`. Each hit scores `raw / (best raw in its source) * coverage`. Hits with
 /// coverage below `min_cov` are dropped unless fewer than `need` hits would remain; then the best of the dropped
-/// ones fill up to `need` (after all the kept ones). Ties on score go to the higher raw score, then first seen.
-fn merge_keyword(lists: &[Vec<(f32, f32)>], min_cov: f32, need: usize) -> Vec<Merged> {
+/// ones fill up to `need` (after all the kept ones). Ties on score go to the higher raw score, then the smaller address.
+fn merge_keyword(lists: &[Vec<(f32, f32, String)>], min_cov: f32, need: usize) -> Vec<Merged> {
     let mut all: Vec<Merged> = Vec::new();
     for (si, l) in lists.iter().enumerate() {
         let top = l.iter().map(|h| h.0).fold(f32::MIN, f32::max);
-        for (hi, &(raw, coverage)) in l.iter().enumerate() {
+        for (hi, (raw, coverage, addr)) in l.iter().enumerate() {
+            let (raw, coverage) = (*raw, *coverage);
             let norm = if top > 0.0 { (raw / top) as f64 } else { 1.0 };
-            all.push(Merged { si, hi, score: norm * coverage as f64, raw, pass: coverage >= min_cov });
+            all.push(Merged { si, hi, addr: addr.clone(), score: norm * coverage as f64, raw, pass: coverage >= min_cov });
         }
     }
     let cmp = |a: &Merged, b: &Merged| {
         b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(b.raw.partial_cmp(&a.raw).unwrap_or(std::cmp::Ordering::Equal))
+            .total_cmp(&a.score)
+            .then(b.raw.total_cmp(&a.raw))
+            .then_with(|| a.addr.cmp(&b.addr))
     };
     all.sort_by(cmp);
     let kept = all.iter().filter(|m| m.pass).count();
@@ -180,6 +182,42 @@ fn merge_keyword(lists: &[Vec<(f32, f32)>], min_cov: f32, need: usize) -> Vec<Me
         let (mut a, b): (Vec<_>, Vec<_>) = all.into_iter().partition(|m| m.pass);
         a.extend(b);
         a
+    }
+}
+
+/// Cap on how far the candidate window is widened to resolve a score tie at its boundary.
+const TIE_CAP: usize = 8192;
+
+/// The best `limit` documents of `q` by score, in a deterministic order: score descending, then the stored
+/// `key_field` (the document's path or point id) ascending. Tantivy breaks equal scores by internal document
+/// address, which depends on how the index was built (a resumed build has other segments than a clean one), so
+/// the window is widened until the documents tied with the last one are all in, then sorted by key and cut.
+/// Returns (score, address, key) and the total match count.
+fn top_deterministic(
+    searcher: &Searcher,
+    q: &dyn Query,
+    limit: usize,
+    key_field: Field,
+) -> tantivy::Result<(Vec<(f32, DocAddress, String)>, usize)> {
+    let limit = limit.max(1);
+    let mut l = limit;
+    loop {
+        let (top, count) = searcher.search(q, &(TopDocs::with_limit(l).order_by_score(), Count))?;
+        let complete = top.len() < l
+            || l >= TIE_CAP
+            || top.last().map(|t| t.0).unwrap_or(0.0) < top[limit - 1].0;
+        if !complete {
+            l = (l * 2).min(TIE_CAP);
+            continue;
+        }
+        let mut v: Vec<(f32, DocAddress, String)> = Vec::with_capacity(top.len());
+        for (score, addr) in top {
+            let doc: TantivyDocument = searcher.doc(addr)?;
+            v.push((score, addr, text_of(&doc, key_field)));
+        }
+        v.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
+        v.truncate(limit);
+        return Ok((v, count));
     }
 }
 
@@ -210,16 +248,15 @@ impl Handle {
             let mut qp = QueryParser::for_index(&oi.index, vec![oi.fields.title, oi.fields.lead, oi.fields.body]);
             qp.set_field_boost(oi.fields.title, 2.0);
             let (q, _errors) = qp.parse_query_lenient(query);
-            let Ok((top, count)) = searcher.search(&q, &(TopDocs::with_limit(candidates).order_by_score(), Count)) else {
+            let Ok((top, count)) = top_deterministic(&searcher, &*q, candidates, oi.fields.path) else {
                 continue;
             };
             let terms = query_term_texts(&*q);
             let fields = [oi.fields.title, oi.fields.lead, oi.fields.body];
             let mut hits = Vec::with_capacity(top.len());
-            for (raw, addr) in top {
-                let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else { continue };
+            for (raw, addr, path) in top {
                 let coverage = term_coverage(&searcher, addr, &terms, &fields);
-                hits.push(Hit { path: text_of(&doc, oi.fields.path), addr, raw, coverage });
+                hits.push(Hit { path, addr, raw, coverage });
             }
             per.push(SrcHits {
                 id,
@@ -233,8 +270,10 @@ impl Handle {
             });
         }
 
-        let lists: Vec<Vec<(f32, f32)>> =
-            per.iter().map(|p| p.hits.iter().map(|h| (h.raw, h.coverage)).collect()).collect();
+        let lists: Vec<Vec<(f32, f32, String)>> = per
+            .iter()
+            .map(|p| p.hits.iter().map(|h| (h.raw, h.coverage, zimsrc::format_address(&p.id, &h.path))).collect())
+            .collect();
         let need = opts.offset + opts.k;
         let merged = merge_keyword(&lists, min_cov, need);
 
@@ -470,6 +509,15 @@ mod tests {
         assert_eq!(h.read(&format!("zim:{u}/p"), 10).unwrap_err().code, crate::ErrorCode::NotFound);
     }
 
+    /// Give each hit an address that sorts in (source, rank) order.
+    fn addr(lists: &[Vec<(f32, f32)>]) -> Vec<Vec<(f32, f32, String)>> {
+        lists
+            .iter()
+            .enumerate()
+            .map(|(si, l)| l.iter().enumerate().map(|(hi, &(r, c))| (r, c, format!("s{si:02}h{hi:03}"))).collect())
+            .collect()
+    }
+
     fn order(m: &[Merged]) -> Vec<(usize, usize)> {
         m.iter().map(|x| (x.si, x.hi)).collect()
     }
@@ -478,7 +526,7 @@ mod tests {
     fn merge_keyword_drops_low_coverage_and_normalises_per_source() {
         // source 0: strong, full coverage. source 1: weak raw scores, one hit with 2/3 coverage, one with 1/3.
         let lists = vec![vec![(10.0, 1.0), (6.0, 1.0)], vec![(2.0, 0.67), (1.9, 0.34)]];
-        let m = merge_keyword(&lists, 0.5, 3);
+        let m = merge_keyword(&addr(&lists), 0.5, 3);
         // (1,1) has coverage 0.34 < 0.5 and is dropped; 3 remain: (0,0)=1.0, (1,0)=0.67, (0,1)=0.6
         assert_eq!(order(&m), vec![(0, 0), (1, 0), (0, 1)]);
         // per-source normalisation: the weak source's best hit scores 1.0*coverage, not its tiny raw score
@@ -488,23 +536,26 @@ mod tests {
     #[test]
     fn merge_keyword_fills_up_to_need_when_too_few_pass() {
         let lists = vec![vec![(10.0, 0.2), (9.0, 0.4)], vec![(5.0, 0.3)]];
-        let m = merge_keyword(&lists, 0.5, 3);
+        let m = merge_keyword(&addr(&lists), 0.5, 3);
         assert_eq!(m.len(), 3, "nothing passes, so the best ones are all kept");
         assert_eq!(order(&m), vec![(0, 1), (1, 0), (0, 0)]); // by normalised score x coverage
         // enough pass: the rest are dropped
         let lists = vec![vec![(10.0, 1.0), (9.0, 0.1)], vec![(5.0, 0.9)]];
-        let m = merge_keyword(&lists, 0.5, 2);
+        let m = merge_keyword(&addr(&lists), 0.5, 2);
         assert_eq!(order(&m), vec![(0, 0), (1, 0)]);
         // passing hits stay ahead of fillers even when a filler scores higher
         let lists = vec![vec![(10.0, 0.45), (1.0, 0.9)]];
-        let m = merge_keyword(&lists, 0.5, 2);
+        let m = merge_keyword(&addr(&lists), 0.5, 2);
         assert_eq!(order(&m), vec![(0, 1), (0, 0)]);
     }
 
     #[test]
     fn merge_keyword_empty_and_ties() {
         assert!(merge_keyword(&[], 0.5, 5).is_empty());
+        // equal scores: the smaller address first, whatever the source order
+        let lists = vec![vec![(4.0, 1.0, "b".to_string())], vec![(4.0, 1.0, "a".to_string())]];
+        assert_eq!(order(&merge_keyword(&lists, 0.5, 2)), vec![(1, 0), (0, 0)]);
         let lists = vec![vec![(4.0, 1.0)], vec![(4.0, 1.0)]];
-        assert_eq!(order(&merge_keyword(&lists, 0.5, 2)), vec![(0, 0), (1, 0)]);
+        assert_eq!(order(&merge_keyword(&addr(&lists), 0.5, 2)), vec![(0, 0), (1, 0)]);
     }
 }

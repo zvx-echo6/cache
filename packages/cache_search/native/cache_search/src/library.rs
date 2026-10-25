@@ -539,8 +539,10 @@ impl LibSlot {
                 .params(params)
                 .with_payload(selector.clone())
                 .build();
-            let res = EdgeShardRead::query(&self.shard, req).map_err(|e| op_internal("dense search", e))?;
+            let mut res = EdgeShardRead::query(&self.shard, req).map_err(|e| op_internal("dense search", e))?;
             let returned = res.len();
+            // equal scores: the smaller address (string compare) first
+            res.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.to_string().cmp(&b.id.to_string())));
             hits.clear();
             let mut keys: Vec<String> = Vec::new();
             for sp in res {
