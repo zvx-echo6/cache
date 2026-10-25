@@ -30,6 +30,9 @@ struct Config {
     user: Option<crate::ext::UserCfg>,
     #[serde(default)]
     live: Option<cache_live::LiveCfg>,
+    /// Map layers: see ext.rs and DESIGN-LAYERS.md.
+    #[serde(default)]
+    layers: Option<cache_layers::LayersCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -344,6 +347,7 @@ impl Handle {
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
         self.configure_ext(cfg.user, cfg.live);
+        self.ext.configure_layers(cfg.layers)?;
         Ok(())
     }
 

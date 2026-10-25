@@ -40,12 +40,37 @@ struct Shared {
     done: AtomicU64,
     total: AtomicU64,
     state: Mutex<(State, Option<Error>)>,
+    /// Extra progress a kind reports (layer_download: bytes written); shown as "detail" when set.
+    detail: Mutex<Option<Value>>,
 }
 
 impl Shared {
     fn set_progress(&self, d: u64, t: u64) {
         self.done.store(d, Ordering::SeqCst);
         self.total.store(t, Ordering::SeqCst);
+    }
+}
+
+/// Layer downloads running in this process, by layer and area: a second one for the same area is `busy`.
+struct ActiveDownload(String);
+
+static ACTIVE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+impl ActiveDownload {
+    fn acquire(key: &str) -> Result<ActiveDownload> {
+        let mut g = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+        if g.iter().any(|k| k == key) {
+            return Err(Error::busy(format!("{key} is already being downloaded")));
+        }
+        g.push(key.to_string());
+        Ok(ActiveDownload(key.to_string()))
+    }
+}
+
+impl Drop for ActiveDownload {
+    fn drop(&mut self) {
+        let mut g = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+        g.retain(|k| *k != self.0);
     }
 }
 
@@ -130,6 +155,7 @@ impl Job {
             "index_library" => Self::start_index_library(params_json),
             "update_library" => Self::start_update_library(params_json),
             "library_manifest" => Self::start_library_manifest(params_json),
+            "layer_download" => Self::start_layer_download(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -217,6 +243,50 @@ impl Job {
         })
     }
 
+    /// Start a `layer_download` job: parameters are `{"layers": <the cs_open layers config>, "layer", "area"?, "name"?,
+    /// "bbox"|"polygon", "minzoom"?, "maxzoom"?, "update"?}`. A layer that does not exist, one that is online only
+    /// and a bad area are reported here and no job exists; limits, free space and network errors make the job `failed`.
+    fn start_layer_download(params_json: &str) -> Result<Job> {
+        #[derive(Deserialize)]
+        struct P {
+            layers: cache_layers::LayersCfg,
+            #[serde(flatten)]
+            req: cache_layers::AreaReq,
+        }
+        let p: P = serde_json::from_str(params_json)?;
+        let conv = |e: cache_layers::Error| {
+            let mut r = Error::new(crate::ErrorCode::from_str_code(e.code), e.message);
+            r.space = e.space;
+            r
+        };
+        let inner = std::sync::Arc::new(cache_layers::Inner::open(p.layers).map_err(conv)?);
+        let base = inner.base_of(&p.req.layer).map_err(conv)?;
+        if !base.offline_allowed() {
+            return Err(conv(cache_layers::Error::offline(format!("{} cannot be downloaded: it needs a connection", base.title))));
+        }
+        p.req.bounds().map_err(conv)?;
+        let key = format!("{}/{}", base.id, p.req.area_id().map_err(conv)?);
+        let guard = ActiveDownload::acquire(&key)?;
+        let req = p.req;
+        Self::spawn("cs-layer-download", guard, 0, move |sh| {
+            let r = inner.run_download(
+                &req,
+                &|d, t, detail| {
+                    sh.set_progress(d, t);
+                    if let Ok(mut g) = sh.detail.lock() {
+                        *g = Some(detail);
+                    }
+                },
+                &|| sh.cancel.load(Ordering::SeqCst),
+            );
+            match r {
+                Ok(cache_layers::Done::Finished) => Ok(Outcome::Done),
+                Ok(cache_layers::Done::Cancelled) => Ok(Outcome::Cancelled),
+                Err(e) => Err(conv(e)),
+            }
+        })
+    }
+
     /// Start a `library_manifest` job. Parameter errors and a library that is busy (an update, another manifest
     /// job, or an index build) are reported here and no job exists. The library is marked as updating before this
     /// returns, like `update_library`.
@@ -249,6 +319,7 @@ impl Job {
             done: AtomicU64::new(0),
             total: AtomicU64::new(total),
             state: Mutex::new((State::Running, None)),
+            detail: Mutex::new(None),
         });
         let sh = shared.clone();
         let th = std::thread::Builder::new()
@@ -286,13 +357,16 @@ impl Job {
             Some(e) => e.to_value(),
             None => serde_json::Value::Null,
         };
-        json!({
+        let mut v = json!({
             "state": st.as_str(),
             "done": self.shared.done.load(Ordering::SeqCst),
             "total": self.shared.total.load(Ordering::SeqCst),
             "error": err_v,
-        })
-        .to_string()
+        });
+        if let Some(d) = self.shared.detail.lock().ok().and_then(|g| g.clone()) {
+            v["detail"] = d;
+        }
+        v.to_string()
     }
 
     pub fn cancel(&self) {

@@ -20,6 +20,15 @@
 //!   GET    /live/sources                                         -> cs_live_sources
 //!   POST   /live/fetch                   {request}               -> cs_live_fetch (the body is the request JSON)
 //!   POST   /live/get                     {request}               -> cs_live_get (the body is the request JSON)
+//!   GET    /layers                                               -> cs_layers_list
+//!   POST   /layers/refresh                                       -> cs_layers_refresh
+//!   POST   /layers                       {definition}            -> cs_layers_save (the body is the definition JSON)
+//!   DELETE /layers/{id}                                          -> cs_layers_remove
+//!   POST   /layers/plan|delete           {request}               -> cs_layers_plan | cs_layers_delete
+//!   POST   /layers/download              {request}               -> a layer_download job, waited for (as `cs layers download`)
+//!   POST   /layers/clear-cache           {layer?}                -> cs_layers_clear_cache
+//!   POST   /layers/tile                  {layer,z,x,y}           -> cs_layers_tile, as the summary `cs layers tile` prints
+//!   POST   /layers/server                {online?}               -> cs_layers_server (the tile server lives on its own port)
 //! Errors are `{"code","message"}` (the core's error) with a matching HTTP status.
 
 use crate::engine::{ApiError, Conv, Engine};
@@ -157,6 +166,33 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
         (Method::Get, ["live", "sources"]) => st.engine.core.live_sources(),
         (Method::Post, ["live", "fetch"]) => st.engine.core.live_fetch(body),
         (Method::Post, ["live", "get"]) => st.engine.core.live_get(body),
+        (Method::Get, ["layers"]) => st.engine.core.layers_list(),
+        (Method::Post, ["layers", "refresh"]) => st.engine.core.layers_refresh(),
+        (Method::Post, ["layers"]) => st.engine.core.layers_save(body),
+        (Method::Delete, ["layers", id]) => st.engine.core.layers_remove(id),
+        (Method::Post, ["layers", "plan"]) => st.engine.core.layers_plan(body),
+        (Method::Post, ["layers", "delete"]) => st.engine.core.layers_delete(body),
+        (Method::Post, ["layers", "download"]) => {
+            let v = body_json(body)?;
+            st.engine.core.layers_download(&v, &mut |_| {})
+        }
+        (Method::Post, ["layers", "clear-cache"]) => {
+            let v = body_json(body)?;
+            st.engine.core.layers_clear_cache(v["layer"].as_str())
+        }
+        (Method::Post, ["layers", "tile"]) => {
+            let v = body_json(body)?;
+            let n = |k: &str| v[k].as_i64().and_then(|n| i32::try_from(n).ok()).ok_or_else(|| ApiError::new("bad_json", format!("\"{k}\" (integer) is required")));
+            let (z, x, y) = (n("z")?, n("x")?, n("y")?);
+            let layer = need_str(&v, "layer")?;
+            let (mime, bytes) = st.engine.core.layers_tile(layer, z, x, y)?;
+            Ok(crate::commands::tile_summary(layer, z, x, y, &mime, &bytes))
+        }
+        (Method::Post, ["layers", "server"]) => {
+            let v = body_json(body)?;
+            let o = v["online"].as_bool().map(|b| json!({"online": b}).to_string());
+            st.engine.core.layers_server(o.as_deref())
+        }
         _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
     }
 }

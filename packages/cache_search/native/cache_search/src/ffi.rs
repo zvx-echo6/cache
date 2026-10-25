@@ -448,6 +448,100 @@ pub unsafe extern "C" fn cs_live_get(h: *mut Handle, request_json: *const c_char
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_get(arg_str(request_json, "request_json")?)?))
 }
 
+// ---- map layers (logic in cache_layers; see ext.rs and DESIGN-LAYERS.md) ----
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_list(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_list()?))
+}
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_refresh(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_refresh()?))
+}
+
+/// # Safety
+/// `h` NULL or live; `def_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_save(h: *mut Handle, def_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_save(arg_str(def_json, "def_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `id` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_remove(h: *mut Handle, id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_remove(arg_str(id, "id")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `options_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_server(h: *mut Handle, options_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let o = if options_json.is_null() { None } else { Some(arg_str(options_json, "options_json")?) };
+        out_string(h.ext.layers_server(o)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_plan(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_plan(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_delete(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.layers_delete(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `layer` NULL (all layers) or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_clear_cache(h: *mut Handle, layer: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let l = if layer.is_null() { None } else { Some(arg_str(layer, "layer")?) };
+        out_string(h.ext.layers_clear_cache(l)?)
+    })
+}
+
+/// One tile through the tile server's own path. An empty tile gives a non-NULL pointer with length 0 and an empty MIME.
+///
+/// # Safety
+/// `h` NULL or live; `layer` NULL or NUL-terminated; `mime_out` and `len_out` NULL or writable.
+#[no_mangle]
+pub unsafe extern "C" fn cs_layers_tile(h: *mut Handle, layer: *const c_char, z: i32, x: i32, y: i32, mime_out: *mut *mut c_char, len_out: *mut i64) -> *mut u8 {
+    if !mime_out.is_null() {
+        *mime_out = ptr::null_mut();
+    }
+    if !len_out.is_null() {
+        *len_out = -1;
+    }
+    with_handle(h, ptr::null_mut(), |h| {
+        if mime_out.is_null() || len_out.is_null() {
+            return Err(Error::bad_json("mime_out or len_out is null"));
+        }
+        if !(0..=24).contains(&z) || x < 0 || y < 0 {
+            return Err(Error::bad_json("z, x and y are out of range"));
+        }
+        let (bytes, mime) = match h.ext.layers_tile(arg_str(layer, "layer")?, z as u8, x as u32, y as u32)? {
+            Some((b, m)) => (b, m),
+            None => (Vec::new(), ""),
+        };
+        let mime = out_string(mime.to_string())?;
+        *len_out = bytes.len() as i64;
+        *mime_out = mime;
+        Ok(Box::into_raw(bytes.into_boxed_slice()) as *mut u8)
+    })
+}
+
 /// # Safety
 /// `s` must be NULL or a string returned by this library, not freed before.
 #[no_mangle]
@@ -512,6 +606,9 @@ mod tests {
             assert!(cs_live_sources(ptr::null_mut()).is_null());
             assert!(cs_live_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_get(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_layers_list(ptr::null_mut()).is_null());
+            assert!(cs_layers_server(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_layers_plan(ptr::null_mut(), ptr::null()).is_null());
             cs_close(ptr::null_mut());
             cs_free_string(ptr::null_mut());
             cs_free_bytes(ptr::null_mut(), 0);

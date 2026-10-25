@@ -19,6 +19,8 @@ pub enum ErrorCode {
     Quota,
     KeyMissing,
     BadResponse,
+    LimitExceeded,
+    Offline,
     Internal,
 }
 
@@ -41,6 +43,8 @@ impl ErrorCode {
             ErrorCode::Quota => "quota",
             ErrorCode::KeyMissing => "key_missing",
             ErrorCode::BadResponse => "bad_response",
+            ErrorCode::LimitExceeded => "limit_exceeded",
+            ErrorCode::Offline => "offline",
             ErrorCode::Internal => "internal",
         }
     }
@@ -77,6 +81,9 @@ impl Error {
     /// A library's files are incomplete (the manifest lists segments that are missing). Nothing was changed.
     pub fn damaged(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Damaged, m)
+    }
+    pub fn busy(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Busy, m)
     }
     pub fn internal(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, m)
@@ -131,6 +138,12 @@ impl ErrorCode {
             "quota" => ErrorCode::Quota,
             "key_missing" => ErrorCode::KeyMissing,
             "bad_response" => ErrorCode::BadResponse,
+            "limit_exceeded" => ErrorCode::LimitExceeded,
+            "offline" => ErrorCode::Offline,
+            "busy" => ErrorCode::Busy,
+            "unsupported" => ErrorCode::Unsupported,
+            "no_space" => ErrorCode::NoSpace,
+            "cancelled" => ErrorCode::Cancelled,
             _ => ErrorCode::Internal,
         }
     }
@@ -164,6 +177,8 @@ mod tests {
             (ErrorCode::Quota, "quota"),
             (ErrorCode::KeyMissing, "key_missing"),
             (ErrorCode::BadResponse, "bad_response"),
+            (ErrorCode::LimitExceeded, "limit_exceeded"),
+            (ErrorCode::Offline, "offline"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

@@ -20,11 +20,14 @@
  *   "no_space"       not enough free disk space for an update_library job; the job error also has the numbers
  *                    "needed" and "available" (bytes)
  *   "damaged"        a library's files are incomplete; nothing was changed
- *   "not_configured" the cs_open config has no "user" section (saved places) or no "live" section (live data)
+ *   "not_configured" the cs_open config has no "user" section (saved places), "live" section (live data) or
+ *                    "layers" section (map layers)
  *   "fetch_failed"   a live-source download failed (network, HTTP status); the last good copy is kept
  *   "quota"          a live source reached its per-minute, per-day or per-month download cap
  *   "key_missing"    a live source needs an API key and the request gave none
  *   "bad_response"   a live-source response was not what its definition expects; the last good copy is kept
+ *   "limit_exceeded" a layer download is over the layer's limit (tiles or bytes per download)
+ *   "offline"        a layer or action needs a connection and the engine is offline (or the layer is online only)
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -58,6 +61,12 @@ char *cs_version(void);
  *   "user": {"db_path": ".../user.sqlite"},          optional: where saved places are stored (cs_places_*)
  *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
  *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
+ *   "layers": {"dir": ".../layers",                  optional: the map layer engine (cs_layers_*, DESIGN-LAYERS.md);
+ *              "defs_dirs": [".../layer-defs"],      read-only folders of definition files (the starter ones)
+ *              "catalogue_urls": ["https://..."],    optional; JSON lists of definitions fetched by cs_layers_refresh and merged with
+ *                                                    the starter ones. Default ["https://cache.echo6.co/catalogue.json"]; [] = none
+ *              "cache_max_bytes": 268435456,         optional cap of the viewed-tile cache (default 256 MiB)
+ *              "online": true}                       optional, default true; false = never use the network
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
@@ -243,6 +252,77 @@ char *cs_live_fetch(cs_handle *h, const char *request_json);
  * was ever downloaded for that source and place. */
 char *cs_live_get(cs_handle *h, const char *request_json);
 
+/* --- map layers (DESIGN-LAYERS.md) ---
+ *
+ * A layer is a definition file (data, never code). The core keeps the catalogue, serves tiles to the map on
+ * 127.0.0.1 and downloads areas for offline use. Needs "layers" in the cs_open config ("not_configured" otherwise).
+ * Returned strings are freed with cs_free_string. Errors: see cs_last_error. */
+
+/* Every layer with its installed state:
+ * {"layers":[{"definition":{...format 1...},"origin":"folder"|"catalogue"|"user","download_layer":"<id>",
+ *             "downloadable":bool,"needs_connection":bool,
+ *             "installed":{"downloaded":bool,"bytes":N (the layer's tile store),"areas":[{"id","name","layer","bbox","polygon",
+ *                          "minzoom","maxzoom","version","tiles_requested","tiles_present","bytes" (of its cover, shared
+ *                          tiles included),"created","source"}] (finished areas),
+ *                          "partial":[{"area","name","tiles_total","version"}]},
+ *             "update_available":bool,"latest_version":null|"..","viewed_cache_bytes":N,
+ *             "health":{"state":"unknown"|"ok"|"degraded"|"unreachable","recent_requests","recent_failures",
+ *                       "recent_timeouts","last_success_at","last_failure":null|{"at","message"}}}],
+ *  "invalid":[{"file","id"?,"error"}],"online":bool,"viewed_cache":{"bytes","max_bytes"},"catalogue_urls":[".."]}
+ * hillshade and contours list the elevation layer's installed areas ("download_layer"). */
+char *cs_layers_list(cs_handle *h);
+
+/* Fetch every catalogue in "catalogue_urls" (valid definitions are stored and merged with the starter ones, a later
+ * catalogue wins by id; invalid ones are reported) and each layer's update.check_url ({"version":".."}). Needs a
+ * connection ("offline"); fails with "fetch_failed" only if no catalogue could be fetched. Returns
+ * {"catalogues":[{"url","layers":N,"invalid":[...]}|{"url","error":{"code","message"}}],"updates":{"<id>":"<version>"|{"error"}}}. */
+char *cs_layers_refresh(cs_handle *h);
+
+/* Add or edit a user definition (the Advanced section): the JSON of one definition, validated ("bad_json" lists every
+ * problem). A user definition overrides one with the same id. Returns {"id","saved":true}. */
+char *cs_layers_save(cs_handle *h, const char *definition_json);
+
+/* Remove a user definition ("not_found" for ids from folders or the catalogue). Returns {"id","removed":true}. */
+char *cs_layers_remove(cs_handle *h, const char *id);
+
+/* Start the local tile server (once per handle; later calls return the same port) and optionally set whether the
+ * engine may use the network: options_json NULL or {"online":bool}. Returns
+ * {"port":N,"base_url":"http://127.0.0.1:N","tilejson":"http://127.0.0.1:N/layers/{id}/tilejson.json","online":bool}.
+ * The server is the one place the map reads tiles from: GET /layers/{id}/{z}/{x}/{y} answers, in order, from tiles
+ * downloaded for offline use, from the cache of tiles viewed before, then (online, if the definition allows) from the
+ * source, which is cached. 200 with the tile (header X-Cache-Status: downloaded|cache|network|generated); 204 where
+ * the source has no tile; 404 with X-Cache-Status: miss when it is not on the device and there is no connection;
+ * 503 "needs a connection" (X-Cache-Status: needs-connection) for an online-only layer; JSON {"code","message"}
+ * errors otherwise. GET /layers/{id}/tilejson.json is a TileJSON 3.0 (tiles, minzoom, maxzoom, bounds, attribution,
+ * "type": vector|raster|raster-dem, "encoding":"terrarium" and "tileSize" for elevation, vector_layers, style_hints).
+ * Vector tiles are sent uncompressed. The server stops when the handle is closed. */
+char *cs_layers_server(cs_handle *h, const char *options_json);
+
+/* The dry run of a download. request_json: {"layer","area"?:"<id>","name"?,"bbox":[w,s,e,n] | "polygon":[[lon,lat],..],
+ * "minzoom"?,"maxzoom"?,"update"?:bool}. Downloaded tiles are kept once per layer in one merged store, so the plan counts
+ * only the tiles NOT already on the device. Returns {"layer","download_layer","area","mode":"new"|"extend"|"resume"|"update",
+ * "tiles" (the area's cover),"tiles_to_download","tiles_already","already_bytes","tiles_present"?,"per_zoom",
+ * "minzoom","maxzoom","estimated_bytes" (of the tiles to download),"estimate_method":"directory"|"sample of N tiles"|"none",
+ * "limits":{...},"free_bytes","version","exists","resumable","ok_to_start":bool,
+ * "problems":[{"code":"limit_exceeded"|"no_space","message"}]}. The layer's limits apply to the tiles to download.
+ * Online-only layers fail with "offline"; the size needs a connection. An area id already used for another shape or
+ * zoom range fails with "bad_json". */
+char *cs_layers_plan(cs_handle *h, const char *request_json);
+
+/* Delete a downloaded area ({"layer","area"}): only the tiles no other area covers are removed. Or all of a layer's areas,
+ * unfinished downloads and tiles ({"layer"}). Returns {"layer","removed":["<area>",..],"tiles_removed","tiles_kept",
+ * "freed_bytes","file_bytes_before","file_bytes_after"}. */
+char *cs_layers_delete(cs_handle *h, const char *request_json);
+
+/* Empty the viewed-tile cache of one layer, or of all layers (layer NULL). Returns {"cleared":N}. */
+char *cs_layers_clear_cache(cs_handle *h, const char *layer);
+
+/* One tile through the server's own path (for tests and headless use). Returns the bytes and sets *mime_out (free with
+ * cs_free_string) and *len_out; an empty tile is a non-NULL pointer, length 0 and an empty MIME. NULL on error:
+ * "not_found" (miss: not on the device, no connection), "offline" (online-only layer), others as above.
+ * Free the bytes with cs_free_bytes. */
+uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, int32_t y, char **mime_out, int64_t *len_out);
+
 /* --- long jobs --- */
 
 /* kind "index_zim":  {"zim_path","index_dir","heap_mb":200}
@@ -289,11 +369,26 @@ char *cs_live_get(cs_handle *h, const char *request_json);
  *   before the read-write load. cs_job_start fails with "busy" if an update, another library_manifest or an
  *   index_library job is using that library, "not_found" if library_path or the folder of out_path does not
  *   exist and "bad_json" for empty paths or an out_path inside the library.
+ * kind "layer_download": {"layers":<the "layers" section of the cs_open config>, "layer", "area"?, "name"?,
+ *                         "bbox"|"polygon", "minzoom"?, "maxzoom"?, "update"?}   (see cs_layers_plan)
+ *   downloads a layer for an area (a box or a polygon) and a zoom range into the layer's ONE merged tile store
+ *   (<dir>/store/<layer>.sqlite): only tiles not already stored are fetched, so overlapping areas share tiles; the tile
+ *   server serves them at once. cs_job_start fails at once with "not_found" (no such layer), "offline" (an online-only
+ *   layer), "bad_json" (bad area, or an area id used for another shape) or "busy" (the same area is already being
+ *   downloaded). The job checks the layer's limits (max_tiles_per_download, max_bytes_per_download, applied to the tiles
+ *   to fetch; the bytes limit is also enforced on what is written) and the free disk space first and fails with
+ *   "limit_exceeded" or "no_space" (with "needed" and "available") before downloading anything. Progress is tiles done
+ *   over tiles to fetch, "detail":{"bytes"}. Tiles are fetched with the layer's max_parallel and the app User-Agent
+ *   "Cache/<version>", retried with backoff. cs_job_cancel stops at the next batch; the area stays "partial" with its tiles
+ *   in the store, and starting the same request again fetches only what is missing. "update":true re-fetches the area's
+ *   tiles that are older than the layer's version into a staging table and swaps them in, with the new version, in one
+ *   transaction when complete; until then the old tiles keep serving.
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);
 
-/* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"}} */
+/* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"}}
+ * layer_download jobs add "detail":{"bytes":N} (bytes written so far). */
 char *cs_job_progress(cs_job *j);
 
 /* Ask the job to stop at its next checkpoint. Returns 0. Poll cs_job_progress until "cancelled". */
