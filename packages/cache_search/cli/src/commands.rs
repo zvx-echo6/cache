@@ -134,7 +134,25 @@ fn print(s: &str) {
     let _ = std::io::stdout().flush();
 }
 
+/// The result of a finished job from its final progress JSON (`{"state","done","total","error"}`): `Ok` only for
+/// `done`. Any other state is an error that carries the job's own code and message, so a failed job, a panic
+/// in a job thread (the core reports it as `internal` with the text `panic: ...`) and a cancelled job are never
+/// reported as a bare failure.
+fn job_result(v: &Value) -> Result<(), ApiError> {
+    let state = v["state"].as_str().unwrap_or("?");
+    if state == "done" {
+        return Ok(());
+    }
+    let code = v["error"]["code"].as_str().unwrap_or(if state == "cancelled" { "cancelled" } else { "internal" });
+    let message = match v["error"]["message"].as_str().filter(|m| !m.is_empty()) {
+        Some(m) => format!("job {state}: {m}"),
+        None => format!("job {state} without an error message from the core"),
+    };
+    Err(ApiError::new(code, message))
+}
+
 /// Run a job to the end, printing `done/total` to stderr as it changes; prints the final progress JSON.
+/// A job that does not finish `done` returns the job's error (the caller prints it to stderr and exits non-zero).
 fn run_job(kind: &str, params: Value) -> Result<(), ApiError> {
     let mut job = JobRun::start(kind, &params)?;
     let mut last = String::new();
@@ -148,13 +166,7 @@ fn run_job(kind: &str, params: Value) -> Result<(), ApiError> {
         }
         if v["state"] != "running" {
             print(&p);
-            return match v["state"].as_str() {
-                Some("done") => Ok(()),
-                _ => Err(ApiError::new(
-                    v["error"]["code"].as_str().unwrap_or("internal"),
-                    format!("job {}: {}", v["state"], v["error"]["message"].as_str().unwrap_or("")),
-                )),
-            };
+            return job_result(&v);
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -353,6 +365,14 @@ pub fn serve(argv: &[String]) -> Result<(), ApiError> {
     server::run(e, &listen)
 }
 
+/// Print an error as one JSON line on stderr. Writes with `writeln!` and ignores a failed write: `eprintln!`
+/// panics when stderr cannot be written, which would turn the report itself into a second failure.
+pub fn report_error(e: &ApiError) {
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "{}", e.to_json());
+    let _ = err.flush();
+}
+
 /// Dispatch. Returns the process exit status.
 pub fn main_with(argv: Vec<String>) -> i32 {
     let Some(cmd) = argv.first() else {
@@ -388,8 +408,42 @@ pub fn main_with(argv: Vec<String>) -> i32 {
     match r {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("{}", e.to_json());
+            report_error(&e);
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn done_is_ok() {
+        assert!(job_result(&json!({"state": "done", "done": 3, "total": 3, "error": null})).is_ok());
+    }
+
+    #[test]
+    fn a_failed_job_carries_its_code_and_message() {
+        let e = job_result(&json!({"state": "failed", "done": 1, "total": 9, "error": {"code": "io", "message": "disk full"}})).unwrap_err();
+        assert_eq!(e.code, "io");
+        assert_eq!(e.message, "job failed: disk full");
+    }
+
+    #[test]
+    fn a_panic_in_a_job_thread_is_reported_with_its_text() {
+        let e = job_result(&json!({"state": "failed", "done": 0, "total": 0, "error": {"code": "internal", "message": "panic: boom"}})).unwrap_err();
+        assert_eq!(e.code, "internal");
+        assert!(e.message.contains("panic: boom"), "{}", e.message);
+    }
+
+    #[test]
+    fn failed_or_cancelled_without_an_error_is_still_an_error() {
+        let e = job_result(&json!({"state": "failed", "done": 0, "total": 0, "error": null})).unwrap_err();
+        assert_eq!(e.code, "internal");
+        assert!(e.message.contains("failed"), "{}", e.message);
+        let e = job_result(&json!({"state": "cancelled", "done": 0, "total": 0, "error": null})).unwrap_err();
+        assert_eq!(e.code, "cancelled");
+        assert!(e.message.contains("cancelled"), "{}", e.message);
     }
 }

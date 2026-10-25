@@ -428,6 +428,27 @@ fn library_manifest_and_update_library_commands() {
     assert_eq!(st["sources"][0]["updating"], false);
 }
 
+#[test]
+fn index_library_failure_prints_the_job_error_and_exits_non_zero() {
+    let tmp = TempDir::new("idxfail");
+    // an existing folder that is not a library: the job starts, then fails on its own thread
+    let notlib = tmp.path("notalib");
+    std::fs::create_dir_all(&notlib).unwrap();
+    let idx = tmp.path("idx");
+    let o = cs(&["index-library", "--library", &notlib, "--index-dir", &idx]);
+    assert!(!o.ok, "a failed job must exit non-zero");
+    let last = o.stderr.lines().last().expect("stderr must not be empty");
+    let e = j(last);
+    assert!(e["code"].as_str().is_some_and(|c| !c.is_empty()), "error code missing: {}", o.stderr);
+    assert!(e["message"].as_str().is_some_and(|m| m.starts_with("job failed:") && m.len() > "job failed: ".len()), "message missing: {}", o.stderr);
+    assert!(o.stderr.contains("failed"), "{}", o.stderr);
+    let fin = j(o.stdout.trim());
+    assert_eq!(fin["state"], "failed");
+    assert_eq!(fin["error"]["code"], e["code"]);
+    // the lock is released: nothing stale is left behind
+    assert!(!Path::new(&idx).join("cache_search_index.lock").exists());
+}
+
 // ---- tools -------------------------------------------------------------------------------------------------------
 
 const NOW: &str = "2026-10-25T14:20:05-06:00";
