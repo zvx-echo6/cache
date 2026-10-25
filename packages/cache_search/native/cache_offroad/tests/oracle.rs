@@ -61,7 +61,7 @@ fn route_matches_navi_route_auto() {
                 }
                 req.network_affinity = Some(h);
             }
-            let router = Router { pack: &pack, valhalla: &StubValhalla, opts: RouteOptions::default() };
+            let router = Router { pack: &pack, elevation: &pack, valhalla: &StubValhalla, opts: RouteOptions::default() };
             let o_set = modes(&s["start_modes"]);
             let g_set = modes(&s["end_modes"]);
             let (mut o2, mut g2) = (o_set.clone(), g_set.clone());

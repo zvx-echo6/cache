@@ -140,11 +140,11 @@ pub fn road_terminus_transitions(
 }
 
 pub fn surface_change_transitions(valhalla: &dyn Valhalla, line: ((f64, f64), (f64, f64))) -> Vec<Tup> {
-    let shape = valhalla.route_shape(line.0, line.1);
+    let shape = crate::surface::get_route_shape(valhalla, line.0, line.1);
     let pairs = [(Mode::Vehicle, Mode::FourW), (Mode::FourW, Mode::TwoW)];
     let mut out = Vec::new();
     if !shape.is_empty() {
-        for (lat, lon) in valhalla.surface_change_candidates(&shape) {
+        for (lat, lon, _f, _t) in crate::surface::get_surface_change_candidates(valhalla, &shape) {
             bidir(lat, lon, &pairs, TRANSITION_COST_SURFACE_CHANGE_S, &mut out);
         }
     }

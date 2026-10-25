@@ -8,6 +8,7 @@ use crate::grid::{self, haversine_m, GridMeta};
 use crate::mvum;
 use crate::pack::{Layer, PackSource};
 use crate::transitions;
+use crate::elevation::ElevationSource;
 use crate::valhalla::{LocateSnap, NetworkRoute, Valhalla};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -77,10 +78,12 @@ pub struct RouteRequest {
     pub end_modes: Option<Vec<Mode>>,
     /// (month, day) for seasonal MVUM checks; None = no seasonal check (what navi's API does).
     pub mvum_on_date: Option<(u32, u32)>,
+    /// Record per-cell path detail (elevation, class, trail, step time) for directions.
+    pub collect_detail: bool,
 }
 impl RouteRequest {
     pub fn new(start: (f64, f64), end: (f64, f64), mode: RequestMode, boundary: Boundary) -> Self {
-        RouteRequest { start, end, mode, boundary, network_affinity: None, start_category: None, end_category: None, start_modes: None, end_modes: None, mvum_on_date: None }
+        RouteRequest { start, end, mode, boundary, network_affinity: None, start_category: None, end_category: None, start_modes: None, end_modes: None, mvum_on_date: None, collect_detail: false }
     }
 }
 
@@ -109,13 +112,13 @@ impl Default for RouteOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
-    #[error("route too long: estimated {estimated} cells exceeds budget {max}")]
+    #[error("Route is too long for Auto routing; choose closer start and end points")]
     TooLong { estimated: usize, max: usize },
-    #[error("failed to load terrain: {0}")]
+    #[error("Failed to load terrain: {0}")]
     Terrain(String),
-    #[error("endpoint outside grid bounds")]
+    #[error("Endpoint outside grid bounds")]
     OutsideGrid,
-    #[error("no unified route found")]
+    #[error("No unified route found")]
     NoRoute,
 }
 
@@ -175,7 +178,26 @@ pub struct RouteResult {
     pub auto_bypass: bool,
     pub network: Option<NetworkRoute>,
     pub meta: Option<GridMeta>,
+    /// per-cell detail of the travelled path (when requested): navi's `path_detail["unified"]`
+    pub detail: Option<PathDetail>,
     pub stats: RouteStats,
+}
+
+/// Per-cell detail of a travelled path (`OffrouteRouter._path_detail`).
+#[derive(Debug, Clone)]
+pub struct PathDetail {
+    pub lat: Vec<f64>,
+    pub lon: Vec<f64>,
+    pub mode: Vec<Mode>,
+    /// metres; None = no DEM value
+    pub elev: Vec<Option<f64>>,
+    /// WorldCover class (0 = unknown)
+    pub terrain: Vec<u8>,
+    /// trails value: 0 none, 5 road, 15 track, 25 foot trail
+    pub trail: Vec<u8>,
+    /// time (s) from cell k to k+1 (len n-1), from the kernel's own edge model
+    pub step_s: Vec<f64>,
+    pub cell_m: f64,
 }
 
 impl RouteResult {
@@ -186,8 +208,8 @@ impl RouteResult {
             let man: Vec<Value> = n
                 .maneuvers
                 .iter()
-                .map(|m| json!({"instruction": m.instruction, "type": m.kind, "distance_km": m.distance_km,
-                                 "time_seconds": m.time_seconds, "street_names": m.street_names}))
+                .map(|m| json!({"instruction": m.instruction, "type": m.kind, "distance_km": m.length_km,
+                                 "time_seconds": m.time_s, "street_names": m.street_names}))
                 .collect();
             return json!({
                 "status": "ok",
@@ -265,14 +287,14 @@ pub fn eligible_modes_from_category(category: Option<&str>) -> Option<BTreeSet<u
     Some(m.iter().map(|m| m.idx()).collect())
 }
 
-fn is_terrain_flat(pack: &dyn PackSource, lat: f64, lon: f64) -> bool {
+fn is_terrain_flat(elev: &dyn ElevationSource, lat: f64, lon: f64) -> bool {
     let dlat = FLAT_SAMPLE_RADIUS_M / 111320.0;
     let dlon = FLAT_SAMPLE_RADIUS_M / (111320.0 * lat.to_radians().cos().max(0.01));
     let pts = [(lat, lon), (lat + dlat, lon), (lat - dlat, lon), (lat, lon + dlon), (lat, lon - dlon)];
     let mut el = Vec::new();
     for (la, lo) in pts {
         let Some((r, c)) = grid::global_pixel(la, lo) else { return false };
-        match pack.read_elevation(r, c, 1, 1) {
+        match elev.read_elevation(r, c, 1, 1) {
             Ok(v) if v[0].is_finite() => el.push(v[0] as f64),
             _ => return false,
         }
@@ -289,7 +311,7 @@ fn snap<'a>(cache: &'a mut SnapCache, v: &dyn Valhalla, lat: f64, lon: f64, cost
 }
 
 /// Eligible modes of an untagged endpoint from Valhalla snaps (the per-mode distance + road-class rules).
-pub fn spatial_eligible_modes(pack: &dyn PackSource, v: &dyn Valhalla, lat: f64, lon: f64, cache: &mut SnapCache) -> BTreeSet<usize> {
+pub fn spatial_eligible_modes(elev: &dyn ElevationSource, v: &dyn Valhalla, lat: f64, lon: f64, cache: &mut SnapCache) -> BTreeSet<usize> {
     let a = snap(cache, v, lat, lon, "auto").clone();
     let b = snap(cache, v, lat, lon, "bicycle").clone();
     let d_auto = a.as_ref().map_or(f64::INFINITY, |s| s.snap_distance_m);
@@ -304,7 +326,7 @@ pub fn spatial_eligible_modes(pack: &dyn PackSource, v: &dyn Valhalla, lat: f64,
     let mut modes = BTreeSet::new();
     modes.insert(Mode::Foot.idx());
     if (d_auto <= AUTO_SNAP_TIGHT_M && paved(&cls_auto))
-        || (d_auto <= AUTO_SNAP_RELAXED_M && paved(&cls_auto) && is_terrain_flat(pack, lat, lon))
+        || (d_auto <= AUTO_SNAP_RELAXED_M && paved(&cls_auto) && is_terrain_flat(elev, lat, lon))
     {
         modes.insert(Mode::Vehicle.idx());
     }
@@ -317,10 +339,10 @@ pub fn spatial_eligible_modes(pack: &dyn PackSource, v: &dyn Valhalla, lat: f64,
     modes
 }
 
-fn auto_eligible_modes(pack: &dyn PackSource, v: &dyn Valhalla, lat: f64, lon: f64, cat: Option<&str>, cache: &mut SnapCache) -> BTreeSet<usize> {
+fn auto_eligible_modes(elev: &dyn ElevationSource, v: &dyn Valhalla, lat: f64, lon: f64, cat: Option<&str>, cache: &mut SnapCache) -> BTreeSet<usize> {
     let mut s = match eligible_modes_from_category(cat) {
         Some(t) => t,
-        None => spatial_eligible_modes(pack, v, lat, lon, cache),
+        None => spatial_eligible_modes(elev, v, lat, lon, cache),
     };
     s.insert(Mode::Foot.idx());
     s
@@ -344,12 +366,13 @@ pub fn auto_bbox(s: (f64, f64), e: (f64, f64), pad: f64, max_span: f64) -> (f64,
 
 pub struct Router<'a> {
     pub pack: &'a dyn PackSource,
+    pub elevation: &'a dyn ElevationSource,
     pub valhalla: &'a dyn Valhalla,
     pub opts: RouteOptions,
 }
 
-pub fn route(pack: &dyn PackSource, valhalla: &dyn Valhalla, req: &RouteRequest, opts: &RouteOptions) -> Result<RouteResult, RouteError> {
-    Router { pack, valhalla, opts: opts.clone() }.route(req)
+pub fn route(pack: &dyn PackSource, elevation: &dyn ElevationSource, valhalla: &dyn Valhalla, req: &RouteRequest, opts: &RouteOptions) -> Result<RouteResult, RouteError> {
+    Router { pack, elevation, valhalla, opts: opts.clone() }.route(req)
 }
 
 impl<'a> Router<'a> {
@@ -365,11 +388,11 @@ impl<'a> Router<'a> {
                 };
                 let s = match &req.start_modes {
                     Some(v) => with_foot(v),
-                    None => auto_eligible_modes(self.pack, self.valhalla, start.0, start.1, req.start_category.as_deref(), &mut cache),
+                    None => auto_eligible_modes(self.elevation, self.valhalla, start.0, start.1, req.start_category.as_deref(), &mut cache),
                 };
                 let e = match &req.end_modes {
                     Some(v) => with_foot(v),
-                    None => auto_eligible_modes(self.pack, self.valhalla, end.0, end.1, req.end_category.as_deref(), &mut cache),
+                    None => auto_eligible_modes(self.elevation, self.valhalla, end.0, end.1, req.end_category.as_deref(), &mut cache),
                 };
                 (s, e)
             }
@@ -381,7 +404,8 @@ impl<'a> Router<'a> {
 
         // Valhalla bypass: pure road <-> road skips the raster pipeline entirely.
         if req.mode == RequestMode::Auto && origin_set.contains(&Mode::Vehicle.idx()) && goal_set.contains(&Mode::Vehicle.idx()) {
-            if let Ok(n) = self.valhalla.route_vehicle(start, end) {
+            if let Ok(trip) = self.valhalla.route(start, end, "auto") {
+                let n = NetworkRoute::from_trip(&trip);
                 return Ok(RouteResult {
                     scenario: "D".into(),
                     boundary: req.boundary,
@@ -397,6 +421,7 @@ impl<'a> Router<'a> {
                     auto_bypass: true,
                     network: Some(n),
                     meta: None,
+                    detail: None,
                     stats: RouteStats::default(),
                 });
             }
@@ -423,7 +448,8 @@ impl<'a> Router<'a> {
         let (south, north, west, east) = meta.bounds;
         let (rows, cols) = (meta.rows, meta.cols);
         let terr = |e: crate::pack::PackError| RouteError::Terrain(e.to_string());
-        let elevation = self.pack.read_elevation(meta.global_row0, meta.global_col0, rows, cols).map_err(terr)?;
+        let elev_err = |e: crate::elevation::ElevError| RouteError::Terrain(e.to_string());
+        let elevation = self.elevation.read_elevation(meta.global_row0, meta.global_col0, rows, cols).map_err(elev_err)?;
         let rd = |l: Layer| self.pack.read_u8(l, meta.global_row0, meta.global_col0, rows, cols);
         let friction_raw = rd(Layer::Friction).map_err(terr)?;
         let friction_mult = friction_to_multiplier(&friction_raw);
@@ -552,7 +578,16 @@ impl<'a> Router<'a> {
             rows, cols, cells: rows * cols, transition_cells: tc.len(), expanded_states: res.expanded,
             ms_rasters, ms_layers, ms_transitions, ms_search,
         };
-        Ok(render_unified_path(&res.path, res.cost, &meta, req.boundary, stats))
+        let mut out = render_unified_path(&res.path, res.cost, &meta, req.boundary, stats);
+        if req.collect_detail {
+            let mp = |mi: usize| (max_grade[mi], sfid[mi], base[mi]);
+            let trans_cost_map: HashMap<(i64, i64, usize, usize), f64> = tc.iter().map(|t| ((t.0, t.1, t.2, t.3), t.4)).collect();
+            out.detail = Some(path_detail(
+                &res.path, &elevation, class.as_deref(), &meta, &stack, &trail_friction_stack, &trails, &barriers,
+                req.boundary.id(), &trans_cost_map, &mp,
+            ));
+        }
+        Ok(out)
     }
 }
 
@@ -610,6 +645,56 @@ pub fn render_unified_path(path: &[[i64; 3]], total_cost: f64, meta: &GridMeta, 
         auto_bypass: false,
         network: None,
         meta: Some(meta.clone()),
+        detail: None,
         stats,
     }
+}
+
+/// `OffrouteRouter._path_detail`: per-cell detail of a travelled path. step_s[k] is the time from cell k to
+/// k+1 from the kernel's own edge model, or the flat transition cost for a same-cell mode change; a hop the
+/// kernel would not take falls back to distance / mode base speed.
+#[allow(clippy::too_many_arguments)]
+pub fn path_detail(
+    path: &[[i64; 3]], elevation: &[f32], terrain: Option<&[u8]>, meta: &GridMeta, stack: &[f32],
+    trail_friction_stack: &[f64], trails: &[u8], barriers: &[u8], boundary_id: i64,
+    trans_cost: &HashMap<(i64, i64, usize, usize), f64>, mode_params: &dyn Fn(usize) -> (f64, i64, f64),
+) -> PathDetail {
+    let cols = meta.cols;
+    let cell_m = meta.cell_size_m;
+    let (mut lat, mut lon, mut mode, mut elev, mut terr, mut trail) = (vec![], vec![], vec![], vec![], vec![], vec![]);
+    for p in path {
+        let (la, lo) = meta.pixel_to_latlon(p[0], p[1]);
+        lat.push(la);
+        lon.push(lo);
+        mode.push(Mode::from_idx(p[2] as usize));
+        let i = p[0] as usize * cols + p[1] as usize;
+        let e = elevation[i] as f64;
+        elev.push(if e.is_nan() { None } else { Some(e) });
+        terr.push(terrain.map_or(0, |t| t[i]));
+        trail.push(trails[i]);
+    }
+    let mut step_s = Vec::with_capacity(path.len().saturating_sub(1));
+    for k in 0..path.len().saturating_sub(1) {
+        let (r0, c0, m0) = (path[k][0], path[k][1], path[k][2] as usize);
+        let (r1, c1, m1) = (path[k + 1][0], path[k + 1][1], path[k + 1][2] as usize);
+        if (r0, c0) == (r1, c1) {
+            step_s.push(*trans_cost.get(&(r0, c0, m0, m1)).unwrap_or(&0.0));
+            continue;
+        }
+        let (mg, sf, bs) = mode_params(m0);
+        let mut t = f64::INFINITY;
+        if (r1 - r0).abs() <= 1 && (c1 - c0).abs() <= 1 {
+            let mp = crate::astar::ModeParams {
+                cost_mult: stack, stride: N_MODES, mode: m0, trail_friction: &trail_friction_stack[m0 * 256..(m0 + 1) * 256],
+                max_grade: mg, speed_function_id: sf, base_speed_kmh: bs,
+            };
+            t = crate::astar::movement_edge_time(r0 as usize, c0 as usize, r1 as usize, c1 as usize, r1 - r0, c1 - c0, cols,
+                elevation, &mp, trails, barriers, boundary_id, cell_m, cell_m);
+        }
+        if !t.is_finite() {
+            t = haversine_m(lat[k], lon[k], lat[k + 1], lon[k + 1]) * 3.6 / bs.max(1.0);
+        }
+        step_s.push(t);
+    }
+    PathDetail { lat, lon, mode, elev, terrain: terr, trail, step_s, cell_m }
 }

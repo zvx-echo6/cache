@@ -2,9 +2,8 @@
 //!
 //! * `meta(key, value)`: grid definition, layer list, source versions, mode-profile hash, build time.
 //! * `tiles(layer, tx, ty, data)`: 256x256-cell tiles of the global z12 pixel grid (tx = global col / 256,
-//!   ty = global row / 256). u8 layers: zstd(raw 65536 bytes). Elevation: zstd of three byte planes of the
-//!   horizontally delta-coded 24-bit Terrarium value (lossless, decodes to exactly navi's float32).
-//!   A missing tile means "no data": elevation NaN (impassable), every other layer 0.
+//!   ty = global row / 256), zstd(raw 65536 bytes). A missing tile reads 0. Elevation is NOT in the pack
+//!   (see `elevation`).
 //! * `parking`, `trailheads`, `mvum` with R*Tree indexes `*_idx`.
 use crate::grid::PACK_TILE;
 use rayon::prelude::*;
@@ -13,8 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-pub const FORMAT_VERSION: &str = "1";
-pub const ELEV_CODEC: &str = "d24p3-zstd";
+pub const FORMAT_VERSION: &str = "2";
 const TILE_CELLS: usize = (PACK_TILE * PACK_TILE) as usize;
 
 #[derive(Debug, thiserror::Error)]
@@ -28,7 +26,6 @@ pub type PResult<T> = Result<T, PackError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Layer {
-    Elevation,
     Friction,
     Class,
     Trails,
@@ -36,10 +33,9 @@ pub enum Layer {
     Wilderness,
 }
 impl Layer {
-    pub const ALL: [Layer; 6] = [Layer::Elevation, Layer::Friction, Layer::Class, Layer::Trails, Layer::Barriers, Layer::Wilderness];
+    pub const ALL: [Layer; 5] = [Layer::Friction, Layer::Class, Layer::Trails, Layer::Barriers, Layer::Wilderness];
     pub fn name(self) -> &'static str {
         match self {
-            Layer::Elevation => "elev",
             Layer::Friction => "friction",
             Layer::Class => "class",
             Layer::Trails => "trails",
@@ -61,54 +57,6 @@ pub fn decode_u8_tile(blob: &[u8]) -> PResult<Vec<u8>> {
         return Err(PackError::Msg("bad u8 tile size".into()));
     }
     Ok(v)
-}
-
-/// `q` = (R<<16 | G<<8 | B) Terrarium bytes, row-major 256x256.
-pub fn encode_elev_tile(q: &[u32], level: i32) -> Vec<u8> {
-    assert_eq!(q.len(), TILE_CELLS);
-    let w = PACK_TILE as usize;
-    let mut planes = vec![0u8; 3 * TILE_CELLS];
-    for r in 0..w {
-        let mut prev = 0u32;
-        for c in 0..w {
-            let i = r * w + c;
-            let d = q[i].wrapping_sub(prev) & 0xFF_FFFF;
-            prev = q[i];
-            planes[i] = (d & 0xFF) as u8;
-            planes[TILE_CELLS + i] = ((d >> 8) & 0xFF) as u8;
-            planes[2 * TILE_CELLS + i] = (d >> 16) as u8;
-        }
-    }
-    zstd::bulk::compress(&planes, level).expect("zstd")
-}
-
-/// Terrarium decode, same f32 operations as navi's `terrarium_decode`.
-#[inline]
-pub fn terrarium_f32(q: u32) -> f32 {
-    let r = ((q >> 16) & 255) as f32;
-    let g = ((q >> 8) & 255) as f32;
-    let b = (q & 255) as f32;
-    (r * 256.0 + g + b / 256.0) - 32768.0
-}
-
-pub fn decode_elev_tile(blob: &[u8]) -> PResult<Vec<f32>> {
-    let planes = zstd::bulk::decompress(blob, 3 * TILE_CELLS).map_err(|e| PackError::Msg(format!("zstd: {e}")))?;
-    if planes.len() != 3 * TILE_CELLS {
-        return Err(PackError::Msg("bad elevation tile size".into()));
-    }
-    let w = PACK_TILE as usize;
-    let mut out = vec![0f32; TILE_CELLS];
-    for r in 0..w {
-        let mut prev = 0u32;
-        for c in 0..w {
-            let i = r * w + c;
-            let d = planes[i] as u32 | (planes[TILE_CELLS + i] as u32) << 8 | (planes[2 * TILE_CELLS + i] as u32) << 16;
-            let q = prev.wrapping_add(d) & 0xFF_FFFF;
-            prev = q;
-            out[i] = terrarium_f32(q);
-        }
-    }
-    Ok(out)
 }
 
 // ---- records ----------------------------------------------------------------------------------
@@ -145,8 +93,6 @@ pub trait PackSource: Send + Sync {
     fn has_layer(&self, layer: Layer) -> bool;
     /// u8 layer window in global pixel coordinates; cells without a tile read 0.
     fn read_u8(&self, layer: Layer, row0: i64, col0: i64, rows: usize, cols: usize) -> PResult<Vec<u8>>;
-    /// Elevation window (NaN where the pack has no DEM tile).
-    fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> PResult<Vec<f32>>;
     /// Candidate points in the lon/lat box (callers apply the exact distance test).
     fn parking_in_box(&self, min_lon: f64, max_lon: f64, min_lat: f64, max_lat: f64) -> PResult<Vec<PointRec>>;
     fn trailheads_in_box(&self, min_lon: f64, max_lon: f64, min_lat: f64, max_lat: f64) -> PResult<Vec<PointRec>>;
@@ -302,9 +248,6 @@ impl PackSource for SqlitePack {
     fn read_u8(&self, layer: Layer, row0: i64, col0: i64, rows: usize, cols: usize) -> PResult<Vec<u8>> {
         self.read_window(layer, row0, col0, rows, cols, 0u8, &|b| decode_u8_tile(b))
     }
-    fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> PResult<Vec<f32>> {
-        self.read_window(Layer::Elevation, row0, col0, rows, cols, f32::NAN, &|b| decode_elev_tile(b))
-    }
     fn parking_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
         self.points("parking", a, b, c, d)
     }
@@ -391,8 +334,8 @@ CREATE VIRTUAL TABLE mvum_idx USING rtree(id, min_lon, max_lon, min_lat, max_lat
 
 // ---- in-memory pack (tests, parity harness) ------------------------------------------------------
 
-/// A pack held in memory over a rectangular region of the (global) pixel grid. Used by the unit tests
-/// with synthetic grids.
+/// A pack (and elevation source) held in memory over a rectangular region of the global pixel grid. Used
+/// by the unit tests with synthetic grids.
 #[derive(Default, Clone)]
 pub struct MemPack {
     pub row0: i64,
@@ -457,12 +400,8 @@ impl PackSource for MemPack {
             Layer::Trails => &self.trails,
             Layer::Barriers => &self.barriers,
             Layer::Wilderness => self.wilderness.as_deref().ok_or_else(|| PackError::Msg("no wilderness".into()))?,
-            Layer::Elevation => return Err(PackError::Msg("elevation is f32".into())),
         };
         Ok(self.win(src, row0, col0, rows, cols, 0u8))
-    }
-    fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> PResult<Vec<f32>> {
-        Ok(self.win(&self.elev, row0, col0, rows, cols, f32::NAN))
     }
     fn parking_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
         Ok(self.parking.iter().filter(|p| p.lon >= a && p.lon <= b && p.lat >= c && p.lat <= d).cloned().collect())
@@ -488,5 +427,11 @@ impl PackSource for MemPack {
             })
             .cloned()
             .collect())
+    }
+}
+
+impl crate::elevation::ElevationSource for MemPack {
+    fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Result<Vec<f32>, crate::elevation::ElevError> {
+        Ok(self.win(&self.elev, row0, col0, rows, cols, f32::NAN))
     }
 }

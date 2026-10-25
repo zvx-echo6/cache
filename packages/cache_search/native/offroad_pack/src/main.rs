@@ -1,15 +1,15 @@
 //! offroad_pack: build and inspect cache_offroad region packs (offroad.sqlite) from navi's data.
 //! Pure Rust (no GDAL): PMTiles + Terrarium WebP, GeoTIFF mosaics, SQLite tables.
-mod pmtiles;
+mod pmw;
 mod raster;
 mod wkb;
 
-use cache_offroad::grid::{self, GridMeta, PACK_TILE, TILE_SIZE};
+use cache_offroad::grid::{self, GridMeta, PACK_TILE};
+use cache_offroad::pmtiles;
 use cache_offroad::pack::*;
 use rayon::prelude::*;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
@@ -66,11 +66,12 @@ fn main() {
         "inspect" => inspect(&args),
         "resample-check" => resample_check(&args),
         "raster-info" => raster_info(&args),
-        "codec-bench" => codec_bench(&args),
+        "elevation-extract" => elevation_extract(&args),
+        "directions" => directions_cmd(&args),
         "raster-window" => raster_window(&args),
         "route" => route_cmd(&args),
         "probe" => probe_cmd(&args),
-        _ => Err("usage: offroad_pack <build|inspect|resample-check|raster-info|codec-bench> [--key value ...]".into()),
+        _ => Err("usage: offroad_pack <build|inspect|route|directions|probe|resample-check|raster-info|raster-window|elevation-extract> [--key value ...]".into()),
     };
     if let Err(e) = r {
         eprintln!("error: {e}");
@@ -111,38 +112,11 @@ struct TileOut {
     rows: Vec<(&'static str, i64, i64, Vec<u8>)>,
 }
 
-fn decode_dem_tile(bytes: &[u8]) -> Result<Vec<u32>, String> {
-    let mut dec = image_webp::WebPDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    if dec.is_lossy() {
-        return Err("DEM tile is lossy WebP: Terrarium bytes would not be exact; stopping".into());
-    }
-    let (w, h) = dec.dimensions();
-    if (w, h) != (TILE_SIZE as u32, TILE_SIZE as u32) {
-        return Err(format!("unexpected DEM tile size {w}x{h}"));
-    }
-    let mut buf = vec![0u8; dec.output_buffer_size().ok_or("no buffer size")?];
-    dec.read_image(&mut buf).map_err(|e| e.to_string())?;
-    let ch = if dec.has_alpha() { 4 } else { 3 };
-    Ok((0..(w * h) as usize).map(|i| ((buf[i * ch] as u32) << 16) | ((buf[i * ch + 1] as u32) << 8) | buf[i * ch + 2] as u32).collect())
-}
-
 fn process_tile(pm: &pmtiles::PmTiles, layers: &Layers, tx: i64, ty: i64, level: i32) -> Result<Option<TileOut>, String> {
     let Some(bytes) = pm.get(12, tx as u64, ty as u64) else { return Ok(None) };
-    let q = decode_dem_tile(bytes).map_err(|e| format!("tile {tx},{ty}: {e}"))?;
+    let _ = bytes; // presence only: the tile defines the region this pack covers
     let mut rows: Vec<(&'static str, i64, i64, Vec<u8>)> = Vec::new();
     let sub = PACK_TILE as usize;
-    let split = |data: &[u32], sx: usize, sy: usize| -> Vec<u32> {
-        let mut t = vec![0u32; sub * sub];
-        for r in 0..sub {
-            t[r * sub..(r + 1) * sub].copy_from_slice(&data[(sy * sub + r) * 512 + sx * sub..(sy * sub + r) * 512 + sx * sub + sub]);
-        }
-        t
-    };
-    for sy in 0..2 {
-        for sx in 0..2 {
-            rows.push(("elev", tx * 2 + sx as i64, ty * 2 + sy as i64, encode_elev_tile(&split(&q, sx, sy), level)));
-        }
-    }
     // cell centres of this DEM tile
     let lons: Vec<f64> = (0..512).map(|j| merc_lon((tx * 512 + j) as f64 + 0.5)).collect();
     let lats: Vec<f64> = (0..512).map(|i| merc_lat((ty * 512 + i) as f64 + 0.5)).collect();
@@ -199,7 +173,7 @@ fn build(a: &Args) -> Result<(), String> {
     if let Some(t) = a.opt("threads") {
         rayon::ThreadPoolBuilder::new().num_threads(t.parse().map_err(|_| "bad --threads")?).build_global().ok();
     }
-    let dem = PathBuf::from(a.get("dem")?);
+    let dem = PathBuf::from(a.get("coverage-pmtiles")?);
     let fr_dir = PathBuf::from(a.get("friction-dir")?);
     let class_dir = a.opt("class-dir").map(PathBuf::from);
     let trails = PathBuf::from(a.get("trails")?);
@@ -222,9 +196,6 @@ fn build(a: &Args) -> Result<(), String> {
         },
     };
     let pm = pmtiles::PmTiles::open(&dem)?;
-    if pm.tile_type != 4 {
-        return Err(format!("DEM PMTiles tile type {} is not WebP", pm.tile_type));
-    }
     let (south, north, west, east) = bbox;
     let (x0, y1) = grid::lat_lon_to_tile(south, west, 12);
     let (x1, y0) = grid::lat_lon_to_tile(north, east, 12);
@@ -302,9 +273,9 @@ fn build(a: &Args) -> Result<(), String> {
     let (n_park, n_th, n_mvum) = write_points(&conn, &navi_db, &parking_db, bbox)?;
     eprintln!("parking {n_park}, trailheads {n_th}, mvum {n_mvum}");
 
-    let mut layer_names = vec!["elev", "friction", "trails", "barriers"];
+    let mut layer_names = vec!["friction", "trails", "barriers"];
     if class_dir.is_some() {
-        layer_names.insert(2, "class");
+        layer_names.insert(1, "class");
     }
     if wild.is_some() {
         layer_names.push("wilderness");
@@ -312,12 +283,11 @@ fn build(a: &Args) -> Result<(), String> {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let meta: Vec<(&str, String)> = vec![
         ("format_version", FORMAT_VERSION.into()),
-        ("grid", "web-mercator z12 pixel grid; tile=256 cells; DEM tile=512; origin top-left of the world; row = ty*256+r, col = tx*256+c".into()),
+        ("grid", "web-mercator z12 pixel grid; tile=256 cells; origin top-left of the world; row = ty*256+r, col = tx*256+c".into()),
         ("grid_zoom", "12".into()),
-        ("dem_tile_size", "512".into()),
-        ("pack_tile_size", "256".into()),
+                ("pack_tile_size", "256".into()),
         ("cell_sampling", "nearest at the true web-mercator centre of each z12 pixel".into()),
-        ("elev_codec", ELEV_CODEC.into()),
+        ("elevation", "external: Mapterhorn-format PMTiles (z12, 512 px Terrarium WebP), see cache_offroad::elevation".into()),
         ("u8_codec", "zstd(raw 65536 bytes)".into()),
         ("zstd_level", level.to_string()),
         ("bbox_south", south.to_string()),
@@ -327,8 +297,8 @@ fn build(a: &Args) -> Result<(), String> {
         ("layers", layer_names.join(",")),
         ("mode_profile_hash", cache_offroad::cost::mode_profile_hash()),
         ("build_unix_time", secs.to_string()),
-        ("dem_tiles", written.to_string()),
-        ("src_dem", file_version(&dem)),
+        ("source_tiles", written.to_string()),
+        ("src_coverage_pmtiles", file_version(&dem)),
         ("src_friction", dir_version(&fr_dir)),
         ("src_class", class_dir.as_ref().map_or("none".into(), |d| dir_version(d))),
         ("src_trails", file_version(&trails)),
@@ -481,24 +451,6 @@ fn raster_info(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
-fn codec_bench(a: &Args) -> Result<(), String> {
-    let pm = pmtiles::PmTiles::open(Path::new(a.get("dem")?))?;
-    let (tx, ty): (i64, i64) = (a.get("tx")?.parse().unwrap(), a.get("ty")?.parse().unwrap());
-    let bytes = pm.get(12, tx as u64, ty as u64).ok_or("tile missing")?;
-    let q = decode_dem_tile(bytes)?;
-    let sub = 256usize;
-    let mut t = vec![0u32; sub * sub];
-    for r in 0..sub {
-        t[r * sub..(r + 1) * sub].copy_from_slice(&q[r * 512..r * 512 + sub]);
-    }
-    let b_low = t.iter().filter(|v| (**v & 255) != 0).count();
-    println!("webp tile bytes {} (covers 4 pack tiles); nonzero B-channel cells in sub-tile: {}/{}", bytes.len(), b_low, t.len());
-    for lvl in [3, 9, 12, 15, 19] {
-        println!("elev tile d24p3-zstd level {lvl}: {} bytes", encode_elev_tile(&t, lvl).len());
-    }
-    Ok(())
-}
-
 /// Compare navi's per-query resample (rasterio window read onto the DEM-shaped grid) with the pack's one-time
 /// global-grid resample, for a bbox, per layer.
 fn resample_check(a: &Args) -> Result<(), String> {
@@ -582,7 +534,7 @@ fn parse_modes(s: &str) -> Result<Vec<cache_offroad::Mode>, String> {
 /// Run one route on a pack (parity harness / manual check). Valhalla is the phase-2 stub.
 fn route_cmd(a: &Args) -> Result<(), String> {
     use cache_offroad::{Boundary, RequestMode, RouteOptions, RouteRequest};
-    let pack = SqlitePack::open(Path::new(a.get("pack")?)).map_err(|e| e.to_string())?;
+    let (pack, elev, valhalla) = open_env(a)?;
     let start = parse_ll(a.get("start")?)?;
     let end = parse_ll(a.get("end")?)?;
     let mode = match a.opt("mode").unwrap_or("auto") {
@@ -639,9 +591,9 @@ fn route_cmd(a: &Args) -> Result<(), String> {
         layers.insert(Layer::Barriers, mk(raster::Mosaic::open_files(&[PathBuf::from(a.get("barriers")?)])?)?);
         layers.insert(Layer::Wilderness, mk(raster::Mosaic::open_files(&[PathBuf::from(a.get("wilderness")?)])?)?);
         over = OverridePack { inner: &pack, row0: meta.global_row0, col0: meta.global_col0, rows: meta.rows, cols: meta.cols, layers };
-        cache_offroad::route(&over, &cache_offroad::StubValhalla, &req, &opts)
+        cache_offroad::route(&over, &elev, &*valhalla, &req, &opts)
     } else {
-        cache_offroad::route(&pack, &cache_offroad::StubValhalla, &req, &opts)
+        cache_offroad::route(&pack, &elev, &*valhalla, &req, &opts)
     };
     match res {
         Ok(r) => {
@@ -669,12 +621,13 @@ fn route_cmd(a: &Args) -> Result<(), String> {
 
 /// Describe the pack around a point: layer values and nearby road/track/trail, wilderness, barrier cells.
 fn probe_cmd(a: &Args) -> Result<(), String> {
-    let pack = SqlitePack::open(Path::new(a.get("pack")?)).map_err(|e| e.to_string())?;
+    let (pack, elev_src, _v) = open_env(a)?;
+    use cache_offroad::ElevationSource;
     let (lat, lon) = parse_ll(a.get("at")?)?;
     let rad: i64 = a.opt("radius").map_or(Ok(150), |s| s.parse().map_err(|_| "bad --radius".to_string()))?;
     let (gr, gc) = grid::global_pixel(lat, lon).ok_or("out of range")?;
     let (r0, c0, n) = (gr - rad, gc - rad, (2 * rad + 1) as usize);
-    let e = pack.read_elevation(r0, c0, n, n).map_err(|e| e.to_string())?;
+    let e = elev_src.read_elevation(r0, c0, n, n).map_err(|e| e.to_string())?;
     let rd = |l: Layer| pack.read_u8(l, r0, c0, n, n).map_err(|e| e.to_string());
     let (tr, wi, ba, cl, fr) = (rd(Layer::Trails)?, rd(Layer::Wilderness)?, rd(Layer::Barriers)?, rd(Layer::Class)?, rd(Layer::Friction)?);
     let ctr = (rad as usize) * n + rad as usize;
@@ -781,9 +734,6 @@ impl PackSource for OverridePack<'_> {
         }
         self.inner.read_u8(l, r0, c0, rows, cols)
     }
-    fn read_elevation(&self, r0: i64, c0: i64, rows: usize, cols: usize) -> PResult<Vec<f32>> {
-        self.inner.read_elevation(r0, c0, rows, cols)
-    }
     fn parking_in_box(&self, a: f64, b: f64, c: f64, d: f64) -> PResult<Vec<PointRec>> {
         self.inner.parking_in_box(a, b, c, d)
     }
@@ -792,5 +742,76 @@ impl PackSource for OverridePack<'_> {
     }
     fn mvum_in_box(&self, s: f64, n: f64, w: f64, e: f64) -> PResult<Vec<MvumFeature>> {
         self.inner.mvum_in_box(s, n, w, e)
+    }
+}
+
+/// Cut the tiles of a Mapterhorn-format PMTiles file (z12, 512 px Terrarium WebP) that touch a bbox into a
+/// new PMTiles file, bytes unchanged. For tests the source is navi's copy of the DEM; in the app the same
+/// file comes from range reads of Mapterhorn's planet.pmtiles.
+fn elevation_extract(a: &Args) -> Result<(), String> {
+    let src = pmtiles::PmTiles::open(Path::new(a.get("src")?))?;
+    let (south, north, west, east) = parse_bbox(a.get("bbox")?)?;
+    let (x0, y1) = grid::lat_lon_to_tile(south, west, 12);
+    let (x1, y0) = grid::lat_lon_to_tile(north, east, 12);
+    let mut tiles = Vec::new();
+    for ty in y0..=y1 {
+        for tx in x0..=x1 {
+            if let Some(b) = src.get(12, tx as u64, ty as u64) {
+                tiles.push((pmtiles::zxy_to_tile_id(12, tx as u64, ty as u64), b.to_vec()));
+            }
+        }
+    }
+    if tiles.is_empty() {
+        return Err("no tiles in bbox".into());
+    }
+    let e7 = |v: f64| (v * 1e7).round() as i32;
+    let n = tiles.len();
+    let meta = format!(
+        "{{\"name\":\"elevation\",\"format\":\"webp\",\"encoding\":\"terrarium\",\"tile_size\":512,\"minzoom\":12,\"maxzoom\":12,\"description\":\"{} tiles cut from {}\"}}",
+        n, a.get("src")?.replace('\\', "/")
+    );
+    let bytes = pmw::build(tiles, 12, [e7(west), e7(south), e7(east), e7(north)], &meta);
+    std::fs::write(a.get("out")?, &bytes).map_err(|e| e.to_string())?;
+    eprintln!("wrote {} tiles, {:.1} MB", n, bytes.len() as f64 / 1e6);
+    Ok(())
+}
+
+fn open_env(a: &Args) -> Result<(SqlitePack, cache_offroad::PmtilesElevation, Box<dyn cache_offroad::Valhalla>), String> {
+    let pack = SqlitePack::open(Path::new(a.get("pack")?)).map_err(|e| e.to_string())?;
+    let elev = cache_offroad::PmtilesElevation::open(Path::new(a.get("elevation")?)).map_err(|e| e.to_string())?;
+    let v: Box<dyn cache_offroad::Valhalla> = match (a.opt("valhalla-lib"), a.opt("valhalla-tiles")) {
+        (Some(lib), Some(tiles)) => Box::new(cache_offroad::shim::ShimValhalla::load(Path::new(lib), &cache_offroad::shim::config_for_tiles(Path::new(tiles)))?),
+        _ => Box::new(cache_offroad::StubValhalla),
+    };
+    Ok((pack, elev, v))
+}
+
+/// navi-style directions on the pack (the /api/directions port).
+fn directions_cmd(a: &Args) -> Result<(), String> {
+    use cache_offroad::directions::{DirectionsRequest, Env, OffroadChoice, TravelMode};
+    let (pack, elev, v) = open_env(a)?;
+    let from = parse_ll(a.get("from")?)?;
+    let to = parse_ll(a.get("to")?)?;
+    let mode = TravelMode::from_name(a.opt("mode").unwrap_or("drive")).ok_or("bad --mode")?;
+    let mut req = DirectionsRequest::new(from, to, mode);
+    req.boundary = cache_offroad::Boundary::from_name(a.opt("boundary").unwrap_or("pragmatic")).ok_or("bad --boundary")?;
+    req.offroad = OffroadChoice::from_name(a.opt("offroad").unwrap_or("auto")).ok_or("bad --offroad")?;
+    req.from_category = a.opt("from-category").map(String::from);
+    req.to_category = a.opt("to-category").map(String::from);
+    let mut opts = cache_offroad::RouteOptions::default();
+    if let Some(m) = a.opt("max-cells") {
+        opts.max_cells = m.parse().map_err(|_| "bad --max-cells")?;
+    }
+    let env = Env { pack: &pack, elevation: &elev, valhalla: &*v, options: opts, namer: None, version: "cache_offroad".into() };
+    let t = Instant::now();
+    let d = env.directions(&req);
+    eprintln!("directions ok={} steps={} in {} ms", d.ok, d.steps.len(), t.elapsed().as_millis());
+    let out = d.to_json().to_string();
+    match a.opt("json") {
+        Some(p) => std::fs::write(p, out).map_err(|e| e.to_string()),
+        None => {
+            println!("{out}");
+            Ok(())
+        }
     }
 }

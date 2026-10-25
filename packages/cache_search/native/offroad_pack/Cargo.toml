@@ -11,14 +11,12 @@ name = "offroad_pack"
 path = "src/main.rs"
 
 [dependencies]
-cache_offroad = { path = "../cache_offroad" }
+cache_offroad = { path = "../cache_offroad", features = ["shim"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 zstd = "0.13"
 rayon = "1"
 tiff = "0.9"
 weezl = "0.1"
-image-webp = "0.2"
-memmap2 = "0.9"
 flate2 = "1"
 sha2 = "0.10"
 serde_json = "1"

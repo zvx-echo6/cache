@@ -29,7 +29,7 @@ const ALLM: [Mode; 4] = [Mode::Foot, Mode::TwoW, Mode::FourW, Mode::Vehicle];
 fn run(pack: &MemPack, meta: &GridMeta, s: (i64, i64), e: (i64, i64), sm: &[Mode], em: &[Mode], b: Boundary, aff: Option<HashMap<Mode, f64>>) -> RouteResult {
     let mut req = RouteRequest::new(px2ll(meta, s.0, s.1), px2ll(meta, e.0, e.1), RequestMode::Auto, b);
     req.network_affinity = aff;
-    let router = Router { pack, valhalla: &StubValhalla, opts: RouteOptions::default() };
+    let router = Router { pack, elevation: pack, valhalla: &StubValhalla, opts: RouteOptions::default() };
     router.search_on_grid(&req, meta.clone(), &set(sm), &set(em), Instant::now()).expect("route")
 }
 
@@ -116,7 +116,7 @@ fn single_mode_seeds_only_that_mode() {
     }
     let mut req = RouteRequest::new(px2ll(&meta, 1, 10), px2ll(&meta, 1, 39), RequestMode::Single(Mode::Foot), Boundary::Pragmatic);
     req.network_affinity = None;
-    let r = Router { pack: &p, valhalla: &StubValhalla, opts: RouteOptions::default() };
+    let r = Router { pack: &p, elevation: &p, valhalla: &StubValhalla, opts: RouteOptions::default() };
     let one: BTreeSet<usize> = [0].into_iter().collect();
     let out = r.search_on_grid(&req, meta.clone(), &one, &one, Instant::now()).unwrap();
     assert_eq!(out.selected_mode_set, vec!["foot".to_string()]);
@@ -149,14 +149,11 @@ impl Valhalla for Fixed {
     fn locate(&self, _: f64, _: f64, _: &str) -> Option<LocateSnap> {
         self.0.clone()
     }
-    fn route_vehicle(&self, _: (f64, f64), _: (f64, f64)) -> Result<NetworkRoute, String> {
-        Err("none".into())
+    fn route(&self, _: (f64, f64), _: (f64, f64), _: &str) -> Result<Trip, ValhallaError> {
+        Err(ValhallaError::msg("none"))
     }
-    fn route_shape(&self, _: (f64, f64), _: (f64, f64)) -> Vec<(f64, f64)> {
-        vec![]
-    }
-    fn surface_change_candidates(&self, _: &[(f64, f64)]) -> Vec<(f64, f64)> {
-        vec![]
+    fn trace_attributes(&self, _: &str) -> Result<Trace, ValhallaError> {
+        Err(ValhallaError::msg("none"))
     }
 }
 fn snap(d: f64, c: Option<&str>, u: Option<&str>) -> Fixed {
@@ -172,9 +169,6 @@ impl PackSource for NoRead {
     fn read_u8(&self, _: Layer, _: i64, _: i64, _: usize, _: usize) -> PResult<Vec<u8>> {
         Err(PackError::Msg("no read".into()))
     }
-    fn read_elevation(&self, _: i64, _: i64, _: usize, _: usize) -> PResult<Vec<f32>> {
-        Err(PackError::Msg("no read".into()))
-    }
     fn parking_in_box(&self, _: f64, _: f64, _: f64, _: f64) -> PResult<Vec<PointRec>> {
         Ok(vec![])
     }
@@ -183,6 +177,12 @@ impl PackSource for NoRead {
     }
     fn mvum_in_box(&self, _: f64, _: f64, _: f64, _: f64) -> PResult<Vec<MvumFeature>> {
         Ok(vec![])
+    }
+}
+
+impl cache_offroad::ElevationSource for NoRead {
+    fn read_elevation(&self, _: i64, _: i64, _: usize, _: usize) -> Result<Vec<f32>, cache_offroad::elevation::ElevError> {
+        Err(cache_offroad::elevation::ElevError::Msg("no read".into()))
     }
 }
 
@@ -200,20 +200,17 @@ fn bypass_fires_for_tagged_roads_and_skips_raster() {
         fn locate(&self, _: f64, _: f64, _: &str) -> Option<LocateSnap> {
             None
         }
-        fn route_vehicle(&self, s: (f64, f64), e: (f64, f64)) -> Result<NetworkRoute, String> {
-            Ok(NetworkRoute { coords: vec![(s.1, s.0), (e.1, e.0)], distance_km: 1.2, duration_min: 1.5, maneuvers: vec![] })
+        fn route(&self, s: (f64, f64), e: (f64, f64), _: &str) -> Result<Trip, ValhallaError> {
+            Ok(Trip { shape: vec![s, e], shape_encoded: String::new(), maneuvers: vec![], length_km: 1.2, time_s: 90.0 })
         }
-        fn route_shape(&self, _: (f64, f64), _: (f64, f64)) -> Vec<(f64, f64)> {
-            vec![]
-        }
-        fn surface_change_candidates(&self, _: &[(f64, f64)]) -> Vec<(f64, f64)> {
-            vec![]
+        fn trace_attributes(&self, _: &str) -> Result<Trace, ValhallaError> {
+            Err(ValhallaError::msg("none"))
         }
     }
     let mut req = RouteRequest::new((42.5558, -114.4701), (42.5644, -114.4631), RequestMode::Auto, Boundary::Pragmatic);
     req.start_category = Some("highway:residential".into());
     req.end_category = Some("highway:residential".into());
-    let out = route(&NoRead, &Ok1, &req, &RouteOptions::default()).unwrap();
+    let out = route(&NoRead, &NoRead, &Ok1, &req, &RouteOptions::default()).unwrap();
     assert!(out.auto_bypass);
     assert_eq!(out.scenario, "D");
     assert_eq!(out.selected_mode, "vehicle");
@@ -224,13 +221,13 @@ fn bypass_fires_for_tagged_roads_and_skips_raster() {
     // road -> footway: no bypass, the raster pipeline runs (and our NoRead pack fails there)
     let mut req2 = req.clone();
     req2.end_category = Some("highway:footway".into());
-    assert!(matches!(route(&NoRead, &Ok1, &req2, &RouteOptions::default()), Err(RouteError::Terrain(_))));
+    assert!(matches!(route(&NoRead, &NoRead, &Ok1, &req2, &RouteOptions::default()), Err(RouteError::Terrain(_))));
     // untagged with a snap-less Valhalla -> foot only -> no bypass
     req2.start_category = None;
     req2.end_category = None;
-    assert!(matches!(route(&NoRead, &Ok1, &req2, &RouteOptions::default()), Err(RouteError::Terrain(_))));
+    assert!(matches!(route(&NoRead, &NoRead, &Ok1, &req2, &RouteOptions::default()), Err(RouteError::Terrain(_))));
     // bypass falls through when Valhalla errors (the stub)
-    assert!(matches!(route(&NoRead, &StubValhalla, &req, &RouteOptions::default()), Err(RouteError::Terrain(_))));
+    assert!(matches!(route(&NoRead, &NoRead, &StubValhalla, &req, &RouteOptions::default()), Err(RouteError::Terrain(_))));
     let _ = seed_of(&Fixed(None), 0.0, 0.0);
 }
 
@@ -242,18 +239,15 @@ fn spatial_seeding_rules_via_untagged_bypass() {
         fn locate(&self, _: f64, _: f64, _: &str) -> Option<LocateSnap> {
             Some(LocateSnap { snap_distance_m: 3.0, road_class: Some("residential".into()), use_: Some("road".into()) })
         }
-        fn route_vehicle(&self, s: (f64, f64), e: (f64, f64)) -> Result<NetworkRoute, String> {
-            Ok(NetworkRoute { coords: vec![(s.1, s.0), (e.1, e.0)], distance_km: 1.0, duration_min: 2.0, maneuvers: vec![] })
+        fn route(&self, s: (f64, f64), e: (f64, f64), _: &str) -> Result<Trip, ValhallaError> {
+            Ok(Trip { shape: vec![s, e], shape_encoded: String::new(), maneuvers: vec![], length_km: 1.0, time_s: 120.0 })
         }
-        fn route_shape(&self, _: (f64, f64), _: (f64, f64)) -> Vec<(f64, f64)> {
-            vec![]
-        }
-        fn surface_change_candidates(&self, _: &[(f64, f64)]) -> Vec<(f64, f64)> {
-            vec![]
+        fn trace_attributes(&self, _: &str) -> Result<Trace, ValhallaError> {
+            Err(ValhallaError::msg("none"))
         }
     }
     let req = RouteRequest::new((42.5558, -114.4701), (42.5644, -114.4631), RequestMode::Auto, Boundary::Pragmatic);
-    assert!(route(&NoRead, &Tight, &req, &RouteOptions::default()).unwrap().auto_bypass);
+    assert!(route(&NoRead, &NoRead, &Tight, &req, &RouteOptions::default()).unwrap().auto_bypass);
     // 50 m snap needs the flat-terrain grace; NoRead cannot sample the DEM -> not flat -> no vehicle -> unified (fails on read)
     struct Relaxed(Tight);
     impl Valhalla for Relaxed {
@@ -263,31 +257,28 @@ fn spatial_seeding_rules_via_untagged_bypass() {
                 s
             })
         }
-        fn route_vehicle(&self, s: (f64, f64), e: (f64, f64)) -> Result<NetworkRoute, String> {
-            self.0.route_vehicle(s, e)
+        fn route(&self, s: (f64, f64), e: (f64, f64), c: &str) -> Result<Trip, ValhallaError> {
+            self.0.route(s, e, c)
         }
-        fn route_shape(&self, _: (f64, f64), _: (f64, f64)) -> Vec<(f64, f64)> {
-            vec![]
-        }
-        fn surface_change_candidates(&self, _: &[(f64, f64)]) -> Vec<(f64, f64)> {
-            vec![]
+        fn trace_attributes(&self, _: &str) -> Result<Trace, ValhallaError> {
+            Err(ValhallaError::msg("none"))
         }
     }
-    assert!(matches!(route(&NoRead, &Relaxed(Tight), &req, &RouteOptions::default()), Err(RouteError::Terrain(_))));
+    assert!(matches!(route(&NoRead, &NoRead, &Relaxed(Tight), &req, &RouteOptions::default()), Err(RouteError::Terrain(_))));
     // ... and with a flat DEM the relaxed snap does grant vehicle (flat-terrain grace) -> bypass
     // (a MemPack keyed at the global pixel of the endpoint)
     let (gr, gc) = cache_offroad::grid::global_pixel(42.5558, -114.4701).unwrap();
     let mut flat = MemPack::blank(400, 400, 1300.0);
     flat.row0 = gr - 200;
     flat.col0 = gc - 200;
-    assert!(route(&flat, &Relaxed(Tight), &req, &RouteOptions::default()).unwrap().auto_bypass);
+    assert!(route(&flat, &flat, &Relaxed(Tight), &req, &RouteOptions::default()).unwrap().auto_bypass);
 }
 
 #[test]
 fn too_long_is_refused_before_reading() {
     let req = RouteRequest::new((43.0, -116.0), (44.0, -114.5), RequestMode::Single(Mode::Foot), Boundary::Pragmatic);
     let opts = RouteOptions { max_cells: 8_000_000, ..Default::default() };
-    match route(&NoRead, &StubValhalla, &req, &opts) {
+    match route(&NoRead, &NoRead, &StubValhalla, &req, &opts) {
         Err(RouteError::TooLong { estimated, max }) => assert!(estimated > max && max == 8_000_000),
         other => panic!("expected TooLong, got {:?}", other.map(|r| r.scenario)),
     }

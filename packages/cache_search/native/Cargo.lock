@@ -467,6 +467,9 @@ name = "cache_offroad"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "image-webp",
+ "libloading",
+ "memmap2",
  "rayon",
  "rusqlite",
  "serde_json",
@@ -2823,8 +2826,6 @@ version = "0.1.0"
 dependencies = [
  "cache_offroad",
  "flate2",
- "image-webp",
- "memmap2",
  "rayon",
  "rusqlite",
  "serde_json",
