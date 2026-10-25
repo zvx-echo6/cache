@@ -1,5 +1,5 @@
 /* Tiny C test for valhalla_shim.
- * usage: valhalla_shim_test <config.json> <route|matrix|locate> <request.json> [repeats] [-q] [-o out.json]
+ * usage: valhalla_shim_test <config.json> <route|matrix|locate|trace_attributes> <request.json> [repeats] [-q] [-o out.json]
  * Prints init time, per-call time, response size; the response body unless -q. */
 #include "valhalla_shim.h"
 
@@ -39,7 +39,7 @@ static char* read_file(const char* path) {
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    fprintf(stderr, "usage: %s <config.json> <route|matrix|locate> <request.json> [repeats] [-q] [-o out.json]\n", argv[0]);
+    fprintf(stderr, "usage: %s <config.json> <route|matrix|locate|trace_attributes> <request.json> [repeats] [-q] [-o out.json]\n", argv[0]);
     return 2;
   }
   int repeats = 1, quiet = 0;
@@ -64,6 +64,7 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[2], "route")) out = valhalla_shim_route(h, req);
     else if (!strcmp(argv[2], "matrix")) out = valhalla_shim_matrix(h, req);
     else if (!strcmp(argv[2], "locate")) out = valhalla_shim_locate(h, req);
+    else if (!strcmp(argv[2], "trace_attributes")) out = valhalla_shim_trace_attributes(h, req);
     else { fprintf(stderr, "unknown action %s\n", argv[2]); return 2; }
     double dt = now_ms() - t1;
     if (!out) { fprintf(stderr, "call failed: %s\n", valhalla_shim_last_error(h)); return 1; }

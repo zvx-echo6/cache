@@ -37,6 +37,7 @@ VALHALLA_SHIM_API valhalla_shim_t* valhalla_shim_init(const char* config);
 VALHALLA_SHIM_API char* valhalla_shim_route(valhalla_shim_t* h, const char* request_json);
 VALHALLA_SHIM_API char* valhalla_shim_matrix(valhalla_shim_t* h, const char* request_json); /* sources_to_targets */
 VALHALLA_SHIM_API char* valhalla_shim_locate(valhalla_shim_t* h, const char* request_json);
+VALHALLA_SHIM_API char* valhalla_shim_trace_attributes(valhalla_shim_t* h, const char* request_json); /* map-matching */
 
 VALHALLA_SHIM_API void valhalla_shim_string_free(char* s);
 VALHALLA_SHIM_API void valhalla_shim_destroy(valhalla_shim_t* h);
@@ -45,6 +46,10 @@ VALHALLA_SHIM_API void valhalla_shim_destroy(valhalla_shim_t* h);
  * NULL: the last error of the calling thread outside a handle (e.g. init).
  * Pointer is valid until the next call on the same handle/thread. Empty string if none. */
 VALHALLA_SHIM_API const char* valhalla_shim_last_error(valhalla_shim_t* h);
+
+/* Valhalla error_code of the last failure on this handle (e.g. 442 no path, 171 no suitable edges, 170 unconnected,
+ * 154 distance limit); 0 if the failure carried no Valhalla code. */
+VALHALLA_SHIM_API int valhalla_shim_last_error_code(valhalla_shim_t* h);
 
 #ifdef __cplusplus
 }

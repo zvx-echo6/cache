@@ -2,6 +2,7 @@
 
 #include <valhalla/baldr/rapidjson_utils.h>
 #include <valhalla/config.h>
+#include <valhalla/exceptions.h>
 #include <valhalla/tyr/actor.h>
 
 #include <boost/property_tree/ptree.hpp>
@@ -20,6 +21,7 @@ struct valhalla_shim {
   std::mutex mu;
   std::unique_ptr<valhalla::tyr::actor_t> actor;
   std::string last_error;
+  int last_code = 0;
 };
 
 namespace {
@@ -63,9 +65,14 @@ template <typename F> char* run(valhalla_shim_t* h, const char* req, F&& call) {
   try {
     std::string out = call(*h->actor, std::string(req));
     h->last_error.clear();
+    h->last_code = 0;
     return dup_string(out);
+  } catch (const valhalla::valhalla_exception_t& e) {
+    h->last_error = e.what();
+    h->last_code = static_cast<int>(e.code);
   } catch (const std::exception& e) {
     h->last_error = e.what();
+    h->last_code = 0;
   } catch (...) {
     h->last_error = "unknown error";
   }
@@ -109,6 +116,9 @@ char* valhalla_shim_matrix(valhalla_shim_t* h, const char* req) {
 char* valhalla_shim_locate(valhalla_shim_t* h, const char* req) {
   return run(h, req, [](valhalla::tyr::actor_t& a, const std::string& r) { return a.locate(r); });
 }
+char* valhalla_shim_trace_attributes(valhalla_shim_t* h, const char* req) {
+  return run(h, req, [](valhalla::tyr::actor_t& a, const std::string& r) { return a.trace_attributes(r); });
+}
 
 void valhalla_shim_string_free(char* s) {
   std::free(s);
@@ -116,6 +126,10 @@ void valhalla_shim_string_free(char* s) {
 
 void valhalla_shim_destroy(valhalla_shim_t* h) {
   delete h;
+}
+
+int valhalla_shim_last_error_code(valhalla_shim_t* h) {
+  return h ? h->last_code : 0;
 }
 
 const char* valhalla_shim_last_error(valhalla_shim_t* h) {
