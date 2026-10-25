@@ -1,0 +1,27 @@
+[package]
+name = "cache_offroad"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Off-road unified multi-mode router (port of navi_offroute's Auto search) over an offline region pack"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+zstd = "0.13"
+rayon = "1"
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+memmap2 = "0.9"
+flate2 = "1"
+image-webp = "0.2"
+libloading = { version = "0.8", optional = true }
+
+[features]
+# Valhalla on the C shim (packages/valhalla), loaded at run time.
+shim = ["dep:libloading"]
+
+[dev-dependencies]
