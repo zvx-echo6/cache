@@ -357,8 +357,9 @@ pub fn tree_size(dir: &Path) -> Result<u64> {
     Ok(total)
 }
 
-/// Bytes available to an unprivileged writer on the file system that holds `path` (`statvfs`: `f_bavail` blocks
-/// of `f_frsize` bytes).
+/// Bytes available to an unprivileged writer on the file system that holds `path` (unix: `statvfs`, `f_bavail`
+/// blocks of `f_frsize` bytes).
+#[cfg(unix)]
 pub fn available_bytes(path: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::bad_json("path contains a NUL byte"))?;
@@ -369,6 +370,36 @@ pub fn available_bytes(path: &Path) -> Result<u64> {
         return Err(op(&format!("reading the free space of {}", path.display()), std::io::Error::last_os_error()));
     }
     Ok((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+}
+
+/// Bytes available to the calling user on the volume that holds `path` (Windows: `GetDiskFreeSpaceExW`, which
+/// honours per-user quotas).
+#[cfg(windows)]
+pub fn available_bytes(path: &Path) -> Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err(Error::bad_json("path contains a NUL byte"));
+    }
+    wide.push(0);
+    let mut free_to_caller: u64 = 0;
+    // SAFETY: `wide` is a valid NUL-terminated UTF-16 path and `free_to_caller` a valid, writable u64; the two
+    // optional out-pointers are null, which the API allows.
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_to_caller, std::ptr::null_mut(), std::ptr::null_mut()) };
+    if ok == 0 {
+        return Err(op(&format!("reading the free space of {}", path.display()), std::io::Error::last_os_error()));
+    }
+    Ok(free_to_caller)
+}
+
+/// Other platforms have no free-space check.
+#[cfg(not(any(unix, windows)))]
+pub fn available_bytes(path: &Path) -> Result<u64> {
+    Err(op(
+        &format!("reading the free space of {}", path.display()),
+        std::io::Error::new(std::io::ErrorKind::Unsupported, "free-space check is not supported on this platform"),
+    ))
 }
 
 /// The free-space check of an update: needed = library size + partial snapshot size + margin must fit in what
