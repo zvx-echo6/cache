@@ -56,6 +56,34 @@ Cache is built to pull data while online and then work offline for long periods,
 
 Test phones: Pixel 8 (8 GB, Tensor G3, weakest), iPhone 15 Pro Max (8 GB, A17 Pro). Context on 8 GB phones: 4-8k tokens. Until a phone is at hand, Android is tested on the desktop emulator (`cache_test`, Pixel 8 profile).
 
+## Cache 1.0
+
+Everything in this plan stays in it, but the work is ordered so a usable app reaches the family's phones first. Cache 1.0 is the line; everything else is labelled 1.x and comes after. Decided 2026-10-25.
+
+**In 1.0**
+- Step 1: chat with the tool loop and citation check.
+- Step 2: library packs.
+- Step 3: Browse (ZIMs and library packs, Kiwix catalogue, import).
+- Step 4: one search across ZIMs and library packs.
+- Step 5: model library (Hugging Face, Cached models, tool check). The network model connector is 1.x.
+- Step 6: the assistant's brain (training for tool use and citations).
+- Step 7: region packs for a baseline set of regions chosen by the owner. The worldwide pack pipeline is 1.x.
+- Step 8: the live source engine with weather and alerts (including the alert flow), with expiry. Fuel prices and the rest of the emergency catalogue are 1.x.
+- Step 9: offline map, place search, nearby (hospital, ER, fuel, water and the rest), latitude and longitude. Land cover, land ownership, USNG/MGRS, Plus Codes, what3words and imported repeaters are 1.x.
+- Step 10: road routing. Off-road routing is 1.x.
+- Step 11: iPhone.
+
+**1.x (after 1.0)**
+- Network models (local Wi-Fi or internet), including Windows Cache as a household model server.
+- Fuel prices (EIA, Google Places, translators).
+- The rest of the starter emergency catalogue (earthquakes, river gauges, avalanche, space weather, wildfire hotspots, road conditions, traffic, satellite passes, outages).
+- Coordinates beyond latitude and longitude: USNG/MGRS, Plus Codes, what3words.
+- Imported repeater lists.
+- Full navi layer parity (land cover, PAD-US, MVUM) and off-road routing.
+- The worldwide region pack pipeline.
+- Step 12: Videos (PeerTube, offline downloads, YouTube).
+- The Windows version.
+
 ## Build order
 
 Each step ends with something usable on a phone. Riskiest first. Updated 2026-10-24.
