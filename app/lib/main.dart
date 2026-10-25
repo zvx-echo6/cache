@@ -3,6 +3,11 @@ import 'package:flutter/material.dart';
 import 'app_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
+import 'chat/read_tool.dart';
+import 'chat/search_tool.dart';
+import 'location/location_service.dart';
+import 'search/core_numbering.dart';
+import 'sources/sources_state.dart';
 import 'screens/shell.dart';
 import 'theme.dart';
 
@@ -20,7 +25,12 @@ class CacheApp extends StatefulWidget {
 
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
-  late final ChatController chat = ChatController();
+  late final SourcesState sources = SourcesState();
+  late final LocationService location = LocationService();
+  late final ChatController chat = ChatController(
+    tools: [SearchTool(sources), ReadTool(sources)],
+    newNumbering: () => sources.coreReady ? CoreNumbering(sources.newConversation) : null,
+  );
   CacheThemeId _applied = CacheThemeId.dark;
 
   @override
@@ -29,6 +39,8 @@ class _CacheAppState extends State<CacheApp> {
     app.addListener(_onApp);
     applySystemUi(_applied);
     app.init();
+    sources.init();
+    location.init();
   }
 
   void _onApp() {
@@ -44,6 +56,8 @@ class _CacheAppState extends State<CacheApp> {
   void dispose() {
     app.removeListener(_onApp);
     app.session.dispose();
+    sources.dispose();
+    location.dispose();
     super.dispose();
   }
 
@@ -55,7 +69,7 @@ class _CacheAppState extends State<CacheApp> {
         title: 'CACHE',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
-        home: Shell(app: app, chat: chat),
+        home: Shell(app: app, chat: chat, sources: sources, location: location),
       ),
     );
   }

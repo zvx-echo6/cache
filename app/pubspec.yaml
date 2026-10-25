@@ -38,6 +38,9 @@ dependencies:
   file_picker: ^13.2.0
   cache_llama:
     path: ../packages/cache_llama
+  cache_search:
+    path: ../packages/cache_search
+  geolocator: ^14.0.2
   flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:

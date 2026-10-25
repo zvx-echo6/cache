@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 import 'model_backend.dart';
-import 'search_tool.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
 
@@ -26,9 +25,12 @@ class ChatMessage {
 
 /// The Ask conversation. Lives above the tabs so it survives switching between them.
 class ChatController extends ChangeNotifier {
-  ChatController({List<Tool>? tools}) : _tools = tools ?? [SearchTool()];
+  ChatController({required this.tools, this.newNumbering});
 
-  final List<Tool> _tools;
+  final List<Tool> tools;
+
+  /// Makes the numbering of a new chat in the search core; null (or returning null) numbers in Dart.
+  final ResultNumbering? Function()? newNumbering;
   final List<ChatMessage> messages = [];
   ToolLoop? _loop;
   ModelBackend? _backend;
@@ -45,6 +47,7 @@ class ChatController extends ChangeNotifier {
 
   void newChat() {
     _loop?.stop();
+    _loop?.dispose();
     _loop = null;
     messages.clear();
     busy = false;
@@ -57,7 +60,7 @@ class ChatController extends ChangeNotifier {
     text = text.trim();
     final backend = _backend;
     if (text.isEmpty || backend == null || busy) return;
-    final loop = _loop ??= ToolLoop(backend: backend, tools: _tools);
+    final loop = _loop ??= ToolLoop(backend: backend, tools: tools, numbering: newNumbering?.call());
     final reply = ChatMessage.assistant();
     messages
       ..add(ChatMessage.user(text))

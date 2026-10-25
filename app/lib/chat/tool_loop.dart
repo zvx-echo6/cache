@@ -47,6 +47,7 @@ class ToolLoop {
     required List<Tool> tools,
     this.systemPrompt = kSystemPrompt,
     this.enableThinking = kEnableThinking,
+    this.numbering,
   })
       : _tools = {for (final t in tools) t.name: t};
 
@@ -54,6 +55,9 @@ class ToolLoop {
   final String systemPrompt;
   final bool enableThinking;
   final Map<String, Tool> _tools;
+
+  /// Numbers the results in the search core. Null: the loop numbers them itself (tests).
+  final ResultNumbering? numbering;
   final List<Map<String, dynamic>> _messages = [];
   final Map<int, NumberedResult> _results = {};
   int _nextId = 1;
@@ -69,6 +73,9 @@ class ToolLoop {
     _stopped = true;
     backend.stop();
   }
+
+  /// Frees the numbering in the core. The loop is not used afterwards.
+  Future<void> dispose() async => numbering?.dispose();
 
   String _clean(String s) => checkCitations(s, _results.keys.toSet()).text;
 
@@ -138,8 +145,15 @@ class ToolLoop {
     final tool = _tools[call.name];
     if (tool == null) return 'Error: there is no tool called ${call.name}.';
     try {
+      if (tool is TextTool) return await tool.runText(call.argumentsMap, (n) => _results[n]);
       final found = await tool.run(call.argumentsMap);
       if (found.isEmpty) return 'No results.';
+      final numbering = this.numbering;
+      if (numbering != null) {
+        final message = await numbering.format(found);
+        await _syncIds(numbering, found);
+        return message;
+      }
       final lines = <String>[];
       for (final r in found) {
         final n = NumberedResult(_nextId++, r);
@@ -149,6 +163,17 @@ class ToolLoop {
       return lines.join('\n');
     } catch (e) {
       return 'Error: the tool failed ($e).';
+    }
+  }
+
+  /// Takes the id map from the core (cs_conversation_ids), the source of truth for the citation check.
+  Future<void> _syncIds(ResultNumbering numbering, List<SourceResult> found) async {
+    final snippets = {for (final r in found) r.address: r.snippet};
+    for (final id in await numbering.ids()) {
+      _results.putIfAbsent(
+        id.n,
+        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address)),
+      );
     }
   }
 }

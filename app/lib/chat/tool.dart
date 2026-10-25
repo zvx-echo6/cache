@@ -31,3 +31,32 @@ abstract class Tool {
         'function': {'name': name, 'description': description, 'parameters': parameters},
       };
 }
+
+/// A tool whose result is plain text, not a list of numbered sources (read). The loop passes it a way to
+/// find a result of this conversation by its number.
+abstract class TextTool extends Tool {
+  Future<String> runText(Map<String, dynamic> args, NumberedResult? Function(int n) lookup);
+
+  @override
+  Future<List<SourceResult>> run(Map<String, dynamic> args) async => const [];
+}
+
+/// Numbers one conversation's tool results. The shipped one is the search core's (cs_format and
+/// cs_conversation_ids); the loop falls back to counting in Dart when there is none.
+abstract class ResultNumbering {
+  /// Numbers [results] and returns the exact tool message.
+  Future<String> format(List<SourceResult> results);
+
+  /// Every number given so far in this conversation, with its address and title.
+  Future<List<NumberedAddress>> ids();
+
+  Future<void> dispose();
+}
+
+class NumberedAddress {
+  const NumberedAddress({required this.n, required this.address, required this.title});
+
+  final int n;
+  final String address;
+  final String title;
+}
