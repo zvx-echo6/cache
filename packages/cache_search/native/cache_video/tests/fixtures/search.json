@@ -1,0 +1,230 @@
+{
+ "total": 1905,
+ "data": [
+  {
+   "id": 85,
+   "uuid": "e32e625c-970d-44d3-96ce-3f2a38f70922",
+   "shortUUID": "u46iN6AQSuQgHaReLeTLZ1",
+   "url": "https://example.org/videos/watch/e32e625c-970d-44d3-96ce-3f2a38f70922",
+   "name": "Working DX Long Distance Ham Radio Contacts",
+   "category": {
+    "id": 102,
+    "label": "Communications"
+   },
+   "licence": {
+    "id": 7,
+    "label": "Public Domain Dedication"
+   },
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "privacy": {
+    "id": 1,
+    "label": "Public"
+   },
+   "nsfw": false,
+   "nsfwFlags": 0,
+   "nsfwSummary": null,
+   "truncatedDescription": "While on a mini vacation I caught CE3WB in Santiago Chile on the air.  It's amazing to catch a DX or Long Distance contact when you're operating portable amateur radio!\n\nMy intro to Amateur Radio pamphlet is here: https://www.patreon.com/posts/126...",
+   "description": "While on a mini vacation I caught CE3WB in Santiago Chile on the air.  It's amazing to catch a DX or Long Distance contact when you're operating portable amateur radio!\n\nMy intro to Amateur Radio pamphlet is here: https://www.patreon.com/posts/126...",
+   "isLocal": true,
+   "duration": 136,
+   "aspectRatio": 0.563,
+   "views": 0,
+   "viewers": 0,
+   "downloads": 0,
+   "likes": 0,
+   "dislikes": 0,
+   "thumbnailPath": "/lazy-static/thumbnails/e1808c67-d032-455f-a1f1-10ca49e3f47c.jpg",
+   "previewPath": "/lazy-static/thumbnails/a6728b65-6b73-4926-91f1-753962abbf7d.jpg",
+   "thumbnails": [
+    {
+     "height": 157,
+     "width": 280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/e1808c67-d032-455f-a1f1-10ca49e3f47c.jpg"
+    },
+    {
+     "height": 480,
+     "width": 850,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/a6728b65-6b73-4926-91f1-753962abbf7d.jpg"
+    }
+   ],
+   "embedPath": "/videos/embed/u46iN6AQSuQgHaReLeTLZ1",
+   "createdAt": "2026-02-13T14:37:25.235Z",
+   "updatedAt": "2026-04-28T04:36:34.635Z",
+   "publishedAt": "2026-02-13T14:37:24.135Z",
+   "originallyPublishedAt": "2026-01-05T00:00:00.000Z",
+   "isLive": false,
+   "account": {
+    "id": 2,
+    "displayName": "root",
+    "name": "root",
+    "url": "https://example.org/accounts/root",
+    "host": "example.org",
+    "avatars": []
+   },
+   "channel": {
+    "id": 38,
+    "name": "ham-radio-crash-course",
+    "displayName": "(YT)Ham Radio Crash Course",
+    "url": "https://example.org/video-channels/ham-radio-crash-course",
+    "host": "example.org",
+    "avatars": []
+   },
+   "comments": 0
+  },
+  {
+   "id": 88,
+   "uuid": "5068ea9a-6f2e-461d-9682-d16c9a81d0a3",
+   "shortUUID": "aVUk4xfvud9okfj6qDM85F",
+   "url": "https://example.org/videos/watch/5068ea9a-6f2e-461d-9682-d16c9a81d0a3",
+   "name": "You Should Try Linux For Ham Radio TODAY!",
+   "category": {
+    "id": 102,
+    "label": "Communications"
+   },
+   "licence": {
+    "id": 7,
+    "label": "Public Domain Dedication"
+   },
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "privacy": {
+    "id": 1,
+    "label": "Public"
+   },
+   "nsfw": false,
+   "nsfwFlags": 0,
+   "nsfwSummary": null,
+   "truncatedDescription": "It's never been easier running Linux on cheap laptop for ham radio.  Today we take a look at the install process for Dragon OS and 73Linux which provides a comprehensive suite of SDR and Ham Radio applications on first boot!\n\nDragon OS: https://ce...",
+   "description": "It's never been easier running Linux on cheap laptop for ham radio.  Today we take a look at the install process for Dragon OS and 73Linux which provides a comprehensive suite of SDR and Ham Radio applications on first boot!\n\nDragon OS: https://ce...",
+   "isLocal": true,
+   "duration": 1526,
+   "aspectRatio": 1.7778,
+   "views": 0,
+   "viewers": 0,
+   "downloads": 0,
+   "likes": 0,
+   "dislikes": 0,
+   "thumbnailPath": "/lazy-static/thumbnails/88ebe503-75a7-4b88-999b-0b992cf22f3b.jpg",
+   "previewPath": "/lazy-static/thumbnails/a091b177-7636-41b8-b2da-591385298562.jpg",
+   "thumbnails": [
+    {
+     "height": 157,
+     "width": 280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/88ebe503-75a7-4b88-999b-0b992cf22f3b.jpg"
+    },
+    {
+     "height": 480,
+     "width": 850,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/a091b177-7636-41b8-b2da-591385298562.jpg"
+    }
+   ],
+   "embedPath": "/videos/embed/aVUk4xfvud9okfj6qDM85F",
+   "createdAt": "2026-02-13T14:56:50.019Z",
+   "updatedAt": "2026-04-28T04:40:15.629Z",
+   "publishedAt": "2026-02-13T14:56:46.802Z",
+   "originallyPublishedAt": "2026-02-10T00:00:00.000Z",
+   "isLive": false,
+   "account": {
+    "id": 2,
+    "displayName": "root",
+    "name": "root",
+    "url": "https://example.org/accounts/root",
+    "host": "example.org",
+    "avatars": []
+   },
+   "channel": {
+    "id": 38,
+    "name": "ham-radio-crash-course",
+    "displayName": "(YT)Ham Radio Crash Course",
+    "url": "https://example.org/video-channels/ham-radio-crash-course",
+    "host": "example.org",
+    "avatars": []
+   },
+   "comments": 0
+  },
+  {
+   "id": 89,
+   "uuid": "c260356e-1fce-4264-8c9a-2ac3013cfc45",
+   "shortUUID": "q18VmSxSumw85FAgLCgboa",
+   "url": "https://example.org/videos/watch/c260356e-1fce-4264-8c9a-2ac3013cfc45",
+   "name": "Advanced Winlink! Email Over Ham Radio",
+   "category": {
+    "id": 102,
+    "label": "Communications"
+   },
+   "licence": {
+    "id": 7,
+    "label": "Public Domain Dedication"
+   },
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "privacy": {
+    "id": 1,
+    "label": "Public"
+   },
+   "nsfw": false,
+   "nsfwFlags": 0,
+   "nsfwSummary": null,
+   "truncatedDescription": "Winlink is one of the best ways to communicate over ham radio during an emergency. Tonight @KM4ACK and I will show you some of the advanced tactics to get on the air.\n\nSocal Linux Expo is coming up March 5-8, 2026. 60% off tickets with code: HRCC ...",
+   "description": "Winlink is one of the best ways to communicate over ham radio during an emergency. Tonight @KM4ACK and I will show you some of the advanced tactics to get on the air.\n\nSocal Linux Expo is coming up March 5-8, 2026. 60% off tickets with code: HRCC ...",
+   "isLocal": true,
+   "duration": 4408,
+   "aspectRatio": 1.7778,
+   "views": 0,
+   "viewers": 0,
+   "downloads": 0,
+   "likes": 0,
+   "dislikes": 0,
+   "thumbnailPath": "/lazy-static/thumbnails/a8a22f91-67b3-4490-a305-7aa70fde69aa.jpg",
+   "previewPath": "/lazy-static/thumbnails/4fe173be-4d5d-4d28-8966-ed434642e807.jpg",
+   "thumbnails": [
+    {
+     "height": 157,
+     "width": 280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/a8a22f91-67b3-4490-a305-7aa70fde69aa.jpg"
+    },
+    {
+     "height": 480,
+     "width": 850,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/4fe173be-4d5d-4d28-8966-ed434642e807.jpg"
+    }
+   ],
+   "embedPath": "/videos/embed/q18VmSxSumw85FAgLCgboa",
+   "createdAt": "2026-02-13T15:11:03.413Z",
+   "updatedAt": "2026-04-28T04:55:07.707Z",
+   "publishedAt": "2026-02-13T15:11:01.960Z",
+   "originallyPublishedAt": "2026-02-08T00:00:00.000Z",
+   "isLive": false,
+   "account": {
+    "id": 2,
+    "displayName": "root",
+    "name": "root",
+    "url": "https://example.org/accounts/root",
+    "host": "example.org",
+    "avatars": []
+   },
+   "channel": {
+    "id": 38,
+    "name": "ham-radio-crash-course",
+    "displayName": "(YT)Ham Radio Crash Course",
+    "url": "https://example.org/video-channels/ham-radio-crash-course",
+    "host": "example.org",
+    "avatars": []
+   },
+   "comments": 0
+  }
+ ]
+}

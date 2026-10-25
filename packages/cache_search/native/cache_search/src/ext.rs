@@ -1,10 +1,11 @@
-//! Saved places (`cache_user`) and live data (`cache_live`) on a handle: the glue behind `cs_places_*` and
-//! `cs_live_*`. The logic lives in those two crates; this file only holds their state, maps their errors to the
+//! Saved places (`cache_user`), live data (`cache_live`) and videos (`cache_video`) on a handle: the glue behind
+//! `cs_places_*`, `cs_live_*` and `cs_video_*`. The logic lives in those two crates; this file only holds their state, maps their errors to the
 //! core's stable codes, and hands the saved places to the live engine.
 
 use crate::error::{Error, ErrorCode, Result};
 use cache_live::{Live, LiveCfg};
 use cache_user::UserStore;
+use cache_video::{Video, VideoCfg};
 use serde::Deserialize;
 
 /// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite"}`.
@@ -17,6 +18,7 @@ pub struct UserCfg {
 pub struct Ext {
     pub user: Option<UserStore>,
     pub live: Option<Live>,
+    pub video: Option<Video>,
 }
 
 fn user_err(e: cache_user::Error) -> Error {
@@ -27,12 +29,19 @@ fn live_err(e: cache_live::Error) -> Error {
     Error::new(ErrorCode::from_str_code(e.code), e.message)
 }
 
+pub fn video_err(e: cache_video::Error) -> Error {
+    match e.space {
+        Some((needed, available)) => Error::no_space(e.message, needed, available),
+        None => Error::new(ErrorCode::from_str_code(e.code), e.message),
+    }
+}
+
 impl crate::handle::Handle {
-    /// Apply the `user` and `live` config sections; a section that is absent keeps what was set before.
+    /// Apply the `user`, `live` and `video` config sections; a section that is absent keeps what was set before.
     /// `user`: the handle's saved places (what tools resolve names against) become cache_user's `UserStore` on that file.
     /// `live`: the `live_data` tool (cache_live) is registered; it leaves itself out of `cs_tool_schemas` while no source
     /// definition is installed in `sources_dir`.
-    pub(crate) fn configure_ext(&mut self, user: Option<UserCfg>, live: Option<LiveCfg>) {
+    pub(crate) fn configure_ext(&mut self, user: Option<UserCfg>, live: Option<LiveCfg>, video: Option<VideoCfg>) {
         if let Some(u) = user {
             self.ext.user = Some(UserStore::new(&u.db_path));
             self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
@@ -40,6 +49,9 @@ impl crate::handle::Handle {
         if let Some(l) = live {
             self.ext.live = Some(Live::new(l.clone()));
             self.register_tool(Box::new(cache_live::LiveDataTool::new(l)));
+        }
+        if let Some(v) = video {
+            self.ext.video = Some(Video::new(&v));
         }
     }
 }
@@ -53,6 +65,10 @@ impl Ext {
         self.live
             .as_ref()
             .ok_or_else(|| Error::new(ErrorCode::NotConfigured, "live data needs \"live\": {\"db_path\",\"sources_dir\"} in the cs_open config"))
+    }
+
+    fn video(&self) -> Result<&Video> {
+        self.video.as_ref().ok_or_else(|| Error::new(ErrorCode::NotConfigured, "videos need \"video\": {\"dir\"} in the cs_open config"))
     }
 
     fn places(&self) -> &dyn cache_tool::SavedPlaces {
@@ -89,5 +105,39 @@ impl Ext {
 
     pub fn live_get(&self, req: &str) -> Result<String> {
         self.live()?.get(req, self.places()).map_err(live_err)
+    }
+}
+
+/// The `cs_video_*` calls: each takes the request JSON the header documents and returns the answer JSON (cache_video).
+macro_rules! video_calls {
+    ($($name:ident => $method:ident),* $(,)?) => {
+        impl Ext {
+            $(pub fn $name(&self, req: &str) -> Result<String> {
+                self.video()?.$method(req).map_err(video_err)
+            })*
+        }
+    };
+}
+video_calls!(
+    video_instance_add => instance_add,
+    video_instance_remove => instance_remove,
+    video_login => login,
+    video_refresh => refresh,
+    video_me => me,
+    video_channels => channels,
+    video_list => list,
+    video_search => search,
+    video_get => get,
+    video_delete => delete_download,
+    video_resolve => resolve,
+);
+
+impl Ext {
+    pub fn video_instances(&self) -> Result<String> {
+        self.video()?.instances_json().map_err(video_err)
+    }
+
+    pub fn video_downloads(&self) -> Result<String> {
+        self.video()?.downloads_json().map_err(video_err)
     }
 }

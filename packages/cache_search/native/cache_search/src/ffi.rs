@@ -465,6 +465,99 @@ pub unsafe extern "C" fn cs_live_get(h: *mut Handle, request_json: *const c_char
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_get(arg_str(request_json, "request_json")?)?))
 }
 
+// ---- videos (logic in cache_video; see ext.rs) ----
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_instances(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_instances()?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_instance_add(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_instance_add(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_instance_remove(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_instance_remove(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_login(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_login(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_refresh(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_refresh(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_me(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_me(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_channels(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_channels(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_list(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_list(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_search(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_search(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_get(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_get(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_downloads(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_downloads()?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_delete(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_delete(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_video_resolve(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_resolve(arg_str(request_json, "request_json")?)?))
+}
+
 /// # Safety
 /// `s` must be NULL or a string returned by this library, not freed before.
 #[no_mangle]
@@ -530,6 +623,19 @@ mod tests {
             assert!(cs_live_sources(ptr::null_mut()).is_null());
             assert!(cs_live_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_get(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_instances(ptr::null_mut()).is_null());
+            assert!(cs_video_instance_add(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_instance_remove(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_login(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_refresh(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_me(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_channels(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_list(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_search(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_get(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_downloads(ptr::null_mut()).is_null());
+            assert!(cs_video_delete(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_video_resolve(ptr::null_mut(), ptr::null()).is_null());
             cs_close(ptr::null_mut());
             cs_free_string(ptr::null_mut());
             cs_free_bytes(ptr::null_mut(), 0);

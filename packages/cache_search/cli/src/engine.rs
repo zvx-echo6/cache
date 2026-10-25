@@ -37,6 +37,9 @@ impl ApiError {
             "busy" | "index_missing" | "index_stale" | "cancelled" => 409,
             "unsupported" => 422,
             "not_configured" => 409,
+            "auth_failed" | "otp_required" => 401,
+            "no_space" => 507,
+            "damaged" => 502,
             "key_missing" => 400,
             "quota" => 429,
             "fetch_failed" | "bad_response" => 502,
@@ -210,6 +213,84 @@ impl Core {
         self.result(p)
     }
 
+    // ---- videos ----
+
+    pub fn video_instances(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_video_instances(self.h) };
+        self.result(p)
+    }
+
+    pub fn video_instance_add(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_instance_add(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_instance_remove(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_instance_remove(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_login(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_login(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_refresh(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_refresh(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_me(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_me(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_channels(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_channels(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_list(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_list(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_search(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_search(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_get(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_get(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_downloads(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_video_downloads(self.h) };
+        self.result(p)
+    }
+
+    pub fn video_delete(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_delete(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_resolve(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_resolve(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
     /// Poll `cs_status` until no source is `"opening"` (libraries open on background threads inside the core).
     pub fn wait_ready(&mut self, timeout: Duration) -> Result<(), ApiError> {
         let t0 = Instant::now();
@@ -293,9 +374,57 @@ impl Drop for JobRun {
 pub struct Engine {
     pub core: Core,
     pub embedder: Option<Arc<Mutex<Embedder>>>,
+    /// The `video` folder of the config, which a `video_download` job is given (jobs have no handle).
+    pub video_dir: Option<String>,
+}
+
+/// How a job ended: its last progress JSON, and its error if it did not finish.
+pub struct JobEnd {
+    pub progress: String,
+    pub error: Option<ApiError>,
+}
+
+/// Start a job and poll it to the end (`on_progress` sees each new `state done/total` line).
+pub fn run_job_to_end(kind: &str, params: &Value, on_progress: &mut dyn FnMut(&str)) -> Result<JobEnd, ApiError> {
+    let mut job = JobRun::start(kind, params)?;
+    let mut last = String::new();
+    loop {
+        let p = job.progress()?;
+        let v: Value = serde_json::from_str(&p).map_err(|e| ApiError::new("internal", e.to_string()))?;
+        let line = format!("{} {}/{}", v["state"].as_str().unwrap_or("?"), v["done"], v["total"]);
+        if line != last {
+            on_progress(&line);
+            last = line;
+        }
+        if v["state"] != "running" {
+            let error = match v["state"].as_str() {
+                Some("done") => None,
+                _ => Some(ApiError::new(
+                    v["error"]["code"].as_str().unwrap_or("internal"),
+                    format!("job {}: {}", v["state"], v["error"]["message"].as_str().unwrap_or("")),
+                )),
+            };
+            return Ok(JobEnd { progress: p, error });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 impl Engine {
+    /// A `video_download` job from a request `{instance, video, choice?, token?}` (the `video` folder comes from the
+    /// config), run to the end. Returns the final progress JSON; a job that did not finish is the error.
+    pub fn video_download(&self, req: &Value, on_progress: &mut dyn FnMut(&str)) -> Result<String, ApiError> {
+        let dir = self.video_dir.clone().ok_or_else(|| ApiError::new("not_configured", "videos need \"video\": {\"dir\"} in the cs_open config"))?;
+        let mut p = req.clone();
+        let Some(o) = p.as_object_mut() else { return Err(ApiError::new("bad_json", "the request must be a JSON object")) };
+        o.insert("dir".into(), json!(dir));
+        let end = run_job_to_end("video_download", &p, on_progress)?;
+        match end.error {
+            None => Ok(end.progress),
+            Some(e) => Err(e),
+        }
+    }
+
     /// `cs_search`. When an embedder is configured and `options` has no `query_vector`, the query is embedded and
     /// the vector is added as `{"model": <model id>, "vector": [...]}`. Everything else is passed through as given.
     pub fn search(&mut self, query: &str, mut options: Value) -> Result<String, ApiError> {

@@ -717,6 +717,39 @@ reached like any other, with `cs tool live_data`, `POST /conversations/{id}/tool
 `cli/tests/features.rs` runs one sequence through the CLI, serve and the C ABI on three separate states and requires
 byte-identical output at every step, and runs `search` then `live_data` in one conversation through serve and the C ABI.
 
+## Videos (crate `cache_video`, PeerTube)
+
+A generic PeerTube connector through PeerTube's official REST API only (no scraping): any instance, added by address; browse and
+search; stream; download for offline use; link resolution for citations. The crate has no dependency on the rest of the core;
+`cs_video_*` (ABI, `cache_search.h`), `cs video-*`, `POST /video/*` on `cs serve` and the `video_download` job are thin wrappers.
+
+- **State on disk** (the `video` section of the `cs_open` config, `{"dir"}`): `instances.json` and `downloads/<instance>/<uuid>/`
+  holding `video.<ext>`, `thumb.<ext>`, `captions-<lang>.vtt` and `manifest.json` (written last; a folder without it is not a
+  download, and a half-finished file is `video.part` with `video.part.json` saying which file it is).
+- **Tokens** are never stored by the core. Login (`GET /api/v1/oauth-clients/local`, then `POST /api/v1/users/token`, password
+  grant, `x-peertube-otp` header when the account has two-factor login) and refresh (`grant_type=refresh_token`) return the tokens;
+  the app keeps them in its secure storage and passes `"token"` per call.
+- **Endpoints used:** `/api/v1/config`, `/oauth-clients/local`, `/users/token`, `/users/me`, `/video-channels`,
+  `/search/video-channels`, `/videos`, `/video-channels/{handle}/videos`, `/search/videos`, `/videos/{id}`, `/videos/{id}/captions`,
+  `POST /videos/{id}/token` (private videos), `/download/videos/generate/{id}` (HLS audio+video join), and the file, thumbnail and
+  caption addresses the API itself returns. Search uses `searchTarget=local`.
+- **File choice** (`model::options`): per resolution, a web-video MP4 first; else the HLS playlist's fragmented MP4 when it has sound;
+  else (instances with separate audio, PeerTube >= 6.2 `hasAudio:false`) the video-only HLS file joined with the audio-only file by the
+  instance's `/download/videos/generate` endpoint (not resumable, size approximate). Audio only: the audio-only web file, else the
+  audio-only HLS file; no such file, no option. Choosing a resolution a video lacks gives the nearest below, else above.
+- **Respect the instance:** `downloadEnabled:false` is refused (`unsupported`) before any file is requested; live streams are refused;
+  at most 2 downloads per instance and 4 in all run at once (others wait); User-Agent `Cache/<version>`; http only to this machine.
+- **Download job** (`video_download`): free space (file + 16 MiB) before anything; `Range` resume from the partial file, 3 retries
+  with 1/2/4 s waits; size must equal the API's; sha256 is always computed into the manifest and checked against the HLS playlist's
+  `segments-sha256` list when that names the file (the API gives no checksum for web-video files); thumbnail and captions saved
+  best-effort (`warnings` in the manifest); a new download replaces the old one.
+- **Link resolution:** `cs_video_resolve` takes a PeerTube link, uuid or short uuid (decoded locally: base-58 of the uuid, flickr
+  alphabet) and a time; downloaded -> local file, no network; else an HLS master playlist or MP4 URL from the instance.
+- **Tests:** unit tests (file choice, ranges, URL rules, short uuids, times), `cache_video/tests/video.rs` against a stand-in PeerTube
+  serving recorded responses (`tests/fixtures`, hostname example.org; the HLS-with-separate-audio video is synthetic, built from the API
+  reference), including a connection cut mid-file, cancel and resume, and `no_space`; `cli/tests/video.rs` runs one sequence through the
+  CLI, `cs serve` and the C ABI and compares the output (state folder and clock times normalised).
+
 ## Open (needs decisions)
 
 - Multi-shard collections (v1 is single-shard only).
