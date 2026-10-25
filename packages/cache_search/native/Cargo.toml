@@ -1,5 +1,5 @@
 [workspace]
-members = ["cache_search", "cache_tool", "cache_user", "cache_live", "../cli"]
+members = ["cache_search", "cache_tool", "cache_user", "cache_live", "cache_places", "places_pack", "../cli"]
 resolver = "2"
 
 [workspace.dependencies]

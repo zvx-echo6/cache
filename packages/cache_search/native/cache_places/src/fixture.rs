@@ -1,0 +1,116 @@
+//! A tiny hand-made Idaho pack for tests (this crate's, the C ABI's and the CLI's). Real coordinates, invented details.
+//! Not used at run time.
+
+use crate::schema::{FORMAT_VERSION, SCHEMA};
+use rusqlite::{params, Connection};
+use std::path::Path;
+
+/// The clock the fixture's tests use: twelve days after the pack was built.
+pub const FIXTURE_NOW: &str = "2026-10-25T14:20:05-06:00";
+pub const FIXTURE_BUILT_AT: &str = "2026-10-13T12:00:00+00:00";
+
+struct P {
+    name: &'static str,
+    cat: Option<&'static str>,
+    kind: &'static str,
+    lat: f64,
+    lon: f64,
+    street: Option<&'static str>,
+    locality: &'static str,
+    phone: Option<&'static str>,
+    hours: Option<&'static str>,
+    alt: &'static str,
+}
+
+#[rustfmt::skip]
+const PLACES: &[P] = &[
+    P { name: "Walgreens", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.5390, lon: -113.7870, street: Some("1414 Overland Ave"), locality: "Burley", phone: Some("+1 208 678 3050"), hours: Some("Mo-Su 08:00-22:00"), alt: "" },
+    P { name: "Smith's Pharmacy", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.5420, lon: -113.8080, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Rupert Drug", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.6180, lon: -113.6740, street: Some("500 6th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
+    P { name: "Cassia Regional Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5290, lon: -113.7850, street: Some("1501 Hiland Ave"), locality: "Burley", phone: Some("+1 208 678 4444"), hours: None, alt: "Cassia Regional Medical Center" },
+    P { name: "Cassia Regional Hospital", cat: Some("emergency_room"), kind: "emergency_department", lat: 42.5291, lon: -113.7851, street: Some("1501 Hiland Ave"), locality: "Burley", phone: Some("+1 208 678 4444"), hours: Some("24/7"), alt: "" },
+    P { name: "Minidoka Memorial Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.6140, lon: -113.6720, street: Some("1224 8th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
+    P { name: "Saint Alphonsus Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 43.6190, lon: -116.2790, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: Some("24/7"), alt: "" },
+    P { name: "St. Luke's Boise Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 43.6125, lon: -116.1900, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: Some("24/7"), alt: "St Lukes Boise" },
+    P { name: "Chevron", cat: Some("fuel"), kind: "amenity=fuel", lat: 42.5400, lon: -113.7900, street: Some("1020 Overland Ave"), locality: "Burley", phone: None, hours: Some("24/7"), alt: "" },
+    P { name: "Stanley Ranger Station", cat: Some("police"), kind: "amenity=police", lat: 44.2160, lon: -114.9310, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Sawtooth Spring", cat: Some("water"), kind: "natural=spring", lat: 44.1700, lon: -114.9200, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Burley Elementary School", cat: None, kind: "amenity=school", lat: 42.5350, lon: -113.7930, street: Some("200 W 10th St"), locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Burley", cat: None, kind: "shop=convenience", lat: 42.5310, lon: -113.8000, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Stanley Lake", cat: None, kind: "natural=water", lat: 44.2400, lon: -115.0000, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+];
+
+// (name, kind, lat, lon, population, state)
+#[rustfmt::skip]
+const LOCALITIES: &[(&str, &str, f64, f64, i64, &str)] = &[
+    ("Burley", "city", 42.5357, -113.7928, 10345, "ID"),
+    ("Heyburn", "city", 42.5585, -113.7691, 3300, "ID"),
+    ("Rupert", "city", 42.6166, -113.6747, 5600, "ID"),
+    ("Declo", "city", 42.5238, -113.6122, 400, "ID"),
+    ("Twin Falls", "city", 42.5629, -114.4609, 51000, "ID"),
+    ("Boise", "city", 43.6150, -116.2023, 235000, "ID"),
+    ("Idaho City", "city", 43.8280, -115.8340, 485, "ID"),
+    ("Stanley", "town", 44.2210, -114.9360, 100, "ID"),
+    ("Lowman", "hamlet", 44.0900, -115.6200, 40, "ID"),
+    ("Stanley", "town", 46.3000, -97.2000, 80, "ND"),
+];
+
+/// Writes the fixture pack to `path` (replacing any file there).
+pub fn write_fixture_pack(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    let c = Connection::open(path).expect("create fixture pack");
+    c.execute_batch(SCHEMA).expect("schema");
+    for (k, v) in [
+        ("format_version", FORMAT_VERSION.to_string()),
+        ("region_id", "idaho".into()),
+        ("region_name", "Idaho".into()),
+        ("built_at", FIXTURE_BUILT_AT.into()),
+        ("min_lat", "41.9".into()),
+        ("min_lon", "-117.3".into()),
+        ("max_lat", "49.1".into()),
+        ("max_lon", "-111.0".into()),
+    ] {
+        c.execute("INSERT INTO meta(key, value) VALUES (?1, ?2)", params![k, v]).unwrap();
+    }
+    for (i, (id, title, desc)) in [
+        ("emergency_room", "Emergency room", "hospital emergency rooms; for a hospital in an emergency use emergency_room"),
+        ("hospital", "Hospital", "hospitals, for information or a non-emergency visit"),
+        ("urgent_care", "Urgent care", "walk-in urgent care clinics"),
+        ("pharmacy", "Pharmacy", "pharmacies and drug stores"),
+        ("fuel", "Fuel", "gas stations"),
+        ("police", "Police", "police stations"),
+        ("water", "Water", "drinking water, water points and springs"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let n = PLACES.iter().filter(|p| p.cat == Some(*id)).count();
+        c.execute(
+            "INSERT INTO categories(id, title, description, rules, place_count, sort) VALUES (?1, ?2, ?3, '[]', ?4, ?5)",
+            params![id, title, desc, n as i64, i as i64],
+        )
+        .unwrap();
+    }
+    c.execute("INSERT INTO states(code, name, country) VALUES ('ID', 'Idaho', 'US'), ('ND', 'North Dakota', 'US')", []).unwrap();
+    for (i, p) in PLACES.iter().enumerate() {
+        let id = i as i64 + 1;
+        c.execute(
+            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, state, country, phone, hours, source, source_id, confidence) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'ID', 'US', ?9, ?10, 'osm', ?11, 0.9)",
+            params![id, p.name, p.cat, p.kind, p.lat, p.lon, p.street, p.locality, p.phone, p.hours, format!("osm:n{id}")],
+        )
+        .unwrap();
+        c.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, p.lat, p.lon]).unwrap();
+        c.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, p.name, p.alt]).unwrap();
+    }
+    for (i, (name, kind, lat, lon, pop, state)) in LOCALITIES.iter().enumerate() {
+        let id = i as i64 + 1;
+        c.execute(
+            "INSERT INTO localities(id, name, kind, lat, lon, population, state, country, source_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'US', ?8)",
+            params![id, name, kind, lat, lon, pop, state, format!("osm:n9{id}")],
+        )
+        .unwrap();
+        c.execute("INSERT INTO localities_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, lat, lon]).unwrap();
+        c.execute("INSERT INTO localities_fts(rowid, name, alt_names) VALUES (?1, ?2, '')", params![id, name]).unwrap();
+    }
+}

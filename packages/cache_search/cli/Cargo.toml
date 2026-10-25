@@ -24,4 +24,6 @@ tiny_http = "0.12"
 sha2 = "0.10"
 
 [dev-dependencies]
+# The tiny Idaho pack the places tests open (cache_places::fixture).
+cache_places = { path = "../native/cache_places" }
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
