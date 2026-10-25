@@ -1,0 +1,12 @@
+[package]
+name = "cache_user"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's user data in user.sqlite: saved places (Home and others)"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+cache_tool = { path = "../cache_tool" }
