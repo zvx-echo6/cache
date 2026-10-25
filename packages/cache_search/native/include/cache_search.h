@@ -166,6 +166,16 @@ void cs_conversation_free(cs_conv *c);
  *   cs_status with its error. Freeing a running update_library job waits for it to finish.
  *   The last step opens the library read-only once; that shard is handed to every handle that had the library
  *   open (no second open).
+ * kind "library_manifest": {"library_path","out_path"}
+ *   writes the library's snapshot manifest (JSON, the body of the server's partial snapshot request) to
+ *   out_path, which must not be inside the library folder. Like update_library it closes the library in every
+ *   handle (marked updating, search skips it, cs_read says busy), does the read-write load that computing the
+ *   manifest needs, rewrites segments_manifest.json, reopens the library read-only once and hands that shard to
+ *   the handles. Progress is in steps (done/total, total 5): closed, loaded and manifest computed, manifest
+ *   written, segments_manifest.json rewritten, library reopened (checked). cs_job_cancel is honoured only
+ *   before the read-write load. cs_job_start fails with "busy" if an update, another library_manifest or an
+ *   index_library job is using that library, "not_found" if library_path or the folder of out_path does not
+ *   exist and "bad_json" for empty paths or an out_path inside the library.
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);

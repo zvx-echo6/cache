@@ -1,4 +1,5 @@
-//! Long jobs: `index_zim`, `index_library` and `update_library` run on their own threads and are polled.
+//! Long jobs: `index_zim`, `index_library`, `update_library` and `library_manifest` run on their own threads and
+//! are polled.
 
 use crate::error::{Error, Result};
 use crate::index::{self, BuildParams, Lock, Outcome};
@@ -89,6 +90,15 @@ struct UpdateLibraryParams {
     hold_ms: u64,
 }
 
+#[derive(Deserialize)]
+struct LibraryManifestParams {
+    library_path: String,
+    out_path: String,
+    /// Not in the header: a test hook that pauses the job (cancellably) before the read-write load.
+    #[serde(default)]
+    hold_ms: u64,
+}
+
 fn default_lib_checkpoint() -> usize {
     libindex::DEFAULT_CHECKPOINT_DOCS
 }
@@ -108,6 +118,7 @@ impl Job {
             "index_zim" => Self::start_index_zim(params_json),
             "index_library" => Self::start_index_library(params_json),
             "update_library" => Self::start_update_library(params_json),
+            "library_manifest" => Self::start_library_manifest(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -181,6 +192,25 @@ impl Job {
                 &entry,
                 &|d, t| sh.set_progress(d, t),
                 // cancelling is honoured only before the apply step; `apply_update` asks at the right places
+                &|| sh.cancel.load(Ordering::SeqCst),
+            )
+        })
+    }
+
+    /// Start a `library_manifest` job. Parameter errors and a library that is busy (an update, another manifest
+    /// job, or an index build) are reported here and no job exists. The library is marked as updating before this
+    /// returns, like `update_library`.
+    fn start_library_manifest(params_json: &str) -> Result<Job> {
+        let p: LibraryManifestParams = serde_json::from_str(params_json)?;
+        let req = libupdate::prepare_manifest(&p.library_path, &p.out_path, p.hold_ms)?;
+        let entry = libreg::entry_for(&req.library);
+        let guard = entry.begin_update()?;
+        Self::spawn("cs-library-manifest", guard, libupdate::MANIFEST_STEPS, move |sh| {
+            libupdate::apply_manifest(
+                &req,
+                &entry,
+                &|d, t| sh.set_progress(d, t),
+                // cancelling is honoured only before the read-write load; `apply_manifest` asks at the right places
                 &|| sh.cancel.load(Ordering::SeqCst),
             )
         })

@@ -100,9 +100,16 @@ How the job finds the library: `cs_job_start(kind, params)` has no handle argume
 thread, so the job and the handles meet in a process-wide registry keyed by the library's canonical path
 (`libreg.rs`). Each open library keeps its shard in a mutex cell registered there; the job takes shards out of
 the cells and a handle notices the change the next time it is called (every call starts by looking). No ABI
-change was needed. The manifest of the library is NOT available through the ABI; if the app needs it, the
-proposal is a job kind `library_manifest` {"library_path","out_path"} that closes the library like
-`update_library` does, writes the JSON and reopens (proposed, not approved).
+change was needed. The manifest of the library is available through the job kind `library_manifest`
+{"library_path","out_path"}, which closes the library in every handle exactly like `update_library` (marked
+updating, search skips it), then does what `cs library-manifest` does (the read-write `EdgeShard::load`, the
+manifest), writes the JSON to `out_path` (a temporary file next to it, renamed; `out_path` must not be inside the
+library folder), rewrites `segments_manifest.json`, and opens the library read-only once and hands that shard
+back as above. Progress steps, total 5: closed, loaded and manifest computed, manifest written, `segments_manifest.json`
+rewritten, reopened (checked). Cancelling is honoured before the read-write load and ignored after it. It is
+`busy` while an update, another manifest job or an index build uses the library. The file is byte for byte what
+`cs library-manifest --out` writes for the same library (tested; both use the same function, which writes the
+keys sorted because the manifest holds hash maps and the same library should give the same bytes every time).
 The full replace from a new snapshot stays as the fallback. A cited address whose point id is not in the updated
 library returns error code `not_found` (the app shows it as no longer in the library).
 
@@ -236,13 +243,14 @@ Options to evaluate first (report before committing):
 
 ## Jobs
 
-`index_zim`, `index_library` and `update_library` run as jobs: start, poll progress, cancel; checkpoints every N articles
+`index_zim`, `index_library`, `update_library` and `library_manifest` run as jobs: start, poll progress, cancel; checkpoints every N articles
 (Tantivy commit + last article or point index) so a cancelled or killed job resumes (`update_library` does not
 checkpoint: it restarts from the snapshot file). `index_library` takes `library_path`, `index_dir` and `heap_mb` (default 200) and builds the device Tantivy
 index from the mapped text field; it is resumable via checkpoints like `index_zim`. `update_library` takes `library_path`,
 `snapshot_path` (the partial snapshot file) and `snapshot_manifest_path` (the manifest the snapshot was made
 against: the library's snapshot manifest as it was sent to the server; it must list exactly the segments on
-disk); it runs the update steps under Libraries / Updates. An update and an `index_library` job on the same
+disk); it runs the update steps under Libraries / Updates. `library_manifest` takes `library_path` and `out_path` and
+writes the library's snapshot manifest (the body to send to the server's partial snapshot endpoint) to `out_path`. An update and an `index_library` job on the same
 library refuse each other with `busy`. Memory cap via Tantivy
 writer heap size (default 200 MB on phones). "Only while charging" is the app's policy, not the core's.
 

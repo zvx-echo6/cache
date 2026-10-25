@@ -1,13 +1,15 @@
 //! Library updates: the snapshot manifest of a library (what a Qdrant server needs to cut a partial snapshot for
-//! it) and the `update_library` job body (apply a partial snapshot to the shard folder).
+//! it), the `library_manifest` job body (the same manifest, written to a file, with the library closed in every
+//! handle meanwhile) and the `update_library` job body (apply a partial snapshot to the shard folder).
 //!
-//! The job ends with one read-only open of the library, which is the check that it opens and whose shard is handed
-//! to the handles that had the library open (see `libreg`); there is no second open.
+//! Both jobs end the same way: one read-only open of the library, which is the check that it opens and whose
+//! shard is handed to the handles that had the library open (see `libreg`); there is no second open.
 //!
 //! Facts from the Qdrant sources at the pinned rev (see DESIGN.md, Libraries / Updates):
 //! - `EdgeShard::snapshot_manifest` exists only on the read-write `EdgeShard`; `ReadOnlyEdgeShard` has none.
 //!   `EdgeShard::load` is a write: it saves `edge_config.json`, replays the WAL and may create an appendable
-//!   segment. So [`library_manifest`] refuses to run while the library is open in this process.
+//!   segment. So [`library_manifest`] refuses to run while the library is open in this process; the
+//!   `library_manifest` job closes the library first, as `update_library` does.
 //! - `EdgeShard::recover_partial_snapshot(shard_path, current_manifest, unpacked_dir, snapshot_manifest)` takes
 //!   the snapshot UNPACKED (not the archive), merges it into `shard_path` by moving files, and finishes with a
 //!   read-write `EdgeShard::load`, which it returns. It is not atomic.
@@ -78,12 +80,112 @@ pub fn library_manifest(library: &Path) -> Result<(String, usize)> {
     if entry.open_shards() {
         return Err(busy("the library is open; the manifest needs a read-write load, which only runs while it is closed"));
     }
+    let (json, n) = load_manifest_json(library)?;
+    write_segments_manifest(library)?;
+    Ok((json, n))
+}
+
+/// The read-write load and the manifest as JSON (no checks, no guard: the caller owns the library).
+fn load_manifest_json(library: &Path) -> Result<(String, usize)> {
     let shard = EdgeShard::load(library, None).map_err(|e| op("loading the shard", e))?;
     let manifest = shard.snapshot_manifest().map_err(|e| op("reading the snapshot manifest", e))?;
     drop(shard);
-    let json = serde_json::to_string(&manifest).map_err(|e| Error::internal(format!("serialising the manifest: {e}")))?;
-    write_segments_manifest(library)?;
+    // With sorted keys: the manifest holds hash maps, whose order changes from run to run, and the same library
+    // should give the same bytes every time.
+    let value = serde_json::to_value(&manifest).map_err(|e| Error::internal(format!("serialising the manifest: {e}")))?;
+    let json = serde_json::to_string(&sort_keys(value)).map_err(|e| Error::internal(format!("serialising the manifest: {e}")))?;
     Ok((json, manifest.len()))
+}
+
+/// The same JSON with every object's keys in sorted order (rebuilt in order, so it holds whether or not
+/// `serde_json` keeps insertion order).
+fn sort_keys(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Object(m) => {
+            let mut entries: Vec<(String, Value)> = m.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().map(|(k, v)| (k, sort_keys(v))).collect())
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(sort_keys).collect()),
+        other => other,
+    }
+}
+
+/// Steps of a `library_manifest` job, as `done`/`total` progress: closed, shard loaded and manifest computed,
+/// manifest written to `out_path`, `segments_manifest.json` rewritten, library reopened (checked).
+pub const MANIFEST_STEPS: u64 = 5;
+
+/// A checked `library_manifest` request.
+pub struct ManifestRequest {
+    pub library: PathBuf,
+    pub out: PathBuf,
+    /// Test hook (not in the header): sleep this long, cancellably, before the read-write load.
+    pub hold_ms: u64,
+}
+
+/// Check the job parameters without touching the library: the library folder has segments, `out_path` is a
+/// file path whose folder exists and which is not inside the library folder.
+pub fn prepare_manifest(library_path: &str, out_path: &str, hold_ms: u64) -> Result<ManifestRequest> {
+    if library_path.is_empty() || out_path.is_empty() {
+        return Err(Error::bad_json("library_path and out_path must not be empty"));
+    }
+    let library = PathBuf::from(library_path);
+    if !library.is_dir() {
+        return Err(Error::not_found(format!("library folder {} not found", library.display())));
+    }
+    segment_dirs(&library)?;
+    let out = PathBuf::from(out_path);
+    if out.is_dir() {
+        return Err(Error::bad_json(format!("out_path {} is a folder", out.display())));
+    }
+    let parent = out.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    let parent = std::fs::canonicalize(parent)
+        .map_err(|_| Error::not_found(format!("the folder of out_path {} does not exist", out.display())))?;
+    let lib_canon = std::fs::canonicalize(&library).map_err(|e| op("resolving library_path", e))?;
+    if parent.starts_with(&lib_canon) {
+        return Err(Error::bad_json("out_path must not be inside the library folder"));
+    }
+    Ok(ManifestRequest { library, out, hold_ms })
+}
+
+/// Run a `library_manifest` job on a library the caller has marked as updating.
+///
+/// Like [`apply_update`] it closes the library in every handle first, so search skips it meanwhile, then does
+/// what [`library_manifest`] does (the read-write load, which writes to the folder), writes the JSON to the
+/// out file (a temporary file next to it, renamed), rewrites `segments_manifest.json`, and opens the library
+/// read-only once, handing that shard to the handles. Cancelling is honoured before the read-write load starts
+/// and then ignored (the library is reopened unchanged in the first case).
+pub fn apply_manifest(
+    req: &ManifestRequest,
+    entry: &LibEntry,
+    progress: &dyn Fn(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Outcome> {
+    ensure_init();
+    progress(0, MANIFEST_STEPS);
+    if !entry.close_all(cancelled)? || cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
+    progress(1, MANIFEST_STEPS);
+    if !hold(req.hold_ms, cancelled) {
+        return Ok(Outcome::Cancelled);
+    }
+    let (json, _n) = load_manifest_json(&req.library)?;
+    progress(2, MANIFEST_STEPS);
+    let name = req.out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = req.out.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, json.as_bytes()).map_err(|e| op(&format!("writing {}", tmp.display()), e))?;
+    if let Err(e) = std::fs::rename(&tmp, &req.out) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(op(&format!("writing {}", req.out.display()), e));
+    }
+    progress(3, MANIFEST_STEPS);
+    write_segments_manifest(&req.library)?;
+    progress(4, MANIFEST_STEPS);
+    hand_back_open(&req.library, entry)?;
+    progress(5, MANIFEST_STEPS);
+    Ok(Outcome::Done)
 }
 
 /// Open the library read-only once and hand that shard to every handle's cell the job closed (see `libreg`).
@@ -92,6 +194,19 @@ fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
     let shard = library::open_shard_for_handoff(library, &entry.vectors())?;
     entry.hand_back(&shard);
     Ok(())
+}
+
+/// Test hook: wait `ms`, cancellably. `false` when cancelled (also checked once after the wait).
+fn hold(ms: u64, cancelled: &dyn Fn() -> bool) -> bool {
+    let mut waited = 0;
+    while waited < ms {
+        if cancelled() {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        waited += 10;
+    }
+    !cancelled()
 }
 
 /// A checked `update_library` request.
@@ -204,15 +319,7 @@ pub fn apply_update(
     }
     progress(2, STEPS);
     // test hook: a pause before the point of no return
-    let mut waited = 0;
-    while waited < req.hold_ms {
-        if cancelled() {
-            return Ok(Outcome::Cancelled);
-        }
-        std::thread::sleep(Duration::from_millis(10));
-        waited += 10;
-    }
-    if cancelled() {
+    if !hold(req.hold_ms, cancelled) {
         return Ok(Outcome::Cancelled);
     }
     // 3: no cancelling from here

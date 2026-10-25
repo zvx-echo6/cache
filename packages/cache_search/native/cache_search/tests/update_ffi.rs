@@ -231,7 +231,11 @@ fn read(h: *mut cache_search::handle::Handle, addr: &str) -> Result<Value, Strin
 }
 
 fn start_job(params: Value) -> *mut Job {
-    let j = unsafe { cs_job_start(cstr("update_library").as_ptr(), cstr(&params.to_string()).as_ptr()) };
+    start_kind("update_library", params)
+}
+
+fn start_kind(kind: &str, params: Value) -> *mut Job {
+    let j = unsafe { cs_job_start(cstr(kind).as_ptr(), cstr(&params.to_string()).as_ptr()) };
     assert!(!j.is_null(), "cs_job_start failed: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
     j
 }
@@ -253,7 +257,11 @@ fn wait_job(j: *mut Job) -> Value {
 }
 
 fn start_err(params: Value) -> Value {
-    let j = unsafe { cs_job_start(cstr("update_library").as_ptr(), cstr(&params.to_string()).as_ptr()) };
+    start_kind_err("update_library", params)
+}
+
+fn start_kind_err(kind: &str, params: Value) -> Value {
+    let j = unsafe { cs_job_start(cstr(kind).as_ptr(), cstr(&params.to_string()).as_ptr()) };
     assert!(j.is_null(), "expected cs_job_start to fail");
     serde_json::from_str(&take(unsafe { cs_last_error(ptr::null_mut()) }).unwrap()).unwrap()
 }
@@ -630,4 +638,96 @@ fn update_without_handles_opens_once_and_a_failed_update_makes_the_handle_open_a
     assert_eq!(status(h)["sources"][0]["docs"], 300);
     assert_eq!(shard_open_count(&f.lib), before + 1);
     unsafe { cs_close(h) };
+}
+
+// ---- the library_manifest job ----------------------------------------------------------------------------------
+
+fn manifest_params(f: &Fixture, out: &Path, hold_ms: u64) -> Value {
+    json!({"library_path": f.lib.to_str().unwrap(), "out_path": out.to_str().unwrap(), "hold_ms": hold_ms})
+}
+
+#[test]
+fn library_manifest_job_writes_the_same_manifest_as_the_cli_helper() {
+    let f = fixture("mjob", false);
+    // what `cs library-manifest --out` writes: the helper's JSON, verbatim (library closed, no handle)
+    let (cli_text, cli_n) = libupdate::library_manifest(&f.lib).unwrap();
+    let cli_file = f.lib.parent().unwrap().join("cli-manifest.json");
+    std::fs::write(&cli_file, &cli_text).unwrap();
+
+    let h = open(&f.lib);
+    let before = shard_open_count(&f.lib);
+    let out = f.lib.parent().unwrap().join("job-manifest.json");
+    let j = start_kind("library_manifest", manifest_params(&f, &out, 600));
+    // the library is closed meanwhile: marked updating, search skips it
+    let v = status(h);
+    assert_eq!(v["sources"][0]["updating"], true, "{v}");
+    assert_eq!(search(h, &random_vec(5), 3)["results"], json!([]));
+    assert_eq!(read(h, "lib:t/5").unwrap_err(), "busy");
+    let p = progress(j);
+    assert_eq!(p["state"], "running");
+    assert_eq!(p["total"], 5);
+    let done = wait_job(j);
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!((done["done"].as_u64(), done["total"].as_u64()), (Some(5), Some(5)));
+    unsafe { cs_job_free(j) };
+
+    assert_eq!(String::from_utf8(std::fs::read(&out).unwrap()).unwrap(), String::from_utf8(std::fs::read(&cli_file).unwrap()).unwrap(), "same bytes as the CLI subcommand");
+    let m: Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!(m.as_object().unwrap().len(), cli_n);
+    assert_eq!(m.as_object().unwrap().keys().cloned().collect::<BTreeSet<_>>(), segment_ids(&f.lib));
+    assert_eq!(listed_in_manifest_file(&f.lib), segment_ids(&f.lib));
+    // no temporary file left next to the output
+    let stray: Vec<_> = std::fs::read_dir(f.lib.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(stray.is_empty(), "{stray:?}");
+
+    // the handle has its library back without opening it again, and it still searches
+    wait_ready(h);
+    let v = status(h);
+    assert_eq!(v["sources"][0]["docs"], 300, "{v}");
+    assert_eq!(v["sources"][0]["error"], Value::Null);
+    assert_eq!(first_addr(&search(h, &random_vec(5), 3)), "lib:t/5");
+    assert_eq!(shard_open_count(&f.lib), before + 1, "one open: the job's");
+    unsafe { cs_close(h) };
+
+    // the manifest is usable: it describes the library for an update (prepare accepts it)
+    let again = libupdate::library_manifest(&f.lib).unwrap().0;
+    assert_eq!(again, cli_text, "the manifest of an unchanged library is stable");
+}
+
+#[test]
+fn library_manifest_job_is_busy_cancellable_and_checks_its_parameters() {
+    let f = fixture("mjob2", false);
+    let out = f.lib.parent().unwrap().join("m.json");
+    let h = open(&f.lib);
+    let j = start_kind("library_manifest", manifest_params(&f, &out, 5000));
+    // a second manifest job and an update refuse (busy) while it runs
+    assert_eq!(start_kind_err("library_manifest", manifest_params(&f, &out, 0))["code"], "busy");
+    assert_eq!(start_err(job_params(&f, 0))["code"], "busy");
+    // cancelled before the read-write load: nothing is written and the library comes back unchanged
+    unsafe { cs_job_cancel(j) };
+    assert_eq!(wait_job(j)["state"], "cancelled");
+    unsafe { cs_job_free(j) };
+    assert!(!out.exists());
+    wait_ready(h);
+    assert_eq!(status(h)["sources"][0]["docs"], 300);
+    assert_eq!(first_addr(&search(h, &random_vec(5), 3)), "lib:t/5");
+    unsafe { cs_close(h) };
+
+    let lib = f.lib.to_str().unwrap();
+    assert_eq!(start_kind_err("library_manifest", json!({"library_path": "/nonexistent/lib", "out_path": out.to_str().unwrap()}))["code"], "not_found");
+    assert_eq!(start_kind_err("library_manifest", json!({"library_path": lib, "out_path": ""}))["code"], "bad_json");
+    assert_eq!(start_kind_err("library_manifest", json!({"library_path": lib}))["code"], "bad_json");
+    let inside = f.lib.join("m.json");
+    assert_eq!(start_kind_err("library_manifest", json!({"library_path": lib, "out_path": inside.to_str().unwrap()}))["code"], "bad_json");
+    assert_eq!(start_kind_err("library_manifest", json!({"library_path": lib, "out_path": "/nonexistent/dir/m.json"}))["code"], "not_found");
+    assert_eq!(start_kind_err("library_manifest", json!({"library_path": lib, "out_path": f.lib.parent().unwrap().to_str().unwrap()}))["code"], "bad_json");
+    // none of those marked the library busy
+    let j = start_kind("library_manifest", manifest_params(&f, &out, 0));
+    assert_eq!(wait_job(j)["state"], "done");
+    unsafe { cs_job_free(j) };
+    assert!(out.exists());
 }
