@@ -1,53 +1,100 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:cache/browse/reader_resources.dart';
 import 'package:cache/browse/zim_urls.dart';
 import 'package:cache_search/cache_search.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const id = '17e9fb54-9554-d2cd-e15f-17cf750882d1';
 
 void main() {
-  test('iOS registers the scheme and blocks other resource protocols', () {
+  // Plugin action enums cache their native values at first access. Serialize
+  // with the iOS target selected, as the real WKWebView creation path does.
+  setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.iOS);
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
+  test('iOS serializes independent WebKit allow filters after its block', () {
     final settings = readerSettings(customScheme: true);
     expect(settings.resourceCustomSchemes, [zimReaderScheme]);
     expect(settings.useShouldInterceptRequest, false);
-    final rules = settings.contentBlockers!;
-    expect(rules.first.action.type, ContentBlockerActionType.BLOCK);
-    expect(
-      rules.last.action.type,
-      ContentBlockerActionType.IGNORE_PREVIOUS_RULES,
-    );
-    bool blocked(String url) {
-      var result = false;
-      for (final rule in rules) {
-        if (RegExp(rule.trigger.urlFilter).hasMatch(url)) {
-          result = rule.action.type == ContentBlockerActionType.BLOCK;
-        }
-      }
-      return result;
+    // Inspect the JSON payload sent to WKContentRuleList, not just Dart RegExp
+    // behavior. Native compilation is a separate macOS workflow smoke check.
+    final serialized =
+        (jsonDecode(
+                  jsonEncode(
+                    settings.contentBlockers!
+                        .map((rule) => rule.toMap())
+                        .toList(),
+                  ),
+                )
+                as List)
+            .cast<Map<String, dynamic>>();
+    // Opt in only: the Mac workflow compiles this exact plugin payload with
+    // WKContentRuleListStore. Normal test runs never write a rules file.
+    final rulesFile = Platform.environment['CACHE_READER_RULES_FILE'] ?? '';
+    if (rulesFile.isNotEmpty) {
+      File(rulesFile).writeAsStringSync(jsonEncode(serialized));
     }
-
+    final filters = serialized
+        .map((rule) => rule['trigger']['url-filter'])
+        .toList();
+    expect(filters, [
+      r'^[a-zA-Z][a-zA-Z0-9+.-]*:',
+      '^cache-zim:',
+      '^data:',
+      '^blob:',
+    ]);
+    expect(serialized.map((rule) => rule['action']['type']).toList(), [
+      'block',
+      'ignore-previous-rules',
+      'ignore-previous-rules',
+      'ignore-previous-rules',
+    ]);
+    for (final filter in filters) {
+      expect(filter, isNot(contains('|')));
+      expect(filter, isNot(contains('(')));
+      expect(filter, isNot(contains(')')));
+    }
+    final localUrls = [
+      'cache-zim://zim.invalid/$id/A/page',
+      'data:image/png;base64,AA==',
+      'blob:local',
+    ];
+    // Check every allow trigger, including the middle rule, and prove that each
+    // one overrides a matching generic block only for its own protocol.
+    for (var i = 0; i < localUrls.length; i++) {
+      final url = localUrls[i];
+      expect(RegExp(filters.first as String).hasMatch(url), true);
+      for (var j = 0; j < localUrls.length; j++) {
+        expect(
+          RegExp(filters[j + 1] as String).hasMatch(url),
+          i == j,
+          reason: '${filters[j + 1]} against $url',
+        );
+      }
+    }
     for (final url in [
       'https://example.org/a.png',
       'http://zim.invalid/a',
       'wss://example.org/socket',
       'file:///private/file',
       'ftp://example.org/a',
+      'data-external://example.org/a',
+      'blob-external://example.org/a',
+      'cache-zim-external://example.org/a',
     ]) {
-      expect(blocked(url), true, reason: url);
-    }
-    for (final url in [
-      'cache-zim://zim.invalid/$id/A/page',
-      'data:image/png;base64,AA==',
-      'blob:local',
-    ]) {
-      expect(blocked(url), false, reason: url);
+      expect(RegExp(filters.first as String).hasMatch(url), true);
+      for (final filter in filters.skip(1)) {
+        expect(
+          RegExp(filter as String).hasMatch(url),
+          false,
+          reason: '$filter against $url',
+        );
+      }
     }
   });
-
   test(
     'Android keeps its HTTPS interception and network/file restrictions',
     () {
@@ -128,6 +175,10 @@ void main() {
       );
       expect(response.contentType, mime.split(';').first);
       expect(response.data, bytes);
+      expect(
+        response.contentEncoding,
+        mime.startsWith('text/') || mime.contains('javascript') ? 'utf-8' : '',
+      );
     }
   });
 
@@ -151,6 +202,7 @@ void main() {
         );
         final body = utf8.decode(response.data);
         expect(response.contentType, 'text/html');
+        expect(response.contentEncoding, 'utf-8');
         expect(
           body.indexOf('Content-Security-Policy'),
           lessThan(body.indexOf('<script>')),

@@ -22,14 +22,15 @@ InAppWebViewSettings readerSettings({required bool customScheme}) =>
                   type: ContentBlockerActionType.BLOCK,
                 ),
               ),
-              ContentBlocker(
-                trigger: ContentBlockerTrigger(
-                  urlFilter: '^($zimReaderScheme|data|blob):',
+              // WKContentRuleList does not support regex alternation. Keep each
+              // local protocol in its own rule after the generic block.
+              for (final scheme in [zimReaderScheme, 'data', 'blob'])
+                ContentBlocker(
+                  trigger: ContentBlockerTrigger(urlFilter: '^$scheme:'),
+                  action: ContentBlockerAction(
+                    type: ContentBlockerActionType.IGNORE_PREVIOUS_RULES,
+                  ),
                 ),
-                action: ContentBlockerAction(
-                  type: ContentBlockerActionType.IGNORE_PREVIOUS_RULES,
-                ),
-              ),
             ]
           : [],
       javaScriptEnabled: true,
@@ -93,9 +94,15 @@ Future<CustomSchemeResponse> serveCustomZimResource(
       utf8.encode(_offlineHtml(utf8.decode(bytes, allowMalformed: true))),
     );
   }
+  final text =
+      mime.startsWith('text/') ||
+      mime.contains('xml') ||
+      mime.contains('json') ||
+      mime.contains('javascript');
   return CustomSchemeResponse(
     data: bytes,
     contentType: mime,
-    contentEncoding: 'utf-8',
+    // The pinned API requires a String; empty means no character encoding.
+    contentEncoding: text ? 'utf-8' : '',
   );
 }
