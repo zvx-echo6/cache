@@ -82,8 +82,12 @@ char *cs_version(void);
  *                                  dropped unless that leaves fewer than k+offset results
  *   "min_relevance": 0.5           optional, default 0.5: keyword hits scoring below this fraction of their source's
  *                                  best hit are dropped on the same terms
- *   "prewarm": true                optional, default true: open libzim on every ZIM with a built-in index on background
- *                                  threads as soon as the sources are set, so the first search does not pay for it
+ *   "prewarm": true                optional, default true (false on Android): open libzim on the ZIMs with a built-in index
+ *                                  on background threads as soon as the sources are set, so the first search does not pay
+ *                                  for it; only as many as fit in searcher_budget_mb, smallest first
+ *   "searcher_budget_mb": 256      optional, default 256: memory budget for the libzim searchers kept built (estimated cost
+ *                                  per searcher, least recently used dropped first); a searcher over the whole budget is
+ *                                  built per query; 0 keeps none. Changes speed only, never the results. See DESIGN.md
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
  * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it
