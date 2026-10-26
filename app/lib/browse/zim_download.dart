@@ -59,9 +59,26 @@ class CancelToken {
 /// Free bytes on the file system holding [dir], or null when it cannot be told.
 typedef FreeSpace = int? Function(String dir);
 
-/// statvfs through libc (Android and Linux, 64-bit). Null elsewhere, and then the download relies on the
+/// iOS uses a native helper compiled against its platform statvfs headers.
+/// Android and Linux use libc directly (64-bit). Null on failure or unsupported platforms; the download relies on the
 /// write failing cleanly when the disk is full.
 int? freeBytesOnDisk(String dir) {
+  if (Platform.isIOS) {
+    final path = dir.toNativeUtf8();
+    try {
+      final freeBytes = ffi.DynamicLibrary.process()
+          .lookupFunction<
+            ffi.Int64 Function(ffi.Pointer<Utf8>),
+            int Function(ffi.Pointer<Utf8>)
+          >('cache_free_bytes_on_disk');
+      final available = freeBytes(path);
+      return available < 0 ? null : available;
+    } catch (_) {
+      return null;
+    } finally {
+      calloc.free(path);
+    }
+  }
   if (!(Platform.isAndroid || Platform.isLinux)) return null;
   if (ffi.Abi.current() != ffi.Abi.androidArm64 &&
       ffi.Abi.current() != ffi.Abi.androidX64 &&
