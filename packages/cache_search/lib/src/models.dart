@@ -21,8 +21,13 @@ class SourceConfig {
 }
 
 /// The cs_open / cs_set_sources config JSON for [sources].
-Map<String, dynamic> openConfigJson(List<SourceConfig> sources) => {
+///
+/// [extra] holds the other sections of the config, which the core reads when they are present: `places`
+/// (`{"packs": [".../places.sqlite"]}`, the map's search), `routing` (`{"valhalla": {"tiles", "shim"}, "offroad": {"pack",
+/// "elevation"}}`) and `user` (`{"db_path"}`, saved places).
+Map<String, dynamic> openConfigJson(List<SourceConfig> sources, {Map<String, dynamic> extra = const {}}) => {
       'sources': [for (final s in sources) s.toJson()],
+      ...extra,
     };
 
 /// One hit of cs_search.

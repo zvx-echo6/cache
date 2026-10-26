@@ -44,6 +44,21 @@ abstract class CsNative {
   void jobFree(int job);
 }
 
+/// The map calls (cs_map_search, cs_map_route, cs_map_progress) and saved places (cs_place_*). Kept apart from [CsNative] so
+/// the fakes of the older seam do not change. [FfiCsNative] implements it; [hasMap] is false when the loaded core is older
+/// than the map calls (the symbols are looked up when first used, never at load).
+abstract class CsMapNative {
+  bool get hasMap;
+  String? mapSearch(int handle, String requestJson);
+  String? mapRoute(int handle, String requestJson);
+  String? mapProgress(int handle, String requestJson);
+
+  bool get hasSavedPlaces;
+  String? placesList(int handle);
+  String? placeSave(int handle, String placeJson);
+  String? placeDelete(int handle, String key);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -74,9 +89,10 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative {
+class FfiCsNative implements CsNative, CsMapNative {
   FfiCsNative(DynamicLibrary lib)
-      : _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
+      : _lib = lib,
+        _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
         _open = lib.lookupFunction<_OpenC, _Open>('cs_open'),
         _setSources = lib.lookupFunction<_SetSourcesC, _SetSources>('cs_set_sources'),
         _status = lib.lookupFunction<_HStrC, _HStr>('cs_status'),
@@ -113,6 +129,7 @@ class FfiCsNative implements CsNative {
     return FfiCsNative(lib);
   }
 
+  final DynamicLibrary _lib;
   final _Str _version;
   final _Open _open;
   final _SetSources _setSources;
@@ -222,4 +239,59 @@ class FfiCsNative implements CsNative {
 
   @override
   void jobFree(int job) => _jobFree(_p(job));
+
+  // ---- the map and saved places: looked up on first use, because a core older than these calls must still load ----
+
+  _HStrStr? _lookupHS(String name) {
+    try {
+      return _lib.lookupFunction<_HStrStrC, _HStrStr>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  late final _HStrStr? _mapSearch = _lookupHS('cs_map_search');
+  late final _HStrStr? _mapRoute = _lookupHS('cs_map_route');
+  late final _HStrStr? _mapProgress = _lookupHS('cs_map_progress');
+  late final _HStrStr? _placeSave = _lookupHS('cs_place_save');
+  late final _HStrStr? _placeDelete = _lookupHS('cs_place_delete');
+  late final _HStr? _placesList = () {
+    try {
+      return _lib.lookupFunction<_HStrC, _HStr>('cs_places_list');
+    } on ArgumentError {
+      return null;
+    }
+  }();
+
+  @override
+  bool get hasMap => _mapSearch != null && _mapRoute != null && _mapProgress != null;
+
+  String? _callHS(_HStrStr? f, int handle, String json) {
+    if (f == null) return null;
+    return using((a) => _take(f(_p(handle), json.toNativeUtf8(allocator: a))));
+  }
+
+  @override
+  String? mapSearch(int handle, String requestJson) => _callHS(_mapSearch, handle, requestJson);
+
+  @override
+  String? mapRoute(int handle, String requestJson) => _callHS(_mapRoute, handle, requestJson);
+
+  @override
+  String? mapProgress(int handle, String requestJson) => _callHS(_mapProgress, handle, requestJson);
+
+  @override
+  bool get hasSavedPlaces => _placesList != null && _placeSave != null && _placeDelete != null;
+
+  @override
+  String? placesList(int handle) {
+    final f = _placesList;
+    return f == null ? null : _take(f(_p(handle)));
+  }
+
+  @override
+  String? placeSave(int handle, String placeJson) => _callHS(_placeSave, handle, placeJson);
+
+  @override
+  String? placeDelete(int handle, String key) => _callHS(_placeDelete, handle, key);
 }
