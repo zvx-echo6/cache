@@ -1,0 +1,122 @@
+{
+  "min_confidence": 0.5,
+  "merge": {"close_m": 40, "near_m": 200, "name_similarity": 0.6, "general_name_similarity": 0.8},
+  "general": {
+    "overture": {"min_confidence": 0.6},
+    "osm": [
+      {"tags": {"amenity": "*"}},
+      {"tags": {"shop": "*"}},
+      {"tags": {"tourism": "*"}},
+      {"tags": {"leisure": "*"}},
+      {"tags": {"historic": "*"}},
+      {"tags": {"natural": "peak|spring|hot_spring|cave_entrance|saddle|volcano"}},
+      {"tags": {"mountain_pass": "yes"}},
+      {"tags": {"aeroway": "aerodrome|helipad"}},
+      {"tags": {"railway": "station"}},
+      {"tags": {"waterway": "waterfall"}}
+    ]
+  },
+  "categories": [
+    {
+      "id": "emergency_room",
+      "title": "Emergency room",
+      "description": "hospital emergency rooms; for a hospital in an emergency use emergency_room",
+      "rules": [
+        {"source": "overture", "basic_category": ["emergency_department"],
+         "enrich_from": {"category": "hospital", "radius_m": 250}}
+      ]
+    },
+    {
+      "id": "hospital",
+      "title": "Hospital",
+      "description": "hospitals, for information or a non-emergency visit",
+      "rules": [
+        {"source": "osm", "tags": {"amenity": "hospital"}},
+        {"source": "osm", "tags": {"healthcare": "hospital"}}
+      ]
+    },
+    {
+      "id": "urgent_care",
+      "title": "Urgent care",
+      "description": "walk-in urgent care and medical clinics",
+      "rules": [
+        {"source": "osm", "tags": {"healthcare": "urgent_care"}},
+        {"source": "osm", "tags": {"amenity": "clinic"}}
+      ]
+    },
+    {
+      "id": "pharmacy",
+      "title": "Pharmacy",
+      "description": "pharmacies and drug stores",
+      "rules": [
+        {"source": "overture", "basic_category": ["pharmacy_and_drug_store"]},
+        {"source": "osm", "tags": {"amenity": "pharmacy"}}
+      ]
+    },
+    {
+      "id": "fuel",
+      "title": "Fuel",
+      "description": "gas stations",
+      "rules": [
+        {"source": "overture", "basic_category": ["gas_station"]},
+        {"source": "osm", "tags": {"amenity": "fuel"}}
+      ]
+    },
+    {
+      "id": "police",
+      "title": "Police",
+      "description": "police stations",
+      "rules": [
+        {"source": "overture", "basic_category": ["police_station"]},
+        {"source": "osm", "tags": {"amenity": "police"}}
+      ]
+    },
+    {
+      "id": "fire_station",
+      "title": "Fire station",
+      "description": "fire stations",
+      "rules": [
+        {"source": "overture", "basic_category": ["fire_station"]},
+        {"source": "osm", "tags": {"amenity": "fire_station"}}
+      ]
+    },
+    {
+      "id": "campground",
+      "title": "Campground",
+      "description": "campgrounds and campsites",
+      "rules": [
+        {"source": "overture", "basic_category": ["campground"]},
+        {"source": "osm", "tags": {"tourism": "camp_site"}}
+      ]
+    },
+    {
+      "id": "trailhead",
+      "title": "Trailhead",
+      "description": "trailheads and trail access points",
+      "rules": [
+        {"source": "overture", "basic_category": ["recreational_trail_or_path"]},
+        {"source": "osm", "tags": {"highway": "trailhead"}}
+      ]
+    },
+    {
+      "id": "water",
+      "title": "Water",
+      "description": "drinking water taps and fountains, water points and springs",
+      "rules": [
+        {"source": "osm", "tags": {"amenity": "drinking_water"}, "not": {"drinking_water": "no"}},
+        {"source": "osm", "tags": {"amenity": "water_point"}},
+        {"source": "osm", "tags": {"natural": "spring"}, "not": {"drinking_water": "no"}},
+        {"source": "osm", "tags": {"man_made": "water_tap|water_well", "drinking_water": "yes"}}
+      ]
+    },
+    {
+      "id": "shelter",
+      "title": "Shelter",
+      "description": "public shelters, huts and cabins open to travellers",
+      "rules": [
+        {"source": "osm", "tags": {"amenity": "shelter"}, "not": {"shelter_type": "public_transport|bicycle_parking|bus_stop"}},
+        {"source": "osm", "tags": {"tourism": "wilderness_hut|alpine_hut"}}
+      ]
+    }
+  ]
+}

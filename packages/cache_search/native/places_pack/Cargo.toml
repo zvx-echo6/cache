@@ -1,0 +1,25 @@
+[package]
+name = "places_pack"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Builds a region's places.sqlite pack from Overture places and an OpenStreetMap extract (desktop CLI, later GitHub Actions)"
+
+[[bin]]
+name = "places_pack"
+path = "src/main.rs"
+
+[dependencies]
+cache_places = { path = "../cache_places" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+# OpenStreetMap PBF reader (MIT).
+osmpbf = "0.3"
+csv = "1"
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# The wiki step: the Wikimedia SQL dumps (gzip), the article streams of the multistream dump (bzip2) and range requests
+# for them (the same ureq with bundled root certificates that cache_live uses).
+flate2 = "1"
+bzip2 = "0.5"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }

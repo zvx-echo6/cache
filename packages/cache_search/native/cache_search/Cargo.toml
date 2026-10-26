@@ -13,6 +13,8 @@ cache_tool = { path = "../cache_tool" }
 # Saved places and live data live in their own crates; this crate wires them into the handle and exports their C ABI.
 cache_user = { path = "../cache_user" }
 cache_live = { path = "../cache_live" }
+# Places packs, the geocoder and the nearby and locate tools.
+cache_places = { path = "../cache_places" }
 # The navigate tool (Valhalla road routing and off-road legs), registered from the "routing" section of the config.
 cache_navigate = { path = "../cache_navigate" }
 # Video sources (PeerTube): instances, browse, offline downloads, citation links; wired in ext.rs and job.rs.
