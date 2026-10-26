@@ -687,3 +687,74 @@ fn island_park_through_the_real_idaho_pack() {
     let v = env.tool_with(json!({"source": "weather"}), Some(&here), LATER, Some(pack.geo()), 50.0).unwrap();
     assert_eq!((v["place"].as_str(), v["asked_place"].as_str()), (Some("Ashton, ID"), Some("current location")));
 }
+
+// ---- the geocoder fills the place object's state, county and country for a fetch ----
+
+/// A geocoder that knows every fact the place object can carry.
+struct Full;
+
+impl Geocoder for Full {
+    fn resolve(&self, _text: &str, _near: Option<(f64, f64)>) -> Option<(String, f64, f64)> {
+        Some(("Burley, ID".into(), 42.536, -113.792))
+    }
+    fn resolve_full(&self, text: &str, near: Option<(f64, f64)>) -> Option<cache_tool::places::ResolvedPlace> {
+        let (name, lat, lon) = self.resolve(text, near)?;
+        Some(cache_tool::places::ResolvedPlace {
+            name,
+            lat,
+            lon,
+            state: Some("ID".into()),
+            state_name: Some("Idaho".into()),
+            county: Some("Cassia".into()),
+            country: Some("US".into()),
+        })
+    }
+}
+
+#[test]
+fn a_geocoded_place_object_carries_state_county_and_country() {
+    let places = UserStore::new(std::env::temp_dir().join(format!("cache-live-hook-user-{}.sqlite", std::process::id())));
+    let o = cache_live::fetch::geocoded_place(Some(json!("Burley")), &places, Some(&Full)).unwrap();
+    assert_eq!(
+        o,
+        json!({"key": "at:42.54,-113.79", "name": "Burley, ID", "lat": 42.536, "lon": -113.792,
+               "state": "ID", "state_name": "Idaho", "county": "Cassia", "country": "US"})
+    );
+    // no geocoder, a place object, or a saved place's name: used exactly as given
+    assert_eq!(cache_live::fetch::geocoded_place(Some(json!("Burley")), &places, None), Some(json!("Burley")));
+    assert_eq!(cache_live::fetch::geocoded_place(Some(burley()), &places, Some(&Full)), Some(burley()));
+    places.save(r#"{"key":"home","name":"Home","lat":42.0,"lon":-113.0}"#).unwrap();
+    assert_eq!(cache_live::fetch::geocoded_place(Some(json!("Home")), &places, Some(&Full)), Some(json!("Home")));
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("cache-live-hook-user-{}.sqlite", std::process::id())));
+}
+
+#[test]
+fn a_definition_using_state_gets_id_for_an_idaho_town() {
+    let pack = Pack::fixture("hook");
+    let srv = Server::start(vec![("/v1/forecast", fixture("openmeteo_burley.json"))]);
+    let mut d = real_source("weather.json");
+    let u = d["request"]["url"].as_str().unwrap().to_string();
+    d["request"]["url"] = json!(format!("{u}&area={{state}}-{{state_name}}-{{country}}"));
+    let env = Env::new("hook", vec![("weather.json", d, Some((srv.port, "/v1/forecast")))]);
+    let req = json!({"source": "weather", "place": "Island Park, Idaho", "now": T0}).to_string();
+
+    let out: Value = serde_json::from_str(&env.live.fetch_with(&req, &env.places, Some(pack.geo())).unwrap()).unwrap();
+    assert_eq!(out["fetched"], true);
+    assert_eq!(out["place"]["name"], "Island Park, ID");
+    assert_eq!(out["place"]["key"], "at:44.42,-111.37");
+    let url = srv.last_url.lock().unwrap().clone();
+    assert!(url.contains("area=ID-Idaho-US"), "{url}");
+    assert!(url.contains("latitude=44.4238&longitude=-111.3714"), "{url}");
+
+    // what was stored is what live_data reads back for that town
+    let t = env.tool_with(json!({"source": "weather", "place": "Island Park"}), None, LATER, Some(pack.geo()), 30.0).unwrap();
+    assert_eq!(t["place"], "Island Park, ID");
+
+    // without a geocoder the name is not a saved place: unchanged behaviour
+    assert_eq!(env.live.fetch(&req, &env.places).unwrap_err().code, "not_found");
+    // a place object that gives no state still says the state is not known
+    let bare = json!({"source": "weather", "place": {"key": "x", "name": "Somewhere", "lat": 44.0, "lon": -111.0}, "now": T0}).to_string();
+    let e = env.live.fetch_with(&bare, &env.places, Some(pack.geo())).unwrap_err();
+    assert_eq!(e.code, "fetch_failed");
+    assert_eq!(e.message, "this source needs the place's state, which is not known for Somewhere");
+}

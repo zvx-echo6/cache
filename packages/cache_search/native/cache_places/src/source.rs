@@ -5,7 +5,7 @@ use crate::geo::haversine_km;
 use crate::nearby::{installed_categories, ranked, MAX_KM};
 use crate::pack::{PackSet, PlaceRow};
 use crate::Geocoder as PackGeo;
-use cache_tool::places::{Geocoder, GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource};
+use cache_tool::places::{Geocoder, GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource, ResolvedPlace};
 use cache_tool::ToolError;
 use std::sync::Arc;
 
@@ -42,6 +42,31 @@ impl Geocoder for PackPlaceSource {
         }
         let hit = self.geo.forward(text, near, 1).into_iter().next()?;
         Some((hit.label, hit.lat, hit.lon))
+    }
+
+    /// `resolve`, with the state, county and country the hit's pack row has, and the state's name from the pack's state list.
+    fn resolve_full(&self, text: &str, near: Option<(f64, f64)>) -> Option<ResolvedPlace> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let packs = self.packs.current();
+        if packs.is_empty() {
+            return None;
+        }
+        let hit = self.geo.forward(text, near, 1).into_iter().next()?;
+        let state_name = hit.state.as_deref().and_then(|code| {
+            packs.iter().flat_map(|p| p.states.iter()).find(|s| s.code.eq_ignore_ascii_case(code)).map(|s| s.name.clone())
+        });
+        Some(ResolvedPlace {
+            name: hit.label,
+            lat: hit.lat,
+            lon: hit.lon,
+            state: hit.state,
+            state_name,
+            county: hit.county,
+            country: hit.country,
+        })
     }
 }
 

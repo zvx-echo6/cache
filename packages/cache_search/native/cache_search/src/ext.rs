@@ -167,7 +167,9 @@ impl Ext {
     }
 
     pub fn live_fetch(&self, req: &str) -> Result<String> {
-        self.live()?.fetch(req, self.places()).map_err(live_err)
+        // a name no saved place has goes through the installed places pack, which also gives the place's state, county and country
+        let source = self.places.read().unwrap_or_else(|e| e.into_inner()).clone();
+        self.live()?.fetch_with(req, self.places(), source.as_deref().and_then(|s| s.geocoder())).map_err(live_err)
     }
 
     pub fn live_get(&self, req: &str) -> Result<String> {

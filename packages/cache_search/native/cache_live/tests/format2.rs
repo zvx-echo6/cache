@@ -119,7 +119,7 @@ impl Env {
         for d in defs {
             std::fs::write(dir.join("sources").join(format!("{}.json", d["id"].as_str().unwrap())), serde_json::to_string_pretty(&d).unwrap()).unwrap();
         }
-        let live = Live::new(LiveCfg { db_path: dir.join("live.sqlite").to_string_lossy().into(), sources_dir: dir.join("sources").to_string_lossy().into() });
+        let live = Live::new(LiveCfg::new(dir.join("live.sqlite").to_string_lossy(), dir.join("sources").to_string_lossy()));
         let places = UserStore::new(dir.join("user.sqlite"));
         Env { dir, live, places }
     }

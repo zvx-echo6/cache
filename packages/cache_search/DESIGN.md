@@ -1103,7 +1103,7 @@ insert as is, `{point:properties.forecast|raw}`; headers and JSON strings never 
 | `{name}` `{place_key}` | the place's name and key |
 | `{bbox:50km}` `{bbox:30mi}` `{bbox:$radius:mi}` | `west,south,east,north` of a box that far (half-width) around the place; `$radius` reads a parameter, the last part is its unit (default km) |
 | `{west:50km}` `{south:50km}` `{east:50km}` `{north:50km}` | one edge of that box, for APIs with a parameter per edge |
-| `{state}` `{state_name}` `{county}` `{county_fips}` `{country}` `{country_name}` | the place's detail, from optional members of the place the caller gives (`{"lat","lon","state":"ID","county":"Cassia","county_fips":"16031","country":"US",...}`; the app fills them from its geocoder). A place without the detail fails with a message that says which |
+| `{state}` `{state_name}` `{county}` `{county_fips}` `{country}` `{country_name}` | the place's detail, from optional members of the place the caller gives (`{"lat","lon","state":"ID","county":"Cassia","county_fips":"16031","country":"US",...}`; the app fills them from its geocoder; `cs_live_fetch` also does it for a `place` that is a name no saved place has: the installed places pack resolves it, keys it `at:<lat>,<lon>` and adds `state`, `state_name`, `county` and `country` where the pack has them, `county_fips` and `country_name` it does not). A place without the detail fails with a message that says which |
 | `{api_key}` | the key (declared in `api_key`); in the query, a header (`"Authorization": "Bearer {api_key}"`, any header name and prefix), the body or the path (`/csv/{api_key}/VIIRS/`) |
 | `{secret:alias}` | any other secret the caller gives under that alias |
 | `{param:name}` | a user parameter (see Parameters) |

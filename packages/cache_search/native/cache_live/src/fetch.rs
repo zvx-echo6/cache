@@ -71,6 +71,28 @@ fn prune_here(c: &Connection, source: &str, keep_key: &str, now: i64) {
     let _ = c.execute(&format!("DELETE FROM live_fetch WHERE {cond}"), params![source, keep_key, now]);
 }
 
+/// The place object of a request. A name (a string) that no saved place has, and that the geocoder resolves, becomes
+/// `{key, name, lat, lon}` plus whichever of `state`, `state_name`, `county` and `country` the geocoder knows; anything else
+/// is returned as given (a saved place's name stays a name, a place object stays the caller's object).
+pub fn geocoded_place(given: Option<Value>, places: &dyn cache_tool::SavedPlaces, geocoder: Option<&dyn cache_tool::places::Geocoder>) -> Option<Value> {
+    let (Some(Value::String(name)), Some(g)) = (&given, geocoder) else { return given };
+    if places.resolve(name).is_some() {
+        return given;
+    }
+    let Some(p) = g.resolve_full(name, None) else { return given };
+    let mut o = Map::new();
+    o.insert("key".into(), Value::String(crate::here_key(p.lat, p.lon)));
+    o.insert("name".into(), Value::String(p.name));
+    o.insert("lat".into(), Value::from(p.lat));
+    o.insert("lon".into(), Value::from(p.lon));
+    for (k, v) in [("state", p.state), ("state_name", p.state_name), ("county", p.county), ("country", p.country)] {
+        if let Some(v) = v.filter(|v| !v.trim().is_empty()) {
+            o.insert(k.into(), Value::String(v));
+        }
+    }
+    Some(Value::Object(o))
+}
+
 /// The secrets of a request: `secrets` by alias, plus `api_key` under the definition's key alias.
 pub(crate) fn secrets_of(d: &SourceDef, api_key: Option<&str>, given: Option<&Map<String, Value>>) -> Secrets {
     let mut s = Secrets::default();
@@ -145,6 +167,14 @@ impl Live {
     /// it, and returns what `get` returns plus `"fetched": true|false`. A failed download leaves the last good copy in
     /// place and is recorded as the row's `last_error`. Keys and logins are used for this call only and never stored.
     pub fn fetch(&self, req_json: &str, places: &dyn cache_tool::SavedPlaces) -> Result<String> {
+        self.fetch_with(req_json, places, None)
+    }
+
+    /// `fetch`, with a geocoder for a `place` that is a name no saved place has: the geocoder's match becomes the place
+    /// (keyed by its position like the phone's, `at:<lat>,<lon>`) and carries the state, state name, county and country the
+    /// places pack has for it into the request's place object, so a definition's `{state}`, `{state_name}`, `{county}` and
+    /// `{country}` fill for it. A saved place, or a place object the caller gives, is used exactly as given.
+    pub fn fetch_with(&self, req_json: &str, places: &dyn cache_tool::SavedPlaces, geocoder: Option<&dyn cache_tool::places::Geocoder>) -> Result<String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Req {
@@ -165,8 +195,9 @@ impl Live {
         let r: Req = serde_json::from_str(req_json).map_err(|e| Error::bad_json(format!("request_json: {e}")))?;
         let now = now_from(r.now.as_deref())?;
         let l = self.def(&r.source).ok_or_else(|| Error::not_found(format!("no live source {:?}", r.source)))?;
-        let place = place_from(r.place.as_ref(), places)?;
-        let info = PlaceInfo::from_value(r.place.as_ref());
+        let given = geocoded_place(r.place, places, geocoder);
+        let place = place_from(given.as_ref(), places)?;
+        let info = PlaceInfo::from_value(given.as_ref());
         let par = uparams::resolve(&l.def, r.params.as_ref())?;
         let place = uparams::row_place(&l.def, &place, &par);
         let c = self.db()?;
