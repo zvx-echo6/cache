@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(CACHE_LLAMA_TEST_CLI "Build the cl_test command line test" OFF)
+# Desktop/server x86_64 only (not Android): let ggml use AVX2/FMA/F16C. Off = baseline x86-64, runs anywhere, slower.
+option(CACHE_LLAMA_X86_AVX2 "Enable AVX2/FMA/F16C on non-Android x86_64 builds" OFF)
 
 # --- llama.cpp options: static, no tests/tools/server, no network or download code ---
 set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
@@ -40,6 +42,12 @@ if (ANDROID AND ANDROID_ABI STREQUAL "arm64-v8a")
   set(GGML_BACKEND_DL          ON CACHE BOOL "" FORCE)
   set(GGML_CPU_ALL_VARIANTS    ON CACHE BOOL "" FORCE)
   set(CACHE_LLAMA_BACKEND_DL   ON)
+endif()
+
+if (NOT ANDROID AND CACHE_LLAMA_X86_AVX2)
+  set(GGML_AVX2 ON CACHE BOOL "" FORCE)
+  set(GGML_FMA  ON CACHE BOOL "" FORCE)
+  set(GGML_F16C ON CACHE BOOL "" FORCE)
 endif()
 
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../third_party/llama.cpp" llama.cpp)

@@ -1,8 +1,10 @@
 // Command line test for the Cache native layer. Uses only the C API in cache_llama.h.
 // Usage: cl_test <model.gguf> [n_threads]
+//        cl_test --embed <embedding-model.gguf> "text one" "text two" ...
 #include "cache_llama.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -95,7 +97,46 @@ static bool greedy(void * h, const std::string & user, int max_tok, std::string 
     return n != -2;
 }
 
+// --embed: print model info, the first 8 values of each vector, and cosine similarity (all pairs).
+static int embed_main(int argc, char ** argv) {
+    if (argc < 4) { fprintf(stderr, "usage: cl_test --embed <model.gguf> \"text one\" \"text two\" ...\n"); return 2; }
+    char err[512] = "";
+    void * h = cl_embed_load(argv[2], 0, 4, err, sizeof(err));
+    if (!h) { printf("cl_embed_load failed: %s\n", err); return 1; }
+    char info[1024];
+    cl_embed_info(h, info, sizeof(info));
+    printf("%s\n", info);
+    std::string s(info);
+    size_t p = s.find("\"n_embd\":");
+    int n_embd = p == std::string::npos ? 0 : atoi(s.c_str() + p + 9);
+    std::vector<std::vector<float>> vecs;
+    for (int i = 3; i < argc; i++) {
+        std::vector<float> v((size_t) n_embd);
+        auto t0 = clk::now();
+        int n = cl_embed(h, argv[i], v.data(), n_embd, 1);
+        double dt = secs(t0, clk::now());
+        if (n != n_embd) { printf("cl_embed failed for \"%s\": %d\n", argv[i], n); cl_embed_free(h); return 1; }
+        printf("[%d] \"%s\" (%.3fs) first 8:", i - 3, argv[i], dt);
+        for (int k = 0; k < 8 && k < n; k++) printf(" %.5f", v[(size_t) k]);
+        printf("\n");
+        vecs.push_back(v);
+    }
+    for (size_t a = 0; a < vecs.size(); a++)
+        for (size_t b = a + 1; b < vecs.size(); b++) {
+            double dot = 0, na = 0, nb = 0;
+            for (int k = 0; k < n_embd; k++) {
+                dot += (double) vecs[a][(size_t) k] * vecs[b][(size_t) k];
+                na += (double) vecs[a][(size_t) k] * vecs[a][(size_t) k];
+                nb += (double) vecs[b][(size_t) k] * vecs[b][(size_t) k];
+            }
+            printf("cosine[%zu,%zu] = %.4f\n", a, b, dot / (std::sqrt(na) * std::sqrt(nb)));
+        }
+    cl_embed_free(h);
+    return 0;
+}
+
 int main(int argc, char ** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "--embed") return embed_main(argc, argv);
     if (argc < 2) { fprintf(stderr, "usage: cl_test <model.gguf> [n_threads]\n"); return 2; }
     int threads = argc > 2 ? atoi(argv[2]) : 4;
     char err[512] = "";

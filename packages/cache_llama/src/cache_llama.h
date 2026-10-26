@@ -62,6 +62,27 @@ CL_API void cl_stop(void * h);
 
 CL_API void cl_free(void * h);
 
+// ---- Embeddings (separate handle type: an app may hold a chat handle and an embedding handle at once) ----
+// Not thread-safe per handle: one cl_embed at a time on a given embedding handle.
+// Prefixes some models expect (e.g. "query: " / "passage: ", or an instruction line) are the caller's job:
+// cl_embed embeds exactly the text it is given.
+
+// Load a GGUF embedding model. Pooling comes from the model's metadata; if it has none, mean pooling.
+// n_ctx <= 0 means 512 (also capped at the model's trained context); n_threads <= 0 means 4.
+// Returns a handle, or NULL with the reason in err.
+CL_API void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len);
+
+// Writes JSON {"description","n_embd","pooling","n_ctx"}. Returns the length, or -1 if out is too small.
+CL_API int cl_embed_info(void * h, char * out_json, int len);
+
+// Embed text (special tokens added as the model expects; markup in text is not parsed as special tokens).
+// Text longer than n_ctx tokens is truncated to n_ctx tokens. Writes n_embd floats to out
+// (L2-normalised if normalize != 0) and returns n_embd, or a negative error:
+// -1 bad handle/exception, -2 out_len < n_embd, -3 nothing to embed, -4 decode failed, -5 no embedding produced.
+CL_API int cl_embed(void * h, const char * text, float * out, int out_len, int normalize);
+
+CL_API void cl_embed_free(void * h);
+
 #ifdef __cplusplus
 }
 #endif

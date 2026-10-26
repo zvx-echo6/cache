@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -112,6 +113,26 @@ void load_model_sampling(const llama_model * model, common_params_sampling & sp)
     cl_logi("sampling (%s): temp=%.2f top_k=%d top_p=%.2f min_p=%.2f repeat_penalty=%.2f penalty_last_n=%d mirostat=%d",
             any ? "from the GGUF, llama.cpp defaults for the rest" : "llama.cpp defaults, the GGUF has none", sp.temp, sp.top_k,
             sp.top_p, sp.min_p, sp.penalty_repeat, sp.penalty_last_n, sp.mirostat);
+}
+
+struct EmbedHandle {
+    llama_model *       model = nullptr;
+    llama_context *     ctx   = nullptr;
+    const llama_vocab * vocab = nullptr;
+    int                 n_ctx  = 0;
+    int                 n_embd = 0;
+    bool                encoder = false;
+};
+
+const char * pooling_name(enum llama_pooling_type t) {
+    switch (t) {
+        case LLAMA_POOLING_TYPE_NONE: return "none";
+        case LLAMA_POOLING_TYPE_MEAN: return "mean";
+        case LLAMA_POOLING_TYPE_CLS:  return "cls";
+        case LLAMA_POOLING_TYPE_LAST: return "last";
+        case LLAMA_POOLING_TYPE_RANK: return "rank";
+        default:                      return "unspecified";
+    }
 }
 
 void set_err(char * err, int len, const std::string & msg) {
@@ -593,6 +614,126 @@ void cl_free(void * hp) {
     h->tmpls.reset();
     if (h->ctx)   llama_free(h->ctx);
     if (h->pool)  h->pool_free(h->pool);
+    if (h->model) llama_model_free(h->model);
+    delete h;
+}
+
+// ---------------- embeddings ----------------
+
+static llama_context * embed_context(llama_model * model, int n_ctx, int n_threads, enum llama_pooling_type pooling) {
+    llama_context_params cp = llama_context_default_params();
+    cp.n_ctx           = (uint32_t) n_ctx;
+    cp.n_batch         = (uint32_t) n_ctx;  // the whole text must fit one (non-causal) batch
+    cp.n_ubatch        = (uint32_t) n_ctx;
+    cp.n_seq_max       = 1;
+    cp.n_threads       = n_threads;
+    cp.n_threads_batch = n_threads;
+    cp.embeddings      = true;
+    cp.pooling_type    = pooling;  // UNSPECIFIED = take it from the model
+    return llama_init_from_model(model, cp);
+}
+
+void * cl_embed_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len) {
+    try {
+        if (n_ctx <= 0)     n_ctx = 512;
+        if (n_threads <= 0) n_threads = 4;
+        llama_log_set(quiet_log, nullptr);
+        llama_backend_init();
+
+        auto h = std::make_unique<EmbedHandle>();
+        h->model = llama_model_load_from_file(model_path, llama_model_default_params());
+        if (!h->model) {
+            set_err(err, err_len, std::string("cannot load model: ") + model_path);
+            return nullptr;
+        }
+        h->vocab = llama_model_get_vocab(h->model);
+        int n_train = llama_model_n_ctx_train(h->model);
+        if (n_train > 0 && n_ctx > n_train) {
+            n_ctx = n_train;
+        }
+
+        h->ctx = embed_context(h->model, n_ctx, n_threads, LLAMA_POOLING_TYPE_UNSPECIFIED);
+        if (h->ctx && llama_pooling_type(h->ctx) == LLAMA_POOLING_TYPE_NONE) {
+            // the model declares no pooling: use mean pooling
+            llama_free(h->ctx);
+            h->ctx = embed_context(h->model, n_ctx, n_threads, LLAMA_POOLING_TYPE_MEAN);
+        }
+        if (!h->ctx) {
+            set_err(err, err_len, "cannot create context (out of memory?)");
+            llama_model_free(h->model);
+            return nullptr;
+        }
+        h->n_ctx   = (int) llama_n_ctx(h->ctx);
+        h->n_embd  = llama_model_n_embd_out(h->model);
+        if (h->n_embd <= 0) {
+            h->n_embd = llama_model_n_embd(h->model);
+        }
+        h->encoder = llama_model_has_encoder(h->model);
+        return h.release();
+    } catch (const std::exception & e) {
+        set_err(err, err_len, e.what());
+        return nullptr;
+    }
+}
+
+int cl_embed_info(void * hp, char * out_json, int len) {
+    auto * h = (EmbedHandle *) hp;
+    if (!h) return -1;
+    try {
+        char desc[256] = "";
+        llama_model_desc(h->model, desc, sizeof(desc));
+        auto j = common_json::object();
+        j["description"] = std::string(desc);
+        j["n_embd"]      = h->n_embd;
+        j["pooling"]     = std::string(pooling_name(llama_pooling_type(h->ctx)));
+        j["n_ctx"]       = h->n_ctx;
+        return put(j.dump(), out_json, len);
+    } catch (const std::exception &) {
+        return -1;
+    }
+}
+
+int cl_embed(void * hp, const char * text, float * out, int out_len, int normalize) {
+    auto * h = (EmbedHandle *) hp;
+    if (!h || !text || !out) return -1;
+    try {
+        if (out_len < h->n_embd) return -2;
+
+        auto tokens = common_tokenize(h->vocab, text, /*add_special*/ true, /*parse_special*/ false);
+        if (tokens.empty()) return -3;
+        if ((int) tokens.size() > h->n_ctx) {
+            // keep the closing special token (SEP/EOS) if the vocab adds one
+            llama_token last = tokens.back();
+            bool keep_last = llama_vocab_get_add_sep(h->vocab) || llama_vocab_get_add_eos(h->vocab);
+            tokens.resize((size_t) h->n_ctx);
+            if (keep_last) tokens.back() = last;
+        }
+
+        if (llama_memory_t mem = llama_get_memory(h->ctx)) {
+            llama_memory_clear(mem, true);
+        }
+        llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
+        std::vector<int8_t> want_out(tokens.size(), 1);  // pooling needs every token as an output
+        batch.logits = want_out.data();
+        int rc = h->encoder ? llama_encode(h->ctx, batch) : llama_decode(h->ctx, batch);
+        if (rc != 0) return -4;
+
+        const float * e = llama_get_embeddings_seq(h->ctx, 0);
+        if (!e) return -5;
+        double norm = 0.0;
+        for (int i = 0; i < h->n_embd; i++) norm += (double) e[i] * e[i];
+        float scale = (normalize && norm > 0.0) ? (float) (1.0 / std::sqrt(norm)) : 1.0f;
+        for (int i = 0; i < h->n_embd; i++) out[i] = e[i] * scale;
+        return h->n_embd;
+    } catch (const std::exception &) {
+        return -1;
+    }
+}
+
+void cl_embed_free(void * hp) {
+    auto * h = (EmbedHandle *) hp;
+    if (!h) return;
+    if (h->ctx)   llama_free(h->ctx);
     if (h->model) llama_model_free(h->model);
     delete h;
 }
