@@ -162,7 +162,7 @@ void main() {
   test('the version in the app is the version in pubspec.yaml', () {
     final line = File('pubspec.yaml').readAsLinesSync().firstWhere((l) => l.startsWith('version:'));
     expect(line.split(':').last.trim().split('+').first, kAppVersion);
-    expect(kAppLicenceId, 'GPL-3.0-or-later');
+    expect(kAppLicenceId, 'AGPL-3.0-or-later');
   });
 
   test('preferences.json holds no key', () async {

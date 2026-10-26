@@ -41,7 +41,7 @@ void main() {
       expect(find.text('41.0 GB free · Updates on any connection'), findsOneWidget);
       expect(find.text('Not built yet'), findsOneWidget);
       expect(find.text('Dark'), findsOneWidget);
-      expect(find.text('Version 1.0.0 · GPL-3.0'), findsOneWidget);
+      expect(find.text('Version 1.0.0 · AGPL-3.0'), findsOneWidget);
       await r.dispose(tester);
     });
 

@@ -23,7 +23,7 @@ class AboutPage extends StatelessWidget {
             SettingsRow(title: 'Version', status: const [Part(kAppVersion)]),
             SettingsRow(
               title: 'Licence',
-              status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU General Public License, version 3 or later.')],
+              status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
             ),
           ],
         ),
@@ -45,7 +45,7 @@ class AboutPage extends StatelessWidget {
                 context: context,
                 applicationName: 'Cache',
                 applicationVersion: kAppVersion,
-                applicationLegalese: 'Licensed $kAppLicenceId. Third-party credits are in Settings > About and credits > Credits.',
+                applicationLegalese: 'Copyright (C) 2026 Happy Little LLC. Licensed $kAppLicenceId. Third-party credits are in Settings > About and credits > Credits.',
               ),
             ),
           ],
