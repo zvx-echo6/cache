@@ -7,20 +7,23 @@ import 'instance_screen.dart';
 import 'library_screen.dart';
 import 'widgets.dart';
 
+/// Asks for a PeerTube address and adds it; the new instance opens.
+Future<void> addVideoInstance(BuildContext context, VideoState video) async {
+  final added = await showDialog<bool>(context: context, builder: (ctx) => AddInstanceDialog(video: video));
+  if (added == true && context.mounted) {
+    // The newest instance is the one just added; open it.
+    final i = video.instances.isEmpty ? null : video.instances.last;
+    if (i != null) Navigator.push(context, MaterialPageRoute<void>(builder: (_) => InstanceScreen(video: video, instance: i)));
+  }
+}
+
 /// Browse > Videos: the instances the user connected, what is downloading, and the videos saved on the phone.
 class VideosScreen extends StatelessWidget {
   const VideosScreen({super.key, required this.video});
 
   final VideoState video;
 
-  Future<void> _add(BuildContext context) async {
-    final added = await showDialog<bool>(context: context, builder: (ctx) => _AddInstanceDialog(video: video));
-    if (added == true && context.mounted) {
-      // The newest instance is the one just added; open it.
-      final i = video.instances.isEmpty ? null : video.instances.last;
-      if (i != null) Navigator.push(context, MaterialPageRoute<void>(builder: (_) => InstanceScreen(video: video, instance: i)));
-    }
-  }
+  Future<void> _add(BuildContext context) => addVideoInstance(context, video);
 
   @override
   Widget build(BuildContext context) {
@@ -116,16 +119,16 @@ class VideosScreen extends StatelessWidget {
   }
 }
 
-class _AddInstanceDialog extends StatefulWidget {
-  const _AddInstanceDialog({required this.video});
+class AddInstanceDialog extends StatefulWidget {
+  const AddInstanceDialog({super.key, required this.video});
 
   final VideoState video;
 
   @override
-  State<_AddInstanceDialog> createState() => _AddInstanceDialogState();
+  State<AddInstanceDialog> createState() => AddInstanceDialogState();
 }
 
-class _AddInstanceDialogState extends State<_AddInstanceDialog> {
+class AddInstanceDialogState extends State<AddInstanceDialog> {
   final _url = TextEditingController();
   String? _error;
   bool _busy = false;

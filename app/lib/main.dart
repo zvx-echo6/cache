@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app_state.dart';
@@ -10,6 +12,7 @@ import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
+import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
@@ -24,15 +27,26 @@ import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'search/core_numbering.dart';
+import 'settings/app_settings.dart';
+import 'settings/data_policy.dart';
+import 'settings/hub.dart';
+import 'settings/storage_usage.dart';
+import 'settings/web_search_setup.dart';
+import 'video/token_store.dart';
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
+import 'screens/settings/about_pages.dart' show kCreditsAsset;
 import 'screens/shell.dart';
 import 'theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // The credits (native libraries, Rust crates, data sources, art) join the licences Flutter lists for the packages.
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
+  });
   runApp(const CacheApp());
 }
 
@@ -46,7 +60,7 @@ class CacheApp extends StatefulWidget {
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
-  late final BrowseState browse = BrowseState(sources: sources);
+  late final BrowseState browse = BrowseState(sources: sources, policy: policy);
   late final LocationService location = LocationService(
     onFix: (f) => sources.setLocation(
       f?.lat,
@@ -56,13 +70,50 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   // The layer engine in the core (cs_layers_*): the catalogue, the tile server the map reads from, area downloads.
+  late final AppSettings settings = AppSettings();
+  // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
+  late final DataPolicy policy = DataPolicy(settings: settings);
   late final MapsState maps = MapsState(
     engine: CoreLayerEngine(
       openCore: sources.whenCoreReady,
       layersConfig: () => sources.layersSection,
+      policy: policy,
     ),
   );
-  late final VideoState video = VideoState();
+  late final VideoState video = VideoState(policy: policy);
+  late final WebSearchSetup webSearch = WebSearchSetup(
+    settings: settings,
+    secrets: const SecureTokenStore(),
+    setWeb: (provider, key, online) async =>
+        (await sources.whenCoreReady())?.setWeb(provider: provider, key: key, online: online),
+    // Checking a key is one real search through the core's own web_search tool, the request the assistant will make.
+    searchProbe: (key) async {
+      final core = await sources.whenCoreReady();
+      if (core == null) throw StateError('The search core is not available');
+      await core.setWeb(provider: WebSearchSetup.provider, key: key, online: true);
+      final conv = await core.newConversation();
+      try {
+        return (await conv.tool('web_search', {'query': 'Cache'}, now: isoWithOffset(DateTime.now()))).content;
+      } finally {
+        await conv.free();
+      }
+    },
+  );
+  late final SettingsHub hub = SettingsHub(
+    settings: settings,
+    policy: policy,
+    webSearch: webSearch,
+    storage: StorageUsage(
+      library: () => [sources.zimsDir, sources.indexesDir],
+      maps: () => [
+        if (sources.layersSection['dir'] is String) Directory(sources.layersSection['dir'] as String),
+        if (sources.zimsDir != null) Directory('${sources.zimsDir!.parent.path}/packs'),
+      ],
+      models: () => [app.modelsDir],
+      videos: () => [video.dir],
+      freeIn: () => app.modelsDir ?? sources.zimsDir,
+    ),
+  );
   late final LayoutState layout = LayoutState();
   late final ChatController chat = ChatController(
     tools: [SearchTool(sources), ReadTool(sources)],
@@ -106,6 +157,7 @@ class _CacheAppState extends State<CacheApp> {
       if (mounted) setState(() => _coreDone = true);
     });
     app.init();
+    settings.init().then((_) => webSearch.init());
     layout.init();
     sources.init();
     browse.init();
@@ -157,6 +209,8 @@ class _CacheAppState extends State<CacheApp> {
     layout.dispose();
     location.dispose();
     maps.dispose();
+    webSearch.dispose();
+    settings.dispose();
     _store?.close();
     super.dispose();
   }
@@ -166,7 +220,7 @@ class _CacheAppState extends State<CacheApp> {
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) => MaterialApp(
-        title: 'CACHE',
+        title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
         builder: (context, child) => Stack(
@@ -194,6 +248,7 @@ class _CacheAppState extends State<CacheApp> {
           browse: browse,
           nav: nav,
           layout: layout,
+          hub: hub,
         ),
       ),
     );

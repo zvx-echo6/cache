@@ -11,9 +11,15 @@ import '../theme.dart';
 /// The list of past conversations, opened from the Ask top bar: New chat, a search box, then Pinned and
 /// the conversations grouped by date.
 class HistoryDrawer extends StatefulWidget {
-  const HistoryDrawer({super.key, required this.chat, this.now, this.share = shareMarkdown, this.layout});
+  const HistoryDrawer({super.key, required this.chat, this.now, this.share = shareMarkdown, this.layout, this.width, this.onChosen});
 
   final ChatController chat;
+
+  /// The drawer's width (the Material default when null); Settings shows the list as a page, so it asks for all the width.
+  final double? width;
+
+  /// Called after a chat was opened or a new one started from the list, once the list has closed (Settings uses it to bring Ask forward).
+  final VoidCallback? onChosen;
 
   /// Where "Add to Home" puts a chat shortcut; the item is hidden when null.
   final LayoutState? layout;
@@ -63,11 +69,13 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
   void _open(int id) {
     widget.chat.openConversation(id);
     Navigator.of(context).pop();
+    widget.onChosen?.call();
   }
 
   void _newChat() {
     widget.chat.newChat();
     Navigator.of(context).pop();
+    widget.onChosen?.call();
   }
 
   Future<void> _longPress(Conversation c) async {
@@ -149,6 +157,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
     final k = context.t;
     final searching = _query.text.trim().isNotEmpty;
     return Drawer(
+      width: widget.width,
       backgroundColor: k.background,
       child: SafeArea(
         child: Column(

@@ -157,6 +157,21 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Deletes a model file from the models folder. The model in use (or one being loaded) is kept: false.
+  Future<bool> deleteModel(ModelEntry entry) async {
+    if (loading != null || active?.path == entry.path) return false;
+    try {
+      final f = File(entry.path);
+      if (f.existsSync()) f.deleteSync();
+    } catch (e) {
+      loadError = 'Could not delete the file: $e';
+      notifyListeners();
+      return false;
+    }
+    await refreshModels();
+    return true;
+  }
+
   /// Loads [entry] and makes it the active model. A model that cannot use tools is marked and not
   /// activated; the previous model (if any) stays active.
   Future<void> activate(ModelEntry entry) async {

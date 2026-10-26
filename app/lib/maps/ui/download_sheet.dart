@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../settings/data_policy.dart';
 import '../../theme.dart';
 import '../geo.dart';
 import '../layers/layer_def.dart';
@@ -84,6 +85,9 @@ class _ConfirmState extends State<_Confirm> {
   String? _error;
   bool _starting = false;
 
+  /// The download was stopped because the phone is on mobile data and downloads on mobile data are off.
+  bool _blockedByMobile = false;
+
   /// The layer that really downloads: for the base map, the regional one where it covers the area.
   late final LayerDef _target = widget.maps.downloadDefFor(widget.def, widget.area);
   late final String _label =
@@ -100,11 +104,23 @@ class _ConfirmState extends State<_Confirm> {
     widget.maps.engine.refreshOnline();
   }
 
-  Future<void> _start() async {
-    setState(() => _starting = true);
+  Future<void> _start({bool anyway = false}) async {
+    setState(() {
+      _starting = true;
+      _blockedByMobile = false;
+      _error = null;
+    });
     try {
-      await widget.maps.engine.download(_target.id, widget.area, label: _label);
+      await widget.maps.engine.download(_target.id, widget.area, label: _label, anyway: anyway);
       if (mounted) Navigator.pop(context);
+    } on MobileDataBlocked catch (e) {
+      if (mounted) {
+        setState(() {
+          _starting = false;
+          _blockedByMobile = true;
+          _error = e.message;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -153,10 +169,16 @@ class _ConfirmState extends State<_Confirm> {
                 Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: FilledButton(
-                    onPressed: (est != null && est.allowed && online && !_starting) ? _start : null,
-                    child: const Text('Download'),
-                  ),
+                  child: _blockedByMobile
+                      ? FilledButton(
+                          key: const ValueKey('download-anyway'),
+                          onPressed: () => _start(anyway: true),
+                          child: const Text('Download anyway'),
+                        )
+                      : FilledButton(
+                          onPressed: (est != null && est.allowed && online && !_starting) ? () => _start() : null,
+                          child: const Text('Download'),
+                        ),
                 ),
               ],
             ),

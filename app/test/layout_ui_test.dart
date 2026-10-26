@@ -23,6 +23,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
 import 'nav_fakes.dart';
+import 'support/settings_rig.dart';
 import 'support/test_layer_engine.dart';
 import 'video_fake.dart';
 
@@ -67,6 +68,7 @@ class Rig {
   late LocationService location;
   late MapsState maps;
   late NavState nav;
+  late SettingsRig settingsRig;
 
   Future<void> start(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
@@ -78,7 +80,7 @@ class Rig {
     store = ConversationStore.memory();
     chat = ChatController(tools: const [])..attachStore(store);
     sources = FakeSources(Directory('${dir.path}/zims')..createSync());
-    browse = BrowseState(sources: sources, network: FakeNetwork(true), settingsDirOverride: dir, phoneLanguage: 'en');
+    browse = BrowseState(sources: sources, policy: testPolicy(), settingsDirOverride: dir, phoneLanguage: 'en');
     video = VideoState(dirOverride: Directory('${dir.path}/videos'), nativeFactory: fakeVideoNative, tokens: MemoryTokenStore());
     location = LocationService(source: _NoSource(), settingsDirOverride: dir);
     maps = MapsState(engine: TestLayerEngine(), settingsDirOverride: dir);
@@ -89,6 +91,7 @@ class Rig {
       positionSource: FakeNavPosition(),
       fmt: const Fmt(UnitSystem.imperial),
     );
+    settingsRig = await SettingsRig.create(tester);
     await tester.runAsync(() async {
       await layout.init();
       await browse.init();
@@ -106,6 +109,7 @@ class Rig {
         browse: browse,
         nav: nav,
         layout: layout,
+        hub: settingsRig.hub,
       ),
     ));
     await tester.pump();
@@ -119,6 +123,7 @@ class Rig {
     sources.dispose();
     store.close();
     layout.dispose();
+    await settingsRig.dispose(tester);
     await tester.runAsync(() => dir.delete(recursive: true));
   }
 }
@@ -310,8 +315,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('home-settings')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('Theme'), findsOneWidget);
-    expect(find.text('Reading sources'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
+    expect(find.text('Appearance'), findsOneWidget);
+    expect(find.text('Share this setup'), findsOneWidget);
     await r.stop(tester);
   });
 }

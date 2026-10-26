@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/opds.dart';
 import 'package:cache/browse/zim_download.dart';
+import 'package:cache/settings/data_policy.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,11 +23,11 @@ void main() {
   });
   tearDown(() => tmp.deleteSync(recursive: true));
 
-  BrowseState make({KiwixCatalog? catalog, ZimDownloader? downloader, NetworkStatus? network, String phone = 'en'}) => BrowseState(
+  BrowseState make({KiwixCatalog? catalog, ZimDownloader? downloader, DataPolicy? policy, String phone = 'en'}) => BrowseState(
         sources: sources,
         catalog: catalog ?? catalogWith((u) async => fixture('kiwix_entries_wikivoyage.xml')),
         downloader: downloader,
-        network: network ?? FakeNetwork(true),
+        policy: policy ?? testPolicy(),
         settingsDirOverride: settings,
         iconFetch: (u) async => Uint8List.fromList([1, 2, 3]),
         phoneLanguage: phone,
@@ -40,11 +41,6 @@ void main() {
     final b = make(phone: 'fr');
     await b.init();
     expect(b.language, 'deu');
-    expect(b.wifiOnly, isTrue);
-    await b.setWifiOnly(false);
-    final c = make();
-    await c.init();
-    expect(c.wifiOnly, isFalse);
   });
 
   test('filters go to the catalogue and pages are appended', () async {
@@ -147,12 +143,12 @@ void main() {
     });
     tearDown(() => server.close(force: true));
 
-    test('waits for Wi-Fi by default, and goes on when told to use mobile data once', () async {
-      final b = make(network: FakeNetwork(false), downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
+    test('is blocked on mobile data by default, and goes on when told to download anyway', () async {
+      final b = make(policy: testPolicy(wifi: false), downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
       await b.init();
       final e = entryFor(server.port);
       await b.download(e);
-      expect(b.transfers[e.id]!.phase, TransferPhase.waitingForWifi);
+      expect(b.transfers[e.id]!.phase, TransferPhase.blockedByMobileData);
       expect(sources.zims, isEmpty);
       await b.download(e, allowMobile: true);
       expect(b.transfers.containsKey(e.id), isFalse);

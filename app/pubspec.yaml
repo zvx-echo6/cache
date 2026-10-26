@@ -91,6 +91,8 @@ flutter:
     # Brand: logo, wordmarks, launch scene and module tiles (made by tool/brand_assets.dart).
     - assets/brand/
     - assets/brand/tiles/
+    # The credits text (a copy of CREDITS.md at the repository root; a test keeps them equal).
+    - assets/credits.md
 
   # To add assets to your application, add an assets section, like this:
   # assets:

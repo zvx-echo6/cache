@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../settings/data_policy.dart';
 import '../../theme.dart';
 import '../layers/layer_def.dart';
 import '../layers/layer_engine.dart';
@@ -126,6 +127,20 @@ class _AreaRow extends StatelessWidget {
     if (yes == true) await engine.delete(area.id);
   }
 
+  Future<void> _update(BuildContext context, {bool anyway = false}) async {
+    try {
+      await engine.update(area.id, anyway: anyway);
+    } on MobileDataBlocked catch (e) {
+      if (!context.mounted) return;
+      final m = ScaffoldMessenger.of(context);
+      m.hideCurrentSnackBar();
+      m.showSnackBar(SnackBar(
+        content: Text(e.message),
+        action: SnackBarAction(label: 'Download anyway', onPressed: () => _update(context, anyway: true)),
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -170,7 +185,7 @@ class _AreaRow extends StatelessWidget {
               IconButton(
                 tooltip: 'Update',
                 icon: Icon(Icons.refresh, color: k.secondary),
-                onPressed: () => engine.update(area.id),
+                onPressed: () => _update(context),
               ),
               IconButton(
                 tooltip: 'Delete',
@@ -205,39 +220,56 @@ class _Advanced extends StatelessWidget {
           title: const Text('Advanced', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Each layer is a definition: what it is, its licence, and the address of its original source. '
-              'Switch one off to leave it out, edit one to point Cache at your own server, or add a new one.',
-              style: TextStyle(fontSize: 14, color: k.secondary),
-            ),
-            const SizedBox(height: 8),
-            for (final l in maps.engine.layers)
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(l.title),
-                subtitle: Text(
-                  '${l.id} · ${l.sourceUrl.isEmpty ? 'no source address' : l.sourceUrl}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                secondary: IconButton(
-                  tooltip: 'Edit the definition of ${l.title}',
-                  icon: const Icon(Icons.edit_outlined),
-                  onPressed: () => _edit(context, l),
-                ),
-                value: maps.isDefinitionEnabled(l),
-                onChanged: (v) => maps.setDefinitionEnabled(l.id, v),
-              ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () => _edit(context, null),
-              icon: const Icon(Icons.add),
-              label: const Text('Add a layer definition'),
-            ),
-          ],
+          children: [LayerDefinitions(maps: maps)],
         ),
       ),
+    );
+  }
+}
+
+/// The layer definitions: a switch and an edit button for each, and a way to add one. The Advanced section of the layers screen and
+/// Settings > Maps > Advanced both show it.
+class LayerDefinitions extends StatelessWidget {
+  const LayerDefinitions({super.key, required this.maps});
+
+  final MapsState maps;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Each layer is a definition: what it is, its licence, and the address of its original source. '
+          'Switch one off to leave it out, edit one to point Cache at your own server, or add a new one.',
+          style: TextStyle(fontSize: 14, color: k.secondary),
+        ),
+        const SizedBox(height: 8),
+        for (final l in maps.engine.layers)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(l.title),
+            subtitle: Text(
+              '${l.id} · ${l.sourceUrl.isEmpty ? 'no source address' : l.sourceUrl}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            secondary: IconButton(
+              tooltip: 'Edit the definition of ${l.title}',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: () => _edit(context, l),
+            ),
+            value: maps.isDefinitionEnabled(l),
+            onChanged: (v) => maps.setDefinitionEnabled(l.id, v),
+          ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: () => _edit(context, null),
+          icon: const Icon(Icons.add),
+          label: const Text('Add a layer definition'),
+        ),
+      ],
     );
   }
 

@@ -119,22 +119,6 @@ class _BrowseScreenState extends State<BrowseScreen> {
             icon: const Icon(Icons.refresh),
             onPressed: b.checkingUpdates ? null : b.checkUpdates,
           ),
-          ListenableBuilder(
-            listenable: b,
-            builder: (context, _) => PopupMenuButton<String>(
-              tooltip: 'More',
-              onSelected: (v) {
-                if (v == 'wifi') b.setWifiOnly(!b.wifiOnly);
-              },
-              itemBuilder: (_) => [
-                CheckedPopupMenuItem(
-                  value: 'wifi',
-                  checked: b.wifiOnly,
-                  child: const Text('Download on Wi-Fi only'),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
       body: ListenableBuilder(
@@ -153,9 +137,17 @@ class _BrowseScreenState extends State<BrowseScreen> {
               if (b.updateError != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    b.updateError!,
-                    style: TextStyle(color: k.warning),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(b.updateError!, style: TextStyle(color: k.warning)),
+                      if (b.updatesBlocked)
+                        TextButton(
+                          key: const ValueKey('check-anyway'),
+                          onPressed: () => b.checkUpdates(anyway: true),
+                          child: const Text('Check anyway'),
+                        ),
+                    ],
                   ),
                 ),
               if (b.updates.isNotEmpty) _updatesCard(k),
