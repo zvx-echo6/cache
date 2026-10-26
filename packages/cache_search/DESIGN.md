@@ -24,7 +24,9 @@ library's settings file.
 ## Sources
 
 A handle is opened with a list of sources, of two kinds:
-- `zim`: a ZIM file plus its Tantivy index directory (prebuilt and downloaded, or built on the phone).
+- `zim`: a ZIM file plus its Tantivy index directory (prebuilt and downloaded, or built on the phone). On builds with
+  the `xapian` feature (Windows, Android; below), a ZIM that carries its own Xapian index is searched through that
+  index and needs no index directory.
 - `library`: a Qdrant collection's shard, used as it is: no export, no conversion, no splitting. Its settings
   file (below) says which payload fields mean what. Its keyword index is the library's own scored text index if
   it has one, otherwise a Tantivy directory built on the device (`index_library` job).
@@ -259,7 +261,15 @@ v1 format:
   This is the setting. What a library actually uses is reported by `cs_status` as `keyword_source`:
   `"own"`, `"device"` or `"none"` (null for ZIMs).
 
-## Keyword index (Tantivy)
+## Keyword index (Tantivy, and a ZIM's own Xapian index)
+
+Hybrid, per ZIM source. With the Cargo feature `xapian` (default; effective on Windows and Android, see
+"ZIM built-in index (libzim)" below):
+- a ZIM that has the full-text index `X/fulltext/xapian` is searched through it, with no `index_dir` needed. `cs_status`
+  lists it as `"indexed":true,"building":false,"stale":false` with `"keyword_source":"own"` (the ZIM's own index, the same
+  word as a library's own scored index; the field appears for these ZIMs only);
+- any other ZIM (no built-in index, or a build without the feature) uses its Tantivy index exactly as described next.
+An `index_zim` job still builds a Tantivy index for any ZIM; a ZIM with a built-in index simply does not use it.
 
 - One index per source. Each index_dir records the index format version and the tokenizer (from the ZIM or
   library language; English stemmer by default). An index from an older format is reported as stale.
@@ -276,8 +286,9 @@ at index time. If the library has its own scored text index (`keyword_source` "o
 
 `search(query, options)`; options carry `k`, `offset` (paging), a source filter and an optional query vector
 tagged with its embedding model id:
-1. Keyword: top 50 (plus offset) from each selected source's keyword index (BM25): a ZIM's Tantivy index, a
-   library's own scored index if present, else the library's device Tantivy index.
+1. Keyword: top 50 (plus offset) from each selected source's keyword index (BM25): a ZIM's own Xapian index
+   if it has one (feature `xapian`), else its Tantivy index; a library's own scored index if present, else the
+   library's device Tantivy index.
 2. Vector: only for libraries whose settings `embedding.model` matches the query vector's model id; other
    libraries are keyword-only, and the response says which sources used vectors.
 3. Merge: the keyword lists across all sources are merged with reciprocal rank fusion (k=60); where a
@@ -298,7 +309,9 @@ Vector search over a library:
 Snippets and titles:
 - Library hit snippet: the `summary` field if mapped, else the start of the `text` field; at most 400 chars,
   cut at a sentence end. ZIM article: Tantivy snippet over `lead`, falling back to its first sentences, at most
-  400 chars.
+  400 chars. For a ZIM searched through its Xapian index: libzim's own snippet, with its HTML (`<b>` around matched
+  words) stripped and entities decoded, whitespace collapsed, a leading or trailing "..." removed, and cut to at most 400 chars at a sentence end
+  by the same rule; if libzim gives none, the first sentences of the article.
 - Library hit title: the mapped `title` (falling back to `title_fallback`); when the point has a page,
   `<title>, p. <page>`. For a ZIM hit: `<ZIM title>: <article title>`.
 
@@ -480,6 +493,66 @@ output, error and status for the test key.
 **CLI.** `cs` turns web search on when both `CACHE_WEB_PROVIDER` and `CACHE_WEB_KEY` are set in the environment (it
 then assumes online); `CACHE_WEB_BASE_URL` points Kagi at another address for runs against a stand-in server.
 `cs serve` has `POST /web {"provider","key","online"}` and `DELETE /web`; the key is never echoed.
+
+## ZIM built-in index (libzim)
+
+Decided by the Cache lead, 2026-10-26: the official prebuilt libzim 9.8.2 (Kiwix; Xapian inside), a small C ABI shim
+`native/zimx/` (`zimx.h`, `zimx.cpp`) built by `cache_search/build.rs` with the `cc` crate, and a Cargo feature `xapian`
+(default; effective on Windows and Android only, other targets ignore it). Download URLs, versions and md5s:
+`native/zimx/LIBZIM.md`; fetch-and-verify scripts: `fetch-libzim.ps1` (Windows) and `fetch-libzim.sh` (Android), which download
+into the build directory, never the repository. `LIBZIM_DIR` names the unpacked folder at build time. On Windows
+`build.rs` copies `zim-9.dll` and the ICU 74 DLLs next to the built binaries; they must ship with them
+(the Visual C++ runtime is also needed). Android arm64 needs `libzim.so`, the NDK's `libc++_shared.so` and ICU data; that
+path is wired but not yet built or run.
+
+What it is used for: keyword search and title suggestions over a ZIM's own indexes. `cs_read`, `cs_zim_get` and
+`cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (lazily, on first search, suggest or status)
+for the indexes.
+- Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k)` (path,
+  title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k)` (path, title). Results are UTF-8 JSON strings
+  freed with `zimx_free`. Every C++ exception is caught in the shim and returned as `{"error":...}` (the Rust side turns it into an
+  `internal` error; a failed open into `io`). Nothing crosses the boundary as an exception.
+- Search: a Xapian query that libzim rejects (an unmatched quote or bracket) is retried with the query reduced to its
+  words; if libzim still fails, the source falls back to its Tantivy index if it has one.
+- Suggest: a ZIM with a title index suggests from it in libzim's order (`Floods | Ready.gov`), with no extra filtering. When
+  such a source and a Tantivy one both answer, each list is ranked by its rank in its own source (1/(60+rank)) and the
+  title length breaks ties; with only Tantivy sources the existing BM25 ranking is unchanged.
+- Without the feature (`--no-default-features`) none of this is built and every ZIM uses Tantivy, which is also the
+  fallback if the licence decision below goes against GPL code.
+
+Differences from Tantivy that callers can see:
+- Ranking: Xapian's own weighting (BM25-based, with libzim's boosts) over the full article text, not Tantivy's title (x2) /
+  lead / body fields. libzim's integer score is the raw score in the cross-source merge (normalised to the source's best, as
+  for every source). libzim does not say which query terms a hit matched, so every Xapian hit counts as full term coverage
+  and the 50% coverage filter does not apply to these sources.
+- Stemming and stop words follow the language libzim chose when the ZIM was built, not Cache's tokenizers.
+- Snippets: libzim's snippet is built from the whole article, so it shows the matched passage, where Tantivy's is
+  cut from the first ~1,500 chars (`lead`). The same HTML-free, at-most-400-chars, sentence-end rule applies.
+- Titles are the ZIM's own entry titles (some ZIMs carry a site suffix, for example `Floods | Ready.gov`).
+- Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. libzim opens each file on its
+  first search, so the first query after a start is slow (30 s here, cold disk, the 27M-entry Wikipedia included); after that
+  a search over every source takes about 1-1.5 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title suggestion 0.3-2.3 s warm
+  (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry up with the `zim` crate).
+- Coverage: libzim does not report which terms a hit matched, so the 50% term-coverage filter does not apply to these
+  sources; a hit that matches one word of a long query can therefore rank higher than it would in Tantivy (see the
+  query "replace iphone battery" surfaced one-word matches from small ZIMs in the 2026-10-26 check). Not changed: a
+  coverage rule for these sources is a design decision (candidates: terms highlighted in libzim's snippet, or reading the
+  article text of the top hits).
+
+### Licences
+
+- libzim: GPL-2.0-or-later. Xapian (statically inside libzim): GPL-2.0-or-later. ICU (the ICU DLLs, or the ICU data file on
+  Android): the Unicode/ICU licence (permissive; copyright notice and licence text to be carried). zstd and liblzma inside
+  libzim: BSD/GPL-2.0 dual and public domain.
+- Effect on Cache: the crates are `AGPL-3.0-or-later`. GPL-2.0-or-later code may be combined with AGPL-3.0-or-later code
+  (GPLv3 section 13), and the combined binaries stay under AGPL-3.0-or-later; because they would then carry GPL code,
+  anyone who receives them must be offered the corresponding source of the shim, Cache and the libzim and Xapian versions
+  used (LIBZIM.md names them; the sources are at https://github.com/openzim/libzim and https://xapian.org). A build
+  with `--no-default-features` links no libzim, Xapian or ICU and has none of these obligations.
+- The app's credits need lines for libzim and Xapian (GPL-2.0-or-later) and ICU. This repository keeps no third-party
+  credits file (the existing notes, such as the ODbL line for the timezone data, say "the app's credits need a line"), so
+  there is nothing to add here beyond this section.
+- Not legal advice: whether to ship the feature is the licence decision; turning the `xapian` feature off is the way back.
 
 ## ZIM reading
 
