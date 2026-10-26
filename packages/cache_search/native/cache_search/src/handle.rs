@@ -35,6 +35,9 @@ struct Config {
     user: Option<crate::ext::UserCfg>,
     #[serde(default)]
     live: Option<cache_live::LiveCfg>,
+    /// Places packs: registers the nearby and locate tools (see ext.rs).
+    #[serde(default)]
+    places: Option<cache_places::PlacesCfg>,
     /// The navigate tool: Valhalla tiles and shim, and the off-road pack (see cache_navigate's config.rs).
     #[serde(default)]
     routing: Option<cache_navigate::NavigateCfg>,
@@ -403,7 +406,7 @@ impl Handle {
         if cfg.prewarm {
             self.start_prewarm();
         }
-        self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video);
+        self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
         self.ext.configure_layers(cfg.layers)?;
         Ok(())
     }

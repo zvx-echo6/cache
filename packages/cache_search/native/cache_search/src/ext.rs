@@ -22,6 +22,12 @@ pub struct Ext {
     pub places: cache_navigate::PlaceSlot,
     pub video: Option<Video>,
     pub layers: Option<cache_layers::Layers>,
+    /// The places packs behind the map's search box (`cs_map_search`), from the `places` section.
+    pub map_places: Option<std::sync::Arc<cache_places::PlacesCore>>,
+    /// The routing engine the `navigate` tool and the map's route call share, from the `routing` section.
+    pub nav: Option<std::sync::Arc<cache_navigate::NavCore>>,
+    /// The routes `cs_map_route` made, which `cs_map_progress` follows.
+    pub routes: cache_navigate::map::RouteStore,
 }
 
 fn user_err(e: cache_user::Error) -> Error {
@@ -46,16 +52,21 @@ pub fn video_err(e: cache_video::Error) -> Error {
 }
 
 impl crate::handle::Handle {
-    /// Apply the `user`, `live`, `routing` and `video` config sections; a section that is absent keeps what was set before.
+    /// Apply the `user`, `live` and `places` config sections; a section that is absent keeps what was set before.
     /// `user`: the handle's saved places (what tools resolve names against) become cache_user's `UserStore` on that file.
     /// `live`: the `live_data` tool (cache_live) is registered; it leaves itself out of `cs_tool_schemas` while no source
     /// definition is installed in `sources_dir`.
+    /// `places`: `{"packs": [...]}` registers `nearby` (cache_places; left out of `cs_tool_schemas` while no pack is installed)
+    /// and `locate` (always available: a GPS fix needs no pack), and plugs the same packs into the navigate tool as its
+    /// `PlaceSource` (names for `to`, `from` and `near`, and the `to_type` categories).
+    /// `routing`: the navigate tool (cache_navigate).
     pub(crate) fn configure_ext(
         &mut self,
         user: Option<UserCfg>,
         live: Option<LiveCfg>,
         routing: Option<cache_navigate::NavigateCfg>,
         video: Option<VideoCfg>,
+        places: Option<cache_places::PlacesCfg>,
     ) {
         if let Some(u) = user {
             self.ext.user = Some(UserStore::new(&u.db_path));
@@ -65,8 +76,18 @@ impl crate::handle::Handle {
             self.ext.live = Some(Live::new(l.clone()));
             self.register_tool(Box::new(cache_live::LiveDataTool::new(l)));
         }
+        if let Some(p) = places {
+            let (core, tools, source) = cache_places::core_tools_and_source(&p);
+            for t in tools {
+                self.register_tool(t);
+            }
+            self.set_place_source(Some(source));
+            self.ext.map_places = Some(core);
+        }
         if let Some(r) = routing {
-            self.register_tool(Box::new(cache_navigate::NavigateTool::new(r, self.ext.places.clone())));
+            let tool = cache_navigate::NavigateTool::new(r, self.ext.places.clone());
+            self.ext.nav = Some(tool.core());
+            self.register_tool(Box::new(tool));
         }
         if let Some(v) = video {
             self.ext.video = Some(Video::new(&v));
@@ -244,5 +265,135 @@ impl Ext {
 
     pub fn video_downloads(&self) -> Result<String> {
         self.video()?.downloads_json().map_err(video_err)
+    }
+}
+
+// ---- the map: search, route, progress (cache_places::map, cache_navigate::map) ----
+
+fn tool_err(e: cache_tool::ToolError) -> Error {
+    let code = match e.code.as_str() {
+        "bad_arguments" => ErrorCode::BadJson,
+        "not_set_up" | "not_configured" => ErrorCode::NotConfigured,
+        "not_found" => ErrorCode::NotFound,
+        _ => ErrorCode::Internal,
+    };
+    Error::new(code, if e.detail.is_empty() { e.code } else { e.detail })
+}
+
+fn map_err(e: cache_places::map::MapError) -> Error {
+    Error::new(ErrorCode::from_str_code(e.code), e.message)
+}
+
+fn parse_json(text: &str, what: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(text).map_err(|e| Error::bad_json(format!("{what}: {e}")))
+}
+
+impl crate::handle::Handle {
+    /// `cs_map_search`: see cache_places::map. Distances are from `near`, else the last GPS fix. The meaning step embeds the
+    /// query with the handle's query embedder, unless the request carries `query_vector`.
+    pub fn map_search(&self, request_json: &str) -> Result<String> {
+        let core = self
+            .ext
+            .map_places
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorCode::NotConfigured, "map search needs \"places\": {\"packs\": [...]} in the cs_open config"))?;
+        let (query, mut opts) = cache_places::map::parse_request(&parse_json(request_json, "request")?).map_err(map_err)?;
+        if opts.near.is_none() {
+            opts.near = self.location.as_ref().map(|l| (l.lat, l.lon));
+        }
+        let embed: Option<&dyn Fn(&str) -> Option<(String, Vec<f32>)>> = self.embedder.as_deref().map(|f| f as _);
+        let v = core.search(&query, &opts, embed).map_err(map_err)?;
+        Ok(v.to_string())
+    }
+
+    /// One end of a route: an object `{id?, lat?, lon?, name?}` (an `id` from a search result brings the place's own details),
+    /// or text (a result id, coordinates in any format, a saved place, a place name). `None` is the last GPS fix.
+    fn map_end(&self, v: Option<&serde_json::Value>, which: &str) -> Result<cache_navigate::map::MapEnd> {
+        use cache_navigate::map::MapEnd;
+        let near = self.location.as_ref().map(|l| (l.lat, l.lon));
+        let places = self.ext.map_places.as_ref();
+        let missing = || Error::bad_json(format!("{which}: not found"));
+        let from_endpoint = |e: cache_places::map::Endpoint| MapEnd { id: e.id, name: e.name, lat: e.lat, lon: e.lon, osm_category: e.osm_category };
+        match v {
+            None | Some(serde_json::Value::Null) => match &self.location {
+                Some(l) => Ok(MapEnd { id: None, name: Some("Current location".into()), lat: l.lat, lon: l.lon, osm_category: None }),
+                None => Err(Error::bad_json(format!("{which}: not given and no GPS fix is known"))),
+            },
+            Some(serde_json::Value::String(t)) => {
+                if let Some(p) = self.places.resolve(t) {
+                    return Ok(MapEnd { id: None, name: Some(p.name), lat: p.lat, lon: p.lon, osm_category: None });
+                }
+                places.and_then(|c| c.resolve_text(t, near)).map(from_endpoint).ok_or_else(missing)
+            }
+            Some(serde_json::Value::Object(o)) => {
+                let num = |k: &str| o.get(k).and_then(serde_json::Value::as_f64);
+                let text = |k: &str| o.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
+                let found = text("id").and_then(|id| places.and_then(|c| c.lookup(&id)));
+                let (lat, lon) = match (num("lat"), num("lon"), &found) {
+                    (Some(la), Some(lo), _) => (la, lo),
+                    (_, _, Some(f)) => (f.lat, f.lon),
+                    _ => return Err(Error::bad_json(format!("{which}: needs lat and lon, or an id that is in the places data"))),
+                };
+                if lat.abs() > 90.0 || lon.abs() > 180.0 {
+                    return Err(Error::bad_json(format!("{which}: lat or lon out of range")));
+                }
+                let same_spot = found.as_ref().is_some_and(|f| (f.lat - lat).abs() < 1e-4 && (f.lon - lon).abs() < 1e-4);
+                Ok(MapEnd {
+                    id: text("id"),
+                    name: text("name").or_else(|| found.as_ref().and_then(|f| f.name.clone())),
+                    lat,
+                    lon,
+                    osm_category: text("osm_category").or_else(|| found.as_ref().filter(|_| same_spot).and_then(|f| f.osm_category.clone())),
+                })
+            }
+            Some(_) => Err(Error::bad_json(format!("{which}: must be an object or a string"))),
+        }
+    }
+
+    /// `cs_map_route`: the complete route, see cache_navigate::map. A route that cannot be made is `{"ok": false, "errors": [...]}`.
+    pub fn map_route(&self, request_json: &str) -> Result<String> {
+        let v = parse_json(request_json, "request")?;
+        let o = v.as_object().ok_or_else(|| Error::bad_json("the request must be a JSON object"))?;
+        for k in o.keys() {
+            if !["from", "to", "via", "mode", "land_access", "alternatives"].contains(&k.as_str()) {
+                return Err(Error::bad_json(format!("{k}: not allowed")));
+            }
+        }
+        let nav = self.ext.nav.as_ref().filter(|n| n.routing_installed()).ok_or_else(|| Error::new(ErrorCode::NotConfigured, "routing needs an installed map region (\"routing\": {\"valhalla\": ...} in the cs_open config)"))?;
+        let (mode, land_access, alternatives) = cache_navigate::map::parse_opts(&v).map_err(tool_err)?;
+        let to = self.map_end(Some(o.get("to").ok_or_else(|| Error::bad_json("to: required"))?), "to")?;
+        let from = self.map_end(o.get("from"), "from")?;
+        let via = match o.get("via") {
+            None | Some(serde_json::Value::Null) => vec![],
+            Some(serde_json::Value::Array(a)) if a.len() <= 8 => a.iter().enumerate().map(|(i, e)| self.map_end(Some(e), &format!("via[{i}]"))).collect::<Result<Vec<_>>>()?,
+            Some(_) => return Err(Error::bad_json("via: must be an array of at most 8 places")),
+        };
+        let req = cache_navigate::map::MapRouteReq { from, via, to, mode, land_access, alternatives };
+        let (out, active) = cache_navigate::map::route(nav, &req).map_err(tool_err)?;
+        self.ext.routes.add(&active);
+        Ok(out.to_string())
+    }
+
+    /// `cs_map_progress`: where a GPS fix is on a route made by `cs_map_route` (by `route_id`), or on a route object sent
+    /// again as `route` (after a restart). See cache_navigate::map::ActiveRoute::progress.
+    pub fn map_progress(&self, request_json: &str) -> Result<String> {
+        let v = parse_json(request_json, "request")?;
+        let req = cache_navigate::map::ProgressReq::from_json(&v).map_err(tool_err)?;
+        let route = match (v["route_id"].as_str(), v.get("route").filter(|r| r.is_object())) {
+            (Some(id), None) => self.ext.routes.get(id).ok_or_else(|| Error::not_found(format!("no route {id:?}: the app sends the route object again as \"route\" after a restart")))?,
+            (_, Some(r)) => {
+                let wanted = v["route_id"].as_str().or(r["route_id"].as_str()).unwrap_or("");
+                match self.ext.routes.get(wanted) {
+                    Some(a) => a,
+                    None => {
+                        let a = std::sync::Arc::new(cache_navigate::map::ActiveRoute::from_json(r).map_err(Error::bad_json)?);
+                        self.ext.routes.add(std::slice::from_ref(&a));
+                        a
+                    }
+                }
+            }
+            (None, None) => return Err(Error::bad_json("route_id (or a route object) is required")),
+        };
+        Ok(route.progress(&req).to_string())
     }
 }

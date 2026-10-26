@@ -66,6 +66,9 @@ char *cs_version(void);
  *                                                   kind video_download); holds instances.json and downloads/
  *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
  *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
+ *   "places": {"packs": [".../idaho/places.sqlite"]},  optional: registers the nearby and locate tools over these places
+ *                                  packs (docs/TOOLS.md). Packs are opened on demand: nearby is left out of
+ *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack
  *   "routing": {"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll"},   optional: the navigate tool
  *               "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles"}},  (see DESIGN.md)
  *   "layers": {"dir": ".../layers",                  optional: the map layer engine (cs_layers_*, DESIGN-LAYERS.md);
@@ -293,6 +296,57 @@ char *cs_live_fetch(cs_handle *h, const char *request_json);
  * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
  * was ever downloaded for that source and place. */
 char *cs_live_get(cs_handle *h, const char *request_json);
+
+/* --- the map: search, route, guidance (cache_places::map, cache_navigate::map) ---
+ * The Maps tab's own calls, direct (no model in the loop). They need the "places" and "routing" sections of the cs_open config
+ * (not_configured otherwise). Distances are metres, durations seconds, bearings degrees clockwise from north. A request with a
+ * key the call does not know is bad_json.
+ *
+ * cs_map_search: {"query": "...", "near"?: {"lat","lon"}, "limit"?: 10 (1-30), "meaning"?: true, "query_vector"?: {"model","vector":[...]}}
+ *   One search box. The query is read as: coordinates (decimal, degrees-minutes-seconds, USNG/MGRS, Plus Codes; a short Plus
+ *   Code is completed from "near"), else a place name, a category ("pharmacy", "gas"), or a meaning ("somewhere to get water").
+ *   A town named in the query anchors it ("pharmacy near Burley" ranks from Burley). "near" is the map centre or the GPS fix
+ *   (default: the fix from cs_set_location); every result reports its distance and direction from it. "meaning" runs the
+ *   vector step when the pack has vectors (places_pack embed) and a vector of the pack's model is given as "query_vector" or
+ *   the handle has a query embedder; otherwise it is skipped and "meaning" in the answer says why.
+ *   Returns {"query","near","interpreted":{"kind":"coordinates"|"text"|"empty","anchor"?,"categories"?},
+ *     "meaning":"used"|"off"|"no_embedder"|"no_vectors"|"model_mismatch","results":[...]}. A result is
+ *     {"id","type":"place"|"town"|"category"|"coordinates","name","kind","category","address","lat","lon","distance_m",
+ *      "direction","bearing_deg","matched":"name"|"category"|"meaning"|"coordinates","score", and when known "phone","hours",
+ *      "website","summary","wikipedia_title","wikidata_id"}; a coordinates result also has "formats" (decimal, dms, usng,
+ *      plus_code), "format" and "precision_m"; a category result has no position (its nearest places follow it). "id" is what
+ *      cs_map_route takes as an end: "place:<id>", "town:<id>", "loc:<lat>,<lon>".
+ *
+ * cs_map_route: {"from"?, "to", "via"?: [...], "mode"?: "drive"|"walk"|"bike", "land_access"?: "strict"|"pragmatic"|"emergency",
+ *   "alternatives"?: 0-3 (default 2)}
+ *   An end is {"id"?, "lat"?, "lon"?, "name"?} (a result's id brings the place's own category) or a string (an id, coordinates,
+ *   a saved place, a place name). No "from" is the last GPS fix. The complete route, built by the same code as the navigate
+ *   tool: {"ok":true,"route_id","mode","land_access","routing":"road"|"offroad","from","via","to","distance_m","duration_s",
+ *   "totals":{distance_m,duration_s,road_m,offroad_m,ascent_m,descent_m},"geometry":"<polyline6>","point_count",
+ *   "segments":[{"kind":"road"|"offroad"|"follow","travel","start_index","end_index","distance_m"}],
+ *   "maneuvers":[{"index","kind","type","instruction","street_names","distance_m","duration_s","lat","lon","begin_index",
+ *     "end_index","bearing_deg","cardinal","travel", and for off-road legs "grade_class","elev_gain_m","elev_loss_m",
+ *     "terrain","follow"}],"major_roads","warnings":[{"code":"offroad_unavailable",...}],"alternatives":[<route objects>]}.
+ *   ALL maneuvers are returned. Indices point into the decoded geometry. Alternatives are Valhalla's, for a plain road route.
+ *   A route that cannot be made is {"ok":false,"route_id","mode","from","to","errors":[{"code","message"}]} with code no_route,
+ *   too_far, out_of_coverage, route_too_long, upstream_timeout or internal. The route (and each alternative) is kept for
+ *   cs_map_progress.
+ *
+ * cs_map_progress: {"route_id" | "route": <a route object>, "lat","lon","accuracy_m"?,"now"?,"reset"?,"off_route_m"?: 50,
+ *   "off_route_fixes"?: 3,"arrive_m"?: 25}
+ *   Where a GPS fix is on a route from cs_map_route (found by route_id; after a restart send the route object as "route"
+ *   and it is loaded again). Fixes are matched near the last match first, so a route that passes itself is not confused.
+ *   Returns {"route_id","fix","matched":{lat,lon,distance_along_m,offset_m,segment,route_bearing_deg},"on_route","off_route",
+ *   "off_route_count","arrived","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
+ *   "off_route" is true once the fix has been more than off_route_m from the route (or the GPS accuracy if larger; twice
+ *   as much on an off-road leg) for off_route_fixes fixes in a row: the app then calls cs_map_route from the fix. "current",
+ *   "next" and "then" are maneuvers: {index,kind,type,instruction,street_names,travel,lat,lon,distance_m,length_m,cardinal,bearing_deg}
+ *   (and follow, elev_gain_m, elev_loss_m, grade_class for off-road ones); "next" is the coming maneuver with the distance to
+ *   it, "then" the one after (its distance is from "next"), "leg" (off-road only) the bearing, distance and climb to the
+ *   next point: {kind,target:{lat,lon},bearing_deg,cardinal,distance_m,climb_m,descent_m,grade_class,travel}. "now" (ISO 8601) adds "eta". Free the result with cs_free_string. */
+char *cs_map_search(cs_handle *h, const char *request_json);
+char *cs_map_route(cs_handle *h, const char *request_json);
+char *cs_map_progress(cs_handle *h, const char *request_json);
 
 /* --- videos (PeerTube; logic in the cache_video crate) ---
  *

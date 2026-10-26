@@ -888,6 +888,18 @@ reached like any other, with `cs tool live_data`, `POST /conversations/{id}/tool
 `cli/tests/features.rs` runs one sequence through the CLI, serve and the C ABI on three separate states and requires
 byte-identical output at every step, and runs `search` then `live_data` in one conversation through serve and the C ABI.
 
+## Places, geocoder, nearby and locate (crates `cache_places` and `places_pack`)
+
+**Pack (`places.sqlite`, one per region).** Tables: `places` (id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence), `places_rt` (R*Tree), `places_fts` (FTS5 over name and alternative names), `localities` (+ `_rt`, `_fts`: city, town, village, hamlet with OSM population), `categories` (id, title, one-line description for the model, rules JSON, place_count), `states`, `meta` (region, build time, bounding box). `category` is NULL for named places that are only there for the geocoder (`kind` says what they are). The schema is `cache_places/src/schema.rs`; the builder and the reader both use it.
+
+**Builder (`places_pack`).** Inputs are `PlaceSource`s (Overture CSV and an OSM PBF today; Overture GeoParquet and Geofabrik on GitHub Actions later, see `places_pack/RECIPE.md`). The category rules are data (`categories.json`, stored in the pack): hospital, urgent_care, water and shelter come from OSM tags only; emergency_room from Overture `emergency_department`, and only where an OSM hospital (amenity=hospital or healthcare=hospital) is within 250 m: the row takes that hospital's name, address, phone and wiki ids and remembers it (`matched_source_id`); emergency-department records with no hospital there (air ambulances, ambulance services, clinics) are dropped; the rest merge Overture and OSM (same place: within 40 m, or within 200 m with similar names). State and country come from navi's admins.sqlite.
+
+**Geocoder (`Geocoder` trait, in cache_places until it moves to cache_tool).** `forward(query, near, limit)`: the query is split at commas ("Walgreens, Burley, ID": a state qualifier filters, a town qualifier biases); FTS5 over towns and places; a name that equals the query wins, a town match gets a boost, so a bare "Burley" is the town and not a school named after it; `near` pulls ties toward a point; when the words do not all match, any-word matching is tried. `reverse(lat, lon)`: nearest town (a hamlet only when it is within 3 km and clearly closer).
+
+**Emergency rooms: confirmed and likely (decided 2026-10-26; navi's approach).** The `emergency_room` category rule in `categories.json` has a second rule, `{"source":"category","category":"hospital","primary_tier":"confirmed","tier":"likely","note":"hospital, likely has an emergency room","beats_primary_only_if_nearer_by_mi":10}`, which the tools read from the pack. A search for `emergency_room` returns the confirmed rows (`er_tier` "confirmed") and then the OSM hospitals that no confirmed row stands for (`er_tier` "likely", with the note). They rank by distance, but a likely hospital goes ahead of a confirmed one only when it is nearer by more than 10 miles (the margin stands in for "15 minutes' drive" until Valhalla ranks by drive time). For navigate's `PlaceSource` the tiers are 1 (confirmed) and 3 (likely), navi's numbers. The rule is data and ids only: no name matching.
+
+**Tools.** `nearby` (schema None until a pack with places is installed; the category enum and descriptions come from the packs' category tables) and `locate` (always offered; a GPS fix needs no pack; nearest town and place names need one). Registered by the `places` section of the `cs_open` config, `{"packs": [paths]}`. Packs are opened on demand and reopened when the file changes. `nearby` ranks by straight-line distance (`ranked_by: "distance"`) out to 300 km; drive-time ranking comes with Valhalla. Citable addresses are `place:<source id>`, `town:<source id>` and `loc:<lat>,<lon>`. `locate` also returns `usng` and `plus_code` (computed offline in `cache_places::coord`).
+
 ### navigate
 
 `cs_open` with a `"routing"` section registers `cache_navigate::NavigateTool` (docs/TOOLS.md, "navigate"):
@@ -917,6 +929,50 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
   code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
 - **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
   requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
+
+## The map: search, route and guidance (`cs_map_search`, `cs_map_route`, `cs_map_progress`)
+
+The Maps tab calls these directly; the `navigate` tool is for the model and stays as it is. The JSON of each call is documented in `cache_search.h`.
+They need the `places` and `routing` sections of the `cs_open` config (`not_configured` otherwise); the CLI has `cs map-search`, `cs map-route` and `cs map-progress`
+(`--request <json>`, or `--query` / `--to` / `--from` shorthands) and `cs serve` has `POST /map/search`, `/map/route` and `/map/progress`. All three print the
+core's JSON as it came, so the doors agree byte for byte (`cli/tests/map.rs`).
+
+**Search (`cache_places::map`).** A query is read in this order. (1) *Coordinates*: decimal, degrees-minutes-seconds (also degrees and decimal minutes, hemisphere
+letters before or after), USNG / MGRS (zone, band, 100 km square, 2 to 10 digits; the inverse of the Kruger series that writes them), Plus Codes (full, padded, with
+grid digits; a short code is completed from `near`, or from a town named after it). The answer is one `coordinates` result with the point in every format and the
+nearest town. (2) *Text*: a run of words that is exactly the name of a city, town or village in the pack ("pharmacy near Burley") is the **anchor**; ranking is from
+there, not from the map centre. Nothing in this step is a list of words: the data says what is a town. (3) *Names*: the geocoder (FTS5, town boost) on the whole text
+and on what is left after the anchor. (4) *Categories*: the words (plurals folded) are matched against the pack's category ids, titles and descriptions; a word that
+many categories use weighs little ("station" is in fuel, police and fire), title words count twice a description word. A matching category gives a `category` row and
+its nearest places from the anchor or the centre. (5) *Meaning*, when the pack has vectors and the host has an embedder: the query vector is compared with the
+vectors of the category texts and of the name-and-summary texts of places and towns. A category counts at cosine 0.40 within 0.08 of the best, a place at 0.50. The
+host's embedder is the handle's query embedder (`set_query_embedder`, the one built-in `search` uses), or the request carries `query_vector`; its `model` must
+equal the pack's `embed_model`, else the answer's `meaning` says `model_mismatch` and keywords answer alone. Without an embedder or vectors the answer says
+`no_embedder` / `no_vectors`; the keyword steps (1 to 4) never need either.
+Ranking: `score = 0.7 * relevance + 0.3 * closeness`; closeness is `exp(-km / 25)` from the anchor, else the centre (0.5 if neither is known); relevance is the name
+match (0..1), the category match, or the cosine mapped from 0.30..0.70 onto 0..1. Every result carries `distance_m` and `direction` from `near` (the map centre or the GPS
+fix), the details a card shows (phone, hours, website, Wikipedia summary and title) and an `id` that the route call takes.
+
+**Vectors in the pack (`places_pack embed`).** The builder embeds each category as `title: description` and each place and town that has a summary as
+`name. summary`, with `cache_embed` (cache_llama's `cl_embed`, the same code and settings the `cs` query embedder uses), and writes them to the `vectors` table
+(`kind`, `ref`, `vec`): one byte per dimension plus a float scale, so Idaho's costs about 1 KB per embedded text. `meta` gets `embed_model` (the id a query vector
+must carry; the GGUF file name unless `--embed-model-id`), `embed_dims`, `embed_model_sha256` and `embed_count`. A pack without the table is a keyword-only pack.
+Places with no summary are found by name and category; the vectors are for the notable ones (peaks, lakes, towns, hot springs, landmarks).
+
+**Route (`cache_navigate::map`).** `NavCore` is the routing engine (Valhalla shim, off-road pack and elevation, opened on first use); the `navigate` tool and the map
+both route through `NavCore::navigate`, so a route has the same id, distance and time in both (a test compares them). The tool shortens the answer; the map keeps all of
+it: the geometry as a polyline6 string, the `segments` (road, off-road or trail, each with its way of travel and its range of points), every maneuver with its position,
+instruction, length and time and its range of points, the totals (road and off-road metres, climb and descent), the warnings, and Valhalla's alternatives
+(`alternates`, for a plain road route; an off-road route has none). Stops (`via`) are routed leg by leg and joined; each stop is a `via` maneuver. A route that cannot be made is
+`{"ok": false, "errors": [{code, message}]}`, not an error of the call.
+
+**Guidance (`cs_map_progress`).** Each route (and each alternative) is kept in the handle, newest eight, so a fix is matched by `route_id`; the app sends the route
+object again after a restart. A fix is matched to the nearest point of the route within 300 m behind and 3 km ahead of the last match, and only on the whole route
+when that finds nothing on it, so a route that passes itself (an out-and-back) is not mistaken for its other pass. `off_route` is true when the fix has been farther
+than `off_route_m` (50) from the route, or than the GPS accuracy if that is larger, for `off_route_fixes` (3) fixes in a row; an off-road leg is a straight line
+between turn points over a 30 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
+along the route, the next maneuver and the distance to it, the one after, the time and distance left, the ETA (if `now` is given) and, on an off-road leg, the bearing,
+distance and climb to the next point. `arrived` is true within `arrive_m` (25) of the end.
 
 ## Videos (crate `cache_video`, PeerTube)
 

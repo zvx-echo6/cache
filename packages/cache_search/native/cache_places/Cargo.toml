@@ -1,0 +1,19 @@
+[package]
+name = "cache_places"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's places: the places.sqlite pack format, the offline geocoder and the nearby and locate tools"
+
+[dependencies]
+# SQLite compiled into the library ("bundled", with FTS5 and R*Tree): nothing linked from the system, same on Android, Windows and Linux.
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+cache_tool = { path = "../cache_tool" }
+# Pack age: the build time is parsed and compared with the caller's "now" (no clock feature: "now" is always passed in).
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# Test-only cross-check of the UTM series against an independent implementation.
+utm = "0.1"

@@ -29,6 +29,11 @@ cs: command line and HTTP wrapper over the cache_search core
   cs places list     --config <sources.json>
   cs places save     --config <sources.json> --place <json {key?,name,lat,lon,label?}>
   cs places delete   --config <sources.json> --key <key>
+  cs map-search      --config <sources.json> (--request <json {query,near?,limit?,meaning?}> | --query <text> [--limit 10] [--no-meaning])
+                     [--near-lat <deg> --near-lon <deg>] [--lat <deg> --lon <deg>] [EMBED] [--open-timeout 600]
+  cs map-route       --config <sources.json> (--request <json {from?,to,via?,mode?,land_access?,alternatives?}> | --to <text> [--from <text>] [--mode drive])
+                     [--lat <deg> --lon <deg>] [--open-timeout 600]
+  cs map-progress    --config <sources.json> --request <json {route|route_id,lat,lon,...}> [--open-timeout 600]
   cs live-sources    --config <sources.json>
   cs live-fetch      --config <sources.json> --request <json {source,place,api_key?,force?,now?}>
   cs live-get        --config <sources.json> --request <json {source,place,now?}>
@@ -116,7 +121,7 @@ fn embedder_from(a: &Args) -> Result<Option<Embedder>, ApiError> {
         }
         (Some(lib), Some(model)) => {
             let threads = a.num("embed-threads", EMBED_DEFAULT_THREADS).map_err(usage_err)?;
-            Embedder::load(lib, model, a.get("embed-model-id"), a.get("embed-sha256"), threads).map(Some)
+            Embedder::load(lib, model, a.get("embed-model-id"), a.get("embed-sha256"), threads).map(Some).map_err(ApiError::from)
         }
         _ => Err(usage_err("--embed-lib and --embed-model go together")),
     }
@@ -331,6 +336,66 @@ pub fn places(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The phone's GPS fix from `--lat` / `--lon`, set on the handle before a map call.
+fn set_fix(e: &mut Engine, a: &Args) -> Result<(), ApiError> {
+    match (a.get("lat"), a.get("lon")) {
+        (None, None) => Ok(()),
+        (Some(_), Some(_)) => {
+            let (lat, lon) = (a.num("lat", 0f64).map_err(usage_err)?, a.num("lon", 0f64).map_err(usage_err)?);
+            e.core.set_location(lat, lon, a.num("accuracy", -1f64).map_err(usage_err)?, &now_local())
+        }
+        _ => Err(usage_err("--lat and --lon go together")),
+    }
+}
+
+pub fn map_search(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "request", "query", "limit", "near-lat", "near-lon", "lat", "lon", "accuracy", "open-timeout"], &["no-meaning"], true)?;
+    let req = match a.get("request") {
+        Some(r) => r.to_string(),
+        None => {
+            let mut r = json!({"query": a.req("query").map_err(usage_err)?, "limit": a.num("limit", 10u64).map_err(usage_err)?});
+            if a.flag("no-meaning") {
+                r["meaning"] = json!(false);
+            }
+            match (a.get("near-lat"), a.get("near-lon")) {
+                (None, None) => {}
+                (Some(_), Some(_)) => r["near"] = json!({"lat": a.num("near-lat", 0f64).map_err(usage_err)?, "lon": a.num("near-lon", 0f64).map_err(usage_err)?}),
+                _ => return Err(usage_err("--near-lat and --near-lon go together")),
+            }
+            r.to_string()
+        }
+    };
+    let mut e = open_engine(&a)?;
+    set_fix(&mut e, &a)?;
+    print(&e.core.map_search(&req)?);
+    Ok(())
+}
+
+pub fn map_route(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "request", "to", "from", "mode", "lat", "lon", "accuracy", "open-timeout"], &[], false)?;
+    let req = match a.get("request") {
+        Some(r) => r.to_string(),
+        None => {
+            let mut r = json!({"to": a.req("to").map_err(usage_err)?, "mode": a.get("mode").unwrap_or("drive")});
+            if let Some(f) = a.get("from") {
+                r["from"] = json!(f);
+            }
+            r.to_string()
+        }
+    };
+    let mut e = open_engine(&a)?;
+    set_fix(&mut e, &a)?;
+    print(&e.core.map_route(&req)?);
+    Ok(())
+}
+
+pub fn map_progress(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "request", "open-timeout"], &[], false)?;
+    let req = a.req("request").map_err(usage_err)?.to_string();
+    print(&open_engine(&a)?.core.map_progress(&req)?);
+    Ok(())
+}
+
 pub fn live_sources(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "open-timeout"], &[], false)?;
     print(&open_engine(&a)?.core.live_sources()?);
@@ -497,6 +562,9 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "tool" => tool(rest),
         "tool-schemas" => tool_schemas(rest),
         "places" => places(rest),
+        "map-search" => map_search(rest),
+        "map-route" => map_route(rest),
+        "map-progress" => map_progress(rest),
         "live-sources" => live_sources(rest),
         "live-fetch" => live_fetch(rest),
         "live-get" => live_get(rest),

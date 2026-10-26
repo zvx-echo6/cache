@@ -56,6 +56,12 @@ impl ApiError {
     }
 }
 
+impl From<cache_embed::EmbedError> for ApiError {
+    fn from(e: cache_embed::EmbedError) -> ApiError {
+        ApiError::new(e.code, e.message)
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
@@ -282,6 +288,24 @@ impl Core {
     pub fn place_delete(&mut self, key: &str) -> Result<String, ApiError> {
         let c = cstring(key, "key")?;
         let p = unsafe { cs_place_delete(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn map_search(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_map_search(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn map_route(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_map_route(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn map_progress(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_map_progress(self.h, c.as_ptr()) };
         self.result(p)
     }
 

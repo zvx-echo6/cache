@@ -113,40 +113,20 @@ impl Valhalla for ShimValhalla {
             &json!({"locations": [{"lat": from.0, "lon": from.1}, {"lat": to.0, "lon": to.1}], "costing": costing, "units": "km"}),
         )?;
         let trip = r.get("trip").ok_or_else(|| ValhallaError::msg("no trip in reply"))?;
-        let leg = trip.get("legs").and_then(|l| l.get(0)).ok_or_else(|| ValhallaError::msg("No route found"))?;
-        let enc = leg.get("shape").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let f = |m: &Value, k: &str| m.get(k).and_then(|v| v.as_f64());
-        let maneuvers = leg
-            .get("maneuvers")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .map(|m| Maneuver {
-                        instruction: m.get("instruction").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        kind: m.get("type").and_then(|v| v.as_i64()).unwrap_or(0),
-                        length_km: f(m, "length").unwrap_or(0.0),
-                        time_s: f(m, "time").unwrap_or(0.0),
-                        street_names: m
-                            .get("street_names")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.iter().filter_map(s).collect())
-                            .unwrap_or_default(),
-                        begin_shape_index: m.get("begin_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
-                        end_shape_index: m.get("end_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
-                        bearing_after: f(m, "bearing_after"),
-                        bearing_before: f(m, "bearing_before"),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let sum = trip.get("summary");
-        Ok(Trip {
-            shape: decode_polyline6(&enc),
-            shape_encoded: enc,
-            maneuvers,
-            length_km: sum.and_then(|x| f(x, "length")).unwrap_or(0.0),
-            time_s: sum.and_then(|x| f(x, "time")).unwrap_or(0.0),
-        })
+        parse_trip(trip)
+    }
+
+    fn alternatives(&self, from: (f64, f64), to: (f64, f64), costing: &str, count: usize) -> Vec<Trip> {
+        let Ok(r) = self.call(
+            self.route,
+            &json!({"locations": [{"lat": from.0, "lon": from.1}, {"lat": to.0, "lon": to.1}], "costing": costing, "units": "km", "alternates": count}),
+        ) else {
+            return Vec::new();
+        };
+        r.get("alternates")
+            .and_then(|a| a.as_array())
+            .map(|a| a.iter().filter_map(|alt| alt.get("trip").and_then(|t| parse_trip(t).ok())).collect())
+            .unwrap_or_default()
     }
 
     fn trace_attributes(&self, enc: &str) -> Result<Trace, ValhallaError> {
@@ -175,4 +155,38 @@ impl Valhalla for ShimValhalla {
             .unwrap_or_default();
         Ok(Trace { edges, shape: r.get("shape").and_then(s) })
     }
+}
+
+/// A Valhalla `trip` object (first leg) as a [`Trip`].
+fn parse_trip(trip: &Value) -> Result<Trip, ValhallaError> {
+    let leg = trip.get("legs").and_then(|l| l.get(0)).ok_or_else(|| ValhallaError::msg("No route found"))?;
+    let enc = leg.get("shape").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let f = |m: &Value, k: &str| m.get(k).and_then(|v| v.as_f64());
+    let maneuvers = leg
+        .get("maneuvers")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|m| Maneuver {
+                    instruction: m.get("instruction").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    kind: m.get("type").and_then(|v| v.as_i64()).unwrap_or(0),
+                    length_km: f(m, "length").unwrap_or(0.0),
+                    time_s: f(m, "time").unwrap_or(0.0),
+                    street_names: m.get("street_names").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(s).collect()).unwrap_or_default(),
+                    begin_shape_index: m.get("begin_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
+                    end_shape_index: m.get("end_shape_index").and_then(|v| v.as_i64()).unwrap_or(0),
+                    bearing_after: f(m, "bearing_after"),
+                    bearing_before: f(m, "bearing_before"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let sum = trip.get("summary");
+    Ok(Trip {
+        shape: decode_polyline6(&enc),
+        shape_encoded: enc,
+        maneuvers,
+        length_km: sum.and_then(|x| f(x, "length")).unwrap_or(0.0),
+        time_s: sum.and_then(|x| f(x, "time")).unwrap_or(0.0),
+    })
 }
