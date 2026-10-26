@@ -1,10 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/maps/geo.dart';
-import 'package:cache/maps/layers/fake_layer_engine.dart';
 import 'package:cache/maps/layers/layer_def.dart';
-import 'package:cache/maps/layers/pmtiles.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/maps/network_access.dart';
 import 'package:cache/maps/ui/catalogue_screen.dart';
@@ -14,6 +11,8 @@ import 'package:cache/location/position_source.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/test_layer_engine.dart';
 
 const GeoBounds home = GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
 
@@ -39,14 +38,6 @@ class _NoSource implements PositionSource {
   Future<void> openLocationSettings() async {}
 }
 
-Future<FetchedTile?> _host(Uri u) async {
-  if (u.path.endsWith('catalogue.json')) return FetchedTile(File('test/fixtures/catalogue.json').readAsBytesSync());
-  if (u.path == '/planet') {
-    return FetchedTile(utf8.encode(jsonEncode({'tiles': ['https://tiles.example/planet/v1/{z}/{x}/{y}.pbf']})));
-  }
-  return FetchedTile(List.filled(2000, 1));
-}
-
 void main() {
   late Directory dir;
   late MapsState maps;
@@ -60,16 +51,9 @@ void main() {
 
   Future<void> boot(WidgetTester tester, Widget Function() home) async {
     await tester.runAsync(() async {
-      final engine = FakeLayerEngine(
-        dirOverride: dir,
-        fetcher: _host,
-        rangeFetcher: (u, o, l) async => throw PmTilesMissing(u),
-        onlineProbe: () async => true,
-        catalogueUrl: Uri.parse('https://example.test/catalogue.json'),
-      );
+      final engine = TestLayerEngine(published: TestLayerEngine.layersOf(File('test/fixtures/catalogue.json').readAsStringSync()));
       maps = MapsState(engine: engine, settingsDirOverride: dir, network: _Allowed());
       await maps.init();
-      await engine.refreshCatalogue();
     });
     addTearDown(maps.dispose);
     maps.viewBounds = const GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);

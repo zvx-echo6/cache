@@ -3,11 +3,11 @@ import 'package:flutter/foundation.dart';
 import '../geo.dart';
 import 'layer_def.dart';
 
-/// The seam between the Maps tab and the layer engine in the Rust core (branch layers-core): a catalogue of
-/// layer definitions, a local tile server on 127.0.0.1, area downloads and on-phone contours.
+/// The seam between the Maps tab and the layer engine in the Rust core (cs_layers_*, see [CoreLayerEngine]): a catalogue
+/// of layer definitions, a local tile server on 127.0.0.1, area downloads and on-phone contours.
 ///
 /// The map reads tiles only from [tilesUrl] (`GET /layers/{id}/{z}/{x}/{y}`); it never knows where a layer
-/// comes from. [FakeLayerEngine] stands in until the real C ABI is bound (see docs/MAPS.md).
+/// comes from.
 abstract class LayerEngine extends ChangeNotifier {
   /// Opens the tile server and reads the catalogue.
   Future<void> start();

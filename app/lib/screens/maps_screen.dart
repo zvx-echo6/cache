@@ -139,12 +139,25 @@ class _MapsScreenState extends State<MapsScreen> {
 
   // ---- map events ---------------------------------------------------------------------------------------
 
-  void _onMapCreated(MapLibreMapController c) => _controller = c;
+  void _onMapCreated(MapLibreMapController c) {
+    _controller = c;
+    _keepOnline(c);
+  }
+
+  /// MapLibre stops asking for tiles when the phone has no connection, even for the app's own tile server on this
+  /// phone (127.0.0.1), which is the one place the map reads from. Telling it it is connected keeps the downloaded
+  /// areas drawing in airplane mode; whether the layers may use the network is the layer engine's own setting.
+  Future<void> _keepOnline(MapLibreMapController c) async {
+    try {
+      await c.forceOnlineMode();
+    } catch (_) {}
+  }
 
   Future<void> _onStyleLoaded() async {
     final c = _controller;
     if (c == null) return;
     _styleReady = true;
+    _keepOnline(c);
     try {
       final p = _palette;
       await c.addImage(kHeadingImage, await MapAssets.headingMarker(p['position'], p['positionRing']));

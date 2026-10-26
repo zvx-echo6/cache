@@ -9,8 +9,7 @@ import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
 import 'history/conversation_store.dart';
 import 'location/location_service.dart';
-import 'maps/layers/fake_catalogue.dart' show kCatalogueUrl;
-import 'maps/layers/fake_layer_engine.dart';
+import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'search/core_numbering.dart';
 import 'search/numbering_state.dart';
@@ -44,9 +43,12 @@ class _CacheAppState extends State<CacheApp> {
       at: f?.time,
     ),
   );
-  // FAKE layer engine until the core's layer engine (layers-core) is bound; see lib/maps/layers/layer_engine.dart.
+  // The layer engine in the core (cs_layers_*): the catalogue, the tile server the map reads from, area downloads.
   late final MapsState maps = MapsState(
-    engine: FakeLayerEngine(catalogueUrl: Uri.parse(kCatalogueUrl)),
+    engine: CoreLayerEngine(
+      openCore: sources.whenCoreReady,
+      layersConfig: () => sources.layersSection,
+    ),
   );
   late final VideoState video = VideoState();
   late final ChatController chat = ChatController(

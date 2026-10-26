@@ -1,14 +1,5 @@
-// FAKE: stand-in catalogue until the layer engine (branch layers-core) provides the real one.
-//
-// The project publishes its catalogue at [kCatalogueUrl]; the fake engine fetches it when it can and keeps the
-// last copy, and its layers (BLM routes, MVUM, Forest Service trails, public lands, ...) replace or add to the
-// definitions below. These are what the app has before the first fetch, plus the layers the published catalogue
-// does not carry yet: the base map, elevation, contours, land cover and satellite.
-//
-// Entries marked `fake_unavailable` need the Rust core (on-phone contours, area cuts) and cannot be served by
-// the Dart fake; they show up in the catalogue so the screens can be built and tested.
-
-const String kCatalogueUrl = 'https://cache.echo6.co/catalogue.json';
+// Test-only layer definitions in the app's older hand-written shape (the shapes LayerDef still reads), standing in for
+// what the core's catalogue lists, so the Maps screens and the style generator can be tested without the core.
 
 const Map<String, dynamic> _ofmLimits = {
   // OpenFreeMap's terms for offline downloads: each download at most 3,000 tiles or 50 MB.
@@ -16,14 +7,13 @@ const Map<String, dynamic> _ofmLimits = {
   'download_limit_bytes': 50 * 1024 * 1024,
 };
 
-const List<Map<String, dynamic>> fakeCatalogue = [
+const List<Map<String, dynamic>> testCatalogue = [
   {
     // The project's own base map: the Protomaps v4 planet in its storage bucket, z0-15, the same for everyone.
     // The published catalogue carries the real entry (same id, with its source address) and replaces this one
     // as soon as it is fetched. This copy is only the offline-first fallback: it has no address, and the Maps
     // tab says the base map is not published yet instead of drawing a blank.
     'id': 'basemap',
-    'fallback': true,
     'title': 'Base map',
     'description': 'Roads, places, water and land from OpenStreetMap, drawn in the app\'s own colours.',
     'license': 'Map data ODbL 1.0 (OpenStreetMap contributors); Protomaps basemap tiles',

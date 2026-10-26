@@ -10,7 +10,12 @@ import 'dart:io';
 ///   packs/REGION/offroad.sqlite, elevation.pmtiles   off-road routing
 ///   live-sources/*.json                     live data source definitions
 /// The databases the app writes (saved places, downloaded live data) are in [supportDir].
-Map<String, dynamic> buildCoreExtras({required Directory filesDir, required Directory supportDir, String shim = 'libvalhalla_shim.so'}) {
+Map<String, dynamic> buildCoreExtras({
+  required Directory filesDir,
+  required Directory supportDir,
+  String shim = 'libvalhalla_shim.so',
+  Directory? layerDefsDir,
+}) {
   final packsDir = Directory('${filesDir.path}/packs');
   final places = <String>[];
   String? tiles, offroadPack, elevation;
@@ -33,6 +38,12 @@ Map<String, dynamic> buildCoreExtras({required Directory filesDir, required Dire
     'user': {'db_path': '${supportDir.path}/user.sqlite'},
     'live': {'db_path': '${supportDir.path}/live.sqlite', 'sources_dir': '${filesDir.path}/live-sources'},
     'places': {'packs': places},
+    // The map layer engine: its folder (tile stores, cache, user definitions) and the starter definitions. The
+    // catalogue address is the core's default (https://cache.echo6.co/catalogue.json).
+    'layers': {
+      'dir': '${supportDir.path}/layers',
+      'defs_dirs': [(layerDefsDir ?? Directory('${supportDir.path}/layer-defs')).path],
+    },
     if (tiles != null || offroadPack != null)
       'routing': {
         if (tiles != null) 'valhalla': {'tiles': tiles, 'shim': shim},

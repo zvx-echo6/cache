@@ -13,6 +13,9 @@ enum LayerKind {
   /// Contour lines as vector tiles (source layer "contours", fields `ele` in metres and `level`), labelled in feet.
   contours,
 
+  /// Elevation tiles (Terrarium) that hillshade and contours are made from: never drawn, never listed.
+  elevation,
+
   /// Picture tiles drawn as they are (land cover, satellite).
   raster,
 
@@ -40,6 +43,7 @@ class LayerDef {
     this.minZoom = 0,
     this.maxZoom = 14,
     this.tileSize = 256,
+    this.encoding = '',
     this.onlineOnly = false,
     this.defaultOn = false,
     this.enabledByDefault = true,
@@ -72,6 +76,9 @@ class LayerDef {
   final int maxZoom;
   final int tileSize;
 
+  /// The elevation encoding of the tiles ("terrarium"), when the layer is elevation.
+  final String encoding;
+
   /// A live service whose terms do not allow keeping it offline.
   final bool onlineOnly;
 
@@ -89,12 +96,6 @@ class LayerDef {
   final Map<String, dynamic> raw;
 
   bool get isBase => kind == LayerKind.basemap;
-
-  /// A bundled stand-in for an entry of the published catalogue (same id), used until that entry is fetched.
-  bool get isFallback => raw['fallback'] == true;
-
-  /// A definition with nowhere to read tiles from (a fallback whose catalogue entry does not exist yet).
-  bool get hasNoSource => sourceUrl.isEmpty && raw['fake_unavailable'] != true;
 
   /// The tile layout of a base map: "openmaptiles" (the OpenFreeMap style) or "protomaps-v4".
   String get layout => (raw['layout'] as String?) ?? 'openmaptiles';
@@ -133,11 +134,13 @@ class LayerDef {
 
   static LayerKind _kind(Map<String, dynamic> j) {
     switch (j['transform']) {
-      case 'elevation_to_hillshade':
+      case 'hillshade' || 'elevation_to_hillshade':
         return LayerKind.hillshade;
-      case 'elevation_to_contours':
+      case 'contours' || 'elevation_to_contours':
         return LayerKind.contours;
     }
+    if (j['kind'] == 'elevation') return LayerKind.elevation;
+    if (j['kind'] == 'online-raster') return LayerKind.raster;
     // The published catalogue calls the base map "vector" like any other vector tiles; what makes it the base
     // map is its tile layout, or its style hint.
     final hints = j['style_hints'];
@@ -201,8 +204,9 @@ class LayerDef {
       minZoom: zoom('minzoom', 'min_zoom', 0),
       maxZoom: zoom('maxzoom', 'max_zoom', 14),
       tileSize: ((src['tile_size'] ?? j['tile_size']) as num?)?.toInt() ?? 256,
+      encoding: (src['encoding'] as String?) ?? '',
       onlineOnly: j['online_only'] == true || (offline is Map && offline['allowed'] == false),
-      defaultOn: j['default_on'] == true,
+      defaultOn: j['default_on'] == true || (kind == LayerKind.basemap && j['enabled_by_default'] != false),
       enabledByDefault: j['enabled_by_default'] != false,
       sourceUrl: (src['url'] as String?) ?? '',
       sourceType: (src['type'] as String?) ?? (src['format'] as String?) ?? '',
@@ -215,6 +219,36 @@ class LayerDef {
     if (j is! Map) throw const FormatException('A layer definition is a JSON object');
     return LayerDef.fromJson(Map<String, dynamic>.from(j));
   }
+
+  /// What the map style depends on, so a style is built again only when it changes (not whenever the catalogue is read
+  /// again).
+  String get styleSignature => '$id|${kind.name}|$minZoom-$maxZoom|$tileSize|$encoding|$sourceUrl|$attribution';
+
+  /// A layer made from another (hillshade and contours from elevation) has no source of its own: this copy takes its
+  /// zooms, tile size and encoding from [from], with [minZoom] and [maxZoom] where the engine serves other zooms. The
+  /// definition as written ([raw]) does not change.
+  LayerDef derivedFrom(LayerDef? from, {int? minZoom, int? maxZoom}) => LayerDef(
+        id: id,
+        title: title,
+        description: description,
+        licence: licence,
+        attribution: attribution,
+        coverage: coverage,
+        kind: kind,
+        styleRole: styleRole,
+        sourceLayers: sourceLayers,
+        plural: plural,
+        minZoom: minZoom ?? from?.minZoom ?? this.minZoom,
+        maxZoom: maxZoom ?? from?.maxZoom ?? this.maxZoom,
+        tileSize: from?.tileSize ?? tileSize,
+        encoding: from?.encoding.isNotEmpty == true ? from!.encoding : encoding,
+        onlineOnly: onlineOnly,
+        defaultOn: defaultOn,
+        enabledByDefault: enabledByDefault,
+        sourceUrl: sourceUrl,
+        sourceType: sourceType,
+        raw: raw,
+      );
 
   /// The definition as written (what the Advanced editor shows and saves).
   Map<String, dynamic> toJson() => Map<String, dynamic>.from(raw);
@@ -230,10 +264,17 @@ class AreaEstimate {
     required this.maxZoom,
     required this.allowed,
     this.problem,
+    this.tilesAlready = 0,
+    this.bytesAlready = 0,
   });
 
+  /// The tiles this download fetches (those not on the phone yet).
   final int tiles;
   final int bytes;
+
+  /// What an earlier download already put on the phone for this area, which is not fetched again.
+  final int tilesAlready;
+  final int bytesAlready;
 
   /// The most detailed zoom the download will include.
   final int maxZoom;
@@ -268,7 +309,7 @@ class DownloadedArea {
   final String label;
   final int minZoom;
   final int maxZoom;
-  final int totalTiles;
+  int totalTiles;
   int doneTiles;
   int bytes;
   AreaPhase phase;

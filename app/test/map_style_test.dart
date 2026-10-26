@@ -2,13 +2,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/maps/geo.dart';
-import 'package:cache/maps/layers/fake_catalogue.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/palette/map_palette.dart';
 import 'package:cache/maps/style/protomaps_layout.dart';
 import 'package:cache/maps/style/style_generator.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/layer_fixtures.dart';
 
 final _colour = RegExp(r'^(#[0-9a-f]{6}|rgba\(\d{1,3},\d{1,3},\d{1,3},(0|1|0?\.\d+)\))$');
 
@@ -19,7 +20,7 @@ void main() {
   // what the engine merges at run time. Every kind of layer is in there.
   final published = (jsonDecode(File('test/fixtures/catalogue.json').readAsStringSync()) as Map)['layers'] as List;
   final defs = [
-    for (final j in [...fakeCatalogue, ...published]) LayerDef.fromJson(Map<String, dynamic>.from(j as Map)),
+    for (final j in [...testCatalogue, ...published]) LayerDef.fromJson(Map<String, dynamic>.from(j as Map)),
   ];
   final openFreeMap = defs.firstWhere((d) => d.id == 'openfreemap');
   final protomaps = defs.firstWhere((d) => d.id == 'basemap');
@@ -136,11 +137,12 @@ void main() {
     expect(ids.indexOf('public-lands-idaho-fill'), lessThan(ids.indexOf('usfs-trails-roads-trails-line')));
   });
 
-  test('contour labels read in feet', () {
+  test('contour labels read in feet, as the core\'s contour tiles already give them', () {
     final style = build(CacheThemeId.light, all);
     final label = (style['layers'] as List).cast<Map>().firstWhere((l) => l['id'] == 'contours-label');
     final field = jsonEncode(label['layout']['text-field']);
-    expect(field, contains('3.28084'));
+    expect(field, isNot(contains('3.28084')), reason: 'ele is feet in the tiles; nothing converts it');
+    expect(field, contains('"ele"'));
     expect(field, contains('ft'));
   });
 
@@ -164,7 +166,7 @@ void main() {
   });
 
   test('a layer definition survives an edit round trip, keeping fields the app does not know', () {
-    final d = LayerDef.fromJson({...fakeCatalogue.first, 'future_field': {'a': 1}});
+    final d = LayerDef.fromJson({...testCatalogue.first, 'future_field': {'a': 1}});
     final back = LayerDef.parse(d.prettyJson());
     expect(back.raw['future_field'], {'a': 1});
     expect(back.id, d.id);

@@ -72,13 +72,12 @@ class MapsState extends ChangeNotifier {
   /// Set by the catalogue to ask the map screen for a drawn area for this layer; the screen clears it.
   String? drawRequest;
 
-  /// Set while the base map in use has no source address, because the published catalogue has no entry for it
-  /// yet. The map screen says so instead of showing a blank map.
+  /// Set when the catalogue has no base map to draw (the first start, before the catalogue was ever fetched, with no
+  /// connection). The map screen says so instead of showing a blank map.
   String? get baseProblem {
-    for (final u in uses) {
-      if (u.def.isBase && u.def.isFallback && u.def.hasNoSource) return 'Base map not published yet';
-    }
-    return null;
+    if (!engine.ready) return null;
+    if (activeDefinitions.any((d) => d.isBase)) return null;
+    return 'No base map yet. Connect once to get the catalogue.';
   }
 
   /// The small line about layers that cannot draw here and now, or null.
@@ -177,6 +176,7 @@ class MapsState extends ChangeNotifier {
   List<LayerDef> get catalogueLayers {
     final cards = <String, LayerDef>{};
     for (final l in activeDefinitions) {
+      if (l.kind == LayerKind.elevation) continue; // feeds hillshade and contours, never listed or drawn
       final known = cards[l.groupKey];
       if (known == null || l.coverageSize > known.coverageSize) cards[l.groupKey] = l;
     }
@@ -256,7 +256,7 @@ class MapsState extends ChangeNotifier {
   String get styleKey => [
         for (final u in uses) '${u.def.id}:${u.opacity.toStringAsFixed(2)}',
         engine.ready ? 'ready' : 'wait',
-        for (final l in engine.layers) l.hashCode,
+        for (final l in engine.layers) l.styleSignature,
       ].join(',');
 
   Future<Map<String, dynamic>> _omt() async => _template ??= await loadOmtTemplate();

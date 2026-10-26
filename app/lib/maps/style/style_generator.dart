@@ -42,7 +42,7 @@ Future<Map<String, dynamic>> loadOmtTemplate() async =>
 /// The layer ids an overlay adds to the style, in drawing order.
 List<String> overlayLayerIds(LayerDef d) {
   switch (d.kind) {
-    case LayerKind.basemap:
+    case LayerKind.basemap || LayerKind.elevation:
       return const [];
     // Ids carry a suffix so an overlay can never collide with a layer of the base map ("landcover").
     case LayerKind.hillshade:
@@ -118,10 +118,11 @@ Map<String, dynamic> buildMapStyle({
     final d = u.def;
     final src = sourceIdOf(d);
     switch (d.kind) {
-      case LayerKind.basemap:
+      case LayerKind.basemap || LayerKind.elevation:
         break;
       case LayerKind.hillshade:
-        sources[src] = _source(d, 'raster-dem', tilesUrl(d), tileSize: d.tileSize, encoding: d.raw['encoding'] as String? ?? 'terrarium');
+        sources[src] = _source(d, 'raster-dem', tilesUrl(d),
+            tileSize: d.tileSize, encoding: d.encoding.isNotEmpty ? d.encoding : (d.raw['encoding'] as String? ?? 'terrarium'));
         ground.add(_hillshade(palette, d, src, u.opacity));
       case LayerKind.raster:
         sources[src] = _source(d, 'raster', tilesUrl(d), tileSize: d.tileSize);
@@ -252,10 +253,10 @@ List<Map<String, dynamic>> _contours(MapPalette p, LayerDef d, String src, doubl
       'layout': {
         'symbol-placement': 'line',
         'symbol-spacing': 320,
-        // Elevations are metres in the tiles; the map says feet.
+        // The core's contour tiles carry `ele` in feet already.
         'text-field': [
           'concat',
-          ['to-string', ['round', ['*', ['to-number', ['get', 'ele'], 0], 3.28084]]],
+          ['to-string', ['round', ['to-number', ['get', 'ele'], 0]]],
           ' ft'
         ],
         'text-font': ['NotoSans-Regular'],

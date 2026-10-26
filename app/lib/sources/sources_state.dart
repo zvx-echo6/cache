@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../browse/opds.dart';
 import '../chat/system_prompt.dart';
 import '../chat/tool.dart';
+import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/search_access.dart';
 
@@ -74,6 +75,16 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   bool get coreReady => _core != null;
 
+  final Completer<SearchCore?> _coreOpened = Completer<SearchCore?>();
+
+  /// The core once startup has finished (null when it could not open). The map's layer engine waits for it.
+  Future<SearchCore?> whenCoreReady() => _coreOpened.future;
+
+  Map<String, dynamic> _extra = const {};
+
+  /// The "layers" section of the core's config, which a layer download job takes along.
+  Map<String, dynamic> get layersSection => ((_extra['layers'] as Map?) ?? const {}).cast<String, dynamic>();
+
   Future<void> init() async {
     zimsDir = zimsDirOverride ?? await _defaultZimsDir();
     indexesDir =
@@ -84,7 +95,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     _scan();
     notifyListeners();
     try {
-      final extra = coreExtras ?? await _defaultExtras();
+      final extra = _extra = coreExtras ?? await _defaultExtras();
       _core = await SearchCore.open(
         _configs(),
         extra: extra,
@@ -97,8 +108,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
           ? e.message
           : 'Search is not available on this device';
       notifyListeners();
+      if (!_coreOpened.isCompleted) _coreOpened.complete(null);
       return;
     }
+    if (!_coreOpened.isCompleted) _coreOpened.complete(_core);
     await _applyFix();
     await refresh();
   }
@@ -110,9 +123,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     final support = await getApplicationSupportDirectory();
+    final defs = Directory('${support.path}/layer-defs');
+    await installStarterLayers(defs);
     return buildCoreExtras(
       filesDir: files,
       supportDir: support,
+      layerDefsDir: defs,
       shim: shimPath(Platform.isAndroid ? nativeLibraryDir() : null),
     );
   }

@@ -134,9 +134,12 @@ class _ConfirmState extends State<_Confirm> {
             if (est == null && _error == null)
               const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
             else if (est != null && est.allowed) ...[
-              Text('${formatCount(est.tiles)} tiles', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text)),
+              Text('${formatCount(est.tiles)} new tiles', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text)),
               Text('About ${formatBytes(est.bytes)} · detail down to zoom ${est.maxZoom}',
                   style: TextStyle(fontSize: 16, color: k.secondary)),
+              if (est.bytesAlready > 0)
+                Text('${formatBytes(est.bytesAlready)} of this area is already on the phone and is not downloaded again.',
+                    style: TextStyle(fontSize: 15, color: k.secondary)),
             ] else if (est != null)
               Text(est.problem ?? 'This area cannot be downloaded.', style: TextStyle(fontSize: 16, color: k.warning)),
             if (_error != null) Text(_error!, style: TextStyle(fontSize: 16, color: k.emergency)),
