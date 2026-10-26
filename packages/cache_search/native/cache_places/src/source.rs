@@ -32,39 +32,16 @@ fn from_row(r: &PlaceRow, title: &str, from: Option<(f64, f64)>) -> PlaceMatch {
     m
 }
 
-/// A first match whose name fits the query at least this well (`name_score`: 100 exact, 90 an exact other name, up to 45 a name
-/// that starts with the query) is taken as the place the query named. Less (a place that has one of the words in it) is not.
-const GOOD_NAME_MATCH: f64 = 40.0;
-
-impl PackPlaceSource {
-    /// `forward`'s first match when its name fits the text well, else a town with a typing slip in it.
-    fn resolve_once(&self, text: &str, near: Option<(f64, f64)>) -> Option<(String, f64, f64)> {
-        let top = self.geo.forward(text, near, 1).into_iter().next();
-        let hit = match top {
-            Some(h) if h.name_match >= GOOD_NAME_MATCH => h,
-            _ => self.geo.fuzzy_town(text, near)?,
-        };
-        Some((hit.label, hit.lat, hit.lon))
-    }
-}
-
-/// `text` with a last word of two lower-case letters written upper case ("rupert id" -> "rupert ID"): the geocoder takes a trailing
-/// state as a code only in capitals. `None` when the text does not end that way.
-fn upper_state_code(text: &str) -> Option<String> {
-    let t = text.trim_end();
-    let cut = t.rfind(|c: char| c.is_whitespace() || c == ',').map(|i| i + 1).unwrap_or(0);
-    let last = &t[cut..];
-    (cut > 0 && last.len() == 2 && last.chars().all(|c| c.is_ascii_lowercase())).then(|| format!("{}{}", &t[..cut], last.to_ascii_uppercase()))
-}
-
 impl Geocoder for PackPlaceSource {
-    /// The pack's best match for the text, as `navigate` and `locate` find it; failing that a town with a typing slip in it.
+    /// The pack's best match for the text: the same `forward` that `navigate` and `locate` use, which also takes a town with a
+    /// typing slip in it when nothing fits the name well.
     fn resolve(&self, text: &str, near: Option<(f64, f64)>) -> Option<(String, f64, f64)> {
         let text = text.trim();
         if text.is_empty() || self.packs.current().is_empty() {
             return None;
         }
-        self.resolve_once(text, near).or_else(|| upper_state_code(text).and_then(|t| self.resolve_once(&t, near)))
+        let hit = self.geo.forward(text, near, 1).into_iter().next()?;
+        Some((hit.label, hit.lat, hit.lon))
     }
 }
 

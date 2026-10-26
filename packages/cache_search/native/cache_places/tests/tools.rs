@@ -346,3 +346,52 @@ fn a_misspelt_town_in_two_states_goes_to_the_one_asked_for_or_the_nearer_one() {
     assert_eq!(g.resolve("Stanly", Some((46.3, -97.2))).unwrap().0, "Stanley, ND"); // nearer the phone
     assert_eq!(g.resolve("Stanly", Some((43.6, -116.2))).unwrap().0, "Stanley, ID");
 }
+
+// ---- one resolver for navigate, locate and live_data: case-insensitive, with the misspelling fallback inside ----
+
+#[test]
+fn a_misspelt_town_resolves_the_same_in_navigate_locate_and_live_data() {
+    use cache_tool::places::GeocodeQuery;
+    let (_d, ts, path) = setup("slip1");
+    let (_, src) = cache_places::tools_and_source(&PlacesCfg { packs: vec![path] });
+    for text in ["Islnd Park", "Islnd Park, Idaho", "islnd park id", "Ilsand Park"] {
+        // navigate: `PlaceSource::geocode`
+        let a = src.geocode(&GeocodeQuery { text, near: None, bias: None, limit: 3 }).unwrap();
+        assert_eq!((a.matches[0].place_name.as_str(), a.matches[0].state.as_deref()), ("Island Park", Some("ID")), "navigate {text}");
+        // locate
+        let v = run(tool(&ts, "locate"), None, json!({"place": text}));
+        assert_eq!(v["place_name"], "Island Park, ID", "locate {text}: {v}");
+        assert_eq!(v["nearest_town"], "Island Park, ID");
+        // live_data: `Geocoder::resolve`
+        assert_eq!(src.geocoder().unwrap().resolve(text, None).unwrap().0, "Island Park, ID", "live_data {text}");
+    }
+}
+
+#[test]
+fn an_exact_name_beats_a_close_fuzzy_one() {
+    let (_d, src) = source("exact1");
+    let (_d2, _ts, path) = setup("exact2");
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    // "Boyse" is one edit from "Boise" and has far more people, and the phone is at it: the exact name still wins, both ways round
+    let near_boyse = Some((46.0, -112.5));
+    for (text, want) in [("Boise", "Boise, ID"), ("boise", "Boise, ID"), ("Boyse", "Boyse, ID")] {
+        assert_eq!(g.forward(text, near_boyse, 3)[0].label, want, "{text}");
+        assert_eq!(src.geocoder().unwrap().resolve(text, near_boyse).unwrap().0, want, "{text}");
+    }
+    // and the slip is still taken when there is no exact name: "Boisse" is one edit from both, the nearer town wins the tie
+    assert_eq!(src.geocoder().unwrap().resolve("Boisse", Some((43.6, -116.2))).unwrap().0, "Boise, ID");
+}
+
+#[test]
+fn a_state_in_any_letter_case_is_the_same_query() {
+    let (_d, ts, path) = setup("case1");
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let labels = |q: &str| g.forward(q, None, 3).into_iter().map(|h| h.label).collect::<Vec<_>>();
+    let want = labels("Rupert ID");
+    assert_eq!(want[0], "Rupert, ID");
+    for q in ["rupert id", "RUPERT ID", "rupert Id", "Rupert, id", "rupert idaho", "RUPERT, IDAHO"] {
+        assert_eq!(labels(q), want, "{q}");
+    }
+    assert_eq!(run(tool(&ts, "locate"), None, json!({"place": "rupert id"})), run(tool(&ts, "locate"), None, json!({"place": "Rupert ID"})));
+    assert_eq!(g.forward("stanley nd", None, 1)[0].state.as_deref(), Some("ND"));
+}

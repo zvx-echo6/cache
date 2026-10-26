@@ -500,12 +500,24 @@ fn weather(env: &Env, geo: Option<&dyn Geocoder>, place: Option<&str>, loc: Opti
 }
 
 #[test]
+fn live_data_takes_a_misspelt_town_like_navigate_and_locate() {
+    let pack = Pack::fixture("slip");
+    let (env, _srv) = burley_data("slip");
+    // Island Park is far from Burley's data: no_data, naming the town that was meant, however it was typed
+    for text in ["Island Park, Idaho", "Islnd Park", "island park id", "Ilsand Park"] {
+        let e = weather(&env, Some(pack.geo()), Some(text), None).unwrap_err();
+        assert_eq!(e.code, "no_data", "{text}");
+        assert!(e.detail.starts_with("no weather data within 30 km of Island Park, ID; the nearest place with data is Burley, ID"), "{text}: {}", e.detail);
+    }
+}
+
+#[test]
 fn one_town_however_it_is_written_and_misspelt() {
     let pack = Pack::fixture("forms");
     let (env, _srv) = burley_data("forms");
     // Rupert is about 13 km from Burley: no data of its own, so Burley's is used and the result says so
     let mut seen: Vec<Value> = Vec::new();
-    for text in ["Rupert, Idaho", "Rupert ID", "rupert", "RUPERT", "Rupret", "Rupet", "42.6166,-113.6747"] {
+    for text in ["Rupert, Idaho", "Rupert ID", "rupert id", "rupert, id", "rupert", "RUPERT", "Rupret", "Rupet", "42.6166,-113.6747"] {
         let v = weather(&env, Some(pack.geo()), Some(text), None).unwrap_or_else(|e| panic!("{text}: {}", e.to_json()));
         assert_eq!(v["place"], "Burley, ID", "{text}");
         assert_eq!(v["distance_from_asked_km"], 13, "{text}: {v}");
