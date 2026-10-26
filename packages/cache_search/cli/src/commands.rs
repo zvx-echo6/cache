@@ -25,6 +25,7 @@ cs: command line and HTTP wrapper over the cache_search core
                      [--json] [EMBED] [--open-timeout 600]
                      (web_search needs CACHE_WEB_PROVIDER=kagi and CACHE_WEB_KEY in the environment; CACHE_WEB_BASE_URL
                      replaces Kagi's address, for runs against a local stand-in server)
+                     [--live-policy '<json {online,allow_metered,metered,enabled_sources}>'] (keys: CACHE_LIVE_KEY_<SOURCE> in the environment)
   cs tool-schemas    [--config <sources.json>] [--open-timeout 600]
   cs places list     --config <sources.json>
   cs places save     --config <sources.json> --place <json {key?,name,lat,lon,label?}>
@@ -64,7 +65,7 @@ cs: command line and HTTP wrapper over the cache_search core
   cs layers clear-cache --config <sources.json> [--layer <id>]
   cs layers tile     --config <sources.json> --layer <id> --z <z> --x <x> --y <y> [--out <file>]
   cs layers serve    --config <sources.json> [--online true|false]       (the tile server, until stopped)
-  cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [EMBED] [--open-timeout 600]
+  cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [--live-policy <json>] [EMBED] [--open-timeout 600]
 
   EMBED: --embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
          [--embed-model-id <id>] [--embed-threads 4]
@@ -152,9 +153,38 @@ fn open_engine_with(a: &Args, cfg: &str) -> Result<Engine, ApiError> {
             None => core.set_web(Some(&provider), Some(&key), true)?,
         }
     }
+    // Live fetch: the policy from --live-policy, and a key per source from CACHE_LIVE_KEY_<SOURCE> (the source id in capitals,
+    // every other character an underscore). Keys go straight to the core (memory only).
+    if let Some(policy) = a.get("live-policy") {
+        core.set_live_policy(Some(policy))?;
+    }
+    live_keys_from_env(&mut core)?;
     core.wait_ready(Duration::from_secs(a.num("open-timeout", 600u64).map_err(usage_err)?))?;
     let video_dir = serde_json::from_str::<Value>(cfg).ok().and_then(|v| v["video"]["dir"].as_str().map(str::to_string));
     Ok(Engine { core, embedder, video_dir })
+}
+
+/// The environment variable that holds a source's key: `CACHE_LIVE_KEY_` and the source id in capitals, with every
+/// character that is not a letter or digit an underscore ("nws-alerts" gives CACHE_LIVE_KEY_NWS_ALERTS).
+pub fn live_key_var(source_id: &str) -> String {
+    let id: String = source_id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
+    format!("CACHE_LIVE_KEY_{id}")
+}
+
+fn live_keys_from_env(core: &mut Core) -> Result<(), ApiError> {
+    if !std::env::vars_os().any(|(k, _)| k.to_string_lossy().starts_with("CACHE_LIVE_KEY_")) {
+        return Ok(());
+    }
+    // the installed sources decide which ids exist; without live data configured there is nothing to key
+    let Ok(sources) = core.live_sources() else { return Ok(()) };
+    let v: Value = serde_json::from_str(&sources).unwrap_or(Value::Null);
+    for s in v["sources"].as_array().into_iter().flatten() {
+        let Some(id) = s["id"].as_str() else { continue };
+        if let Some(key) = std::env::var(live_key_var(id)).ok().filter(|k| !k.is_empty()) {
+            core.set_live_key(id, Some(&key))?;
+        }
+    }
+    Ok(())
 }
 
 /// The current local time, ISO 8601 with offset.
@@ -275,7 +305,7 @@ pub fn tool(argv: &[String]) -> Result<(), ApiError> {
     let Some(name) = argv.first().filter(|a| !a.starts_with("--")) else {
         return Err(usage_err("cs tool needs a tool name, e.g. cs tool search --args '{\"query\":\"...\"}'"));
     };
-    let a = parse(&argv[1..], &["config", "args", "now", "lat", "lon", "accuracy", "open-timeout"], &["json"], true)?;
+    let a = parse(&argv[1..], &["config", "args", "now", "lat", "lon", "accuracy", "live-policy", "open-timeout"], &["json"], true)?;
     let now = a.get("now").map(str::to_string).unwrap_or_else(now_local);
     let mut e = open_engine(&a)?;
     match (a.get("lat"), a.get("lon")) {
@@ -307,7 +337,7 @@ pub fn tool(argv: &[String]) -> Result<(), ApiError> {
 
 /// The function schemas of the available tools (`--config` is optional: they do not depend on the sources).
 pub fn tool_schemas(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["config", "open-timeout"], &[], false)?;
+    let a = parse(argv, &["config", "live-policy", "open-timeout"], &[], false)?;
     let cfg = match a.get("config") {
         Some(p) => load_config(p)?,
         None => r#"{"sources":[]}"#.to_string(),
@@ -649,7 +679,7 @@ pub fn layers(argv: &[String]) -> Result<(), ApiError> {
 }
 
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["config", "listen", "open-timeout"], &["allow-non-loopback"], true)?;
+    let a = parse(argv, &["config", "listen", "live-policy", "open-timeout"], &["allow-non-loopback"], true)?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
     server::check_listen(&listen, a.flag("allow-non-loopback"))?;
     let e = open_engine(&a)?;

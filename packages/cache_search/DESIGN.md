@@ -1068,6 +1068,7 @@ fails when it is stale). Write and test a definition with `cs live-check` and `c
 { "format": 2, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
   "description": "one line: what the model and the Home card see of this source",
   "attribution": "credit line shown with the data",
+  "none_label": "No active emergency alerts",             optional: what live_data calls its one "nothing to report" entry (default: title)
   "request": { ... },                                    see Request
   "api_key": { "alias": "eia", "required": true },       a key; "{api_key}" in url, headers or body
   "basic_auth": { "user_alias": "u", "password_alias": "p" },   HTTP Basic login (instead of api_key)
@@ -1386,6 +1387,41 @@ been downloaded for the source the older wording stays (`no weather data has bee
 HTTP is `ureq` (blocking, rustls with bundled root certificates, no async runtime): the app's scheduler or the CLI calls
 fetch from a worker thread, so a blocking client is enough and it adds far fewer crates than reqwest (tokio, hyper).
 SQLite is `rusqlite` with the `bundled` feature (compiled in, nothing linked from the system).
+
+### Live fetch policy and keys
+
+Decided by the Cache lead (ref-a5), 2026-10-26. The host grants network fetches and holds the API keys; the core fetches. The
+core has no callbacks into the host, so the host pushes its state in:
+
+- `cache_tool::LiveFetcher` (`can_fetch(source_id) -> bool`, `key_for(source_id) -> Option<String>`) is what a tool asks.
+  `ToolCtx.live_fetcher: Option<&dyn LiveFetcher>` carries it; it is `None` unless the host has set a policy.
+- The handle holds the built-in implementation, `cache_tool::fetcher::PolicyFetcher` (`Handle.fetcher`).
+  `cs_live_set_fetch_policy(h, json)` takes `{"online","allow_metered","metered","enabled_sources":[ids]}` and
+  `can_fetch = online && source in enabled_sources && (!metered || allow_metered)`. A null json clears the policy; with no
+  policy `can_fetch` is false for everything, so captures and tests never fetch, and `ToolCtx.live_fetcher` is `None`.
+  A bad document is `bad_json` and the old policy stays.
+- `cs_live_set_key(h, source_id, key_or_null)` keeps one source's key in memory only. `PolicyFetcher` has no `Debug`, no
+  serialisation and no accessor except `key_for`; the key is in no error, status, log or result (tests search every string
+  the core returns for a sentinel key). A null (or empty) key clears it; `cs_close` clears the policy and every key, and the
+  key strings are overwritten before they are freed.
+- The fetch itself (the on-demand fetch in `live_data`, the row keys and pruning) is built on top of this plumbing and is not
+  part of it: `live_data`'s behaviour is unchanged.
+- CLI: `--live-policy <json>` (`cs tool`, `cs tool-schemas`, `cs serve`) and `CACHE_LIVE_KEY_<SOURCE>` environment variables
+  (source id in capitals, any other character `_`: `nws-alerts` is `CACHE_LIVE_KEY_NWS_ALERTS`; read at start for each
+  installed source). `cs serve`: `POST /live/policy` (the body is the policy), `DELETE /live/policy`,
+  `POST /live/key {"source_id","key"}` (a null key clears it), `DELETE /live/key/{source_id}`; each answers `{"ok":true}` and
+  never echoes a key.
+
+### Nothing to report is a numbered entry
+
+Decided by the Cache lead (ref-a5), 2026-10-26. When a valid, unexpired result has no items (no active alerts), `live_data` used
+to return `"items": []` with `"none": true`, which the dispatch had nothing to number, so the model could not cite "no active
+alerts". It now returns one entry in an item's shape: address `live:<source>/<place-key>/none`, `label` from the definition
+(`none_label`, an optional string in the definition format; the `title` when absent, so no wording is invented in code), `time` =
+`fetched_at`, `fields` `{"Status": "none active", "Checked": <fetched_at to the minute, place zone>, "Age": <age>}` and
+`"none_active": true`. The top level keeps `"none": true`. Expired and no-data results stay errors; results with items are
+unchanged byte for byte. The change is in `cache_live`'s tool only: `cs_live_get` (the app's screens) still returns the stored
+items, an empty list when there are none.
 
 ### Addresses of live items
 

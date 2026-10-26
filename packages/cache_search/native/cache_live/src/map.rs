@@ -786,6 +786,11 @@ pub fn date_of(t: i64, zone: &Zone) -> String {
     DateTime::from_timestamp(t, 0).map(|d| d.with_timezone(&zone.offset_at(t)).format("%Y-%m-%d").to_string()).unwrap_or_default()
 }
 
+/// `2026-10-25 22:00`: a time of day to the minute in the place's zone, as the alerts' "Expires" field reads.
+pub fn minute_of(t: i64, zone: &Zone) -> String {
+    DateTime::from_timestamp(t, 0).map(|d| d.with_timezone(&zone.offset_at(t)).format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default()
+}
+
 /// "25 minutes old", "1 day old": the age in plain words, rounded down.
 pub fn age_words(secs: i64) -> String {
     let secs = secs.max(0);

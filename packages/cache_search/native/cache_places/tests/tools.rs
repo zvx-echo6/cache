@@ -39,7 +39,7 @@ fn loc(lat: f64, lon: f64) -> Location {
 }
 
 fn run(t: &dyn Tool, location: Option<&Location>, args: Value) -> Value {
-    let ctx = ToolCtx { location, places: &NoSavedPlaces, now: FIXTURE_NOW, geocoder: None };
+    let ctx = ToolCtx { location, places: &NoSavedPlaces, now: FIXTURE_NOW, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args) {
         Ok(ToolOutput::Json(v)) => v,
         Ok(ToolOutput::Text(_)) => panic!("text"),
@@ -222,7 +222,7 @@ fn saved_places_resolve_before_the_geocoder() {
         }
     }
     let (_d, ts, _) = setup("l2");
-    let ctx = ToolCtx { location: None, places: &Home, now: FIXTURE_NOW, geocoder: None };
+    let ctx = ToolCtx { location: None, places: &Home, now: FIXTURE_NOW, geocoder: None, live_fetcher: None };
     let Ok(ToolOutput::Json(v)) = tool(&ts, "nearby").run(&ctx, &json!({"category": "pharmacy", "near": "Home", "limit": 1})) else { panic!() };
     assert_eq!(v["center"], "Home");
     assert_eq!(v["places"][0]["name"], "Walgreens");

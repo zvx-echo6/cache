@@ -133,7 +133,7 @@ fn here() -> Location {
 }
 
 fn run(t: &NavigateTool, loc: Option<&Location>, args: Value) -> Result<Value, ToolError> {
-    let ctx = ToolCtx { location: loc, places: &Saved, now: NOW, geocoder: None };
+    let ctx = ToolCtx { location: loc, places: &Saved, now: NOW, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args)? {
         ToolOutput::Json(v) => Ok(v),
         ToolOutput::Text(_) => panic!("navigate gives JSON"),

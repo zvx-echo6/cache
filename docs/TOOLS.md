@@ -353,7 +353,23 @@ far it is. Without them the data is for the place asked about.
 Rules:
 - `fields` keys are plain labels and values carry their units, so no source needs special handling by the model.
 - Items are capped (about 12 per result) to fit the 8k context; `"more": N` says how many were left out.
-- Nothing to report (for example no active alerts): `"items": []` with `"none": true`; the assistant states the age.
+- Nothing to report (for example no active alerts) is still a result with one numbered entry, so it can be cited like any
+  item: `"none": true` stays at the top level, and `items` holds one entry in an item's shape with `"none_active": true`
+  (its label is the definition's `none_label`, or its `title` when it has none; `Checked` is the time of the download in the
+  place's zone; the assistant states the age). The same entry is returned for as long as the download is valid:
+
+```json
+{"ok": true,
+ "source": {"id": "alerts", "title": "Emergency alerts", "provider": "NWS"},
+ "place": "Boise, ID",
+ "fetched_at": "2026-10-26T09:53:25-06:00", "valid_until": "2026-10-26T15:53:25-06:00", "age": "6 minutes old", "expired": false,
+ "items": [
+  {"n": 3, "label": "No active emergency alerts", "time": "2026-10-26T09:53:25-06:00",
+   "fields": {"Status": "none active", "Checked": "2026-10-26 09:53", "Age": "6 minutes old"}, "none_active": true}],
+ "none": true}
+```
+
+  Before this change the same result was `"items": []` with `"none": true`, which gave the model nothing to cite.
 - All downloaded data expired: `{"ok": false, "error": {"type": "expired", "detail": "weather data expired 2026-11-01"}}`;
   nothing ever downloaded: type `no_data`; source not installed: type `unknown_source`. Data exists, but none within
   `live_radius_km` of the place asked about: type `no_data` with the nearest place named in the detail

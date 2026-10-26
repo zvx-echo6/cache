@@ -826,6 +826,55 @@ fn serve_web_endpoints_set_and_clear_search_without_echoing_the_key() {
     assert!(!body.contains(WEB_KEY));
 }
 
+const LIVE_KEY: &str = "CLI-LIVEKEY-5150-do-not-leak";
+
+#[test]
+fn serve_live_policy_and_key_endpoints_never_echo_the_key() {
+    let tmp = TempDir::new("servelive");
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, r#"{"sources":[]}"#).unwrap();
+    let s = Serve::start(&["--config", &config, "--live-policy", r#"{"online":false,"enabled_sources":[]}"#]);
+    let ok = r#"{"ok":true}"#;
+    let (code, body) = s.req("POST", "/live/policy", Some(&json!({"online": true, "allow_metered": false, "metered": false, "enabled_sources": ["nws"]})));
+    assert_eq!((code, body.as_str()), (200, ok));
+    // a bad policy is refused and the key a caller put in it is not echoed
+    for bad in [json!({"online": true}), json!({"online": true, "enabled_sources": [], "api_key": LIVE_KEY}), json!([LIVE_KEY])] {
+        let (code, body) = s.req("POST", "/live/policy", Some(&bad));
+        assert_eq!((code, j(&body)["code"].as_str().unwrap().to_string()), (400, "bad_json".to_string()), "{body}");
+        assert!(!body.contains(LIVE_KEY), "{body}");
+    }
+    let (code, body) = s.req("DELETE", "/live/policy", None);
+    assert_eq!((code, body.as_str()), (200, ok));
+    let (code, body) = s.req("POST", "/live/key", Some(&json!({"source_id": "nws", "key": LIVE_KEY})));
+    assert_eq!((code, body.as_str()), (200, ok));
+    let (code, body) = s.req("POST", "/live/key", Some(&json!({"key": LIVE_KEY})));
+    assert_eq!(code, 400, "{body}");
+    assert!(!body.contains(LIVE_KEY), "{body}");
+    let (code, body) = s.req("POST", "/live/key", Some(&json!({"source_id": "nws", "key": 5})));
+    assert_eq!(code, 400, "{body}");
+    let (code, body) = s.req("POST", "/live/key", Some(&json!({"source_id": "nws", "key": null})));
+    assert_eq!((code, body.as_str()), (200, ok));
+    let (code, body) = s.req("DELETE", "/live/key/nws", None);
+    assert_eq!((code, body.as_str()), (200, ok));
+    let (_, status) = s.req("GET", "/status", None);
+    assert!(!status.contains(LIVE_KEY));
+}
+
+#[test]
+fn live_policy_flag_and_key_env_are_accepted_and_never_printed() {
+    let good = r#"{"online":true,"enabled_sources":["nws"]}"#;
+    let env = [("CACHE_LIVE_KEY_NWS", LIVE_KEY)];
+    let o = cs_env(&["tool-schemas", "--config", &empty_config()], &env);
+    assert!(o.ok, "{}", o.stderr);
+    assert!(!o.stdout.contains(LIVE_KEY) && !o.stderr.contains(LIVE_KEY));
+    let o = cs_env(&["tool", "search", "--config", &empty_config(), "--args", r#"{"query":"x"}"#, "--now", NOW, "--live-policy", good, "--json"], &env);
+    assert!(o.ok, "{}", o.stderr);
+    assert!(!o.stdout.contains(LIVE_KEY) && !o.stderr.contains(LIVE_KEY));
+    // a malformed policy stops the start
+    let o = cs_env(&["tool-schemas", "--config", &empty_config(), "--live-policy", "{nope"], &env);
+    assert!(!o.ok, "{}", o.stdout);
+}
+
 #[test]
 fn serve_exports_a_conversation_and_imports_it_as_a_new_one() {
     let tmp = TempDir::new("serveconv");

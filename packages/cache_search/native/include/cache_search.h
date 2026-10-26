@@ -243,6 +243,22 @@ int32_t cs_clear_location(cs_handle *h);
  * "timing_ms" field ({"search": ms} or {"fetch": ms}) for measurement; it is not part of what the model sees. */
 int32_t cs_set_web(cs_handle *h, const char *provider, const char *key, int32_t online);
 
+/* Live fetch policy and keys. The host decides when the core may fetch live data and holds the API keys; it pushes both in
+ * (no callbacks). The handle keeps them in a built-in cache_tool::LiveFetcher that tools see as ToolCtx.live_fetcher.
+ *
+ * cs_live_set_fetch_policy: policy_json is {"online":bool,"allow_metered":bool,"metered":bool,"enabled_sources":[ids]}
+ * ("online" and "enabled_sources" are required; "allow_metered" and "metered" default to false; no other field).
+ * can_fetch(source) = online && source in enabled_sources && (!metered || allow_metered). Each call replaces the
+ * policy; NULL policy_json clears it. With no policy set can_fetch is false for every source and ToolCtx.live_fetcher
+ * is None, so a capture or a test never fetches. Returns 0; -1 with code "bad_json" for a malformed policy (the old one
+ * stays).
+ * cs_live_set_key: the API key of one source (source_id is a live source id, e.g. "alerts"); NULL key_or_null (or an empty
+ * one) clears it. The key is kept in memory only: it is never written to disk, logged, or put in any result, error,
+ * status or debug output; it is cleared by NULL and on cs_close. Returns 0; -1 with code "bad_json" for a NULL source_id.
+ * Both only store state: a fetch itself is made by cs_live_fetch or by a tool built on the fetcher. */
+int32_t cs_live_set_fetch_policy(cs_handle *h, const char *policy_json);
+int32_t cs_live_set_key(cs_handle *h, const char *source_id, const char *key_or_null);
+
 /* A JSON array of the function schemas ({"type":"function","function":{...}}) of the tools available now, in this
  * order where present: search, read, navigate, nearby, locate, live_data, web_search (any other registered tool
  * after them). A tool that is registered but has nothing installed to work with (its schema is None) is left out. */

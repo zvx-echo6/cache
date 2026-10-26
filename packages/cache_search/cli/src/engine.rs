@@ -167,6 +167,25 @@ impl Core {
         Ok(())
     }
 
+    /// `cs_live_set_fetch_policy`: the host's grant for network fetches (JSON, see the header); None clears it.
+    pub fn set_live_policy(&mut self, policy_json: Option<&str>) -> Result<(), ApiError> {
+        let p = policy_json.map(|s| cstring(s, "policy")).transpose()?;
+        if unsafe { cs_live_set_fetch_policy(self.h, p.as_ref().map_or(ptr::null(), |c| c.as_ptr())) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    /// `cs_live_set_key`: a source's API key, memory only; None clears it. The key is not kept, printed or put in an error here.
+    pub fn set_live_key(&mut self, source_id: &str, key: Option<&str>) -> Result<(), ApiError> {
+        let s = cstring(source_id, "source_id")?;
+        let k = key.map(|k| cstring(k, "key")).transpose()?;
+        if unsafe { cs_live_set_key(self.h, s.as_ptr(), k.as_ref().map_or(ptr::null(), |c| c.as_ptr())) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
     /// Web search with Kagi at another address (for runs against a stand-in server; set by CACHE_WEB_BASE_URL).
     pub fn set_web_kagi_at(&mut self, base_url: &str, key: &str, online: bool) {
         // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.

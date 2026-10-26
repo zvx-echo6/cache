@@ -249,6 +249,14 @@ pub struct Handle {
     pub ext: crate::ext::Ext,
     /// Memory budget of the open libzim archives, shared by all this handle's ZIM sources (budget.rs).
     pub zim_budget: Arc<ZimBudget>,
+    /// The host-pushed live-fetch policy and keys (`cs_live_set_fetch_policy`, `cs_live_set_key`); memory only, cleared on close.
+    pub fetcher: Arc<cache_tool::fetcher::PolicyFetcher>,
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.fetcher.clear();
+    }
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -271,12 +279,23 @@ impl Handle {
             web: Arc::new(WebState::new()),
             ext: Default::default(),
             zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(target_os = "android")) * budget::MIB)),
+            fetcher: Arc::new(cache_tool::fetcher::PolicyFetcher::new()),
         };
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
         // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
         // live_data tool: set_sources does it (ext.rs), so a later cs_set_sources can add them too.
         h.set_sources(config_json)?;
         Ok(h)
+    }
+
+    /// `cs_live_set_fetch_policy`: the host's grant for network fetches; `None` clears it.
+    pub fn set_fetch_policy(&self, json: Option<&str>) -> Result<()> {
+        self.fetcher.set_policy_json(json).map_err(Error::bad_json)
+    }
+
+    /// `cs_live_set_key`: a source's API key, in memory only; `None` clears it.
+    pub fn set_live_key(&self, source_id: &str, key: Option<&str>) {
+        self.fetcher.set_key(source_id, key);
     }
 
     /// Replace the source list. Malformed JSON, an unknown kind or a duplicate source id fail the whole call and
