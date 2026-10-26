@@ -47,7 +47,7 @@ class BrandTileImage extends StatelessWidget {
   );
 }
 
-/// The CACHE wordmark: parchment lettering for dark themes, charcoal for light ones.
+/// The Cache wordmark: parchment lettering for dark themes, charcoal for light ones.
 class BrandWordmark extends StatelessWidget {
   const BrandWordmark({super.key, this.height = 28});
 
@@ -57,7 +57,7 @@ class BrandWordmark extends StatelessWidget {
   Widget build(BuildContext context) {
     final light = Theme.of(context).brightness == Brightness.light;
     return Semantics(
-      label: 'CACHE',
+      label: 'Cache',
       child: _tinted(
         context,
         Image.asset(

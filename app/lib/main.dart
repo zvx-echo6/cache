@@ -220,7 +220,7 @@ class _CacheAppState extends State<CacheApp> {
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) => MaterialApp(
-        title: 'CACHE',
+        title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
         builder: (context, child) => Stack(
