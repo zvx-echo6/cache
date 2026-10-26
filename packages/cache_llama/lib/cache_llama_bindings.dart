@@ -14,6 +14,8 @@ typedef _IntHC = Int32 Function(Pointer<Void>);
 typedef _IntH = int Function(Pointer<Void>);
 typedef _VoidHC = Void Function(Pointer<Void>);
 typedef _VoidH = void Function(Pointer<Void>);
+typedef _EmbedC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, Int32, Int32);
+typedef _Embed = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Float>, int, int);
 
 /// Thin typed wrapper over the native library. Every method is a direct call.
 class CacheLlamaBindings {
@@ -27,7 +29,11 @@ class CacheLlamaBindings {
         clPromptTokens = lib.lookupFunction<_IntHC, _IntH>('cl_prompt_tokens'),
         clGeneratedTokens = lib.lookupFunction<_IntHC, _IntH>('cl_generated_tokens'),
         clStop = lib.lookupFunction<_VoidHC, _VoidH>('cl_stop'),
-        clFree = lib.lookupFunction<_VoidHC, _VoidH>('cl_free');
+        clFree = lib.lookupFunction<_VoidHC, _VoidH>('cl_free'),
+        clEmbedLoad = lib.lookupFunction<_LoadC, _Load>('cl_embed_load'),
+        clEmbedInfo = lib.lookupFunction<_BufC, _Buf>('cl_embed_info'),
+        clEmbed = lib.lookupFunction<_EmbedC, _Embed>('cl_embed'),
+        clEmbedFree = lib.lookupFunction<_VoidHC, _VoidH>('cl_embed_free');
 
   /// Opens the native library of the current platform.
   factory CacheLlamaBindings.open() {
@@ -54,4 +60,8 @@ class CacheLlamaBindings {
   final _IntH clGeneratedTokens;
   final _VoidH clStop;
   final _VoidH clFree;
+  final _Load clEmbedLoad;
+  final _Buf clEmbedInfo;
+  final _Embed clEmbed;
+  final _VoidH clEmbedFree;
 }

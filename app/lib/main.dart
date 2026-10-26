@@ -15,6 +15,7 @@ import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'nav/demo_backend.dart';
 import 'nav/nav_backend.dart';
+import 'nav/query_embedder.dart';
 import 'nav/notification_access.dart';
 import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
@@ -73,10 +74,14 @@ class _CacheAppState extends State<CacheApp> {
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
+  // The meaning search of the map: the query is embedded on the phone with the same model the places pack was built with.
+  late final PhoneQueryEmbedder queryEmbedder = PhoneQueryEmbedder(
+    modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
+  );
   late final NavState nav = NavState(
     backend: const String.fromEnvironment('CACHE_NAV_DEMO').isNotEmpty
         ? DemoMapBackend(Directory(const String.fromEnvironment('CACHE_NAV_DEMO')))
-        : CoreMapBackend(() => sources.core!, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
+        : CoreMapBackend(() => sources.core!, embedder: queryEmbedder.call, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
     location: location,
     speaker: FlutterTtsSpeaker(),
     positionSource: GeolocatorNavSource(),
@@ -136,6 +141,7 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     browse.dispose();
     nav.dispose();
+    queryEmbedder.dispose();
     sources.dispose();
     video.dispose();
     location.dispose();
