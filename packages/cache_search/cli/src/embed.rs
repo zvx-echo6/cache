@@ -62,6 +62,10 @@ pub fn sha256_file(path: &str) -> Result<String, ApiError> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+// SAFETY: the llama context behind `handle` is used from one thread at a time (callers hold it in a Mutex); it is
+// not tied to the thread that made it.
+unsafe impl Send for Embedder {}
+
 impl Embedder {
     /// Load the model. `model_id` defaults to the GGUF file name. With `expect_sha256` the file is hashed first
     /// and a mismatch is an error.

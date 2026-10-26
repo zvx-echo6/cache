@@ -9,7 +9,27 @@
 //!   POST   /conversations                                        -> {"id"} (cs_conversation_new)
 //!   POST   /conversations/{id}/format    {results}               -> cs_format
 //!   GET    /conversations/{id}/ids                               -> cs_conversation_ids
+//!   GET    /conversations/{id}/export                            -> cs_conversation_export (the state, format 1)
+//!   POST   /conversations/import         (the body is an export) -> {"id"}: a new conversation (cs_conversation_import)
 //!   DELETE /conversations/{id}                                   -> cs_conversation_free
+//!   GET    /tools                                                -> cs_tool_schemas
+//!   POST   /location        {lat, lon, accuracy_m, fixed_at}     -> cs_set_location ({"ok":true}; accuracy_m optional)
+//!   DELETE /location                                             -> cs_clear_location ({"ok":true})
+//!   POST   /web             {provider, key, online}              -> cs_set_web ({"ok":true}; the key is never echoed or logged)
+//!   DELETE /web                                                  -> web search off, key cleared ({"ok":true})
+//!   POST   /conversations/{id}/tool  {name, args, now}           -> cs_tool ({"content","ids"})
+//!   GET    /places                                               -> cs_places_list
+//!   POST   /places                       {place}                 -> cs_place_save (the body is the place JSON)
+//!   DELETE /places/{key}                                         -> cs_place_delete
+//!   GET    /live/sources                                         -> cs_live_sources
+//!   POST   /live/fetch                   {request}               -> cs_live_fetch (the body is the request JSON)
+//!   POST   /live/get                     {request}               -> cs_live_get (the body is the request JSON)
+//!   GET    /video/instances                                      -> cs_video_instances
+//!   POST   /video/{instance-add|instance-remove|login|refresh|me|channels|list|search|get|delete|resolve}
+//!                                        (the body is the request JSON) -> cs_video_<name>
+//!   POST   /video/download {instance,video,choice?,token?} -> a video_download job, run to the end: its last progress
+//!                                                           JSON (the request is `cs video-download`'s)
+//!   GET    /video/downloads                                      -> cs_video_downloads
 //! Errors are `{"code","message"}` (the core's error) with a matching HTTP status.
 
 use crate::engine::{ApiError, Conv, Engine};
@@ -109,6 +129,13 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             st.convs.insert(id.clone(), Conv::new()?);
             Ok(json!({"id": id}).to_string())
         }
+        (Method::Post, ["conversations", "import"]) => {
+            let conv = Conv::import(body)?;
+            let id = format!("c{}", st.next);
+            st.next += 1;
+            st.convs.insert(id.clone(), conv);
+            Ok(json!({"id": id}).to_string())
+        }
         (Method::Post, ["conversations", id, "format"]) => {
             let v = body_json(body)?;
             if !v["results"].is_array() {
@@ -117,10 +144,70 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.format(&v["results"].to_string())
         }
         (Method::Get, ["conversations", id, "ids"]) => st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.ids(),
+        (Method::Get, ["conversations", id, "export"]) => st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.export(),
+        (Method::Get, ["tools"]) => st.engine.core.tool_schemas(),
+        (Method::Post, ["location"]) => {
+            let v = body_json(body)?;
+            let num = |key: &str| v[key].as_f64().ok_or_else(|| ApiError::new("bad_json", format!("\"{key}\" (number) is required")));
+            let accuracy = if v["accuracy_m"].is_null() { -1.0 } else { num("accuracy_m")? };
+            st.engine.core.set_location(num("lat")?, num("lon")?, accuracy, need_str(&v, "fixed_at")?)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Delete, ["location"]) => {
+            st.engine.core.clear_location()?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["web"]) => {
+            let v = body_json(body)?;
+            let opt = |key: &str| match &v[key] {
+                Value::Null => Ok(None),
+                Value::String(s) => Ok(Some(s.as_str())),
+                _ => Err(ApiError::new("bad_json", format!("\"{key}\" must be a string"))),
+            };
+            let online = v["online"].as_bool().ok_or_else(|| ApiError::new("bad_json", "\"online\" (boolean) is required"))?;
+            st.engine.core.set_web(opt("provider")?, opt("key")?, online)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Delete, ["web"]) => {
+            st.engine.core.set_web(None, None, false)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["conversations", id, "tool"]) => {
+            let v = body_json(body)?;
+            let name = need_str(&v, "name")?;
+            let args = if v["args"].is_null() { json!({}) } else { v["args"].clone() };
+            let now = v["now"].as_str().unwrap_or("");
+            let conv = st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?;
+            st.engine.core.tool(conv, name, &args.to_string(), now)
+        }
         (Method::Delete, ["conversations", id]) => {
             st.convs.remove(*id).ok_or_else(|| conv_not_found(id))?;
             Ok(json!({"deleted": id}).to_string())
         }
+        (Method::Get, ["places"]) => st.engine.core.places_list(),
+        (Method::Post, ["places"]) => st.engine.core.place_save(body),
+        (Method::Delete, ["places", key]) => st.engine.core.place_delete(key),
+        (Method::Get, ["live", "sources"]) => st.engine.core.live_sources(),
+        (Method::Post, ["live", "fetch"]) => st.engine.core.live_fetch(body),
+        (Method::Post, ["live", "get"]) => st.engine.core.live_get(body),
+        (Method::Get, ["video", "instances"]) => st.engine.core.video_instances(),
+        (Method::Get, ["video", "downloads"]) => st.engine.core.video_downloads(),
+        (Method::Post, ["video", op]) => match *op {
+            "instance-add" => st.engine.core.video_instance_add(body),
+            "instance-remove" => st.engine.core.video_instance_remove(body),
+            "login" => st.engine.core.video_login(body),
+            "refresh" => st.engine.core.video_refresh(body),
+            "me" => st.engine.core.video_me(body),
+            "channels" => st.engine.core.video_channels(body),
+            "list" => st.engine.core.video_list(body),
+            "search" => st.engine.core.video_search(body),
+            "get" => st.engine.core.video_get(body),
+            "delete" => st.engine.core.video_delete(body),
+            "resolve" => st.engine.core.video_resolve(body),
+            // runs the download job to the end before answering (requests are handled one at a time)
+            "download" => st.engine.video_download(&body_json(body)?, &mut |_| {}),
+            _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
+        },
         _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
     }
 }

@@ -1,0 +1,155 @@
+{
+ "id": 3708,
+ "uuid": "07273a4b-40a5-433f-a305-1c8f4268fd72",
+ "shortUUID": "1TesHJPJ33Jz5TUP7TA7cu",
+ "url": "https://example.org/videos/watch/07273a4b-40a5-433f-a305-1c8f4268fd72",
+ "name": "Merry Christmas from the Isle of Man",
+ "category": {
+  "id": null,
+  "label": "Unknown"
+ },
+ "licence": {
+  "id": 7,
+  "label": "Public Domain Dedication"
+ },
+ "language": {
+  "id": "en",
+  "label": "English"
+ },
+ "privacy": {
+  "id": 1,
+  "label": "Public"
+ },
+ "nsfw": false,
+ "nsfwFlags": 0,
+ "nsfwSummary": null,
+ "truncatedDescription": "Hope you have a great Christmas and a fantastic new year.",
+ "description": "Hope you have a great Christmas and a fantastic new year.",
+ "isLocal": true,
+ "duration": 11,
+ "aspectRatio": 0.563,
+ "views": 0,
+ "viewers": 0,
+ "downloads": 0,
+ "likes": 0,
+ "dislikes": 0,
+ "thumbnailPath": "/lazy-static/thumbnails/029b382e-46e0-4626-b2a7-526a3e188585.jpg",
+ "previewPath": "/lazy-static/thumbnails/461b256f-67ab-4606-a27d-5235060944eb.jpg",
+ "thumbnails": [
+  {
+   "height": 480,
+   "width": 850,
+   "aspectRatio": "16:9",
+   "fileUrl": "https://example.org/lazy-static/thumbnails/461b256f-67ab-4606-a27d-5235060944eb.jpg"
+  },
+  {
+   "height": 157,
+   "width": 280,
+   "aspectRatio": "16:9",
+   "fileUrl": "https://example.org/lazy-static/thumbnails/029b382e-46e0-4626-b2a7-526a3e188585.jpg"
+  }
+ ],
+ "embedPath": "/videos/embed/1TesHJPJ33Jz5TUP7TA7cu",
+ "createdAt": "2026-02-17T00:41:00.765Z",
+ "updatedAt": "2026-02-17T06:16:17.276Z",
+ "publishedAt": "2026-02-17T00:40:59.702Z",
+ "originallyPublishedAt": "2025-12-25T00:00:00.000Z",
+ "isLive": false,
+ "account": {
+  "url": "https://example.org/accounts/root",
+  "name": "root",
+  "host": "example.org",
+  "avatars": [],
+  "id": 2,
+  "hostRedundancyAllowed": false,
+  "followingCount": 0,
+  "followersCount": 0,
+  "createdAt": "2026-02-13T00:34:33.275Z",
+  "displayName": "root",
+  "description": null,
+  "updatedAt": "2026-02-13T00:34:33.274Z",
+  "userId": 1
+ },
+ "channel": {
+  "url": "https://example.org/video-channels/big-clive",
+  "name": "big-clive",
+  "host": "example.org",
+  "avatars": [],
+  "id": 56,
+  "hostRedundancyAllowed": false,
+  "followingCount": 0,
+  "followersCount": 0,
+  "createdAt": "2026-02-13T10:32:18.344Z",
+  "banners": [],
+  "displayName": "(YT)Big Clive",
+  "description": "Imported from YouTube: https://www.youtube.com/@bigclivedotcom",
+  "support": null,
+  "isLocal": true,
+  "updatedAt": "2026-10-03T16:42:17.744Z",
+  "ownerAccount": {
+   "url": "https://example.org/accounts/root",
+   "name": "root",
+   "host": "example.org",
+   "avatars": [],
+   "id": 2,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-02-13T00:34:33.275Z",
+   "displayName": "root",
+   "description": null,
+   "updatedAt": "2026-02-13T00:34:33.274Z",
+   "userId": 1
+  }
+ },
+ "comments": 0,
+ "blacklisted": false,
+ "blacklistedReason": null,
+ "streamingPlaylists": [],
+ "files": [
+  {
+   "id": 3708,
+   "resolution": {
+    "id": 608,
+    "label": "608p"
+   },
+   "width": 608,
+   "height": 1080,
+   "magnetUri": "magnet:?xs=https%3A%2F%2Fexample.org%2Flazy-static%2Ftorrents%2F13f5836c-f9ce-4935-a870-d3e6c9c57497-608.torrent&xt=urn:btih:e256a47aa03dd5cba13fa8f94586c655e5b9a285&dn=Merry+Christmas+from+the+Isle+of+Man&tr=https%3A%2F%2Fexample.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fexample.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fexample.org%2Fstatic%2Fweb-videos%2F3c85ea25-bf2f-49fd-bf09-b1961332744b-608.mp4",
+   "size": 1976686,
+   "fps": 30,
+   "torrentUrl": "https://example.org/lazy-static/torrents/13f5836c-f9ce-4935-a870-d3e6c9c57497-608.torrent",
+   "torrentDownloadUrl": "https://example.org/download/torrents/13f5836c-f9ce-4935-a870-d3e6c9c57497-608.torrent",
+   "fileUrl": "https://example.org/static/web-videos/3c85ea25-bf2f-49fd-bf09-b1961332744b-608.mp4",
+   "fileDownloadUrl": "https://example.org/download/web-videos/07273a4b-40a5-433f-a305-1c8f4268fd72-608.mp4",
+   "metadataUrl": "https://example.org/api/v1/videos/07273a4b-40a5-433f-a305-1c8f4268fd72/metadata/3708",
+   "hasAudio": true,
+   "hasVideo": true,
+   "storage": 0
+  }
+ ],
+ "liveSchedules": [],
+ "support": null,
+ "tags": [
+  "Science & Technology"
+ ],
+ "commentsPolicy": {
+  "id": 1,
+  "label": "Enabled"
+ },
+ "downloadEnabled": true,
+ "waitTranscoding": false,
+ "inputFileUpdatedAt": null,
+ "state": {
+  "id": 1,
+  "label": "Published"
+ },
+ "trackerUrls": [
+  "https://example.org/tracker/announce",
+  "wss://example.org:443/tracker/socket"
+ ],
+ "embedPrivacyPolicy": {
+  "id": 1,
+  "label": "All allowed"
+ }
+}

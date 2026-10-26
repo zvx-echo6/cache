@@ -3,8 +3,11 @@
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
+use crate::tools::QueryEmbedder;
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
+use crate::web::{WebSearchTool, WebState};
 use crate::zimsrc::{self, ZimSource};
+use cache_tool::{Location, NoSavedPlaces, SavedPlaces, Tool};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -23,6 +26,16 @@ struct SourceCfg {
 #[derive(Debug, Deserialize)]
 struct Config {
     sources: Vec<SourceCfg>,
+    /// Saved places and live data (see ext.rs). A later cs_set_sources config without these keeps the earlier ones.
+    #[serde(default)]
+    user: Option<crate::ext::UserCfg>,
+    #[serde(default)]
+    live: Option<cache_live::LiveCfg>,
+    /// The navigate tool: Valhalla tiles and shim, and the off-road pack (see cache_navigate's config.rs).
+    #[serde(default)]
+    routing: Option<cache_navigate::NavigateCfg>,
+    #[serde(default)]
+    video: Option<cache_video::VideoCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -160,6 +173,18 @@ pub struct Handle {
     pub candidates_per_list: u32,
     pub min_term_coverage: f32,
     pub last_error: Option<Error>,
+    /// The tools registered by the host (see `tools.rs`); `search` and `read` are built in and not listed here.
+    pub tools: Vec<Box<dyn Tool>>,
+    /// The user's saved places, for tools. None until the host sets them.
+    pub places: Box<dyn SavedPlaces>,
+    /// The phone's last GPS fix (`cs_set_location`), for tools.
+    pub location: Option<Location>,
+    /// Embeds the query for built-in `search`; without one it is keyword-only.
+    pub embedder: Option<QueryEmbedder>,
+    /// Web search settings (provider, key, online), shared with the registered `web_search` tool. See `web.rs`.
+    pub web: Arc<WebState>,
+    /// Saved places and live data, configured from the `user` and `live` sections (ext.rs).
+    pub ext: crate::ext::Ext,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -168,7 +193,22 @@ fn stem_title(path: &std::path::Path) -> String {
 
 impl Handle {
     pub fn open(config_json: &str) -> Result<Handle> {
-        let mut h = Handle { sources: vec![], snippet_chars: 400, candidates_per_list: 50, min_term_coverage: 0.5, last_error: None };
+        let mut h = Handle {
+            sources: vec![],
+            snippet_chars: 400,
+            candidates_per_list: 50,
+            min_term_coverage: 0.5,
+            last_error: None,
+            tools: Vec::new(),
+            places: Box::new(NoSavedPlaces),
+            location: None,
+            embedder: None,
+            web: Arc::new(WebState::new()),
+            ext: Default::default(),
+        };
+        h.register_tool(Box::new(WebSearchTool(h.web.clone())));
+        // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
+        // live_data tool: set_sources does it (ext.rs), so a later cs_set_sources can add them too.
         h.set_sources(config_json)?;
         Ok(h)
     }
@@ -311,8 +351,10 @@ impl Handle {
             })
             .collect();
         self.snippet_chars = cfg.snippet_chars;
+        self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
+        self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video);
         Ok(())
     }
 

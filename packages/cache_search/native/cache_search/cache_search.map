@@ -1,4 +1,6 @@
-/* Linker version script: the shared library exports only the C ABI (cs_*), nothing from its dependencies. */
+/* Linker version script: the shared library exports only the C ABI (cs_*), nothing from its dependencies.
+ * cs_* covers every function in include/cache_search.h, including cs_places_*, cs_place_* and cs_live_* (cache_user and
+ * cache_live are compiled into this library; their own Rust symbols stay local). */
 {
   global:
     cs_*;

@@ -17,9 +17,18 @@
  *   "unsupported"    the file or feature is not supported (e.g. an unknown ZIM compression)
  *   "io"             a file could not be read or written
  *   "cancelled"      a job was cancelled
- *   "no_space"       not enough free disk space for an update_library job; the job error also has the numbers
- *                    "needed" and "available" (bytes)
+ *   "no_space"       not enough free disk space for an update_library or video_download job; the job error also has the
+ *                    numbers "needed" and "available" (bytes)
  *   "damaged"        a library's files are incomplete; nothing was changed
+ *   "not_configured" the cs_open config has no "user" section (saved places), "live" section (live data) or "video"
+ *                    section (videos)
+ *   "fetch_failed"   a live-source download failed (network, HTTP status); the last good copy is kept
+ *   "quota"          a live source reached its per-minute, per-day or per-month download cap
+ *   "key_missing"    a live source needs an API key and the request gave none
+ *   "bad_response"   a live-source response was not what its definition expects; the last good copy is kept
+ *   "auth_failed"    a video instance refused the login or the access token (wrong password, expired or revoked token,
+ *                    a video that needs a login)
+ *   "otp_required"   the video account has two-factor login on: repeat the login with the "otp" code
  *   "internal"       anything else (a bug); message has detail
  */
 #ifndef CACHE_SEARCH_H
@@ -50,6 +59,13 @@ char *cs_version(void);
  *   ],
  *   "snippet_chars": 400,          optional, default 400
  *   "candidates_per_list": 50,     optional, default 50
+ *   "user": {"db_path": ".../user.sqlite"},          optional: where saved places are stored (cs_places_*)
+ *   "video": {"dir": ".../videos"},                 optional: PeerTube instances, offline downloads (cs_video_*, job
+ *                                                   kind video_download); holds instances.json and downloads/
+ *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
+ *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
+ *   "routing": {"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll"},   optional: the navigate tool
+ *               "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles"}},  (see DESIGN.md)
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }
@@ -148,7 +164,215 @@ char *cs_format(cs_conv *c, const char *results_json);
 /* The id map so far: {"ids":[{"n","address","title"}]}, for the citation check. */
 char *cs_conversation_ids(cs_conv *c);
 
+/* The conversation's whole state as JSON, so a chat can be saved and continued later (or in another process) with the
+ * same numbering and the same `read` fallback. Format 1, keys in this order:
+ *   {"format":1,
+ *    "next_n":N,                                   the number the next new address gets (last id + 1; 1 when empty)
+ *    "ids":[{"n","address","title"}, ...],         every number given, ascending
+ *    "web_hits":{"<address>":{"title","snippet","fetched"}, ...}}
+ *                                                  what web_search showed per web:<url> address (keys sorted), the
+ *                                                  stored title/snippet `read` falls back to when the page fetch fails
+ * The same state always gives the same bytes. NULL on error (cs_last_error(NULL)). */
+char *cs_conversation_export(cs_conv *c);
+
+/* A new conversation from cs_conversation_export's output; continuing on it gives byte-identical cs_format / cs_tool
+ * results to continuing the original. NULL on error, with cs_last_error(NULL): "bad_json" for malformed JSON or an
+ * export whose ids/next_n disagree, "unsupported" for a "format" other than 1. Free it with cs_conversation_free. */
+cs_conv *cs_conversation_import(const char *json);
+
 void cs_conversation_free(cs_conv *c);
+
+/* --- tools --- */
+
+/* The tools the model can call. search and read are built in; the host registers the others in Rust
+ * (Handle::register_tool: navigate, nearby, locate, live_data, ...; web_search is registered by cs_open and switched on
+ * with cs_set_web). See docs/TOOLS.md for the
+ * schemas and results, and DESIGN.md, Tools, for the dispatch. */
+
+/* The phone's GPS fix, for the tools that default to "where I am". accuracy_m < 0 means unknown. fixed_at is the
+ * time of the fix, ISO 8601 with offset, e.g. "2026-10-25T14:20:05-06:00". lat must be in -90..90 and lon in
+ * -180..180. Returns 0; -1 with code "bad_json" for a value out of range or a missing fixed_at.
+ * cs_clear_location removes the fix (the tools then answer no_location). Returns 0. */
+int32_t cs_set_location(cs_handle *h, double lat, double lon, double accuracy_m, const char *fixed_at);
+int32_t cs_clear_location(cs_handle *h);
+
+/* Web search settings. provider is "kagi", or NULL for web search off; key is the provider's API key, or NULL for none;
+ * online is 0 or 1, the app's own view of whether the phone has a connection. web_search is offered in
+ * cs_tool_schemas only while a provider, a key and online=1 are all set; without them cs_tool answers it with
+ * not_set_up. Each call replaces all three settings. The key is kept in memory only: it is never written to disk,
+ * logged, or put in any result or error. Returns 0; -1 with code "bad_json" for an unknown provider or an online
+ * value other than 0 or 1 (nothing changes). Web results exist only in the conversation: nothing from the web is
+ * stored or added to a library. A cs_tool result for a web search or a read of a web result also carries a
+ * "timing_ms" field ({"search": ms} or {"fetch": ms}) for measurement; it is not part of what the model sees. */
+int32_t cs_set_web(cs_handle *h, const char *provider, const char *key, int32_t online);
+
+/* A JSON array of the function schemas ({"type":"function","function":{...}}) of the tools available now, in this
+ * order where present: search, read, navigate, nearby, locate, live_data, web_search (any other registered tool
+ * after them). A tool that is registered but has nothing installed to work with (its schema is None) is left out. */
+char *cs_tool_schemas(cs_handle *h);
+
+/* Run one tool call. name is the tool's name; args_json the call's arguments (a JSON object); now the local
+ * date and time of the call, ISO 8601 with offset (required, not empty).
+ * Returns {"content":"<exactly the tool message the model sees>","ids":[{"n","address","title"}]}.
+ *   - content of search and read is their plain text; of every other tool the result JSON, compact.
+ *   - The call's sources are numbered in c like cs_format does: a source already numbered keeps its number, and
+ *     "ids" holds only the numbers this call gave, in order. The tool never numbers anything itself.
+ *   - A failure of the tool is not an error of this function: content is the error JSON
+ *     {"ok":false,"error":{"type","detail",...}}, with type one of bad_arguments (also an unknown tool name or
+ *     arguments that break the tool's schema: the detail names the field), no_location, not_set_up (the tool is
+ *     registered but its data is not installed), not_found (read of a number not in c), internal (the tool
+ *     failed), expired, no_data, unknown_source, not_configured, fetch_failed, quota, key_missing, bad_response.
+ *   - NULL (cs_last_error) only for a NULL or invalid handle or conv, an args_json that is not JSON, or an empty
+ *     now.
+ * The arguments are checked against the tool's schema before it runs: type (string, integer, number, boolean,
+ * object), enum, minLength, maxLength, minimum, maximum, required and additionalProperties:false. Defaults are not
+ * filled in. */
+char *cs_tool(cs_handle *h, cs_conv *c, const char *name, const char *args_json, const char *now);
+
+/* --- saved places (user.sqlite; logic in the cache_user crate) ---
+ *
+ * Tools and live data resolve a place name against saved places first (by key, then by name, ignoring case).
+ * All three fail with "not_configured" when the cs_open config has no "user" section. */
+
+/* {"places":[{"key","name","lat","lon","label"?}]}, oldest first. */
+char *cs_places_list(cs_handle *h);
+
+/* place_json: {"key"?:"home","name":"Home","lat":42.536,"lon":-113.792,"label"?:"home"}. Inserts, or updates the
+ * place with that key. Without a key one is made from the name ("home", then "home-2", ...); a key is letters,
+ * digits and _ - . : , + (it is used inside addresses). Returns the saved place, same shape as above. */
+char *cs_place_save(cs_handle *h, const char *place_json);
+
+/* Deletes the saved place and the live data downloaded for it. {"deleted":"<key>"}, or "not_found". */
+char *cs_place_delete(cs_handle *h, const char *key);
+
+/* --- live data (live.sqlite; logic in the cache_live crate) ---
+ *
+ * One general engine: a source is a definition file (data, never code; format in DESIGN.md, "Live sources"). The
+ * core has no scheduler: the app calls cs_live_fetch when it is online. All three fail with "not_configured" when
+ * the cs_open config has no "live" section. */
+
+/* {"sources":[{"id","title","provider","description","attribution","refresh_minutes",
+ *              "api_key":null|{"alias","required"},"quota":{"per_minute","per_day","per_month"}}],
+ *  "errors":[{"file","message"}]}   (definition files that could not be read) */
+char *cs_live_sources(cs_handle *h);
+
+/* request_json: {"source":"weather","place":<place>,"api_key"?:"...","force"?:false,"now"?:"<ISO 8601 with offset>"}
+ * <place> is a saved place's key or name (a string) or {"key","name","lat","lon"} (the app passes the phone's
+ * position this way; for "where the phone is" use the key "at:<lat>,<lon>" rounded to 2 decimals, which is the key the
+ * live_data tool looks for). "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
+ * unless the stored copy is younger than the source's refresh interval and still valid (then "fetched":false and no
+ * network); maps the response with the definition and stores it with the raw response. The API key is used for this
+ * call only and never stored. A failed download returns NULL (codes fetch_failed, quota, key_missing, bad_response,
+ * not_found, bad_json) and keeps the last good copy; cs_live_get then shows it with "last_error".
+ * Returns what cs_live_get returns plus "fetched":true|false. */
+char *cs_live_fetch(cs_handle *h, const char *request_json);
+
+/* request_json: {"source","place","now"?}. The stored data for Home cards and map layers, expired or not:
+ * {"source":{"id","title","provider","description","attribution"},"place":{"key","name","lat","lon"},
+ *  "fetched_at","valid_until","age":"2 hours old","age_seconds","expired":bool,"not_covered_after":null|"<date>",
+ *  "last_error":null|{"code","message","at"},
+ *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
+ *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>}]}
+ * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
+ * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
+ * was ever downloaded for that source and place. */
+char *cs_live_get(cs_handle *h, const char *request_json);
+
+/* --- videos (PeerTube; logic in the cache_video crate) ---
+ *
+ * A generic PeerTube connector over PeerTube's official REST API only (no scraping): any instance, added by address.
+ * All fail with "not_configured" when the cs_open config has no "video" section. Requests are JSON objects; unknown
+ * fields are "bad_json". Every network request has the User-Agent "Cache/<version>". An instance must be https (http is
+ * accepted only for 127.0.0.1/localhost). Access tokens are never stored by the core: the app keeps them in its secure
+ * storage and passes "token" (the access token) in each request that needs a login; cs_video_login and
+ * cs_video_refresh return the tokens to the caller. An instance is named by its "id" (its host, with ":" as "_" for a
+ * port) or by its address. Network trouble is "fetch_failed", an instance rate limit "quota", 401/403 "auth_failed"
+ * (two-factor: "otp_required"), a missing video/instance/channel "not_found".
+ * A video is named by its uuid, short uuid or numeric id. Lists take "start" (default 0) and "count" (default 20, max 100).
+ *
+ * Shapes used below:
+ *   <channel> = {"name","display_name","handle","host","avatar":null|url}      ("handle" is what cs_video_list takes)
+ *   <video>   = {"uuid","short_uuid","id","title","duration_s","published_at","views","channel":<channel>,
+ *                "thumbnail":null|url,"nsfw","is_live","downloaded":bool}
+ *   <manifest> = {"version":1,"instance","instance_url","id","uuid","short_uuid","title","description","channel":<channel>,
+ *                "duration_s","published_at","kind":"video"|"audio","resolution":"480"|"audio","resolution_label",
+ *                "source":"web"|"hls"|"hls+audio","size","sha256","checksum_verified":null|"playlist","file",
+ *                "thumbnail":null|name,"captions":[{"language","label","automatic","file"}],"warnings":[...],
+ *                "downloaded_at", and, added when listed: "dir","path","thumbnail_path","captions"[i]."path"} */
+
+/* {"instances":[{"id","url","name","version","added_at"}]} */
+char *cs_video_instances(cs_handle *h);
+
+/* request_json: {"url":"stream.example.org"} (https:// optional; anything after the host is ignored). Reads
+ * GET /api/v1/config to confirm it is PeerTube and to take its display name. Returns the instance record
+ * {"id","url","name","version","added_at"}; adding one that is there refreshes its name and version. */
+char *cs_video_instance_add(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance":"<id|address>","delete_downloads"?:false}. Its downloaded videos are kept (they play
+ * without it) unless delete_downloads is true. {"removed":"<id>","downloads_deleted":bool} */
+char *cs_video_instance_remove(cs_handle *h, const char *request_json);
+
+/* Login with PeerTube's OAuth password flow (GET /api/v1/oauth-clients/local, then POST /api/v1/users/token).
+ * request_json: {"instance","username","password","otp"?}. Returns {"instance","token_type","access_token",
+ * "refresh_token","expires_in","refresh_token_expires_in"}; the caller stores them. The password is used for this
+ * call only and is never in an error message. Wrong credentials: "auth_failed"; "otp_required" when the account
+ * has two-factor login and "otp" was not given. */
+char *cs_video_login(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","refresh_token"}. Same answer as cs_video_login (the refresh token changes too). */
+char *cs_video_refresh(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","token"}. GET /api/v1/users/me: {"instance","username","display_name","role"}. */
+char *cs_video_me(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","search"?:"text","start"?,"count"?,"token"?}. Channels of the instance (newest first), or the
+ * ones matching "search" (the instance's own, searchTarget=local).
+ * {"instance","total","start","channels":[<channel> plus {"description","followers"}]} */
+char *cs_video_channels(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","channel"?:"<handle>","start"?,"count"?,"sort"?:"-publishedAt","token"?}. The instance's
+ * latest videos, or a channel's. {"instance","total","start","videos":[<video>]} */
+char *cs_video_list(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","query","start"?,"count"?,"sort"?:"-match","token"?}. Search the instance's own videos.
+ * Same answer as cs_video_list. */
+char *cs_video_search(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","video","token"?}. The video page:
+ * {"instance","uuid","short_uuid","id","title","description","duration_s","published_at","views","privacy","is_live",
+ *  "nsfw","tags","channel":<channel>,"thumbnail","preview","download_enabled":bool,
+ *  "captions":[{"language","label","automatic","url"}],
+ *  "options":[{"key","label","kind":"video"|"audio","size":null|bytes,"source":"web"|"hls"|"hls+audio"}],
+ *  "stream":{"hls":null|url,"mp4":null|url,"needs_auth":bool},
+ *  "downloaded":null|{"kind","resolution","size","downloaded_at"}}
+ * "options" are the download choices, resolutions high to low then "audio" (audio only, only when the instance has an
+ * audio-only file), with the size to show before downloading. For one resolution the file is chosen like this: a web-video
+ * MP4 if there is one; else the HLS playlist's fragmented MP4 (a downloadable file) when it has sound; else, on
+ * instances that keep audio in its own file, the video-only HLS file joined with the audio-only file by the instance's
+ * /download/videos/generate endpoint ("hls+audio": that download cannot be resumed). "download_enabled" false means the
+ * video can only be streamed: a video_download job refuses it. */
+char *cs_video_get(cs_handle *h, const char *request_json);
+
+/* Downloaded videos, newest first: {"downloads":[<manifest>],"total_bytes"} (works without any network or instance). */
+char *cs_video_downloads(cs_handle *h);
+
+/* request_json: {"instance","video"}. Deletes the downloaded video's files (and a half-finished download of it).
+ * {"deleted":"<uuid>","instance","freed_bytes"}, or "not_found". */
+char *cs_video_delete(cs_handle *h, const char *request_json);
+
+/* Citations: where to open a video at a time. request_json: {"video":"<link|uuid|short uuid>","instance"?:"<id|address>",
+ * "offset_s"?:12.5,"token"?}. "video" may be a PeerTube link (/w/<id>, /videos/watch/<id>, /videos/embed/<id>; a start= or t=
+ * in it such as 1m30s is the offset when offset_s is absent; the link's host is the instance, even one that was never
+ * added); a bare id looks in the downloads of every instance, then asks "instance" or each added instance in turn.
+ * A downloaded video is answered from disk with no network:
+ *   {"kind":"local","instance","uuid","title","media":"video"|"audio","path","offset_s","duration_s","resolution",
+ *    "captions":[{"language","label","path"}],"thumbnail_path"}
+ * otherwise the instance is asked and the answer is a stream:
+ *   {"kind":"stream","instance","uuid","title","url","format":"hls"|"mp4","offset_s","duration_s","needs_auth","thumbnail"}
+ * "url" is the HLS master playlist when the instance has HLS, else an MP4 file (the highest resolution up to 720 with
+ * sound). For a video that needs a login a short-lived file token is added to the URL (token required, else
+ * "auth_failed"). offset_s is clamped to the duration. Live streams are "unsupported". */
+char *cs_video_resolve(cs_handle *h, const char *request_json);
 
 /* --- long jobs --- */
 
@@ -196,6 +420,21 @@ void cs_conversation_free(cs_conv *c);
  *   before the read-write load. cs_job_start fails with "busy" if an update, another library_manifest or an
  *   index_library job is using that library, "not_found" if library_path or the folder of out_path does not
  *   exist and "bad_json" for empty paths or an out_path inside the library.
+ * kind "video_download": {"dir","instance","video","choice"?:"lowest","token"?}
+ *   downloads one video for offline use. "dir" is the "video" folder of the cs_open config; "choice" is "audio",
+ *   "lowest", "highest" or a resolution from cs_video_get's options (a resolution the video lacks gives the nearest one
+ *   below it, else above); "token" is the access token for videos that need a login. cs_job_start fails at once with
+ *   "bad_json" or "not_found" (unknown instance). On the job's thread it reads the video's details from the instance,
+ *   refuses a live stream and a video with download_enabled false ("unsupported", nothing is downloaded), picks the file (see
+ *   cs_video_get), then checks free space: file size + 16 MiB must fit ("no_space" with "needed" and "available",
+ *   nothing downloaded). The file goes to <dir>/downloads/<instance>/<uuid>/video.part and is resumed with HTTP Range
+ *   from what is there: a cancelled or failed job keeps it and a new job for the same file continues; network trouble
+ *   is retried 3 times (1 s, 2 s, 4 s) before the job fails ("fetch_failed"). At most 2 downloads per instance and 4 in
+ *   all run at once; the others wait ("running", done 0). The finished file's size must equal the size the instance gave
+ *   and, when the instance publishes a checksum for it (HLS playlists' segments-sha256 list), its sha256 must match
+ *   ("damaged": the file is deleted); the manifest always records the sha256 computed. Then the thumbnail and the
+ *   captions (VTT) are saved and manifest.json is written last. A new download of a video replaces the earlier one.
+ *   Progress: done/total in bytes of the video file (total 0 until known). Cancel keeps the partial file.
  * Resumes from the last checkpoint if index_dir holds an unfinished build. The index format version and the
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);

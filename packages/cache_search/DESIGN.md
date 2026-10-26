@@ -14,7 +14,7 @@ Layout (repo `packages/cache_search/`):
 - `native/` — Cargo workspace root. Crate `cache_search` (lib: `cdylib` + `staticlib` + `rlib`). Header
   `native/include/cache_search.h`.
 - `cli/` — crate `cache_search_cli`, binary `cs` (a member of the `native/` workspace as `../cli`): `cs index-zim`,
-  `unpack-library`, `index-library`, `library-manifest`, `update-library`, `search`, `read`, `status`, `serve` (HTTP). Built as described under
+  `unpack-library`, `index-library`, `library-manifest`, `update-library`, `search`, `read`, `status`, `tool`, `tool-schemas`, `serve` (HTTP). Built as described under
   Headless parity; it calls the same `cs_*` functions as the C ABI.
 
 The crate never links llama.cpp. Query vectors come from the caller (the app via cache_llama `cl_embed`; the
@@ -323,6 +323,164 @@ next [6].., an address seen before keeps its old number) and returns the exact t
 Weather and other live-source tools can pass their results through the same formatter so all numbering stays in
 one place.
 
+### Conversation state (export and import)
+
+A conversation lives only in memory. To continue a chat in a later session or another process, the app saves
+`cs_conversation_export(conv)` and restores it with `cs_conversation_import(json)`; the restored conversation numbers and reads
+exactly as the original would have (the same later `cs_format` and `cs_tool` calls give byte-identical `content` and `ids`).
+The export holds all the state a conversation has: the id map and what `web_search` showed for each web result (the
+title and snippet `read` falls back to when the page cannot be fetched). Nothing else is kept per conversation.
+
+Format 1, one JSON object, keys always in this order (the same state always gives the same bytes):
+
+```
+{"format":1,
+ "next_n":4,
+ "ids":[{"n":1,"address":"lib:x/1","title":"..."}, ...],
+ "web_hits":{"web:https://a.example/1":{"title":"...","snippet":"...","fetched":"2026-10-25 14:20"}, ...}}
+```
+
+- `format`: the version, an integer. An import of any other number is refused with `unsupported`; a missing or non-integer
+  one with `bad_json`. A later format that adds keys gets a new number.
+- `next_n`: the number the next new address gets, always `ids` length + 1 (1 when empty). It is redundant on purpose: an
+  export whose `next_n` disagrees with its `ids` is `bad_json`, not repaired.
+- `ids`: every number given, ascending, entry `i` being number `i + 1`; `title` is the first title seen for the address. A
+  repeated address or a gap in the numbers is `bad_json`.
+- `web_hits`: for each `web:<url>` address a `web_search` returned, `title` and `snippet` (as shown to the model, already
+  cleaned) and `fetched` (local `YYYY-MM-DD HH:MM`, used in `read`'s header line). Keys are sorted by address. May be `{}`
+  (and is read as `{}` when absent).
+- Unknown keys are ignored on import. An import that fails changes nothing and returns no conversation.
+
+Errors with no handle follow the rest of the conversation calls: NULL, with the error in `cs_last_error(NULL)`.
+`cs serve` has `GET /conversations/{id}/export` (the JSON) and `POST /conversations/import` (the body is an export;
+returns `{"id"}` of a new conversation). The CLI has no such command: a conversation does not outlive a `cs` process.
+Tests: `conv.rs` (key order, round trip, refusals); `tests/web_ffi.rs` runs one sequence (a `cs_format`, a stand-in
+`search` tool, `web_search` against the local stand-in server, a read of a web hit whose page loads, one whose page fails,
+a final `cs_format`) uninterrupted and again with an export and import after each step, and requires every reply to be
+byte-identical; `cli/tests/cli.rs` covers the two endpoints.
+
+## Tools
+
+The model's tools (docs/TOOLS.md) run through the core, so the phone and the headless runs share one dispatch:
+`cs_tool_schemas` lists the available tools' function schemas and `cs_tool` runs one call and numbers its result
+in the conversation.
+
+**Registry.** The handle holds `Vec<Box<dyn cache_tool::Tool>>`. The host adds tools with
+`Handle::register_tool` (a tool registered again under the same name replaces the first), sets the user's saved
+places with `set_saved_places` (default `NoSavedPlaces`) and the query embedder of `search` with
+`set_query_embedder` (a callback `&str -> Option<(model id, vector)>`; with none, search is keyword-only, as
+`cs_search` is without a `query_vector`). `cs_open` registers the tools of the config's "user", "live" and "routing"
+sections (see Wiring and headless, and navigate below). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
+web_search (a tool with another name follows, in registration order) and leaves out a tool whose `schema()` is
+None.
+
+**search and read are built in.** They are not `Tool` impls: `Tool::run` sees only the location, the saved places
+and the clock, while search needs the handle's sources and read needs the conversation's number-to-address map.
+They still use TOOLS.md's schemas (copied verbatim into `tools.rs`) and every dispatch step below. `search` runs
+`cs_search` with k=5 and the embedder's vector, and writes one line per result,
+`{{addr:<address>}} <title> — <snippet>`, with the title and snippet rules of `cs_format` (whitespace runs
+become one space; no ` — ` when the snippet is empty); no result is `No results found.`. `read` takes `n`, finds
+its address in the conversation (unknown: `not_found`, "no result [n] in this conversation"), calls `cs_read` with
+max_chars 6000 and writes `[n] <title>`, the text, and `[truncated]` on its own line when it was cut. It keeps the
+number it was given, so it writes `[n]` itself and gives no marker.
+
+**Dispatch** (`Handle::call_tool`):
+1. Find the tool. An unknown name is `bad_arguments` "no tool named <name>"; a registered tool whose schema is
+   None is `not_set_up`.
+2. Validate the arguments against the schema's `parameters` (below). A violation is `bad_arguments`, detail
+   `"<field>: <what>"`. Defaults in the schema are not filled in; the tool applies them.
+3. Run it with a `ToolCtx` (the handle's location and saved places, and `now`) inside `catch_unwind`; a panic is
+   `internal`, "<tool> failed".
+4. Number the result in the conversation (the numbering `cs_format` uses, so an address seen before keeps its
+   number): in text, each `{{addr:<address>}}` becomes `[n]` and the title is the text after the marker up to ` — `
+   or the end of the line; in JSON the value is walked depth first in document order and every object with an
+   `"address"` key gets that key replaced, in place, by `"n": <number>` (its title is its `title`, `name`,
+   `place_name` or `label`, in that order, else empty). A JSON object without `"ok"` gets `"ok": true` as its first
+   key; other key order is untouched. A `ToolError` becomes its `to_json()` unnumbered.
+5. The reply is `{"content","ids"}`; `content` is the text as it is, or the JSON serialised compactly; `ids` holds
+   only the numbers this call gave, in order.
+
+A tool's failure is its content, never a C error. Only a NULL or invalid handle or conversation, an `args_json` that
+is not JSON, or an empty `now` return NULL with `cs_last_error`.
+
+**Validator.** A small built-in subset of JSON Schema over the properties of `parameters`: `type` (string, integer,
+number, boolean, object), `enum`, `minLength`, `maxLength` (in characters), `minimum`, `maximum`, `required`, and
+`additionalProperties: false`. The arguments must be an object. Nothing else in a schema is checked.
+
+**now and location.** `now` (the local time with offset, from the caller's clock, so captures can pin it) is required
+on every call. The phone's GPS fix is set with `cs_set_location(lat, lon, accuracy_m, fixed_at)` (`accuracy_m` < 0
+is unknown) and removed with `cs_clear_location`; tools see it as `ctx.location` and answer `no_location` without it.
+
+### Web search
+
+`web_search` and `read` on a web result live in `web.rs`. Settings: `cs_set_web(h, provider, key, online)`
+(provider "kagi", or NULL for off; key or NULL; online 0/1; each call replaces all three).
+
+**Availability.** `web_search` is a registered `cache_tool::Tool` (`WebSearchTool`), registered by `Handle::open`
+and sharing the handle's `WebState`. Its `schema()` is Some only while a provider, a key and `online` are all set;
+otherwise it is left out of `cs_tool_schemas` and a call gives `not_set_up`. It is a registered tool rather than
+built in because it needs only `ToolCtx` (the clock) plus its own state; the two things a plain tool cannot do are
+done by the dispatch: `call_tool` moves the hits the tool left in `WebState` into the conversation after the call,
+and `read` (built in, it has the conversation) handles `web:` addresses. A host that registers its own tool named
+`web_search` replaces it.
+
+**Provider interface.** `trait WebSearchProvider: Send + Sync { fn search(&self, query, limit, key, deadline) ->
+Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provider maps its own failures to the shared
+error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/search`, overridable for tests) sends
+`POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
+from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
+matches the request AIDA uses in production (Open WebUI kagi.py); live-verified: pending. HTTP 401/403 or an error code
+401/403 is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
+`quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
+used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
+top-level key names (and `data`'s) but never a value, and never the key or the query. A `data` object whose `search`
+is missing or null is zero results (`No results found.`). Kagi's `meta` object (request id, timing), when present,
+goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
+mapping of a balance, credit or quota message to `quota` are a judgement from the previous API's shape, not seen from
+v1; only the 200 response shape above is known from AIDA's use.
+
+**Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
+now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
+boundary with `…`), the title to 150 characters. Repeated URLs are dropped. Text from the web is made safe for the
+line: first the HTML is removed (tags stripped, named, decimal and hex entities decoded, as `html::strip` does for a
+page), then whitespace runs become one space, `{{` becomes `{ {` so a page cannot forge an address marker, and a ` — ` in
+a title becomes ` - ` (the numbering reads the title up to the first ` — `). Nothing found: `No results found.`
+
+**Read.** `read` on a `web:` number fetches the URL (GET, up to 5 redirects, `User-Agent: Cache/<version>`), strips
+HTML with the same rules as a ZIM article (`html_to_text`: headings kept, script and style removed; plain text is
+used as it is), and cuts to 6,000 characters at a paragraph end. Output: `[n] <title> (web, fetched <time>)`, the
+text, and `[truncated]` when cut (or when the download hit the cap). When the page cannot be had, the output is the
+same first line, the snippet the search showed (the conversation keeps each web hit's title, snippet and fetch time
+beside its number), and a last line `[full page did not load in time]` (timeout) or `[full page not available]`
+(connection failure, bad status, a content type that is not HTML or text, a page with no text, or the phone being
+offline, in which case nothing is fetched). That is a result, not an error. A page that loads but whose extracted text is
+under 500 characters (`LITTLE_TEXT_CHARS`; a script-rendered shell that gives only navigation or a footer) is not
+a full page: the output is the first line, the stored snippet, the extracted text (if not empty), and a last line
+`[page had little readable text]`. This is a length rule on machine output. Compression is not requested: the
+reqwest already in the lockfile has no gzip support and the decoder crate it would need is not in the lockfile.
+
+**Budgets.** Search 6 s from the call to the result; read 8 s for connect, download and parse; a page download is
+capped at 2 MB (the rest is dropped). Each network call runs on its own thread and the caller waits only until the
+deadline, so a stalled name lookup or a slow body cannot hold the handle longer; the abandoned thread ends when its
+own request times out. The client is `reqwest` 0.13.5 (blocking API, rustls), already in the lockfile through
+Qdrant's object store; no crate was added.
+
+**Never stored.** Nothing from the web is written to disk or added to a library. Hits and their snippets live in the
+`Conversation` and die with it.
+
+**The key.** `WebState` holds it in memory only. It is sent only as the provider's `Authorization` header (marked
+sensitive in the client), never in a URL; it is not written to disk, not logged (the core has no logging), and is
+removed from any error detail built from a server's reply (`***`). `WebState` has no `Debug`. The tests search every
+output, error and status for the test key.
+
+**Timing.** A `cs_tool` reply for a web search or a web read also has `"timing_ms": {"search": ms}` or
+`{"fetch": ms}` after `content` and `ids`: a debug field for speed measurement, never part of what the model sees.
+`cs tool` prints it on stderr (and in `--json`).
+
+**CLI.** `cs` turns web search on when both `CACHE_WEB_PROVIDER` and `CACHE_WEB_KEY` are set in the environment (it
+then assumes online); `CACHE_WEB_BASE_URL` points Kagi at another address for runs against a stand-in server.
+`cs serve` has `POST /web {"provider","key","online"}` and `DELETE /web`; the key is never echoed.
+
 ## ZIM reading
 
 Options to evaluate first (report before committing):
@@ -386,6 +544,11 @@ Subcommands (results on stdout as the core's JSON, errors on stderr as `{"code",
   conversation (with `--format --json`, the whole `cs_format` JSON). Plain `--json` is accepted and is the default.
 - `cs read --config <sources.json> --address <addr> [--max-chars 6000]`: the `cs_read` JSON.
 - `cs status --config <sources.json>`: the `cs_status` JSON.
+- `cs tool <name> --config <sources.json> [--args '<json>'] [--now <iso>] [--lat <deg> --lon <deg> [--accuracy <m>]] [--json] [embedder flags]`:
+  one `cs_tool` call in a fresh conversation (so `read` has nothing to open; use `serve` for a conversation across calls).
+  Prints the content, then a line `ids <json>`; `--json` prints the core's `{"content","ids"}`. `--now` defaults to the
+  local time with offset. The embedder, if configured, is also the query embedder of the built-in `search`.
+- `cs tool-schemas [--config <sources.json>]`: the `cs_tool_schemas` array.
 - `cs serve --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [embedder flags]`: HTTP, below.
 - All commands that open sources take `--open-timeout <seconds>` (default 600). `cs_open` returns at once and
   libraries open on background threads, so the wrapper polls `cs_status` until no source is `"opening"` before it
@@ -408,7 +571,13 @@ what a handle requires). JSON in, the core's JSON out byte for byte:
 | `POST /conversations` | | `cs_conversation_new`; returns `{"id"}` |
 | `POST /conversations/{id}/format` | `{results}` | `cs_format` on that conversation |
 | `GET /conversations/{id}/ids` | | `cs_conversation_ids` |
+| `GET /conversations/{id}/export` | | `cs_conversation_export` (format 1, see "Conversation state") |
+| `POST /conversations/import` | an export | `cs_conversation_import`; returns `{"id"}` of the new conversation |
 | `DELETE /conversations/{id}` | | `cs_conversation_free`; returns `{"deleted":"<id>"}` |
+| `GET /tools` | | `cs_tool_schemas` |
+| `POST /location` | `{lat, lon, accuracy_m, fixed_at}` (`accuracy_m` optional) | `cs_set_location`; returns `{"ok":true}` |
+| `DELETE /location` | | `cs_clear_location`; returns `{"ok":true}` |
+| `POST /conversations/{id}/tool` | `{name, args, now}` | `cs_tool` on that conversation |
 
 Errors are the core's `{"code","message"}` with HTTP 400 (`bad_json`), 404 (`not_found`, also unknown
 endpoint or conversation), 409 (`busy`, `index_missing`, `index_stale`, `cancelled`), 422 (`unsupported`), 500 (anything else).
@@ -458,6 +627,201 @@ may have cached reads.
   2 CPUs and 1 GiB cap (about 14,400 docs/s), 594 MB index in 6 segments, peak anonymous memory 394 MB.
   Keyword query top 10: median 25 ms first pass, 3 ms warm.
 - Binary size: test binary with Edge 37.5 MB stripped (Linux x86_64).
+
+## Saved places and live data (crates `cache_user` and `cache_live`)
+
+Two small crates in the `native/` workspace, compiled into the library; their C functions are exported by
+`cache_search` (`ffi.rs`, glue in `ext.rs`). The tool contract (`cache_tool`) comes from the tool framework; these
+crates implement `SavedPlaces` (`cache_user`) and the `live_data` `Tool` (`cache_live`).
+
+### Saved places (`cache_user`, user.sqlite)
+
+`cs_open` config `"user": {"db_path": ".../user.sqlite"}`. `cs_places_list`, `cs_place_save`, `cs_place_delete` (header
+has the shapes). A place is `{key, name, lat, lon, label?}`; the key is stable across renames, is part of every live-data
+address, and is letters, digits and `_ - . : , +`. A name given to a tool or to live data is matched against saved places
+first (key, then name ignoring case); map-pack place search comes later and plugs in after it. Deleting a place deletes
+the live data stored for it.
+
+### Live sources (`cache_live`)
+
+"Every API data point works this way": one engine, no per-source code. A source is one JSON file; the app points
+`"live": {"db_path", "sources_dir"}` at a folder of them. The files that ship are in `packages/cache_search/sources/`
+(`weather.json`: Open-Meteo, `alerts.json`: NWS); the app copies them into its sources folder on install, and a user adds
+or shares more by dropping files there. An unreadable file is listed under `errors` by `cs_live_sources` and does not stop
+the others.
+
+Definition (format 1; unknown keys are errors, so typos show):
+
+```
+{ "format": 1, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
+  "description": "one line: what the model and the Home card see of this source",
+  "attribution": "optional credit line",
+  "request": { "url": "https://...?lat={lat}&lon={lon}", "headers": {"Accept": "..."} },
+  "api_key": { "alias": "eia", "required": true },      optional; "{api_key}" in url/headers
+  "refresh_minutes": 180,                                a fetch inside this time returns the stored copy
+  "quota": { "per_minute": 30, "per_day": 2000, "per_month": 30000 },       all optional
+  "validity": { "fixed_hours": 6 }                       or { "end_path": "daily.time[-1]", "end_of_day": true,
+                                                              "not_covered_after": true }
+  "require": ["current", "daily.time"],                  paths that must exist, else bad_response
+  "timezone_path": "timezone",                           optional: IANA zone name in the response (best)
+  "utc_offset_path": "utc_offset_seconds",               optional: fixed offset; without either, the offline lookup
+  "items": [ <item group>, ... ] }
+```
+
+URL placeholders: `{lat}` `{lon}` (4 decimals; `{lat:2}` for another count), `{name}`, `{place_key}`, `{api_key}`; values
+are percent-encoded. https only (plain http only to 127.0.0.1/localhost, for tests). Every fetch sends the User-Agent
+`Cache/<version>` and nothing personal. The key value arrives in the fetch request, is used for that call and is never stored
+or written to an error message (the alias is what the app keeps in secure storage).
+
+Item group: `{ "each": "<path to an array>", "key": V, "label": V, "time": V?, "ends": V?, "fields": [ V+label ],
+"sort": [..]?, "point": {"lat": V, "lon": V}?, "area": "<path to a GeoJSON geometry>"? }`. One item per element of `each` (without `each`,
+one item from the response root). `key` is the item's stable id (it ends up in its address); `ends` is when the item stops
+being true (an alert's end; ended items are left out); `fields` are the labelled values, in order, a field with no value
+is left out; `point` and `area` are for map layers and Home cards (not given to the model).
+
+A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that
+has a value) or `distance`, then formatted by these steps, in this order: `time` (`{"in": "local"|"rfc3339"|"unix", "out":
+"datetime"|"datetime_s"|"date"|"<strftime>", "zone": "place"?}`) or `scale`, `offset`, `round` (decimals), `compass`
+(degrees to N/NE/...); `lookup` (a fixed table from a code to text, `"*"` is the fallback; replaces the result);
+`omit_if`; `case`; `max_chars`; `prefix`, `suffix`. No scripting.
+
+Paths are dot-separated keys with `[n]` indexes (`[-1]` last). A path starts at the current element (the `each` element),
+`^` starts at the response root, `@` is the element itself and `[#]` is its index, so a response with one array per column
+reads as `"each": "daily.time"` plus `"path": "^daily.temperature_2m_max[#]"`.
+
+Times: every time the core writes (`fetched_at`, `valid_until`, `age` bases, item times, `last_error.at`) is in the place's
+local offset, as TOOLS.md says. The place's time zone is, in this order: the IANA name at `timezone_path` in the response
+(Open-Meteo `timezone`), a fixed offset at `utc_offset_path`, the offline lookup of the place's position, UTC. A named zone
+knows daylight saving, so a forecast that crosses the change (1 Nov) shows -06:00 before it and -07:00 after, and its
+`valid_until` (local midnight at the end of the last day) is exact. A time the provider wrote with its own offset is
+converted with `"zone": "place"` in its `time` step (the NWS definition does), otherwise it keeps the provider's offset.
+The zone is stored with the row, so a stored response is re-read in the same zone.
+
+Offline zone lookup: `tzf-rs` 2.1 (MIT) with its lite embedded boundary file, queried in place (`EmbeddedFinder`, no
+expansion into memory), and `chrono-tz` 0.10 (MIT OR Apache-2.0) for the offsets. The boundary data is from
+timezone-boundary-builder (ODbL-1.0): the app's credits need a line for it. Both add to the library size, reported with the
+release build.
+
+Distance: a field value `{"distance": {"geometry": "<path to a GeoJSON geometry>", "unit": "mi"|"km"}}` is the distance from
+the place to the nearest point of the area and the compass direction of that point (`6.2 mi S`), or `inside the area` when
+the place is within it (holes count). An item with no geometry has no such field; nothing is estimated from the area name.
+
+Sorting: an item group may have `"sort": [{"by": <value>, "rank": [..] | "time": true, "desc": false}, ...]` (first key
+first; missing values last). The alerts definition sorts by NWS severity (Extreme, Severe, Moderate, Minor, Unknown), then by
+onset.
+
+Rows for the phone's position (`at:` keys) are pruned: after a fetch for one, the other `at:` rows of that source are deleted
+unless they are still within their validity, so only the newest fetch plus any still-valid row is kept. Saved places are
+never pruned.
+
+Validity: `fixed_hours` after the fetch, or the end of the day found at `end_path` (a forecast is valid until its last day
+ends; `not_covered_after` then reports that date). After `valid_until` the data is expired.
+
+### Store and calls
+
+live.sqlite: one row per (source id, place key): `fetched_at`, `valid_until`, the mapped items, the raw response and a hash
+of the definition file. A changed definition re-maps the stored response on the next read without a download. A failed
+download (network, HTTP status, a response that is not JSON or lacks a `require` path, a quota) changes nothing and is
+recorded as the row's `last_error`. Quota caps count every attempt in a log table and refuse with `quota`.
+
+`cs_live_fetch` is called by the app's scheduler (or `cs live-fetch`); it skips the network when the stored copy is younger
+than `refresh_minutes`. `cs_live_get` gives the screens everything stored, expired or not. The `live_data` tool gives the
+model the same items through the same code, at most 12, with `more` for the rest, and refuses expired data with the
+`expired` error. All of them take "now" from the caller (`now` in the request, `ctx.now` in the tool), so captures
+reproduce; only a missing `now` falls back to the system clock.
+
+The phone's own position as a place: the key `at:<lat>,<lon>` with both rounded to 2 decimals (about 1 km) and the name
+`current location`. The `live_data` tool uses it when no place is given and a location is known, so the app fetches
+for the current position with a place object carrying that key.
+
+HTTP is `ureq` (blocking, rustls with bundled root certificates, no async runtime): the app's scheduler or the CLI calls
+fetch from a worker thread, so a blocking client is enough and it adds far fewer crates than reqwest (tokio, hyper).
+SQLite is `rusqlite` with the `bundled` feature (compiled in, nothing linked from the system).
+
+### Addresses of live items
+
+`live:<source-id>/<place-key>/<item-key>`, for example `live:weather/home/now`, `live:weather/home/2026-10-26`,
+`live:alerts/home/urn:oid:2.49.0.1.840.0.example1`. Every item that `cs_live_get` and the `live_data` tool return carries
+its address (the tool framework swaps it for `n`). An address stays valid across refreshes as long as the item key is
+stable; a citation whose item is gone says so. Other address schemes in the core: `zim:<uuid>/<path>` and
+`lib:<library-id>/<point-id>`.
+
+### Wiring and headless
+
+`cs_open` with a `"user"` section sets the handle's saved places to `cache_user`'s store (what every tool resolves a
+place name against); with a `"live"` section it registers `cache_live::LiveDataTool` as the `live_data` tool. The tool
+leaves itself out of `cs_tool_schemas` while `sources_dir` holds no valid definition, and a call then gives `not_set_up`.
+Through `cs_tool` its items carry `"n"` (numbered with the conversation's other sources, so numbers continue after a
+`search` and a known address keeps its number); the `ids` of the result map each `n` to its `live:` address.
+
+`cs places list|save|delete`, `cs live-sources`, `cs live-fetch --request`, `cs live-get --request`; `cs serve` has
+`GET/POST /places`, `DELETE /places/{key}`, `GET /live/sources`, `POST /live/fetch`, `POST /live/get`. The tool itself is
+reached like any other, with `cs tool live_data`, `POST /conversations/{id}/tool` and `cs tool-schemas`. The test
+`cli/tests/features.rs` runs one sequence through the CLI, serve and the C ABI on three separate states and requires
+byte-identical output at every step, and runs `search` then `live_data` in one conversation through serve and the C ABI.
+
+### navigate
+
+`cs_open` with a `"routing"` section registers `cache_navigate::NavigateTool` (docs/TOOLS.md, "navigate"):
+`{"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll", "region": "Idaho"}, "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles", "max_cells": 8000000}}`
+(`region`, `offroad` and `max_cells` optional; `region` defaults to the tiles' folder name, "Idaho" for `packs/idaho/valhalla/tiles.tar`).
+
+- **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
+  (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
+- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
+  Off-road legs come back inside the route, as in AIDA: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
+  off-road lead-in or tail (drive uses the vehicle-class modes, walk foot, bike a two-wheeler), and a trip with no road gets a whole off-road route. Without the
+  off-road files the road route is returned with an `offroad_unavailable` warning.
+- **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
+  `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` and `to_type` is `not_set_up`; the `to_type`
+  enum is TOOLS.md's list until a pack supplies its categories. The nearest place of a type is chosen by routing to the pack's 5 nearest by straight line.
+- **Result = AIDA's navigate contract** (`nav_runtime.py navigate()`), in its build order: `ok`, `n` (from `address` = `nav:<route_id>`), `mode`, `location_bias`
+  (`sender_node_position` for the phone's fix, `near:<name>`, `from_place`, null), `route_id`, `from_matched`, `to_matched` (place_name, kind, street, locality,
+  county, state, distance_km, [er_tier], near, snap_distance_m), `other_destination_candidates` (always, at most 2; `drive_min` on a nearest search),
+  `nearest_search` {to_type, ranked_by, warnings}, `distance_mi`, `distance_km`, `duration_minutes`, `major_roads` [{name, distance_km}], `step_count`, `steps`
+  (at most 12; every off-road step is kept, the first road steps fill the rest), `steps_truncated`, `road_steps_omitted` / `offroad_steps_omitted`,
+  `offroad_mi` + `offroad_note` (AIDA's text), `warnings` [{code, end, road_point, gap_m}]; then Cache's `map_region`, `map_region_age`. A step is index, kind,
+  type, street_names, distance_mi, cardinal, instruction; off-road steps add travel, grade_class, elev_gain_m, elev_loss_m, terrain (only when known, underscores
+  to spaces), follow {name, trail_kind}. Off-road instruction text is generated from the fields exactly as AIDA's `_step_text` does. Not filled (null): county and
+  distance_km (the geocoder's), `near` (navi's reverse geocode of the end), kind/street/locality/state of a place given as coordinates, er_tier. Not present: `pins`, `bridge`.
+- **Errors** (`ok:false`, `error`, then top-level `from_matched` / `to_matched` where AIDA attaches them): `geocode_empty` {which, query, searched_within_km, hint}
+  (no detail), `origin_unknown` (no from and no fix), `bad_arguments`, `nearby_empty` {to_type, warnings} + from_matched, `same_place` + both places, the router's own
+  code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
+- **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
+  requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
+
+## Videos (crate `cache_video`, PeerTube)
+
+A generic PeerTube connector through PeerTube's official REST API only (no scraping): any instance, added by address; browse and
+search; stream; download for offline use; link resolution for citations. The crate has no dependency on the rest of the core;
+`cs_video_*` (ABI, `cache_search.h`), `cs video-*`, `POST /video/*` on `cs serve` and the `video_download` job are thin wrappers.
+
+- **State on disk** (the `video` section of the `cs_open` config, `{"dir"}`): `instances.json` and `downloads/<instance>/<uuid>/`
+  holding `video.<ext>`, `thumb.<ext>`, `captions-<lang>.vtt` and `manifest.json` (written last; a folder without it is not a
+  download, and a half-finished file is `video.part` with `video.part.json` saying which file it is).
+- **Tokens** are never stored by the core. Login (`GET /api/v1/oauth-clients/local`, then `POST /api/v1/users/token`, password
+  grant, `x-peertube-otp` header when the account has two-factor login) and refresh (`grant_type=refresh_token`) return the tokens;
+  the app keeps them in its secure storage and passes `"token"` per call.
+- **Endpoints used:** `/api/v1/config`, `/oauth-clients/local`, `/users/token`, `/users/me`, `/video-channels`,
+  `/search/video-channels`, `/videos`, `/video-channels/{handle}/videos`, `/search/videos`, `/videos/{id}`, `/videos/{id}/captions`,
+  `POST /videos/{id}/token` (private videos), `/download/videos/generate/{id}` (HLS audio+video join), and the file, thumbnail and
+  caption addresses the API itself returns. Search uses `searchTarget=local`.
+- **File choice** (`model::options`): per resolution, a web-video MP4 first; else the HLS playlist's fragmented MP4 when it has sound;
+  else (instances with separate audio, PeerTube >= 6.2 `hasAudio:false`) the video-only HLS file joined with the audio-only file by the
+  instance's `/download/videos/generate` endpoint (not resumable, size approximate). Audio only: the audio-only web file, else the
+  audio-only HLS file; no such file, no option. Choosing a resolution a video lacks gives the nearest below, else above.
+- **Respect the instance:** `downloadEnabled:false` is refused (`unsupported`) before any file is requested; live streams are refused;
+  at most 2 downloads per instance and 4 in all run at once (others wait); User-Agent `Cache/<version>`; http only to this machine.
+- **Download job** (`video_download`): free space (file + 16 MiB) before anything; `Range` resume from the partial file, 3 retries
+  with 1/2/4 s waits; size must equal the API's; sha256 is always computed into the manifest and checked against the HLS playlist's
+  `segments-sha256` list when that names the file (the API gives no checksum for web-video files); thumbnail and captions saved
+  best-effort (`warnings` in the manifest); a new download replaces the old one.
+- **Link resolution:** `cs_video_resolve` takes a PeerTube link, uuid or short uuid (decoded locally: base-58 of the uuid, flickr
+  alphabet) and a time; downloaded -> local file, no network; else an HLS master playlist or MP4 URL from the instance.
+- **Tests:** unit tests (file choice, ranges, URL rules, short uuids, times), `cache_video/tests/video.rs` against a stand-in PeerTube
+  serving recorded responses (`tests/fixtures`, hostname example.org; the HLS-with-separate-audio video is synthetic, built from the API
+  reference), including a connection cut mid-file, cancel and resume, and `no_space`; `cli/tests/video.rs` runs one sequence through the
+  CLI, `cs serve` and the C ABI and compares the output (state folder and clock times normalised).
 
 ## Open (needs decisions)
 

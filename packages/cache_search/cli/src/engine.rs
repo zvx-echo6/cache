@@ -10,6 +10,7 @@ use cache_search::job::Job;
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// An error as the core reports it: `{"code","message"}`.
@@ -35,6 +36,13 @@ impl ApiError {
             "not_found" => 404,
             "busy" | "index_missing" | "index_stale" | "cancelled" => 409,
             "unsupported" => 422,
+            "not_configured" => 409,
+            "auth_failed" | "otp_required" => 401,
+            "no_space" => 507,
+            "damaged" => 502,
+            "key_missing" => 400,
+            "quota" => 429,
+            "fetch_failed" | "bad_response" => 502,
             _ => 500,
         }
     }
@@ -113,6 +121,176 @@ impl Core {
         self.result(p)
     }
 
+    /// `cs_set_location`; `accuracy_m < 0` means unknown.
+    pub fn set_location(&mut self, lat: f64, lon: f64, accuracy_m: f64, fixed_at: &str) -> Result<(), ApiError> {
+        let at = cstring(fixed_at, "fixed_at")?;
+        if unsafe { cs_set_location(self.h, lat, lon, accuracy_m, at.as_ptr()) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    pub fn clear_location(&mut self) -> Result<(), ApiError> {
+        if unsafe { cs_clear_location(self.h) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    /// `cs_set_web`: `provider` "kagi" or None (off), `key` None for none, `online` as the app says. The key goes
+    /// straight to the core; it is not kept, printed or put in an error here.
+    pub fn set_web(&mut self, provider: Option<&str>, key: Option<&str>, online: bool) -> Result<(), ApiError> {
+        let p = provider.map(|s| cstring(s, "provider")).transpose()?;
+        let k = key.map(|s| cstring(s, "key")).transpose()?;
+        let rc = unsafe {
+            cs_set_web(self.h, p.as_ref().map_or(ptr::null(), |c| c.as_ptr()), k.as_ref().map_or(ptr::null(), |c| c.as_ptr()), online as i32)
+        };
+        if rc != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    /// Web search with Kagi at another address (for runs against a stand-in server; set by CACHE_WEB_BASE_URL).
+    pub fn set_web_kagi_at(&mut self, base_url: &str, key: &str, online: bool) {
+        // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.
+        let h = unsafe { &*self.h };
+        h.web.configure(Some(Arc::new(cache_search::web::KagiProvider::with_base_url(base_url))), Some(key), online);
+    }
+
+    pub fn tool_schemas(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_tool_schemas(self.h) };
+        self.result(p)
+    }
+
+    /// `cs_tool`: `{"content","ids"}`.
+    pub fn tool(&mut self, conv: &mut Conv, name: &str, args_json: &str, now: &str) -> Result<String, ApiError> {
+        let (n, a, t) = (cstring(name, "name")?, cstring(args_json, "args")?, cstring(now, "now")?);
+        let p = unsafe { cs_tool(self.h, conv.c, n.as_ptr(), a.as_ptr(), t.as_ptr()) };
+        self.result(p)
+    }
+
+    /// Make built-in `search` embed its query with `embedder` (the core never links an embedder itself).
+    pub fn set_query_embedder(&mut self, embedder: Arc<Mutex<Embedder>>) {
+        // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.
+        unsafe { &mut *self.h }.set_query_embedder(Box::new(move |q: &str| {
+            let e = embedder.lock().ok()?;
+            e.embed(q).ok().map(|v| (e.model_id.clone(), v))
+        }));
+    }
+
+    pub fn places_list(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_places_list(self.h) };
+        self.result(p)
+    }
+
+    pub fn place_save(&mut self, place_json: &str) -> Result<String, ApiError> {
+        let c = cstring(place_json, "place")?;
+        let p = unsafe { cs_place_save(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn place_delete(&mut self, key: &str) -> Result<String, ApiError> {
+        let c = cstring(key, "key")?;
+        let p = unsafe { cs_place_delete(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn live_sources(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_live_sources(self.h) };
+        self.result(p)
+    }
+
+    pub fn live_fetch(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_live_fetch(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn live_get(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_live_get(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    // ---- videos ----
+
+    pub fn video_instances(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_video_instances(self.h) };
+        self.result(p)
+    }
+
+    pub fn video_instance_add(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_instance_add(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_instance_remove(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_instance_remove(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_login(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_login(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_refresh(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_refresh(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_me(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_me(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_channels(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_channels(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_list(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_list(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_search(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_search(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_get(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_get(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_downloads(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_video_downloads(self.h) };
+        self.result(p)
+    }
+
+    pub fn video_delete(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_delete(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn video_resolve(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_video_resolve(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
     /// Poll `cs_status` until no source is `"opening"` (libraries open on background threads inside the core).
     pub fn wait_ready(&mut self, timeout: Duration) -> Result<(), ApiError> {
         let t0 = Instant::now();
@@ -158,6 +336,21 @@ impl Conv {
     pub fn ids(&mut self) -> Result<String, ApiError> {
         take(unsafe { cs_conversation_ids(self.c) }).ok_or_else(thread_error)
     }
+
+    /// `cs_conversation_export`: the conversation's whole state (format 1).
+    pub fn export(&mut self) -> Result<String, ApiError> {
+        take(unsafe { cs_conversation_export(self.c) }).ok_or_else(thread_error)
+    }
+
+    /// `cs_conversation_import`: a new conversation from an export.
+    pub fn import(json: &str) -> Result<Conv, ApiError> {
+        let j = cstring(json, "conversation")?;
+        let c = unsafe { cs_conversation_import(j.as_ptr()) };
+        if c.is_null() {
+            return Err(thread_error());
+        }
+        Ok(Conv { c })
+    }
 }
 
 impl Drop for Conv {
@@ -195,10 +388,69 @@ impl Drop for JobRun {
 /// The core plus the optional query embedder: what `cs search` and `cs serve` share.
 pub struct Engine {
     pub core: Core,
-    pub embedder: Option<Embedder>,
+    pub embedder: Option<Arc<Mutex<Embedder>>>,
+    /// The `video` folder of the config, which a `video_download` job is given (jobs have no handle).
+    pub video_dir: Option<String>,
+}
+
+/// The result of a finished job from its final progress JSON (`{"state","done","total","error"}`): `Ok` only for
+/// `done`. Any other state is an error that carries the job's own code and message, so a failed job, a panic
+/// in a job thread (the core reports it as `internal` with the text `panic: ...`) and a cancelled job are never
+/// reported as a bare failure.
+pub fn job_result(v: &Value) -> Result<(), ApiError> {
+    let state = v["state"].as_str().unwrap_or("?");
+    if state == "done" {
+        return Ok(());
+    }
+    let code = v["error"]["code"].as_str().unwrap_or(if state == "cancelled" { "cancelled" } else { "internal" });
+    let message = match v["error"]["message"].as_str().filter(|m| !m.is_empty()) {
+        Some(m) => format!("job {state}: {m}"),
+        None => format!("job {state} without an error message from the core"),
+    };
+    Err(ApiError::new(code, message))
+}
+
+/// How a job ended: its last progress JSON, and its error if it did not finish.
+pub struct JobEnd {
+    pub progress: String,
+    pub error: Option<ApiError>,
+}
+
+/// Start a job and poll it to the end (`on_progress` sees each new `state done/total` line).
+pub fn run_job_to_end(kind: &str, params: &Value, on_progress: &mut dyn FnMut(&str)) -> Result<JobEnd, ApiError> {
+    let mut job = JobRun::start(kind, params)?;
+    let mut last = String::new();
+    loop {
+        let p = job.progress()?;
+        let v: Value = serde_json::from_str(&p).map_err(|e| ApiError::new("internal", e.to_string()))?;
+        let line = format!("{} {}/{}", v["state"].as_str().unwrap_or("?"), v["done"], v["total"]);
+        if line != last {
+            on_progress(&line);
+            last = line;
+        }
+        if v["state"] != "running" {
+            let error = job_result(&v).err();
+            return Ok(JobEnd { progress: p, error });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 impl Engine {
+    /// A `video_download` job from a request `{instance, video, choice?, token?}` (the `video` folder comes from the
+    /// config), run to the end. Returns the final progress JSON; a job that did not finish is the error.
+    pub fn video_download(&self, req: &Value, on_progress: &mut dyn FnMut(&str)) -> Result<String, ApiError> {
+        let dir = self.video_dir.clone().ok_or_else(|| ApiError::new("not_configured", "videos need \"video\": {\"dir\"} in the cs_open config"))?;
+        let mut p = req.clone();
+        let Some(o) = p.as_object_mut() else { return Err(ApiError::new("bad_json", "the request must be a JSON object")) };
+        o.insert("dir".into(), json!(dir));
+        let end = run_job_to_end("video_download", &p, on_progress)?;
+        match end.error {
+            None => Ok(end.progress),
+            Some(e) => Err(e),
+        }
+    }
+
     /// `cs_search`. When an embedder is configured and `options` has no `query_vector`, the query is embedded and
     /// the vector is added as `{"model": <model id>, "vector": [...]}`. Everything else is passed through as given.
     pub fn search(&mut self, query: &str, mut options: Value) -> Result<String, ApiError> {
@@ -207,6 +459,7 @@ impl Engine {
         };
         if let Some(emb) = &self.embedder {
             if map.get("query_vector").map(Value::is_null).unwrap_or(true) {
+                let emb = emb.lock().map_err(|_| ApiError::new("internal", "the embedder lock is poisoned"))?;
                 let v = emb.embed(query)?;
                 map.insert("query_vector".into(), json!({"model": emb.model_id, "vector": v}));
             }

@@ -14,6 +14,13 @@ pub enum ErrorCode {
     Cancelled,
     NoSpace,
     Damaged,
+    NotConfigured,
+    FetchFailed,
+    Quota,
+    KeyMissing,
+    BadResponse,
+    AuthFailed,
+    OtpRequired,
     Internal,
 }
 
@@ -31,6 +38,13 @@ impl ErrorCode {
             ErrorCode::Cancelled => "cancelled",
             ErrorCode::NoSpace => "no_space",
             ErrorCode::Damaged => "damaged",
+            ErrorCode::NotConfigured => "not_configured",
+            ErrorCode::FetchFailed => "fetch_failed",
+            ErrorCode::Quota => "quota",
+            ErrorCode::KeyMissing => "key_missing",
+            ErrorCode::BadResponse => "bad_response",
+            ErrorCode::AuthFailed => "auth_failed",
+            ErrorCode::OtpRequired => "otp_required",
             ErrorCode::Internal => "internal",
         }
     }
@@ -109,6 +123,29 @@ impl From<zim::Error> for Error {
     }
 }
 
+impl ErrorCode {
+    /// The code for a stable code string from `cache_live`, `cache_user` or `cache_video`; anything unknown is `internal`.
+    pub fn from_str_code(s: &str) -> ErrorCode {
+        match s {
+            "bad_json" => ErrorCode::BadJson,
+            "not_found" => ErrorCode::NotFound,
+            "io" => ErrorCode::Io,
+            "not_configured" => ErrorCode::NotConfigured,
+            "fetch_failed" => ErrorCode::FetchFailed,
+            "quota" => ErrorCode::Quota,
+            "key_missing" => ErrorCode::KeyMissing,
+            "bad_response" => ErrorCode::BadResponse,
+            "unsupported" => ErrorCode::Unsupported,
+            "no_space" => ErrorCode::NoSpace,
+            "damaged" => ErrorCode::Damaged,
+            "cancelled" => ErrorCode::Cancelled,
+            "auth_failed" => ErrorCode::AuthFailed,
+            "otp_required" => ErrorCode::OtpRequired,
+            _ => ErrorCode::Internal,
+        }
+    }
+}
+
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::bad_json(e.to_string())
@@ -132,6 +169,13 @@ mod tests {
             (ErrorCode::Cancelled, "cancelled"),
             (ErrorCode::NoSpace, "no_space"),
             (ErrorCode::Damaged, "damaged"),
+            (ErrorCode::NotConfigured, "not_configured"),
+            (ErrorCode::FetchFailed, "fetch_failed"),
+            (ErrorCode::Quota, "quota"),
+            (ErrorCode::KeyMissing, "key_missing"),
+            (ErrorCode::BadResponse, "bad_response"),
+            (ErrorCode::AuthFailed, "auth_failed"),
+            (ErrorCode::OtpRequired, "otp_required"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

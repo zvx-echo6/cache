@@ -4,7 +4,8 @@
 
 use cache_search_cli::embed::{Embedder, DECIDED_MODEL_FILE, DECIDED_MODEL_SHA256};
 use edge::{
-    Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
+    CreateIndex, Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, FieldIndexOperations, PayloadFieldSchema, PayloadSchemaParams,
+    PointInsertOperations, PointOperations, PointStruct, TextIndexParams, TextScoringParams, UpdateOperation,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -425,4 +426,387 @@ fn library_manifest_and_update_library_commands() {
     let st = j(&cs_ok(&["status", "--config", &config]));
     assert_eq!(st["sources"][0]["docs"], 20, "{st}");
     assert_eq!(st["sources"][0]["updating"], false);
+}
+
+#[test]
+fn index_library_failure_prints_the_job_error_and_exits_non_zero() {
+    let tmp = TempDir::new("idxfail");
+    // an existing folder that is not a library: the job starts, then fails on its own thread
+    let notlib = tmp.path("notalib");
+    std::fs::create_dir_all(&notlib).unwrap();
+    let idx = tmp.path("idx");
+    let o = cs(&["index-library", "--library", &notlib, "--index-dir", &idx]);
+    assert!(!o.ok, "a failed job must exit non-zero");
+    let last = o.stderr.lines().last().expect("stderr must not be empty");
+    let e = j(last);
+    assert!(e["code"].as_str().is_some_and(|c| !c.is_empty()), "error code missing: {}", o.stderr);
+    assert!(e["message"].as_str().is_some_and(|m| m.starts_with("job failed:") && m.len() > "job failed: ".len()), "message missing: {}", o.stderr);
+    assert!(o.stderr.contains("failed"), "{}", o.stderr);
+    let fin = j(o.stdout.trim());
+    assert_eq!(fin["state"], "failed");
+    assert_eq!(fin["error"]["code"], e["code"]);
+    // the lock is released: nothing stale is left behind
+    assert!(!Path::new(&idx).join("cache_search_index.lock").exists());
+}
+
+// ---- tools -------------------------------------------------------------------------------------------------------
+
+const NOW: &str = "2026-10-25T14:20:05-06:00";
+
+/// A small library with a BM25-scored text index of its own (keyword search needs no index job); returns the
+/// path of its sources.json.
+fn tool_fixture(tmp: &TempDir) -> String {
+    let shard = tmp.path("shard");
+    {
+        cache_search::library::ensure_init();
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(4, Distance::Cosine).build()).build();
+        let sh = EdgeShard::new(Path::new(&shard), cfg).unwrap();
+        let schema = PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
+            scoring: Some(TextScoringParams::default()),
+            ..TextIndexParams::default()
+        }));
+        sh.update(UpdateOperation::FieldIndexOperation(FieldIndexOperations::CreateIndex(CreateIndex {
+            field_name: "content".parse().unwrap(),
+            field_schema: Some(schema),
+        })))
+        .unwrap();
+        let pts: Vec<_> = (1..=6u64)
+            .map(|i| {
+                let content = if i == 3 { "The sesquipedalian word appears once".to_string() } else { format!("Alpha text number {i} here") };
+                PointStruct::new(i, vec![1.0, i as f32, 0.5, 0.25], json!({"title": format!("Doc {i}"), "content": content})).0
+            })
+            .collect();
+        sh.update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts)))).unwrap();
+        sh.flush().unwrap();
+        drop(sh);
+        cache_search::library::write_segments_manifest(Path::new(&shard)).unwrap();
+    }
+    let settings = json!({"format": 1, "library_id": "fx", "title": "Fixture", "fields": {"title": "title", "text": "content"},
+        "embedding": {"vector": "", "model": "m", "sha256": "x", "dims": 4}, "keyword_index": "auto"});
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, json!({"sources": [{"kind": "library", "path": shard, "settings": settings}]}).to_string()).unwrap();
+    config
+}
+
+#[test]
+fn tool_command_search_schemas_and_errors() {
+    let tmp = TempDir::new("tool");
+    let config = tool_fixture(&tmp);
+
+    // the tool message, then the ids line
+    let out = cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#, "--now", NOW]);
+    assert_eq!(out.lines().count(), 2, "{out}");
+    assert!(out.starts_with("[1] Doc 3 \u{2014} "), "{out}");
+    assert_eq!(out.lines().nth(1).unwrap(), r#"ids [{"n":1,"address":"lib:fx/3","title":"Doc 3"}]"#);
+    // --json is the core's {"content","ids"}
+    let full = j(&cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#, "--now", NOW, "--json"]));
+    assert_eq!(full["content"], out.lines().next().unwrap());
+    assert_eq!(full["ids"][0]["address"], "lib:fx/3");
+    // no --now: the current local time is used
+    assert!(cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#]).starts_with("[1] Doc 3"));
+    // nothing found
+    assert!(cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"qqqqzzzz"}"#]).starts_with("No results found.\nids []"));
+
+    // a tool's failure is its content, with exit status 0
+    let bad = cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":""}"#, "--json"]);
+    assert_eq!(
+        j(&bad)["content"],
+        r#"{"ok":false,"error":{"type":"bad_arguments","detail":"query: must be at least 1 characters"}}"#
+    );
+    let none = j(&cs_ok(&["tool", "navigate", "--config", &config, "--json"]));
+    assert_eq!(none["content"], r#"{"ok":false,"error":{"type":"bad_arguments","detail":"no tool named navigate"}}"#);
+    // a fresh conversation has no result to read
+    let rd = j(&cs_ok(&["tool", "read", "--config", &config, "--args", r#"{"n":1}"#, "--json"]));
+    assert!(rd["content"].as_str().unwrap().contains("not_found"));
+    // --lat/--lon are accepted; one alone, or malformed args, are errors
+    cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"alpha"}"#, "--lat", "42.5", "--lon", "-113.7", "--accuracy", "10"]);
+    assert!(!cs(&["tool", "search", "--config", &config, "--lat", "42.5"]).ok);
+    let o = cs(&["tool", "search", "--config", &config, "--args", "{"]);
+    assert!(!o.ok);
+    assert_eq!(j(o.stderr.trim())["code"], "bad_json");
+    let o = cs(&["tool", "--config", &config]);
+    assert!(!o.ok && j(o.stderr.trim())["code"] == "bad_json", "{}", o.stderr);
+
+    // tool-schemas: with and without a config
+    for args in [vec!["tool-schemas", "--config", config.as_str()], vec!["tool-schemas"]] {
+        let s = j(&cs_ok(&args));
+        let names: Vec<&str> = s.as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["search", "read"]);
+    }
+}
+
+#[test]
+fn serve_tool_endpoints() {
+    let tmp = TempDir::new("servetool");
+    let config = tool_fixture(&tmp);
+    let s = Serve::start(&["--config", &config]);
+
+    // GET /tools is cs tool-schemas
+    let (code, body) = s.req("GET", "/tools", None);
+    assert_eq!(code, 200);
+    assert_eq!(body, cs_ok(&["tool-schemas"]));
+
+    // a conversation: search numbers [1], read opens it
+    let (_, b) = s.req("POST", "/conversations", None);
+    let id = j(&b)["id"].as_str().unwrap().to_string();
+    let path = format!("/conversations/{id}/tool");
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "search", "args": {"query": "sesquipedalian"}, "now": NOW})));
+    assert_eq!(code, 200, "{body}");
+    let v = j(&body);
+    assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids"]);
+    assert!(v["content"].as_str().unwrap().starts_with("[1] Doc 3 \u{2014} "), "{body}");
+    assert_eq!(v["ids"][0]["address"], "lib:fx/3");
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "read", "args": {"n": 1}, "now": NOW})));
+    assert_eq!((code, j(&body)["content"].as_str().unwrap()), (200, "[1] Doc 3\nThe sesquipedalian word appears once"));
+    // the same call through the CLI gives the same bytes (fresh conversation, same search)
+    let (_, body) = s.req("POST", "/conversations", None);
+    let id2 = j(&body)["id"].as_str().unwrap().to_string();
+    let (_, body) = s.req("POST", &format!("/conversations/{id2}/tool"), Some(&json!({"name": "search", "args": {"query": "sesquipedalian"}, "now": NOW})));
+    assert_eq!(body, cs_ok(&["tool", "search", "--config", &config, "--args", r#"{"query":"sesquipedalian"}"#, "--now", NOW, "--json"]));
+
+    // a tool's failure is a 200 with the error as content; a missing now, or an unknown conversation, are errors
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "nope", "now": NOW})));
+    assert_eq!(code, 200);
+    assert!(j(&body)["content"].as_str().unwrap().contains("no tool named nope"));
+    let (code, body) = s.req("POST", &path, Some(&json!({"name": "search", "args": {"query": "x"}})));
+    assert_eq!((code, j(&body)["code"].as_str().unwrap().to_string()), (400, "bad_json".to_string()), "{body}");
+    let (code, _) = s.req("POST", &path, Some(&json!({"args": {}, "now": NOW})));
+    assert_eq!(code, 400);
+    let (code, _) = s.req("POST", "/conversations/zzz/tool", Some(&json!({"name": "search", "args": {"query": "x"}, "now": NOW})));
+    assert_eq!(code, 404);
+
+    // location: set, clear, and a value out of range
+    let (code, body) = s.req("POST", "/location", Some(&json!({"lat": 42.5, "lon": -113.7, "accuracy_m": 12.0, "fixed_at": NOW})));
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+    let (code, _) = s.req("POST", "/location", Some(&json!({"lat": 42.5, "lon": -113.7, "fixed_at": NOW})));
+    assert_eq!(code, 200, "accuracy_m is optional");
+    let (code, body) = s.req("POST", "/location", Some(&json!({"lat": 95.0, "lon": 0.0, "fixed_at": NOW})));
+    assert_eq!((code, j(&body)["code"].as_str().unwrap().to_string()), (400, "bad_json".to_string()), "{body}");
+    let (code, _) = s.req("POST", "/location", Some(&json!({"lat": 1.0, "fixed_at": NOW})));
+    assert_eq!(code, 400);
+    let (code, body) = s.req("DELETE", "/location", None);
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+}
+
+// ---- web search ------------------------------------------------------------------------------------------------
+
+const WEB_KEY: &str = "CLI-TESTKEY-31337-do-not-leak";
+
+/// `cs` with extra environment variables.
+fn cs_env(args: &[&str], env: &[(&str, &str)]) -> Out {
+    let o = Command::new(env!("CARGO_BIN_EXE_cs"))
+        .args(args)
+        .env_remove("CACHE_WEB_PROVIDER")
+        .env_remove("CACHE_WEB_KEY")
+        .env_remove("CACHE_WEB_BASE_URL")
+        .envs(env.iter().copied())
+        .output()
+        .expect("run cs");
+    Out { ok: o.status.success(), stdout: String::from_utf8(o.stdout).unwrap(), stderr: String::from_utf8(o.stderr).unwrap() }
+}
+
+/// A one-answer HTTP server standing in for Kagi's v1 API (no real network is touched). Returns its base address. It
+/// insists on a POST to /api/v1/search with `Authorization: Bearer <WEB_KEY>` and a JSON body with `query` and `limit`
+/// (a wrong header gets 401, anything else wrong gets 400), and records the Authorization header of each request. A
+/// query of "nosnippet" gets a result with no snippet.
+fn stand_in_kagi(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> String {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/api/v1/search", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut s in l.incoming().flatten() {
+            let mut raw: Vec<u8> = Vec::new();
+            let mut buf = vec![0u8; 4096];
+            let mut head_end = None;
+            while head_end.is_none() {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => raw.extend_from_slice(&buf[..n]),
+                }
+                head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4);
+            }
+            let Some(head_end) = head_end else { continue };
+            let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+            let header = |name: &str| -> String {
+                head.lines()
+                    .find(|l| l.to_ascii_lowercase().starts_with(&format!("{name}:")))
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let want: usize = header("content-length").split_once(':').and_then(|(_, v)| v.trim().parse().ok()).unwrap_or(0);
+            let mut body = raw[head_end..].to_vec();
+            while body.len() < want {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                }
+            }
+            let auth = header("authorization");
+            seen.lock().unwrap().push(auth.clone());
+            let first = head.lines().next().unwrap_or("");
+            let parsed: Option<Value> = serde_json::from_slice(&body).ok();
+            let (status, out) = if auth.split_once(':').map(|(_, v)| v.trim()) != Some(format!("Bearer {WEB_KEY}").as_str()) {
+                (401, r#"{"error":[{"code":401,"msg":"unauthorized"}]}"#.to_string())
+            } else if !first.starts_with("POST /api/v1/search ")
+                || !parsed.as_ref().is_some_and(|b| b["query"].is_string() && b["limit"].is_u64())
+            {
+                (400, r#"{"error":[{"code":400,"msg":"bad request"}]}"#.to_string())
+            } else if parsed.as_ref().unwrap()["query"] == "nosnippet" {
+                (200, json!({"data": {"search": [{"url": "https://n.example/1", "title": "Bare"}]}}).to_string())
+            } else {
+                let r = json!({"meta": {}, "data": {"search": [
+                    {"url": "https://a.example/1", "title": "Burn ban lifted", "snippet": "Ended on Friday.", "rank": 1}],
+                    "related_searches": ["x"]}});
+                (200, r.to_string())
+            };
+            let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
+        }
+    });
+    base
+}
+
+#[test]
+fn web_search_through_the_cli_needs_the_environment() {
+    // without the variables: not in the schemas, and a call is not_set_up
+    let names = |o: &Out| -> Vec<String> {
+        j(o.stdout.trim()).as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[])), ["search", "read"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "kagi")])), ["search", "read"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_KEY", WEB_KEY)])), ["search", "read"]);
+    let o = cs_env(&["tool", "web_search", "--config", &empty_config(), "--args", r#"{"query":"x"}"#, "--json"], &[]);
+    assert!(o.ok, "{}", o.stderr);
+    assert_eq!(j(o.stdout.trim())["content"], r#"{"ok":false,"error":{"type":"not_set_up","detail":"web_search is not set up"}}"#);
+    // both set: offered
+    let both = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", WEB_KEY)];
+    assert_eq!(names(&cs_env(&["tool-schemas"], &both)), ["search", "read", "web_search"]);
+    // an unknown provider is refused at start
+    let o = cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "bing"), ("CACHE_WEB_KEY", WEB_KEY)]);
+    assert!(!o.ok && j(o.stderr.trim())["code"] == "bad_json", "{}", o.stderr);
+    assert!(!o.stderr.contains(WEB_KEY) && !o.stdout.contains(WEB_KEY));
+}
+
+fn empty_config() -> String {
+    let p = std::env::temp_dir().join(format!("cs-clitest-web-{}.json", std::process::id()));
+    std::fs::write(&p, r#"{"sources":[]}"#).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn cs_tool_web_search_against_a_stand_in_server() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let base = stand_in_kagi(seen.clone());
+    let cfg = empty_config();
+    let env = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", WEB_KEY), ("CACHE_WEB_BASE_URL", base.as_str())];
+    let args = ["tool", "web_search", "--config", cfg.as_str(), "--args", r#"{"query":"burn ban"}"#, "--now", NOW];
+    let o = cs_env(&args, &env);
+    assert!(o.ok, "{}", o.stderr);
+    let lines: Vec<&str> = o.stdout.lines().collect();
+    assert_eq!(lines[0], "[1] Burn ban lifted (web, fetched 2026-10-25 14:20) \u{2014} Ended on Friday.");
+    assert_eq!(lines[1], r#"ids [{"n":1,"address":"web:https://a.example/1","title":"Burn ban lifted (web, fetched 2026-10-25 14:20)"}]"#);
+    assert!(o.stderr.starts_with("timing_ms {\"search\":"), "{}", o.stderr);
+    // --json carries the timing next to content and ids
+    let mut json_args = args.to_vec();
+    json_args.push("--json");
+    let o = cs_env(&json_args, &env);
+    let v = j(o.stdout.trim());
+    assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
+    assert!(v["timing_ms"]["search"].is_u64());
+    // the key went out as a header, and appears in nothing cs printed
+    assert_eq!(seen.lock().unwrap()[0].split_once(':').unwrap().1.trim(), format!("Bearer {WEB_KEY}"));
+    assert!(!o.stdout.contains(WEB_KEY) && !o.stderr.contains(WEB_KEY));
+    // a result with no snippet is a line with no dash part
+    let nosnip = ["tool", "web_search", "--config", cfg.as_str(), "--args", r#"{"query":"nosnippet"}"#, "--now", NOW];
+    let o = cs_env(&nosnip, &env);
+    assert!(o.ok, "{}", o.stderr);
+    assert_eq!(o.stdout.lines().next().unwrap(), "[1] Bare (web, fetched 2026-10-25 14:20)");
+    // a wrong key is a 401 from the stand-in: key_missing, and the key is not echoed
+    let wrong = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", "not-the-key"), ("CACHE_WEB_BASE_URL", base.as_str())];
+    let o = cs_env(&args, &wrong);
+    assert!(o.stdout.contains("key_missing") || o.stderr.contains("key_missing"), "{} {}", o.stdout, o.stderr);
+}
+
+#[test]
+fn serve_web_endpoints_set_and_clear_search_without_echoing_the_key() {
+    let tmp = TempDir::new("serveweb");
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, r#"{"sources":[]}"#).unwrap();
+    let s = Serve::start(&["--config", &config]);
+    let names = |s: &Serve| -> Vec<String> {
+        j(&s.req("GET", "/tools", None).1).as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&s), ["search", "read"]);
+
+    // on: provider, key and online
+    let (code, body) = s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": true})));
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+    assert_eq!(names(&s), ["search", "read", "web_search"]);
+    // offline: gone; online again: back
+    s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": false})));
+    assert_eq!(names(&s), ["search", "read"]);
+    s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": true})));
+    assert_eq!(names(&s), ["search", "read", "web_search"]);
+    // an unknown provider, a missing online, a wrong type: errors that do not echo the key
+    for bad in [json!({"provider": "bing", "key": WEB_KEY, "online": true}), json!({"provider": "kagi", "key": WEB_KEY}), json!({"provider": "kagi", "key": 5, "online": true})] {
+        let (code, body) = s.req("POST", "/web", Some(&bad));
+        assert_eq!(code, 400, "{body}");
+        assert!(!body.contains(WEB_KEY), "{body}");
+    }
+    assert_eq!(names(&s), ["search", "read", "web_search"], "a refused request changes nothing");
+    // clear
+    let (code, body) = s.req("DELETE", "/web", None);
+    assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
+    assert_eq!(names(&s), ["search", "read"]);
+    let (_, b) = s.req("POST", "/conversations", None);
+    let id = j(&b)["id"].as_str().unwrap().to_string();
+    let (_, body) = s.req("POST", &format!("/conversations/{id}/tool"), Some(&json!({"name": "web_search", "args": {"query": "x"}, "now": NOW})));
+    assert!(j(&body)["content"].as_str().unwrap().contains("not_set_up"));
+    assert!(!body.contains(WEB_KEY));
+}
+
+#[test]
+fn serve_exports_a_conversation_and_imports_it_as_a_new_one() {
+    let tmp = TempDir::new("serveconv");
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, r#"{"sources":[]}"#).unwrap();
+    let s = Serve::start(&["--config", &config]);
+    let new_id = |s: &Serve| j(&s.req("POST", "/conversations", None).1)["id"].as_str().unwrap().to_string();
+    let list = |a: &str, b: &str| json!({"results": [{"address": a, "title": format!("T {a}"), "snippet": "s"}, {"address": b, "title": format!("T {b}"), "snippet": "s"}]});
+
+    // empty: the same bytes the core documents
+    let empty = new_id(&s);
+    let (code, body) = s.req("GET", &format!("/conversations/{empty}/export"), None);
+    assert_eq!((code, body.as_str()), (200, r#"{"format":1,"next_n":1,"ids":[],"web_hits":{}}"#));
+
+    // two formats, then export
+    let a = new_id(&s);
+    s.req("POST", &format!("/conversations/{a}/format"), Some(&list("lib:x/1", "lib:x/2")));
+    s.req("POST", &format!("/conversations/{a}/format"), Some(&list("lib:x/3", "lib:x/1")));
+    let (code, export) = s.req("GET", &format!("/conversations/{a}/export"), None);
+    assert_eq!(code, 200);
+    assert_eq!(
+        export,
+        r#"{"format":1,"next_n":4,"ids":[{"n":1,"address":"lib:x/1","title":"T lib:x/1"},{"n":2,"address":"lib:x/2","title":"T lib:x/2"},{"n":3,"address":"lib:x/3","title":"T lib:x/3"}],"web_hits":{}}"#
+    );
+
+    // import: a new id; its export is the same bytes; continuing on it matches continuing on the original
+    let (code, body) = s.req("POST", "/conversations/import", Some(&j(&export)));
+    assert_eq!(code, 200, "{body}");
+    let b = j(&body)["id"].as_str().unwrap().to_string();
+    assert_ne!(a, b);
+    assert_eq!(s.req("GET", &format!("/conversations/{b}/export"), None).1, export);
+    let next = list("lib:x/9", "lib:x/2");
+    let (_, from_a) = s.req("POST", &format!("/conversations/{a}/format"), Some(&next));
+    let (_, from_b) = s.req("POST", &format!("/conversations/{b}/format"), Some(&next));
+    assert_eq!(from_a, from_b);
+    assert!(from_b.contains(r#""n":4"#), "{from_b}");
+    assert_eq!(s.req("GET", &format!("/conversations/{a}/export"), None).1, s.req("GET", &format!("/conversations/{b}/export"), None).1);
+
+    // refusals: an unknown format, malformed JSON, an unknown conversation
+    let (code, body) = s.req("POST", "/conversations/import", Some(&json!({"format": 2, "next_n": 1, "ids": []})));
+    assert_eq!(j(&body)["code"], "unsupported", "{body}");
+    assert_eq!(code, 422);
+    let (code, body) = s.req("POST", "/conversations/import", Some(&json!("not an export")));
+    assert_eq!((code, j(&body)["code"].as_str().unwrap()), (400, "bad_json"));
+    let (code, body) = s.req("GET", "/conversations/zzz/export", None);
+    assert_eq!((code, j(&body)["code"].as_str().unwrap()), (404, "not_found"));
 }
