@@ -231,7 +231,7 @@ jobs:
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>${TEAM_ID}</string>
             <key>signingStyle</key><string>manual</string>
-            <key>signingCertificate</key><string>iOS Distribution</string>
+            <key>signingCertificate</key><string>iPhone Distribution</string>
             <key>provisioningProfiles</key>
             <dict><key>${BUNDLE_ID}</key><string>Cache App Store</string></dict>
             <key>uploadSymbols</key><true/>

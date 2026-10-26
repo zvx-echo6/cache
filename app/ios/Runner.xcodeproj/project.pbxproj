@@ -591,7 +591,7 @@
 				);
 				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iOS Distribution";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Cache App Store";
 				DEVELOPMENT_TEAM = 7G87LQAK4J;
 				PRODUCT_BUNDLE_IDENTIFIER = com.happylittle.cache;
