@@ -39,16 +39,21 @@ pub fn video_err(e: cache_video::Error) -> Error {
 }
 
 impl crate::handle::Handle {
-    /// Apply the `user`, `live`, `routing` and `video` config sections; a section that is absent keeps what was set before.
+    /// Apply the `user`, `live` and `places` config sections; a section that is absent keeps what was set before.
     /// `user`: the handle's saved places (what tools resolve names against) become cache_user's `UserStore` on that file.
     /// `live`: the `live_data` tool (cache_live) is registered; it leaves itself out of `cs_tool_schemas` while no source
     /// definition is installed in `sources_dir`.
+    /// `places`: `{"packs": [...]}` registers `nearby` (cache_places; left out of `cs_tool_schemas` while no pack is installed)
+    /// and `locate` (always available: a GPS fix needs no pack), and plugs the same packs into the navigate tool as its
+    /// `PlaceSource` (names for `to`, `from` and `near`, and the `to_type` categories).
+    /// `routing`: the navigate tool (cache_navigate).
     pub(crate) fn configure_ext(
         &mut self,
         user: Option<UserCfg>,
         live: Option<LiveCfg>,
         routing: Option<cache_navigate::NavigateCfg>,
         video: Option<VideoCfg>,
+        places: Option<cache_places::PlacesCfg>,
     ) {
         if let Some(u) = user {
             self.ext.user = Some(UserStore::new(&u.db_path));
@@ -57,6 +62,13 @@ impl crate::handle::Handle {
         if let Some(l) = live {
             self.ext.live = Some(Live::new(l.clone()));
             self.register_tool(Box::new(cache_live::LiveDataTool::new(l)));
+        }
+        if let Some(p) = places {
+            let (tools, source) = cache_places::tools_and_source(&p);
+            for t in tools {
+                self.register_tool(t);
+            }
+            self.set_place_source(Some(source));
         }
         if let Some(r) = routing {
             self.register_tool(Box::new(cache_navigate::NavigateTool::new(r, self.ext.places.clone())));
