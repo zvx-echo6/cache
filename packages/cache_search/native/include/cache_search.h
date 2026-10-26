@@ -84,10 +84,19 @@ char *cs_version(void);
  *                                  best hit are dropped on the same terms
  *   "prewarm": true                optional, default true (false on Android): open libzim on the ZIMs with a built-in index
  *                                  on background threads as soon as the sources are set, so the first search does not pay
- *                                  for it; only as many as fit in searcher_budget_mb, smallest first
- *   "searcher_budget_mb": 256      optional, default 256: memory budget for the libzim searchers kept built (estimated cost
- *                                  per searcher, least recently used dropped first); a searcher over the whole budget is
- *                                  built per query; 0 keeps none. Changes speed only, never the results. See DESIGN.md
+ *                                  for it; only as many as fit in zim_budget_mb, smallest first
+ *   "zim_budget_mb": 1024          optional, default 384 on Android and 1024 elsewhere: memory budget in MiB for the open
+ *                                  libzim archives together with their searchers and caches (the old name of this key,
+ *                                  "searcher_budget_mb", is still read when "zim_budget_mb" is absent). Each ZIM costs an
+ *                                  estimate of about 10 MiB plus ~11 bytes per entry plus its searchers; when opening one
+ *                                  would go over the budget the least recently used archives are closed first (they reopen
+ *                                  on their next query); an archive over the whole budget is opened for the query and closed
+ *                                  after it; 0 does that for every query. Changes speed only, never the results. See DESIGN.md
+ *   "zim_cluster_cache_mb": 4      optional, default 4 (libzim's own default is 16): limit in MiB of compressed data of
+ *                                  libzim's cluster cache, shared by all archives in the process (the last cs_open or
+ *                                  cs_set_sources in the process sets it). What it holds is about 8 times larger once
+ *                                  decompressed, and that is taken off the top of zim_budget_mb
+ *   "zim_dirent_cache": 512        optional, default 512 (libzim's own default): dirents each open archive's dirent cache holds
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
  * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it

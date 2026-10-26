@@ -4,10 +4,8 @@
 //! the `zimx` cfg this module is a stub whose `open` always fails with `unsupported`, so callers need no `cfg` of
 //! their own and the core is Tantivy-only.
 
-use crate::budget::SearcherBudget;
 use crate::error::{Error, Result};
 use std::path::Path;
-use std::sync::Arc;
 
 /// One full-text hit, as libzim returns it.
 #[derive(Debug, Clone)]
@@ -22,6 +20,17 @@ pub struct XHit {
     pub score: i32,
 }
 
+/// Options for opening a libzim archive (`None` keeps libzim's default for that option; see DESIGN.md "Memory budget").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OpenOpts {
+    /// Preload the Xapian database when the archive opens (libzim's default: yes).
+    pub preload_xapian: Option<bool>,
+    /// Dirent ranges preloaded at open, to speed up entry lookups (0 = none).
+    pub preload_dirent_ranges: Option<u32>,
+    /// The archive's dirent cache limit, in dirents.
+    pub dirent_cache: Option<u64>,
+}
+
 /// One title suggestion.
 #[derive(Debug, Clone)]
 pub struct XSuggestion {
@@ -32,13 +41,12 @@ pub struct XSuggestion {
 #[cfg(zimx)]
 mod imp {
     use super::*;
-    use crate::budget::{estimate_cost, Evict, Kind};
     use serde_json::Value;
     use std::ffi::{c_char, c_int, c_void, CStr, CString};
-    use std::sync::{OnceLock, Weak};
-
+    
     extern "C" {
-        fn zimx_open(path: *const c_char, err: *mut *mut c_char) -> *mut c_void;
+        fn zimx_open_with(path: *const c_char, preload_xapian: c_int, ranges: c_int, dirent_cache: i64, err: *mut *mut c_char) -> *mut c_void;
+        fn zimx_archive_info(z: *mut c_void) -> *mut c_char;
         fn zimx_close(z: *mut c_void);
         fn zimx_has_fulltext(z: *mut c_void) -> c_int;
         fn zimx_has_title_index(z: *mut c_void) -> c_int;
@@ -73,21 +81,10 @@ mod imp {
         Ok(v)
     }
 
-    /// The memory budget this archive's searchers answer to (see `budget.rs`).
-    struct Gov {
-        budget: Arc<SearcherBudget>,
-        id: u64,
-        /// Estimated cost of the kept full-text and title searchers.
-        ft_cost: u64,
-        ti_cost: u64,
-    }
-
     struct Inner {
         p: *mut c_void,
         fulltext: bool,
         titles: bool,
-        /// Set by `bind`; without it every searcher is kept (no budget).
-        gov: OnceLock<Gov>,
     }
 
     // libzim's Archive is read-only and thread safe; the shim serialises the calls that use a kept searcher.
@@ -96,34 +93,34 @@ mod imp {
 
     impl Drop for Inner {
         fn drop(&mut self) {
-            if let Some(g) = self.gov.get() {
-                g.budget.forget(g.id);
-            }
             unsafe { zimx_close(self.p) };
         }
     }
 
-    impl Evict for Inner {
-        fn drop_searcher(&self, kind: Kind) {
-            let (ft, ti) = ((kind == Kind::Fulltext) as c_int, (kind == Kind::Titles) as c_int);
-            let _ = parse(unsafe { zimx_drop(self.p, ft, ti) });
-        }
-    }
-
-    /// An open libzim archive (read-only). Kept searchers are built inside the shim and are bounded by the memory budget
-    /// the archive is bound to (`bind`); one handle can be used from several threads.
+    /// An open libzim archive (read-only). Its searchers are built on first use and kept for as long as the archive is open;
+    /// what stays open is decided by the memory budget one level up (`zimsrc.rs`, `budget.rs`). One handle can be used from
+    /// several threads.
     pub struct Zimx {
-        inner: Arc<Inner>,
+        inner: Inner,
     }
 
     impl Zimx {
         pub const AVAILABLE: bool = true;
 
+        /// Open with libzim's own defaults.
         pub fn open(path: &Path) -> Result<Zimx> {
+            Zimx::open_with(path, &OpenOpts::default())
+        }
+
+        /// Open with the given archive options (`OpenOpts`; `None` keeps libzim's default for that option).
+        pub fn open_with(path: &Path, o: &OpenOpts) -> Result<Zimx> {
             let s = path.to_str().ok_or_else(|| Error::io(format!("path is not UTF-8: {}", path.display())))?;
             let c = CString::new(s).map_err(|_| Error::io("path has a NUL byte"))?;
             let mut err: *mut c_char = std::ptr::null_mut();
-            let p = unsafe { zimx_open(c.as_ptr(), &mut err) };
+            let px = o.preload_xapian.map(|b| b as c_int).unwrap_or(-1);
+            let dr = o.preload_dirent_ranges.map(|n| n.min(i32::MAX as u32) as c_int).unwrap_or(-1);
+            let dc = o.dirent_cache.map(|n| n.min(i64::MAX as u64) as i64).unwrap_or(-1);
+            let p = unsafe { zimx_open_with(c.as_ptr(), px, dr, dc, &mut err) };
             if p.is_null() {
                 let m = take(err)
                     .and_then(|j| serde_json::from_str::<Value>(&j).ok())
@@ -132,22 +129,14 @@ mod imp {
                 return Err(Error::io(format!("{}: {m}", path.display())));
             }
             let (fulltext, titles) = unsafe { (zimx_has_fulltext(p) != 0, zimx_has_title_index(p) != 0) };
-            Ok(Zimx { inner: Arc::new(Inner { p, fulltext, titles, gov: OnceLock::new() }) })
+            Ok(Zimx { inner: Inner { p, fulltext, titles } })
         }
 
-        /// Put this archive's searchers under `budget`. `fulltext_bytes` and `title_bytes` are the sizes of the ZIM's
-        /// two index entries (0 when unknown), from which the cost of keeping each searcher is estimated. The first call
-        /// wins; an archive that is never bound keeps every searcher it builds.
-        pub fn bind(&self, budget: Arc<SearcherBudget>, fulltext_bytes: u64, title_bytes: u64) {
-            let id = budget.register();
-            let g = Gov {
-                budget: budget.clone(),
-                id,
-                ft_cost: estimate_cost(Kind::Fulltext, fulltext_bytes),
-                ti_cost: estimate_cost(Kind::Titles, title_bytes),
-            };
-            if self.inner.gov.set(g).is_err() {
-                budget.forget(id);
+        /// This archive's dirent cache: (entries in use, limit).
+        pub fn dirent_cache(&self) -> (u64, u64) {
+            match parse(unsafe { zimx_archive_info(self.inner.p) }) {
+                Ok(v) => (v["dirent_cache_current"].as_u64().unwrap_or(0), v["dirent_cache_max"].as_u64().unwrap_or(0)),
+                Err(_) => (0, 0),
             }
         }
 
@@ -159,43 +148,11 @@ mod imp {
             self.inner.titles
         }
 
-        fn weak(&self) -> Weak<dyn Evict> {
-            let w: Weak<Inner> = Arc::downgrade(&self.inner);
-            w
-        }
-
-        /// Whether the `kind` searcher is to be kept for the call that is about to run (marks it used). `false`: the
-        /// searcher is too big for the budget and the call builds a temporary one.
-        fn keep(&self, kind: Kind) -> bool {
-            match self.inner.gov.get() {
-                None => true,
-                Some(g) => {
-                    let cost = if kind == Kind::Fulltext { g.ft_cost } else { g.ti_cost };
-                    g.budget.admit(g.id, kind, cost, self.weak())
-                }
-            }
-        }
-
-        /// After a call that kept its searcher: if another thread's admission evicted it while the call ran, release what
-        /// the call rebuilt, so what the shim holds is what the budget counts.
-        fn settle(&self, kind: Kind) {
-            if let Some(g) = self.inner.gov.get() {
-                if !g.budget.is_kept(g.id, kind) {
-                    self.inner.drop_searcher(kind);
-                }
-            }
-        }
-
         /// Results `offset..offset+k` of a full-text query and the estimated number of matches.
         pub fn search(&self, query: &str, offset: usize, k: usize) -> Result<(Vec<XHit>, usize)> {
             let q = CString::new(query.replace('\0', " ")).unwrap();
             let (off, k) = (offset.min(i32::MAX as usize) as c_int, k.min(i32::MAX as usize) as c_int);
-            let keep = self.inner.fulltext && self.keep(Kind::Fulltext);
-            let r = parse(unsafe { zimx_search(self.inner.p, q.as_ptr(), off, k, keep as c_int) });
-            if keep {
-                self.settle(Kind::Fulltext);
-            }
-            let v = r?;
+            let v = parse(unsafe { zimx_search(self.inner.p, q.as_ptr(), off, k, self.inner.fulltext as c_int) })?;
             let text = |h: &Value, f: &str| h.get(f).and_then(Value::as_str).unwrap_or("").to_string();
             let hits = v["hits"]
                 .as_array()
@@ -214,50 +171,25 @@ mod imp {
         }
 
         /// Build the full-text and/or title searchers now (opens the Xapian databases), so the first search or
-        /// suggestion does not pay for it. A searcher the ZIM does not have is skipped, and so is one the budget has no
-        /// room for (prewarm never evicts another source's searcher).
+        /// suggestion does not pay for it. A searcher the ZIM does not have is skipped.
         pub fn prewarm(&self, fulltext: bool, titles: bool) -> Result<()> {
-            let want = |has: bool, wanted: bool, kind: Kind| -> bool {
-                if !(has && wanted) {
-                    return false;
-                }
-                match self.inner.gov.get() {
-                    None => true,
-                    Some(g) => {
-                        let cost = if kind == Kind::Fulltext { g.ft_cost } else { g.ti_cost };
-                        g.budget.try_reserve(g.id, kind, cost, self.weak())
-                    }
-                }
-            };
-            let (ft, ti) = (want(self.inner.fulltext, fulltext, Kind::Fulltext), want(self.inner.titles, titles, Kind::Titles));
+            let (ft, ti) = (fulltext && self.inner.fulltext, titles && self.inner.titles);
             if !(ft || ti) {
                 return Ok(());
             }
             parse(unsafe { zimx_prewarm(self.inner.p, ft as c_int, ti as c_int) }).map(|_| ())
         }
 
-        /// Release the kept searchers now (the archive stays open). Used by the memory measurements; the budget does it itself.
+        /// Release the kept searchers now (the archive stays open). Used by the memory measurements.
         pub fn drop_searchers(&self, fulltext: bool, titles: bool) {
-            if let Some(g) = self.inner.gov.get() {
-                if fulltext {
-                    g.budget.release(g.id, Kind::Fulltext);
-                }
-                if titles {
-                    g.budget.release(g.id, Kind::Titles);
-                }
-            }
             let _ = parse(unsafe { zimx_drop(self.inner.p, fulltext as c_int, titles as c_int) });
         }
 
         /// The first `k` title suggestions for `prefix`, in libzim's order.
         pub fn suggest(&self, prefix: &str, k: usize) -> Result<Vec<XSuggestion>> {
             let q = CString::new(prefix.replace('\0', " ")).unwrap();
-            let keep = self.inner.titles && self.keep(Kind::Titles);
-            let r = parse(unsafe { zimx_suggest(self.inner.p, q.as_ptr(), k.min(i32::MAX as usize) as c_int, keep as c_int) });
-            if keep {
-                self.settle(Kind::Titles);
-            }
-            let v = r?;
+            let keep = self.inner.titles as c_int;
+            let v = parse(unsafe { zimx_suggest(self.inner.p, q.as_ptr(), k.min(i32::MAX as usize) as c_int, keep) })?;
             let text = |h: &Value, f: &str| h.get(f).and_then(Value::as_str).unwrap_or("").to_string();
             Ok(v["hits"]
                 .as_array()
@@ -266,8 +198,9 @@ mod imp {
         }
     }
 
-    /// libzim's cluster cache (decompressed ZIM clusters, shared by every open archive in the process): bytes in use and
-    /// its limit. Reading articles fills it, and dropping a searcher does not empty it; it is not under the searcher budget.
+    /// libzim's cluster cache (ZIM clusters, shared by every open archive in the process; libzim counts their compressed size):
+    /// bytes in use and its limit. Reading articles fills it. Its cap is set from `zim_cluster_cache_mb` and its estimated cost
+    /// is the budget's reserved part (`budget::reserved_cost`).
     pub fn cluster_cache() -> (u64, u64) {
         match parse(unsafe { zimx_cluster_cache() }) {
             Ok(v) => (v["current"].as_u64().unwrap_or(0), v["max"].as_u64().unwrap_or(0)),
@@ -275,9 +208,8 @@ mod imp {
         }
     }
 
-    /// Set libzim's process-wide cluster cache limit in bytes (what is over it is dropped). Not used by the core; a hook for
-    /// the memory measurements in `tests/searcher_cost.rs`.
-    #[doc(hidden)]
+    /// Set libzim's process-wide cluster cache limit in bytes (what is over it is dropped). The core sets it from
+    /// `zim_cluster_cache_mb` (see `budget.rs`).
     pub fn set_cluster_cache_max(bytes: u64) {
         let _ = parse(unsafe { zimx_set_cluster_cache_max(bytes) });
     }
@@ -307,7 +239,12 @@ mod imp {
         pub fn open(_path: &Path) -> Result<Zimx> {
             Err(Error::unsupported("built without the xapian feature"))
         }
-        pub fn bind(&self, _budget: Arc<SearcherBudget>, _fulltext_bytes: u64, _title_bytes: u64) {}
+        pub fn open_with(_path: &Path, _o: &OpenOpts) -> Result<Zimx> {
+            Err(Error::unsupported("built without the xapian feature"))
+        }
+        pub fn dirent_cache(&self) -> (u64, u64) {
+            (0, 0)
+        }
         pub fn drop_searchers(&self, _fulltext: bool, _titles: bool) {}
         pub fn has_fulltext(&self) -> bool {
             false

@@ -33,7 +33,17 @@ struct zimx {
   std::mutex mu;
   std::unique_ptr<zim::Searcher> searcher;
   std::unique_ptr<zim::SuggestionSearcher> suggester;
-  explicit zimx(const char *path) : archive(std::string(path)) {}
+  zimx(const char *path, int preload_xapian, int dirent_ranges, long long dirent_cache)
+      : archive(std::string(path), make_config(preload_xapian, dirent_ranges)) {
+    if (dirent_cache >= 0) archive.setDirentCacheMaxSize(static_cast<size_t>(dirent_cache));
+  }
+  // -1 keeps libzim's default for that option (the default OpenConfig preloads the Xapian database and some dirent ranges).
+  static zim::OpenConfig make_config(int preload_xapian, int dirent_ranges) {
+    zim::OpenConfig oc;
+    if (preload_xapian >= 0) oc.preloadXapianDb(preload_xapian != 0);
+    if (dirent_ranges >= 0) oc.preloadDirentRanges(dirent_ranges);
+    return oc;
+  }
   zim::Searcher &fulltext() {  // call with mu held
     if (!searcher) searcher.reset(new zim::Searcher(archive));
     return *searcher;
@@ -137,12 +147,14 @@ char *guarded(F f) {
 
 extern "C" {
 
-zimx *zimx_open(const char *path, char **err) {
+zimx *zimx_open(const char *path, char **err) { return zimx_open_with(path, -1, -1, -1, err); }
+
+zimx *zimx_open_with(const char *path, int preload_xapian, int dirent_ranges, long long dirent_cache, char **err) {
   if (err) *err = nullptr;
   std::string msg;
   try {
     if (!path) throw std::invalid_argument("null path");
-    return new zimx(path);
+    return new zimx(path, preload_xapian, dirent_ranges, dirent_cache);
   } catch (const std::exception &e) {
     msg = std::string("libzim: ") + e.what();
   } catch (...) {
@@ -266,6 +278,14 @@ char *zimx_suggest(zimx *z, const char *prefix, int k, int keep) {
     }
     o += "]}";
     return o;
+  });
+}
+
+char *zimx_archive_info(zimx *z) {
+  return guarded([&]() -> std::string {
+    if (!z) throw std::invalid_argument("null argument");
+    return "{\"dirent_cache_max\":" + std::to_string(z->archive.getDirentCacheMaxSize()) + ",\"dirent_cache_current\":" +
+           std::to_string(z->archive.getDirentCacheCurrentSize()) + ",\"all_entries\":" + std::to_string(z->archive.getAllEntryCount()) + "}";
   });
 }
 

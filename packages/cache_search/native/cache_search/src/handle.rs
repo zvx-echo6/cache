@@ -1,6 +1,6 @@
 //! A handle: the list of open sources plus the last error.
 
-use crate::budget::{self, SearcherBudget};
+use crate::budget::{self, ZimBudget};
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
@@ -57,13 +57,24 @@ struct Config {
     min_relevance: f32,
     /// Open libzim on every ZIM source that has a built-in index, on background threads, as soon as the sources are
     /// set, so the first search does not pay for the opens (default `true`, but `false` on Android). Only as many
-    /// searchers are built as fit in `searcher_budget_mb`, smallest first. `false` leaves them to the first search.
+    /// archives are opened as fit in `zim_budget_mb`, smallest first. `false` leaves them to the first search.
     #[serde(default = "default_prewarm")]
     prewarm: bool,
-    /// Memory budget in MiB for the libzim searchers kept built (default 256; 0 keeps none, each query builds its own).
-    /// See budget.rs and DESIGN.md "Searcher memory budget".
-    #[serde(default = "default_searcher_budget_mb")]
-    searcher_budget_mb: u64,
+    /// Memory budget in MiB for open libzim archives with their searchers and caches (default 384 on Android, 1024 elsewhere;
+    /// 0 keeps none open, each query opens and closes its archives). `searcher_budget_mb` is the old name of this key and is
+    /// still read when `zim_budget_mb` is absent. See budget.rs and DESIGN.md "Memory budget".
+    #[serde(default)]
+    zim_budget_mb: Option<u64>,
+    #[serde(default)]
+    searcher_budget_mb: Option<u64>,
+    /// Dirents each open archive's dirent cache may hold (default 512, libzim's own default).
+    #[serde(default)]
+    zim_dirent_cache: Option<u64>,
+    /// Limit in MiB (of compressed cluster data) of libzim's cluster cache, shared by all open archives in the process (default
+    /// 4; libzim's own default is 16). What it holds is decompressed, about 8 times its limit, and that is taken off the top
+    /// of `zim_budget_mb` (`budget::reserved_cost`).
+    #[serde(default)]
+    zim_cluster_cache_mb: Option<u64>,
     /// Not in the header: a test hook that makes each library's background open sleep first.
     #[serde(default)]
     open_delay_ms: u64,
@@ -71,10 +82,6 @@ struct Config {
 
 fn default_prewarm() -> bool {
     budget::prewarm_default(cfg!(target_os = "android"))
-}
-
-fn default_searcher_budget_mb() -> u64 {
-    budget::DEFAULT_BUDGET_MB
 }
 
 /// Threads that open libzim archives in the background after `set_sources`.
@@ -106,7 +113,7 @@ pub struct ZimSlot {
 
 impl ZimSlot {
     /// libzim's handle when this source keyword-searches through the ZIM's own Xapian index.
-    pub fn xapian(&self) -> Option<&crate::zimx::Zimx> {
+    pub fn xapian(&self) -> Option<std::sync::Arc<crate::zimx::Zimx>> {
         if self.builtin { self.src.xapian() } else { None }
     }
 
@@ -116,7 +123,7 @@ impl ZimSlot {
     }
 
     /// libzim's handle when this source suggests from the ZIM's title index.
-    pub fn title_index(&self) -> Option<&crate::zimx::Zimx> {
+    pub fn title_index(&self) -> Option<std::sync::Arc<crate::zimx::Zimx>> {
         if self.builtin { self.src.title_index() } else { None }
     }
 
@@ -240,8 +247,8 @@ pub struct Handle {
     pub web: Arc<WebState>,
     /// Saved places and live data, configured from the `user` and `live` sections (ext.rs).
     pub ext: crate::ext::Ext,
-    /// Memory budget of the kept libzim searchers, shared by all this handle's ZIM sources (budget.rs).
-    pub searcher_budget: Arc<SearcherBudget>,
+    /// Memory budget of the open libzim archives, shared by all this handle's ZIM sources (budget.rs).
+    pub zim_budget: Arc<ZimBudget>,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -263,7 +270,7 @@ impl Handle {
             embedder: None,
             web: Arc::new(WebState::new()),
             ext: Default::default(),
-            searcher_budget: Arc::new(SearcherBudget::new(budget::DEFAULT_BUDGET_MB * budget::MIB)),
+            zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(target_os = "android")) * budget::MIB)),
         };
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
         // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
@@ -305,7 +312,6 @@ impl Handle {
                         },
                         None => match ZimSource::open(&path) {
                             Ok(z) => {
-                                z.set_budget(self.searcher_budget.clone());
                                 let id = z.id.clone();
                                 (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None, builtin })))
                             }
@@ -417,7 +423,19 @@ impl Handle {
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
         self.min_relevance = cfg.min_relevance;
-        self.searcher_budget.set_limit(cfg.searcher_budget_mb.saturating_mul(budget::MIB));
+        let caps = budget::Caps {
+            dirent_cache: cfg.zim_dirent_cache.unwrap_or(budget::DEFAULT_DIRENT_CACHE),
+            cluster_cache: cfg.zim_cluster_cache_mb.unwrap_or(budget::DEFAULT_CLUSTER_CACHE_MB).saturating_mul(budget::MIB),
+        };
+        let limit_mb = cfg.zim_budget_mb.or(cfg.searcher_budget_mb).unwrap_or_else(|| budget::default_budget_mb(cfg!(target_os = "android")));
+        crate::zimx::set_cluster_cache_max(caps.cluster_cache);
+        self.zim_budget.configure(limit_mb.saturating_mul(budget::MIB), budget::reserved_cost(&caps));
+        let opts = crate::zimx::OpenOpts { dirent_cache: Some(caps.dirent_cache), ..Default::default() };
+        for s in &self.sources {
+            if let Source::Zim(z) = s {
+                z.src.configure(&self.zim_budget, caps, opts);
+            }
+        }
         if cfg.prewarm {
             self.start_prewarm();
         }
@@ -428,7 +446,7 @@ impl Handle {
 
     /// Open libzim on the ZIM sources that use their built-in index and build their searchers, on up to
     /// `PREWARM_THREADS` background threads (each source once), but only the sources whose searchers fit in the memory
-    /// budget, cheapest first (`budget::prewarm_plan`); the others build theirs on their first search. Nothing waits for
+    /// budget, cheapest first (`budget::prewarm_plan`); the others open on their first search. Nothing waits for
     /// them: a search that needs a source still being warmed waits for that source's open only.
     fn start_prewarm(&self) {
         let all: Vec<zimsrc::WarmJob> = self
@@ -440,7 +458,7 @@ impl Handle {
             })
             .collect();
         let costs: Vec<u64> = all.iter().map(|j| j.cost()).collect();
-        let plan = budget::prewarm_plan(&costs, self.searcher_budget.limit());
+        let plan = budget::prewarm_plan(&costs, self.zim_budget.available());
         let mut slots: Vec<Option<zimsrc::WarmJob>> = all.into_iter().map(Some).collect();
         // `pop` takes from the end, so the queue holds the plan's most expensive first
         let jobs: Vec<zimsrc::WarmJob> = plan.iter().rev().filter_map(|&i| slots[i].take()).collect();

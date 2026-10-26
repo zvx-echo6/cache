@@ -32,7 +32,13 @@ typedef struct zimx zimx;
 
 /* Open a ZIM file. NULL on failure, with a malloc'd {"error":...} JSON in *err (may be NULL; free with zimx_free). */
 ZIMX_API zimx *zimx_open(const char *path, char **err);
+/* Like zimx_open with archive options; -1 keeps libzim's default for that option. preload_xapian: 1/0 preload the Xapian
+ * database at open; preload_dirent_ranges: how many dirent ranges to preload (0 = none); dirent_cache: the archive's dirent
+ * cache limit in dirents. See DESIGN.md "Memory budget". */
+ZIMX_API zimx *zimx_open_with(const char *path, int preload_xapian, int preload_dirent_ranges, long long dirent_cache, char **err);
 ZIMX_API void zimx_close(zimx *z);
+/* {"dirent_cache_max":n,"dirent_cache_current":n,"all_entries":n} for this archive. */
+ZIMX_API char *zimx_archive_info(zimx *z);
 
 /* 1 if the ZIM carries the built-in full-text index (X/fulltext/xapian) / the title index; 0 if not or z is NULL. */
 ZIMX_API int zimx_has_fulltext(zimx *z);

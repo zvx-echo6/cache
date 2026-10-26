@@ -385,7 +385,7 @@ impl Handle {
             // A ZIM with a built-in Xapian index uses it (no index_dir needed). If libzim fails on this query, the
             // source falls back to its Tantivy index, if it has one.
             if let Some(x) = z.xapian() {
-                if let Some((mut hits, mut xhits, count)) = xapian_list(x, query, candidates) {
+                if let Some((mut hits, mut xhits, count)) = xapian_list(&x, query, candidates) {
                     let mut an = index::make_analyzer(index::tokenizer_name_for(z.src.language.as_deref()));
                     xapian_coverage(&z.src, &mut an, &words, &mut hits, &mut xhits, (opts.offset + opts.k).max(KEEP_PER_SOURCE));
                     per.push(SrcHits { id, title, engine: Engine::Xapian(xhits), count, hits });

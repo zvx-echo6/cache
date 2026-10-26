@@ -1,14 +1,116 @@
 //! One opened ZIM file.
 
-use crate::budget::{estimate_cost, Kind, SearcherBudget};
+use crate::budget::{archive_cost, Caps, Evict, Profile, ZimBudget};
 use crate::error::{Error, ErrorCode, Result};
+use crate::zimx::{OpenOpts, Zimx};
 use std::path::{Path, PathBuf};
-use crate::zimx::Zimx;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use zim::{DirectoryEntry, MimeType, Namespace, Target, Zim};
 
 /// Redirect hops followed before giving up.
 pub const MAX_REDIRECT_HOPS: u32 = 10;
+
+/// What a ZIM's libzim archive answers to: the budget, its owner id there, the estimated cost and the open options.
+#[derive(Clone)]
+struct Mem {
+    budget: Arc<ZimBudget>,
+    id: u64,
+    cost: u64,
+    opts: OpenOpts,
+    caps: Caps,
+}
+
+/// The libzim side of one ZIM: the archive while it is open, shared by the source and its prewarm job. The budget closes the
+/// archive through `Evict`; a query that already holds it keeps it alive until the query ends.
+struct Shared {
+    path: PathBuf,
+    cur: Mutex<Option<Arc<Zimx>>>,
+    /// Serialises opens of this archive (so two queries do not open it twice); `cur` is only ever held briefly.
+    opening: Mutex<()>,
+    /// libzim could not open the file.
+    failed: AtomicBool,
+    mem: Mutex<Option<Mem>>,
+}
+
+impl Evict for Shared {
+    fn close(&self) {
+        *self.cur.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+impl Shared {
+    fn mem(&self) -> Option<Mem> {
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn current(&self) -> Option<Arc<Zimx>> {
+        self.cur.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The open archive for a query, opening it if it is not open. With a budget the archive is kept open when the budget
+    /// admits it (closing least recently used ones to make room); when it is over the whole budget the returned handle is the
+    /// only owner and the archive closes when the query drops it. `reserve_only` (prewarm): open it only if it fits without
+    /// closing anything, else `None`. Also `None` when libzim cannot open the file.
+    fn lease(self: &Arc<Self>, reserve_only: bool) -> Option<Arc<Zimx>> {
+        if self.failed.load(Ordering::SeqCst) {
+            return None;
+        }
+        let Some(m) = self.mem() else {
+            // not under a budget (a standalone source): open once, keep
+            let _o = self.opening.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(a) = self.current() {
+                return Some(a);
+            }
+            return match Zimx::open(&self.path) {
+                Ok(z) => {
+                    let a = Arc::new(z);
+                    *self.cur.lock().unwrap_or_else(|e| e.into_inner()) = Some(a.clone());
+                    Some(a)
+                }
+                Err(_) => {
+                    self.failed.store(true, Ordering::SeqCst);
+                    None
+                }
+            };
+        };
+        let who: Weak<dyn Evict> = {
+            let a: Arc<dyn Evict> = self.clone();
+            Arc::downgrade(&a)
+        };
+        let kept = if reserve_only { m.budget.try_reserve(m.id, m.cost, who) } else { m.budget.admit(m.id, m.cost, who) };
+        if reserve_only && !kept {
+            return None;
+        }
+        if let Some(a) = self.current() {
+            return Some(a);
+        }
+        let _o = self.opening.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(a) = self.current() {
+            return Some(a);
+        }
+        match Zimx::open_with(&self.path, &m.opts) {
+            Err(_) => {
+                self.failed.store(true, Ordering::SeqCst);
+                m.budget.forget(m.id);
+                None
+            }
+            Ok(z) => {
+                m.budget.note_open();
+                let a = Arc::new(z);
+                if kept {
+                    *self.cur.lock().unwrap_or_else(|e| e.into_inner()) = Some(a.clone());
+                    // another thread's admission may have closed this archive while it was opening: then it is not counted
+                    // any more and must not stay open behind the budget's back
+                    if !m.budget.is_kept(m.id) {
+                        self.close();
+                    }
+                }
+                Some(a)
+            }
+        }
+    }
+}
 
 pub struct ZimSource {
     pub zim: Zim,
@@ -17,17 +119,23 @@ pub struct ZimSource {
     pub path: PathBuf,
     pub title: String,
     pub language: Option<String>,
-    /// libzim's view of the same file, opened on first use: `None` when the `xapian` feature is not built in or libzim
-    /// could not open it (the `zim` crate stays the reader for `read` and `zim_get` either way).
-    x: Arc<OnceLock<Option<Zimx>>>,
+    /// libzim's view of the same file, opened when a search or suggestion needs it and closed again by the memory budget (see
+    /// `Shared`). The `zim` crate stays the reader for `read` and `zim_get` either way.
+    x: Arc<Shared>,
     /// Set once a prewarm of the libzim handle has been queued (see `warm_job`).
-    warm_queued: std::sync::atomic::AtomicBool,
-    /// The memory budget the libzim searchers of this ZIM answer to (set by the handle; see `set_budget`).
-    budget: OnceLock<Arc<SearcherBudget>>,
+    warm_queued: AtomicBool,
 }
 
-/// Sizes in bytes of the ZIM's full-text and title index entries (0 when it has none or they cannot be read): what the
-/// searcher cost estimate is made from.
+impl Drop for ZimSource {
+    fn drop(&mut self) {
+        if let Some(m) = self.x.mem() {
+            m.budget.forget(m.id);
+        }
+        self.x.close();
+    }
+}
+
+/// Sizes in bytes of the ZIM's full-text and title index entries (0 when it has none or they cannot be read).
 fn index_sizes(zim: &Zim) -> (u64, u64) {
     fn len_of(c: Option<Option<zim::Content<'_>>>) -> u64 {
         c.flatten().and_then(|c| c.len().ok()).unwrap_or(0) as u64
@@ -35,35 +143,23 @@ fn index_sizes(zim: &Zim) -> (u64, u64) {
     (len_of(zim.fulltext_index().ok()), len_of(zim.title_index().ok()))
 }
 
-/// Opens libzim for a ZIM and binds it to a budget: shared by `ZimSource::libzim` and `WarmJob::run`.
-fn open_bound(path: &Path, budget: Option<&Arc<SearcherBudget>>, sizes: (u64, u64)) -> Option<Zimx> {
-    let z = Zimx::open(path).ok()?;
-    if let Some(b) = budget {
-        z.bind(b.clone(), sizes.0, sizes.1);
-    }
-    Some(z)
-}
-
 /// Opening libzim on one ZIM and building its searchers, to run on a background thread (see `ZimSource::warm_job`).
 pub struct WarmJob {
-    path: PathBuf,
-    x: Arc<OnceLock<Option<Zimx>>>,
+    x: Arc<Shared>,
     fulltext: bool,
     titles: bool,
-    budget: Option<Arc<SearcherBudget>>,
-    sizes: (u64, u64),
+    cost: u64,
 }
 
 impl WarmJob {
-    /// Estimated memory of the searchers this job builds: what prewarm planning sorts and sums (`budget::prewarm_plan`).
+    /// Estimated memory of the archive this job opens: what prewarm planning sorts and sums (`budget::prewarm_plan`).
     pub fn cost(&self) -> u64 {
-        (if self.fulltext { estimate_cost(Kind::Fulltext, self.sizes.0) } else { 0 })
-            + (if self.titles { estimate_cost(Kind::Titles, self.sizes.1) } else { 0 })
+        self.cost
     }
 
     pub fn run(self) {
-        if let Some(z) = self.x.get_or_init(|| open_bound(&self.path, self.budget.as_ref(), self.sizes)) {
-            let _ = z.prewarm(self.fulltext && z.has_fulltext(), self.titles && z.has_title_index());
+        if let Some(z) = self.x.lease(true) {
+            let _ = z.prewarm(self.fulltext, self.titles);
         }
     }
 }
@@ -211,41 +307,70 @@ impl ZimSource {
             path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
         });
         let language = meta("Language");
-        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language, x: Arc::new(OnceLock::new()), warm_queued: Default::default(), budget: OnceLock::new() })
+        let x = Arc::new(Shared {
+            path: path.to_path_buf(),
+            cur: Mutex::new(None),
+            opening: Mutex::new(()),
+            failed: AtomicBool::new(false),
+            mem: Mutex::new(None),
+        });
+        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language, x, warm_queued: Default::default() })
     }
 
-    /// Put the libzim searchers of this ZIM under `budget` (the handle's, shared by all its ZIMs). The first call wins. A
-    /// ZIM never given one keeps every searcher it builds.
-    pub fn set_budget(&self, budget: Arc<SearcherBudget>) {
-        if self.budget.set(budget.clone()).is_ok() {
-            if let Some(Some(z)) = self.x.get() {
-                let (ft, ti) = index_sizes(&self.zim);
-                z.bind(budget, ft, ti);
+    /// What this ZIM's archive costs (`budget::archive_cost`): from its entry count and index sizes, with `caps` on libzim's caches.
+    pub fn archive_cost(&self, caps: &Caps) -> u64 {
+        let (ft, ti) = index_sizes(&self.zim);
+        archive_cost(&Profile { entries: self.entry_count(), fulltext_bytes: ft, title_bytes: ti }, caps)
+    }
+
+    /// Put the libzim archive of this ZIM under `budget` (the handle's, shared by all its ZIMs), with `caps` on libzim's caches
+    /// and `opts` to open it with. The first call registers it; a later call with other caps or options closes the archive
+    /// (it reopens with the new ones) and recomputes the cost. A ZIM never given a budget keeps its archive open once opened.
+    pub fn configure(&self, budget: &Arc<ZimBudget>, caps: Caps, opts: OpenOpts) {
+        let cost = self.archive_cost(&caps);
+        let mut g = self.x.mem.lock().unwrap_or_else(|e| e.into_inner());
+        let id = match g.as_ref() {
+            Some(m) if Arc::ptr_eq(&m.budget, budget) => {
+                if m.caps == caps && m.opts == opts {
+                    return;
+                }
+                m.id
             }
-        }
+            Some(m) => {
+                m.budget.forget(m.id);
+                budget.register()
+            }
+            None => budget.register(),
+        };
+        budget.forget(id);
+        *g = Some(Mem { budget: budget.clone(), id, cost, opts, caps });
+        drop(g);
+        self.x.close();
     }
 
     /// What a background thread needs to open libzim on this file and build its searchers before the first search asks
     /// for them (`WarmJob::run`). `None` when there is nothing to warm (no libzim, or the ZIM has neither index) or the
-    /// job was already handed out. A search that comes while the job runs waits for the same open (`OnceLock`).
+    /// job was already handed out. A search that comes while the job runs waits for the same open.
     pub fn warm_job(&self) -> Option<WarmJob> {
         if !Zimx::AVAILABLE {
             return None;
         }
         let fulltext = self.zim.fulltext_index().ok().flatten().is_some();
         let titles = self.zim.title_index().ok().flatten().is_some();
-        if !(fulltext || titles) || self.warm_queued.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if !(fulltext || titles) || self.warm_queued.swap(true, Ordering::SeqCst) {
             return None;
         }
-        Some(WarmJob { path: self.path.clone(), x: self.x.clone(), fulltext, titles, budget: self.budget.get().cloned(), sizes: index_sizes(&self.zim) })
+        let cost = self.x.mem().map(|m| m.cost).unwrap_or(0);
+        Some(WarmJob { x: self.x.clone(), fulltext, titles, cost })
     }
 
-    /// libzim's handle on this file (opened on first use), if the `xapian` feature is built in and it opens.
-    fn libzim(&self) -> Option<&Zimx> {
+    /// libzim's handle on this file for one query (opened if it is not open), if the `xapian` feature is built in and it
+    /// opens. The handle keeps the archive open while it is held; see `Shared::lease`.
+    fn libzim(&self) -> Option<Arc<Zimx>> {
         if !Zimx::AVAILABLE {
             return None;
         }
-        self.x.get_or_init(|| open_bound(&self.path, self.budget.get(), index_sizes(&self.zim))).as_ref()
+        self.x.lease(false)
     }
 
     /// True when keyword search can use the ZIM's built-in Xapian full-text index (`X/fulltext/xapian`): the feature is
@@ -253,12 +378,12 @@ impl ZimSource {
     /// has not failed to open the file. `cs_status` asks this, so listing sources never opens libzim.
     pub fn has_xapian(&self) -> bool {
         Zimx::AVAILABLE
-            && !matches!(self.x.get(), Some(None))
+            && !self.x.failed.load(Ordering::SeqCst)
             && self.zim.fulltext_index().ok().flatten().is_some()
     }
 
-    /// The libzim handle when `has_xapian`: keyword search uses it instead of a Tantivy index. Opens libzim on first use.
-    pub fn xapian(&self) -> Option<&Zimx> {
+    /// The libzim handle when `has_xapian`: keyword search uses it instead of a Tantivy index. Opens libzim when needed.
+    pub fn xapian(&self) -> Option<Arc<Zimx>> {
         if !self.has_xapian() {
             return None;
         }
@@ -266,11 +391,16 @@ impl ZimSource {
     }
 
     /// The libzim handle when this ZIM carries a title index (`X/title/xapian`): suggestions use it.
-    pub fn title_index(&self) -> Option<&Zimx> {
+    pub fn title_index(&self) -> Option<Arc<Zimx>> {
         if !Zimx::AVAILABLE || self.zim.title_index().ok().flatten().is_none() {
             return None;
         }
         self.libzim().filter(|x| x.has_title_index())
+    }
+
+    /// Whether the libzim archive is open right now (for tests and measurements).
+    pub fn archive_open(&self) -> bool {
+        self.x.current().is_some()
     }
 
     /// Number of directory entries in the file (all namespaces).
