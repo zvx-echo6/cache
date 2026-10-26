@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'app_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
+import 'history/conversation_store.dart';
 import 'location/location_service.dart';
 import 'search/core_numbering.dart';
 import 'sources/sources_state.dart';
@@ -41,6 +43,22 @@ class _CacheAppState extends State<CacheApp> {
     app.init();
     sources.init();
     location.init();
+    _openHistory();
+  }
+
+  ConversationStore? _store;
+  int? _backendGeneration;
+
+  /// The conversations live in the app's private storage.
+  Future<void> _openHistory() async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      await dir.create(recursive: true);
+      _store = ConversationStore.open('${dir.path}/conversations.db');
+      chat.attachStore(_store!);
+    } catch (_) {
+      // Without the database the app still answers; it just keeps no history.
+    }
   }
 
   void _onApp() {
@@ -48,8 +66,14 @@ class _CacheAppState extends State<CacheApp> {
       _applied = app.theme;
       applySystemUi(_applied);
     }
-    // The chat talks to whatever model is active; a new model starts a new chat.
-    chat.setBackend(app.active == null ? null : LocalLlamaBackend(app.session));
+    // The chat talks to whatever model is active. A different model carries on the open conversation.
+    if (_backendGeneration != app.modelGeneration) {
+      _backendGeneration = app.modelGeneration;
+      chat.setBackend(
+        app.active == null ? null : LocalLlamaBackend(app.session),
+        modelName: app.active == null ? '' : app.displayName(app.active!),
+      );
+    }
   }
 
   @override
@@ -58,6 +82,7 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     sources.dispose();
     location.dispose();
+    _store?.close();
     super.dispose();
   }
 

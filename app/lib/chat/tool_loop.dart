@@ -48,8 +48,17 @@ class ToolLoop {
     this.systemPrompt = kSystemPrompt,
     this.enableThinking = kEnableThinking,
     this.numbering,
+    List<Map<String, dynamic>> history = const [],
+    Iterable<NumberedResult> knownResults = const [],
   })
-      : _tools = {for (final t in tools) t.name: t};
+      : _tools = {for (final t in tools) t.name: t} {
+    // A conversation reopened from storage: its transcript and the results already numbered in it.
+    _messages.addAll(history);
+    for (final r in knownResults) {
+      _results[r.id] = r;
+    }
+    _nextId = _results.keys.fold(0, (a, b) => b > a ? b : a) + 1;
+  }
 
   final ModelBackend backend;
   final String systemPrompt;
@@ -74,6 +83,28 @@ class ToolLoop {
     backend.stop();
   }
 
+  /// Takes the numbers already given from [numbering] (a restored conversation), so the citation check
+  /// knows them.
+  Future<void> syncNumbering() async {
+    final n = numbering;
+    if (n != null) await _syncIds(n, const []);
+  }
+
+  /// A request for the model made of this conversation plus [extra] (one more message that is not kept in
+  /// it), for side questions such as a title. With [withTools] the request carries the same tool
+  /// definitions as a normal turn, so the model's cached prompt start stays valid.
+  Map<String, dynamic> requestWith(Map<String, dynamic> extra, {bool withTools = false}) =>
+      _request([..._messages, extra], withTools && _tools.isNotEmpty);
+
+  Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools) => {
+        'messages': [
+          {'role': 'system', 'content': systemPrompt},
+          ...messages,
+        ],
+        'enable_thinking': enableThinking,
+        if (withTools) 'tools': [for (final t in _tools.values) t.toSchema()],
+      };
+
   /// Frees the numbering in the core. The loop is not used afterwards.
   Future<void> dispose() async => numbering?.dispose();
 
@@ -87,14 +118,7 @@ class ToolLoop {
     try {
       while (true) {
         final allowTools = rounds < kMaxToolRounds && _tools.isNotEmpty;
-        final request = <String, dynamic>{
-          'messages': [
-            {'role': 'system', 'content': systemPrompt},
-            ..._messages,
-          ],
-          'enable_thinking': enableThinking,
-          if (allowTools) 'tools': [for (final t in _tools.values) t.toSchema()],
-        };
+        final request = _request(_messages, allowTools);
 
         PartialMessage? last;
         await for (final p in backend.generate(request)) {

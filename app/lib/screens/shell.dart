@@ -31,7 +31,7 @@ class _ShellState extends State<Shell> {
       body: IndexedStack(
         index: _index,
         children: [
-          HomeScreen(app: widget.app, sources: widget.sources, onOpenAsk: () => setState(() => _index = 1)),
+          HomeScreen(app: widget.app, sources: widget.sources, chat: widget.chat, onOpenAsk: () => setState(() => _index = 1)),
           AskScreen(app: widget.app, chat: widget.chat),
           const PlaceholderScreen(title: 'Browse', message: 'Browse comes in step 3'),
           MapsScreen(location: widget.location),

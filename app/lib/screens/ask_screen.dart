@@ -4,14 +4,17 @@ import '../app_state.dart';
 import '../chat/answer_markdown.dart';
 import '../chat/chat_controller.dart';
 import '../chat/tool_loop.dart';
+import '../history/share.dart';
 import '../theme.dart';
+import 'history_drawer.dart';
 import 'models_screen.dart';
 
 class AskScreen extends StatefulWidget {
-  const AskScreen({super.key, required this.app, required this.chat});
+  const AskScreen({super.key, required this.app, required this.chat, this.share = shareMarkdown});
 
   final AppState app;
   final ChatController chat;
+  final ShareMarkdown share;
 
   @override
   State<AskScreen> createState() => _AskScreenState();
@@ -57,13 +60,30 @@ class _AskScreenState extends State<AskScreen> {
 
   void _openModels() => openModels(context, widget.app);
 
+  Future<void> _shareChat() async {
+    final id = widget.chat.activeId;
+    final md = id == null ? null : widget.chat.exportMarkdown(id);
+    final title = id == null ? null : widget.chat.store?.get(id)?.title;
+    if (md != null) await widget.share(title ?? 'Chat', md);
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
     return Scaffold(
       resizeToAvoidBottomInset: false,
+      drawer: HistoryDrawer(chat: widget.chat),
       appBar: AppBar(
-        titleSpacing: 16,
+        titleSpacing: 0,
+        leading: Builder(
+          builder: (ctx) => IconButton(
+            tooltip: 'Chats',
+            iconSize: 26,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            onPressed: () => Scaffold.of(ctx).openDrawer(),
+            icon: const Icon(Icons.menu),
+          ),
+        ),
         title: ListenableBuilder(
           listenable: widget.app,
           builder: (context, _) {
@@ -95,6 +115,18 @@ class _AskScreenState extends State<AskScreen> {
           },
         ),
         actions: [
+          ListenableBuilder(
+            listenable: widget.chat,
+            builder: (context, _) => widget.chat.activeId == null || widget.chat.busy
+                ? const SizedBox.shrink()
+                : IconButton(
+                    tooltip: 'Share chat',
+                    iconSize: 26,
+                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                    onPressed: _shareChat,
+                    icon: const Icon(Icons.ios_share),
+                  ),
+          ),
           IconButton(
             tooltip: 'New chat',
             iconSize: 26,
