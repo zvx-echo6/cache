@@ -7,7 +7,7 @@ enum LocationPermissionState { notAsked, granted, denied, deniedForever }
 
 /// One reading of the phone's position.
 class Fix {
-  const Fix({required this.lat, required this.lon, required this.accuracyM, required this.time});
+  const Fix({required this.lat, required this.lon, required this.accuracyM, required this.time, this.heading});
 
   final double lat;
   final double lon;
@@ -17,6 +17,10 @@ class Fix {
 
   /// When the phone made the reading.
   final DateTime time;
+
+  /// The direction of travel in degrees clockwise from north, or null when the phone is not moving (a GPS
+  /// heading means nothing standing still).
+  final double? heading;
 }
 
 /// The phone's position, behind a small seam so the service can be tested. The real one is geolocator.
@@ -48,7 +52,13 @@ class GeolocatorSource implements PositionSource {
         LocationPermission.unableToDetermine => LocationPermissionState.denied,
       };
 
-  static Fix _fix(Position p) => Fix(lat: p.latitude, lon: p.longitude, accuracyM: p.accuracy, time: p.timestamp);
+  static Fix _fix(Position p) => Fix(
+        lat: p.latitude,
+        lon: p.longitude,
+        accuracyM: p.accuracy,
+        time: p.timestamp,
+        heading: p.speed > 0.7 && p.heading >= 0 && p.heading <= 360 ? p.heading : null,
+      );
 
   // Best accuracy: a survival app wants the real position, not a battery-saving guess. The stream only
   // runs while the app is on screen, and a fix is taken after the phone has moved 25 m.

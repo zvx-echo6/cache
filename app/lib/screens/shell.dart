@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../chat/chat_controller.dart';
 import '../location/location_service.dart';
+import '../maps/maps_state.dart';
 import '../sources/sources_state.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
@@ -10,12 +11,13 @@ import 'maps_screen.dart';
 import 'placeholder_screen.dart';
 
 class Shell extends StatefulWidget {
-  const Shell({super.key, required this.app, required this.chat, required this.sources, required this.location});
+  const Shell({super.key, required this.app, required this.chat, required this.sources, required this.location, required this.maps});
 
   final AppState app;
   final ChatController chat;
   final SourcesState sources;
   final LocationService location;
+  final MapsState maps;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -34,7 +36,7 @@ class _ShellState extends State<Shell> {
           HomeScreen(app: widget.app, sources: widget.sources, onOpenAsk: () => setState(() => _index = 1)),
           AskScreen(app: widget.app, chat: widget.chat),
           const PlaceholderScreen(title: 'Browse', message: 'Browse comes in step 3'),
-          MapsScreen(location: widget.location),
+          MapsScreen(location: widget.location, maps: widget.maps, themeId: widget.app.theme),
         ],
       ),
       bottomNavigationBar: keyboardOpen

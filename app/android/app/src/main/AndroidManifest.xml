@@ -2,8 +2,11 @@
     <!-- Where the phone is: asked only when the user first needs it (see LocationService). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Map tiles are streamed and downloaded when there is a connection. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="CACHE"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
