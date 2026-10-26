@@ -54,7 +54,7 @@ impl PlaceSource for OvertureCsv {
             let conf: f64 = rec.get(c_conf).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
             let name = nonempty(rec.get(c_name));
             let (category, enrich) = match rules.overture_category(basic, conf) {
-                Some((c, r)) => (Some(c.id.clone()), r.enrich_from.as_ref().map(|e| (e.category.clone(), e.radius_m))),
+                Some((c, r)) => (Some(c.id.clone()), r.require_match.as_ref().map(|e| (e.category.clone(), e.radius_m))),
                 None => (None, None),
             };
             // A category place needs a name to be useful; a general place needs one and a higher confidence.
@@ -91,6 +91,7 @@ impl PlaceSource for OvertureCsv {
                 // The brand's Wikidata item (a chain), never the place's own.
                 brand_wikidata: nonempty(rec.get(c_brand_wd)).filter(|q| crate::model::is_qid(q)),
                 enrich,
+                matched: None,
             });
         }
         Ok(())

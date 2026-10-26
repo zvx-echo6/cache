@@ -9,6 +9,9 @@ use std::path::Path;
 pub const FIXTURE_NOW: &str = "2026-10-25T14:20:05-06:00";
 pub const FIXTURE_BUILT_AT: &str = "2026-10-13T12:00:00+00:00";
 
+/// The emergency_room rules as categories.json writes them: confirmed rows, then hospitals as "likely".
+const ER_RULES: &str = r#"[{"source":"overture","basic_category":["emergency_department"],"require_match":{"category":"hospital","radius_m":250}},{"source":"category","category":"hospital","primary_tier":"confirmed","tier":"likely","note":"hospital, likely has an emergency room","beats_primary_only_if_nearer_by_mi":10}]"#;
+
 struct P {
     name: &'static str,
     cat: Option<&'static str>,
@@ -28,10 +31,14 @@ const PLACES: &[P] = &[
     P { name: "Smith's Pharmacy", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.5420, lon: -113.8080, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
     P { name: "Rupert Drug", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.6180, lon: -113.6740, street: Some("500 6th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
     P { name: "Cassia Regional Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5290, lon: -113.7850, street: Some("1501 Hiland Ave"), locality: "Burley", phone: Some("+1 208 678 4444"), hours: None, alt: "Cassia Regional Medical Center" },
-    P { name: "Cassia Regional Hospital", cat: Some("emergency_room"), kind: "emergency_department", lat: 42.5291, lon: -113.7851, street: Some("1501 Hiland Ave"), locality: "Burley", phone: Some("+1 208 678 4444"), hours: Some("24/7"), alt: "" },
     P { name: "Minidoka Memorial Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.6140, lon: -113.6720, street: Some("1224 8th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
+    P { name: "St. Luke's Boise Medical Center", cat: Some("hospital"), kind: "amenity=hospital", lat: 43.6126, lon: -116.1901, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: None, alt: "" },
+    P { name: "Saint Alphonsus Regional Medical Center", cat: Some("hospital"), kind: "amenity=hospital", lat: 43.6191, lon: -116.2791, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: None, alt: "" },
     P { name: "Saint Alphonsus Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 43.6190, lon: -116.2790, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: Some("24/7"), alt: "" },
     P { name: "St. Luke's Boise Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 43.6125, lon: -116.1900, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: Some("24/7"), alt: "St Lukes Boise" },
+    P { name: "St. Luke's Magic Valley Regional Medical Center", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5530, lon: -114.4690, street: Some("801 Pole Line Rd W"), locality: "Twin Falls", phone: Some("+1 208 814 1000"), hours: None, alt: "" },
+    P { name: "St. Luke's Magic Valley Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 42.5531, lon: -114.4691, street: Some("801 Pole Line Rd W"), locality: "Twin Falls", phone: Some("+1 208 814 1000"), hours: Some("24/7"), alt: "" },
+    P { name: "Heyburn Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5585, lon: -113.7691, street: None, locality: "Heyburn", phone: None, hours: None, alt: "" },
     P { name: "Chevron", cat: Some("fuel"), kind: "amenity=fuel", lat: 42.5400, lon: -113.7900, street: Some("1020 Overland Ave"), locality: "Burley", phone: None, hours: Some("24/7"), alt: "" },
     P { name: "Stanley Ranger Station", cat: Some("police"), kind: "amenity=police", lat: 44.2160, lon: -114.9310, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
     P { name: "Sawtooth Spring", cat: Some("water"), kind: "natural=spring", lat: 44.1700, lon: -114.9200, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
@@ -86,8 +93,8 @@ pub fn write_fixture_pack(path: &Path) {
     {
         let n = PLACES.iter().filter(|p| p.cat == Some(*id)).count();
         c.execute(
-            "INSERT INTO categories(id, title, description, rules, place_count, sort) VALUES (?1, ?2, ?3, '[]', ?4, ?5)",
-            params![id, title, desc, n as i64, i as i64],
+            "INSERT INTO categories(id, title, description, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, title, desc, if *id == "emergency_room" { ER_RULES } else { "[]" }, n as i64, i as i64],
         )
         .unwrap();
     }
@@ -102,6 +109,11 @@ pub fn write_fixture_pack(path: &Path) {
         .unwrap();
         c.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, p.lat, p.lon]).unwrap();
         c.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, p.name, p.alt]).unwrap();
+    }
+    // Each emergency room row names the hospital row it stands for (same name).
+    for (i, p) in PLACES.iter().enumerate().filter(|(_, p)| p.cat == Some("emergency_room")) {
+        let h = PLACES.iter().position(|q| q.cat == Some("hospital") && q.name == p.name).expect("hospital for the emergency room");
+        c.execute("UPDATE places SET matched_source_id = ?1 WHERE id = ?2", params![format!("osm:n{}", h + 1), i as i64 + 1]).unwrap();
     }
     for (i, (name, kind, lat, lon, pop, state)) in LOCALITIES.iter().enumerate() {
         let id = i as i64 + 1;

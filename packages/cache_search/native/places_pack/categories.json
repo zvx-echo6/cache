@@ -23,7 +23,9 @@
       "description": "hospital emergency rooms; for a hospital in an emergency use emergency_room",
       "rules": [
         {"source": "overture", "basic_category": ["emergency_department"],
-         "enrich_from": {"category": "hospital", "radius_m": 250}}
+         "require_match": {"category": "hospital", "radius_m": 250}},
+        {"source": "category", "category": "hospital", "primary_tier": "confirmed", "tier": "likely",
+         "note": "hospital, likely has an emergency room", "beats_primary_only_if_nearer_by_mi": 10}
       ]
     },
     {

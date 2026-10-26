@@ -42,6 +42,8 @@ CREATE TABLE places (
   wikivoyage_title TEXT,
   summary TEXT,
   brand_wikidata TEXT,
+  -- An emergency room row names the hospital it was matched to; that hospital is not listed again as a "likely" one.
+  matched_source_id TEXT,
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
   confidence REAL

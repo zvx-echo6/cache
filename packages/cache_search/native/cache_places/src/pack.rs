@@ -3,6 +3,7 @@
 use crate::geo::{bbox_around, haversine_km};
 use crate::schema::FORMAT_VERSION;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -48,6 +49,33 @@ pub struct Category {
     pub title: String,
     pub description: String,
     pub place_count: i64,
+    /// The rules JSON the builder stored.
+    pub rules: String,
+}
+
+/// A category that also offers places of another category, after its own (emergency rooms: hospitals that probably have one).
+#[derive(Debug, Clone)]
+pub struct Fallback {
+    pub category: String,
+    pub primary_tier: String,
+    pub tier: String,
+    pub note: Option<String>,
+    /// A fallback place ranks ahead of a primary one only when it is nearer by at least this many km.
+    pub advantage_km: f64,
+}
+
+impl Category {
+    pub fn fallback(&self) -> Option<Fallback> {
+        let v: serde_json::Value = serde_json::from_str(&self.rules).ok()?;
+        let r = v.as_array()?.iter().find(|r| r["source"] == "category")?;
+        Some(Fallback {
+            category: r["category"].as_str()?.to_string(),
+            primary_tier: r["primary_tier"].as_str().unwrap_or("confirmed").to_string(),
+            tier: r["tier"].as_str()?.to_string(),
+            note: r["note"].as_str().map(str::to_string),
+            advantage_km: r["beats_primary_only_if_nearer_by_mi"].as_f64().unwrap_or(0.0) * crate::geo::KM_PER_MI,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +165,8 @@ pub struct Pack {
     pub meta: Meta,
     pub categories: Vec<Category>,
     pub states: Vec<StateRow>,
+    /// Source ids of hospitals that an emergency room row was matched to.
+    pub matched: HashSet<String>,
     conn: Mutex<Connection>,
     stamp: (u64, u64),
 }
@@ -173,8 +203,8 @@ impl Pack {
             max_lon: num("max_lon")?,
         };
         let categories = {
-            let mut st = conn.prepare("SELECT id, title, description, place_count FROM categories ORDER BY sort, id")?;
-            let rows = st.query_map([], |r| Ok(Category { id: r.get(0)?, title: r.get(1)?, description: r.get(2)?, place_count: r.get(3)? }))?;
+            let mut st = conn.prepare("SELECT id, title, description, place_count, rules FROM categories ORDER BY sort, id")?;
+            let rows = st.query_map([], |r| Ok(Category { id: r.get(0)?, title: r.get(1)?, description: r.get(2)?, place_count: r.get(3)?, rules: r.get(4)? }))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let states = {
@@ -182,7 +212,12 @@ impl Pack {
             let rows = st.query_map([], |r| Ok(StateRow { code: r.get(0)?, name: r.get(1)? }))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(Pack { path: path.to_path_buf(), meta, categories, states, conn: Mutex::new(conn), stamp: file_stamp(path) })
+        let matched = {
+            let mut st = conn.prepare("SELECT matched_source_id FROM places WHERE matched_source_id IS NOT NULL")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<HashSet<_>>>()?
+        };
+        Ok(Pack { path: path.to_path_buf(), meta, categories, states, matched, conn: Mutex::new(conn), stamp: file_stamp(path) })
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
