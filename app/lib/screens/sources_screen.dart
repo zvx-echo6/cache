@@ -18,11 +18,19 @@ class SourcesScreen extends StatelessWidget {
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Remove ${z.name}?'),
-        content: const Text('The file and its index are deleted from this phone.'),
+        title: Text('Remove ${sources.titleOf(z)}?'),
+        content: const Text(
+          'The file and its index are deleted from this phone.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -45,26 +53,38 @@ class SourcesScreen extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(24),
                           child: Text(
-                            sources.unavailable ?? 'No sources yet. Choose a .zim file to add one.',
+                            sources.unavailable ??
+                                'No sources yet. Choose a .zim file to add one.',
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 18, color: k.secondary),
                           ),
                         ),
                       )
                     : ListView(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        children: [for (final z in sources.zims) _tile(context, z)],
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        children: [
+                          for (final z in sources.zims) _tile(context, z),
+                        ],
                       ),
               ),
               if (sources.unavailable != null && sources.zims.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text(sources.unavailable!, style: TextStyle(fontSize: 15, color: k.warning)),
+                  child: Text(
+                    sources.unavailable!,
+                    style: TextStyle(fontSize: 15, color: k.warning),
+                  ),
                 ),
               if (sources.error != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text(sources.error!, style: TextStyle(fontSize: 15, color: k.emergency)),
+                  child: Text(
+                    sources.error!,
+                    style: TextStyle(fontSize: 15, color: k.emergency),
+                  ),
                 ),
               if (sources.copyProgress != null)
                 Padding(
@@ -72,8 +92,10 @@ class SourcesScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Copying ${sources.copyName} — ${(sources.copyProgress! * 100).toStringAsFixed(0)}%',
-                          style: TextStyle(fontSize: 15, color: k.secondary)),
+                      Text(
+                        'Copying ${sources.copyName} — ${(sources.copyProgress! * 100).toStringAsFixed(0)}%',
+                        style: TextStyle(fontSize: 15, color: k.secondary),
+                      ),
                       const SizedBox(height: 6),
                       LinearProgressIndicator(value: sources.copyProgress),
                     ],
@@ -87,7 +109,9 @@ class SourcesScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       FilledButton.icon(
-                        onPressed: sources.copyProgress != null ? null : () => sources.pickAndAddZim(),
+                        onPressed: sources.copyProgress != null
+                            ? null
+                            : () => sources.pickAndAddZim(),
                         icon: const Icon(Icons.add),
                         label: const Text('Add a ZIM…'),
                       ),
@@ -119,7 +143,9 @@ class SourcesScreen extends StatelessWidget {
         statusColor = k.ok;
       case ZimPhase.indexing:
         final f = sources.indexFraction(z);
-        status = f == null ? 'Indexing…' : 'Indexing ${(f * 100).toStringAsFixed(0)}%';
+        status = f == null
+            ? 'Indexing…'
+            : 'Indexing ${(f * 100).toStringAsFixed(0)}%';
         statusColor = k.secondary;
       case ZimPhase.failed:
         status = sources.failureOf(z) ?? 'Could not be read';
@@ -143,12 +169,24 @@ class SourcesScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(z.name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                      Text(
+                        sources.titleOf(z),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: k.text,
+                        ),
+                      ),
                       const SizedBox(height: 2),
-                      Text('${_size(z.size)} · $status', style: TextStyle(fontSize: 15, color: statusColor)),
+                      Text(
+                        '${_size(z.size)} · $status',
+                        style: TextStyle(fontSize: 15, color: statusColor),
+                      ),
                       if (phase == ZimPhase.indexing) ...[
                         const SizedBox(height: 8),
-                        LinearProgressIndicator(value: sources.indexFraction(z)),
+                        LinearProgressIndicator(
+                          value: sources.indexFraction(z),
+                        ),
                       ],
                     ],
                   ),

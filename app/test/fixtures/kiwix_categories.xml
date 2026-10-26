@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opds="https://specs.opds.io/opds-1.2">
+  <id>dbf82b0f-dd72-5b33-548d-cbb4d53279cc</id>
+  <link rel="self"
+        href="/catalog/v2/categories"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <title>List of categories</title>
+  <updated>2026-10-26T02:16:42Z</updated>
+
+  <entry>
+    <title>gutenberg</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=gutenberg"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>43486b20-9d6b-078b-bccf-0f603fbdf813</id>
+    <content type="text">All entries with category of 'gutenberg'.</content>
+  </entry>
+  <entry>
+    <title>iFixit</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=iFixit"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>7f3c8cc2-2fab-5c40-8e23-560177d76437</id>
+    <content type="text">All entries with category of 'iFixit'.</content>
+  </entry>
+  <entry>
+    <title>mooc</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=mooc"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>daee96e5-8cc2-23b8-a735-658698e19331</id>
+    <content type="text">All entries with category of 'mooc'.</content>
+  </entry>
+  <entry>
+    <title>other</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=other"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>90beafcd-b3b1-c0ce-cf6d-4339d43bcbd0</id>
+    <content type="text">All entries with category of 'other'.</content>
+  </entry>
+  <entry>
+    <title>phet</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=phet"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>7b4e3a4c-3921-7dec-d51e-58307dae6b46</id>
+    <content type="text">All entries with category of 'phet'.</content>
+  </entry>
+  <entry>
+    <title>psiram</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=psiram"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>a0853458-3ea9-9a07-7436-afea8960381b</id>
+    <content type="text">All entries with category of 'psiram'.</content>
+  </entry>
+  <entry>
+    <title>stack_exchange</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=stack_exchange"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>f464901a-02c8-61bc-ee3b-df62dbe57ed9</id>
+    <content type="text">All entries with category of 'stack_exchange'.</content>
+  </entry>
+  <entry>
+    <title>ted</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=ted"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>81243ec0-c5ba-e65e-d44a-184488a97d86</id>
+    <content type="text">All entries with category of 'ted'.</content>
+  </entry>
+  <entry>
+    <title>vikidia</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=vikidia"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>d2136dbc-439f-0ec5-a562-b0452167368e</id>
+    <content type="text">All entries with category of 'vikidia'.</content>
+  </entry>
+  <entry>
+    <title>wikibooks</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wikibooks"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>b601b769-513b-96e2-6ca2-e0e02c40de62</id>
+    <content type="text">All entries with category of 'wikibooks'.</content>
+  </entry>
+  <entry>
+    <title>wikipedia</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wikipedia"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>a0331d34-94e5-3d7b-fad9-b8c0a043ff6f</id>
+    <content type="text">All entries with category of 'wikipedia'.</content>
+  </entry>
+  <entry>
+    <title>wikiquote</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wikiquote"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>98e0e31c-50c9-695a-b79b-5be2818596a4</id>
+    <content type="text">All entries with category of 'wikiquote'.</content>
+  </entry>
+  <entry>
+    <title>wikisource</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wikisource"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>4f996d5a-046c-ca3c-8695-27bc71a21159</id>
+    <content type="text">All entries with category of 'wikisource'.</content>
+  </entry>
+  <entry>
+    <title>wikiversity</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wikiversity"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>2cf32d19-ff19-c369-ad9d-d93d660ea8f1</id>
+    <content type="text">All entries with category of 'wikiversity'.</content>
+  </entry>
+  <entry>
+    <title>wikivoyage</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wikivoyage"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>93a1a0e4-d297-fc03-adff-e560a8be533f</id>
+    <content type="text">All entries with category of 'wikivoyage'.</content>
+  </entry>
+  <entry>
+    <title>wiktionary</title>
+    <link rel="subsection"
+          href="/catalog/v2/entries?category=wiktionary"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>cd1050bd-b1bc-de2d-1fb6-9297f5f0eb28</id>
+    <content type="text">All entries with category of 'wiktionary'.</content>
+  </entry>
+</feed>

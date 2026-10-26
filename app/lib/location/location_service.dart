@@ -13,9 +13,13 @@ enum LocationProblem { off, permissionDenied, permissionBlocked, serviceOff, noF
 /// The phone's GPS position: asks for permission only when it is first needed, keeps the latest fix while
 /// the app is on screen, and can be turned off in one switch.
 class LocationService extends ChangeNotifier with WidgetsBindingObserver {
-  LocationService({PositionSource? source, this.settingsDirOverride}) : _source = source ?? GeolocatorSource();
+  LocationService({PositionSource? source, this.settingsDirOverride, this.onFix}) : _source = source ?? GeolocatorSource();
 
   final PositionSource _source;
+
+  /// Called with every new fix, and with null when the position is forgotten (the setting is turned off). The app
+  /// hands it to the search core (cs_set_location, cs_clear_location).
+  final void Function(Fix? fix)? onFix;
 
   /// Test hook.
   final Directory? settingsDirOverride;
@@ -57,11 +61,11 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// The one place a fix goes to the rest of the app. TODO(tool-framework): call cs_set_location here when the
-  /// core has it; until then the fix lives in [fix] only.
+  /// The one place a fix goes to the rest of the app: [fix], and the search core through [onFix].
   void _publish(Fix f) {
     fix = f;
     problem = null;
+    onFix?.call(f);
     notifyListeners();
   }
 
@@ -127,6 +131,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     if (!on) {
       _unlisten();
       fix = null;
+      onFix?.call(null);
     } else if (permission == LocationPermissionState.granted) {
       _listen();
     }

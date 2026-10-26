@@ -5,6 +5,7 @@ import 'citations.dart';
 import 'model_backend.dart';
 import 'tool.dart';
 
+/// The plain prompt of the loop when no builder is given (tests). The app passes [buildSystemPrompt].
 const String kSystemPrompt =
     'You are Cache, an offline survival and preparedness assistant. Use your tools to look things up '
     'before answering questions about facts or how to do things. Cite every fact you take from a tool '
@@ -45,19 +46,26 @@ class ToolLoop {
   ToolLoop({
     required this.backend,
     required List<Tool> tools,
-    this.systemPrompt = kSystemPrompt,
+    this.systemPrompt,
     this.enableThinking = kEnableThinking,
     this.numbering,
+    this.host,
   })
       : _tools = {for (final t in tools) t.name: t};
 
   final ModelBackend backend;
-  final String systemPrompt;
+
+  /// Builds the system prompt for each turn (local time and location change); null: [kSystemPrompt].
+  final String Function()? systemPrompt;
   final bool enableThinking;
   final Map<String, Tool> _tools;
 
   /// Numbers the results in the search core. Null: the loop numbers them itself (tests).
   final ResultNumbering? numbering;
+
+  /// The core's tools: when set, its schemas are offered and every call goes through cs_tool (which numbers the
+  /// sources itself); [tools] and [numbering] are not used.
+  final ToolHost? host;
   final List<Map<String, dynamic>> _messages = [];
   final Map<int, NumberedResult> _results = {};
   int _nextId = 1;
@@ -75,7 +83,10 @@ class ToolLoop {
   }
 
   /// Frees the numbering in the core. The loop is not used afterwards.
-  Future<void> dispose() async => numbering?.dispose();
+  Future<void> dispose() async {
+    await numbering?.dispose();
+    await host?.dispose();
+  }
 
   String _clean(String s) => checkCitations(s, _results.keys.toSet()).text;
 
@@ -84,16 +95,19 @@ class ToolLoop {
     _messages.add({'role': 'user', 'content': userText});
     var rounds = 0;
     var promptTokens = 0, generatedTokens = 0;
+    final prompt = systemPrompt?.call() ?? kSystemPrompt;
     try {
+      final hostSchemas = host == null ? const <Map<String, dynamic>>[] : await host!.schemas();
       while (true) {
-        final allowTools = rounds < kMaxToolRounds && _tools.isNotEmpty;
+        final schemas = host == null ? [for (final t in _tools.values) t.toSchema()] : hostSchemas;
+        final allowTools = rounds < kMaxToolRounds && schemas.isNotEmpty;
         final request = <String, dynamic>{
           'messages': [
-            {'role': 'system', 'content': systemPrompt},
+            {'role': 'system', 'content': prompt},
             ..._messages,
           ],
           'enable_thinking': enableThinking,
-          if (allowTools) 'tools': [for (final t in _tools.values) t.toSchema()],
+          if (allowTools) 'tools': schemas,
         };
 
         PartialMessage? last;
@@ -142,6 +156,18 @@ class ToolLoop {
 
   /// Runs one tool call and returns the tool message content: `[n] title — snippet`, one per line.
   Future<String> _runCall(ToolCall call) async {
+    final host = this.host;
+    if (host != null) {
+      try {
+        final r = await host.call(call.name, call.argumentsMap, DateTime.now());
+        for (final id in r.ids) {
+          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address)));
+        }
+        return r.content;
+      } catch (e) {
+        return 'Error: the tool failed ($e).';
+      }
+    }
     final tool = _tools[call.name];
     if (tool == null) return 'Error: there is no tool called ${call.name}.';
     try {

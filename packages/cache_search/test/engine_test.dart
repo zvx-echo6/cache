@@ -6,6 +6,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// A stand-in for the native library: answers from canned JSON and records what it was given.
 class FakeNative implements CsNative {
+  // The tool, location, places and live calls are not used by these tests.
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
   final Map<String, String?> replies = {};
   final List<String> calls = [];
   String? error;
@@ -18,6 +22,12 @@ class FakeNative implements CsNative {
   String? _r(String name, [Object? arg]) {
     calls.add(arg == null ? name : '$name:$arg');
     return replies[name];
+  }
+
+  @override
+  String? video(int handle, String op, String requestJson) {
+    calls.add('video:$op:$requestJson');
+    return replies['video:$op'];
   }
 
   @override

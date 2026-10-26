@@ -38,6 +38,42 @@ abstract class CsNative {
   String? conversationIds(int conv);
   void conversationFree(int conv);
 
+  /// The conversation's whole state as JSON (cs_conversation_export), or null on error.
+  String? conversationExport(int conv);
+
+  /// A conversation from [json] (cs_conversation_import); 0 on error (ask [lastError] with handle 0).
+  int conversationImport(String json);
+
+  /// The phone's GPS fix (cs_set_location). [accuracyM] < 0 means unknown, [fixedAt] is ISO 8601 with an offset.
+  /// 0 on success, -1 on error.
+  int setLocation(int handle, double lat, double lon, double accuracyM, String fixedAt);
+
+  /// cs_clear_location: the tools answer no_location again.
+  int clearLocation(int handle);
+
+  /// cs_set_web: [provider] null turns web search off. 0 on success, -1 on error.
+  int setWeb(int handle, String? provider, String? key, bool online);
+
+  /// cs_tool_schemas: a JSON array of the function schemas of the tools available now.
+  String? toolSchemas(int handle);
+
+  /// cs_tool: runs one tool call in conversation [conv]. [now] is the local date and time, ISO 8601 with an offset.
+  /// Returns {"content","ids"}.
+  String? tool(int handle, int conv, String name, String argsJson, String now);
+
+  /// Saved places (cs_places_list, cs_place_save, cs_place_delete).
+  String? placesList(int handle);
+  String? placeSave(int handle, String placeJson);
+  String? placeDelete(int handle, String key);
+
+  /// Live data. [op] is the function's name after `cs_live_`: sources, fetch, get. [requestJson] is ignored for sources.
+  String? live(int handle, String op, String requestJson);
+
+  /// The video connector (cs_video_*). [op] is the function's name after `cs_video_`: instances, instance_add,
+  /// instance_remove, login, refresh, me, channels, list, search, get, downloads, delete, resolve.
+  /// [requestJson] is ignored for instances and downloads.
+  String? video(int handle, String op, String requestJson);
+
   int jobStart(String kind, String paramsJson);
   String? jobProgress(int job);
   int jobCancel(int job);
@@ -64,6 +100,16 @@ typedef _NewC = Pointer<Void> Function();
 typedef _New = Pointer<Void> Function();
 typedef _ZimGetC = Pointer<Uint8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Pointer<Utf8>>, Pointer<Int64>);
 typedef _ZimGet = Pointer<Uint8> Function(Pointer<Void>, Pointer<Utf8>, Pointer<Pointer<Utf8>>, Pointer<Int64>);
+typedef _SetLocC = Int32 Function(Pointer<Void>, Double, Double, Double, Pointer<Utf8>);
+typedef _SetLoc = int Function(Pointer<Void>, double, double, double, Pointer<Utf8>);
+typedef _IntHC = Int32 Function(Pointer<Void>);
+typedef _IntH = int Function(Pointer<Void>);
+typedef _SetWebC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Int32);
+typedef _SetWeb = int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, int);
+typedef _ToolC = Pointer<Utf8> Function(Pointer<Void>, Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _Tool = Pointer<Utf8> Function(Pointer<Void>, Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _ImportC = Pointer<Void> Function(Pointer<Utf8>);
+typedef _Import = Pointer<Void> Function(Pointer<Utf8>);
 typedef _JobStartC = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _JobStart = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _JobCancelC = Int32 Function(Pointer<Void>);
@@ -91,6 +137,32 @@ class FfiCsNative implements CsNative {
         _format = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_format'),
         _conversationIds = lib.lookupFunction<_HStrC, _HStr>('cs_conversation_ids'),
         _conversationFree = lib.lookupFunction<_VoidHC, _VoidH>('cs_conversation_free'),
+        _conversationExport = lib.lookupFunction<_HStrC, _HStr>('cs_conversation_export'),
+        _conversationImport = lib.lookupFunction<_ImportC, _Import>('cs_conversation_import'),
+        _setLocation = lib.lookupFunction<_SetLocC, _SetLoc>('cs_set_location'),
+        _clearLocation = lib.lookupFunction<_IntHC, _IntH>('cs_clear_location'),
+        _setWeb = lib.lookupFunction<_SetWebC, _SetWeb>('cs_set_web'),
+        _toolSchemas = lib.lookupFunction<_HStrC, _HStr>('cs_tool_schemas'),
+        _tool = lib.lookupFunction<_ToolC, _Tool>('cs_tool'),
+        _placesList = lib.lookupFunction<_HStrC, _HStr>('cs_places_list'),
+        _placeSave = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_place_save'),
+        _placeDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_place_delete'),
+        _liveSources = lib.lookupFunction<_HStrC, _HStr>('cs_live_sources'),
+        _liveFetch = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_live_fetch'),
+        _liveGet = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_live_get'),
+        _videoInstances = lib.lookupFunction<_HStrC, _HStr>('cs_video_instances'),
+        _videoInstanceAdd = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_instance_add'),
+        _videoInstanceRemove = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_instance_remove'),
+        _videoLogin = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_login'),
+        _videoRefresh = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_refresh'),
+        _videoMe = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_me'),
+        _videoChannels = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_channels'),
+        _videoList = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_list'),
+        _videoSearch = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_search'),
+        _videoGet = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_get'),
+        _videoDownloads = lib.lookupFunction<_HStrC, _HStr>('cs_video_downloads'),
+        _videoDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_delete'),
+        _videoResolve = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_resolve'),
         _jobStart = lib.lookupFunction<_JobStartC, _JobStart>('cs_job_start'),
         _jobProgress = lib.lookupFunction<_HStrC, _HStr>('cs_job_progress'),
         _jobCancel = lib.lookupFunction<_JobCancelC, _JobCancel>('cs_job_cancel'),
@@ -128,6 +200,32 @@ class FfiCsNative implements CsNative {
   final _HStrStr _format;
   final _HStr _conversationIds;
   final _VoidH _conversationFree;
+  final _HStr _conversationExport;
+  final _Import _conversationImport;
+  final _SetLoc _setLocation;
+  final _IntH _clearLocation;
+  final _SetWeb _setWeb;
+  final _HStr _toolSchemas;
+  final _Tool _tool;
+  final _HStr _placesList;
+  final _HStrStr _placeSave;
+  final _HStrStr _placeDelete;
+  final _HStr _liveSources;
+  final _HStrStr _liveFetch;
+  final _HStrStr _liveGet;
+  final _HStr _videoInstances;
+  final _HStrStr _videoInstanceAdd;
+  final _HStrStr _videoInstanceRemove;
+  final _HStrStr _videoLogin;
+  final _HStrStr _videoRefresh;
+  final _HStrStr _videoMe;
+  final _HStrStr _videoChannels;
+  final _HStrStr _videoList;
+  final _HStrStr _videoSearch;
+  final _HStrStr _videoGet;
+  final _HStr _videoDownloads;
+  final _HStrStr _videoDelete;
+  final _HStrStr _videoResolve;
   final _JobStart _jobStart;
   final _HStr _jobProgress;
   final _JobCancel _jobCancel;
@@ -209,6 +307,71 @@ class FfiCsNative implements CsNative {
 
   @override
   void conversationFree(int conv) => _conversationFree(_p(conv));
+
+  @override
+  String? conversationExport(int conv) => _take(_conversationExport(_p(conv)));
+
+  @override
+  int conversationImport(String json) => using((a) => _conversationImport(json.toNativeUtf8(allocator: a)).address);
+
+  @override
+  int setLocation(int handle, double lat, double lon, double accuracyM, String fixedAt) =>
+      using((a) => _setLocation(_p(handle), lat, lon, accuracyM, fixedAt.toNativeUtf8(allocator: a)));
+
+  @override
+  int clearLocation(int handle) => _clearLocation(_p(handle));
+
+  @override
+  int setWeb(int handle, String? provider, String? key, bool online) => using((a) => _setWeb(
+      _p(handle), provider == null ? nullptr : provider.toNativeUtf8(allocator: a), key == null ? nullptr : key.toNativeUtf8(allocator: a), online ? 1 : 0));
+
+  @override
+  String? toolSchemas(int handle) => _take(_toolSchemas(_p(handle)));
+
+  @override
+  String? tool(int handle, int conv, String name, String argsJson, String now) => using((a) => _take(_tool(
+      _p(handle), _p(conv), name.toNativeUtf8(allocator: a), argsJson.toNativeUtf8(allocator: a), now.toNativeUtf8(allocator: a))));
+
+  @override
+  String? placesList(int handle) => _take(_placesList(_p(handle)));
+
+  @override
+  String? placeSave(int handle, String placeJson) => using((a) => _take(_placeSave(_p(handle), placeJson.toNativeUtf8(allocator: a))));
+
+  @override
+  String? placeDelete(int handle, String key) => using((a) => _take(_placeDelete(_p(handle), key.toNativeUtf8(allocator: a))));
+
+  @override
+  String? live(int handle, String op, String requestJson) => using((a) {
+        final req = requestJson.toNativeUtf8(allocator: a);
+        return switch (op) {
+          'sources' => _take(_liveSources(_p(handle))),
+          'fetch' => _take(_liveFetch(_p(handle), req)),
+          'get' => _take(_liveGet(_p(handle), req)),
+          _ => throw ArgumentError('Unknown live call $op'),
+        };
+      });
+
+  @override
+  String? video(int handle, String op, String requestJson) => using((a) {
+        final req = requestJson.toNativeUtf8(allocator: a);
+        return switch (op) {
+      'instances' => _take(_videoInstances(_p(handle))),
+      'instance_add' => _take(_videoInstanceAdd(_p(handle), req)),
+      'instance_remove' => _take(_videoInstanceRemove(_p(handle), req)),
+      'login' => _take(_videoLogin(_p(handle), req)),
+      'refresh' => _take(_videoRefresh(_p(handle), req)),
+      'me' => _take(_videoMe(_p(handle), req)),
+      'channels' => _take(_videoChannels(_p(handle), req)),
+      'list' => _take(_videoList(_p(handle), req)),
+      'search' => _take(_videoSearch(_p(handle), req)),
+      'get' => _take(_videoGet(_p(handle), req)),
+      'downloads' => _take(_videoDownloads(_p(handle))),
+      'delete' => _take(_videoDelete(_p(handle), req)),
+      'resolve' => _take(_videoResolve(_p(handle), req)),
+      _ => throw ArgumentError('Unknown video call $op'),
+        };
+      });
 
   @override
   int jobStart(String kind, String paramsJson) =>

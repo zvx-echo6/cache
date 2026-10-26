@@ -24,6 +24,9 @@ class ModelEntry {
 }
 
 /// App-wide state: theme, models folder, the active model and the native session.
+/// The model's context window, in tokens. Set on every load (the default of the native layer is the same).
+const int kContextTokens = 8192;
+
 class AppState extends ChangeNotifier {
   AppState({this.settingsDirOverride, this.modelsDirOverride});
 
@@ -159,7 +162,7 @@ class AppState extends ChangeNotifier {
     loadError = null;
     notifyListeners();
     try {
-      final info = await session.load(entry.path);
+      final info = await session.load(entry.path, nCtx: kContextTokens);
       final pretty = prettyModelName(info.description);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -169,7 +172,7 @@ class AppState extends ChangeNotifier {
         activeInfo = null;
         if (previous != null) {
           try {
-            activeInfo = await session.load(previous.path);
+            activeInfo = await session.load(previous.path, nCtx: kContextTokens);
             active = previous;
           } catch (_) {}
         }

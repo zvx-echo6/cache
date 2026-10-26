@@ -19,8 +19,9 @@ class SearchCore {
   SearchCore._(this._isolate, this._toWorker, this._fromWorker);
 
   /// Starts the worker and opens the core with [sources]. Throws a [CacheSearchException] if the native
-  /// library is missing on this platform or cs_open fails.
-  static Future<SearchCore> open(List<SourceConfig> sources, {CsNativeFactory native = _openNative}) async {
+  /// library is missing on this platform or cs_open fails. [extra] holds the other sections of the cs_open config
+  /// (user, live, places, routing, ...), see cache_search.h.
+  static Future<SearchCore> open(List<SourceConfig> sources, {Map<String, dynamic>? extra, CsNativeFactory native = _openNative}) async {
     final rp = ReceivePort();
     final errors = ReceivePort();
     final isolate = await Isolate.spawn(_workerMain, [rp.sendPort, native], debugName: 'cache_search', onError: errors.sendPort);
@@ -36,7 +37,7 @@ class SearchCore {
       }
     }());
     try {
-      await core._call('open', {'sources': jsonSources(sources)});
+      await core._call('open', {'sources': jsonSources(sources), 'extra': extra});
     } catch (_) {
       await core.close();
       rethrow;
@@ -118,6 +119,37 @@ class SearchCore {
   /// A new [n] numbering for one chat. Free it with [CoreConversation.free].
   Future<CoreConversation> newConversation() async => CoreConversation._(this, (await _call('convNew')) as int);
 
+  /// A conversation continued from [CoreConversation.export]'s output, with the same numbering.
+  Future<CoreConversation> importConversation(String json) async =>
+      CoreConversation._(this, (await _call('convImport', {'json': json})) as int);
+
+  /// The phone's GPS fix for the tools that default to "where I am" (cs_set_location). [fixedAt] is ISO 8601 with an offset.
+  Future<void> setLocation(double lat, double lon, {double accuracyM = -1, required String fixedAt}) =>
+      _call('setLocation', {'lat': lat, 'lon': lon, 'accuracy': accuracyM, 'fixedAt': fixedAt});
+
+  Future<void> clearLocation() => _call('clearLocation');
+
+  /// Web search settings (cs_set_web); [provider] null turns it off.
+  Future<void> setWeb({String? provider, String? key, required bool online}) =>
+      _call('setWeb', {'provider': provider, 'key': key, 'online': online});
+
+  /// The function schemas of the tools available now (cs_tool_schemas).
+  Future<List<Map<String, dynamic>>> toolSchemas() async =>
+      [for (final t in await _call('toolSchemas') as List) (t as Map).cast<String, dynamic>()];
+
+  Future<Map<String, dynamic>> _map(String op, [Map<String, dynamic> args = const {}]) async =>
+      ((await _call(op, args)) as Map).cast<String, dynamic>();
+
+  /// Saved places (cs_places_list, cs_place_save, cs_place_delete).
+  Future<Map<String, dynamic>> placesList() => _map('placesList');
+  Future<Map<String, dynamic>> placeSave(Map<String, dynamic> place) => _map('placeSave', {'place': place});
+  Future<Map<String, dynamic>> placeDelete(String key) => _map('placeDelete', {'key': key});
+
+  /// Live data (cs_live_sources, cs_live_fetch, cs_live_get).
+  Future<Map<String, dynamic>> liveSources() => _map('liveSources');
+  Future<Map<String, dynamic>> liveFetch(Map<String, dynamic> request) => _map('liveFetch', {'request': request});
+  Future<Map<String, dynamic>> liveGet(Map<String, dynamic> request) => _map('liveGet', {'request': request});
+
   /// Starts a long job: kind "index_zim" with {"zim_path","index_dir","heap_mb"} and so on (see cache_search.h).
   Future<CoreJobHandle> startJob(String kind, Map<String, dynamic> params) async =>
       CoreJobHandle._(this, (await _call('jobStart', {'kind': kind, 'params': params})) as int);
@@ -153,6 +185,14 @@ class CoreConversation {
   Future<List<ConversationId>> ids() async => [
         for (final i in await _core._call('convIds', {'conv': _id}) as List) ConversationId.fromJson((i as Map).cast<String, dynamic>()),
       ];
+
+  /// Runs one tool call in this conversation (cs_tool); its sources are numbered here. A failure of the tool comes back
+  /// as its error JSON in [ToolOutput.content], not as an exception. [now] is the local time, ISO 8601 with an offset.
+  Future<ToolOutput> tool(String name, Map<String, dynamic> args, {required String now}) async => ToolOutput.fromJson(
+      ((await _core._call('convTool', {'conv': _id, 'name': name, 'args': args, 'now': now})) as Map).cast<String, dynamic>());
+
+  /// The conversation's whole state as JSON (cs_conversation_export).
+  Future<String> export() async => (await _core._call('convExport', {'conv': _id})) as String;
 
   Future<void> free() async {
     if (_freed) return;
@@ -217,7 +257,7 @@ void _workerMain(List<dynamic> init) {
       switch (msg['op']) {
         case 'open':
           native = factory();
-          engine = SearchEngine.open(native!, _sourcesFrom(a['sources'] as List));
+          engine = SearchEngine.open(native!, _sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
         case 'version':
           result = eng().version();
         case 'setSources':
@@ -300,6 +340,39 @@ void _workerMain(List<dynamic> init) {
           };
         case 'convIds':
           result = [for (final i in convs[a['conv']]!.ids()) {'n': i.n, 'address': i.address, 'title': i.title}];
+        case 'convImport':
+          final c = ConversationNumbers.import(native ?? (native = factory()), a['json'] as String);
+          final key = nextKey++;
+          convs[key] = c;
+          result = key;
+        case 'convExport':
+          result = convs[a['conv']]!.export();
+        case 'convTool':
+          final o = eng().tool(convs[a['conv']]!, a['name'] as String, (a['args'] as Map).cast<String, dynamic>(), now: a['now'] as String);
+          result = {
+            'content': o.content,
+            'ids': [for (final i in o.ids) {'n': i.n, 'address': i.address, 'title': i.title}],
+          };
+        case 'setLocation':
+          eng().setLocation(a['lat'] as double, a['lon'] as double, accuracyM: a['accuracy'] as double, fixedAt: a['fixedAt'] as String);
+        case 'clearLocation':
+          eng().clearLocation();
+        case 'setWeb':
+          eng().setWeb(provider: a['provider'] as String?, key: a['key'] as String?, online: a['online'] as bool);
+        case 'toolSchemas':
+          result = eng().toolSchemas();
+        case 'placesList':
+          result = eng().placesList();
+        case 'placeSave':
+          result = eng().placeSave((a['place'] as Map).cast<String, dynamic>());
+        case 'placeDelete':
+          result = eng().placeDelete(a['key'] as String);
+        case 'liveSources':
+          result = eng().liveSources();
+        case 'liveFetch':
+          result = eng().liveFetch((a['request'] as Map).cast<String, dynamic>());
+        case 'liveGet':
+          result = eng().liveGet((a['request'] as Map).cast<String, dynamic>());
         case 'convFree':
           convs.remove(a['conv'])?.free();
         case 'jobStart':

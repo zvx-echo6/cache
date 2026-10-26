@@ -13,8 +13,8 @@ class SearchEngine {
   SearchEngine(this.native, this._handle);
 
   /// Opens the core with [sources] (cs_open). Returns at once; libraries open in the background.
-  factory SearchEngine.open(CsNative native, List<SourceConfig> sources) {
-    final h = native.open(jsonEncode(openConfigJson(sources)));
+  factory SearchEngine.open(CsNative native, List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    final h = native.open(jsonEncode(openConfigJson(sources, extra: extra)));
     if (h == 0) throw CacheSearchException.fromJson(native.lastError(0));
     return SearchEngine(native, h);
   }
@@ -73,6 +73,36 @@ class SearchEngine {
           Suggestion.fromJson((s as Map).cast<String, dynamic>()),
       ];
 
+  /// The phone's GPS fix, for the tools that default to "where I am" (cs_set_location). [fixedAt] is ISO 8601 with an offset.
+  void setLocation(double lat, double lon, {double accuracyM = -1, required String fixedAt}) {
+    if (native.setLocation(_h, lat, lon, accuracyM, fixedAt) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  void clearLocation() {
+    if (native.clearLocation(_h) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// Web search settings (cs_set_web); [provider] null turns it off. [online] is the app's own view of the connection.
+  void setWeb({String? provider, String? key, required bool online}) {
+    if (native.setWeb(_h, provider, key, online) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// The function schemas of the tools available now (cs_tool_schemas), each {"type":"function","function":{...}}.
+  List<Map<String, dynamic>> toolSchemas() =>
+      [for (final t in jsonDecode(_ok(native.toolSchemas(_h))) as List) (t as Map).cast<String, dynamic>()];
+
+  /// Runs one tool call (cs_tool). A failure of the tool is not an exception: its content is the error JSON.
+  ToolOutput tool(ConversationNumbers conv, String name, Map<String, dynamic> args, {required String now}) =>
+      ToolOutput.fromJson(_object(_ok(native.tool(_h, conv.handle, name, jsonEncode(args), now))));
+
+  Map<String, dynamic> placesList() => _object(_ok(native.placesList(_h)));
+  Map<String, dynamic> placeSave(Map<String, dynamic> place) => _object(_ok(native.placeSave(_h, jsonEncode(place))));
+  Map<String, dynamic> placeDelete(String key) => _object(_ok(native.placeDelete(_h, key)));
+
+  Map<String, dynamic> liveSources() => _object(_ok(native.live(_h, 'sources', '')));
+  Map<String, dynamic> liveFetch(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'fetch', jsonEncode(request))));
+  Map<String, dynamic> liveGet(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'get', jsonEncode(request))));
+
   void close() {
     if (_handle != 0) native.close(_handle);
     _handle = 0;
@@ -89,8 +119,21 @@ class ConversationNumbers {
     return ConversationNumbers(native, c);
   }
 
+  /// A conversation from [json], the output of [export] (cs_conversation_import).
+  factory ConversationNumbers.import(CsNative native, String json) {
+    final c = native.conversationImport(json);
+    if (c == 0) throw CacheSearchException.fromJson(native.lastError(0));
+    return ConversationNumbers(native, c);
+  }
+
   final CsNative native;
   int _conv;
+
+  /// The native conversation, for cs_tool.
+  int get handle => _c;
+
+  /// The conversation's whole state as JSON, to save a chat and continue it later (cs_conversation_export).
+  String export() => native.conversationExport(_c) ?? (throw CacheSearchException.fromJson(native.lastError(0)));
 
   int get _c {
     if (_conv == 0) throw const CacheSearchException('internal', 'The conversation is closed');

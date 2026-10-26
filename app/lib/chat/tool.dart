@@ -60,3 +60,22 @@ class NumberedAddress {
   final String address;
   final String title;
 }
+
+/// The tools run by the search core (cs_tool_schemas, cs_tool): every installed tool is offered to the model and
+/// the core numbers the sources of each result in the conversation.
+abstract class ToolHost {
+  /// The function schemas of the tools available now ({"type":"function","function":{...}}).
+  Future<List<Map<String, dynamic>>> schemas();
+
+  /// Runs one tool call. [content] is exactly the tool message; [ids] are the numbers this call gave.
+  Future<HostToolResult> call(String name, Map<String, dynamic> args, DateTime now);
+
+  Future<void> dispose();
+}
+
+class HostToolResult {
+  const HostToolResult({required this.content, required this.ids});
+
+  final String content;
+  final List<NumberedAddress> ids;
+}

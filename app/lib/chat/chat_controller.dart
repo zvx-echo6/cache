@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'model_backend.dart';
+import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
 
@@ -25,9 +26,15 @@ class ChatMessage {
 
 /// The Ask conversation. Lives above the tabs so it survives switching between them.
 class ChatController extends ChangeNotifier {
-  ChatController({required this.tools, this.newNumbering});
+  ChatController({required this.tools, this.newNumbering, this.newHost, this.locationKnown});
 
   final List<Tool> tools;
+
+  /// The search core's tools for a new chat (cs_tool_schemas, cs_tool); null (or returning null): [tools] are used.
+  final ToolHost? Function()? newHost;
+
+  /// Whether the phone's location is known right now, for the system prompt.
+  final bool Function()? locationKnown;
 
   /// Makes the numbering of a new chat in the search core; null (or returning null) numbers in Dart.
   final ResultNumbering? Function()? newNumbering;
@@ -60,7 +67,13 @@ class ChatController extends ChangeNotifier {
     text = text.trim();
     final backend = _backend;
     if (text.isEmpty || backend == null || busy) return;
-    final loop = _loop ??= ToolLoop(backend: backend, tools: tools, numbering: newNumbering?.call());
+    final loop = _loop ??= ToolLoop(
+      backend: backend,
+      tools: tools,
+      numbering: newNumbering?.call(),
+      host: newHost?.call(),
+      systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false),
+    );
     final reply = ChatMessage.assistant();
     messages
       ..add(ChatMessage.user(text))

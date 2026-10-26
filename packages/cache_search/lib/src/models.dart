@@ -20,9 +20,11 @@ class SourceConfig {
       };
 }
 
-/// The cs_open / cs_set_sources config JSON for [sources].
-Map<String, dynamic> openConfigJson(List<SourceConfig> sources) => {
+/// The cs_open / cs_set_sources config JSON for [sources]. [extra] adds the other sections of the config
+/// (user, live, places, routing, video, snippet_chars, ...). A later cs_set_sources without them keeps the earlier ones.
+Map<String, dynamic> openConfigJson(List<SourceConfig> sources, {Map<String, dynamic>? extra}) => {
       'sources': [for (final s in sources) s.toJson()],
+      if (extra != null) ...extra,
     };
 
 /// One hit of cs_search.
@@ -197,6 +199,19 @@ class FormattedResults {
       );
 
   final String toolMessage;
+  final List<ConversationId> ids;
+}
+
+/// What cs_tool returns: [content] is exactly the tool message the model sees; [ids] are the numbers this call gave.
+class ToolOutput {
+  const ToolOutput({required this.content, required this.ids});
+
+  factory ToolOutput.fromJson(Map<String, dynamic> j) => ToolOutput(
+        content: (j['content'] ?? '') as String,
+        ids: [for (final i in (j['ids'] as List? ?? const [])) ConversationId.fromJson((i as Map).cast<String, dynamic>())],
+      );
+
+  final String content;
   final List<ConversationId> ids;
 }
 
