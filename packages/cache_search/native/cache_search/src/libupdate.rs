@@ -205,6 +205,49 @@ fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
 }
 
 /// Test hook: wait `ms`, cancellably. `false` when cancelled (also checked once after the wait).
+/// Retry a file-system change that Windows refuses for a moment (`Access is denied` / sharing violation while
+/// a virus scanner, the indexer or a just-closed mmap still holds the folder). Bounded: about 5 s, then the last
+/// error is returned. Other errors (not found, ...) are returned at once.
+fn retry_fs<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut wait = 10u64;
+    for _ in 0..30 {
+        match f() {
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::PermissionDenied) || e.raw_os_error() == Some(32) => {
+                std::thread::sleep(Duration::from_millis(wait));
+                wait = (wait * 2).min(250);
+            }
+            r => return r,
+        }
+    }
+    f()
+}
+
+/// A snapshot must start with a valid tar header (512 bytes whose checksum field matches). Anything else is
+/// refused at once with a clear message, before a single file is created.
+fn check_tar_header(path: &Path) -> Result<()> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| op(&format!("opening the snapshot {}", path.display()), e))?;
+    let mut h = [0u8; 512];
+    let mut n = 0;
+    while n < h.len() {
+        match f.read(&mut h[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) => return Err(op("reading the snapshot", e)),
+        }
+    }
+    if n < h.len() {
+        return Err(Error::io(format!("the snapshot is not a tar archive: only {n} bytes")));
+    }
+    let field = std::str::from_utf8(&h[148..156]).unwrap_or("").trim_matches(|c: char| c == '\0' || c == ' ');
+    let stored = u64::from_str_radix(field, 8).ok();
+    let sum: u64 = h.iter().enumerate().map(|(i, b)| if (148..156).contains(&i) { 32 } else { *b as u64 }).sum();
+    if stored != Some(sum) {
+        return Err(Error::io("the snapshot is not a tar archive: its first header has a bad checksum"));
+    }
+    Ok(())
+}
+
 fn hold(ms: u64, cancelled: &dyn Fn() -> bool) -> bool {
     let mut waited = 0;
     while waited < ms {
@@ -525,21 +568,21 @@ pub fn recover_leftovers(library: &Path) -> Result<Vec<String>> {
     let mut done = Vec::new();
     let (stage, old) = (stage_path(library)?, old_path(library)?);
     if std::fs::symlink_metadata(&stage).is_ok() {
-        std::fs::remove_dir_all(&stage).map_err(|e| op(&format!("deleting {}", stage.display()), e))?;
+        retry_fs(|| std::fs::remove_dir_all(&stage)).map_err(|e| op(&format!("deleting {}", stage.display()), e))?;
         done.push(format!("deleted {}", stage.display()));
     }
     if std::fs::symlink_metadata(&old).is_ok() {
         if library.is_dir() {
             if library_is_complete(library) {
-                std::fs::remove_dir_all(&old).map_err(|e| op(&format!("deleting {}", old.display()), e))?;
+                retry_fs(|| std::fs::remove_dir_all(&old)).map_err(|e| op(&format!("deleting {}", old.display()), e))?;
                 done.push(format!("deleted {}", old.display()));
             } else {
-                std::fs::remove_dir_all(library).map_err(|e| op(&format!("deleting {}", library.display()), e))?;
-                std::fs::rename(&old, library).map_err(|e| op(&format!("restoring {}", library.display()), e))?;
+                retry_fs(|| std::fs::remove_dir_all(library)).map_err(|e| op(&format!("deleting {}", library.display()), e))?;
+                retry_fs(|| std::fs::rename(&old, library)).map_err(|e| op(&format!("restoring {}", library.display()), e))?;
                 done.push(format!("{} was not complete: restored it from {}", library.display(), old.display()));
             }
         } else {
-            std::fs::rename(&old, library).map_err(|e| op(&format!("restoring {}", library.display()), e))?;
+            retry_fs(|| std::fs::rename(&old, library)).map_err(|e| op(&format!("restoring {}", library.display()), e))?;
             done.push(format!("restored {} from {}", library.display(), old.display()));
         }
         if let Some(parent) = library.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -610,6 +653,7 @@ pub fn apply_update(
     }
     progress(1, STEPS);
     // 2
+    check_tar_header(&req.snapshot)?;
     let tmp = unpack_dir(&req.library)?;
     let _ = std::fs::remove_dir_all(&tmp);
     let _cleanup = RemoveDir(tmp.clone());
@@ -653,8 +697,8 @@ pub fn apply_update(
     req.hooks.inject("before_swap")?;
     // 4: the swap. The library is not changed until the first rename succeeds.
     let _ = std::fs::remove_dir_all(&old);
-    std::fs::rename(&req.library, &old).map_err(|e| op("swapping: moving the library aside", e))?;
-    if let Err(e) = std::fs::rename(&stage, &req.library) {
+    retry_fs(|| std::fs::rename(&req.library, &old)).map_err(|e| op("swapping: moving the library aside", e))?;
+    if let Err(e) = retry_fs(|| std::fs::rename(&stage, &req.library)) {
         let back = std::fs::rename(&old, &req.library);
         return Err(op(
             &format!("swapping: moving the copy into place (library {})", if back.is_ok() { "restored" } else { "NOT restored: it is in the .cs-old folder" }),

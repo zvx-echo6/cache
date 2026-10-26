@@ -35,10 +35,11 @@ impl ApiError {
             "bad_json" => 400,
             "not_found" => 404,
             "busy" | "index_missing" | "index_stale" | "cancelled" => 409,
-            "unsupported" => 422,
+            "unsupported" | "limit_exceeded" => 422,
+            "offline" => 503,
+            "no_space" => 507,
             "not_configured" => 409,
             "auth_failed" | "otp_required" => 401,
-            "no_space" => 507,
             "damaged" => 502,
             "key_missing" => 400,
             "quota" => 429,
@@ -82,6 +83,8 @@ fn cstring(s: &str, what: &str) -> Result<CString, ApiError> {
 /// A `cs_handle`, opened from the `cs_open` config JSON.
 pub struct Core {
     h: *mut Handle,
+    /// The `cs_open` config the handle was opened with (a layer download job needs its `layers` section).
+    cfg: String,
 }
 
 impl Core {
@@ -91,7 +94,7 @@ impl Core {
         if h.is_null() {
             return Err(thread_error());
         }
-        Ok(Core { h })
+        Ok(Core { h, cfg: config_json.to_string() })
     }
 
     fn result(&self, p: *mut c_char) -> Result<String, ApiError> {
@@ -177,6 +180,92 @@ impl Core {
             let e = embedder.lock().ok()?;
             e.embed(q).ok().map(|v| (e.model_id.clone(), v))
         }));
+    }
+
+    pub fn layers_list(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_layers_list(self.h) };
+        self.result(p)
+    }
+
+    pub fn layers_refresh(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_layers_refresh(self.h) };
+        self.result(p)
+    }
+
+    pub fn layers_save(&mut self, def_json: &str) -> Result<String, ApiError> {
+        let c = cstring(def_json, "definition")?;
+        let p = unsafe { cs_layers_save(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn layers_remove(&mut self, id: &str) -> Result<String, ApiError> {
+        let c = cstring(id, "id")?;
+        let p = unsafe { cs_layers_remove(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn layers_server(&mut self, options_json: Option<&str>) -> Result<String, ApiError> {
+        let c = options_json.map(|o| cstring(o, "options")).transpose()?;
+        let p = unsafe { cs_layers_server(self.h, c.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null())) };
+        self.result(p)
+    }
+
+    pub fn layers_plan(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_layers_plan(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn layers_delete(&mut self, request_json: &str) -> Result<String, ApiError> {
+        let c = cstring(request_json, "request")?;
+        let p = unsafe { cs_layers_delete(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn layers_clear_cache(&mut self, layer: Option<&str>) -> Result<String, ApiError> {
+        let c = layer.map(|l| cstring(l, "layer")).transpose()?;
+        let p = unsafe { cs_layers_clear_cache(self.h, c.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null())) };
+        self.result(p)
+    }
+
+    /// One tile: `(mime, bytes)`; an empty tile has an empty MIME and no bytes.
+    pub fn layers_tile(&mut self, layer: &str, z: i32, x: i32, y: i32) -> Result<(String, Vec<u8>), ApiError> {
+        let c = cstring(layer, "layer")?;
+        let (mut mime, mut len): (*mut c_char, i64) = (ptr::null_mut(), -1);
+        let p = unsafe { cs_layers_tile(self.h, c.as_ptr(), z, x, y, &mut mime, &mut len) };
+        if p.is_null() {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(p, len as usize) }.to_vec();
+        let m = take(mime).unwrap_or_default();
+        unsafe { cs_free_bytes(p, len) };
+        Ok((m, bytes))
+    }
+
+    /// A `layer_download` job for `request` (`{layer, area?, bbox|polygon, minzoom?, maxzoom?, update?}`) with this
+    /// handle's `layers` config; `on_progress` gets the progress JSON whenever it changes. Returns the final progress JSON.
+    pub fn layers_download(&mut self, request: &Value, on_progress: &mut dyn FnMut(&str)) -> Result<String, ApiError> {
+        let cfg: Value = serde_json::from_str(&self.cfg).map_err(|e| ApiError::new("bad_json", e.to_string()))?;
+        let mut params = request.clone();
+        let layers = cfg.get("layers").cloned().ok_or_else(|| ApiError::new("not_configured", "the config has no \"layers\" section"))?;
+        params.as_object_mut().ok_or_else(|| ApiError::new("bad_json", "the request must be an object"))?.insert("layers".into(), layers);
+        let mut job = JobRun::start("layer_download", &params)?;
+        let mut last = String::new();
+        loop {
+            let p = job.progress()?;
+            let v: Value = serde_json::from_str(&p).map_err(|e| ApiError::new("internal", e.to_string()))?;
+            if v["state"] != "running" {
+                return match v["state"].as_str() {
+                    Some("done") => Ok(p),
+                    _ => Err(ApiError::new(v["error"]["code"].as_str().unwrap_or(if v["state"] == "cancelled" { "cancelled" } else { "internal" }), v["error"]["message"].as_str().unwrap_or("the download did not finish").to_string())),
+                };
+            }
+            if p != last {
+                on_progress(&p);
+                last = p;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
     }
 
     pub fn places_list(&mut self) -> Result<String, ApiError> {

@@ -187,10 +187,22 @@ fn settings() -> Value {
 }
 
 fn open(path: &Path) -> *mut cache_search::handle::Handle {
+    let h = open_unchecked(path);
+    wait_ready(h);
+    h
+}
+
+/// Open and wait until the source has settled, whether it opened or failed (for tests that expect a failed source).
+fn open_expecting_failure(path: &Path) -> *mut cache_search::handle::Handle {
+    let h = open_unchecked(path);
+    wait_settled(h);
+    h
+}
+
+fn open_unchecked(path: &Path) -> *mut cache_search::handle::Handle {
     let cfg = cstr(&json!({"sources":[{"kind":"library","path":path.to_str().unwrap(),"index_dir":"/nonexistent/idx","settings":settings()}]}).to_string());
     let h = unsafe { cs_open(cfg.as_ptr()) };
     assert!(!h.is_null(), "cs_open failed: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
-    wait_ready(h);
     h
 }
 
@@ -198,17 +210,30 @@ fn status(h: *mut cache_search::handle::Handle) -> Value {
     serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap()
 }
 
-/// Poll cs_status until the library is neither opening nor updating.
-fn wait_ready(h: *mut cache_search::handle::Handle) -> Value {
+/// Poll cs_status until no library is opening or updating, whatever the outcome (a failed open counts as settled).
+/// Never waits for more than `WAIT_SECS`: it fails with the last status instead.
+const WAIT_SECS: u64 = 120;
+
+fn wait_settled(h: *mut cache_search::handle::Handle) -> Value {
     let t0 = Instant::now();
     loop {
         let v = status(h);
         if v["sources"].as_array().unwrap().iter().all(|s| s["opening"] == false && s["updating"] == false) {
             return v;
         }
-        assert!(t0.elapsed().as_secs() < 120, "library did not become ready: {v}");
+        assert!(t0.elapsed().as_secs() < WAIT_SECS, "library did not settle within {WAIT_SECS} s: {v}");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Like `wait_settled`, but a source that settled with an error (a failed background open: docs 0, error set) is a
+/// failure here, not "ready". Tests that expect a failed source call `wait_settled`.
+fn wait_ready(h: *mut cache_search::handle::Handle) -> Value {
+    let v = wait_settled(h);
+    for s in v["sources"].as_array().unwrap() {
+        assert!(s["error"].is_null(), "library settled with an error instead of becoming ready: {v}");
+    }
+    v
 }
 
 fn search(h: *mut cache_search::handle::Handle, v: &[f32], k: usize) -> Value {
@@ -251,7 +276,7 @@ fn wait_job(j: *mut Job) -> Value {
         if p["state"] != "running" {
             return p;
         }
-        assert!(t0.elapsed().as_secs() < 300, "job did not finish: {p}");
+        assert!(t0.elapsed().as_secs() < 300, "job still {} after {} s (bounded wait): {p}", p["state"], t0.elapsed().as_secs());
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -561,7 +586,7 @@ fn failed_reopen_is_reported_as_a_failed_source() {
     assert_eq!(done["state"], "failed", "{done}");
     unsafe { cs_job_free(j) };
     // the handle reopens from disk, which does not work: the source is reported failed
-    let v = wait_ready(h);
+    let v = wait_settled(h);
     let s = &v["sources"][0];
     assert!(s["error"].is_object(), "{v}");
     unsafe { cs_close(h) };
@@ -1344,7 +1369,7 @@ fn a_manifest_segment_whose_folder_is_gone_is_damaged_and_nothing_is_touched() {
     let f = fixture("damaged-folder", false);
     damage(&f, false);
     let before = fingerprint(&f.lib);
-    let h = open(&f.lib);
+    let h = open_expecting_failure(&f.lib);
     assert_damaged_source(h, &f.lib);
     unsafe { cs_close(h) };
     assert_eq!(fingerprint(&f.lib), before, "byte-identical, manifest not regenerated");
@@ -1360,7 +1385,7 @@ fn a_segment_folder_with_its_files_gone_is_damaged_and_nothing_is_touched() {
     let f = fixture("damaged-files", false);
     damage(&f, true);
     let before = fingerprint(&f.lib);
-    let h = open(&f.lib);
+    let h = open_expecting_failure(&f.lib);
     assert_damaged_source(h, &f.lib);
     unsafe { cs_close(h) };
     assert_eq!(fingerprint(&f.lib), before);

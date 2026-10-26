@@ -39,6 +39,9 @@ struct Config {
     routing: Option<cache_navigate::NavigateCfg>,
     #[serde(default)]
     video: Option<cache_video::VideoCfg>,
+    /// Map layers: see ext.rs and DESIGN-LAYERS.md.
+    #[serde(default)]
+    layers: Option<cache_layers::LayersCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -358,6 +361,7 @@ impl Handle {
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.places, cfg.video);
+        self.ext.configure_layers(cfg.layers)?;
         Ok(())
     }
 

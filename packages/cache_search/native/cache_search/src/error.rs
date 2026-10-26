@@ -21,6 +21,8 @@ pub enum ErrorCode {
     BadResponse,
     AuthFailed,
     OtpRequired,
+    LimitExceeded,
+    Offline,
     Internal,
 }
 
@@ -45,6 +47,8 @@ impl ErrorCode {
             ErrorCode::BadResponse => "bad_response",
             ErrorCode::AuthFailed => "auth_failed",
             ErrorCode::OtpRequired => "otp_required",
+            ErrorCode::LimitExceeded => "limit_exceeded",
+            ErrorCode::Offline => "offline",
             ErrorCode::Internal => "internal",
         }
     }
@@ -81,6 +85,9 @@ impl Error {
     /// A library's files are incomplete (the manifest lists segments that are missing). Nothing was changed.
     pub fn damaged(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Damaged, m)
+    }
+    pub fn busy(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Busy, m)
     }
     pub fn internal(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, m)
@@ -141,6 +148,8 @@ impl ErrorCode {
             "cancelled" => ErrorCode::Cancelled,
             "auth_failed" => ErrorCode::AuthFailed,
             "otp_required" => ErrorCode::OtpRequired,
+            "limit_exceeded" => ErrorCode::LimitExceeded,
+            "offline" => ErrorCode::Offline,
             _ => ErrorCode::Internal,
         }
     }
@@ -176,6 +185,8 @@ mod tests {
             (ErrorCode::BadResponse, "bad_response"),
             (ErrorCode::AuthFailed, "auth_failed"),
             (ErrorCode::OtpRequired, "otp_required"),
+            (ErrorCode::LimitExceeded, "limit_exceeded"),
+            (ErrorCode::Offline, "offline"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

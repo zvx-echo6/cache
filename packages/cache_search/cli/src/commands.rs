@@ -46,6 +46,15 @@ cs: command line and HTTP wrapper over the cache_search core
   cs video-downloads       --config <sources.json>
   cs video-delete          --config <sources.json> --request <json {instance,video}>
   cs video-resolve         --config <sources.json> --request <json {video,instance?,offset_s?,token?}>
+  cs layers list|refresh --config <sources.json>
+  cs layers save     --config <sources.json> --def <json | @file>        (add or edit a user definition)
+  cs layers remove   --config <sources.json> --id <layer id>
+  cs layers plan     --config <sources.json> --request <json {layer,bbox|polygon,minzoom?,maxzoom?,area?}>   (dry run)
+  cs layers download --config <sources.json> --request <json>                    (runs the layer_download job)
+  cs layers delete   --config <sources.json> --request <json {layer,area?}>
+  cs layers clear-cache --config <sources.json> [--layer <id>]
+  cs layers tile     --config <sources.json> --layer <id> --z <z> --x <x> --y <y> [--out <file>]
+  cs layers serve    --config <sources.json> [--online true|false]       (the tile server, until stopped)
   cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [EMBED] [--open-timeout 600]
 
   EMBED: --embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
@@ -368,6 +377,91 @@ pub fn video_download(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A JSON argument: the text itself, or `@file` to read it from a file.
+fn json_arg(v: &str) -> Result<String, ApiError> {
+    match v.strip_prefix('@') {
+        Some(f) => std::fs::read_to_string(f).map_err(|e| ApiError::new("io", format!("reading {f}: {e}"))),
+        None => Ok(v.to_string()),
+    }
+}
+
+/// The JSON `cs layers tile` and `POST /layers/tile` print: what the tile is, without its bytes.
+pub fn tile_summary(layer: &str, z: i32, x: i32, y: i32, mime: &str, bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let sha: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    json!({"layer": layer, "z": z, "x": x, "y": y, "empty": bytes.is_empty(), "mime": mime, "len": bytes.len(), "sha256": sha}).to_string()
+}
+
+pub fn layers(argv: &[String]) -> Result<(), ApiError> {
+    let Some(sub) = argv.first() else { return Err(usage_err("cs layers needs list, refresh, save, remove, plan, download, delete, clear-cache, tile or serve")) };
+    let rest = &argv[1..];
+    match sub.as_str() {
+        "list" => {
+            let a = parse(rest, &["config", "open-timeout"], &[], false)?;
+            print(&open_engine(&a)?.core.layers_list()?);
+        }
+        "refresh" => {
+            let a = parse(rest, &["config", "open-timeout"], &[], false)?;
+            print(&open_engine(&a)?.core.layers_refresh()?);
+        }
+        "save" => {
+            let a = parse(rest, &["config", "def", "open-timeout"], &[], false)?;
+            let d = json_arg(a.req("def").map_err(usage_err)?)?;
+            print(&open_engine(&a)?.core.layers_save(&d)?);
+        }
+        "remove" => {
+            let a = parse(rest, &["config", "id", "open-timeout"], &[], false)?;
+            let id = a.req("id").map_err(usage_err)?.to_string();
+            print(&open_engine(&a)?.core.layers_remove(&id)?);
+        }
+        "plan" => {
+            let a = parse(rest, &["config", "request", "open-timeout"], &[], false)?;
+            let r = json_arg(a.req("request").map_err(usage_err)?)?;
+            print(&open_engine(&a)?.core.layers_plan(&r)?);
+        }
+        "download" => {
+            let a = parse(rest, &["config", "request", "open-timeout"], &[], false)?;
+            let r: Value = serde_json::from_str(&json_arg(a.req("request").map_err(usage_err)?)?).map_err(|e| usage_err(format!("request: {e}")))?;
+            let mut e = open_engine(&a)?;
+            let out = e.core.layers_download(&r, &mut |p| {
+                let v: Value = serde_json::from_str(p).unwrap_or(Value::Null);
+                eprintln!("{} {}/{} {} bytes", v["state"].as_str().unwrap_or("?"), v["done"], v["total"], v["detail"]["bytes"]);
+            })?;
+            print(&out);
+        }
+        "delete" => {
+            let a = parse(rest, &["config", "request", "open-timeout"], &[], false)?;
+            let r = json_arg(a.req("request").map_err(usage_err)?)?;
+            print(&open_engine(&a)?.core.layers_delete(&r)?);
+        }
+        "clear-cache" => {
+            let a = parse(rest, &["config", "layer", "open-timeout"], &[], false)?;
+            print(&open_engine(&a)?.core.layers_clear_cache(a.get("layer"))?);
+        }
+        "tile" => {
+            let a = parse(rest, &["config", "layer", "z", "x", "y", "out", "open-timeout"], &[], false)?;
+            let layer = a.req("layer").map_err(usage_err)?.to_string();
+            let (z, x, y): (i32, i32, i32) = (a.num("z", -1).map_err(usage_err)?, a.num("x", -1).map_err(usage_err)?, a.num("y", -1).map_err(usage_err)?);
+            let (mime, bytes) = open_engine(&a)?.core.layers_tile(&layer, z, x, y)?;
+            if let Some(o) = a.get("out") {
+                std::fs::write(o, &bytes).map_err(|e| ApiError::new("io", format!("writing {o}: {e}")))?;
+            }
+            print(&tile_summary(&layer, z, x, y, &mime, &bytes));
+        }
+        "serve" => {
+            let a = parse(rest, &["config", "online", "open-timeout"], &[], false)?;
+            let opts = a.get("online").map(|v| json!({"online": v == "true"}).to_string());
+            let mut e = open_engine(&a)?;
+            print(&e.core.layers_server(opts.as_deref())?);
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
+        other => return Err(usage_err(format!("unknown cs layers subcommand {other:?}"))),
+    }
+    Ok(())
+}
+
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "listen", "open-timeout"], &["allow-non-loopback"], true)?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
@@ -420,6 +514,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "video-downloads" => video_call(rest, |e, _| e.core.video_downloads(), false),
         "video-delete" => video_call(rest, |e, r| e.core.video_delete(r.unwrap()), true),
         "video-resolve" => video_call(rest, |e, r| e.core.video_resolve(r.unwrap()), true),
+        "layers" => layers(rest),
         "serve" => serve(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
