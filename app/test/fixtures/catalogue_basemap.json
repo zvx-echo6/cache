@@ -1,0 +1,44 @@
+{
+ "format": 1,
+ "updated": "2026-10-26T02:35:27Z",
+ "layers": [
+  {
+   "format": 1,
+   "id": "basemap",
+   "title": "Base map (Protomaps, planet)",
+   "description": "Worldwide vector base map, Protomaps v4 layout, from OpenStreetMap.",
+   "kind": "vector",
+   "transform": "as_is",
+   "layout": "protomaps-v4",
+   "source": {
+    "type": "pmtiles",
+    "url": "https://cache.echo6.co/basemap/protomaps-planet-20261025.pmtiles",
+    "minzoom": 0,
+    "maxzoom": 15,
+    "tile_format": "mvt"
+   },
+   "attribution": "(c) OpenStreetMap contributors",
+   "license": "ODbL 1.0 Produced Work (OpenStreetMap data); Protomaps basemap tiles",
+   "coverage": {
+    "bbox": [
+     -180,
+     -85.0511,
+     180,
+     85.0511
+    ]
+   },
+   "offline": {
+    "allowed": true,
+    "limit": null
+   },
+   "style_hints": {
+    "role": "basemap"
+   },
+   "update": {
+    "version": "20261025",
+    "interval_days": 30
+   },
+   "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/basemap-planet.md"
+  }
+ ]
+}

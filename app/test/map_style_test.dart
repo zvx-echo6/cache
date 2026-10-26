@@ -332,4 +332,16 @@ void main() {
       expect(pubspec, contains('- $f'), reason: f);
     }
   });
+
+  test('the published base map entry draws in the Protomaps layout in all four themes', () {
+    final entry = (jsonDecode(File('test/fixtures/catalogue_basemap.json').readAsStringSync()) as Map)['layers'][0] as Map;
+    final base = LayerDef.fromJson(Map<String, dynamic>.from(entry));
+    for (final id in CacheThemeId.values) {
+      final style = build(id, [StyleLayerUse(base)]);
+      final ids = [for (final l in style['layers'] as List) (l as Map)['id'] as String];
+      expect(ids, containsAll(['earth', 'water', 'roads_highway', 'buildings', 'places_locality']), reason: id.name);
+      expect((style['sources'] as Map)['src-basemap']['maxzoom'], 15);
+      expect((style['sources'] as Map)['src-basemap']['tiles'][0], contains('/layers/basemap/'));
+    }
+  });
 }

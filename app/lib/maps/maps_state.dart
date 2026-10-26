@@ -240,9 +240,15 @@ class MapsState extends ChangeNotifier {
   /// text and the licences). A long credit is cut after its first sentence.
   List<String> get attributions {
     final seen = <String>{};
+    String credit(LayerDef d) {
+      final a = shortAttribution(d.attribution);
+      // The Protomaps layout is credited whatever the catalogue's own line says.
+      return d.isBase && d.layout == 'protomaps-v4' && !a.contains('Protomaps') ? '$a · Protomaps' : a;
+    }
+
     return [
       for (final u in uses)
-        if (u.def.attribution.isNotEmpty && seen.add(shortAttribution(u.def.attribution))) shortAttribution(u.def.attribution),
+        if (u.def.attribution.isNotEmpty && seen.add(credit(u.def))) credit(u.def),
     ];
   }
 

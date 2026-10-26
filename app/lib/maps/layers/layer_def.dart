@@ -131,14 +131,18 @@ class LayerDef {
     return onlineOnly ? '$title $verb a connection here' : '$title $verb a connection or a download here';
   }
 
-  static LayerKind _kind(String? kind, String? transform) {
-    switch (transform) {
+  static LayerKind _kind(Map<String, dynamic> j) {
+    switch (j['transform']) {
       case 'elevation_to_hillshade':
         return LayerKind.hillshade;
       case 'elevation_to_contours':
         return LayerKind.contours;
     }
-    return LayerKind.values.firstWhere((k) => k.name == kind, orElse: () => LayerKind.vector);
+    // The published catalogue calls the base map "vector" like any other vector tiles; what makes it the base
+    // map is its tile layout, or its style hint.
+    final hints = j['style_hints'];
+    if (j['layout'] is String || (hints is Map && hints['role'] == 'basemap')) return LayerKind.basemap;
+    return LayerKind.values.firstWhere((k) => k.name == j['kind'], orElse: () => LayerKind.vector);
   }
 
   static String _words(Map<String, dynamic> j) {
@@ -181,7 +185,7 @@ class LayerDef {
           if (l is Map && l['name'] is String) l['name'] as String,
     ];
     final single = s('source_layer');
-    final kind = _kind(j['kind'] as String?, j['transform'] as String?);
+    final kind = _kind(j);
     final offline = j['offline'];
     return LayerDef(
       id: id,

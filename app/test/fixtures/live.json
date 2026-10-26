@@ -1,0 +1,347 @@
+{
+  "format": 1,
+  "layers": [
+    {
+      "format": 1,
+      "id": "blm-routes",
+      "title": "BLM roads and trails",
+      "description": "BLM public roads and trails (GTLF public datasets) with route name, surface and designation.",
+      "kind": "vector",
+      "transform": "as_is",
+      "source": {
+        "type": "pmtiles",
+        "url": "https://cache.echo6.co/blm-routes/blm-routes.pmtiles",
+        "minzoom": 6,
+        "maxzoom": 14,
+        "tile_format": "mvt"
+      },
+      "attribution": "Source: Bureau of Land Management (BLM National GTLF public datasets). Data were clipped to the region and re-tiled by Cache; attributes were kept but not otherwise changed. Not approved or endorsed by the BLM.",
+      "license": "BLM data provided as is, with no warranty. The BLM must be cited as the data source; modifications are described here and in the recipe; this layer does not imply BLM endorsement.",
+      "coverage": {
+        "bbox": [
+          -180.0,
+          -14.6,
+          180.0,
+          71.5
+        ]
+      },
+      "offline": {
+        "allowed": true
+      },
+      "update": {
+        "version": "2026-10-25",
+        "interval_days": 30
+      },
+      "style_hints": {
+        "layers": [
+          {
+            "name": "blm_routes",
+            "attributes": [
+              "subset",
+              "FLTP_CODE",
+              "ROUTE_PRMRY_NM",
+              "OBSRVE_SRFCE_TYPE",
+              "PLAN_OHV_ROUTE_DSGNTN",
+              "OHV_ROUTE_DSGNTN_LIM",
+              "ROUTE_SPCL_DSGNTN_TYPE",
+              "PLAN_ACCESS_RSTRCT",
+              "PLAN_SEASON_RSTRCT_CODE"
+            ]
+          }
+        ]
+      },
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/blm-routes.md"
+    },
+    {
+      "format": 1,
+      "id": "mvum",
+      "title": "Motor vehicle use map (MVUM)",
+      "description": "Forest Service roads and trails open to motor vehicles, by vehicle class and season.",
+      "kind": "vector",
+      "transform": "as_is",
+      "source": {
+        "type": "pmtiles",
+        "url": "https://cache.echo6.co/mvum/mvum.pmtiles",
+        "minzoom": 8,
+        "maxzoom": 14,
+        "tile_format": "mvt"
+      },
+      "attribution": "USDA Forest Service, Motor Vehicle Use Map (Enterprise Data Warehouse)",
+      "license": "Public domain (US Government data); provided without warranty by the USDA Forest Service",
+      "coverage": {
+        "bbox": [
+          -180.0,
+          -14.6,
+          180.0,
+          71.5
+        ]
+      },
+      "offline": {
+        "allowed": true
+      },
+      "update": {
+        "version": "2026-10-25",
+        "interval_days": 30
+      },
+      "style_hints": {
+        "layers": [
+          {
+            "name": "mvum_roads",
+            "attributes": [
+              "NAME",
+              "SYMBOL",
+              "MVUM_SYMBOL_NAME",
+              "SEASONAL",
+              "PASSENGERVEHICLE",
+              "HIGHCLEARANCEVEHICLE",
+              "ATV",
+              "MOTORCYCLE",
+              "FOURWD_GT50INCHES",
+              "PASSENGERVEHICLE_DATESOPEN",
+              "ATV_DATESOPEN",
+              "MOTORCYCLE_DATESOPEN"
+            ]
+          },
+          {
+            "name": "mvum_trails",
+            "attributes": [
+              "NAME",
+              "SYMBOL",
+              "MVUM_SYMBOL_NAME",
+              "SEASONAL",
+              "ATV",
+              "MOTORCYCLE",
+              "FOURWD_GT50INCHES",
+              "TRAILCLASS",
+              "ATV_DATESOPEN",
+              "MOTORCYCLE_DATESOPEN"
+            ]
+          }
+        ]
+      },
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/mvum.md",
+      "extra_files": [
+        "https://cache.echo6.co/mvum/mvum.geojsonl.gz"
+      ]
+    },
+    {
+      "format": 1,
+      "id": "public-lands",
+      "title": "Public lands (PAD-US)",
+      "description": "Public land ownership, managers and designations from USGS PAD-US 4.1.",
+      "kind": "vector",
+      "transform": "as_is",
+      "source": {
+        "type": "pmtiles",
+        "url": "https://cache.echo6.co/public-lands/public-lands.pmtiles",
+        "minzoom": 4,
+        "maxzoom": 12,
+        "tile_format": "mvt"
+      },
+      "attribution": "USGS Gap Analysis Project, PAD-US 4.1 (doi:10.5066/P96WBCHS)",
+      "license": "Public domain (US Government data)",
+      "coverage": {
+        "bbox": [
+          -180.0,
+          -14.6,
+          180.0,
+          71.5
+        ]
+      },
+      "offline": {
+        "allowed": true
+      },
+      "update": {
+        "version": "2026-10-25",
+        "interval_days": 90
+      },
+      "style_hints": {
+        "layers": [
+          {
+            "name": "public_lands",
+            "attributes": [
+              "Mang_Name",
+              "Mang_Type",
+              "Own_Type",
+              "Des_Tp",
+              "GAP_Sts",
+              "Pub_Access",
+              "Unit_Nm",
+              "GIS_Acres"
+            ]
+          }
+        ]
+      },
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/public-lands.md"
+    },
+    {
+      "format": 1,
+      "id": "usfs-trails-roads",
+      "title": "Forest Service trails and roads",
+      "description": "National Forest System trails and roads from the USFS Enterprise Data Warehouse.",
+      "kind": "vector",
+      "transform": "as_is",
+      "source": {
+        "type": "pmtiles",
+        "url": "https://cache.echo6.co/usfs-trails-roads/usfs-trails-roads.pmtiles",
+        "minzoom": 6,
+        "maxzoom": 14,
+        "tile_format": "mvt"
+      },
+      "attribution": "USDA Forest Service, Enterprise Data Warehouse (NFS Trails and Road Core)",
+      "license": "Public domain (US Government data); provided without warranty by the USDA Forest Service",
+      "coverage": {
+        "bbox": [
+          -180.0,
+          -14.6,
+          180.0,
+          71.5
+        ]
+      },
+      "offline": {
+        "allowed": true
+      },
+      "update": {
+        "version": "2026-10-25",
+        "interval_days": 30
+      },
+      "style_hints": {
+        "layers": [
+          {
+            "name": "trails",
+            "attributes": [
+              "TRAIL_NAME",
+              "TRAIL_TYPE",
+              "TRAIL_CLASS",
+              "ALLOWED_TERRA_USE",
+              "MOTORCYCLE_MANAGED",
+              "ATV_MANAGED",
+              "BICYCLE_MANAGED",
+              "HIKER_PEDESTRIAN_MANAGED"
+            ]
+          },
+          {
+            "name": "roads",
+            "attributes": [
+              "NAME",
+              "SYSTEM",
+              "OPER_MAINT_LEVEL",
+              "SURFACE_TYPE",
+              "ROUTE_STATUS",
+              "OPENFORUSETO"
+            ]
+          }
+        ]
+      },
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/usfs-trails-roads.md"
+    }
+  ],
+  "updated": "2026-10-25T22:13:32Z",
+  "packs": [
+    {
+      "id": "valhalla-routing-idaho",
+      "title": "Routing tiles (idaho)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "idaho-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/idaho-2026-10-25/valhalla-idaho-manifest.json",
+      "size": 221798400,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/idaho-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    },
+    {
+      "id": "valhalla-routing-montana",
+      "title": "Routing tiles (montana)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "montana-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/montana-2026-10-25/valhalla-montana-manifest.json",
+      "size": 146257920,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/montana-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    },
+    {
+      "id": "valhalla-routing-nevada",
+      "title": "Routing tiles (nevada)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "nevada-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/nevada-2026-10-25/valhalla-nevada-manifest.json",
+      "size": 214568960,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/nevada-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    },
+    {
+      "id": "valhalla-routing-oregon",
+      "title": "Routing tiles (oregon)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "oregon-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/oregon-2026-10-25/valhalla-oregon-manifest.json",
+      "size": 348938240,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/oregon-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    },
+    {
+      "id": "valhalla-routing-utah",
+      "title": "Routing tiles (utah)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "utah-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/utah-2026-10-25/valhalla-utah-manifest.json",
+      "size": 295536640,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/utah-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    },
+    {
+      "id": "valhalla-routing-washington",
+      "title": "Routing tiles (washington)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "washington-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/washington-2026-10-25/valhalla-washington-manifest.json",
+      "size": 561664000,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/washington-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    },
+    {
+      "id": "valhalla-routing-wyoming",
+      "title": "Routing tiles (wyoming)",
+      "kind": "valhalla-routing-tiles",
+      "version": "2026-10-25",
+      "valhalla_version": "3.7.0",
+      "tag": "wyoming-2026-10-25",
+      "manifest": "https://github.com/zvx-echo6/cache-packs/releases/download/wyoming-2026-10-25/valhalla-wyoming-manifest.json",
+      "size": 111032320,
+      "parts": 1,
+      "license": "ODbL 1.0",
+      "attribution": "Contains data (c) OpenStreetMap contributors",
+      "source_url": "https://download.geofabrik.de/north-america/us/wyoming-261024.osm.pbf",
+      "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/valhalla-routing.md"
+    }
+  ]
+}

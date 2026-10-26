@@ -474,4 +474,41 @@ void main() {
       e.dispose();
     });
   });
+
+  group('the published base map entry', () {
+    final entry = (jsonDecode(File('test/fixtures/catalogue_basemap.json').readAsStringSync()) as Map)['layers'][0] as Map;
+
+    test('is read as the base map although the catalogue calls it a vector layer', () {
+      final d = LayerDef.fromJson(Map<String, dynamic>.from(entry));
+      expect(d.kind, LayerKind.basemap);
+      expect(d.isBase, isTrue);
+      expect(d.layout, 'protomaps-v4');
+      expect(d.isFallback, isFalse);
+      expect(d.hasNoSource, isFalse);
+      expect(d.sourceUrl, endsWith('protomaps-planet-20261025.pmtiles'));
+      expect(d.minZoom, 0);
+      expect(d.maxZoom, 15);
+      expect(d.styleRole, '', reason: 'a base map has no overlay colour family');
+    });
+
+    test('replaces the fallback: the base map in use, no "not published" message, credited with Protomaps', () async {
+      final e = FakeLayerEngine(
+        dirOverride: Directory('${dir.path}/pubbase'),
+        fetcher: (u) async => u.path.endsWith('catalogue.json')
+            ? FetchedTile(File('test/fixtures/catalogue_basemap.json').readAsBytesSync())
+            : null,
+        catalogueUrl: Uri.parse('https://example.test/catalogue.json'),
+      );
+      final m = MapsState(engine: e, settingsDirOverride: Directory('${dir.path}/pubbase'), network: _Net(allowed: true));
+      await m.init();
+      await e.refreshCatalogue();
+      expect([for (final l in e.layers) if (l.isBase) l.id], contains('basemap'));
+      expect(m.uses.where((u) => u.def.isBase).single.def.id, 'basemap');
+      expect(m.uses.where((u) => !u.def.isBase), isEmpty, reason: 'it is not drawn as an overlay');
+      expect(m.baseProblem, isNull);
+      expect(m.attributions, ['(c) OpenStreetMap contributors · Protomaps']);
+      expect([for (final l in m.catalogueLayers) l.id].where((id) => id == 'basemap').length, 1);
+      e.dispose();
+    });
+  });
 }
