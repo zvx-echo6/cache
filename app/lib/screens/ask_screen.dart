@@ -4,14 +4,18 @@ import '../app_state.dart';
 import '../chat/answer_markdown.dart';
 import '../chat/chat_controller.dart';
 import '../chat/tool_loop.dart';
+import '../browse/zim_urls.dart';
 import '../theme.dart';
 import 'models_screen.dart';
 
 class AskScreen extends StatefulWidget {
-  const AskScreen({super.key, required this.app, required this.chat});
+  const AskScreen({super.key, required this.app, required this.chat, this.onOpenSource});
 
   final AppState app;
   final ChatController chat;
+
+  /// Opens the article a citation points at (a `zim:` address) in Browse.
+  final void Function(String address)? onOpenSource;
 
   @override
   State<AskScreen> createState() => _AskScreenState();
@@ -131,7 +135,7 @@ class _AskScreenState extends State<AskScreen> {
                     controller: _scroll,
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                     itemCount: msgs.length,
-                    itemBuilder: (_, i) => msgs[i].isUser ? _UserBubble(msgs[i].text) : _AssistantBlock(msgs[i]),
+                    itemBuilder: (_, i) => msgs[i].isUser ? _UserBubble(msgs[i].text) : _AssistantBlock(msgs[i], onOpenSource: widget.onOpenSource),
                   );
                 },
               ),
@@ -212,9 +216,10 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg);
+  const _AssistantBlock(this.msg, {this.onOpenSource});
 
   final ChatMessage msg;
+  final void Function(String address)? onOpenSource;
 
   @override
   State<_AssistantBlock> createState() => _AssistantBlockState();
@@ -303,9 +308,15 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           for (final s in m.sources)
             Container(
               margin: const EdgeInsets.only(top: 6),
-              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(12)),
-              child: Column(
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: widget.onOpenSource != null && isZimAddress(s.result.address)
+                    ? () => widget.onOpenSource!(s.result.address)
+                    : null,
+                child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('[${s.id}] ${s.result.title}',
@@ -315,7 +326,14 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                       padding: const EdgeInsets.only(top: 2),
                       child: Text(s.result.snippet, style: TextStyle(fontSize: 14, color: k.secondary)),
                     ),
+                  if (isZimAddress(s.result.address))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text('Open the article', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.accent)),
+                    ),
                 ],
+              ),
+              ),
               ),
             ),
       ],

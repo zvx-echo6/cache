@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
+import 'browse/browse_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
@@ -26,6 +27,7 @@ class CacheApp extends StatefulWidget {
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
+  late final BrowseState browse = BrowseState(sources: sources);
   late final LocationService location = LocationService();
   late final ChatController chat = ChatController(
     tools: [SearchTool(sources), ReadTool(sources)],
@@ -40,6 +42,7 @@ class _CacheAppState extends State<CacheApp> {
     applySystemUi(_applied);
     app.init();
     sources.init();
+    browse.init();
     location.init();
   }
 
@@ -56,6 +59,7 @@ class _CacheAppState extends State<CacheApp> {
   void dispose() {
     app.removeListener(_onApp);
     app.session.dispose();
+    browse.dispose();
     sources.dispose();
     location.dispose();
     super.dispose();
@@ -69,7 +73,7 @@ class _CacheAppState extends State<CacheApp> {
         title: 'CACHE',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
-        home: Shell(app: app, chat: chat, sources: sources, location: location),
+        home: Shell(app: app, chat: chat, sources: sources, browse: browse, location: location),
       ),
     );
   }
