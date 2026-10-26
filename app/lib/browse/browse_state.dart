@@ -4,35 +4,17 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../settings/data_policy.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
 import 'zim_download.dart';
 
-/// Whether the phone is on an unmetered connection (Wi-Fi or Ethernet).
-abstract class NetworkStatus {
-  Future<bool> get unmetered;
-}
-
-class ConnectivityNetworkStatus implements NetworkStatus {
-  @override
-  Future<bool> get unmetered async {
-    try {
-      final r = await Connectivity().checkConnectivity();
-      return r.contains(ConnectivityResult.wifi) ||
-          r.contains(ConnectivityResult.ethernet);
-    } catch (_) {
-      // If the system cannot say, do not block the user.
-      return true;
-    }
-  }
-}
-
 enum TransferPhase {
-  waitingForWifi,
+  /// Not started: the phone is on mobile data and downloads on mobile data are off. "Download anyway" starts it.
+  blockedByMobileData,
   starting,
   downloading,
   verifying,
@@ -58,19 +40,18 @@ class ZimTransfer {
 }
 
 /// The Browse tab's state: the Kiwix catalogue being browsed, the downloads, the updates found, and the
-/// two small settings the Browse tab has today (language and Wi-Fi only).
+/// one small setting the Browse tab has (language).
 class BrowseState extends ChangeNotifier {
   BrowseState({
     required this.sources,
     KiwixCatalog? catalog,
     ZimDownloader? downloader,
-    NetworkStatus? network,
+    this.policy,
     this.settingsDirOverride,
     Future<Uint8List?> Function(Uri url)? iconFetch,
     String? phoneLanguage,
   }) : catalog = catalog ?? KiwixCatalog(),
        downloader = downloader ?? ZimDownloader(),
-       network = network ?? ConnectivityNetworkStatus(),
        _iconFetch = iconFetch ?? _fetchIcon,
        // ignore: prefer_initializing_formals
        _phoneLanguage = phoneLanguage {
@@ -80,7 +61,8 @@ class BrowseState extends ChangeNotifier {
   final SourcesState sources;
   final KiwixCatalog catalog;
   final ZimDownloader downloader;
-  final NetworkStatus network;
+  /// The mobile data rule (Settings > Storage and data); null: no rule.
+  final DataPolicy? policy;
   final Directory? settingsDirOverride;
   final Future<Uint8List?> Function(Uri url) _iconFetch;
   final String? _phoneLanguage;
@@ -98,9 +80,6 @@ class BrowseState extends ChangeNotifier {
 
   // ---- settings
 
-  /// Downloads wait for Wi-Fi unless the user says otherwise (on by default).
-  bool wifiOnly = true;
-
   /// The catalogue language filter (ISO 639-3); empty means all languages.
   String language = 'eng';
 
@@ -117,7 +96,6 @@ class BrowseState extends ChangeNotifier {
       if (_file!.existsSync()) {
         final j = (jsonDecode(_file!.readAsStringSync()) as Map)
             .cast<String, dynamic>();
-        wifiOnly = (j['wifiOnly'] ?? true) as bool;
         if (j['language'] is String) {
           language = j['language'] as String;
           hadLanguage = true;
@@ -141,18 +119,11 @@ class BrowseState extends ChangeNotifier {
     try {
       await _file?.writeAsString(
         jsonEncode({
-          'wifiOnly': wifiOnly,
           'language': language,
           'replacements': _replacements,
         }),
       );
     } catch (_) {}
-  }
-
-  Future<void> setWifiOnly(bool v) async {
-    wifiOnly = v;
-    notifyListeners();
-    await _save();
   }
 
   // ---- the catalogue
@@ -278,11 +249,21 @@ class BrowseState extends ChangeNotifier {
   final Map<String, CatalogEntry> updates = {};
   bool checkingUpdates = false;
   String? updateError;
+
+  /// The last update check did not run because the phone is on mobile data and updates on mobile data are off.
+  bool updatesBlocked = false;
   DateTime? lastUpdateCheck;
 
   /// Asks the catalogue whether a newer dated release exists for each installed ZIM (same name and variant).
-  Future<void> checkUpdates() async {
+  Future<void> checkUpdates({bool anyway = false}) async {
     if (checkingUpdates) return;
+    updatesBlocked = false;
+    if (!anyway && policy != null && await policy!.blocksUpdate()) {
+      updatesBlocked = true;
+      updateError = const MobileDataBlocked(updates: true).message;
+      notifyListeners();
+      return;
+    }
     checkingUpdates = true;
     updateError = null;
     notifyListeners();
@@ -337,14 +318,14 @@ class BrowseState extends ChangeNotifier {
     final existing = transfers[entry.id];
     if (existing != null &&
         existing.phase != TransferPhase.failed &&
-        existing.phase != TransferPhase.waitingForWifi) {
+        existing.phase != TransferPhase.blockedByMobileData) {
       return;
     }
     final t = ZimTransfer(entry, replaces: replaces)..total = entry.size;
     transfers[entry.id] = t;
     notifyListeners();
-    if (wifiOnly && !allowMobile && !await network.unmetered) {
-      t.phase = TransferPhase.waitingForWifi;
+    if (!allowMobile && policy != null && await policy!.blocksDownload()) {
+      t.phase = TransferPhase.blockedByMobileData;
       notifyListeners();
       return;
     }

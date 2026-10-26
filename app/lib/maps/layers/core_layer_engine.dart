@@ -6,6 +6,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../../settings/data_policy.dart';
 import '../geo.dart';
 import 'layer_def.dart';
 import 'layer_engine.dart';
@@ -21,6 +22,7 @@ class CoreLayerEngine extends LayerEngine {
     Future<bool> Function()? connected,
     this.pollEvery = const Duration(milliseconds: 600),
     this.maxDownloadBytes = 800 * 1024 * 1024,
+    this.policy,
   }) : _connected = connected ?? _platformConnected;
 
   /// The search core once it is open (null when it could not open).
@@ -31,6 +33,9 @@ class CoreLayerEngine extends LayerEngine {
 
   final Future<bool> Function() _connected;
   final Duration pollEvery;
+
+  /// The mobile data rule for downloads and catalogue updates; null: no rule.
+  final DataPolicy? policy;
 
   /// A download bigger than this is not offered; the estimate steps down to less detail until it fits.
   final int maxDownloadBytes;
@@ -169,6 +174,8 @@ class CoreLayerEngine extends LayerEngine {
   Future<void> refreshCatalogue() async {
     final core = _core;
     if (core == null || !_online) return;
+    // A small update: skipped (quietly; the downloaded copy stays in use) on mobile data when updates on mobile data are off.
+    if (policy != null && await policy!.blocksUpdate()) return;
     if (DateTime.now().difference(_lastRefresh) < const Duration(seconds: 20)) return;
     _lastRefresh = DateTime.now();
     try {
@@ -391,7 +398,8 @@ class CoreLayerEngine extends LayerEngine {
       );
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false}) async {
+    await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
@@ -519,7 +527,8 @@ class CoreLayerEngine extends LayerEngine {
   }
 
   @override
-  Future<void> update(String areaId) async {
+  Future<void> update(String areaId, {bool anyway = false}) async {
+    await policy?.checkDownload(anyway: anyway);
     final a = _areas.values.where((x) => x.id == areaId).firstOrNull;
     if (a == null || _running.containsKey(areaId)) return;
     final partial = a.phase == AreaPhase.failed;

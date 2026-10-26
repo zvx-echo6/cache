@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
-import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/opds.dart';
+import 'package:cache/settings/app_settings.dart';
+import 'package:cache/settings/data_policy.dart';
 import 'package:cache/sources/sources_state.dart';
 
 String fixture(String name) => File('test/fixtures/$name').readAsStringSync();
@@ -40,13 +42,27 @@ class FakeSources extends SourcesState {
   }
 }
 
-class FakeNetwork implements NetworkStatus {
-  FakeNetwork(this.wifi);
+/// A connection that is what the test says.
+class FakeProbe implements ConnectionProbe {
+  FakeProbe(this.kind);
 
-  bool wifi;
+  ConnectionKind kind;
+  final StreamController<ConnectionKind> _changes = StreamController<ConnectionKind>.broadcast();
 
   @override
-  Future<bool> get unmetered async => wifi;
+  Future<ConnectionKind> current() async => kind;
+
+  @override
+  Stream<ConnectionKind> get changes => _changes.stream;
+
+  void change(ConnectionKind k) {
+    kind = k;
+    _changes.add(k);
+  }
 }
+
+/// The mobile data rule on a Wi-Fi connection (or, with [wifi] false, on mobile data), with downloads on mobile data off as they are by default.
+DataPolicy testPolicy({bool wifi = true, AppSettings? settings}) =>
+    DataPolicy(settings: settings ?? AppSettings(), probe: FakeProbe(wifi ? ConnectionKind.wifi : ConnectionKind.mobile));
 
 KiwixCatalog catalogWith(Future<String> Function(Uri) fetch) => KiwixCatalog(fetch: fetch);

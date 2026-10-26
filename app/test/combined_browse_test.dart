@@ -14,7 +14,7 @@ void main() {
     final sources = FakeSources(Directory('${dir.path}/zims')..createSync());
     final browse = BrowseState(
       sources: sources,
-      network: FakeNetwork(true),
+      policy: testPolicy(),
       settingsDirOverride: dir,
       phoneLanguage: 'en',
     );

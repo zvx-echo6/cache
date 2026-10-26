@@ -51,7 +51,8 @@ abstract class LayerEngine extends ChangeNotifier {
   Future<AreaEstimate> estimate(String layerId, GeoBounds area);
 
   /// Starts the download; progress shows in [areasOf].
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label});
+  /// Throws a MobileDataBlocked (lib/settings/data_policy.dart) when the phone is on mobile data and downloads on mobile data are off, unless [anyway].
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false});
 
   /// Downloaded and downloading areas of a layer.
   List<DownloadedArea> areasOf(String layerId);
@@ -62,7 +63,7 @@ abstract class LayerEngine extends ChangeNotifier {
   Future<void> delete(String areaId);
 
   /// Fetches the area again and swaps it in when complete (the old copy stays in use until then).
-  Future<void> update(String areaId);
+  Future<void> update(String areaId, {bool anyway = false});
 
   int storageOf(String layerId);
 

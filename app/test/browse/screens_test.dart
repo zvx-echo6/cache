@@ -24,7 +24,7 @@ void main() {
   BrowseState make(Future<String> Function(Uri) fetch) => BrowseState(
         sources: sources,
         catalog: catalogWith(fetch),
-        network: FakeNetwork(true),
+        policy: testPolicy(),
         settingsDirOverride: Directory('${tmp.path}/s')..createSync(),
         phoneLanguage: 'en',
       );

@@ -112,7 +112,10 @@ class LibraryScreen extends StatelessWidget {
             ] else
               Row(children: [
                 Expanded(child: Text(failed ? (t.error ?? 'The download failed.') : 'Stopped', style: TextStyle(fontSize: 14, color: failed ? k.emergency : k.secondary))),
-                TextButton(onPressed: () => video.retry(t), child: const Text('Continue')),
+                if (t.blockedByMobile)
+                  TextButton(key: const ValueKey('download-anyway'), onPressed: () => video.retry(t, anyway: true), child: const Text('Download anyway'))
+                else
+                  TextButton(onPressed: () => video.retry(t), child: const Text('Continue')),
                 IconButton(tooltip: 'Dismiss', icon: const Icon(Icons.close), onPressed: () => video.dismiss(t)),
               ]),
           ],

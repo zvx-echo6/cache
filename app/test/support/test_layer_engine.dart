@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:cache/maps/geo.dart';
+import 'package:cache/settings/data_policy.dart';
 import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/layers/layer_engine.dart';
 import 'package:cache/maps/layers/tile_math.dart';
@@ -11,7 +12,10 @@ import 'layer_fixtures.dart';
 /// A layer engine for the screens' tests: definitions in memory (the test catalogue plus any [published] ones and what
 /// the user adds), areas that "download" in a few milliseconds, no network and no core.
 class TestLayerEngine extends LayerEngine {
-  TestLayerEngine({this.published = const [], this.canBind});
+  TestLayerEngine({this.published = const [], this.canBind, this.policy});
+
+  /// The mobile data rule, as the real engine applies it.
+  final DataPolicy? policy;
 
   final List<Map<String, dynamic>> published;
   final List<Map<String, dynamic>> _user = [];
@@ -115,7 +119,8 @@ class TestLayerEngine extends LayerEngine {
   List<DownloadedArea> areasOf(String layerId) => [for (final a in _areas) if (a.layerId == layerId) a];
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false}) async {
+    await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
@@ -165,7 +170,8 @@ class TestLayerEngine extends LayerEngine {
   }
 
   @override
-  Future<void> update(String areaId) async {
+  Future<void> update(String areaId, {bool anyway = false}) async {
+    await policy?.checkDownload(anyway: anyway);
     final a = _areas.where((x) => x.id == areaId).firstOrNull;
     if (a == null || a.phase == AreaPhase.running) return;
     a

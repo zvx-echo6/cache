@@ -160,7 +160,10 @@ class _VideoScreenState extends State<VideoScreen> {
         children: [
           Text(task.phase == DownloadPhase.cancelled ? 'Download stopped.' : (task.error ?? 'The download failed.'), style: TextStyle(fontSize: 15, color: task.phase == DownloadPhase.failed ? k.emergency : k.secondary)),
           const SizedBox(height: 8),
-          OutlinedButton.icon(onPressed: () => widget.video.retry(task), icon: const Icon(Icons.refresh), label: const Text('Continue download')),
+          if (task.blockedByMobile)
+            FilledButton.icon(key: const ValueKey('download-anyway'), onPressed: () => widget.video.retry(task, anyway: true), icon: const Icon(Icons.download), label: const Text('Download anyway'))
+          else
+            OutlinedButton.icon(onPressed: () => widget.video.retry(task), icon: const Icon(Icons.refresh), label: const Text('Continue download')),
         ],
       );
     }

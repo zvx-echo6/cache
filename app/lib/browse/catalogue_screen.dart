@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../settings/data_policy.dart';
 import '../theme.dart';
 import 'browse_state.dart';
 import 'opds.dart';
@@ -422,23 +423,24 @@ class TransferRow extends StatelessWidget {
     final t = transfer;
     final e = t.entry;
     switch (t.phase) {
-      case TransferPhase.waitingForWifi:
+      case TransferPhase.blockedByMobileData:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Waiting for Wi-Fi',
+              const MobileDataBlocked().message,
               style: TextStyle(color: k.warning, fontWeight: FontWeight.w600),
             ),
-            Row(
+            Wrap(
               children: [
                 TextButton(
+                  key: const ValueKey('download-anyway'),
                   onPressed: () => browse.download(
                     e,
                     replaces: t.replaces,
                     allowMobile: true,
                   ),
-                  child: const Text('Use mobile data this once'),
+                  child: const Text('Download anyway'),
                 ),
                 TextButton(
                   onPressed: () => browse.cancel(e),

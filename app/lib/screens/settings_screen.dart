@@ -1,123 +1,192 @@
 import 'package:flutter/material.dart';
 
-import '../app_state.dart';
-import '../chat/chat_controller.dart';
-import '../sources/sources_state.dart';
+import '../maps/layers/layer_def.dart';
+import '../version.dart';
 import '../theme.dart';
-import 'models_screen.dart';
-import 'sources_screen.dart';
+import '../video/format.dart';
+import 'settings/about_pages.dart';
+import 'settings/appearance_page.dart';
+import 'settings/assistant_page.dart';
+import 'settings/deps.dart';
+import 'settings/library_page.dart';
+import 'settings/maps_page.dart';
+import 'settings/notifications_page.dart';
+import 'settings/storage_page.dart';
+import 'settings/videos_page.dart';
+import 'settings/widgets.dart';
 
-/// Settings. Technical settings sit behind Advanced, closed by default.
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.app, required this.chat, required this.sources});
+/// Settings: ten rows in three groups, each saying its current state, each opening one page.
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key, required this.deps});
 
-  final AppState app;
-  final ChatController chat;
-  final SourcesState sources;
+  final SettingsDeps deps;
 
-  Future<void> _pickTheme(BuildContext context) async {
-    final chosen = await showDialog<CacheThemeId>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Theme'),
-        children: [
-          for (final id in CacheThemeId.values)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, id),
-              padding: EdgeInsets.zero,
-              child: ListTile(
-                minTileHeight: 56,
-                leading: Icon(id == app.theme ? Icons.radio_button_checked : Icons.radio_button_off, color: ctx.t.accent),
-                title: Text(id.label, style: const TextStyle(fontSize: 18)),
-                subtitle: Text(id.hint),
-              ),
-            ),
-        ],
-      ),
-    );
-    if (chosen != null) app.setTheme(chosen);
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  SettingsDeps get d => widget.deps;
+  int? _liveSources;
+
+  @override
+  void initState() {
+    super.initState();
+    d.hub.storage.readFree();
+    _readLive();
   }
 
-  Future<void> _deleteAll(BuildContext context) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete all conversations?'),
-        content: const Text('Every saved chat is removed from this phone. This cannot be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Delete all', style: TextStyle(color: ctx.t.emergency)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-    chat.deleteAllConversations();
-    final m = ScaffoldMessenger.of(context);
-    m.hideCurrentSnackBar();
-    m.showSnackBar(const SnackBar(content: Text('All conversations deleted')));
+  /// The live data sources (weather, alerts, fires) the search core has definitions for.
+  Future<void> _readLive() async {
+    int? n;
+    try {
+      final core = await d.sources.whenCoreReady();
+      if (core != null) n = ((await core.liveSources())['sources'] as List?)?.length;
+    } catch (_) {}
+    if (mounted) setState(() => _liveSources = n);
+  }
+
+  void _open(Widget page) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+
+  List<Part> _assistant() {
+    final app = d.app;
+    final model = app.active == null ? 'No model' : app.displayName(app.active!);
+    final Part state = app.loading != null
+        ? const Part('Loading…')
+        : app.active == null
+        ? const Part('Choose a model', Tone.warn)
+        : const Part('Ready', Tone.ok);
+    return joinParts([
+      if (app.active != null) [Part(model)],
+      [state],
+      [Part(d.hub.webSearch.active ? 'Web search on' : 'Web search off')],
+    ]);
+  }
+
+  List<Part> _library() {
+    final s = d.sources;
+    if (s.unavailable != null && s.zims.isEmpty) return const [Part('Not available', Tone.warn)];
+    if (s.zims.isEmpty) return const [Part('No sources yet')];
+    final bytes = s.zims.fold<int>(0, (a, z) => a + z.size);
+    final n = s.zims.length;
+    return [Part('$n ${n == 1 ? 'source' : 'sources'} · ${formatBytes(bytes)}')];
+  }
+
+  List<Part> _maps() {
+    final m = d.maps;
+    if (m.engine.problem != null) return const [Part('Not available', Tone.warn)];
+    final done = <String>{};
+    var running = 0;
+    for (final l in m.catalogueLayers) {
+      for (final a in m.areasOfCard(l)) {
+        if (a.phase == AreaPhase.done) done.add(a.label.split(' · ').first);
+        if (a.phase == AreaPhase.running) running++;
+      }
+    }
+    final String held;
+    if (done.isEmpty) {
+      held = running > 0 ? 'Downloading' : 'Nothing downloaded';
+    } else if (done.length == 1 && done.first != 'This region') {
+      held = '${done.first} downloaded';
+    } else {
+      held = '${done.length} ${done.length == 1 ? 'area' : 'areas'} downloaded';
+    }
+    final layers = m.catalogueLayers.length;
+    return joinParts([
+      [Part(held)],
+      if (layers > 0) [Part('$layers ${layers == 1 ? 'layer' : 'layers'}')],
+    ]);
+  }
+
+  List<Part> _weather() {
+    final n = _liveSources;
+    if (n == null || n == 0) return const [Part('Not set up')];
+    return [Part('$n ${n == 1 ? 'source' : 'sources'} set up')];
+  }
+
+  List<Part> _videos() {
+    final v = d.video;
+    if (v.unavailable != null) return const [Part('Not available', Tone.warn)];
+    final String where = v.instances.isEmpty
+        ? 'No instances'
+        : v.instances.length == 1
+        ? v.instances.first.host
+        : '${v.instances.length} instances';
+    return joinParts([
+      [Part(where)],
+      [Part('${v.saved.length} downloaded')],
+    ]);
+  }
+
+  List<Part> _notifications() {
+    final s = d.hub.settings;
+    return joinParts([
+      [Part(s.alertPopups ? 'Pop-ups on' : 'Pop-ups off')],
+      [Part(s.quiet.on ? 'Quiet ${s.quiet.label}' : 'No quiet hours')],
+    ]);
+  }
+
+  List<Part> _storage() {
+    final u = d.hub.storage;
+    final s = d.hub.settings;
+    return joinParts([
+      [Part(u.freeBytes == null ? 'Free space unknown' : '${formatBytes(u.freeBytes!)} free')],
+      [Part(s.mobileForUpdates ? 'Updates on any connection' : 'Updates on Wi-Fi only')],
+    ]);
   }
 
   @override
   Widget build(BuildContext context) {
-    final k = context.t;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        children: [
-          ListenableBuilder(
-            listenable: Listenable.merge([app, sources]),
-            builder: (context, _) => Column(
-              children: [
-                ListTile(
-                  minTileHeight: 56,
-                  leading: const Icon(Icons.palette_outlined),
-                  title: const Text('Theme', style: TextStyle(fontSize: 18)),
-                  subtitle: Text(app.theme.label),
-                  onTap: () => _pickTheme(context),
+      body: ListenableBuilder(
+        listenable: Listenable.merge([
+          d.app,
+          d.sources,
+          d.maps,
+          d.video,
+          d.hub.changes,
+          d.chat.historyRevision,
+        ]),
+        builder: (context, _) => ListView(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+          children: [
+            SettingsGroup(
+              rows: [
+                SettingsRow(icon: Icons.lightbulb_outline, title: 'Assistant', status: _assistant(), onTap: () => _open(AssistantPage(deps: d))),
+                SettingsRow(icon: Icons.menu_book_outlined, title: 'Library', status: _library(), onTap: () => _open(LibraryPage(deps: d))),
+                SettingsRow(icon: Icons.map_outlined, title: 'Maps', status: _maps(), onTap: () => _open(MapsPage(deps: d))),
+                SettingsRow(
+                  icon: Icons.cloud_outlined,
+                  title: 'Weather and alerts',
+                  status: _weather(),
+                  onTap: () => say(context, 'Weather and alerts settings are not built yet.'),
                 ),
-                ListTile(
-                  minTileHeight: 56,
-                  leading: const Icon(Icons.memory),
-                  title: const Text('Model', style: TextStyle(fontSize: 18)),
-                  subtitle: Text(app.loading != null
-                      ? 'Loading…'
-                      : app.active == null
-                          ? 'No model'
-                          : app.displayName(app.active!)),
-                  onTap: () => openModels(context, app),
-                ),
-                ListTile(
-                  minTileHeight: 56,
-                  leading: const Icon(Icons.menu_book_outlined),
-                  title: const Text('Reading sources', style: TextStyle(fontSize: 18)),
-                  subtitle: Text(sources.summary),
-                  onTap: () {
-                    sources.refresh();
-                    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SourcesScreen(sources: sources)));
-                  },
+                SettingsRow(icon: Icons.smart_display_outlined, title: 'Videos', status: _videos(), onTap: () => _open(VideosPage(deps: d))),
+              ],
+            ),
+            const SizedBox(height: 14),
+            SettingsGroup(
+              rows: [
+                SettingsRow(icon: Icons.notifications_none, title: 'Notifications and location', status: _notifications(), onTap: () => _open(NotificationsPage(deps: d))),
+                SettingsRow(icon: Icons.sd_storage_outlined, title: 'Storage and data', status: _storage(), onTap: () => _open(StoragePage(deps: d))),
+                SettingsRow(
+                  icon: Icons.share_outlined,
+                  title: 'Share this setup',
+                  status: [Part('Not built yet', Tone.quiet)],
+                  dim: true,
                 ),
               ],
             ),
-          ),
-          Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              title: const Text('Advanced', style: TextStyle(fontSize: 18)),
-              children: [
-                ListTile(
-                  minTileHeight: 56,
-                  leading: Icon(Icons.delete_outline, color: k.emergency),
-                  title: Text('Delete all conversations', style: TextStyle(fontSize: 18, color: k.emergency)),
-                  subtitle: const Text('Removes every saved chat from this phone'),
-                  onTap: () => _deleteAll(context),
-                ),
+            const SizedBox(height: 14),
+            SettingsGroup(
+              rows: [
+                SettingsRow(icon: Icons.contrast, title: 'Appearance', status: [Part(d.app.theme.label)], onTap: () => _open(AppearancePage(app: d.app))),
+                SettingsRow(icon: Icons.info_outline, title: 'About and credits', status: [Part('Version $kAppVersion · $kAppLicenceShort')], onTap: () => _open(const AboutPage())),
               ],
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

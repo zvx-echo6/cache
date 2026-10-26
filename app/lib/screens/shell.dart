@@ -14,11 +14,13 @@ import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../nav/nav_state.dart';
+import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
+import 'settings/deps.dart';
 import 'settings_screen.dart';
 import 'videos/videos_screen.dart';
 
@@ -36,6 +38,7 @@ class Shell extends StatefulWidget {
     required this.browse,
     required this.nav,
     required this.layout,
+    required this.hub,
   });
 
   final AppState app;
@@ -47,6 +50,7 @@ class Shell extends StatefulWidget {
   final BrowseState browse;
   final NavState nav;
   final LayoutState layout;
+  final SettingsHub hub;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -94,10 +98,28 @@ class _ShellState extends State<Shell> {
     widget.browse.openAddress(address);
   }
 
+  SettingsDeps get _settingsDeps => SettingsDeps(
+    app: widget.app,
+    chat: widget.chat,
+    sources: widget.sources,
+    maps: widget.maps,
+    video: widget.video,
+    browse: widget.browse,
+    location: widget.location,
+    hub: widget.hub,
+    onOpenAsk: _openAskFromSettings,
+  );
+
   void _openSettings() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => SettingsScreen(app: widget.app, chat: widget.chat, sources: widget.sources)),
+      MaterialPageRoute<void>(builder: (_) => SettingsScreen(deps: _settingsDeps)),
     );
+  }
+
+  /// A saved conversation was chosen in Settings: leave Settings and show Ask.
+  void _openAskFromSettings() {
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    _goModule(ModuleId.ask);
   }
 
   void _say(String text) {
@@ -150,7 +172,7 @@ class _ShellState extends State<Shell> {
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme),
         ModuleId.videos => VideosScreen(video: widget.video),
-        ModuleId.settings => SettingsScreen(app: widget.app, chat: widget.chat, sources: widget.sources),
+        ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 
   @override

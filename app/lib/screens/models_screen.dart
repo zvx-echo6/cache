@@ -94,6 +94,21 @@ class ModelsScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _confirmDelete(BuildContext context, ModelEntry m) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${app.displayName(m)}?'),
+        content: Text('The file (${_size(m.size)}) is deleted from this phone. You can add it again later.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+          TextButton(key: const ValueKey('confirm-delete-model'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (yes == true) await app.deleteModel(m);
+  }
+
   Widget _tile(BuildContext context, ModelEntry m) {
     final k = context.t;
     final isActive = app.active?.path == m.path;
@@ -143,7 +158,14 @@ class ModelsScreen extends StatelessWidget {
                   if (isLoading)
                     const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
                   else if (isActive)
-                    Icon(Icons.check_circle, color: k.ok),
+                    Icon(Icons.check_circle, color: k.ok)
+                  else if (app.loading == null)
+                    IconButton(
+                      key: ValueKey('delete-model-${m.fileName}'),
+                      tooltip: 'Delete',
+                      icon: Icon(Icons.delete_outline, color: k.secondary),
+                      onPressed: () => _confirmDelete(context, m),
+                    ),
                 ],
               ),
             ),
