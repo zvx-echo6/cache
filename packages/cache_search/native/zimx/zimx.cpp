@@ -14,13 +14,29 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <memory>
+#include <mutex>
 #include <new>
 #include <stdexcept>
 #include <string>
 
+// The searchers are built once (on the first search or suggestion, or by zimx_prewarm) and kept: building one opens the
+// Xapian database, which is most of the cost of the first query. libzim's Searcher is thread safe but its
+// SuggestionSearcher is not, so one mutex serialises the searches on a handle.
 struct zimx {
   zim::Archive archive;
+  std::mutex mu;
+  std::unique_ptr<zim::Searcher> searcher;
+  std::unique_ptr<zim::SuggestionSearcher> suggester;
   explicit zimx(const char *path) : archive(std::string(path)) {}
+  zim::Searcher &fulltext() {  // call with mu held
+    if (!searcher) searcher.reset(new zim::Searcher(archive));
+    return *searcher;
+  }
+  zim::SuggestionSearcher &titles() {  // call with mu held
+    if (!suggester) suggester.reset(new zim::SuggestionSearcher(archive));
+    return *suggester;
+  }
 };
 
 namespace {
@@ -163,9 +179,9 @@ char *zimx_search(zimx *z, const char *query, int offset, int k) {
   return guarded([&]() -> std::string {
     if (!z || !query) throw std::invalid_argument("null argument");
     if (offset < 0 || k < 0) throw std::invalid_argument("negative offset or k");
-    zim::Searcher searcher(z->archive);
+    std::lock_guard<std::mutex> lock(z->mu);
     zim::Query q{std::string(query)};
-    zim::Search search = searcher.search(q);
+    zim::Search search = z->fulltext().search(q);
     std::string o = "{\"total\":" + std::to_string(search.getEstimatedMatches()) + ",\"hits\":[";
     bool first = true;
     if (k > 0) {
@@ -187,12 +203,22 @@ char *zimx_search(zimx *z, const char *query, int offset, int k) {
   });
 }
 
+char *zimx_prewarm(zimx *z, int fulltext, int titles) {
+  return guarded([&]() -> std::string {
+    if (!z) throw std::invalid_argument("null argument");
+    std::lock_guard<std::mutex> lock(z->mu);
+    if (fulltext && z->archive.hasFulltextIndex()) z->fulltext();
+    if (titles && z->archive.hasTitleIndex()) z->titles();
+    return "{\"ok\":true}";
+  });
+}
+
 char *zimx_suggest(zimx *z, const char *prefix, int k) {
   return guarded([&]() -> std::string {
     if (!z || !prefix) throw std::invalid_argument("null argument");
     if (k < 0) throw std::invalid_argument("negative k");
-    zim::SuggestionSearcher searcher(z->archive);
-    zim::SuggestionSearch s = searcher.suggest(std::string(prefix));
+    std::lock_guard<std::mutex> lock(z->mu);
+    zim::SuggestionSearch s = z->titles().suggest(std::string(prefix));
     std::string o = "{\"total\":" + std::to_string(s.getEstimatedMatches()) + ",\"hits\":[";
     bool first = true;
     if (k > 0) {

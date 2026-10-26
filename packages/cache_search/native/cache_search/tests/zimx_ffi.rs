@@ -262,17 +262,53 @@ mod xapian {
         assert!(!z.has_fulltext() && !z.has_title_index());
         // searching without an index is an error from libzim, not a crash
         assert!(z.search("flood", 0, 5).is_err());
+        // prewarming asks only for what the ZIM has: nothing here, so it succeeds without building a searcher
+        z.prewarm(true, true).unwrap();
     }
 
     #[test]
-    fn scores_are_percentages_and_the_total_is_an_estimate_on_ready_gov() {
+    fn prewarm_on_ready_gov() {
         let Some(ready) = ready_zim() else { return };
         let z = Zimx::open(Path::new(&ready)).unwrap();
+        let t0 = Instant::now();
+        z.prewarm(true, true).unwrap();
+        eprintln!("prewarm (opens the Xapian databases): {:?}", t0.elapsed());
         // the score is a percentage and the best hit of a query is 100
         let (hits, total) = z.search("flood", 0, 10).unwrap();
         assert!(total >= hits.len() && !hits.is_empty());
         assert_eq!(hits[0].score, 100, "{:?}", hits[0]);
         assert!(hits.iter().all(|h| (0..=100).contains(&h.score) && h.score <= hits[0].score));
+        // prewarming again, and searching from two threads, is fine (one searcher, calls serialised)
+        z.prewarm(true, true).unwrap();
+        std::thread::scope(|s| {
+            for _ in 0..2 {
+                s.spawn(|| assert!(!z.search("flood insurance", 0, 5).unwrap().0.is_empty()));
+            }
+        });
+    }
+
+    #[test]
+    fn prewarm_can_be_switched_off_and_the_first_search_still_works() {
+        let Some(ready) = ready_zim() else { return };
+        for cfg in [json!({"sources": [{"kind": "zim", "path": ready}], "prewarm": false}), json!({"sources": [{"kind": "zim", "path": ready}]})] {
+            let c = cstr(&cfg.to_string());
+            let h = unsafe { cs_open(c.as_ptr()) };
+            assert!(!h.is_null());
+            let r = search(h, "flood", json!({"k": 3}));
+            assert_eq!(r["results"].as_array().unwrap().len(), 3, "{r}");
+            unsafe { cs_close(h) };
+        }
+    }
+
+    /// A hit whose title has the query words beats one that has them only in the body, whatever the source order.
+    #[test]
+    fn a_title_match_comes_first_on_ready_gov() {
+        let Some(ready) = ready_zim() else { return };
+        let h = open(vec![json!({"kind": "zim", "path": ready})]);
+        let r = search(h, "flood", json!({"k": 5}));
+        let first = r["results"][0]["title"].as_str().unwrap().to_lowercase();
+        assert!(first.contains("flood"), "{r}");
+        unsafe { cs_close(h) };
     }
 
     #[test]
@@ -354,17 +390,6 @@ mod xapian {
         let sg = &s["suggestions"][0];
         assert!(sg["address"].as_str().unwrap().starts_with(&format!("zim:{READY}/")));
         assert_eq!(sg["source_id"], READY);
-        unsafe { cs_close(h) };
-    }
-
-    /// A hit whose title has the query words beats one that has them only in the body, whatever the source order.
-    #[test]
-    fn a_title_match_comes_first_on_ready_gov() {
-        let Some(ready) = ready_zim() else { return };
-        let h = open(vec![json!({"kind": "zim", "path": ready})]);
-        let r = search(h, "flood", json!({"k": 5}));
-        let first = r["results"][0]["title"].as_str().unwrap().to_lowercase();
-        assert!(first.contains("flood"), "{r}");
         unsafe { cs_close(h) };
     }
 

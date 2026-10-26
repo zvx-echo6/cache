@@ -40,6 +40,7 @@ mod imp {
         fn zimx_has_title_index(z: *mut c_void) -> c_int;
         fn zimx_search(z: *mut c_void, query: *const c_char, offset: c_int, k: c_int) -> *mut c_char;
         fn zimx_suggest(z: *mut c_void, prefix: *const c_char, k: c_int) -> *mut c_char;
+        fn zimx_prewarm(z: *mut c_void, fulltext: c_int, titles: c_int) -> *mut c_char;
         fn zimx_version() -> *mut c_char;
         fn zimx_selftest_throw(mode: c_int) -> *mut c_char;
         fn zimx_free(s: *mut c_char);
@@ -132,6 +133,12 @@ mod imp {
             Ok((hits, v["total"].as_u64().unwrap_or(0) as usize))
         }
 
+        /// Build the full-text and/or title searchers now (opens the Xapian databases), so the first search or
+        /// suggestion does not pay for it. A searcher the ZIM does not have is skipped.
+        pub fn prewarm(&self, fulltext: bool, titles: bool) -> Result<()> {
+            parse(unsafe { zimx_prewarm(self.p, fulltext as c_int, titles as c_int) }).map(|_| ())
+        }
+
         /// The first `k` title suggestions for `prefix`, in libzim's order.
         pub fn suggest(&self, prefix: &str, k: usize) -> Result<Vec<XSuggestion>> {
             let q = CString::new(prefix.replace('\0', " ")).unwrap();
@@ -179,6 +186,9 @@ mod imp {
             Err(Error::unsupported("built without the xapian feature"))
         }
         pub fn suggest(&self, _p: &str, _k: usize) -> Result<Vec<XSuggestion>> {
+            Err(Error::unsupported("built without the xapian feature"))
+        }
+        pub fn prewarm(&self, _fulltext: bool, _titles: bool) -> Result<()> {
             Err(Error::unsupported("built without the xapian feature"))
         }
     }

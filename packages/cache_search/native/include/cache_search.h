@@ -75,10 +75,12 @@ char *cs_version(void);
  *              "cache_max_bytes": 268435456,         optional cap of the viewed-tile cache (default 256 MiB)
  *              "online": true}                       optional, default true; false = never use the network
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
- *                                  query terms (idf-weighted, so words found nearly everywhere count for little) are
+ *                                  query terms are
  *                                  dropped unless that leaves fewer than k+offset results
  *   "min_relevance": 0.5           optional, default 0.5: keyword hits scoring below this fraction of their source's
  *                                  best hit are dropped on the same terms
+ *   "prewarm": true                optional, default true: open libzim on every ZIM with a built-in index on background
+ *                                  threads as soon as the sources are set, so the first search does not pay for it
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
  * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it

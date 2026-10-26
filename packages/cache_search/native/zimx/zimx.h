@@ -13,8 +13,8 @@
  * for the others (measured on 18 real ZIMs: the best hit is always 100). It is relative to this ZIM's best hit, so
  * scores from two ZIMs cannot be compared with each other.
  *
- * A handle may be used from several threads at once (libzim's Archive is read-only and thread safe; the searchers are
- * created per call). */
+ * A handle may be used from several threads at once (libzim's Archive is read-only and thread safe); the searchers are
+ * built once and kept, and calls that use them are serialised by a mutex inside the handle. */
 #ifndef ZIMX_H
 #define ZIMX_H
 
@@ -40,6 +40,9 @@ ZIMX_API int zimx_has_title_index(zimx *z);
 
 /* Full-text search: results offset..offset+k. */
 ZIMX_API char *zimx_search(zimx *z, const char *query, int offset, int k);
+/* Build and keep the full-text and/or title searchers now (opens the Xapian databases), so the first search or suggestion
+ * does not pay for it. Returns {"ok":true}, or {"error":...}. A searcher the ZIM cannot have is skipped. */
+ZIMX_API char *zimx_prewarm(zimx *z, int fulltext, int titles);
 /* Title-prefix suggestions: the first k. */
 ZIMX_API char *zimx_suggest(zimx *z, const char *prefix, int k);
 

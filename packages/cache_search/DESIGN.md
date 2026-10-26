@@ -549,8 +549,8 @@ into the build directory, never the repository. `LIBZIM_DIR` names the unpacked 
 path is wired but not yet built or run.
 
 What it is used for: keyword search and title suggestions over a ZIM's own indexes. `cs_read`, `cs_zim_get` and
-`cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (lazily, on first search, suggest or status)
-for the indexes.
+`cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (on a background thread once the sources are
+set, see "Prewarm"; otherwise on first search, suggest or status) for the indexes.
 - Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k)` (path,
   title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k)` (path, title). Results are UTF-8 JSON strings
   freed with `zimx_free`. Every C++ exception is caught in the shim and returned as `{"error":...}` (the Rust side turns it into an
@@ -572,14 +572,27 @@ Differences from Tantivy that callers can see:
 - Snippets: libzim's snippet is built from the whole article, so it shows the matched passage, where Tantivy's is
   cut from the first ~1,500 chars (`lead`). The same HTML-free, at-most-400-chars, sentence-end rule applies.
 - Titles are the ZIM's own entry titles (some ZIMs carry a site suffix, for example `Floods | Ready.gov`).
-- Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. libzim opens each file on its
-  first search, so the first query after a start is slow (30 s here, cold disk, the 27M-entry Wikipedia included); after that
-  a search over every source takes about 1-1.5 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title suggestion 0.3-2.3 s warm
-  (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry up with the `zim` crate).
+- Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. Without prewarm libzim opens each
+  file on its first search, which on a cold disk took 39-52 s for the first query after a start (the 27M-entry Wikipedia
+  included); after that a search over every source takes about 1-2 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title
+  suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry
+  up with the `zim` crate).
+- Prewarm cost, measured (`cs serve`, all 19 sources, debug build, process memory sampled every second from launch to 60 s
+  after the port opened, the OS file cache warm from earlier runs so the cold-disk part of the saving is not in these
+  figures): the port opens at 35.6 s in every run (the library). Private bytes at open+60 s: 542 MB without prewarm, 1005 MB with
+  it; after the first query both are 1019-1021 MB, so prewarm brings forward the same ~470 MB (the kept Xapian searchers) rather than adding
+  to it. Peak working set: 17.8 GB without, 18.1 GB with (the library's mapped files dominate). First query: 4.1-5.6 s without
+  prewarm, 3.8 s with it, the same whether it comes at once or 60 s after open; the build before this change (lazy opens,
+  searchers rebuilt per call, no coverage reading) took 1.9-9.6 s on the same warm cache.
 - Coverage: libzim does not report which query terms a hit matched, and the `<b>` marks in its snippets did not appear
   on the real ZIMs tried, so Cache reads the top hits' articles (the first 300 KB, `max(k+offset, 10)` per source) and
   computes coverage and title coverage itself from the words of the title and the text (see "Search and merge"). Reading
   articles costs about a second over a full source set.
+- Searchers: the shim builds libzim's full-text and title searchers once per ZIM and keeps them (building one opens the
+  Xapian database, most of the cost of a first query); one mutex per handle serialises the calls that use them.
+- Prewarm: `set_sources` starts up to 4 background threads that open libzim on every ZIM with a built-in index and build its
+  searchers, so the first search does not pay for the opens. The config key `"prewarm": false` turns it off. A search that
+  arrives while a source is still being warmed waits for that source only.
 
 ### Licences
 

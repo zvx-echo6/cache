@@ -51,10 +51,21 @@ struct Config {
     min_term_coverage: f32,
     #[serde(default = "default_min_rel")]
     min_relevance: f32,
+    /// Open libzim on every ZIM source that has a built-in index, on background threads, as soon as the sources are
+    /// set (default `true`), so the first search does not pay for the opens. `false` leaves them to the first search.
+    #[serde(default = "default_prewarm")]
+    prewarm: bool,
     /// Not in the header: a test hook that makes each library's background open sleep first.
     #[serde(default)]
     open_delay_ms: u64,
 }
+
+fn default_prewarm() -> bool {
+    true
+}
+
+/// Threads that open libzim archives in the background after `set_sources`.
+const PREWARM_THREADS: usize = 4;
 
 fn default_min_cov() -> f32 {
     0.5
@@ -389,9 +400,38 @@ impl Handle {
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
         self.min_relevance = cfg.min_relevance;
+        if cfg.prewarm {
+            self.start_prewarm();
+        }
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video);
         self.ext.configure_layers(cfg.layers)?;
         Ok(())
+    }
+
+    /// Open libzim on the ZIM sources that use their built-in index and build their searchers, on up to
+    /// `PREWARM_THREADS` background threads (each source once). Nothing waits for them: a search that needs a source
+    /// still being warmed waits for that source's open only.
+    fn start_prewarm(&self) {
+        let jobs: Vec<zimsrc::WarmJob> = self
+            .sources
+            .iter()
+            .filter_map(|s| match s {
+                Source::Zim(z) if z.builtin => z.src.warm_job(),
+                _ => None,
+            })
+            .collect();
+        let n = jobs.len().min(PREWARM_THREADS);
+        let queue = Arc::new(std::sync::Mutex::new(jobs));
+        for i in 0..n {
+            let q = queue.clone();
+            let _ = std::thread::Builder::new().name(format!("cs-prewarm-{i}")).spawn(move || loop {
+                let job = q.lock().ok().and_then(|mut g| g.pop());
+                match job {
+                    Some(j) => j.run(),
+                    None => break,
+                }
+            });
+        }
     }
 
     /// Bring the library sources up to date with what happened since the last call: an open that finished becomes
