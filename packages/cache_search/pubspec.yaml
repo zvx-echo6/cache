@@ -26,6 +26,7 @@ flutter:
     platforms:
       android:
         ffiPlugin: true
-  # The starter layer definitions (data) the app copies to the folder the core reads them from.
+  # The starter layer definitions and the live data source definitions (data) the app copies to the folders the core reads them from.
   assets:
     - layers/
+    - sources/

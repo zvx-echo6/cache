@@ -136,6 +136,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
     final defs = Directory('${support.path}/layer-defs');
     await installStarterLayers(defs);
+    try {
+      await installLiveSources(Directory('${files.path}/live-sources'));
+    } catch (e) {
+      debugPrint('Live sources: $e');
+    }
     return buildCoreExtras(
       filesDir: files,
       supportDir: support,
