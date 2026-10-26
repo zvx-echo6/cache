@@ -12,6 +12,12 @@
 name: iOS TestFlight
 
 on:
+  # TEMPORARY, only while this workflow is not on the default branch (GitHub can dispatch only workflows that are there): a push
+  # that changes .github/ios-run.env runs the build with the stage named in that file. It never uploads. Remove it when the
+  # workflow is merged.
+  push:
+    branches: [ios-build]
+    paths: ['.github/ios-run.env']
   workflow_dispatch:
     inputs:
       upload:
@@ -29,7 +35,7 @@ on:
         default: all
 
 concurrency:
-  group: ios-testflight-${{ inputs.stage }}
+  group: ios-testflight-${{ github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -39,14 +45,36 @@ env:
   IPHONEOS_DEPLOYMENT_TARGET: '16.0'
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.p.outputs.stage }}
+      upload: ${{ steps.p.outputs.upload }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+      - id: p
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "stage=${{ inputs.stage }}" >> "$GITHUB_OUTPUT"
+            echo "upload=${{ inputs.upload }}" >> "$GITHUB_OUTPUT"
+          else
+            . .github/ios-run.env
+            echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
   core:
-    if: inputs.stage == 'all' || inputs.stage == 'core'
+    needs: plan
+    if: needs.plan.outputs.stage == 'all' || needs.plan.outputs.stage == 'core'
     runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
       - name: Finished library cache
         id: out
         uses: actions/cache@v4
@@ -91,13 +119,14 @@ jobs:
           retention-days: 2
 
   llama:
-    if: inputs.stage == 'all' || inputs.stage == 'llama'
+    needs: plan
+    if: needs.plan.outputs.stage == 'all' || needs.plan.outputs.stage == 'llama'
     runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
       - name: Finished library cache
         id: out
@@ -118,14 +147,14 @@ jobs:
           retention-days: 2
 
   app:
-    if: inputs.stage == 'all'
-    needs: [core, llama]
+    needs: [plan, core, llama]
+    if: needs.plan.outputs.stage == 'all'
     runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/download-artifact@v4
         with:
           name: native-core
@@ -226,7 +255,7 @@ jobs:
           path: ${{ runner.temp }}/archive.log
           retention-days: 3
       - name: Upload to TestFlight
-        if: inputs.upload
+        if: needs.plan.outputs.upload == 'true'
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
