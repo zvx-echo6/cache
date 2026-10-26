@@ -501,6 +501,34 @@ pub unsafe extern "C" fn cs_live_get(h: *mut Handle, request_json: *const c_char
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_get(arg_str(request_json, "request_json")?)?))
 }
 
+/// Live fetch policy: the host's grant for network fetches, pushed as
+/// `{"online":bool,"allow_metered":bool,"metered":bool,"enabled_sources":[ids]}`. NULL clears it.
+///
+/// # Safety
+/// `h` NULL or live; `policy_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_set_fetch_policy(h: *mut Handle, policy_json: *const c_char) -> i32 {
+    with_handle(h, -1, |h| {
+        let json = if policy_json.is_null() { None } else { Some(arg_str(policy_json, "policy_json")?) };
+        h.set_fetch_policy(json)?;
+        Ok(0)
+    })
+}
+
+/// A source's API key; kept in memory only. NULL `key_or_null` clears it.
+///
+/// # Safety
+/// `h` NULL or live; `source_id` NULL or NUL-terminated; `key_or_null` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_set_key(h: *mut Handle, source_id: *const c_char, key_or_null: *const c_char) -> i32 {
+    with_handle(h, -1, |h| {
+        let source = arg_str(source_id, "source_id")?;
+        let key = if key_or_null.is_null() { None } else { Some(arg_str(key_or_null, "key")?) };
+        h.set_live_key(source, key);
+        Ok(0)
+    })
+}
+
 /// `cs_live_preview`: no handle (nothing is opened or stored).
 ///
 /// # Safety
@@ -794,6 +822,8 @@ mod tests {
             assert!(cs_live_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_get(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_preview(ptr::null()).is_null());
+            assert_eq!(cs_live_set_fetch_policy(ptr::null_mut(), ptr::null()), -1);
+            assert_eq!(cs_live_set_key(ptr::null_mut(), ptr::null(), ptr::null()), -1);
             assert!(cs_video_instances(ptr::null_mut()).is_null());
             assert!(cs_video_instance_add(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_instance_remove(ptr::null_mut(), ptr::null()).is_null());

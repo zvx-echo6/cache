@@ -96,7 +96,7 @@ impl Env {
     /// The tool with a geocoder (the places pack) and a `live_radius_km`.
     fn tool_with(&self, args: Value, loc: Option<&Location>, now: &str, geo: Option<&dyn Geocoder>, radius_km: f64) -> Result<Value, ToolError> {
         let t = LiveDataTool::new(LiveCfg { live_radius_km: radius_km, ..self.live.cfg.clone() });
-        match t.run(&ToolCtx { location: loc, places: &self.places, now, geocoder: geo }, &args)? {
+        match t.run(&ToolCtx { location: loc, places: &self.places, now, geocoder: geo, live_fetcher: None }, &args)? {
             ToolOutput::Json(v) => Ok(v),
             ToolOutput::Text(_) => panic!("text"),
         }

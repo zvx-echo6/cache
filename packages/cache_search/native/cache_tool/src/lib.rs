@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub mod fetcher;
 pub mod places;
 
 /// Start of an address marker in tool text.
@@ -59,6 +60,15 @@ impl SavedPlaces for NoSavedPlaces {
     }
 }
 
+/// The host's grant for live network fetches, and the keys it holds. The host pushes this state in (the handle's
+/// `PolicyFetcher`); a tool only asks. `ToolCtx::live_fetcher` is `None` until the host has set a policy.
+pub trait LiveFetcher: Send + Sync {
+    /// The host allows a network fetch for this source right now.
+    fn can_fetch(&self, source_id: &str) -> bool;
+    /// The source's API key from the host's secure storage, if it needs one.
+    fn key_for(&self, source_id: &str) -> Option<String>;
+}
+
 /// What a tool sees of the caller's world.
 pub struct ToolCtx<'a> {
     pub location: Option<&'a Location>,
@@ -68,6 +78,8 @@ pub struct ToolCtx<'a> {
     /// Names to coordinates through the installed places pack (the one `navigate` and `locate` use); `None` while no pack is
     /// installed, and a tool then resolves saved places and "lat,lon" text only.
     pub geocoder: Option<&'a dyn places::Geocoder>,
+    /// The host's live-fetch grant; `None` until the host has set a fetch policy (so captures and tests never fetch).
+    pub live_fetcher: Option<&'a dyn LiveFetcher>,
 }
 
 /// What a tool returns on success.
@@ -231,7 +243,7 @@ mod tests {
     #[test]
     fn tool_is_object_safe_and_runs() {
         let t: Box<dyn Tool> = Box::new(Dummy);
-        let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: "2026-01-01T00:00:00-07:00", geocoder: None };
+        let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: "2026-01-01T00:00:00-07:00", geocoder: None, live_fetcher: None };
         assert_eq!(t.name(), "dummy");
         assert!(t.schema().is_none());
         match t.run(&ctx, &Value::Null).unwrap() {

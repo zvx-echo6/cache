@@ -349,6 +349,8 @@ impl Handle {
                     places: &*self.places,
                     now,
                     geocoder: source.as_deref().and_then(|s| s.geocoder()),
+                    // only once the host has pushed a policy; before that no tool can fetch
+                    live_fetcher: if self.fetcher.is_set() { Some(&*self.fetcher) } else { None },
                 };
                 self.tools[i.expect("checked above")].run(&ctx, args)
             }

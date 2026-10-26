@@ -1387,6 +1387,30 @@ HTTP is `ureq` (blocking, rustls with bundled root certificates, no async runtim
 fetch from a worker thread, so a blocking client is enough and it adds far fewer crates than reqwest (tokio, hyper).
 SQLite is `rusqlite` with the `bundled` feature (compiled in, nothing linked from the system).
 
+### Live fetch policy and keys
+
+Decided by the Cache lead (ref-a5), 2026-10-26. The host grants network fetches and holds the API keys; the core fetches. The
+core has no callbacks into the host, so the host pushes its state in:
+
+- `cache_tool::LiveFetcher` (`can_fetch(source_id) -> bool`, `key_for(source_id) -> Option<String>`) is what a tool asks.
+  `ToolCtx.live_fetcher: Option<&dyn LiveFetcher>` carries it; it is `None` unless the host has set a policy.
+- The handle holds the built-in implementation, `cache_tool::fetcher::PolicyFetcher` (`Handle.fetcher`).
+  `cs_live_set_fetch_policy(h, json)` takes `{"online","allow_metered","metered","enabled_sources":[ids]}` and
+  `can_fetch = online && source in enabled_sources && (!metered || allow_metered)`. A null json clears the policy; with no
+  policy `can_fetch` is false for everything, so captures and tests never fetch, and `ToolCtx.live_fetcher` is `None`.
+  A bad document is `bad_json` and the old policy stays.
+- `cs_live_set_key(h, source_id, key_or_null)` keeps one source's key in memory only. `PolicyFetcher` has no `Debug`, no
+  serialisation and no accessor except `key_for`; the key is in no error, status, log or result (tests search every string
+  the core returns for a sentinel key). A null (or empty) key clears it; `cs_close` clears the policy and every key, and the
+  key strings are overwritten before they are freed.
+- The fetch itself (the on-demand fetch in `live_data`, the row keys and pruning) is built on top of this plumbing and is not
+  part of it: `live_data`'s behaviour is unchanged.
+- CLI: `--live-policy <json>` (`cs tool`, `cs tool-schemas`, `cs serve`) and `CACHE_LIVE_KEY_<SOURCE>` environment variables
+  (source id in capitals, any other character `_`: `nws-alerts` is `CACHE_LIVE_KEY_NWS_ALERTS`; read at start for each
+  installed source). `cs serve`: `POST /live/policy` (the body is the policy), `DELETE /live/policy`,
+  `POST /live/key {"source_id","key"}` (a null key clears it), `DELETE /live/key/{source_id}`; each answers `{"ok":true}` and
+  never echoes a key.
+
 ### Addresses of live items
 
 `live:<source-id>/<place-key>/<item-key>`, for example `live:weather/home/now`, `live:weather/home/2026-10-26`,

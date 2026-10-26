@@ -17,6 +17,10 @@
 //!   DELETE /location                                             -> cs_clear_location ({"ok":true})
 //!   POST   /web             {provider, key, online}              -> cs_set_web ({"ok":true}; the key is never echoed or logged)
 //!   DELETE /web                                                  -> web search off, key cleared ({"ok":true})
+//!   POST   /live/policy    {online,allow_metered?,metered?,enabled_sources} -> cs_live_set_fetch_policy ({"ok":true})
+//!   DELETE /live/policy                                          -> policy cleared: no fetch allowed ({"ok":true})
+//!   POST   /live/key       {source_id, key}                      -> cs_live_set_key ({"ok":true}; the key is never echoed or logged)
+//!   DELETE /live/key/{source_id}                                 -> that key cleared ({"ok":true})
 //!   POST   /conversations/{id}/tool  {name, args, now}           -> cs_tool ({"content","ids"})
 //!   GET    /places                                               -> cs_places_list
 //!   POST   /places                       {place}                 -> cs_place_save (the body is the place JSON)
@@ -180,6 +184,30 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
         }
         (Method::Delete, ["web"]) => {
             st.engine.core.set_web(None, None, false)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["live", "policy"]) => {
+            // the body is the policy document itself; the core validates it
+            body_json(body)?;
+            st.engine.core.set_live_policy(Some(body))?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Delete, ["live", "policy"]) => {
+            st.engine.core.set_live_policy(None)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["live", "key"]) => {
+            let v = body_json(body)?;
+            let key = match &v["key"] {
+                Value::Null => None,
+                Value::String(s) => Some(s.as_str()),
+                _ => return Err(ApiError::new("bad_json", "\"key\" must be a string")),
+            };
+            st.engine.core.set_live_key(need_str(&v, "source_id")?, key)?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Delete, ["live", "key", source_id]) => {
+            st.engine.core.set_live_key(source_id, None)?;
             Ok(json!({"ok": true}).to_string())
         }
         (Method::Post, ["conversations", id, "tool"]) => {
