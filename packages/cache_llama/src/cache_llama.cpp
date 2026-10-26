@@ -42,6 +42,10 @@ struct Handle {
     // everything generated and decoded since). The next cl_start reuses the common prefix.
     std::vector<llama_token>  cached;
     int                       n_reused = 0;  // prompt tokens of the last cl_start taken from the cache
+    int                       first_token = -1;  // first token of the last cl_start's prompt
+
+    // Sampling defaults: llama.cpp's own, replaced by what the GGUF recommends (general.sampling.*) at load.
+    common_params_sampling    sampling;
 
     // state of the current generation
     std::unique_ptr<common_chat_session> session;
@@ -55,6 +59,60 @@ struct Handle {
     bool                                 finished    = true;
     std::atomic<bool>                    stop{false};
 };
+
+void cl_logi(const char * fmt, ...);
+
+// The model's own recommended sampling, embedded in the GGUF as general.sampling.* (the same keys and
+// effect as llama.cpp's common_init_from_params, whose helper is private). Keys the GGUF lacks keep llama.cpp's
+// defaults. Logs the effective settings once.
+void load_model_sampling(const llama_model * model, common_params_sampling & sp) {
+    auto val = [&](llama_model_meta_key k, std::string & out) {
+        char buf[512] = {0};
+        if (llama_model_meta_val_str(model, llama_model_meta_key_str(k), buf, sizeof(buf)) > 0) { out = buf; return true; }
+        return false;
+    };
+    auto f = [&](llama_model_meta_key k, float & dst, bool & from_model) {
+        std::string v;
+        if (!val(k, v)) return;
+        char * end = nullptr;
+        float x = strtof(v.c_str(), &end);
+        if (end && end != v.c_str()) { dst = x; from_model = true; }
+    };
+    auto i = [&](llama_model_meta_key k, int32_t & dst, bool & from_model) {
+        std::string v;
+        if (!val(k, v)) return;
+        char * end = nullptr;
+        long x = strtol(v.c_str(), &end, 10);
+        if (end && end != v.c_str()) { dst = (int32_t) x; from_model = true; }
+    };
+    bool any = false;
+    std::string seq;
+    if (val(LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE, seq)) {
+        std::vector<std::string> names;
+        size_t a = 0;
+        while (a <= seq.size()) {
+            size_t b = seq.find(';', a);
+            if (b == std::string::npos) b = seq.size();
+            if (b > a) names.push_back(seq.substr(a, b - a));
+            a = b + 1;
+        }
+        if (!names.empty()) { sp.samplers = common_sampler_types_from_names(names); any = true; }
+    }
+    i(LLAMA_MODEL_META_KEY_SAMPLING_TOP_K, sp.top_k, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_TOP_P, sp.top_p, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_MIN_P, sp.min_p, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY, sp.xtc_probability, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD, sp.xtc_threshold, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_TEMP, sp.temp, any);
+    i(LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N, sp.penalty_last_n, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT, sp.penalty_repeat, any);
+    i(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT, sp.mirostat, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU, sp.mirostat_tau, any);
+    f(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA, sp.mirostat_eta, any);
+    cl_logi("sampling (%s): temp=%.2f top_k=%d top_p=%.2f min_p=%.2f repeat_penalty=%.2f penalty_last_n=%d mirostat=%d",
+            any ? "from the GGUF, llama.cpp defaults for the rest" : "llama.cpp defaults, the GGUF has none", sp.temp, sp.top_k,
+            sp.top_p, sp.min_p, sp.penalty_repeat, sp.penalty_last_n, sp.mirostat);
+}
 
 void set_err(char * err, int len, const std::string & msg) {
     if (err && len > 0) {
@@ -94,7 +152,7 @@ void cl_logi(const char * fmt, ...) {
 #if defined(__ANDROID__)
     __android_log_print(ANDROID_LOG_INFO, "cache_llama", "%s", line);
 #else
-    (void) line;
+    fprintf(stderr, "[cl] %s\n", line);
 #endif
 }
 
@@ -233,6 +291,7 @@ void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, in
             return nullptr;
         }
         h->vocab = llama_model_get_vocab(h->model);
+        load_model_sampling(h->model, h->sampling);
 
         llama_context_params cp = llama_context_default_params();
         cp.n_ctx           = (uint32_t) n_ctx;
@@ -344,9 +403,7 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
         // The session wraps common_chat_templates_apply and keeps the parser for cl_finish.
         h->session = std::make_unique<common_chat_session>(h->tmpls.get(), h->vocab, in);
 
-        common_params_sampling sp;
-        sp.temp  = 0.7f;
-        sp.top_p = 0.95f;
+        common_params_sampling sp = h->sampling;  // the GGUF's recommended sampling (load_model_sampling)
         // Optional top-level "temperature" (0 = greedy, used by tests that compare outputs).
         if (req.contains("temperature") && req.at("temperature").is_number()) {
             sp.temp = req.at("temperature").get<float>();
@@ -365,7 +422,10 @@ int cl_start(void * hp, const char * request_json, char * err, int err_len) {
                     ps.substr(ps.size() > (size_t) n ? ps.size() - (size_t) n : 0).c_str());
         }
 
-        auto tokens = common_tokenize(h->vocab, h->session->prompt().str(), /*add_special*/ false, /*parse_special*/ true);
+        auto tokens = common_tokenize(h->vocab, h->session->prompt().str(), /*add_special*/ true, /*parse_special*/ true);
+        // add_special follows the vocab's own add_bos/add_eos settings, so a model that wants BOS gets it first
+        // on every turn (the template's text leaves it out); the token prefix reuse below still matches.
+        h->first_token = tokens.empty() ? -1 : (int) tokens[0];
         h->n_prompt = (int) tokens.size();
         if (h->n_prompt == 0 || h->n_prompt >= h->n_ctx) {
             set_err(err, err_len, "prompt does not fit the context (" + std::to_string(h->n_prompt) + " tokens)");
@@ -517,6 +577,11 @@ int cl_finish(void * hp, char * out_json, int len) {
 int cl_prompt_tokens(void * hp)    { return ((Handle *) hp)->n_prompt; }
 int cl_generated_tokens(void * hp) { return ((Handle *) hp)->n_generated; }
 int cl_reused_tokens(void * hp)    { return ((Handle *) hp)->n_reused; }
+int cl_first_prompt_token(void * hp) { return ((Handle *) hp)->first_token; }
+int cl_bos_token(void * hp) {
+    auto * h = (Handle *) hp;
+    return llama_vocab_get_add_bos(h->vocab) ? (int) llama_vocab_bos(h->vocab) : -1;
+}
 
 void cl_stop(void * hp) { ((Handle *) hp)->stop.store(true); }
 

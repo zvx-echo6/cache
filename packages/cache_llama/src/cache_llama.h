@@ -52,6 +52,10 @@ CL_API int cl_prompt_tokens(void * h);
 CL_API int cl_generated_tokens(void * h);
 // How many of the prompt tokens of the last cl_start were taken from the KV cache instead of decoded.
 CL_API int cl_reused_tokens(void * h);
+// The first token of the last cl_start's prompt, or -1.
+CL_API int cl_first_prompt_token(void * h);
+// The BOS token id when the model's vocab wants BOS added to every prompt (add_bos_token), else -1.
+CL_API int cl_bos_token(void * h);
 
 // Ask the running generation to end; the next cl_next returns -1. Thread-safe.
 CL_API void cl_stop(void * h);
