@@ -12,12 +12,6 @@
 name: iOS TestFlight
 
 on:
-  # TEMPORARY, only while this workflow is not on the default branch (GitHub can dispatch only workflows that are there): a push
-  # that changes .github/ios-run.env runs the build with the stage named in that file. It never uploads. Remove it when the
-  # workflow is merged.
-  push:
-    branches: [ios-build]
-    paths: ['.github/ios-run.env']
   workflow_dispatch:
     inputs:
       upload:
@@ -56,14 +50,8 @@ jobs:
           sparse-checkout: .github
       - id: p
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "stage=${{ inputs.stage }}" >> "$GITHUB_OUTPUT"
-            echo "upload=${{ inputs.upload }}" >> "$GITHUB_OUTPUT"
-          else
-            . .github/ios-run.env
-            echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
-            echo "upload=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "stage=${{ inputs.stage }}" >> "$GITHUB_OUTPUT"
+          echo "upload=${{ inputs.upload }}" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
   core:
