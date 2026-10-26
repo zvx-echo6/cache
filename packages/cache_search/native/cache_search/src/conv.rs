@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 use crate::web::WebNote;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 /// The id map of one chat. Numbers start at 1 and never change once given.
@@ -24,6 +24,37 @@ struct Item {
     title: String,
     #[serde(default)]
     snippet: String,
+}
+
+/// The version of the export format `export_json` writes and `import_json` reads.
+pub const EXPORT_FORMAT: u64 = 1;
+
+/// The shape of an export on the way in. Unknown keys are ignored, so a later version may add keys without breaking
+/// this one; `format` is checked before this is read.
+#[derive(Debug, Deserialize)]
+struct Export {
+    next_n: u64,
+    ids: Vec<ExportId>,
+    #[serde(default)]
+    web_hits: HashMap<String, ExportHit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportId {
+    n: u64,
+    address: String,
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportHit {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    snippet: String,
+    #[serde(default)]
+    fetched: String,
 }
 
 /// One line of text: every run of whitespace (including line breaks) becomes a single space.
@@ -98,6 +129,52 @@ impl Conversation {
         }
         let ids: Vec<Value> = seen.iter().map(|&i| self.id_json(i)).collect();
         Ok(json!({"tool_message": lines.join("\n"), "ids": ids}).to_string())
+    }
+
+    /// The whole state of the conversation as JSON, enough for `import_json` to continue numbering and reading exactly
+    /// as this conversation would. Keys come out in this order: `format` (1), `next_n` (the number the next new
+    /// address gets), `ids` (`{"n","address","title"}` in number order), `web_hits` (what `web_search` showed, by
+    /// `web:<url>` address in sorted order, each `{"title","snippet","fetched"}`; the snippet is what `read` falls back
+    /// to). Same state, same bytes.
+    pub fn export_json(&self) -> String {
+        let ids: Vec<Value> = (0..self.entries.len()).map(|i| self.id_json(i)).collect();
+        let mut hits: Vec<(&String, &WebNote)> = self.web.iter().collect();
+        hits.sort_by(|a, b| a.0.cmp(b.0));
+        let mut web_hits = Map::new();
+        for (address, w) in hits {
+            web_hits.insert(address.clone(), json!({"title": w.title, "snippet": w.snippet, "fetched": w.fetched}));
+        }
+        json!({"format": EXPORT_FORMAT, "next_n": self.entries.len() + 1, "ids": ids, "web_hits": web_hits}).to_string()
+    }
+
+    /// A conversation from `export_json`'s output. Malformed JSON, a missing or non-integer `format`, ids that are
+    /// not numbered 1, 2, 3... in order, a repeated address, or a `next_n` that is not one past the last id are
+    /// `bad_json`; a `format` other than 1 is `unsupported`. Nothing is partly built: a bad import gives no conversation.
+    pub fn import_json(json: &str) -> Result<Conversation> {
+        let v: Value = serde_json::from_str(json).map_err(|e| Error::bad_json(format!("conversation export: {e}")))?;
+        let Some(obj) = v.as_object() else { return Err(Error::bad_json("conversation export must be a JSON object")) };
+        match obj.get("format").and_then(Value::as_u64) {
+            None => return Err(Error::bad_json("conversation export has no integer \"format\"")),
+            Some(EXPORT_FORMAT) => {}
+            Some(other) => return Err(Error::unsupported(format!("conversation export format {other} is not supported (this core reads format {EXPORT_FORMAT})"))),
+        }
+        let e: Export = serde_json::from_value(v).map_err(|e| Error::bad_json(format!("conversation export: {e}")))?;
+        let mut c = Conversation::new();
+        for (i, id) in e.ids.into_iter().enumerate() {
+            if id.n != i as u64 + 1 {
+                return Err(Error::bad_json(format!("conversation export: id {} is at position {}; ids must be numbered 1, 2, 3... in order", id.n, i + 1)));
+            }
+            if !c.number(&id.address, &id.title).1 {
+                return Err(Error::bad_json(format!("conversation export: address {:?} is numbered twice", id.address)));
+            }
+        }
+        if e.next_n != c.entries.len() as u64 + 1 {
+            return Err(Error::bad_json(format!("conversation export: next_n is {} but {} ids end at {}", e.next_n, c.entries.len(), c.entries.len())));
+        }
+        for (address, h) in e.web_hits {
+            c.web.insert(address, WebNote { title: h.title, snippet: h.snippet, fetched: h.fetched });
+        }
+        Ok(c)
     }
 
     /// `{"ids":[...]}`, every number given so far, ascending.
@@ -189,6 +266,42 @@ mod tests {
         let mut c = Conversation::new();
         let v = call(&mut c, r#"[{"address":"a","title":"A\nB","snippet":"x\r\n  y"},{"address":"b","title":"Only title","snippet":""}]"#);
         assert_eq!(v["tool_message"], "[1] A B \u{2014} x y\n[2] Only title");
+    }
+
+    fn note(t: &str, s: &str) -> WebNote {
+        WebNote { title: t.into(), snippet: s.into(), fetched: "2026-10-25 14:20".into() }
+    }
+
+    #[test]
+    fn export_has_a_fixed_key_order_and_sorted_hits() {
+        let mut c = Conversation::new();
+        call(&mut c, r#"[{"address":"web:https://b/","title":"B","snippet":"s"},{"address":"web:https://a/","title":"A","snippet":"s"}]"#);
+        c.note_web("web:https://b/", note("B", "bee"));
+        c.note_web("web:https://a/", note("A", "ay"));
+        assert_eq!(
+            c.export_json(),
+            r#"{"format":1,"next_n":3,"ids":[{"n":1,"address":"web:https://b/","title":"B"},{"n":2,"address":"web:https://a/","title":"A"}],"web_hits":{"web:https://a/":{"title":"A","snippet":"ay","fetched":"2026-10-25 14:20"},"web:https://b/":{"title":"B","snippet":"bee","fetched":"2026-10-25 14:20"}}}"#
+        );
+    }
+
+    #[test]
+    fn empty_conversation_round_trips() {
+        let c = Conversation::new();
+        assert_eq!(c.export_json(), r#"{"format":1,"next_n":1,"ids":[],"web_hits":{}}"#);
+        let mut d = Conversation::import_json(&c.export_json()).unwrap();
+        assert_eq!(d.export_json(), c.export_json());
+        assert_eq!(call(&mut d, r#"[{"address":"a","title":"A","snippet":"s"}]"#)["ids"][0]["n"], 1);
+    }
+
+    #[test]
+    fn import_rejects_bad_exports() {
+        use crate::error::ErrorCode;
+        for bad in ["", "{", "[]", "null", "{}", r#"{"format":"1","next_n":1,"ids":[]}"#, r#"{"format":1}"#, r#"{"format":1,"next_n":1,"ids":[{"n":2,"address":"a"}]}"#,
+            r#"{"format":1,"next_n":3,"ids":[{"n":1,"address":"a"},{"n":2,"address":"a"}]}"#, r#"{"format":1,"next_n":5,"ids":[{"n":1,"address":"a"}]}"#, r#"{"format":1,"next_n":1,"ids":[],"web_hits":[]}"#] {
+            assert_eq!(Conversation::import_json(bad).unwrap_err().code, ErrorCode::BadJson, "{bad}");
+        }
+        assert_eq!(Conversation::import_json(r#"{"format":2,"next_n":1,"ids":[]}"#).unwrap_err().code, ErrorCode::Unsupported);
+        assert_eq!(Conversation::import_json(r#"{"format":0}"#).unwrap_err().code, ErrorCode::Unsupported);
     }
 
     #[test]

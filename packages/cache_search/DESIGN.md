@@ -323,6 +323,42 @@ next [6].., an address seen before keeps its old number) and returns the exact t
 Weather and other live-source tools can pass their results through the same formatter so all numbering stays in
 one place.
 
+### Conversation state (export and import)
+
+A conversation lives only in memory. To continue a chat in a later session or another process, the app saves
+`cs_conversation_export(conv)` and restores it with `cs_conversation_import(json)`; the restored conversation numbers and reads
+exactly as the original would have (the same later `cs_format` and `cs_tool` calls give byte-identical `content` and `ids`).
+The export holds all the state a conversation has: the id map and what `web_search` showed for each web result (the
+title and snippet `read` falls back to when the page cannot be fetched). Nothing else is kept per conversation.
+
+Format 1, one JSON object, keys always in this order (the same state always gives the same bytes):
+
+```
+{"format":1,
+ "next_n":4,
+ "ids":[{"n":1,"address":"lib:x/1","title":"..."}, ...],
+ "web_hits":{"web:https://a.example/1":{"title":"...","snippet":"...","fetched":"2026-10-25 14:20"}, ...}}
+```
+
+- `format`: the version, an integer. An import of any other number is refused with `unsupported`; a missing or non-integer
+  one with `bad_json`. A later format that adds keys gets a new number.
+- `next_n`: the number the next new address gets, always `ids` length + 1 (1 when empty). It is redundant on purpose: an
+  export whose `next_n` disagrees with its `ids` is `bad_json`, not repaired.
+- `ids`: every number given, ascending, entry `i` being number `i + 1`; `title` is the first title seen for the address. A
+  repeated address or a gap in the numbers is `bad_json`.
+- `web_hits`: for each `web:<url>` address a `web_search` returned, `title` and `snippet` (as shown to the model, already
+  cleaned) and `fetched` (local `YYYY-MM-DD HH:MM`, used in `read`'s header line). Keys are sorted by address. May be `{}`
+  (and is read as `{}` when absent).
+- Unknown keys are ignored on import. An import that fails changes nothing and returns no conversation.
+
+Errors with no handle follow the rest of the conversation calls: NULL, with the error in `cs_last_error(NULL)`.
+`cs serve` has `GET /conversations/{id}/export` (the JSON) and `POST /conversations/import` (the body is an export;
+returns `{"id"}` of a new conversation). The CLI has no such command: a conversation does not outlive a `cs` process.
+Tests: `conv.rs` (key order, round trip, refusals); `tests/web_ffi.rs` runs one sequence (a `cs_format`, a stand-in
+`search` tool, `web_search` against the local stand-in server, a read of a web hit whose page loads, one whose page fails,
+a final `cs_format`) uninterrupted and again with an export and import after each step, and requires every reply to be
+byte-identical; `cli/tests/cli.rs` covers the two endpoints.
+
 ## Tools
 
 The model's tools (docs/TOOLS.md) run through the core, so the phone and the headless runs share one dispatch:
@@ -535,6 +571,8 @@ what a handle requires). JSON in, the core's JSON out byte for byte:
 | `POST /conversations` | | `cs_conversation_new`; returns `{"id"}` |
 | `POST /conversations/{id}/format` | `{results}` | `cs_format` on that conversation |
 | `GET /conversations/{id}/ids` | | `cs_conversation_ids` |
+| `GET /conversations/{id}/export` | | `cs_conversation_export` (format 1, see "Conversation state") |
+| `POST /conversations/import` | an export | `cs_conversation_import`; returns `{"id"}` of the new conversation |
 | `DELETE /conversations/{id}` | | `cs_conversation_free`; returns `{"deleted":"<id>"}` |
 | `GET /tools` | | `cs_tool_schemas` |
 | `POST /location` | `{lat, lon, accuracy_m, fixed_at}` (`accuracy_m` optional) | `cs_set_location`; returns `{"ok":true}` |

@@ -9,6 +9,8 @@
 //!   POST   /conversations                                        -> {"id"} (cs_conversation_new)
 //!   POST   /conversations/{id}/format    {results}               -> cs_format
 //!   GET    /conversations/{id}/ids                               -> cs_conversation_ids
+//!   GET    /conversations/{id}/export                            -> cs_conversation_export (the state, format 1)
+//!   POST   /conversations/import         (the body is an export) -> {"id"}: a new conversation (cs_conversation_import)
 //!   DELETE /conversations/{id}                                   -> cs_conversation_free
 //!   GET    /tools                                                -> cs_tool_schemas
 //!   POST   /location        {lat, lon, accuracy_m, fixed_at}     -> cs_set_location ({"ok":true}; accuracy_m optional)
@@ -127,6 +129,13 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             st.convs.insert(id.clone(), Conv::new()?);
             Ok(json!({"id": id}).to_string())
         }
+        (Method::Post, ["conversations", "import"]) => {
+            let conv = Conv::import(body)?;
+            let id = format!("c{}", st.next);
+            st.next += 1;
+            st.convs.insert(id.clone(), conv);
+            Ok(json!({"id": id}).to_string())
+        }
         (Method::Post, ["conversations", id, "format"]) => {
             let v = body_json(body)?;
             if !v["results"].is_array() {
@@ -135,6 +144,7 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.format(&v["results"].to_string())
         }
         (Method::Get, ["conversations", id, "ids"]) => st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.ids(),
+        (Method::Get, ["conversations", id, "export"]) => st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?.export(),
         (Method::Get, ["tools"]) => st.engine.core.tool_schemas(),
         (Method::Post, ["location"]) => {
             let v = body_json(body)?;

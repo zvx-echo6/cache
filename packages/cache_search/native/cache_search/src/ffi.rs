@@ -342,6 +342,42 @@ pub unsafe extern "C" fn cs_conversation_ids(c: *mut Conversation) -> *mut c_cha
     })
 }
 
+/// The conversation's whole state as versioned JSON (see `Conversation::export_json`). NULL on error; the error is in
+/// `cs_last_error(NULL)`.
+///
+/// # Safety
+/// `c` NULL or a live conversation.
+#[no_mangle]
+pub unsafe extern "C" fn cs_conversation_export(c: *mut Conversation) -> *mut c_char {
+    let r = guarded(|| {
+        if c.is_null() {
+            return Err(Error::bad_json("null conversation"));
+        }
+        out_string((*c).export_json())
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
+/// A new conversation from `cs_conversation_export`'s output. NULL on error (`bad_json` for malformed JSON or an
+/// inconsistent export, `unsupported` for a `format` this core does not read); the error is in `cs_last_error(NULL)`.
+///
+/// # Safety
+/// `json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_conversation_import(json: *const c_char) -> *mut Conversation {
+    let r = guarded(|| {
+        let s = arg_str(json, "json")?;
+        Ok(Box::into_raw(Box::new(Conversation::import_json(s)?)))
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
 /// # Safety
 /// `c` NULL or a conversation from `cs_conversation_new` not used afterwards.
 #[no_mangle]

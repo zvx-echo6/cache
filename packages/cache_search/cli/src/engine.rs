@@ -336,6 +336,21 @@ impl Conv {
     pub fn ids(&mut self) -> Result<String, ApiError> {
         take(unsafe { cs_conversation_ids(self.c) }).ok_or_else(thread_error)
     }
+
+    /// `cs_conversation_export`: the conversation's whole state (format 1).
+    pub fn export(&mut self) -> Result<String, ApiError> {
+        take(unsafe { cs_conversation_export(self.c) }).ok_or_else(thread_error)
+    }
+
+    /// `cs_conversation_import`: a new conversation from an export.
+    pub fn import(json: &str) -> Result<Conv, ApiError> {
+        let j = cstring(json, "conversation")?;
+        let c = unsafe { cs_conversation_import(j.as_ptr()) };
+        if c.is_null() {
+            return Err(thread_error());
+        }
+        Ok(Conv { c })
+    }
 }
 
 impl Drop for Conv {

@@ -164,6 +164,22 @@ char *cs_format(cs_conv *c, const char *results_json);
 /* The id map so far: {"ids":[{"n","address","title"}]}, for the citation check. */
 char *cs_conversation_ids(cs_conv *c);
 
+/* The conversation's whole state as JSON, so a chat can be saved and continued later (or in another process) with the
+ * same numbering and the same `read` fallback. Format 1, keys in this order:
+ *   {"format":1,
+ *    "next_n":N,                                   the number the next new address gets (last id + 1; 1 when empty)
+ *    "ids":[{"n","address","title"}, ...],         every number given, ascending
+ *    "web_hits":{"<address>":{"title","snippet","fetched"}, ...}}
+ *                                                  what web_search showed per web:<url> address (keys sorted), the
+ *                                                  stored title/snippet `read` falls back to when the page fetch fails
+ * The same state always gives the same bytes. NULL on error (cs_last_error(NULL)). */
+char *cs_conversation_export(cs_conv *c);
+
+/* A new conversation from cs_conversation_export's output; continuing on it gives byte-identical cs_format / cs_tool
+ * results to continuing the original. NULL on error, with cs_last_error(NULL): "bad_json" for malformed JSON or an
+ * export whose ids/next_n disagree, "unsupported" for a "format" other than 1. Free it with cs_conversation_free. */
+cs_conv *cs_conversation_import(const char *json);
+
 void cs_conversation_free(cs_conv *c);
 
 /* --- tools --- */

@@ -877,3 +877,165 @@ fn the_little_text_line_is_exactly_at_500_characters() {
     let out = c.content("read", json!({"n": 1}));
     assert_eq!(out, format!("[1] The Page (web, fetched 2026-10-25 14:20)\n{}", "x".repeat(500)));
 }
+
+// ---- conversation export and import ---------------------------------------------------------------------------
+
+/// A stand-in for a library `search`: results with addresses, one of them already numbered by `cs_format`.
+struct StubSearch;
+
+impl cache_tool::Tool for StubSearch {
+    fn name(&self) -> &'static str {
+        "stub_search"
+    }
+    fn schema(&self) -> Option<Value> {
+        Some(json!({"type":"function","function":{"name":"stub_search","description":"d","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}))
+    }
+    fn run(&self, _ctx: &cache_tool::ToolCtx, _args: &Value) -> Result<cache_tool::ToolOutput, cache_tool::ToolError> {
+        Ok(cache_tool::ToolOutput::Json(json!({"results": [
+            {"address": "lib:fx/9", "title": "Nine"},
+            {"address": "lib:fx/2", "title": "Two again"}]})))
+    }
+}
+
+fn last_thread_error() -> Option<Value> {
+    take(unsafe { cs_last_error(ptr::null_mut()) }).map(|s| serde_json::from_str(&s).unwrap())
+}
+
+impl Core {
+    fn format(&mut self, results: &str) -> String {
+        let out = take(unsafe { cs_format(self.c, cstr(results).as_ptr()) }).unwrap_or_else(|| panic!("cs_format failed: {:?}", last_thread_error()));
+        self.seen.push(out.clone());
+        out
+    }
+
+    /// Export the conversation, import the export as a new one and carry on with that; the old one is freed.
+    fn reload(&mut self) -> String {
+        let json = take(unsafe { cs_conversation_export(self.c) }).unwrap_or_else(|| panic!("export failed: {:?}", last_thread_error()));
+        let imported = unsafe { cs_conversation_import(cstr(&json).as_ptr()) };
+        assert!(!imported.is_null(), "import failed: {:?}", last_thread_error());
+        unsafe { cs_conversation_free(self.c) };
+        self.c = imported;
+        // an export of the import is the export it came from
+        assert_eq!(take(unsafe { cs_conversation_export(self.c) }).unwrap(), json);
+        json
+    }
+}
+
+/// A cs_tool reply as the model's side sees it: `content` and `ids`. `timing_ms` is debug output that differs run to run.
+fn without_timing(mut reply: Value) -> String {
+    reply.as_object_mut().unwrap().remove("timing_ms");
+    reply.to_string()
+}
+
+/// The same six steps every time: a format of a list, a `search`-like tool, `web_search`, a read of a web hit whose
+/// page loads, a read of one whose page fails, and a format that mixes known and new addresses. With
+/// `reload_after = Some(k)` the conversation is exported and imported after step `k`. Returns every reply, in order,
+/// and the export taken at the reload point.
+fn conversation_steps(search: &Server, reload_after: Option<usize>) -> (Vec<String>, Option<String>) {
+    let mut c = Core::with_web(&search_url(search));
+    unsafe { (*c.h).register_tool(Box::new(StubSearch)) };
+    let mut replies = Vec::new();
+    let mut export = None;
+    for step in 0..6 {
+        let reply = match step {
+            0 => c.format(r#"[{"address":"lib:fx/1","title":"One","snippet":"first"},{"address":"lib:fx/2","title":"Two","snippet":"second"}]"#),
+            1 => without_timing(c.tool("stub_search", json!({}))),
+            2 => without_timing(c.tool("web_search", json!({"query": "burn ban"}))),
+            3 => without_timing(c.tool("read", json!({"n": 4}))),
+            4 => without_timing(c.tool("read", json!({"n": 5}))),
+            _ => c.format(r#"[{"address":"lib:fx/7","title":"Seven","snippet":"s"},{"address":"lib:fx/9","title":"Nine v2","snippet":"s"}]"#),
+        };
+        replies.push(reply);
+        if reload_after == Some(step) {
+            export = Some(c.reload());
+        }
+    }
+    c.assert_no_key();
+    (replies, export)
+}
+
+#[test]
+fn a_restored_conversation_continues_byte_for_byte_like_one_that_never_stopped() {
+    let pages = Server::start(|r| if r.path == "/ok" { Resp::html("<html><body><p>The page loaded fine.</p></body></html>") } else { Resp::new(500, "text/plain", "no") });
+    let (ok, bad) = (pages.url("/ok"), pages.url("/bad"));
+    let search = Server::start(move |_| Resp::json(&kagi(&[(&ok, "Good Page", "First snippet."), (&bad, "Bad Page", "Second snippet.")])));
+
+    let (base, none) = conversation_steps(&search, None);
+    assert!(none.is_none());
+    // the baseline is what the test means it to be: numbers 1-2 from format, 3 from the tool, 4-5 from the web, 6 new
+    assert!(base[1].contains(r#""ids":[{"n":3,"address":"lib:fx/9","title":"Nine"}]"#), "{}", base[1]);
+    assert!(base[2].contains("[4] Good Page") && base[2].contains("[5] Bad Page"), "{}", base[2]);
+    assert!(base[3].contains("The page loaded fine."), "{}", base[3]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&base[4]).unwrap()["content"],
+        "[5] Bad Page (web, fetched 2026-10-25 14:20)\nSecond snippet.\n[full page not available]"
+    );
+    assert!(base[5].contains(r#""ids":[{"n":6,"address":"lib:fx/7","title":"Seven"},{"n":3,"address":"lib:fx/9","title":"Nine"}]"#), "{}", base[5]);
+    assert!(base[5].contains("[3] Nine v2"), "{}", base[5]);
+
+    // export and import at every point, including the one right after the second step (before any web hit exists)
+    // and the ones after web_search (where web_hits holds the stored titles and snippets)
+    for k in 0..6 {
+        let (replies, export) = conversation_steps(&search, Some(k));
+        assert_eq!(replies, base, "replies differ when the conversation is restored after step {k}");
+        let export: Value = serde_json::from_str(&export.unwrap()).unwrap();
+        assert_eq!(export["format"], 1);
+        assert_eq!(export["next_n"], match k { 0 => 3, 1 => 4, 2 | 3 | 4 => 6, _ => 7 });
+        assert_eq!(export["web_hits"].as_object().unwrap().len(), if k >= 2 { 2 } else { 0 }, "step {k}");
+    }
+}
+
+#[test]
+fn a_restored_read_of_a_web_hit_shows_the_stored_snippet_when_the_page_fails() {
+    let pages = Server::start(|_| Resp::new(500, "text/plain", "down"));
+    let bad = pages.url("/gone");
+    let search = Server::start(move |_| Resp::json(&kagi(&[(&bad, "Gone Page", "The stored snippet.")])));
+    let mut c = Core::with_web(&search_url(&search));
+    c.search("x");
+    let export = c.reload();
+    let v: Value = serde_json::from_str(&export).unwrap();
+    let address = format!("web:{}", pages.url("/gone"));
+    assert_eq!(v["web_hits"][&address], json!({"title": "Gone Page", "snippet": "The stored snippet.", "fetched": "2026-10-25 14:20"}));
+    assert_eq!(
+        c.content("read", json!({"n": 1})),
+        "[1] Gone Page (web, fetched 2026-10-25 14:20)\nThe stored snippet.\n[full page not available]"
+    );
+
+    // the same export into a brand new core, with web search switched off: still readable from the stored snippet
+    let mut d = Core::new();
+    unsafe { cs_conversation_free(d.c) };
+    d.c = unsafe { cs_conversation_import(cstr(&export).as_ptr()) };
+    assert!(!d.c.is_null());
+    assert_eq!(d.content("read", json!({"n": 1})), "[1] Gone Page (web, fetched 2026-10-25 14:20)\nThe stored snippet.\n[full page not available]");
+}
+
+#[test]
+fn an_empty_conversation_round_trips_and_numbers_from_one() {
+    let mut c = Core::new();
+    let export = c.reload();
+    assert_eq!(export, r#"{"format":1,"next_n":1,"ids":[],"web_hits":{}}"#);
+    let out: Value = serde_json::from_str(&c.format(r#"[{"address":"a","title":"A","snippet":"s"}]"#)).unwrap();
+    assert_eq!(out["ids"][0]["n"], 1);
+}
+
+#[test]
+fn import_refuses_a_bad_export_with_an_error_and_no_conversation() {
+    for (bad, code) in [
+        ("", "bad_json"),
+        ("{", "bad_json"),
+        ("[]", "bad_json"),
+        ("{}", "bad_json"),
+        (r#"{"format":"1","next_n":1,"ids":[]}"#, "bad_json"),
+        (r#"{"format":1,"next_n":9,"ids":[{"n":1,"address":"a","title":"A"}],"web_hits":{}}"#, "bad_json"),
+        (r#"{"format":2,"next_n":1,"ids":[],"web_hits":{}}"#, "unsupported"),
+        (r#"{"format":0}"#, "unsupported"),
+    ] {
+        let c = unsafe { cs_conversation_import(cstr(bad).as_ptr()) };
+        assert!(c.is_null(), "{bad}");
+        assert_eq!(last_thread_error().unwrap()["code"], code, "{bad}");
+    }
+    assert!(unsafe { cs_conversation_import(ptr::null()) }.is_null());
+    assert_eq!(last_thread_error().unwrap()["code"], "bad_json");
+    assert!(unsafe { cs_conversation_export(ptr::null_mut()) }.is_null());
+    assert_eq!(last_thread_error().unwrap()["code"], "bad_json");
+}

@@ -762,3 +762,51 @@ fn serve_web_endpoints_set_and_clear_search_without_echoing_the_key() {
     assert!(j(&body)["content"].as_str().unwrap().contains("not_set_up"));
     assert!(!body.contains(WEB_KEY));
 }
+
+#[test]
+fn serve_exports_a_conversation_and_imports_it_as_a_new_one() {
+    let tmp = TempDir::new("serveconv");
+    let config = tmp.path("sources.json");
+    std::fs::write(&config, r#"{"sources":[]}"#).unwrap();
+    let s = Serve::start(&["--config", &config]);
+    let new_id = |s: &Serve| j(&s.req("POST", "/conversations", None).1)["id"].as_str().unwrap().to_string();
+    let list = |a: &str, b: &str| json!({"results": [{"address": a, "title": format!("T {a}"), "snippet": "s"}, {"address": b, "title": format!("T {b}"), "snippet": "s"}]});
+
+    // empty: the same bytes the core documents
+    let empty = new_id(&s);
+    let (code, body) = s.req("GET", &format!("/conversations/{empty}/export"), None);
+    assert_eq!((code, body.as_str()), (200, r#"{"format":1,"next_n":1,"ids":[],"web_hits":{}}"#));
+
+    // two formats, then export
+    let a = new_id(&s);
+    s.req("POST", &format!("/conversations/{a}/format"), Some(&list("lib:x/1", "lib:x/2")));
+    s.req("POST", &format!("/conversations/{a}/format"), Some(&list("lib:x/3", "lib:x/1")));
+    let (code, export) = s.req("GET", &format!("/conversations/{a}/export"), None);
+    assert_eq!(code, 200);
+    assert_eq!(
+        export,
+        r#"{"format":1,"next_n":4,"ids":[{"n":1,"address":"lib:x/1","title":"T lib:x/1"},{"n":2,"address":"lib:x/2","title":"T lib:x/2"},{"n":3,"address":"lib:x/3","title":"T lib:x/3"}],"web_hits":{}}"#
+    );
+
+    // import: a new id; its export is the same bytes; continuing on it matches continuing on the original
+    let (code, body) = s.req("POST", "/conversations/import", Some(&j(&export)));
+    assert_eq!(code, 200, "{body}");
+    let b = j(&body)["id"].as_str().unwrap().to_string();
+    assert_ne!(a, b);
+    assert_eq!(s.req("GET", &format!("/conversations/{b}/export"), None).1, export);
+    let next = list("lib:x/9", "lib:x/2");
+    let (_, from_a) = s.req("POST", &format!("/conversations/{a}/format"), Some(&next));
+    let (_, from_b) = s.req("POST", &format!("/conversations/{b}/format"), Some(&next));
+    assert_eq!(from_a, from_b);
+    assert!(from_b.contains(r#""n":4"#), "{from_b}");
+    assert_eq!(s.req("GET", &format!("/conversations/{a}/export"), None).1, s.req("GET", &format!("/conversations/{b}/export"), None).1);
+
+    // refusals: an unknown format, malformed JSON, an unknown conversation
+    let (code, body) = s.req("POST", "/conversations/import", Some(&json!({"format": 2, "next_n": 1, "ids": []})));
+    assert_eq!(j(&body)["code"], "unsupported", "{body}");
+    assert_eq!(code, 422);
+    let (code, body) = s.req("POST", "/conversations/import", Some(&json!("not an export")));
+    assert_eq!((code, j(&body)["code"].as_str().unwrap()), (400, "bad_json"));
+    let (code, body) = s.req("GET", "/conversations/zzz/export", None);
+    assert_eq!((code, j(&body)["code"].as_str().unwrap()), (404, "not_found"));
+}
