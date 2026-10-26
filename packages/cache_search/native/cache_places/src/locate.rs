@@ -52,6 +52,7 @@ impl Tool for LocateTool {
         let (place, near) = (get("place")?, get("near")?);
 
         // Where: the phone, a saved place, or the best geocoder match (biased toward `near`, else toward the phone).
+        let mut kind: Option<(String, String)> = None;
         let (lat, lon, place_name, address, current) = match place {
             None => {
                 let c = resolve_center(ctx, &self.packs, &*self.geo, None)?;
@@ -79,6 +80,7 @@ impl Tool for LocateTool {
                         .next()
                         .or_else(|| self.geo.forward(name, bias, 1).into_iter().next())
                         .ok_or_else(|| err("geocode_empty", format!("no place matches {:?}", name.trim())).with("query", name.trim()))?;
+                    kind = hit.kind_id.clone().zip(hit.kind_label.clone());
                     (hit.lat, hit.lon, hit.label, hit.address, false)
                 }
             }
@@ -87,6 +89,10 @@ impl Tool for LocateTool {
         let mut out = Map::new();
         out.insert("address".into(), json!(address));
         out.insert("place_name".into(), json!(place_name));
+        if let Some((id, label)) = kind {
+            out.insert("kind".into(), json!(id));
+            out.insert("kind_label".into(), json!(label));
+        }
         out.insert("lat".into(), json!(round_to(lat, 5)));
         out.insert("lon".into(), json!(round_to(lon, 5)));
         out.insert("lat_lon_dms".into(), json!(dms(lat, lon)));

@@ -10,6 +10,7 @@ pub mod embedpack;
 pub mod fixture;
 pub mod geo;
 pub mod geocoder;
+pub mod kind;
 pub mod locate;
 pub mod map;
 pub mod nearby;

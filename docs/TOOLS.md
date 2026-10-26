@@ -249,12 +249,21 @@ Result:
 ```json
 {"ok": true, "category": "pharmacy", "center": "current location", "ranked_by": "distance",
  "places": [
-  {"n": 7, "name": "Walgreens", "street": "1414 Overland Ave", "locality": "Burley", "state": "ID", "distance_mi": 0.8, "direction": "SE", "phone": "+1 208 ...", "hours": "Mo-Su 08:00-22:00"},
-  {"n": 8, "name": "Smith's Pharmacy", "locality": "Burley", "state": "ID", "distance_mi": 1.6, "direction": "S"}],
+  {"n": 7, "name": "Walgreens", "kind": "pharmacy", "kind_label": "Pharmacy", "street": "1414 Overland Ave", "locality": "Burley", "state": "ID", "distance_mi": 0.8, "direction": "SE", "phone": "+1 208 ...", "hours": "Mo-Su 08:00-22:00"},
+  {"n": 8, "name": "Smith's Pharmacy", "kind": "pharmacy", "kind_label": "Pharmacy", "locality": "Burley", "state": "ID", "distance_mi": 1.6, "direction": "S"}],
  "map_region": "Idaho", "map_region_age": "12 days old"}
 ```
 
-`phone` and `hours` only when the map data has them. Errors: `nearby_empty`, `no_location`, `not_set_up`.
+`phone` and `hours` only when the map data has them.
+
+**Kinds.** Every place says what it is: `kind` is a stable id from the pack's kind table (`drinking_water`, `spring`, `water_well`,
+`water_point`, `emergency_shelter`, `picnic_shelter`, `trail_shelter`, `wilderness_hut`, `hospital`, `urgent_care`, `pharmacy`, `fuel`, ...)
+and `kind_label` is how to say it ("Drinking water tap", "Picnic shelter"). The kinds are derived from the source's own tags by data
+rules (`places_pack/categories.json`), never from names. A category can hold several kinds (`water` holds taps, springs and wells;
+`shelter` holds emergency shelters, picnic shelters, trail shelters and huts), so the answer reads `kind_label` to say which. A place
+the map data gives no name is called by its kind label and has `"unnamed": true` (`{"name": "Drinking water tap", "kind": "drinking_water",
+"kind_label": "Drinking water tap", "unnamed": true, ...}`): the model says "an unnamed drinking water tap", never a bare "Water" or
+"Shelter". A pack of the older format (1) has no kinds: those fields are absent. Errors: `nearby_empty`, `no_location`, `not_set_up`.
 
 ### locate
 
@@ -278,7 +287,8 @@ Result (1.0 gives latitude/longitude; 1.x adds the other formats shown):
  "usng": "12T VN 64780 10230", "plus_code": "85GF+...", "what3words": "///filled.count.soap"}
 ```
 
-`what3words` only when it was fetched online or cached for a saved place. Errors: `geocode_empty`, `no_location`.
+`what3words` only when it was fetched online or cached for a saved place. For a named place the result also has `kind` and `kind_label`
+right after `place_name` (`"kind": "pharmacy", "kind_label": "Pharmacy"`; a town is `town` / "Town"); the phone's own position has none. Errors: `geocode_empty`, `no_location`.
 
 ### live_data (one generic tool for every live source)
 
@@ -319,7 +329,7 @@ Result (one self-describing shape for every source):
   {"n": 10, "label": "Now", "time": "2026-10-25T14:00-06:00",
    "fields": {"Temperature": "54 °F", "Feels like": "51 °F", "Wind": "12 mph NW, gusts 20 mph", "Conditions": "partly cloudy"}},
   {"n": 11, "label": "Sun 26 Oct", "time": "2026-10-26",
-   "fields": {"High": "58 °F", "Low": "31 °F", "Chance of rain": "10%", "Wind max": "18 mph"}}],
+   "fields": {"High": "58 °F", "Low": "31 °F", "Chance of rain": "10%", "Precipitation": "0.0 in over 0 h", "Snow": "0.0 in", "Wind max": "18 mph"}}],
  "not_covered_after": "2026-11-01"}
 ```
 

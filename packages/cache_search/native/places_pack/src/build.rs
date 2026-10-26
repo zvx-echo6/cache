@@ -3,7 +3,7 @@
 
 use crate::admins::Admins;
 use crate::model::{Harvest, PlaceSource, Raw, RawLocality};
-use crate::rules::Rules;
+use crate::rules::{generic_kind_id, Rules};
 use cache_places::geo::haversine_km;
 use cache_places::schema::{FORMAT_VERSION, SCHEMA};
 use rusqlite::{params, Connection};
@@ -87,6 +87,9 @@ fn absorb(into: &mut Raw, other: &Raw) {
     }
     if into.brand_wikidata.is_none() {
         into.brand_wikidata = other.brand_wikidata.clone();
+    }
+    if into.kind_id.is_none() {
+        into.kind_id = other.kind_id.clone();
     }
     if into.wiki.wikidata.is_none() {
         into.wiki = other.wiki.clone();
@@ -282,6 +285,8 @@ pub struct Report {
     pub enriched: usize,
     pub per_category: BTreeMap<String, usize>,
     pub per_source: BTreeMap<String, usize>,
+    /// Places per kind id.
+    pub per_kind: BTreeMap<String, usize>,
     pub notes: Vec<String>,
 }
 
@@ -384,8 +389,11 @@ pub fn build(
 
     let mut per_category: BTreeMap<String, usize> = BTreeMap::new();
     let mut per_source: BTreeMap<String, usize> = BTreeMap::new();
+    let mut per_kind: BTreeMap<String, usize> = BTreeMap::new();
     for (n, &i) in order.iter().enumerate() {
         let r = &rows[i];
+        let kind_id = r.kind_id.clone().unwrap_or_else(|| generic_kind_id(&r.kind));
+        *per_kind.entry(kind_id.clone()).or_default() += 1;
         let id = n as i64 + 1;
         let (state, country) = (&row_geo[i].0, &row_geo[i].1);
         let locality = match &r.city {
@@ -400,9 +408,9 @@ pub fn build(
                 .map(|(_, j)| locs[j].name.clone()),
         };
         tx.execute(
-            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
-            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, locality, state, country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched],
+            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id, kind_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, locality, state, country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched, kind_id],
         )
         .map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, r.lat, r.lon]).map_err(|e| e.to_string())?;
@@ -431,6 +439,25 @@ pub fn build(
             params![c.id, c.title, c.description, Rules::rules_json(c), *per_category.get(&c.id).unwrap_or(&0) as i64, i as i64],
         )
         .map_err(|e| e.to_string())?;
+    }
+    // The kinds: every kind the rules define (even one no place of this region has), then the kinds the builder derived from a raw
+    // type because no rule covers them, with the label read from the id.
+    let mut sort = 0i64;
+    for k in &rules.kinds {
+        tx.execute(
+            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![k.id, k.label, k.description, k.category, Rules::kind_rules_json(k), *per_kind.get(&k.id).unwrap_or(&0) as i64, sort],
+        )
+        .map_err(|e| e.to_string())?;
+        sort += 1;
+    }
+    for (id, n) in per_kind.iter().filter(|(id, _)| !rules.kinds.iter().any(|k| &k.id == *id)) {
+        tx.execute(
+            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, '', NULL, '[]', ?3, ?4)",
+            params![id, rules.kind_label(id), *n as i64, sort],
+        )
+        .map_err(|e| e.to_string())?;
+        sort += 1;
     }
     let built_at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
     for (k, v) in [
@@ -464,7 +491,7 @@ pub fn build(
             notes.push(format!("category {} has no places", c.id));
         }
     }
-    Ok(Report { places: rows.len(), localities: locs.len(), merged, deduped, enriched, per_category, per_source, notes })
+    Ok(Report { places: rows.len(), localities: locs.len(), merged, deduped, enriched, per_category, per_source, per_kind, notes })
 }
 
 #[cfg(test)]
@@ -480,6 +507,7 @@ mod tests {
             alt: vec![],
             category: cat.map(String::from),
             kind: "x".into(),
+            kind_id: None,
             lat,
             lon,
             street: None,

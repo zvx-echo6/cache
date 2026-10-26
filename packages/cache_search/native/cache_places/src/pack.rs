@@ -1,7 +1,7 @@
 //! Reading a places.sqlite pack: its metadata, category table, nearby queries and the lookups the geocoder uses.
 
 use crate::geo::{bbox_around, haversine_km};
-use crate::schema::FORMAT_VERSION;
+use crate::schema::{FORMAT_VERSION, MIN_FORMAT_VERSION};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -78,12 +78,27 @@ impl Category {
     }
 }
 
+/// One kind of place a format 2 pack knows (`kinds` table).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KindInfo {
+    /// The stable machine id: `drinking_water`, `picnic_shelter`.
+    pub id: String,
+    /// How a person says it: "Drinking water tap".
+    pub label: String,
+    /// One line on what the kind is.
+    pub description: String,
+    /// The starter category it belongs to; None for kinds that are only here for the geocoder.
+    pub category: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaceRow {
     pub id: i64,
     pub name: Option<String>,
     pub category: Option<String>,
     pub kind: Option<String>,
+    /// What kind of place it is (the `kinds` table id); None in a format 1 pack.
+    pub kind_id: Option<String>,
     pub lat: f64,
     pub lon: f64,
     pub street: Option<String>,
@@ -125,7 +140,8 @@ pub struct StateRow {
     pub name: String,
 }
 
-const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary";
+/// The columns of a place row, in `place_row`'s order. `kind_id` is column 4 (a format 1 pack has none: see `Pack::place_cols`).
+const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary";
 const LOC_COLS: &str = "l.id, l.name, l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.source_id, l.wikipedia_title, l.summary";
 
 fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
@@ -134,22 +150,23 @@ fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
         name: r.get(1)?,
         category: r.get(2)?,
         kind: r.get(3)?,
-        lat: r.get(4)?,
-        lon: r.get(5)?,
-        street: r.get(6)?,
-        locality: r.get(7)?,
-        county: r.get(8)?,
-        state: r.get(9)?,
-        country: r.get(10)?,
-        phone: r.get(11)?,
-        hours: r.get(12)?,
-        website: r.get(13)?,
-        source: r.get(14)?,
-        source_id: r.get(15)?,
-        confidence: r.get(16)?,
-        wikidata_id: r.get(17)?,
-        wikipedia_title: r.get(18)?,
-        summary: r.get(19)?,
+        kind_id: r.get(4)?,
+        lat: r.get(5)?,
+        lon: r.get(6)?,
+        street: r.get(7)?,
+        locality: r.get(8)?,
+        county: r.get(9)?,
+        state: r.get(10)?,
+        country: r.get(11)?,
+        phone: r.get(12)?,
+        hours: r.get(13)?,
+        website: r.get(14)?,
+        source: r.get(15)?,
+        source_id: r.get(16)?,
+        confidence: r.get(17)?,
+        wikidata_id: r.get(18)?,
+        wikipedia_title: r.get(19)?,
+        summary: r.get(20)?,
     })
 }
 
@@ -176,6 +193,10 @@ pub struct Pack {
     pub meta: Meta,
     pub categories: Vec<Category>,
     pub states: Vec<StateRow>,
+    /// The format 2 `kinds` table (empty for a format 1 pack).
+    pub kinds: Vec<KindInfo>,
+    /// The pack's format version.
+    pub format: u32,
     /// Source ids of hospitals that an emergency room row was matched to.
     pub matched: HashSet<String>,
     conn: Mutex<Connection>,
@@ -200,8 +221,10 @@ impl Pack {
         };
         let need = |k: &str| get(k)?.ok_or_else(|| Error { message: format!("{}: meta {k} is missing", path.display()) });
         let version: u32 = need("format_version")?.parse().unwrap_or(0);
-        if version != FORMAT_VERSION {
-            return Err(Error { message: format!("{}: pack format {version} is not supported (expected {FORMAT_VERSION})", path.display()) });
+        if !(MIN_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) {
+            return Err(Error {
+                message: format!("{}: pack format {version} is not supported (this reader reads {MIN_FORMAT_VERSION} to {FORMAT_VERSION})", path.display()),
+            });
         }
         let num = |k: &str| -> Result<f64> { need(k)?.parse::<f64>().map_err(|_| Error { message: format!("meta {k} is not a number") }) };
         let meta = Meta {
@@ -223,12 +246,19 @@ impl Pack {
             let rows = st.query_map([], |r| Ok(StateRow { code: r.get(0)?, name: r.get(1)? }))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
+        let kinds = if version >= 2 {
+            let mut st = conn.prepare("SELECT id, label, description, category FROM kinds ORDER BY sort, id")?;
+            let rows = st.query_map([], |r| Ok(KindInfo { id: r.get(0)?, label: r.get(1)?, description: r.get(2)?, category: r.get(3)? }))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
         let matched = {
             let mut st = conn.prepare("SELECT matched_source_id FROM places WHERE matched_source_id IS NOT NULL")?;
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<HashSet<_>>>()?
         };
-        Ok(Pack { path: path.to_path_buf(), meta, categories, states, matched, conn: Mutex::new(conn), stamp: file_stamp(path) })
+        Ok(Pack { path: path.to_path_buf(), meta, categories, states, kinds, format: version, matched, conn: Mutex::new(conn), stamp: file_stamp(path) })
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -239,12 +269,23 @@ impl Pack {
         self.categories.iter().find(|c| c.id == id)
     }
 
+    /// A kind of place by its id (format 2 packs).
+    pub fn kind(&self, id: &str) -> Option<&KindInfo> {
+        self.kinds.iter().find(|k| k.id == id)
+    }
+
+    /// The place columns for this pack's format: a format 1 pack has no `kind_id`, which then reads as NULL.
+    fn place_cols(&self) -> String {
+        if self.format >= 2 { PLACE_COLS.to_string() } else { PLACE_COLS.replace("p.kind_id", "NULL") }
+    }
+
     /// The nearest `limit` places of a category within `max_km`, nearest first, with their distance in km. The search
     /// widens in rings so a nearby hit never scans the whole region.
     pub fn nearby(&self, category: &str, lat: f64, lon: f64, max_km: f64, limit: usize) -> Result<Vec<(PlaceRow, f64)>> {
         let conn = self.conn();
+        let cols = self.place_cols();
         let mut st = conn.prepare(&format!(
-            "SELECT {PLACE_COLS} FROM places_rt r JOIN places p ON p.id = r.id \
+            "SELECT {cols} FROM places_rt r JOIN places p ON p.id = r.id \
              WHERE r.max_lat >= ?1 AND r.min_lat <= ?2 AND r.max_lon >= ?3 AND r.min_lon <= ?4 AND p.category = ?5"
         ))?;
         let mut radius = 10.0f64;
@@ -314,7 +355,8 @@ impl Pack {
 
     pub fn place(&self, id: i64) -> Result<Option<PlaceRow>> {
         let conn = self.conn();
-        Ok(conn.query_row(&format!("SELECT {PLACE_COLS} FROM places p WHERE p.id = ?1"), params![id], place_row).optional()?)
+        let cols = self.place_cols();
+        Ok(conn.query_row(&format!("SELECT {cols} FROM places p WHERE p.id = ?1"), params![id], place_row).optional()?)
     }
 
     pub fn locality(&self, id: i64) -> Result<Option<LocalityRow>> {
@@ -325,7 +367,8 @@ impl Pack {
     /// A place by the id a map result carries (`place:<source_id>` without the prefix).
     pub fn place_by_source_id(&self, source_id: &str) -> Result<Option<PlaceRow>> {
         let conn = self.conn();
-        Ok(conn.query_row(&format!("SELECT {PLACE_COLS} FROM places p WHERE p.source_id = ?1 LIMIT 1"), params![source_id], place_row).optional()?)
+        let cols = self.place_cols();
+        Ok(conn.query_row(&format!("SELECT {cols} FROM places p WHERE p.source_id = ?1 LIMIT 1"), params![source_id], place_row).optional()?)
     }
 
     pub fn locality_by_source_id(&self, source_id: &str) -> Result<Option<LocalityRow>> {

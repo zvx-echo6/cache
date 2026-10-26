@@ -23,6 +23,7 @@
 use crate::coord::{self, Parsed};
 use crate::geo::{bearing_deg, compass8, dms, haversine_km, round_to};
 use crate::geocoder::{GeoHit, Geocoder, HitKind};
+use crate::kind::{humanize, kind_of};
 use crate::nearby::ranked;
 use crate::pack::{Category, LocalityRow, Pack, PackSet, PlaceRow};
 use serde_json::{json, Map, Value};
@@ -122,7 +123,13 @@ struct Cand {
     id: String,
     kind_t: &'static str,
     name: String,
+    /// For display: the kind's label when the place has one, else the category's title or the raw type, humanized.
     kind: String,
+    /// The pack's kind id and label (`drinking_water`, "Drinking water tap"); a town's size (`town`, "Town").
+    kind_id: Option<String>,
+    kind_label: Option<String>,
+    /// The place has no name in the pack; `name` is then its kind's label.
+    unnamed: bool,
     category: Option<String>,
     street: Option<String>,
     locality: Option<String>,
@@ -140,31 +147,27 @@ struct Cand {
     matched: &'static str,
 }
 
-fn humanize(raw: &str) -> String {
-    let v = raw.rsplit(['=', ':']).next().unwrap_or(raw).replace('_', " ");
-    let mut c = v.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-        None => String::new(),
-    }
-}
-
 fn cat_title(packs: &[Arc<Pack>], id: &str) -> Option<String> {
     packs.iter().find_map(|p| p.category(id)).map(|c| c.title.clone())
 }
 
 fn cand_place(packs: &[Arc<Pack>], r: &PlaceRow, rel: f64, matched: &'static str) -> Cand {
-    let kind = r
-        .category
-        .as_deref()
-        .and_then(|c| cat_title(packs, c))
+    let own = kind_of(packs, r);
+    let kind = own
+        .as_ref()
+        .map(|k| k.1.clone())
+        .or_else(|| r.category.as_deref().and_then(|c| cat_title(packs, c)))
         .or_else(|| r.kind.as_deref().map(humanize))
         .unwrap_or_else(|| "Place".into());
+    let named = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Cand {
         id: format!("place:{}", r.source_id),
         kind_t: "place",
-        name: r.name.clone().unwrap_or_else(|| kind.clone()),
+        unnamed: named.is_none(),
+        name: named.unwrap_or_else(|| kind.clone()),
         kind,
+        kind_id: own.as_ref().map(|k| k.0.clone()),
+        kind_label: own.map(|k| k.1),
         category: r.category.clone(),
         street: r.street.clone(),
         locality: r.locality.clone(),
@@ -189,6 +192,9 @@ fn cand_town(l: &LocalityRow, rel: f64, matched: &'static str) -> Cand {
         kind_t: "town",
         name: l.name.clone(),
         kind: humanize(&l.kind),
+        kind_id: Some(l.kind.clone()),
+        kind_label: Some(humanize(&l.kind)),
+        unnamed: false,
         category: None,
         street: None,
         locality: Some(l.name.clone()),
@@ -234,6 +240,11 @@ fn cand_json(c: &Cand, near: Option<(f64, f64)>, score: f64) -> Value {
     m.insert("type".into(), json!(c.kind_t));
     m.insert("name".into(), json!(c.name));
     m.insert("kind".into(), json!(c.kind));
+    put(&mut m, "kind_id", &c.kind_id);
+    put(&mut m, "kind_label", &c.kind_label);
+    if c.unnamed {
+        m.insert("unnamed".into(), json!(true));
+    }
     m.insert("category".into(), json!(c.category));
     m.insert("address".into(), json!(address_of(c)));
     m.insert("lat".into(), json!(round_to(c.lat, 6)));
@@ -643,7 +654,7 @@ impl PlacesCore {
         if let Some(sid) = id.strip_prefix("place:") {
             let r = packs.iter().find_map(|p| p.place_by_source_id(sid).ok().flatten())?;
             let osm = crate::geocoder::osm_category(&r);
-            return Some(Endpoint { id: Some(id.into()), name: r.name.clone().or(r.kind.clone()), lat: r.lat, lon: r.lon, osm_category: osm });
+            return Some(Endpoint { id: Some(id.into()), name: r.name.clone().or_else(|| kind_of(&packs, &r).map(|k| k.1)).or(r.kind.clone()), lat: r.lat, lon: r.lon, osm_category: osm });
         }
         if let Some(sid) = id.strip_prefix("town:") {
             let l = packs.iter().find_map(|p| p.locality_by_source_id(sid).ok().flatten())?;

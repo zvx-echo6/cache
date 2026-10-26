@@ -6,6 +6,7 @@
 //! implemented over it by `PackPlaceSource`.
 
 use crate::geo::{bearing_deg, haversine_km};
+use crate::kind::humanize;
 use crate::pack::{LocalityRow, PackSet, PlaceRow};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -37,6 +38,10 @@ pub struct GeoHit {
     pub country: Option<String>,
     /// OSM "key:value" ("highway:trailhead") when the place comes from OSM.
     pub osm_category: Option<String>,
+    /// What kind of place it is: the pack's kind id and label (`drinking_water`, "Drinking water tap"); for a town its
+    /// size (`town`, "Town"). None for a place of a format 1 pack.
+    pub kind_id: Option<String>,
+    pub kind_label: Option<String>,
     /// How well the name fits the query alone, 0 to 100 (100 exact, 90 an exact alternative name), before the town boost,
     /// the text score and the distance bias.
     pub name_match: f64,
@@ -315,6 +320,8 @@ impl PackGeocoder {
                         county: l.county.clone(),
                         country: l.country.clone(),
                         osm_category: None,
+                        kind_id: Some(l.kind.clone()),
+                        kind_label: Some(humanize(&l.kind)),
                         name_match: ns,
                         score,
                     });
@@ -347,6 +354,8 @@ impl PackGeocoder {
                         county: r.county.clone(),
                         country: r.country.clone(),
                         osm_category: osm_category(&r),
+                        kind_id: r.kind_id.clone(),
+                        kind_label: r.kind_id.as_deref().map(|k| p.kind(k).map(|i| i.label.clone()).unwrap_or_else(|| humanize(k))),
                         name_match: nm,
                         score,
                     });
@@ -441,6 +450,8 @@ impl PackGeocoder {
             county: l.county.clone(),
             country: l.country.clone(),
             osm_category: None,
+            kind_id: Some(l.kind.clone()),
+            kind_label: Some(humanize(&l.kind)),
             name_match: 100.0 - 10.0 * e as f64,
             score: 0.0,
         })
