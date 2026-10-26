@@ -67,6 +67,7 @@ pub struct AreaInfo {
     pub maxzoom: u8,
 }
 
+#[derive(Clone)]
 pub enum TileOut {
     Tile { bytes: Vec<u8>, mime: &'static str, from: &'static str },
     /// The source has no tile here.
@@ -534,6 +535,43 @@ impl Inner {
         }
     }
 
+    /// The tile if it can be answered from local storage alone (downloaded areas, the viewed-tile cache, offline, out
+    /// of the zoom range, contours made of local elevation tiles); `None` if it needs the source. Never touches the
+    /// network and never waits for it, so the tile server answers these at once.
+    pub fn tile_local(&self, id: &str, z: u8, x: u32, y: u32) -> Result<Option<TileOut>> {
+        match http::with_policy(http::Policy::LocalOnly, || self.tile(id, z, x, y)) {
+            Ok(t) => Ok(Some(t)),
+            Err(e) if e.code == "needs_upstream" => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The tile from the source, as the tile server asks for it: one attempt with the upstream timeout. A source that
+    /// is too slow or has no free connection is a clean `Miss` (not an error), so the map simply asks again later.
+    pub fn tile_upstream(&self, id: &str, z: u8, x: u32, y: u32) -> Result<TileOut> {
+        match http::with_policy(http::Policy::Interactive(http::upstream_timeout()), || self.tile(id, z, x, y)) {
+            Err(e) if e.code == "upstream_timeout" => Ok(TileOut::Miss),
+            r => r,
+        }
+    }
+
+    /// True when answering this layer's TileJSON may fetch the source's own TileJSON (a `tilejson` source whose copy in
+    /// memory is missing or a day old, while online); everything else is made from the definition alone.
+    pub fn tilejson_needs_upstream(&self, id: &str) -> bool {
+        let Ok(l) = self.base_of(id) else { return false };
+        let is_tj = l.source.as_ref().map(|s| s.kind == "tilejson").unwrap_or(false);
+        if !is_tj || !self.is_online() || http::network_seems_down() {
+            return false;
+        }
+        let fresh = self.tj.lock().ok().and_then(|g| g.get(&l.id).map(|(t, _)| now_secs() - t < 86_400)).unwrap_or(false);
+        !fresh
+    }
+
+    /// TileJSON through the same rules as `tile_upstream`.
+    pub fn tilejson_upstream(&self, id: &str, base_url: &str) -> Result<Value> {
+        http::with_policy(http::Policy::Interactive(http::upstream_timeout()), || self.tilejson(id, base_url))
+    }
+
     fn zoom_range(l: &LayerDef) -> (u8, u8) {
         let s = l.source.as_ref();
         (s.and_then(|s| s.minzoom).unwrap_or(0), s.and_then(|s| s.maxzoom).unwrap_or(22))
@@ -560,6 +598,9 @@ impl Inner {
         let offline_out = || if l.transform == Transform::OnlineOnly { TileOut::NeedsConnection } else { TileOut::Miss };
         if !self.is_online() || http::network_seems_down() {
             return Ok(offline_out());
+        }
+        if http::policy() == http::Policy::LocalOnly {
+            return Err(Error::needs_upstream());
         }
         let fetched = self.fetch_source(l, z, x, y);
         self.note_health(&l.id, fetched.as_ref().err());

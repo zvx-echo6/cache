@@ -53,11 +53,16 @@ impl Fake {
 
 /// `handler(url, range)` -> (status, body). A range is applied by the handler. `delay_ms` makes every answer slow.
 pub fn fake_host(delay_ms: u64, handler: impl Fn(&str, Option<(u64, u64)>) -> (u16, Vec<u8>) + Send + Sync + 'static) -> Fake {
+    fake_host_n(8, delay_ms, handler)
+}
+
+/// Like `fake_host` with `threads` serving threads (a handler that sleeps holds its thread).
+pub fn fake_host_n(threads: usize, delay_ms: u64, handler: impl Fn(&str, Option<(u64, u64)>) -> (u16, Vec<u8>) + Send + Sync + 'static) -> Fake {
     let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
     let port = server.server_addr().to_ip().unwrap().port();
     let stats = Arc::new(Stats::default());
     let handler = Arc::new(handler);
-    for _ in 0..8 {
+    for _ in 0..threads {
         let (s, st, h) = (server.clone(), stats.clone(), handler.clone());
         std::thread::spawn(move || {
             while let Ok(req) = s.recv() {

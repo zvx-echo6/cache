@@ -343,8 +343,9 @@ impl RangeSource for HttpSource {
         if ranges.len() <= 1 {
             return ranges.iter().map(|&(o, l)| self.read(o, l)).collect();
         }
+        let pol = crate::http::policy();
         let results: Vec<Result<Vec<u8>>> = std::thread::scope(|sc| {
-            let hs: Vec<_> = ranges.iter().map(|&(o, l)| sc.spawn(move || self.read(o, l))).collect();
+            let hs: Vec<_> = ranges.iter().map(|&(o, l)| sc.spawn(move || crate::http::with_policy(pol, || self.read(o, l)))).collect();
             hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(Error::internal("panic in a range read")))).collect()
         });
         results.into_iter().collect()
