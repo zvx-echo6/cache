@@ -94,7 +94,7 @@ Result (text; the same number; up to ~6,000 characters, cut at a paragraph end):
 
 ```
 [2] WikiMed: Bleeding
-<article text, headings kept, HTML removed>
+<article text, headings kept, HTML removed; the page's main content only: menus, banners, sidebars and footers are left out>
 [truncated]
 ```
 

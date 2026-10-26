@@ -120,6 +120,8 @@ enum Engine {
 struct SrcHits {
     id: String,
     title: String,
+    /// The stemming tokenizer of the source's language (`index::tokenizer_name_for`).
+    tokenizer: &'static str,
     engine: Engine,
     count: usize,
     /// Best first.
@@ -252,6 +254,77 @@ fn query_words(query: &str) -> Vec<String> {
     out
 }
 
+/// The letters and digits of `s`, lowercased: text in a form where the same words compare equal however the markup
+/// spaced or punctuated them.
+pub fn compact(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+
+/// Whether every fragment of `snippet` (libzim joins passages with "...") is in the page text whose `compact` form is
+/// `page`. A fragment is judged on its letters and digits only.
+pub fn snippet_in_text(snippet: &str, page: &str) -> bool {
+    let flat = snippet.replace('\u{2026}', "...");
+    let mut any = false;
+    for frag in flat.split("...") {
+        let c = compact(frag);
+        if c.is_empty() {
+            continue;
+        }
+        any = true;
+        if !page.contains(&c) {
+            return false;
+        }
+    }
+    any
+}
+
+/// Where a snippet around byte `p` of `text` should start: the start of the sentence `p` is in when that is within a third
+/// of `max` characters back, else a word start about a sixth of `max` back.
+fn window_start(text: &str, p: usize, max: usize) -> usize {
+    let head = &text[..p];
+    let back = |n: usize| head.char_indices().rev().nth(n.saturating_sub(1)).map(|(i, _)| i).unwrap_or(0);
+    let lo = back(max / 3);
+    let region = &head[lo..];
+    let mut best: Option<usize> = None;
+    let mut it = region.char_indices().peekable();
+    while let Some((_, c)) = it.next() {
+        if matches!(c, '.' | '!' | '?' | '\n') {
+            if let Some(&(j, d)) = it.peek() {
+                if d.is_whitespace() {
+                    best = Some(lo + j + d.len_utf8());
+                }
+            }
+        }
+    }
+    if let Some(b) = best {
+        let rest = &text[b..p];
+        return b + (rest.len() - rest.trim_start().len());
+    }
+    let lo = back(max / 6);
+    match head[lo..].find(char::is_whitespace) {
+        Some(w) if lo + w < p => lo + w + head[lo + w..].chars().next().map(|c| c.len_utf8()).unwrap_or(1),
+        _ => p,
+    }
+}
+
+/// A snippet of at most `max` chars cut from `text` (an article's main text): starting a little before the first word
+/// that stems to one of `stems`, or at the start of the text when none does.
+pub fn main_snippet(text: &str, an: &mut TextAnalyzer, stems: &HashSet<String>, max: usize) -> String {
+    let mut first: Option<usize> = None;
+    if !stems.is_empty() {
+        let mut ts = an.token_stream(text);
+        while ts.advance() {
+            let t = ts.token();
+            if stems.contains(&t.text) {
+                first = Some(t.offset_from);
+                break;
+            }
+        }
+    }
+    let from = first.map(|p| window_start(text, p, max)).unwrap_or(0);
+    html::snippet_from_text(&text[from..], max)
+}
+
 /// Hits kept per Xapian source for the merge when fewer than this many results were asked for: their articles are read
 /// for coverage, so the window is bounded.
 const KEEP_PER_SOURCE: usize = 10;
@@ -382,13 +455,14 @@ impl Handle {
                 }
             }
             let (id, title) = (z.src.id.clone(), z.src.title.clone());
+            let tokenizer = index::tokenizer_name_for(z.src.language.as_deref());
             // A ZIM with a built-in Xapian index uses it (no index_dir needed). If libzim fails on this query, the
             // source falls back to its Tantivy index, if it has one.
             if let Some(x) = z.xapian() {
                 if let Some((mut hits, mut xhits, count)) = xapian_list(&x, query, candidates) {
                     let mut an = index::make_analyzer(index::tokenizer_name_for(z.src.language.as_deref()));
                     xapian_coverage(&z.src, &mut an, &words, &mut hits, &mut xhits, (opts.offset + opts.k).max(KEEP_PER_SOURCE));
-                    per.push(SrcHits { id, title, engine: Engine::Xapian(xhits), count, hits });
+                    per.push(SrcHits { id, title, tokenizer, engine: Engine::Xapian(xhits), count, hits });
                     continue;
                 }
             }
@@ -411,6 +485,7 @@ impl Handle {
             per.push(SrcHits {
                 id,
                 title,
+                tokenizer,
                 engine: Engine::Tantivy { searcher, query: q, lead: oi.fields.lead, title_f: oi.fields.title },
                 count,
                 hits,
@@ -558,6 +633,7 @@ impl Handle {
         }
 
         let mut generators: HashMap<usize, Option<SnippetGenerator>> = HashMap::new();
+        let mut fitters: HashMap<usize, (TextAnalyzer, HashSet<String>)> = HashMap::new();
         let mut results: Vec<Value> = Vec::new();
         for e in shown.into_iter().skip(opts.offset).take(opts.k) {
             let (m_si, hi) = match e {
@@ -581,20 +657,12 @@ impl Handle {
             let address = zimsrc::format_address(&p.id, &h.path);
             let (searcher, query, lead_f, title_f) = match &p.engine {
                 Engine::Xapian(xhits) => {
-                    // libzim's own snippet (HTML with <b>), stripped and cut like every other snippet; an empty one
-                    // falls back to the start of the article text.
+                    // libzim's own snippet (HTML with <b>), stripped and cut like every other snippet. libzim picks its
+                    // passage from the whole page, menus and footers included, so a snippet that is not in the article's
+                    // main text is rebuilt from that text around the query's first term (see `fit_snippet`).
                     let xh = &xhits[hi];
-                    let mut snippet = clean_snippet(&xh.snippet, snippet_chars);
-                    if snippet.is_empty() {
-                        if let Ok(e) = self.zim_get(&address) {
-                            if e.mime.to_ascii_lowercase().starts_with("text/html") {
-                                snippet = html::snippet_from_text(
-                                    &html::html_to_text(&String::from_utf8_lossy(&e.bytes)),
-                                    snippet_chars,
-                                );
-                            }
-                        }
-                    }
+                    let snippet = clean_snippet(&xh.snippet, snippet_chars);
+                    let snippet = self.fit_snippet(&mut fitters, m_si, p.tokenizer, &words, &address, snippet, snippet_chars);
                     let art_title = if xh.title.is_empty() { xh.path.clone() } else { xh.title.clone() };
                     results.push(json!({
                         "address": address,
@@ -631,6 +699,8 @@ impl Handle {
                     t
                 }
             };
+            // an index built before main-content extraction has menu text in its leads: same check as for Xapian hits
+            let snippet = self.fit_snippet(&mut fitters, m_si, per[m_si].tokenizer, &words, &address, snippet, snippet_chars);
             results.push(json!({
                 "address": address,
                 "title": format!("{}: {}", p.title, art_title),
@@ -650,6 +720,37 @@ impl Handle {
             "keyword_only_sources": keyword_only,
         })
         .to_string())
+    }
+
+    /// `snippet` if it is text of the article's main content, else a snippet cut from the main text around the first
+    /// occurrence of a query term (the first words of the main text when no term is found). Only HTML articles are
+    /// checked; anything else (or an article that cannot be read) keeps `snippet`. `fitters` caches the analyzer and the
+    /// query's stems for each source.
+    #[allow(clippy::too_many_arguments)]
+    fn fit_snippet(
+        &self,
+        fitters: &mut HashMap<usize, (TextAnalyzer, HashSet<String>)>,
+        src: usize,
+        tokenizer: &str,
+        words: &[String],
+        address: &str,
+        snippet: String,
+        max: usize,
+    ) -> String {
+        let Ok(e) = self.zim_get(address) else { return snippet };
+        if !e.mime.to_ascii_lowercase().starts_with("text/html") {
+            return snippet;
+        }
+        let main = html::html_to_text(&String::from_utf8_lossy(&e.bytes));
+        if !snippet.is_empty() && snippet_in_text(&snippet, &compact(&main)) {
+            return snippet;
+        }
+        let (an, stems) = fitters.entry(src).or_insert_with(|| {
+            let mut an = index::make_analyzer(tokenizer);
+            let stems: HashSet<String> = words.iter().filter_map(|w| analyzed(&mut an, w).into_iter().next()).collect();
+            (an, stems)
+        });
+        main_snippet(&main, an, stems, max)
     }
 
     /// Plain text of an address, cut to `max_chars` at a paragraph end.
@@ -713,6 +814,52 @@ mod tests {
 
     fn l(v: &[&str]) -> Vec<(String, f32)> {
         v.iter().enumerate().map(|(i, s)| (s.to_string(), 10.0 - i as f32)).collect()
+    }
+
+    fn stems(words: &[&str]) -> (TextAnalyzer, HashSet<String>) {
+        let mut an = index::make_analyzer("en_stem");
+        let set = words.iter().filter_map(|w| analyzed(&mut an, w).into_iter().next()).collect();
+        (an, set)
+    }
+
+    #[test]
+    fn snippet_text_check_ignores_spacing_and_marks() {
+        let page = compact("Boise is the capital of Idaho.\n\nIt lies on the Boise River, in the Treasure Valley.");
+        assert!(snippet_in_text("capital of  Idaho. It lies on the Boise River", &page));
+        assert!(snippet_in_text("...the capital of Idaho... in the Treasure Valley.", &page));
+        // one passage that is not in the page (a menu) fails the whole snippet; an empty one is not "in" the page
+        assert!(!snippet_in_text("Home Docs Downloads", &page));
+        assert!(!snippet_in_text("the capital of Idaho ... Home Docs", &page));
+        assert!(!snippet_in_text("...", &page));
+    }
+
+    #[test]
+    fn main_snippet_starts_at_the_sentence_of_the_first_query_term() {
+        let text = format!("{} The first sentence has nothing. Reading the manual about rebasing is the key step here. {}", "Filler words go here. ".repeat(40), "Then more text follows. ".repeat(40));
+        let (mut an, st) = stems(&["rebase"]);
+        let s = main_snippet(&text, &mut an, &st, 120);
+        assert!(s.starts_with("Reading the manual about rebasing"), "{s}");
+        assert!(s.chars().count() <= 120);
+        // a term early in the text starts at the beginning
+        let (mut an, st) = stems(&["filler"]);
+        assert!(main_snippet(&text, &mut an, &st, 60).starts_with("Filler words"));
+    }
+
+    #[test]
+    fn main_snippet_without_a_matching_term_is_the_start_of_the_text() {
+        let text = "Alpha beta gamma. Delta epsilon.";
+        let (mut an, st) = stems(&["zeta"]);
+        assert_eq!(main_snippet(text, &mut an, &st, 400), "Alpha beta gamma. Delta epsilon.");
+        let (mut an, st) = stems(&[]);
+        assert_eq!(main_snippet(text, &mut an, &st, 400), "Alpha beta gamma. Delta epsilon.");
+    }
+
+    #[test]
+    fn main_snippet_with_a_long_unbroken_run_before_the_term_still_cuts_on_a_word() {
+        let text = format!("{} flood insurance matters", "x".repeat(900));
+        let (mut an, st) = stems(&["flood"]);
+        let s = main_snippet(&text, &mut an, &st, 100);
+        assert!(s.starts_with("flood insurance") || s.contains("flood"), "{s}");
     }
 
     #[test]

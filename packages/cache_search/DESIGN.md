@@ -331,7 +331,12 @@ Snippets and titles:
   cut at a sentence end. ZIM article: Tantivy snippet over `lead`, falling back to its first sentences, at most
   400 chars. For a ZIM searched through its Xapian index: libzim's own snippet, with its HTML (`<b>` around matched
   words) stripped and entities decoded, whitespace collapsed, a leading or trailing "..." removed, and cut to at most 400 chars at a sentence end
-  by the same rule; if libzim gives none, the first sentences of the article.
+  by the same rule; if libzim gives none, the first sentences of the article. Main-content check (all ZIM hits, both
+  engines): libzim picks its passage from the whole page, menus and footers included, and an index built before main-content
+  extraction has menu text in its `lead`. So the article is read, and a snippet whose text (letters and digits only, each
+  "..."-joined passage on its own) is not in the article's main text is replaced by a snippet cut from the main text,
+  starting at the sentence of the first query term (matched after stemming with the source's analyzer; the first
+  sentences when no term is found). A snippet that is main text is left as it is.
 - Library hit title: the mapped `title` (falling back to `title_fallback`); when the point has a page,
   `<title>, p. <page>`. For a ZIM hit: `<ZIM title>: <article title>`.
 
@@ -360,9 +365,34 @@ build) because the top hits' articles are read for coverage.
 
 ## read
 
-`read(address, max_chars)`: ZIM → the article text (HTML stripped to plain text, headings kept); library → the
+`read(address, max_chars)`: ZIM → the article text (HTML stripped to plain text, headings kept, main content only: see
+below); library → the
 point's title and mapped text field, plus author, page and source type (null where unmapped) so the app can
 render the page.
+
+### Main-content extraction (`html::extract`, used by `read`, by the coverage read, by snippets and by the index's `lead`)
+
+Menus, banners and footers come before the article in a page's text, so the text of a ZIM page is the page's main content.
+Structure and measures only (element names, ARIA roles, link density, text length); no word lists.
+
+1. Chrome is left out: `nav`, `aside`, `footer`, `head`, `script`, `style` and the other elements the stripper drops; any element
+   with `role` navigation, banner, contentinfo, complementary or search, or `aria-hidden="true"`; and a `header` that is not inside an
+   `article`, `aside`, `main`, `nav` or `section` (inside one it is that section's title block and stays).
+2. If the page has `main`, `article` or `role="main"` elements, the largest one is the content. (Kiwix/mwoffliner Wikipedia
+   pages are `main#content`; MkDocs, Docusaurus, DevDocs, NHS, ready.gov, Sphinx and Appropedia pages carry `main` or
+   `article`; Stack Exchange has `role="main"`.)
+3. Otherwise the density walk: starting at `body`, enter the container child (`div`, `section`, `table`, `td`, `center`,
+   `font`, `form`...) that holds at least 70% of the element's text, with link text not counted (so a menu counts for
+   nothing), while it holds at least half of the text `body` held. The element where the walk stops is the content; blocks
+   in it of which 80% or more of the text is link text (at least two links) are left out (previous/next rows, related
+   lists). The optional end tags of `p`, `li`, `dt`, `dd`, `tr`, `td` and `th` are implied when the tree is built.
+4. If the density walk's text is under 200 characters (`MIN_DENSITY_CHARS`), the whole page text is used, as before: a page
+   that short has no room for a menu to bury it. A declared `main` that has no text counts as absent.
+
+Wikipedia pages go through step 2 and give the byte-identical text the earlier code gave (checked on sampled articles of the
+maxi and medicine ZIMs, `tests/zim_main_text.rs`). Existing Tantivy indexes are not rebuilt (`INDEX_FORMAT` is unchanged);
+their `lead` may still hold menu text, which the snippet check above corrects when a result is shown. New indexes store the
+`lead` of the main text.
 
 ## Browse
 
