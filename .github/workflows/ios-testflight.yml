@@ -63,6 +63,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - name: Check the disk-space helper on macOS
+        run: |
+          clang -Wall -Wextra -Werror packages/cache_search/ios/Classes/cache_search.c \
+            packages/cache_search/ios/tests/free_space_test.c -o "$RUNNER_TEMP/free-space-test"
+          "$RUNNER_TEMP/free-space-test" "$RUNNER_TEMP" "$RUNNER_TEMP/missing-$(uuidgen)"
       - name: Native toolchain identity
         id: toolchain
         run: |
@@ -177,7 +182,7 @@ jobs:
         run: |
           flutter --version
           flutter pub get
-          flutter test --no-pub test/core_config_test.dart
+          flutter test --no-pub test/core_config_test.dart test/nav_speaker_test.dart test/browse/zim_download_test.dart test/browse/storage_test.dart
           flutter build ios --config-only --release --build-name=1.0.0 --build-number=${{ github.run_number }}
           cd ios && pod install
       - name: Signing certificate and profile
@@ -218,7 +223,7 @@ jobs:
           BIN="$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app/Runner"
           ls -l "$BIN"
           nm -gU "$BIN" > "$RUNNER_TEMP/syms.txt"
-          for s in _cs_open _cs_version _cl_load _cl_next _valhalla_shim_init _valhalla_shim_route; do grep -q " $s\$" "$RUNNER_TEMP/syms.txt" && echo "found $s" || { echo "MISSING $s"; exit 1; }; done
+          for s in _cs_open _cs_version _cl_load _cl_next _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk; do grep -q " $s\$" "$RUNNER_TEMP/syms.txt" && echo "found $s" || { echo "MISSING $s"; exit 1; }; done
           codesign -d --entitlements :- "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app" 2>/dev/null | grep -E "increased-memory|extended-virtual|time-sensitive"
       - name: Export the .ipa
         run: |

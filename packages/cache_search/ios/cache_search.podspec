@@ -27,7 +27,7 @@ The Cache search core (ZIMs and libraries, places, live data, navigation) called
   # -force_load keeps every cs_* function of the core (nothing in the app calls them directly; Dart looks them up). libCoreKiwix.a is
   # not force-loaded: only the libzim parts the core uses are pulled from it.
   s.user_target_xcconfig = {
-    'OTHER_LDFLAGS' => '$(inherited) -force_load "${PODS_ROOT}/../.symlinks/plugins/cache_search/ios/native/libcache_search.a"',
+    'OTHER_LDFLAGS' => '$(inherited) -force_load "${PODS_ROOT}/../.symlinks/plugins/cache_search/ios/native/libcache_search.a" -Wl,-u,_cache_free_bytes_on_disk',
   }
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.0'
