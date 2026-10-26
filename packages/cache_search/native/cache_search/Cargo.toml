@@ -4,8 +4,18 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
+[features]
+# Keyword search over a ZIM's own built-in Xapian index, through the C++ shim ../zimx over the official prebuilt libzim
+# (GPL-2.0-or-later; see ../zimx/LIBZIM.md and DESIGN.md "Licences"). Takes effect on Windows and Android only; any
+# build with --no-default-features is the Tantivy-only core.
+default = ["xapian"]
+xapian = []
+
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
+
+[build-dependencies]
+cc = "1"
 
 [dependencies]
 zim = "0.5.0"

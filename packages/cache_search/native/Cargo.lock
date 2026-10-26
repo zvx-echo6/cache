@@ -539,6 +539,7 @@ dependencies = [
  "cache_tool",
  "cache_user",
  "cache_video",
+ "cc",
  "common",
  "edge",
  "html-escape",
