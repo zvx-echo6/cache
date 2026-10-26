@@ -69,20 +69,7 @@ impl Resolved {
     }
 }
 
-/// "44.0543,-115.4237" or "44.0543 -115.4237" (also with a space after the comma): two numbers in range.
-pub fn parse_latlon(text: &str) -> Option<(f64, f64)> {
-    let t = text.trim();
-    let parts: Vec<&str> = if t.contains(',') { t.split(',').map(str::trim).collect() } else { t.split_whitespace().collect() };
-    if parts.len() != 2 {
-        return None;
-    }
-    let (lat, lon) = (parts[0].parse::<f64>().ok()?, parts[1].parse::<f64>().ok()?);
-    if lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0 {
-        Some((lat, lon))
-    } else {
-        None
-    }
-}
+pub use cache_tool::places::parse_latlon;
 
 pub(crate) struct Resolver<'a, 'c> {
     pub ctx: &'a ToolCtx<'c>,

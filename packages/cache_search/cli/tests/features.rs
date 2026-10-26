@@ -438,3 +438,56 @@ fn live_data_through_cs_tool_numbers_and_continues_after_search() {
     let r = nodefs.tool(&mut Conv::new().unwrap(), "live_data", r#"{"source":"weather"}"#, NOW).unwrap();
     assert!(serde_json::from_str::<Value>(&r).unwrap()["content"].as_str().unwrap().contains("not_set_up"), "{r}");
 }
+
+// ---- live_data resolves the place through the places pack (cs_tool: the handle plugs the pack in as ToolCtx::geocoder) ----
+
+#[test]
+fn live_data_resolves_place_names_through_the_places_pack() {
+    let port = mock_server();
+    let (t, _, json) = state("places-pack", port);
+    let pack = t.0.join("places.sqlite");
+    cache_places::fixture::write_fixture_pack(&pack);
+    let mut cfg: Value = serde_json::from_str(&json).unwrap();
+    let plain = cfg.to_string();
+    cfg["places"] = json!({"packs": [pack.to_string_lossy()]});
+    let with_pack = cfg.to_string();
+
+    let tool = |core: &mut Core, args: Value| -> Value {
+        let out = core.tool(&mut Conv::new().unwrap(), "live_data", &args.to_string(), NOW).unwrap();
+        serde_json::from_str::<Value>(&serde_json::from_str::<Value>(&out).unwrap()["content"].as_str().unwrap().to_string()).unwrap()
+    };
+    // weather for Burley, stored under a saved place; Rupert is 13 km away and has none of its own
+    let mut core = Core::open(&with_pack).unwrap();
+    core.wait_ready(std::time::Duration::from_secs(60)).unwrap();
+    core.place_save(r#"{"name":"Home","lat":42.536,"lon":-113.792}"#).unwrap();
+    core.live_fetch(&format!(r#"{{"source":"weather","place":"Home","now":"{NOW}"}}"#)).unwrap();
+    let mut first: Option<Value> = None;
+    for text in ["Rupert, Idaho", "rupert id", "Rupret", "42.6166,-113.6747"] {
+        let v = tool(&mut core, json!({"source": "weather", "place": text}));
+        assert_eq!(v["ok"], true, "{text}: {v}");
+        assert_eq!(v["place"], "Home", "{text}");
+        assert_eq!(v["distance_from_asked_km"], 13, "{text}");
+        assert!(v["asked_place"].as_str().unwrap().starts_with("Rupert, ID") || text.starts_with("42."), "{text}: {v}");
+        assert!(v["items"][0]["n"].is_number() && v["items"][0].get("address").is_none());
+        let items = v["items"].clone();
+        assert_eq!(first.get_or_insert(items.clone()), &items, "{text}");
+    }
+    // out of range: no_data naming the nearest, not geocode_empty; a name that is no place is geocode_empty
+    let e = tool(&mut core, json!({"source": "weather", "place": "Boise"}));
+    assert_eq!(e["ok"], false);
+    assert_eq!(e["error"]["type"], "no_data");
+    assert!(e["error"]["detail"].as_str().unwrap().contains("the nearest place with data is Home, 230 km away"), "{e}");
+    assert_eq!(tool(&mut core, json!({"source": "weather", "place": "Xqzvk Plugh"}))["error"]["type"], "geocode_empty");
+    // the phone's position, 10 km from Burley
+    core.set_location(42.60, -113.70, 10.0, NOW).unwrap();
+    let v = tool(&mut core, json!({"source": "weather"}));
+    assert_eq!((v["place"].as_str(), v["asked_place"].as_str(), v["distance_from_asked_km"].as_i64()), (Some("Home"), Some("current location"), Some(10)));
+    drop(core);
+
+    // the same state without a places section: the saved place and coordinates work, a town name is geocode_empty
+    let mut core = Core::open(&plain).unwrap();
+    core.wait_ready(std::time::Duration::from_secs(60)).unwrap();
+    assert_eq!(tool(&mut core, json!({"source": "weather", "place": "Home"}))["place"], "Home");
+    assert_eq!(tool(&mut core, json!({"source": "weather", "place": "42.60,-113.70"}))["place"], "Home");
+    assert_eq!(tool(&mut core, json!({"source": "weather", "place": "Rupert, Idaho"}))["error"]["type"], "geocode_empty");
+}

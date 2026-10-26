@@ -65,6 +65,9 @@ pub struct ToolCtx<'a> {
     pub places: &'a dyn SavedPlaces,
     /// Local time now, ISO 8601 with offset, from the caller (the phone's clock; pinned in captures).
     pub now: &'a str,
+    /// Names to coordinates through the installed places pack (the one `navigate` and `locate` use); `None` while no pack is
+    /// installed, and a tool then resolves saved places and "lat,lon" text only.
+    pub geocoder: Option<&'a dyn places::Geocoder>,
 }
 
 /// What a tool returns on success.
@@ -228,7 +231,7 @@ mod tests {
     #[test]
     fn tool_is_object_safe_and_runs() {
         let t: Box<dyn Tool> = Box::new(Dummy);
-        let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: "2026-01-01T00:00:00-07:00" };
+        let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: "2026-01-01T00:00:00-07:00", geocoder: None };
         assert_eq!(t.name(), "dummy");
         assert!(t.schema().is_none());
         match t.run(&ctx, &Value::Null).unwrap() {

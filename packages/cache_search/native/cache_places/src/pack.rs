@@ -289,6 +289,14 @@ impl Pack {
         Ok(out)
     }
 
+    /// `(id, name)` of every locality in the pack (towns, cities, villages, hamlets), for matching a misspelt name.
+    pub fn locality_names(&self) -> Result<Vec<(i64, String)>> {
+        let conn = self.conn();
+        let mut st = conn.prepare("SELECT id, name FROM localities")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Full-text matches in the places index: (id, bm25 score where lower is better). `fts` is an FTS5 MATCH expression.
     pub fn fts_places(&self, fts: &str, limit: usize) -> Result<Vec<(i64, f64)>> {
         let conn = self.conn();

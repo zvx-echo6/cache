@@ -79,6 +79,23 @@ impl From<serde_json::Error> for Error {
 pub struct LiveCfg {
     pub db_path: String,
     pub sources_dir: String,
+    /// How far from the place asked about (km) the `live_data` tool takes data stored for another place: a town with no data of
+    /// its own gets the nearest stored location's data when that is within this distance. Default 30.
+    #[serde(default = "default_live_radius_km")]
+    pub live_radius_km: f64,
+}
+
+/// The default of `LiveCfg::live_radius_km`.
+pub const DEFAULT_LIVE_RADIUS_KM: f64 = 30.0;
+
+fn default_live_radius_km() -> f64 {
+    DEFAULT_LIVE_RADIUS_KM
+}
+
+impl LiveCfg {
+    pub fn new(db_path: impl Into<String>, sources_dir: impl Into<String>) -> LiveCfg {
+        LiveCfg { db_path: db_path.into(), sources_dir: sources_dir.into(), live_radius_km: DEFAULT_LIVE_RADIUS_KM }
+    }
 }
 
 /// A place live data is fetched for. `key` is part of every item address, so it has no `/`.
@@ -393,6 +410,21 @@ impl Live {
             .collect();
         let errors: Vec<Value> = errs.iter().map(|(f, m)| serde_json::json!({"file": f, "message": m})).collect();
         serde_json::json!({"sources": sources, "errors": errors}).to_string()
+    }
+
+    /// Every place `source` has stored data for (saved places and positions the phone fetched at), with how far each is from
+    /// `(lat, lon)` in km, nearest first.
+    pub(crate) fn locations(&self, c: &Connection, source: &str, lat: f64, lon: f64) -> Result<Vec<(Place, f64)>> {
+        let mut st = c.prepare("SELECT place_key, place_name, lat, lon FROM live_fetch WHERE source=?1")?;
+        let rows = st.query_map([source], |r| Ok(Place { key: r.get(0)?, name: r.get(1)?, lat: r.get(2)?, lon: r.get(3)? }))?;
+        let mut out: Vec<(Place, f64)> = Vec::new();
+        for p in rows {
+            let p = p?;
+            let km = geo::haversine_km(lat, lon, p.lat, p.lon);
+            out.push((p, km));
+        }
+        out.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.key.cmp(&b.0.key)));
+        Ok(out)
     }
 
     /// Delete everything stored for a place (when the saved place is deleted).

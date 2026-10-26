@@ -26,3 +26,5 @@ cache_tool = { path = "../cache_tool" }
 [dev-dependencies]
 tiny_http = "0.12"
 cache_user = { path = "../cache_user" }
+# The places pack and its geocoder, for the tests of live_data resolving place names.
+cache_places = { path = "../cache_places" }

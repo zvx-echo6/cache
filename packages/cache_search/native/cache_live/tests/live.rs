@@ -2,6 +2,7 @@
 //! test are the real files from packages/cache_search/sources with only the URL pointed at that server.
 
 use cache_live::{Live, LiveCfg, LiveDataTool};
+use cache_tool::places::{Geocoder, PlaceSource};
 use cache_tool::{Location, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput};
 use cache_user::UserStore;
 use serde_json::{json, Value};
@@ -79,7 +80,7 @@ impl Env {
             }
             std::fs::write(dir.join("sources").join(file), serde_json::to_string_pretty(&d).unwrap()).unwrap();
         }
-        let live = Live::new(LiveCfg { db_path: dir.join("live.sqlite").to_string_lossy().into(), sources_dir: dir.join("sources").to_string_lossy().into() });
+        let live = Live::new(LiveCfg::new(dir.join("live.sqlite").to_string_lossy(), dir.join("sources").to_string_lossy()));
         let places = UserStore::new(dir.join("user.sqlite"));
         Env { dir, live, places }
     }
@@ -90,8 +91,12 @@ impl Env {
         self.live.get(&req.to_string(), &self.places).map(|s| serde_json::from_str(&s).unwrap())
     }
     fn tool(&self, args: Value, loc: Option<&Location>, now: &str) -> Result<Value, ToolError> {
-        let t = LiveDataTool::new(self.live.cfg.clone());
-        match t.run(&ToolCtx { location: loc, places: &self.places, now }, &args)? {
+        self.tool_with(args, loc, now, None, self.live.cfg.live_radius_km)
+    }
+    /// The tool with a geocoder (the places pack) and a `live_radius_km`.
+    fn tool_with(&self, args: Value, loc: Option<&Location>, now: &str, geo: Option<&dyn Geocoder>, radius_km: f64) -> Result<Value, ToolError> {
+        let t = LiveDataTool::new(LiveCfg { live_radius_km: radius_km, ..self.live.cfg.clone() });
+        match t.run(&ToolCtx { location: loc, places: &self.places, now, geocoder: geo }, &args)? {
             ToolOutput::Json(v) => Ok(v),
             ToolOutput::Text(_) => panic!("text"),
         }
@@ -437,4 +442,236 @@ fn deleting_a_saved_place_forgets_its_data() {
     env.live.forget_place("home");
     assert_eq!(env.get(json!({"source": "weather", "place": "home", "now": T0})).unwrap_err().code, "not_found");
     let _ = env.places.list();
+}
+
+// ---- live_data resolves the place through the places pack (DESIGN.md "live_data and the places pack") ----
+
+/// The places pack of a test as the handle would plug it in: `PlaceSource::geocoder`.
+struct Pack {
+    source: std::sync::Arc<dyn PlaceSource>,
+    _dir: Option<PathBuf>,
+}
+
+impl Pack {
+    /// The small Idaho fixture pack (Burley, Heyburn, Rupert, Declo, Twin Falls, Boise, Stanley, ...).
+    fn fixture(name: &str) -> Pack {
+        let dir = std::env::temp_dir().join(format!("cache-live-pack-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("places.sqlite");
+        cache_places::fixture::write_fixture_pack(&path);
+        let (_, source) = cache_places::tools_and_source(&cache_places::PlacesCfg { packs: vec![path.to_string_lossy().into()] });
+        Pack { source, _dir: Some(dir) }
+    }
+    /// A real pack, read only.
+    fn real(path: &str) -> Pack {
+        let (_, source) = cache_places::tools_and_source(&cache_places::PlacesCfg { packs: vec![path.into()] });
+        Pack { source, _dir: None }
+    }
+    fn geo(&self) -> &dyn Geocoder {
+        self.source.geocoder().expect("the pack source is a geocoder")
+    }
+}
+
+impl Drop for Pack {
+    fn drop(&mut self) {
+        if let Some(d) = &self._dir {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
+/// Weather stored for Burley (a saved place), as the app would have downloaded it.
+fn burley_data(name: &str) -> (Env, Server) {
+    let (env, srv) = weather_env(name);
+    env.places.save(r#"{"key":"burley","name":"Burley, ID","lat":42.536,"lon":-113.792}"#).unwrap();
+    env.weather(json!({"source": "weather", "place": "burley", "now": T0})).unwrap();
+    (env, srv)
+}
+
+const LATER: &str = "2026-10-25T12:00:00-06:00";
+
+fn weather(env: &Env, geo: Option<&dyn Geocoder>, place: Option<&str>, loc: Option<&Location>) -> Result<Value, ToolError> {
+    let args = match place {
+        Some(p) => json!({"source": "weather", "place": p}),
+        None => json!({"source": "weather"}),
+    };
+    env.tool_with(args, loc, LATER, geo, 30.0)
+}
+
+#[test]
+fn one_town_however_it_is_written_and_misspelt() {
+    let pack = Pack::fixture("forms");
+    let (env, _srv) = burley_data("forms");
+    // Rupert is about 13 km from Burley: no data of its own, so Burley's is used and the result says so
+    let mut seen: Vec<Value> = Vec::new();
+    for text in ["Rupert, Idaho", "Rupert ID", "rupert", "RUPERT", "Rupret", "Rupet", "42.6166,-113.6747"] {
+        let v = weather(&env, Some(pack.geo()), Some(text), None).unwrap_or_else(|e| panic!("{text}: {}", e.to_json()));
+        assert_eq!(v["place"], "Burley, ID", "{text}");
+        assert_eq!(v["distance_from_asked_km"], 13, "{text}: {v}");
+        assert_eq!(v["items"][0]["address"], "live:weather/burley/now", "{text}");
+        let asked = v["asked_place"].as_str().unwrap().to_string();
+        assert!(asked == "Rupert, ID" || asked == "42.6166,-113.6747", "{text}: asked_place {asked}");
+        seen.push(v["items"].clone());
+    }
+    // the same data every time
+    assert!(seen.windows(2).all(|w| w[0] == w[1]));
+    // field order: place, then the two new fields, then fetched_at
+    let v = weather(&env, Some(pack.geo()), Some("Rupert"), None).unwrap();
+    let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(&keys[..5], ["source", "place", "asked_place", "distance_from_asked_km", "fetched_at"]);
+    // the place that has the data: no extra fields (the saved place itself, or a place a km away at most)
+    let own = weather(&env, Some(pack.geo()), Some("burley"), None).unwrap();
+    assert_eq!(own["place"], "Burley, ID");
+    assert!(own.get("asked_place").is_none() && own.get("distance_from_asked_km").is_none(), "{own}");
+    let town = weather(&env, Some(pack.geo()), Some("Burley, Idaho"), None).unwrap();
+    assert_eq!(town["place"], "Burley, ID");
+    assert!(town.get("distance_from_asked_km").is_none(), "{town}");
+}
+
+#[test]
+fn a_town_with_no_data_in_range_is_no_data_naming_the_nearest() {
+    let pack = Pack::fixture("far");
+    let (env, _srv) = burley_data("far");
+    let e = weather(&env, Some(pack.geo()), Some("Boise, Idaho"), None).unwrap_err();
+    assert_eq!(e.code, "no_data");
+    assert_eq!(
+        e.to_json().to_string(),
+        r#"{"ok":false,"error":{"type":"no_data","detail":"no weather data within 30 km of Boise, ID; the nearest place with data is Burley, ID, 230 km away"}}"#
+    );
+    // not geocode_empty, which is for a name that is no place at all
+    let e = weather(&env, Some(pack.geo()), Some("Xqzvk"), None).unwrap_err();
+    assert_eq!(e.code, "geocode_empty");
+    // nothing stored at all: the old wording
+    let (empty, _s) = weather_env("far-empty");
+    let e = weather(&empty, Some(pack.geo()), Some("Rupert"), None).unwrap_err();
+    assert_eq!((e.code.as_str(), e.detail.as_str()), ("no_data", "no weather data has been downloaded for Rupert, ID"));
+}
+
+#[test]
+fn the_radius_is_config() {
+    let pack = Pack::fixture("radius");
+    let (env, _srv) = burley_data("radius");
+    let args = json!({"source": "weather", "place": "Rupert"});
+    let e = env.tool_with(args.clone(), None, LATER, Some(pack.geo()), 10.0).unwrap_err();
+    assert_eq!(e.detail, "no weather data within 10 km of Rupert, ID; the nearest place with data is Burley, ID, 13 km away");
+    assert_eq!(env.tool_with(args.clone(), None, LATER, Some(pack.geo()), 13.5).unwrap()["place"], "Burley, ID");
+    // the default is 30 km, and a config without the key gets it
+    let cfg: LiveCfg = serde_json::from_str(r#"{"db_path":"a","sources_dir":"b"}"#).unwrap();
+    assert_eq!(cfg.live_radius_km, 30.0);
+    let cfg: LiveCfg = serde_json::from_str(r#"{"db_path":"a","sources_dir":"b","live_radius_km":12.5}"#).unwrap();
+    assert_eq!(cfg.live_radius_km, 12.5);
+}
+
+#[test]
+fn the_phones_position_takes_the_nearest_stored_data_too() {
+    let pack = Pack::fixture("fix");
+    let (env, _srv) = burley_data("fix");
+    // 10 km from Burley, with no data stored at this position
+    let here = Location { lat: 42.60, lon: -113.70, accuracy_m: Some(12.0), fixed_at: "2026-10-25T11:40:00-06:00".into() };
+    let v = weather(&env, Some(pack.geo()), None, Some(&here)).unwrap();
+    assert_eq!(v["place"], "Burley, ID");
+    assert_eq!(v["asked_place"], "current location");
+    assert_eq!(v["distance_from_asked_km"], 10);
+    // data stored at this very position wins and says nothing extra
+    env.weather(json!({"source": "weather", "place": {"key": "at:42.60,-113.70", "name": "current location", "lat": 42.60, "lon": -113.70}, "now": T0})).unwrap();
+    let v = weather(&env, Some(pack.geo()), None, Some(&here)).unwrap();
+    assert_eq!(v["place"], "current location");
+    assert!(v.get("asked_place").is_none());
+    // a fix with nothing stored within the radius
+    let far = Location { lat: 43.6150, lon: -116.2023, accuracy_m: None, fixed_at: "2026-10-25T11:40:00-06:00".into() };
+    let e = weather(&env, Some(pack.geo()), None, Some(&far)).unwrap_err();
+    assert_eq!(e.code, "no_data");
+    assert!(e.detail.contains("current location") && e.detail.contains("Burley, ID"), "{}", e.detail);
+    // and no fix, no place: as before
+    assert_eq!(weather(&env, Some(pack.geo()), None, None).unwrap_err().code, "no_location");
+}
+
+#[test]
+fn without_a_places_pack_only_the_exact_name_matches() {
+    let (env, _srv) = burley_data("nopack");
+    // saved place by key or name, coordinates by text
+    for text in ["burley", "Burley, ID", "BURLEY, id"] {
+        assert_eq!(weather(&env, None, Some(text), None).unwrap()["place"], "Burley, ID", "{text}");
+    }
+    let v = weather(&env, None, Some("42.60,-113.70"), None).unwrap();
+    assert_eq!((v["place"].as_str(), v["distance_from_asked_km"].as_i64()), (Some("Burley, ID"), Some(10)));
+    // a town name is not a saved place, and nothing resolves it
+    for text in ["Rupert", "Rupert, Idaho", "Burley Idaho"] {
+        let e = weather(&env, None, Some(text), None).unwrap_err();
+        assert_eq!(e.code, "geocode_empty", "{text}");
+    }
+}
+
+#[test]
+fn fresh_data_a_little_farther_beats_expired_data_nearer() {
+    let srv = Server::start(vec![("/alerts/active", fixture("nws_boise.json"))]);
+    let env = Env::new("fresh", vec![("alerts.json", real_source("alerts.json"), Some((srv.port, "/alerts/active")))]);
+    let pack = Pack::fixture("fresh");
+    let save = |k: &str, n: &str, lat: f64, lon: f64| env.places.save(&json!({"key": k, "name": n, "lat": lat, "lon": lon}).to_string()).unwrap();
+    save("declo", "Declo, ID", 42.5238, -113.6122);
+    save("burley", "Burley, ID", 42.5357, -113.7928);
+    let fetch = |k: &str, now: &str| env.live.fetch(&json!({"source": "alerts", "place": k, "now": now}).to_string(), &env.places).unwrap();
+    fetch("declo", "2026-10-25T00:00:00-06:00"); // valid 6 hours: over at 06:00
+    fetch("burley", "2026-10-25T10:00:00-06:00"); // over at 16:00
+    let near_declo = |now: &str| env.tool_with(json!({"source": "alerts", "place": "Declo"}), None, now, Some(pack.geo()), 30.0);
+    // Declo's own data is the nearest and has run out; Burley's is still good: Burley's is used
+    let v = near_declo("2026-10-25T11:00:00-06:00").unwrap();
+    assert_eq!(v["place"], "Burley, ID");
+    assert_eq!(v["asked_place"], "Declo, ID");
+    // both over: the nearest one's expiry is what the model is told
+    let e = near_declo("2026-10-25T17:00:00-06:00").unwrap_err();
+    assert_eq!((e.code.as_str(), e.detail.as_str()), ("expired", "alerts data expired 2026-10-25"));
+}
+
+// ---- the real Idaho pack: CS_TEST_IDAHO_PACK=<places.sqlite>, read only ----
+
+#[test]
+fn island_park_through_the_real_idaho_pack() {
+    let Some(path) = std::env::var("CS_TEST_IDAHO_PACK").ok().filter(|s| !s.is_empty()) else {
+        eprintln!("CS_TEST_IDAHO_PACK not set: skipping");
+        return;
+    };
+    let pack = Pack::real(&path);
+    let (env, _srv) = weather_env("real");
+    // weather was downloaded for Ashton, about 40 km from Island Park
+    env.places.save(r#"{"key":"ashton","name":"Ashton, ID","lat":44.0716,"lon":-111.4483}"#).unwrap();
+    env.weather(json!({"source": "weather", "place": "ashton", "now": T0})).unwrap();
+    let ask = |text: &str, radius: f64| env.tool_with(json!({"source": "weather", "place": text}), None, LATER, Some(pack.geo()), radius);
+
+    // every way of writing the town, and a misspelling, is the one town
+    let mut asked = std::collections::BTreeSet::new();
+    for text in ["Island Park, Idaho", "Island Park ID", "island park", "ISLAND PARK", "Islnd Park", "Ilsand Park", "Island Parc", "44.4238,-111.3714"] {
+        let v = ask(text, 50.0).unwrap_or_else(|e| panic!("{text}: {}", e.to_json()));
+        assert_eq!(v["place"], "Ashton, ID", "{text}");
+        let km = v["distance_from_asked_km"].as_i64().unwrap();
+        assert!((38..=42).contains(&km), "{text}: {km} km");
+        asked.insert(v["asked_place"].as_str().unwrap().to_string());
+        eprintln!("{text:22} -> asked_place {:?}, data for {:?}, {km} km", v["asked_place"], v["place"]);
+    }
+    // the five names of the town give one asked_place; the coordinates are shown as written
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked.contains("Island Park, ID") && asked.contains("44.4238,-111.3714"), "{asked:?}");
+
+    // the default radius (30 km) does not reach Ashton: no_data, naming it
+    let e = ask("Island Park, Idaho", 30.0).unwrap_err();
+    assert_eq!(e.code, "no_data");
+    assert!(e.detail.starts_with("no weather data within 30 km of Island Park, ID; the nearest place with data is Ashton, ID, 4"), "{}", e.detail);
+    eprintln!("{}", e.to_json());
+
+    // a town in range of Ashton gets Ashton's data; one out of range is no_data naming Ashton; a name that is no place is geocode_empty
+    let v = ask("St. Anthony, Idaho", 30.0).unwrap();
+    assert_eq!((v["place"].as_str(), v["asked_place"].as_str()), (Some("Ashton, ID"), Some("St. Anthony, ID")));
+    let km = v["distance_from_asked_km"].as_i64().unwrap();
+    assert!((20..=24).contains(&km), "{km}");
+    let e = ask("Driggs", 30.0).unwrap_err();
+    assert_eq!(e.code, "no_data");
+    assert!(e.detail.starts_with("no weather data within 30 km of Driggs, ID; the nearest place with data is Ashton, ID, 4"), "{}", e.detail);
+    eprintln!("St. Anthony -> {} km; Driggs -> {}", km, e.to_json());
+    assert_eq!(ask("Xqzvkj Qlmn", 30.0).unwrap_err().code, "geocode_empty");
+
+    // the phone at Island Park
+    let here = Location { lat: 44.4238, lon: -111.3714, accuracy_m: Some(8.0), fixed_at: "2026-10-25T11:40:00-06:00".into() };
+    let v = env.tool_with(json!({"source": "weather"}), Some(&here), LATER, Some(pack.geo()), 50.0).unwrap();
+    assert_eq!((v["place"].as_str(), v["asked_place"].as_str()), (Some("Ashton, ID"), Some("current location")));
 }

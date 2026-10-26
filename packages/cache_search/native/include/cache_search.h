@@ -65,7 +65,9 @@ char *cs_version(void);
  *   "video": {"dir": ".../videos"},                 optional: PeerTube instances, offline downloads (cs_video_*, job
  *                                                   kind video_download); holds instances.json and downloads/
  *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
- *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
+ *            "sources_dir": ".../sources",           the source definition files (*.json, see DESIGN.md)
+ *            "live_radius_km": 30},                  optional, default 30: live_data uses the nearest stored place's data
+ *                                                    within this distance of the place asked about
  *   "places": {"packs": [".../idaho/places.sqlite"]},  optional: registers the nearby and locate tools over these places
  *                                  packs (docs/TOOLS.md). Packs are opened on demand: nearby is left out of
  *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack

@@ -67,7 +67,35 @@ pub struct NearestQuery<'a> {
     pub limit: usize,
 }
 
+/// A name to one point: the lookup a tool needs when it only wants to know where a place is (`live_data`). `cache_places`
+/// implements it over the installed places pack, with the same resolver `navigate` and `locate` use.
+pub trait Geocoder: Send + Sync {
+    /// The best match for `text` ("Island Park, Idaho", "island park", a close misspelling of a town): its name as it is shown
+    /// ("Island Park, ID") and its position. `near` is a point to prefer when several places share the name (the phone's
+    /// position). `None` when nothing fits.
+    fn resolve(&self, text: &str, near: Option<(f64, f64)>) -> Option<(String, f64, f64)>;
+}
+
+/// "44.0543,-115.4237" or "44.0543 -115.4237" (also with a space after the comma): two numbers in range.
+pub fn parse_latlon(text: &str) -> Option<(f64, f64)> {
+    let t = text.trim();
+    let parts: Vec<&str> = if t.contains(',') { t.split(',').map(str::trim).collect() } else { t.split_whitespace().collect() };
+    if parts.len() != 2 {
+        return None;
+    }
+    let (lat, lon) = (parts[0].parse::<f64>().ok()?, parts[1].parse::<f64>().ok()?);
+    if lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+        Some((lat, lon))
+    } else {
+        None
+    }
+}
+
 pub trait PlaceSource: Send + Sync {
+    /// The same pack as a `Geocoder` (for `ToolCtx::geocoder`); `None` for a source that only does `geocode` and `nearest`.
+    fn geocoder(&self) -> Option<&dyn Geocoder> {
+        None
+    }
     /// The categories `to_type` may use, or None while no places data is installed.
     fn categories(&self) -> Option<Vec<String>>;
     fn geocode(&self, q: &GeocodeQuery) -> Result<GeocodeAnswer, ToolError>;

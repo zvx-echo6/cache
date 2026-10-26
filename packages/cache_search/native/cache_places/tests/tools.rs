@@ -39,7 +39,7 @@ fn loc(lat: f64, lon: f64) -> Location {
 }
 
 fn run(t: &dyn Tool, location: Option<&Location>, args: Value) -> Value {
-    let ctx = ToolCtx { location, places: &NoSavedPlaces, now: FIXTURE_NOW };
+    let ctx = ToolCtx { location, places: &NoSavedPlaces, now: FIXTURE_NOW, geocoder: None };
     match t.run(&ctx, &args) {
         Ok(ToolOutput::Json(v)) => v,
         Ok(ToolOutput::Text(_)) => panic!("text"),
@@ -222,7 +222,7 @@ fn saved_places_resolve_before_the_geocoder() {
         }
     }
     let (_d, ts, _) = setup("l2");
-    let ctx = ToolCtx { location: None, places: &Home, now: FIXTURE_NOW };
+    let ctx = ToolCtx { location: None, places: &Home, now: FIXTURE_NOW, geocoder: None };
     let Ok(ToolOutput::Json(v)) = tool(&ts, "nearby").run(&ctx, &json!({"category": "pharmacy", "near": "Home", "limit": 1})) else { panic!() };
     assert_eq!(v["center"], "Home");
     assert_eq!(v["places"][0]["name"], "Walgreens");
@@ -295,4 +295,54 @@ fn place_source_for_navigate() {
     let b = src.nearest(&NearestQuery { category: "emergency_room", from: (42.536, -113.792), limit: 2 }).unwrap();
     assert_eq!((b.matches[0].place_name.as_str(), b.matches[0].er_tier), ("Cassia Regional Hospital", Some(3)));
     assert!(src.nearest(&NearestQuery { category: "urgent_care", from: (43.8, -115.8), limit: 2 }).unwrap().matches.is_empty());
+}
+
+// ---- `cache_tool::places::Geocoder`: the one-point lookup live_data resolves place names with ----
+
+fn source(name: &str) -> (Dir, Arc<dyn cache_tool::places::PlaceSource>) {
+    let (d, _, path) = setup(name);
+    let (_, source) = cache_places::tools_and_source(&PlacesCfg { packs: vec![path] });
+    (d, source)
+}
+
+#[test]
+fn resolve_gives_one_point_for_a_name_however_it_is_written() {
+    let (_d, src) = source("resolve1");
+    let g = src.geocoder().expect("the pack source is a geocoder");
+    for text in ["Burley, Idaho", "Burley ID", "burley", "BURLEY", "  Burley  ", "burley id", "burley, id", "Burley, Idaho."] {
+        let (name, lat, lon) = g.resolve(text, None).unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(name, "Burley, ID", "{text}");
+        assert!((lat - 42.5357).abs() < 1e-3 && (lon + 113.7928).abs() < 1e-3);
+    }
+    // a place that is not a town: its name as the pack shows it
+    assert_eq!(g.resolve("Cassia Regional Hospital", None).unwrap().0, "Cassia Regional Hospital (Burley, ID)");
+    // nothing: not a place, empty text, or only a weak match (a place that has one of the words in its name)
+    assert!(g.resolve("Xyzzy Plugh", None).is_none());
+    assert!(g.resolve("   ", None).is_none());
+}
+
+#[test]
+fn resolve_takes_a_town_with_a_typing_slip() {
+    let (_d, src) = source("resolve2");
+    let g = src.geocoder().unwrap();
+    // swapped neighbours, a missing letter, a doubled letter, a wrong letter
+    for (typo, town) in [("Burlye", "Burley, ID"), ("Burly", "Burley, ID"), ("Heybrn", "Heyburn, ID"), ("Twin Fals", "Twin Falls, ID"), ("Ruppert", "Rupert, ID"), ("Boisse", "Boise, ID"), ("Idaho Cty", "Idaho City, ID"), ("Twin Fallz Idaho", "Twin Falls, ID")] {
+        assert_eq!(g.resolve(typo, None).map(|r| r.0).as_deref(), Some(town), "{typo}");
+    }
+    // a short name must be exact (no edits allowed under 4 letters), and too many edits is no match
+    assert!(g.resolve("Bose", None).is_some()); // 4 letters: one slip
+    assert!(g.resolve("Bxi", None).is_none());
+    assert!(g.resolve("Bxrlxy", None).is_none());
+    assert!(g.resolve("Burleyville Road Extension", None).is_none());
+}
+
+#[test]
+fn a_misspelt_town_in_two_states_goes_to_the_one_asked_for_or_the_nearer_one() {
+    let (_d, src) = source("resolve3");
+    let g = src.geocoder().unwrap();
+    // the fixture has a Stanley in Idaho (100 people) and one in North Dakota (80)
+    assert_eq!(g.resolve("Stanly", None).unwrap().0, "Stanley, ID"); // more people
+    assert_eq!(g.resolve("Stanly, ND", None).unwrap().0, "Stanley, ND"); // the state asked for
+    assert_eq!(g.resolve("Stanly", Some((46.3, -97.2))).unwrap().0, "Stanley, ND"); // nearer the phone
+    assert_eq!(g.resolve("Stanly", Some((43.6, -116.2))).unwrap().0, "Stanley, ID");
 }

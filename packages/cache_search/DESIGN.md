@@ -475,7 +475,7 @@ number it was given, so it writes `[n]` itself and gives no marker.
    None is `not_set_up`.
 2. Validate the arguments against the schema's `parameters` (below). A violation is `bad_arguments`, detail
    `"<field>: <what>"`. Defaults in the schema are not filled in; the tool applies them.
-3. Run it with a `ToolCtx` (the handle's location and saved places, and `now`) inside `catch_unwind`; a panic is
+3. Run it with a `ToolCtx` (the handle's location and saved places, `now`, and the places pack's `Geocoder` when one is installed) inside `catch_unwind`; a panic is
    `internal`, "<tool> failed".
 4. Number the result in the conversation (the numbering `cs_format` uses, so an address seen before keeps its
    number): in text, each `{{addr:<address>}}` becomes `[n]` and the title is the text after the marker up to ` — `
@@ -1128,6 +1128,36 @@ reproduce; only a missing `now` falls back to the system clock.
 The phone's own position as a place: the key `at:<lat>,<lon>` with both rounded to 2 decimals (about 1 km) and the name
 `current location`. The `live_data` tool uses it when no place is given and a location is known, so the app fetches
 for the current position with a place object carrying that key.
+
+### `live_data` and the places pack
+
+Decided by the Cache lead (ref-a5), 2026-10-26. The `place` the model gives is not matched against saved place names only. The
+tool resolves it, in this order:
+
+1. a saved place (key or name, ignoring case): its own stored data is used whatever the distance;
+2. `lat,lon` text (the form `navigate` takes: `"44.4238,-111.3714"`): the point as written, shown as written;
+3. a name the places pack resolves, through `ToolCtx::geocoder` (`cache_tool::places::Geocoder`,
+   `resolve(text, near) -> Option<(name, lat, lon)>`; `near` is the phone's position when it is known, to choose between towns of
+   one name). `cache_places::PackPlaceSource` implements it over the same `PackGeocoder` that `navigate` and `locate` use:
+   `forward` search (name, alternative names, prefix, state or county after a comma) when its first match fits the name
+   (`name_score` 40 or more), else the town whose name is the text with a typing slip in it (`fuzzy_town`: optimal string
+   alignment distance, nothing to do with the language: no edits allowed under 4 letters, 1 up to 9, 2 from 10; ties go to the
+   town nearer the phone, then to the larger one). A match that only has one of the words in its name is not a match;
+4. no place text: the phone's position (`here_key`).
+
+With no places pack installed `geocoder` is `None` and only 1 and 2 apply: any other text is `geocode_empty` (as before).
+A text the pack cannot resolve is `geocode_empty` too.
+
+The data is then looked up by distance, not by key: every place the source has stored data for (saved places, and the positions
+the phone fetched at) is a candidate, and the nearest one within `live_radius_km` (the `live` config key, default 30) is used;
+the nearest whose data has not expired when there is a choice. The result's `place` is that place, and when it is not the one
+asked about and is at least 1 km from it, `asked_place` (the name that was resolved, or the text for coordinates and
+`current location` for the fix) and `distance_from_asked_km` (whole km, at least 1) follow it, so the assistant can say "I
+only have Ashton, 40 km from Island Park". The item addresses are those of the place the data is for.
+
+Nothing within the radius is `no_data` with the nearest stored place and its distance in the detail (`no weather data within 30 km
+of Island Park, ID; the nearest place with data is Ashton, ID, 40 km away`), never `geocode_empty`; when nothing at all has
+been downloaded for the source the older wording stays (`no weather data has been downloaded for X`).
 
 HTTP is `ureq` (blocking, rustls with bundled root certificates, no async runtime): the app's scheduler or the CLI calls
 fetch from a worker thread, so a blocking client is enough and it adds far fewer crates than reqwest (tokio, hyper).

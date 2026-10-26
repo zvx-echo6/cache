@@ -5,9 +5,15 @@
 //! TOOLS.md's shape with an `"address"` on each item where the model sees `"n"`: the tool framework numbers the
 //! addresses and adds `"ok": true`. Age and expiry are computed from `ctx.now`, never from the system clock, so
 //! captures reproduce.
+//!
+//! The place asked about is a saved place, "lat,lon" text, a name the places pack's geocoder resolves (`ctx.geocoder`: the
+//! same resolver `navigate` and `locate` use, so "Island Park, Idaho", "island park" and a misspelling find one town), or the
+//! phone's position when none is given. The data is that of the nearest place it was downloaded for within
+//! `live_radius_km`; the result says which place that was and how far it is from the one asked about.
 
 use crate::map::{age_words, date_of, stamp};
 use crate::{address, here_key, now_from, Live, LiveCfg, Place};
+use cache_tool::places::parse_latlon;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
 
@@ -30,6 +36,48 @@ impl LiveDataTool {
 
 fn err(code: &str, detail: impl Into<String>) -> ToolError {
     ToolError::new(code, detail)
+}
+
+/// Data for a place closer than this to the one asked about is "the same place": nothing extra is said.
+const SAME_PLACE_KM: f64 = 1.0;
+
+/// The place a question is about.
+struct Asked {
+    name: String,
+    lat: f64,
+    lon: f64,
+    /// The saved place's key, or the phone-position key: data stored under it is taken whatever the distance.
+    key: Option<String>,
+}
+
+/// Whole km for the model (at least 1).
+fn km_words(km: f64) -> i64 {
+    (km.round() as i64).max(1)
+}
+
+fn resolve_asked(ctx: &ToolCtx, text: Option<&str>) -> Result<Asked, ToolError> {
+    match text {
+        Some(name) => {
+            if let Some(p) = ctx.places.resolve(name) {
+                return Ok(Asked { name: p.name, lat: p.lat, lon: p.lon, key: Some(p.key) });
+            }
+            if let Some((lat, lon)) = parse_latlon(name) {
+                return Ok(Asked { name: name.trim().to_string(), lat, lon, key: None });
+            }
+            let near = ctx.location.map(|l| (l.lat, l.lon));
+            match ctx.geocoder {
+                Some(g) => g
+                    .resolve(name, near)
+                    .map(|(name, lat, lon)| Asked { name, lat, lon, key: None })
+                    .ok_or_else(|| err("geocode_empty", format!("no place called {:?} was found", name.trim()))),
+                None => Err(err("geocode_empty", format!("no saved place called {:?}", name.trim()))),
+            }
+        }
+        None => match ctx.location {
+            Some(loc) => Ok(Asked { name: "current location".into(), lat: loc.lat, lon: loc.lon, key: Some(here_key(loc.lat, loc.lon)) }),
+            None => Err(err(ToolError::NO_LOCATION, "no place was given and the phone's location is not known")),
+        },
+    }
 }
 
 impl Tool for LiveDataTool {
@@ -82,21 +130,46 @@ impl Tool for LiveDataTool {
         let Some(l) = defs.into_iter().find(|l| l.def.id == source) else {
             return Err(err(ToolError::UNKNOWN_SOURCE, format!("no live source called {source:?}")));
         };
-        let place = match place_arg {
-            Some(name) => ctx
-                .places
-                .resolve(name)
-                .map(|p| Place { key: p.key, name: p.name, lat: p.lat, lon: p.lon })
-                .ok_or_else(|| err("geocode_empty", format!("no saved place called {:?}", name.trim())))?,
-            None => match ctx.location {
-                Some(loc) => Place { key: here_key(loc.lat, loc.lon), name: "current location".into(), lat: loc.lat, lon: loc.lon },
-                None => return Err(err(ToolError::NO_LOCATION, "no place was given and the phone's location is not known")),
-            },
-        };
+        let asked = resolve_asked(ctx, place_arg)?;
         let c = self.live.db().map_err(|e| err(ToolError::INTERNAL, e.message))?;
-        let Some(v) = self.live.view(&c, &l, &place, now).map_err(|e| err(ToolError::INTERNAL, e.message))? else {
-            return Err(err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, place.name)));
+        let radius = self.live.cfg.live_radius_km;
+        let stored = self.live.locations(&c, &l.def.id, asked.lat, asked.lon).map_err(|e| err(ToolError::INTERNAL, e.message))?;
+        // the places data was downloaded for: the asked place's own row whatever the distance, the others within the radius
+        let usable: Vec<&(Place, f64)> =
+            stored.iter().filter(|(p, km)| *km <= radius || asked.key.as_deref() == Some(p.key.as_str())).collect();
+        if usable.is_empty() {
+            return Err(match stored.first() {
+                None => err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, asked.name)),
+                Some((p, km)) => err(
+                    ToolError::NO_DATA,
+                    format!(
+                        "no {} data within {} km of {}; the nearest place with data is {}, {} km away",
+                        l.def.id,
+                        radius,
+                        asked.name,
+                        p.name,
+                        km_words(*km)
+                    ),
+                ),
+            });
+        }
+        // the nearest whose data has not expired; when all have, the nearest (and the expired error says so)
+        let mut chosen: Option<(&(Place, f64), crate::View)> = None;
+        for u in &usable {
+            let Some(v) = self.live.view(&c, &l, &u.0, now).map_err(|e| err(ToolError::INTERNAL, e.message))? else { continue };
+            let fresh = !v.expired;
+            if chosen.is_none() || fresh {
+                chosen = Some((u, v));
+            }
+            if fresh {
+                break;
+            }
+        }
+        let Some((&(ref place, km), v)) = chosen else {
+            return Err(err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, asked.name)));
         };
+        let own = asked.key.as_deref() == Some(place.key.as_str());
+        let shown = if own { asked.name.clone() } else { place.name.clone() };
         let off = v.zone();
         if v.expired {
             return Err(err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off))));
@@ -123,7 +196,12 @@ impl Tool for LiveDataTool {
             .collect();
         let mut out = Map::new();
         out.insert("source".into(), json!({"id": l.def.id, "title": l.def.title, "provider": l.def.provider}));
-        out.insert("place".into(), json!(place.name));
+        out.insert("place".into(), json!(shown));
+        if !own && km >= SAME_PLACE_KM {
+            // the data is for another place than the one asked about: say which, and how far apart they are
+            out.insert("asked_place".into(), json!(asked.name));
+            out.insert("distance_from_asked_km".into(), json!(km_words(km)));
+        }
         out.insert("fetched_at".into(), json!(stamp(v.row.fetched_at, &off)));
         out.insert("valid_until".into(), json!(stamp(v.row.valid_until, &off)));
         out.insert("age".into(), json!(age_words(v.age_secs())));

@@ -302,6 +302,12 @@ Schema as the app builds it (example with three installed sources):
     "required": ["source"], "additionalProperties": false}}}
 ```
 
+The `place` text is a saved place, a town or other place the places pack knows, or latitude and longitude (`"44.42,-111.37"`).
+It may be written any way the pack understands ("Island Park, Idaho", "Island Park ID", "island park") and a town name with one
+typing slip in it ("Islnd Park") still finds the town. Data is looked up by distance: it is the data of the nearest place that
+was downloaded for, within `live_radius_km` (phone setting, default 30), so a town with no data of its own gets the nearest
+stored town's, and the result says so (below). The schema is unchanged.
+
 Result (one self-describing shape for every source):
 
 ```json
@@ -331,12 +337,29 @@ The same shape for alerts:
               "Instructions": "Prepare to leave at a moment's notice. Gather medications, documents and pets."}}]}
 ```
 
+When the data is for another place than the one asked about (and 1 km or more away), `place` is the place the data is for, and
+two fields follow it: `asked_place`, the place that was asked about (the name the pack resolved, the coordinates as given, or
+`current location`), and `distance_from_asked_km`, whole km, at least 1. The assistant says which place the data is for and how
+far it is. Without them the data is for the place asked about.
+
+```json
+{"ok": true,
+ "source": {"id": "weather", "title": "Weather forecast", "provider": "Open-Meteo"},
+ "place": "Ashton, ID", "asked_place": "Island Park, ID", "distance_from_asked_km": 40,
+ "fetched_at": "2026-10-24T06:00:00-06:00", "valid_until": "2026-11-01T00:00:00-06:00", "age": "1 day old", "expired": false,
+ "items": [{"n": 10, "label": "Now", "time": "2026-10-25T14:00-06:00", "fields": {"Temperature": "41 °F", "Conditions": "overcast"}}]}
+```
+
 Rules:
 - `fields` keys are plain labels and values carry their units, so no source needs special handling by the model.
 - Items are capped (about 12 per result) to fit the 8k context; `"more": N` says how many were left out.
 - Nothing to report (for example no active alerts): `"items": []` with `"none": true`; the assistant states the age.
 - All downloaded data expired: `{"ok": false, "error": {"type": "expired", "detail": "weather data expired 2026-11-01"}}`;
-  nothing ever downloaded: type `no_data`; source not installed: type `unknown_source`. The assistant says plainly
+  nothing ever downloaded: type `no_data`; source not installed: type `unknown_source`. Data exists, but none within
+  `live_radius_km` of the place asked about: type `no_data` with the nearest place named in the detail
+  (`"no weather data within 30 km of Island Park, ID; the nearest place with data is Ashton, ID, 40 km away"`). A place text
+  that no saved place and no places pack entry matches: type `geocode_empty`. Without a places pack only saved places and
+  coordinates are matched. The assistant says plainly
   that it needs to go online (for example "I no longer have weather data. We need to go online for more.").
 - "Ask about this alert" starts a chat whose first user turn carries the alert as source [1] in this shape.
 

@@ -1,8 +1,9 @@
 //! The offline geocoder: forward search by name (SQLite FTS5 plus a boost for towns, so a bare town name finds the
 //! town and not a school named after it) and reverse lookup of the nearest town.
 //!
-//! `Geocoder` is the trait the tools use. cache_tool has no geocoder trait yet, so this minimal one lives here; it can
-//! move to cache_tool unchanged.
+//! `Geocoder` is the trait this crate's tools use (forward search with its scores, reverse lookup). The small
+//! `cache_tool::places::Geocoder` ("this text, where is it?") that other crates' tools get through `ToolCtx::geocoder` is
+//! implemented over it by `PackPlaceSource`.
 
 use crate::geo::{bearing_deg, haversine_km};
 use crate::pack::{LocalityRow, PackSet, PlaceRow};
@@ -59,6 +60,44 @@ pub trait Geocoder: Send + Sync {
     fn forward(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit>;
     /// The nearest town (city, town or village; a hamlet only when no larger one is within 50 km).
     fn reverse(&self, lat: f64, lon: f64) -> Option<Nearest>;
+    /// The town whose name is the query with a typing slip in it ("Islnd Park", "Bosie"): `forward` finds names, words and
+    /// prefixes, not misspellings. Compared by edit distance (see `slip_allowed`), so nothing depends on the language. `None`
+    /// when no town is that close, and for geocoders that do not do this.
+    fn fuzzy_town(&self, _query: &str, _near: Option<(f64, f64)>) -> Option<GeoHit> {
+        None
+    }
+}
+
+/// Edits (insert, delete, replace, swap of two neighbours) to turn `a` into `b`: the optimal string alignment distance.
+pub fn edit_distance(a: &[char], b: &[char]) -> usize {
+    let (n, m) = (a.len(), b.len());
+    let mut d = vec![vec![0usize; m + 1]; n + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for j in 0..=m {
+        d[0][j] = j;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[n][m]
+}
+
+/// How many edits a name of `len` characters may be off and still count as a misspelling of another: one up to 9 characters,
+/// two from 10 (a name under 4 characters must match exactly).
+pub fn slip_allowed(len: usize) -> usize {
+    match len {
+        0..=3 => 0,
+        4..=9 => 1,
+        _ => 2,
+    }
 }
 
 /// A geocoder over the installed packs.
@@ -366,6 +405,75 @@ impl Geocoder for PackGeocoder {
         };
         Some(Nearest { label: town_label(&l), bearing: bearing_deg(lat, lon, l.lat, l.lon), name: l.name, state: l.state, km })
     }
+
+    fn fuzzy_town(&self, query: &str, near: Option<(f64, f64)>) -> Option<GeoHit> {
+        let packs = self.packs.current();
+        if packs.is_empty() {
+            return None;
+        }
+        let mut states: Vec<(String, String)> = Vec::new();
+        for p in &packs {
+            for s in &p.states {
+                if !states.iter().any(|(c, _)| *c == s.code) {
+                    states.push((s.code.clone(), s.name.clone()));
+                }
+            }
+        }
+        let q = parse_query(query, &states);
+        let want: Vec<char> = norm(&q.head).chars().collect();
+        let allowed = slip_allowed(want.len());
+        if allowed == 0 {
+            return None;
+        }
+        // (edits, locality), the fewest edits first; a tie goes to the town nearer `near`, then to the one with more people
+        let mut best: Option<(usize, LocalityRow)> = None;
+        for p in &packs {
+            for (id, name) in p.locality_names().unwrap_or_default() {
+                let have: Vec<char> = norm(&name).chars().collect();
+                if have.len().abs_diff(want.len()) > allowed {
+                    continue;
+                }
+                let e = edit_distance(&want, &have);
+                if e == 0 || e > allowed {
+                    continue; // an exact name is `forward`'s business
+                }
+                let Ok(Some(l)) = p.locality(id) else { continue };
+                if q.state.as_ref().is_some_and(|s| l.state.as_ref() != Some(s)) {
+                    continue;
+                }
+                let better = match &best {
+                    None => true,
+                    Some((be, bl)) => {
+                        let (pop, bpop) = (l.population.unwrap_or(0), bl.population.unwrap_or(0));
+                        let dist = |x: &LocalityRow| near.map(|(la, lo)| haversine_km(la, lo, x.lat, x.lon)).unwrap_or(0.0);
+                        let (dl, db) = (dist(&l), dist(bl));
+                        e < *be || (e == *be && (dl < db - 1e-6 || ((dl - db).abs() <= 1e-6 && pop > bpop)))
+                    }
+                };
+                if better {
+                    best = Some((e, l));
+                }
+            }
+        }
+        let (e, l) = best?;
+        Some(GeoHit {
+            kind: HitKind::Locality,
+            address: format!("town:{}", l.source_id),
+            name: l.name.clone(),
+            label: town_label(&l),
+            lat: l.lat,
+            lon: l.lon,
+            locality: Some(l.name.clone()),
+            state: l.state.clone(),
+            category: None,
+            what: Some(l.kind.clone()),
+            street: None,
+            county: l.county.clone(),
+            osm_category: None,
+            name_match: 100.0 - 10.0 * e as f64,
+            score: 0.0,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -396,6 +504,22 @@ mod tests {
         // A name that is only a state stays a name.
         let q = parse_query("Idaho", &st());
         assert_eq!((q.head.as_str(), q.state.as_deref()), ("Idaho", None));
+    }
+
+    #[test]
+    fn edit_distance_counts_insert_delete_replace_and_swap() {
+        let d = |a: &str, b: &str| edit_distance(&a.chars().collect::<Vec<_>>(), &b.chars().collect::<Vec<_>>());
+        assert_eq!(d("island park", "island park"), 0);
+        assert_eq!(d("islnd park", "island park"), 1);
+        assert_eq!(d("ilsand park", "island park"), 1);
+        assert_eq!(d("island parc", "island park"), 1);
+        assert_eq!(d("bosie", "boise"), 1);
+        assert_eq!(d("", "abc"), 3);
+        assert_eq!(d("kitten", "sitting"), 3);
+        assert_eq!(slip_allowed(3), 0);
+        assert_eq!(slip_allowed(4), 1);
+        assert_eq!(slip_allowed(9), 1);
+        assert_eq!(slip_allowed(10), 2);
     }
 
     #[test]

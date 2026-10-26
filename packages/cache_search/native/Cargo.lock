@@ -523,6 +523,7 @@ dependencies = [
 name = "cache_live"
 version = "0.1.0"
 dependencies = [
+ "cache_places",
  "cache_tool",
  "cache_user",
  "chrono",
