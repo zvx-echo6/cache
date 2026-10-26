@@ -1068,6 +1068,7 @@ fails when it is stale). Write and test a definition with `cs live-check` and `c
 { "format": 2, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
   "description": "one line: what the model and the Home card see of this source",
   "attribution": "credit line shown with the data",
+  "none_label": "No active emergency alerts",             optional: what live_data calls its one "nothing to report" entry (default: title)
   "request": { ... },                                    see Request
   "api_key": { "alias": "eia", "required": true },       a key; "{api_key}" in url, headers or body
   "basic_auth": { "user_alias": "u", "password_alias": "p" },   HTTP Basic login (instead of api_key)
@@ -1410,6 +1411,17 @@ core has no callbacks into the host, so the host pushes its state in:
   installed source). `cs serve`: `POST /live/policy` (the body is the policy), `DELETE /live/policy`,
   `POST /live/key {"source_id","key"}` (a null key clears it), `DELETE /live/key/{source_id}`; each answers `{"ok":true}` and
   never echoes a key.
+
+### Nothing to report is a numbered entry
+
+Decided by the Cache lead (ref-a5), 2026-10-26. When a valid, unexpired result has no items (no active alerts), `live_data` used
+to return `"items": []` with `"none": true`, which the dispatch had nothing to number, so the model could not cite "no active
+alerts". It now returns one entry in an item's shape: address `live:<source>/<place-key>/none`, `label` from the definition
+(`none_label`, an optional string in the definition format; the `title` when absent, so no wording is invented in code), `time` =
+`fetched_at`, `fields` `{"Status": "none active", "Checked": <fetched_at to the minute, place zone>, "Age": <age>}` and
+`"none_active": true`. The top level keeps `"none": true`. Expired and no-data results stay errors; results with items are
+unchanged byte for byte. The change is in `cache_live`'s tool only: `cs_live_get` (the app's screens) still returns the stored
+items, an empty list when there are none.
 
 ### Addresses of live items
 

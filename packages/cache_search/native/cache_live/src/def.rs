@@ -35,6 +35,10 @@ pub struct SourceDef {
     pub description: String,
     #[serde(default)]
     pub attribution: Option<String>,
+    /// What the `live_data` tool calls the one entry it shows when a valid result has nothing to report ("No active emergency
+    /// alerts"). Without it the entry is labelled with `title`.
+    #[serde(default)]
+    pub none_label: Option<String>,
     pub request: RequestDef,
     /// A key the user supplies. Use `{api_key}` in the URL (query or path), a header value or the body.
     #[serde(default)]
@@ -518,6 +522,9 @@ impl SourceDef {
         }
         if self.description.trim().is_empty() || self.title.trim().is_empty() || self.provider.trim().is_empty() {
             bad!("title, provider and description are required");
+        }
+        if self.none_label.as_deref().is_some_and(|l| l.trim().is_empty()) {
+            bad!("none_label: must not be empty (leave it out to use the title)");
         }
         if self.refresh_minutes == 0 {
             bad!("refresh_minutes: must be at least 1");

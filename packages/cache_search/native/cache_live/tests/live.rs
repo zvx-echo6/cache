@@ -332,16 +332,24 @@ fn alerts_local_time_distance_sort_and_ended_items() {
     assert!(g["items"][0].get("area").is_none());
     // by 16:30 everything has ended but the download is still valid: nothing to report
     let t = env.tool(json!({"source": "alerts", "place": "home"}), None, "2026-10-25T16:30:00-06:00").unwrap();
-    assert_eq!(t["items"], json!([]));
     assert_eq!(t["none"], true);
+    assert_eq!(t["items"].as_array().unwrap().len(), 1);
+    assert_eq!(t["items"][0]["address"], "live:alerts/home/none");
     // Boise: a real response with no active alerts
     *srv.bodies.lock().unwrap() = vec![("/alerts/active".into(), fixture("nws_boise.json"))];
     let boise = json!({"key": "boise", "name": "Boise, ID", "lat": 43.615, "lon": -116.202});
     env.live.fetch(&json!({"source": "alerts", "place": boise, "now": "2026-10-25T10:50:00-06:00"}).to_string(), &env.places).unwrap();
     env.places.save(r#"{"key":"boise","name":"Boise, ID","lat":43.615,"lon":-116.202}"#).unwrap();
     let t = env.tool(json!({"source": "alerts", "place": "Boise, ID"}), None, "2026-10-25T10:55:00-06:00").unwrap();
-    assert_eq!(t["items"], json!([]));
     assert_eq!(t["none"], true);
+    // nothing to report is one entry in an item's shape, so the dispatch can number it and the model can cite it
+    assert_eq!(
+        t["items"],
+        json!([{"address": "live:alerts/boise/none", "label": "No active emergency alerts", "time": "2026-10-25T10:50:00-06:00",
+                "fields": {"Status": "none active", "Checked": "2026-10-25 10:50", "Age": "5 minutes old"}, "none_active": true}])
+    );
+    let keys: Vec<_> = t["items"][0].as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["address", "label", "time", "fields", "none_active"]);
     assert_eq!(t["age"], "5 minutes old");
     assert_eq!(t["fetched_at"], "2026-10-25T10:50:00-06:00");
     // a place in another zone gets that zone's offset
@@ -349,6 +357,29 @@ fn alerts_local_time_distance_sort_and_ended_items() {
     env.live.fetch(&json!({"source": "alerts", "place": ny, "now": "2026-10-25T10:50:00-06:00"}).to_string(), &env.places).unwrap();
     let g = env.get(json!({"source": "alerts", "place": ny, "now": "2026-10-25T10:55:00-06:00"})).unwrap();
     assert_eq!(g["fetched_at"], "2026-10-25T12:50:00-04:00");
+}
+
+#[test]
+fn the_none_entry_is_labelled_from_the_definition() {
+    // without none_label the entry takes the title; with it, that text
+    let srv = Server::start(vec![("/alerts/active", fixture("nws_boise.json"))]);
+    let mut d = real_source("alerts.json");
+    d.as_object_mut().unwrap().remove("none_label");
+    let env = Env::new("nonelabel", vec![("alerts.json", d, Some((srv.port, "/alerts/active")))]);
+    env.places.save(r#"{"key":"boise","name":"Boise, ID","lat":43.615,"lon":-116.202}"#).unwrap();
+    env.live.fetch(&json!({"source": "alerts", "place": "boise", "now": "2026-10-25T10:50:00-06:00"}).to_string(), &env.places).unwrap();
+    let t = env.tool(json!({"source": "alerts", "place": "Boise, ID"}), None, "2026-10-25T10:55:00-06:00").unwrap();
+    assert_eq!(t["items"][0]["label"], "Emergency alerts");
+    let mut d = real_source("alerts.json");
+    d["none_label"] = json!("Nothing is active");
+    let env = Env::new("nonelabel2", vec![("alerts.json", d, Some((srv.port, "/alerts/active")))]);
+    env.places.save(r#"{"key":"boise","name":"Boise, ID","lat":43.615,"lon":-116.202}"#).unwrap();
+    env.live.fetch(&json!({"source": "alerts", "place": "boise", "now": "2026-10-25T10:50:00-06:00"}).to_string(), &env.places).unwrap();
+    let t = env.tool(json!({"source": "alerts", "place": "Boise, ID"}), None, "2026-10-25T10:55:00-06:00").unwrap();
+    assert_eq!(t["items"][0]["label"], "Nothing is active");
+    // an expired result stays an error, and a non-empty one has no such entry
+    let e = env.tool(json!({"source": "alerts", "place": "Boise, ID"}), None, "2026-10-26T10:55:00-06:00").unwrap_err();
+    assert_eq!(e.code, "expired");
 }
 
 #[test]

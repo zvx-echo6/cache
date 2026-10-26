@@ -11,7 +11,7 @@
 //! phone's position when none is given. The data is that of the nearest place it was downloaded for within
 //! `live_radius_km`; the result says which place that was and how far it is from the one asked about.
 
-use crate::map::{age_words, date_of, stamp};
+use crate::map::{age_words, date_of, minute_of, stamp};
 use crate::{address, here_key, now_from, Live, LiveCfg, Place};
 use cache_tool::places::parse_latlon;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
@@ -194,6 +194,23 @@ impl Tool for LiveDataTool {
                 Value::Object(m)
             })
             .collect();
+        let mut items = items;
+        let none = items.is_empty();
+        if none {
+            // nothing to report is still something to cite: one numbered entry, in an item's shape, saying so
+            let label = l.def.none_label.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(&l.def.title);
+            let mut f = Map::new();
+            f.insert("Status".into(), json!("none active"));
+            f.insert("Checked".into(), json!(minute_of(v.row.fetched_at, &off)));
+            f.insert("Age".into(), json!(age_words(v.age_secs())));
+            let mut m = Map::new();
+            m.insert("address".into(), json!(address(&l.def.id, &place.key, "none")));
+            m.insert("label".into(), json!(label));
+            m.insert("time".into(), json!(stamp(v.row.fetched_at, &off)));
+            m.insert("fields".into(), Value::Object(f));
+            m.insert("none_active".into(), json!(true));
+            items.push(Value::Object(m));
+        }
         let mut out = Map::new();
         out.insert("source".into(), json!({"id": l.def.id, "title": l.def.title, "provider": l.def.provider}));
         out.insert("place".into(), json!(shown));
@@ -206,7 +223,6 @@ impl Tool for LiveDataTool {
         out.insert("valid_until".into(), json!(stamp(v.row.valid_until, &off)));
         out.insert("age".into(), json!(age_words(v.age_secs())));
         out.insert("expired".into(), json!(false));
-        let none = items.is_empty();
         out.insert("items".into(), Value::Array(items));
         if more > 0 {
             out.insert("more".into(), json!(more));

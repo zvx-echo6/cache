@@ -5,6 +5,7 @@
   "provider": "NWS",
   "description": "active emergency alerts and weather warnings for the place (National Weather Service, US)",
   "attribution": "Alerts from the US National Weather Service (weather.gov)",
+  "none_label": "No active emergency alerts",
   "request": {
     "url": "https://api.weather.gov/alerts/active?point={lat:4},{lon:4}",
     "headers": {

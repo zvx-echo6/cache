@@ -64,6 +64,14 @@
         "$ref": "#/definitions/ItemDef"
       }
     },
+    "none_label": {
+      "description": "What the `live_data` tool calls the one entry it shows when a valid result has nothing to report (\"No active emergency alerts\"). Without it the entry is labelled with `title`.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "params": {
       "description": "Values the user can set when adding the source; used as `{param:name}` in the request and `{\"param\": \"name\"}` in a mapping.",
       "default": [],
