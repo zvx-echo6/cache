@@ -25,6 +25,12 @@ class FakeNative implements CsNative {
   }
 
   @override
+  String? layers(int handle, String op, String? arg) {
+    calls.add('layers:$op:$arg');
+    return replies['layers:$op'];
+  }
+
+  @override
   String? video(int handle, String op, String requestJson) {
     calls.add('video:$op:$requestJson');
     return replies['video:$op'];
@@ -303,6 +309,26 @@ void main() {
       n.jobCancelResult = -1;
       n.error = '{"code":"internal","message":"x"}';
       expect(() => j.cancel(), throwsA(isA<CacheSearchException>()));
+    });
+  });
+
+  group('layers', () {
+    test('every call passes its one string, or null, and parses the object', () {
+      final n = FakeNative()
+        ..replies['layers:list'] = '{"layers":[],"online":true}'
+        ..replies['layers:plan'] = '{"tiles":10,"ok_to_start":true}'
+        ..replies['layers:server'] = '{"port":4321,"base_url":"http://127.0.0.1:4321"}';
+      final e = SearchEngine.open(n, [_zim]);
+      expect(e.layers('list')['online'], true);
+      expect(e.layers('plan', '{"layer":"basemap"}')['tiles'], 10);
+      expect(e.layers('server')['port'], 4321);
+      expect(n.calls, containsAll(['layers:list:null', 'layers:plan:{"layer":"basemap"}', 'layers:server:null']));
+    });
+
+    test('a failed call raises the handle error', () {
+      final n = FakeNative()..error = '{"code":"not_configured","message":"no layers section"}';
+      final e = SearchEngine.open(n, [_zim]);
+      expect(() => e.layers('list'), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'not_configured')));
     });
   });
 }

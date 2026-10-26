@@ -103,6 +103,9 @@ class SearchEngine {
   Map<String, dynamic> liveFetch(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'fetch', jsonEncode(request))));
   Map<String, dynamic> liveGet(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'get', jsonEncode(request))));
 
+  /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache.
+  Map<String, dynamic> layers(String op, [String? arg]) => _object(_ok(native.layers(_h, op, arg)));
+
   void close() {
     if (_handle != 0) native.close(_handle);
     _handle = 0;

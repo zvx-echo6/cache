@@ -74,6 +74,11 @@ abstract class CsNative {
   /// [requestJson] is ignored for instances and downloads.
   String? video(int handle, String op, String requestJson);
 
+  /// The map layer engine (cs_layers_*). [op] is the function's name after `cs_layers_`: list, refresh, save, remove,
+  /// server, plan, delete, clear_cache. [arg] is the definition JSON (save), the id (remove), the options (server, may be
+  /// null), the request (plan, delete) or the layer (clear_cache, may be null); ignored for list and refresh.
+  String? layers(int handle, String op, String? arg);
+
   int jobStart(String kind, String paramsJson);
   String? jobProgress(int job);
   int jobCancel(int job);
@@ -163,6 +168,14 @@ class FfiCsNative implements CsNative {
         _videoDownloads = lib.lookupFunction<_HStrC, _HStr>('cs_video_downloads'),
         _videoDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_delete'),
         _videoResolve = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_resolve'),
+        _layersList = lib.lookupFunction<_HStrC, _HStr>('cs_layers_list'),
+        _layersRefresh = lib.lookupFunction<_HStrC, _HStr>('cs_layers_refresh'),
+        _layersSave = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_layers_save'),
+        _layersRemove = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_layers_remove'),
+        _layersServer = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_layers_server'),
+        _layersPlan = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_layers_plan'),
+        _layersDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_layers_delete'),
+        _layersClearCache = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_layers_clear_cache'),
         _jobStart = lib.lookupFunction<_JobStartC, _JobStart>('cs_job_start'),
         _jobProgress = lib.lookupFunction<_HStrC, _HStr>('cs_job_progress'),
         _jobCancel = lib.lookupFunction<_JobCancelC, _JobCancel>('cs_job_cancel'),
@@ -226,6 +239,14 @@ class FfiCsNative implements CsNative {
   final _HStr _videoDownloads;
   final _HStrStr _videoDelete;
   final _HStrStr _videoResolve;
+  final _HStr _layersList;
+  final _HStr _layersRefresh;
+  final _HStrStr _layersSave;
+  final _HStrStr _layersRemove;
+  final _HStrStr _layersServer;
+  final _HStrStr _layersPlan;
+  final _HStrStr _layersDelete;
+  final _HStrStr _layersClearCache;
   final _JobStart _jobStart;
   final _HStr _jobProgress;
   final _JobCancel _jobCancel;
@@ -370,6 +391,23 @@ class FfiCsNative implements CsNative {
       'delete' => _take(_videoDelete(_p(handle), req)),
       'resolve' => _take(_videoResolve(_p(handle), req)),
       _ => throw ArgumentError('Unknown video call $op'),
+        };
+      });
+
+  @override
+  String? layers(int handle, String op, String? arg) => using((a) {
+        final h = _p(handle);
+        final s = arg == null ? nullptr : arg.toNativeUtf8(allocator: a);
+        return switch (op) {
+          'list' => _take(_layersList(h)),
+          'refresh' => _take(_layersRefresh(h)),
+          'save' => _take(_layersSave(h, s)),
+          'remove' => _take(_layersRemove(h, s)),
+          'server' => _take(_layersServer(h, s)),
+          'plan' => _take(_layersPlan(h, s)),
+          'delete' => _take(_layersDelete(h, s)),
+          'clear_cache' => _take(_layersClearCache(h, s)),
+          _ => throw ArgumentError('Unknown layers call $op'),
         };
       });
 

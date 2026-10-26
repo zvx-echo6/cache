@@ -150,6 +150,10 @@ class SearchCore {
   Future<Map<String, dynamic>> liveFetch(Map<String, dynamic> request) => _map('liveFetch', {'request': request});
   Future<Map<String, dynamic>> liveGet(Map<String, dynamic> request) => _map('liveGet', {'request': request});
 
+  /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache; [arg]
+  /// is that call's one string (see cache_search.h).
+  Future<Map<String, dynamic>> layers(String op, [String? arg]) => _map('layers', {'op': op, 'arg': arg});
+
   /// Starts a long job: kind "index_zim" with {"zim_path","index_dir","heap_mb"} and so on (see cache_search.h).
   Future<CoreJobHandle> startJob(String kind, Map<String, dynamic> params) async =>
       CoreJobHandle._(this, (await _call('jobStart', {'kind': kind, 'params': params})) as int);
@@ -373,6 +377,8 @@ void _workerMain(List<dynamic> init) {
           result = eng().liveFetch((a['request'] as Map).cast<String, dynamic>());
         case 'liveGet':
           result = eng().liveGet((a['request'] as Map).cast<String, dynamic>());
+        case 'layers':
+          result = eng().layers(a['op'] as String, a['arg'] as String?);
         case 'convFree':
           convs.remove(a['conv'])?.free();
         case 'jobStart':

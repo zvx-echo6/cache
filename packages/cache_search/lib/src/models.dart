@@ -218,7 +218,7 @@ class ToolOutput {
 enum JobState { running, done, cancelled, failed }
 
 class JobProgress {
-  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage});
+  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes});
 
   factory JobProgress.fromJson(Map<String, dynamic> j) {
     final e = j['error'];
@@ -228,6 +228,7 @@ class JobProgress {
       total: (j['total'] ?? 0) as int,
       errorCode: e is Map ? e['code'] as String? : null,
       errorMessage: e is Map ? e['message'] as String? : null,
+      bytes: j['detail'] is Map ? ((j['detail'] as Map)['bytes'] as num?)?.toInt() : null,
     );
   }
 
@@ -236,6 +237,9 @@ class JobProgress {
   final int total;
   final String? errorCode;
   final String? errorMessage;
+
+  /// Bytes written so far (layer downloads).
+  final int? bytes;
 
   bool get isFinished => state != JobState.running;
 
