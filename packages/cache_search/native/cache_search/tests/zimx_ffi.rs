@@ -357,6 +357,17 @@ mod xapian {
         unsafe { cs_close(h) };
     }
 
+    /// A hit whose title has the query words beats one that has them only in the body, whatever the source order.
+    #[test]
+    fn a_title_match_comes_first_on_ready_gov() {
+        let Some(ready) = ready_zim() else { return };
+        let h = open(vec![json!({"kind": "zim", "path": ready})]);
+        let r = search(h, "flood", json!({"k": 5}));
+        let first = r["results"][0]["title"].as_str().unwrap().to_lowercase();
+        assert!(first.contains("flood"), "{r}");
+        unsafe { cs_close(h) };
+    }
+
     /// A ZIM with Xapian and one without it side by side: each is searched by its own engine, one merged list.
     #[test]
     fn xapian_and_tantivy_sources_merge_in_one_list() {

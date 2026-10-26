@@ -291,9 +291,29 @@ tagged with its embedding model id:
    library's device Tantivy index.
 2. Vector: only for libraries whose settings `embedding.model` matches the query vector's model id; other
    libraries are keyword-only, and the response says which sources used vectors.
-3. Merge: the keyword lists across all sources are merged with reciprocal rank fusion (k=60); where a
-   vector list exists it joins that fusion as another list (RRF k=60 between the keyword and vector lists);
-   one entry per address.
+3. Merge. The keyword lists of all sources (ZIMs and libraries) are scored hit by hit and merged into one list; where a
+   vector list exists it joins that list in a reciprocal rank fusion (k=60), one entry per address. A source's best hit
+   is not worth the same everywhere (the earlier merge gave every source's best hit 1.0, so with 19 sources the weak
+   matches of small ZIMs competed with the strong ones), so each hit gets a score of its own:
+   - `rel`: the hit's raw score over the best raw score of its source (Tantivy BM25; for a Xapian source libzim's
+     percentage, which is 100 for the source's best hit, so it is relative too). It orders hits inside a source; it
+     cannot compare two sources.
+   - `coverage`: the fraction of the query's distinct words (compared after the source's own stemming) found in the hit.
+     Tantivy hits: found in title, lead or body. Xapian hits: found in the title or the text of the article (read from the
+     ZIM; the first 300 KB), because libzim reports no matched terms. `title_cov`: the same fraction counting the title only
+     (for a Tantivy hit it equals `coverage`: the title is already boosted x2 in its BM25). Every word counts the same,
+     including "how" or "the": a chatty question is not cleaned up here (it is for the vector list, or for the model that
+     writes the query).
+   - `score = rel * (coverage + title_cov) / 2`. The title is the one signal that crosses sources: a hit whose title lacks
+     the query words keeps at most half its source-relative score, so an article that merely mentions the words cannot
+     outrank one about them from another source. (Measured on the 15 evaluation queries, top-3 hits for a title share
+     of 0 / 0.25 / 0.5 / 0.75 / 1.0: 8 / 11 / 14 / 13 / 12, so 0.5.)
+   - A hit is good if `coverage >= min_term_coverage` (default 0.5) and `rel >= min_relevance` (default 0.5; on the
+     evaluation queries 0.34-0.67 for the first and 0-0.7 for the second change nothing). Hits that
+     are not good are dropped before the merge, unless fewer than k+offset good hits exist; then the best of the dropped
+     ones fill up to k+offset after all the good ones.
+   - Sorted by score, ties by the higher raw score, then by address. Per Xapian source the merge sees the best
+     max(k+offset, 10) hits (their articles are read for coverage).
 4. Collapse duplicates after the merge and before [n] numbering: library hits with the same `document` field
    value and the same title collapse to the best-ranked one; with no `document` field mapped, hits with
    identical title plus identical snippet collapse. Then fill back up to k from the next-ranked hits.
@@ -314,6 +334,29 @@ Snippets and titles:
   by the same rule; if libzim gives none, the first sentences of the article.
 - Library hit title: the mapped `title` (falling back to `title_fallback`); when the point has a page,
   `<title>, p. <page>`. For a ZIM hit: `<ZIM title>: <article title>`.
+
+### Search quality evaluation
+
+`packages/cache_search/eval/` holds `queries.json` (15 queries with the expected source and/or article title for the top 3)
+and `search_eval.py` (standard library only; it talks to a running `cs serve` and prints hit@3 and hit@5 per query). It is
+a script, not a cargo test, because it needs the real source set. The expectations were written by reading what the recon
+library and the ZIMs contain, each source searched alone, not from any ranking. Two queries come from the 2026-10-26 check
+("replace iphone battery", "flood"), the other 13 from heldout-v1 (never used for training). Run 2026-10-26 on Windows with
+the recon library (keyword only, no embedder) and the 18 ZIMs, k=5, a debug build:
+
+| | hit@3 | hit@5 |
+|---|---|---|
+| Tantivy only (every ZIM `"builtin_index": false`; Wikipedia has no finished Tantivy index and is left out, so the 3 queries answered by Wikipedia cannot hit: 6/12 and 8/12 on the others) | 6/15 | 8/15 |
+| Hybrid, before the ranking change (adf154e) | 8/15 | 8/15 |
+| Hybrid, after | 14/15 | 14/15 |
+
+Before the change the junk came from small ZIMs whose best hit counted as much as anyone's: "replace iphone battery" gave
+Hundred Rabbits, Meshtastic Settings and Wikivoyage Electrical systems and no iFixit page; "flood" opened with Hundred Rabbits.
+After it iFixit's iPhone battery guides take the first eight places and "flood" opens with Ready.gov. The one miss is
+"how do I know if I'm getting dehydrated?": for the whole chatty sentence no source's own top 50 holds a good article (the
+common words dominate Xapian and BM25 alike), so the merge has nothing to promote; that is for the vector list or for a model
+that rewrites the question. The ranking costs a warm query about 0.6 s more (mean 1.3 s to 1.9 s over the 15 queries, debug
+build) because the top hits' articles are read for coverage.
 
 ## read
 
@@ -522,9 +565,9 @@ for the indexes.
 
 Differences from Tantivy that callers can see:
 - Ranking: Xapian's own weighting (BM25-based, with libzim's boosts) over the full article text, not Tantivy's title (x2) /
-  lead / body fields. libzim's integer score is the raw score in the cross-source merge (normalised to the source's best, as
-  for every source). libzim does not say which query terms a hit matched, so every Xapian hit counts as full term coverage
-  and the 50% coverage filter does not apply to these sources.
+  lead / body fields. libzim's integer score is a percentage that is 100 for the best hit of the query in that ZIM (measured
+  on all 18 ZIMs), so inside the cross-source merge it is a within-source figure like Tantivy's normalised BM25 (see "Search
+  and merge" for how sources are compared).
 - Stemming and stop words follow the language libzim chose when the ZIM was built, not Cache's tokenizers.
 - Snippets: libzim's snippet is built from the whole article, so it shows the matched passage, where Tantivy's is
   cut from the first ~1,500 chars (`lead`). The same HTML-free, at-most-400-chars, sentence-end rule applies.
@@ -533,11 +576,10 @@ Differences from Tantivy that callers can see:
   first search, so the first query after a start is slow (30 s here, cold disk, the 27M-entry Wikipedia included); after that
   a search over every source takes about 1-1.5 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title suggestion 0.3-2.3 s warm
   (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry up with the `zim` crate).
-- Coverage: libzim does not report which terms a hit matched, so the 50% term-coverage filter does not apply to these
-  sources; a hit that matches one word of a long query can therefore rank higher than it would in Tantivy (see the
-  query "replace iphone battery" surfaced one-word matches from small ZIMs in the 2026-10-26 check). Not changed: a
-  coverage rule for these sources is a design decision (candidates: terms highlighted in libzim's snippet, or reading the
-  article text of the top hits).
+- Coverage: libzim does not report which query terms a hit matched, and the `<b>` marks in its snippets did not appear
+  on the real ZIMs tried, so Cache reads the top hits' articles (the first 300 KB, `max(k+offset, 10)` per source) and
+  computes coverage and title coverage itself from the words of the title and the text (see "Search and merge"). Reading
+  articles costs about a second over a full source set.
 
 ### Licences
 

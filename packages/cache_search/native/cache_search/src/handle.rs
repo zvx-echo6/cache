@@ -49,12 +49,18 @@ struct Config {
     candidates_per_list: u32,
     #[serde(default = "default_min_cov")]
     min_term_coverage: f32,
+    #[serde(default = "default_min_rel")]
+    min_relevance: f32,
     /// Not in the header: a test hook that makes each library's background open sleep first.
     #[serde(default)]
     open_delay_ms: u64,
 }
 
 fn default_min_cov() -> f32 {
+    0.5
+}
+
+fn default_min_rel() -> f32 {
     0.5
 }
 
@@ -196,6 +202,7 @@ pub struct Handle {
     pub snippet_chars: u32,
     pub candidates_per_list: u32,
     pub min_term_coverage: f32,
+    pub min_relevance: f32,
     pub last_error: Option<Error>,
     /// The tools registered by the host (see `tools.rs`); `search` and `read` are built in and not listed here.
     pub tools: Vec<Box<dyn Tool>>,
@@ -222,6 +229,7 @@ impl Handle {
             snippet_chars: 400,
             candidates_per_list: 50,
             min_term_coverage: 0.5,
+            min_relevance: 0.5,
             last_error: None,
             tools: Vec::new(),
             places: Box::new(NoSavedPlaces),
@@ -380,6 +388,7 @@ impl Handle {
         self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
+        self.min_relevance = cfg.min_relevance;
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video);
         self.ext.configure_layers(cfg.layers)?;
         Ok(())
