@@ -212,3 +212,10 @@ so failed native builds preserve downloads and partial dependency/build work.
 Restore is restricted to the exact recipe and toolchain prefix; run/attempt suffixes
 allow later partial progress to supersede earlier snapshots. Finished core-output
 caches and native-core artifacts remain success-only.
+
+First Actions run 40418080382 failed before Rust: host pkgconf's Meson sanity
+executable was compiled for iPhone and killed (-9). Global
+IPHONEOS_DEPLOYMENT_TARGET leaked into host Apple clang. build-ios.sh now unsets
+that variable before vcpkg; target triplet and explicit iOS compiler/CMake flags
+still pin 16.0. The workflow's macOS disk-helper test also unsets it for clang.
+This repair is syntax-checked; confirmation requires the lead's next Actions run.

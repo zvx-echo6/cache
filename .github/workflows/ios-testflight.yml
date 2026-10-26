@@ -65,7 +65,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       - name: Check the disk-space helper on macOS
         run: |
-          clang -Wall -Wextra -Werror packages/cache_search/ios/Classes/cache_search.c \
+          env -u IPHONEOS_DEPLOYMENT_TARGET clang -Wall -Wextra -Werror packages/cache_search/ios/Classes/cache_search.c \
             packages/cache_search/ios/tests/free_space_test.c -o "$RUNNER_TEMP/free-space-test"
           "$RUNNER_TEMP/free-space-test" "$RUNNER_TEMP" "$RUNNER_TEMP/missing-$(uuidgen)"
       - name: Native toolchain identity

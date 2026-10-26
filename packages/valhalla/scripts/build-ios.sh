@@ -3,6 +3,9 @@
 set -euo pipefail
 [[ $# == 2 ]] || { echo "usage: $0 <work-dir> <output-dir>" >&2; exit 2; }
 [[ $(uname -s) == Darwin ]] || { echo "requires macOS/Xcode" >&2; exit 1; }
+# Apple clang interprets this ambient variable even for macOS host tools.
+# iOS stays pinned via the target triplet and explicit CMake/compiler flags below.
+unset IPHONEOS_DEPLOYMENT_TARGET
 here=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$1" "$2"
 work=$(cd "$1" && pwd)
