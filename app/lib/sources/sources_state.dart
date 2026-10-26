@@ -85,6 +85,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// The "layers" section of the core's config, which a layer download job takes along.
   Map<String, dynamic> get layersSection => ((_extra['layers'] as Map?) ?? const {}).cast<String, dynamic>();
 
+  /// The sections of the config beyond the sources, as they were when the core was opened (the map's search and routing
+  /// look for `places` and `routing` here).
+  Map<String, dynamic> get openedExtra => _extra;
+
   Future<void> init() async {
     zimsDir = zimsDirOverride ?? await _defaultZimsDir();
     indexesDir =

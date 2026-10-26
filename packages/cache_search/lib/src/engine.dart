@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'errors.dart';
+import 'map_models.dart';
 import 'models.dart';
 import 'native.dart';
 
@@ -105,6 +106,46 @@ class SearchEngine {
 
   /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache.
   Map<String, dynamic> layers(String op, [String? arg]) => _object(_ok(native.layers(_h, op, arg)));
+
+  // ---- the map: search, route, guidance (cs_map_*), and saved places ----
+
+  CsMapNative get _map {
+    final n = native is CsMapNative ? native as CsMapNative : null;
+    if (n != null && n.hasMap) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core has no map search or routing yet');
+  }
+
+  CsMapNative get _saved {
+    final n = native is CsMapNative ? native as CsMapNative : null;
+    if (n != null && n.hasSavedPlaces) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core cannot save places yet');
+  }
+
+  /// cs_map_search: `{"query", "near"?: {"lat","lon"}, "limit"?, "meaning"?, "query_vector"?}` as the raw JSON object.
+  Map<String, dynamic> mapSearchRaw(Map<String, dynamic> request) => _object(_ok(_map.mapSearch(_h, jsonEncode(request))));
+
+  /// cs_map_route: `{"from"?, "to", "via"?, "mode"?, "land_access"?, "alternatives"?}` as the raw JSON object.
+  Map<String, dynamic> mapRouteRaw(Map<String, dynamic> request) => _object(_ok(_map.mapRoute(_h, jsonEncode(request))));
+
+  /// cs_map_progress: `{"route_id"|"route", "lat", "lon", ...}` as the raw JSON object.
+  Map<String, dynamic> mapProgressRaw(Map<String, dynamic> request) => _object(_ok(_map.mapProgress(_h, jsonEncode(request))));
+
+  MapSearchResponse mapSearch(Map<String, dynamic> request) => MapSearchResponse.fromJson(mapSearchRaw(request));
+  MapRoute mapRoute(Map<String, dynamic> request) => MapRoute.fromJson(mapRouteRaw(request));
+  MapProgress mapProgress(Map<String, dynamic> request) => MapProgress.fromJson(mapProgressRaw(request));
+
+  List<SavedPlaceRecord> savedPlaces() => [
+        for (final p in (_object(_ok(_saved.placesList(_h)))['places'] as List? ?? const []))
+          SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),
+      ];
+
+  /// cs_place_save: `{"key"?, "name", "lat", "lon", "label"?}`; returns the saved place.
+  SavedPlaceRecord savePlace(Map<String, dynamic> place) {
+    final r = _object(_ok(_saved.placeSave(_h, jsonEncode(place))));
+    return SavedPlaceRecord.fromJson(r['place'] is Map ? (r['place'] as Map).cast<String, dynamic>() : r);
+  }
+
+  void deleteSavedPlace(String key) => _ok(_saved.placeDelete(_h, key));
 
   void close() {
     if (_handle != 0) native.close(_handle);

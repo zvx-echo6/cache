@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'engine.dart';
 import 'errors.dart';
+import 'map_models.dart';
 import 'models.dart';
 import 'native.dart';
 
@@ -115,6 +116,64 @@ class SearchCore {
         for (final s in await _call('suggest', {'prefix': prefix, 'k': k, 'sources': sources}) as List)
           Suggestion.fromJson((s as Map).cast<String, dynamic>()),
       ];
+
+  // ---- the map (cs_map_*) and saved places ----
+
+  /// The map's search box. [query] is a place name, a category, coordinates in any format, or a meaning; [near] is the
+  /// map centre or the GPS fix (distances and ranking are from it). [meaning] false skips the vector step (fast, for
+  /// results as you type); [queryVector] is the query as the app's embedder made it.
+  Future<MapSearchResponse> mapSearch(String query, {GeoPoint? near, int limit = 10, bool meaning = true, MapQueryVector? queryVector}) async =>
+      MapSearchResponse.fromJson(((await _call('mapSearch', {
+        'request': {
+          'query': query,
+          if (near != null) 'near': near.toJson(),
+          'limit': limit,
+          'meaning': meaning,
+          'query_vector': ?queryVector?.toJson(),
+        },
+      })) as Map)
+          .cast<String, dynamic>());
+
+  /// The complete route. [to] and [from] are ends (`{"id"?, "lat", "lon", "name"?}`, from a [MapPlace.toEnd]); no [from]
+  /// is the core's last GPS fix. A route that cannot be made is a [MapRoute] with `ok` false and its errors.
+  Future<MapRoute> mapRoute({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) async =>
+      MapRoute.fromJson(((await _call('mapRoute', {
+        'request': {
+          'from': ?from,
+          'to': to,
+          if (via.isNotEmpty) 'via': via,
+          'mode': mode,
+          'land_access': ?landAccess,
+          'alternatives': alternatives,
+        },
+      })) as Map)
+          .cast<String, dynamic>());
+
+  /// Where a fix is on a route. Sends [route] too, so the core finds the route again after a restart.
+  Future<MapProgress> mapProgress(MapRoute route, {required double lat, required double lon, double? accuracyM, DateTime? now, bool reset = false, double? offRouteM, int? offRouteFixes, bool sendRoute = false}) async =>
+      MapProgress.fromJson(((await _call('mapProgress', {
+        'request': {
+          'route_id': route.routeId,
+          if (sendRoute) 'route': route.raw,
+          'lat': lat,
+          'lon': lon,
+          'accuracy_m': ?accuracyM,
+          if (now != null) 'now': now.toIso8601String(),
+          if (reset) 'reset': true,
+          'off_route_m': ?offRouteM,
+          'off_route_fixes': ?offRouteFixes,
+        },
+      })) as Map)
+          .cast<String, dynamic>());
+
+  Future<List<SavedPlaceRecord>> savedPlaces() async => [
+        for (final p in await _call('savedPlaces') as List) SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),
+      ];
+
+  Future<SavedPlaceRecord> savePlace({String? key, required String name, required double lat, required double lon, String? label}) async =>
+      SavedPlaceRecord.fromJson(((await _call('savePlace', {'place': {'key': ?key, 'name': name, 'lat': lat, 'lon': lon, 'label': ?label}})) as Map).cast<String, dynamic>());
+
+  Future<void> deleteSavedPlace(String key) => _call('deleteSavedPlace', {'key': key});
 
   /// A new [n] numbering for one chat. Free it with [CoreConversation.free].
   Future<CoreConversation> newConversation() async => CoreConversation._(this, (await _call('convNew')) as int);
@@ -264,6 +323,21 @@ void _workerMain(List<dynamic> init) {
           engine = SearchEngine.open(native!, _sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
         case 'version':
           result = eng().version();
+        case 'mapSearch':
+          result = eng().mapSearchRaw((a['request'] as Map).cast<String, dynamic>());
+        case 'mapRoute':
+          result = eng().mapRouteRaw((a['request'] as Map).cast<String, dynamic>());
+        case 'mapProgress':
+          result = eng().mapProgressRaw((a['request'] as Map).cast<String, dynamic>());
+        case 'savedPlaces':
+          result = [
+            for (final p in eng().savedPlaces()) {'key': p.key, 'name': p.name, 'lat': p.lat, 'lon': p.lon, 'label': p.label},
+          ];
+        case 'savePlace':
+          final p = eng().savePlace((a['place'] as Map).cast<String, dynamic>());
+          result = {'key': p.key, 'name': p.name, 'lat': p.lat, 'lon': p.lon, 'label': p.label};
+        case 'deleteSavedPlace':
+          eng().deleteSavedPlace(a['key'] as String);
         case 'setSources':
           eng().setSources(_sourcesFrom(a['sources'] as List));
         case 'status':

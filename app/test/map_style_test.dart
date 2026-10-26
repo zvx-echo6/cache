@@ -120,10 +120,10 @@ void main() {
     expect(idsOf.values.map((v) => v.join(',')).toSet().length, 1);
   });
 
-  test('without a base map there is still a background and the position layers', () {
+  test('without a base map there is still a background, the route and pin layers and the position layers', () {
     final style = build(CacheThemeId.dark, [StyleLayerUse(defs.firstWhere((d) => d.id == 'hillshade'))]);
     final ids = [for (final l in style['layers'] as List) (l as Map)['id']];
-    expect(ids, ['background', 'hillshade-shade', kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+    expect(ids, ['background', 'hillshade-shade', kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
   });
 
   test('overlays are drawn between the base map\'s roads and labels, contour labels on top', () {

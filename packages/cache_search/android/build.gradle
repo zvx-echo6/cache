@@ -75,6 +75,9 @@ tasks.register("cargoNdkBuild", Exec) {
 }
 
 // Run before Gradle merges the native libraries (the task name differs per variant, so hook all of them).
+// -PcacheSearchSkipCore=true builds the app without the core (an emulator run on recorded answers, or a UI-only change): the core then
+// says it is not available.
+def skipCore = (project.findProperty("cacheSearchSkipCore") ?: "false").toString() == "true"
 tasks.configureEach { t ->
-    if (t.name == "preBuild") t.dependsOn("cargoNdkBuild")
+    if (t.name == "preBuild" && !skipCore) t.dependsOn("cargoNdkBuild")
 }

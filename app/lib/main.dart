@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -11,6 +13,13 @@ import 'history/conversation_store.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
+import 'nav/demo_backend.dart';
+import 'nav/nav_backend.dart';
+import 'nav/notification_access.dart';
+import 'nav/nav_position.dart';
+import 'nav/nav_state.dart';
+import 'nav/speaker.dart';
+import 'nav/units.dart';
 import 'search/core_numbering.dart';
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
@@ -61,6 +70,19 @@ class _CacheAppState extends State<CacheApp> {
         : CoreToolHost(core: sources.core!, numbering: numbering),
     numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => location.fix != null,
+  );
+  // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
+  // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
+  late final NavState nav = NavState(
+    backend: const String.fromEnvironment('CACHE_NAV_DEMO').isNotEmpty
+        ? DemoMapBackend(Directory(const String.fromEnvironment('CACHE_NAV_DEMO')))
+        : CoreMapBackend(() => sources.core!, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
+    location: location,
+    speaker: FlutterTtsSpeaker(),
+    positionSource: GeolocatorNavSource(),
+    fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
+    onFollow: (m) => maps.setFollow(m),
+    notifications: PlatformNotificationAccess(),
   );
   CacheThemeId _applied = CacheThemeId.dark;
 
@@ -113,6 +135,7 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onApp);
     app.session.dispose();
     browse.dispose();
+    nav.dispose();
     sources.dispose();
     video.dispose();
     location.dispose();
@@ -137,6 +160,7 @@ class _CacheAppState extends State<CacheApp> {
           maps: maps,
           video: video,
           browse: browse,
+          nav: nav,
         ),
       ),
     );

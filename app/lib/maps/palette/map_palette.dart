@@ -36,6 +36,8 @@ class MapPalette {
     'publicLandsFill', 'publicLandsLine', 'trail', 'mvum', 'blm',
     // The phone's own position.
     'position', 'positionAccuracy', 'positionRing',
+    // A route (the line, its outline, the off-road part, the other routes) and the pin on a chosen place.
+    'route', 'routeCasing', 'routeOffroad', 'routeAlternate', 'pin',
   ];
 
   Color operator [](String role) {
@@ -81,6 +83,7 @@ final MapPalette _light = MapPalette(CacheThemeId.light, {
   'publicLandsFill': _c(0x5EA657, 0.16), 'publicLandsLine': _c(0x3C8246, 0.75), 'trail': _c(0xB5470F),
   'mvum': _c(0x7B3FA0), 'blm': _c(0xB8860B),
   'position': _c(0x1F6FA8), 'positionAccuracy': _c(0x1F6FA8, 0.16), 'positionRing': _c(0xFFFFFF),
+  'route': _c(0x1F6FA8), 'routeCasing': _c(0xFFFFFF), 'routeOffroad': _c(0xB5470F), 'routeAlternate': _c(0x7C8590), 'pin': _c(0xC62E24),
 });
 
 /// Dark: low-glare blue-greys, labels light.
@@ -100,6 +103,7 @@ final MapPalette _dark = MapPalette(CacheThemeId.dark, {
   'publicLandsFill': _c(0x5FB98A, 0.12), 'publicLandsLine': _c(0x5FB98A, 0.7), 'trail': _c(0xE8955A),
   'mvum': _c(0xB48AE0), 'blm': _c(0xE0B45A),
   'position': _c(0x6BB4DE), 'positionAccuracy': _c(0x6BB4DE, 0.18), 'positionRing': _c(0x0F1115),
+  'route': _c(0x6BB4DE), 'routeCasing': _c(0x0F1115), 'routeOffroad': _c(0xE8955A), 'routeAlternate': _c(0x707987), 'pin': _c(0xFF6B5E),
 });
 
 /// Parchment: warm paper, muted water, sepia lines.
@@ -119,6 +123,7 @@ final MapPalette _parchment = MapPalette(CacheThemeId.parchment, {
   'publicLandsFill': _c(0x6B8F4E, 0.2), 'publicLandsLine': _c(0x4F7A3A, 0.8), 'trail': _c(0xA3261C),
   'mvum': _c(0x6B3A7A), 'blm': _c(0x8A5A00),
   'position': _c(0x7A4E1D), 'positionAccuracy': _c(0x7A4E1D, 0.18), 'positionRing': _c(0xF3E9D2),
+  'route': _c(0x7A4E1D), 'routeCasing': _c(0xF3E9D2), 'routeOffroad': _c(0xA3261C), 'routeAlternate': _c(0x9A8A70), 'pin': _c(0xA3261C),
 });
 
 /// Tactical: black with reds only, so it does not spoil night vision. Every colour here has a red hue;
@@ -139,6 +144,7 @@ final MapPalette _tactical = MapPalette(CacheThemeId.tactical, {
   'publicLandsFill': _c(0xB23A2E, 0.14), 'publicLandsLine': _c(0xB23A2E, 0.75), 'trail': _c(0xFF5A4A),
   'mvum': _c(0xC24A1E), 'blm': _c(0x8E2B24),
   'position': _c(0xFF5A4A), 'positionAccuracy': _c(0xFF5A4A, 0.18), 'positionRing': _c(0x000000),
+  'route': _c(0xFF5A4A), 'routeCasing': _c(0x000000), 'routeOffroad': _c(0xF08070), 'routeAlternate': _c(0x8E2B24), 'pin': _c(0xFF2D1F),
 });
 
 final Map<CacheThemeId, MapPalette> mapPalettes = {

@@ -5,6 +5,7 @@ import '../browse/browse_state.dart';
 import '../chat/chat_controller.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
+import '../nav/nav_state.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
 import 'browse_screen.dart';
@@ -22,6 +23,7 @@ class Shell extends StatefulWidget {
     required this.maps,
     required this.video,
     required this.browse,
+    required this.nav,
   });
 
   final AppState app;
@@ -31,6 +33,7 @@ class Shell extends StatefulWidget {
   final MapsState maps;
   final VideoState video;
   final BrowseState browse;
+  final NavState nav;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -70,6 +73,7 @@ class _ShellState extends State<Shell> {
           MapsScreen(
             location: widget.location,
             maps: widget.maps,
+            nav: widget.nav,
             themeId: widget.app.theme,
           ),
         ],

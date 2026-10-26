@@ -20,8 +20,10 @@ class SourceConfig {
       };
 }
 
-/// The cs_open / cs_set_sources config JSON for [sources]. [extra] adds the other sections of the config
-/// (user, live, places, routing, video, snippet_chars, ...). A later cs_set_sources without them keeps the earlier ones.
+/// The cs_open / cs_set_sources config JSON for [sources]. [extra] adds the other sections of the config (user, live, places,
+/// routing, video, layers, snippet_chars, ...): `places` (`{"packs": [".../places.sqlite"]}`, the map's search), `routing`
+/// (`{"valhalla": {"tiles", "shim"}, "offroad": {"pack", "elevation"}}`) and `user` (`{"db_path"}`, saved places). A later
+/// cs_set_sources without them keeps the earlier ones.
 Map<String, dynamic> openConfigJson(List<SourceConfig> sources, {Map<String, dynamic>? extra}) => {
       'sources': [for (final s in sources) s.toJson()],
       if (extra != null) ...extra,

@@ -52,6 +52,8 @@ dependencies:
   flutter_inappwebview: 6.2.0-beta.3
   sqlite3: ^3.5.2
   share_plus: ^13.3.1
+  # Spoken turn prompts: the phone's own text-to-speech (Android TextToSpeech, iOS AVSpeechSynthesizer), on the device.
+  flutter_tts: ^4.2.3
 
 dev_dependencies:
   flutter_test:
