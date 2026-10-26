@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "id": "esri-world-imagery",
+  "title": "Satellite imagery (Esri)",
+  "description": "Online only. Esri's terms apply",
+  "kind": "online-raster",
+  "transform": "online_only",
+  "source": {
+    "type": "xyz",
+    "url": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    "minzoom": 0,
+    "maxzoom": 19,
+    "tile_format": "jpg",
+    "tile_size": 256
+  },
+  "attribution": "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community",
+  "license": "Esri World Imagery terms of use apply",
+  "coverage": { "bbox": [-180, -85.0511287, 180, 85.0511287] },
+  "offline": { "allowed": false },
+  "enabled_by_default": false,
+  "recipe": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer"
+}

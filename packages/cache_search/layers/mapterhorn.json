@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "id": "elevation",
+  "title": "Elevation",
+  "description": "Worldwide terrain heights (Terrarium-encoded tiles) from Mapterhorn: 30 m worldwide, 10 m in the USA. Feeds hillshade and contours.",
+  "kind": "elevation",
+  "transform": "as_is",
+  "source": { "type": "tilejson", "url": "https://tiles.mapterhorn.com/tilejson.json", "minzoom": 0, "maxzoom": 12, "encoding": "terrarium", "tile_format": "webp", "tile_size": 512 },
+  "attribution": "© Mapterhorn",
+  "license": "Open data from many national sources, see https://mapterhorn.com/attribution",
+  "coverage": { "bbox": [-180, -85.0511287, 180, 85.0511287] },
+  "offline": {
+    "allowed": true,
+    "max_parallel": 4,
+    "source": { "type": "pmtiles", "url": "https://download.mapterhorn.com/planet.pmtiles", "minzoom": 0, "maxzoom": 12, "encoding": "terrarium", "tile_format": "webp", "tile_size": 512 }
+  },
+  "update": { "version": "0.0.13", "check_url": "https://download.mapterhorn.com/download_urls.json", "interval_days": 30 },
+  "recipe": "https://mapterhorn.com/data-access/"
+}

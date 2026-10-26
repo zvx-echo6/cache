@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "id": "usgs-imagery",
+  "title": "Aerial imagery (USGS)",
+  "description": "Aerial photos of the USA, mostly NAIP at about 1 m, from The National Map. Public domain.",
+  "kind": "raster",
+  "transform": "as_is",
+  "source": {
+    "type": "xyz",
+    "url": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+    "minzoom": 0,
+    "maxzoom": 17,
+    "tile_format": "jpg",
+    "tile_size": 256
+  },
+  "attribution": "USDA, USGS The National Map: Orthoimagery",
+  "license": "Public domain (USGS The National Map)",
+  "coverage": { "bbox": [-180, 18, -66, 72] },
+  "offline": { "allowed": true, "max_tiles_per_download": 100000, "max_parallel": 4 },
+  "update": { "version": "", "interval_days": 90 },
+  "recipe": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer"
+}

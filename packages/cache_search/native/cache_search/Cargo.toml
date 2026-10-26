@@ -12,6 +12,7 @@ zim = "0.5.0"
 cache_tool = { path = "../cache_tool" }
 # Saved places and live data live in their own crates; this crate wires them into the handle and exports their C ABI.
 cache_user = { path = "../cache_user" }
+cache_layers = { path = "../cache_layers" }
 cache_live = { path = "../cache_live" }
 # The navigate tool (Valhalla road routing and off-road legs), registered from the "routing" section of the config.
 cache_navigate = { path = "../cache_navigate" }
