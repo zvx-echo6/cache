@@ -1,5 +1,5 @@
-//! Distance and direction from a place to a GeoJSON area (alerts): 0 and "inside" when the place is within it, else the
-//! distance to the nearest point of its boundary and the compass direction of that point.
+//! Distance and direction from a place to a GeoJSON geometry (a point, a line or an area): "inside" when the place is
+//! within an area, else the distance to the nearest point of the geometry and the compass direction of that point.
 
 use serde_json::Value;
 
@@ -104,14 +104,89 @@ fn nearest_on_ring(r: &Ring, lat0: f64, lon0: f64, best: &mut Option<(f64, f64, 
     }
 }
 
-/// `None` when the value has no polygon.
+/// The nearest point of an open path (a line), same flat-map method as the rings.
+fn nearest_on_path(pts: &[(f64, f64)], lat0: f64, lon0: f64, best: &mut Option<(f64, f64, f64)>) {
+    if pts.len() == 1 {
+        let d = haversine_km(lat0, lon0, pts[0].1, pts[0].0);
+        if best.map(|b| d < b.0).unwrap_or(true) {
+            *best = Some((d, pts[0].1, pts[0].0));
+        }
+        return;
+    }
+    let k = lat0.to_radians().cos().max(1e-6);
+    let xy = |p: &(f64, f64)| (wrap(p.0 - lon0) * k, p.1 - lat0);
+    for w in pts.windows(2) {
+        let (a, b) = (xy(&w[0]), xy(&w[1]));
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 == 0.0 { 0.0 } else { (-(a.0 * dx + a.1 * dy) / len2).clamp(0.0, 1.0) };
+        let (px, py) = (a.0 + t * dx, a.1 + t * dy);
+        let (plat, plon) = (lat0 + py, lon0 + px / k);
+        let d = haversine_km(lat0, lon0, plat, plon);
+        if best.map(|b| d < b.0).unwrap_or(true) {
+            *best = Some((d, plat, plon));
+        }
+    }
+}
+
+fn coord(p: &Value) -> Option<(f64, f64)> {
+    Some((p.get(0)?.as_f64()?, p.get(1)?.as_f64()?))
+}
+
+fn path_of(coords: &Value) -> Vec<(f64, f64)> {
+    coords.as_array().map(|a| a.iter().filter_map(coord).collect()).unwrap_or_default()
+}
+
+/// Points and lines found in a geometry (everything that is not a polygon).
+fn paths(g: &Value, out: &mut Vec<Vec<(f64, f64)>>) {
+    match g.get("type").and_then(Value::as_str) {
+        Some("Point") => out.extend(coord(&g["coordinates"]).map(|c| vec![c])),
+        Some("MultiPoint") => out.extend(path_of(&g["coordinates"]).into_iter().map(|c| vec![c])),
+        Some("LineString") => out.push(path_of(&g["coordinates"])),
+        Some("MultiLineString") => {
+            if let Some(ls) = g["coordinates"].as_array() {
+                out.extend(ls.iter().map(path_of));
+            }
+        }
+        Some("GeometryCollection") => {
+            if let Some(gs) = g["geometries"].as_array() {
+                for x in gs {
+                    paths(x, out);
+                }
+            }
+        }
+        Some("Feature") => paths(&g["geometry"], out),
+        Some("FeatureCollection") => {
+            if let Some(fs) = g["features"].as_array() {
+                for f in fs {
+                    paths(&f["geometry"], out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Distance and direction to a point given directly.
+pub fn to_point(lat: f64, lon: f64, plat: f64, plon: f64) -> Near {
+    Near { inside: false, km: haversine_km(lat, lon, plat, plon), bearing: bearing_deg(lat, lon, plat, plon) }
+}
+
+/// The nearest part of any GeoJSON geometry (Point, LineString, Polygon, their Multi forms, collections, a Feature
+/// or a FeatureCollection). `None` when the value has no geometry.
 pub fn nearest(geometry: &Value, lat: f64, lon: f64) -> Option<Near> {
     let mut polys = Vec::new();
     polygons(geometry, &mut polys);
-    polys.retain(|p| !p.is_empty());
-    if polys.is_empty() {
-        return None;
+    // polygons() does not look inside features: unwrap them here
+    match geometry.get("type").and_then(Value::as_str) {
+        Some("Feature") => return nearest(&geometry["geometry"], lat, lon),
+        Some("FeatureCollection") => {
+            let all: Vec<Near> = geometry["features"].as_array()?.iter().filter_map(|f| nearest(&f["geometry"], lat, lon)).collect();
+            return all.into_iter().min_by(|a, b| (if a.inside { 0.0 } else { a.km }).partial_cmp(&(if b.inside { 0.0 } else { b.km })).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        _ => {}
     }
+    polys.retain(|p| !p.is_empty());
     for p in &polys {
         if in_ring(&p[0], lon, lat) && !p[1..].iter().any(|h| in_ring(h, lon, lat)) {
             return Some(Near { inside: true, km: 0.0, bearing: 0.0 });
@@ -122,6 +197,11 @@ pub fn nearest(geometry: &Value, lat: f64, lon: f64) -> Option<Near> {
         for r in p {
             nearest_on_ring(r, lat, lon, &mut best);
         }
+    }
+    let mut ps = Vec::new();
+    paths(geometry, &mut ps);
+    for p in ps.iter().filter(|p| !p.is_empty()) {
+        nearest_on_path(p, lat, lon, &mut best);
     }
     let (km, plat, plon) = best?;
     Some(Near { inside: false, km, bearing: bearing_deg(lat, lon, plat, plon) })
@@ -159,7 +239,10 @@ mod tests {
         let mp = json!({"type":"MultiPolygon","coordinates":[[[[-10.0,0.0],[-9.0,0.0],[-9.0,1.0],[-10.0,0.0]]],[[[-113.9,42.4],[-113.6,42.4],[-113.6,42.7],[-113.9,42.4]]]]});
         assert!(nearest(&mp, 42.5, -113.7).unwrap().inside);
         assert!(nearest(&json!({"type":"GeometryCollection","geometries":[square(42.7, -113.9, 42.8, -113.7)]}), 42.536, -113.792).is_some());
-        assert!(nearest(&json!({"type":"Point","coordinates":[1,2]}), 0.0, 0.0).is_none());
+        assert!(nearest(&json!({"type":"Point","coordinates":[1,2]}), 0.0, 0.0).is_some());
+        assert!(nearest(&json!({"type":"Nope"}), 0.0, 0.0).is_none());
+        let line = nearest(&json!({"type":"LineString","coordinates":[[-113.0,42.0],[-113.0,43.0]]}), 42.5, -113.792).unwrap();
+        assert!((line.bearing - 90.0).abs() < 1.0 && line.km > 50.0 && line.km < 70.0, "{} {}", line.km, line.bearing);
         assert!(nearest(&Value::Null, 0.0, 0.0).is_none());
     }
 }

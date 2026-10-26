@@ -22,6 +22,19 @@ chrono-tz = { version = "0.10", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 cache_tool = { path = "../cache_tool" }
+# Response formats beyond JSON: XML and CSV/TSV become a JSON tree before mapping; gzip bodies are unpacked. All pure Rust.
+quick-xml = "0.37"
+csv = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# HTTP Basic: the Authorization header.
+base64 = "0.22"
+# Definition errors that name the field (items[0].fields[2].time.in).
+serde_path_to_error = "0.1"
+# The JSON Schema of the definition format, generated from the types (cargo test --features schema).
+schemars = { version = "0.8", optional = true }
+
+[features]
+schema = ["dep:schemars"]
 
 [dev-dependencies]
 tiny_http = "0.12"

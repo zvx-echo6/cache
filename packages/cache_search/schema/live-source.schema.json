@@ -1,0 +1,1236 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cache live source definition, format 2 (reads formats 1 to 2)",
+  "type": "object",
+  "required": [
+    "description",
+    "format",
+    "id",
+    "items",
+    "provider",
+    "refresh_minutes",
+    "request",
+    "title",
+    "validity"
+  ],
+  "properties": {
+    "api_key": {
+      "description": "A key the user supplies. Use `{api_key}` in the URL (query or path), a header value or the body.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/KeyDef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "attribution": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "basic_auth": {
+      "description": "HTTP Basic: the username and password come from secure storage under these aliases.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BasicAuthDef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "description": {
+      "description": "One line: what the model and the Home card see of this source.",
+      "type": "string"
+    },
+    "format": {
+      "description": "1 or 2. Format 2 adds everything described in DESIGN.md that format 1 lacks.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 2
+    },
+    "id": {
+      "description": "Lower-case letters, digits, `_` and `-`.",
+      "type": "string"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ItemDef"
+      }
+    },
+    "params": {
+      "description": "Values the user can set when adding the source; used as `{param:name}` in the request and `{\"param\": \"name\"}` in a mapping.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ParamDef"
+      }
+    },
+    "provider": {
+      "type": "string"
+    },
+    "quota": {
+      "$ref": "#/definitions/Quota"
+    },
+    "refresh_minutes": {
+      "description": "Minutes before `cs_live_fetch` downloads again (a fetch inside this time returns the stored copy).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "request": {
+      "$ref": "#/definitions/RequestDef"
+    },
+    "require": {
+      "description": "Paths that must exist in a response, or the response is rejected (`bad_response`) and the last good copy stays.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "timezone_path": {
+      "description": "Path (from the response root) of the place's IANA time zone name (`America/Boise`). Best: it knows daylight saving.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "utc_offset_path": {
+      "description": "Path of the place's UTC offset in seconds, when the response has no zone name.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validity": {
+      "$ref": "#/definitions/Validity"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BasicAuthDef": {
+      "type": "object",
+      "required": [
+        "password_alias",
+        "user_alias"
+      ],
+      "properties": {
+        "password_alias": {
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "type": "boolean"
+        },
+        "user_alias": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CalcSpec": {
+      "type": "object",
+      "required": [
+        "args",
+        "op"
+      ],
+      "properties": {
+        "args": {
+          "description": "Two or more values. If any is missing, so is the result (use `first_of` to give a fallback).",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Spec"
+          }
+        },
+        "op": {
+          "description": "\"add\", \"sub\", \"mul\", \"div\" (left to right over `args`), \"min\" or \"max\". The signs + - * / are also accepted.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Cond": {
+      "description": "One condition of `where`. Exactly one of `value`, `field` or `or` names what is tested; then at least one test.",
+      "type": "object",
+      "properties": {
+        "contains": {
+          "description": "Text contains (ignoring case).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "equals": {
+          "default": null
+        },
+        "exists": {
+          "description": "True: the value exists. False: it does not.",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "field": {
+          "description": "The label of one of the item's mapped `fields` (the number at the start of the text is used for comparisons).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ge": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Num"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Num"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "in": {
+          "default": [],
+          "type": "array",
+          "items": true
+        },
+        "le": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Num"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Num"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_age_hours": {
+          "description": "The value is a time (give it a `time` step, else RFC 3339) no more than this many hours before the fetch.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Num"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "not_equals": {
+          "default": null
+        },
+        "not_in": {
+          "default": [],
+          "type": "array",
+          "items": true
+        },
+        "or": {
+          "description": "True if any of these conditions is true.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Cond"
+          }
+        },
+        "starts_with": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "A value of the response (any way a value can be found).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DistanceSpec": {
+      "type": "object",
+      "required": [
+        "unit"
+      ],
+      "properties": {
+        "geometry": {
+          "description": "Path to a GeoJSON geometry or feature (Point, LineString, Polygon, their Multi forms, collections).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "description": "Give just the number (for `calc`, `where` and `round`), not \"6.2 mi S\".",
+          "default": false,
+          "type": "boolean"
+        },
+        "point": {
+          "description": "Or: a coordinate pair.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PointDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "description": "\"mi\" or \"km\".",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ForEachDef": {
+      "type": "object",
+      "required": [
+        "as",
+        "from",
+        "path"
+      ],
+      "properties": {
+        "as": {
+          "description": "The name the current element has in this step's placeholders (`{as:path}`; `{as}` for a plain value).",
+          "type": "string"
+        },
+        "from": {
+          "description": "The id of an earlier step (not itself a fan-out).",
+          "type": "string"
+        },
+        "limit": {
+          "description": "At most this many elements are requested (default 10, at most 50).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "path": {
+          "description": "Path of the list inside that step's response.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ItemDef": {
+      "type": "object",
+      "required": [
+        "fields",
+        "key",
+        "label"
+      ],
+      "properties": {
+        "area": {
+          "description": "Path to a GeoJSON geometry for the item's area.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "each": {
+          "description": "Path to an array (one item per element) or to an object (one item per member; `@key` is the member's name). Without it, one item from the response root.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ends": {
+          "description": "When the item stops being true (an alert's end). Ended items are left out.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Spec"
+          }
+        },
+        "key": {
+          "description": "Stable id of the item inside its source and place; it ends up in the item's address.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            }
+          ]
+        },
+        "label": {
+          "$ref": "#/definitions/Spec"
+        },
+        "limit": {
+          "description": "Keep at most this many items of the group (after filtering and sorting).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "near": {
+          "description": "Keep only items whose point or area is within this distance of the place.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NearDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "point": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PointDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sort": {
+          "description": "Order of the items of this group (first key first); without it, the response's order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SortKey"
+          }
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "where": {
+          "description": "Keep only items that pass every one of these.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Cond"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeyDef": {
+      "type": "object",
+      "required": [
+        "alias"
+      ],
+      "properties": {
+        "alias": {
+          "description": "The name the app stores the key under (secure storage); the caller passes the value at fetch time.",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NearDef": {
+      "type": "object",
+      "required": [
+        "max",
+        "unit"
+      ],
+      "properties": {
+        "geometry": {
+          "description": "Measure to this GeoJSON geometry (a path) instead of the item's `point` or `area`.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max": {
+          "description": "The largest distance from the place.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Num"
+            }
+          ]
+        },
+        "point": {
+          "description": "Measure to this point instead of the item's `point`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PointDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "description": "\"mi\" or \"km\".",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Num": {
+      "description": "A number written in the definition, or found by a value (for example a parameter).",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "$ref": "#/definitions/Spec"
+        }
+      ]
+    },
+    "PagingDef": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "list_path": {
+          "description": "Path of the list that is joined across pages (empty or \"^\": the response itself is the list).",
+          "default": "",
+          "type": "string"
+        },
+        "max_pages": {
+          "description": "Hard cap on pages (default 5, at most 50). Reaching it with more data left sets `truncated`.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "more_path": {
+          "description": "Path of a flag that says there are more pages (ArcGIS `exceededTransferLimit`). When set, paging goes on only while it is true.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_path": {
+          "description": "\"cursor\" and \"next_link\": path of the token or the URL in each response; absent or empty ends the paging.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page_size": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "param": {
+          "description": "The query parameter that carries the offset, page number or cursor.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_param": {
+          "description": "The query parameter that carries the page size.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "description": "First page number (default 1; offsets start at 0).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "type": {
+          "description": "\"offset\" (a start position), \"page\" (a page number), \"cursor\" (a token from the last response) or \"next_link\" (the next URL from the last response).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParamDef": {
+      "description": "A value the user can set.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "choices": {
+          "description": "\"choice\": the allowed values.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default": {
+          "description": "Used when the caller gives no value. A parameter with no default and `required` not false must be given.",
+          "default": null
+        },
+        "help": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "What the app shows next to the input.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "min": {
+          "description": "\"number\" and \"integer\": limits.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "name": {
+          "description": "Letters, digits and `_`.",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "type": "boolean"
+        },
+        "type": {
+          "description": "\"text\" (default), \"number\", \"integer\", \"bool\" or \"choice\".",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PointDef": {
+      "type": "object",
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "properties": {
+        "lat": {
+          "$ref": "#/definitions/Spec"
+        },
+        "lon": {
+          "$ref": "#/definitions/Spec"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Quota": {
+      "type": "object",
+      "properties": {
+        "per_day": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "per_minute": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "per_month": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequestDef": {
+      "description": "One HTTP request, or (inside `steps`) one step of several.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "description": "POST body: a JSON value whose strings take placeholders (`body_type` \"json\"), an object of strings for a form (\"form\"), or a string (\"text\").",
+          "default": null
+        },
+        "body_type": {
+          "description": "\"json\" (default), \"form\" or \"text\".",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "for_each": {
+          "description": "Steps only: repeat this step for each element of a list found in an earlier response.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ForEachDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headers": {
+          "description": "Extra headers; values take placeholders. Top-level headers are sent with every step.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "description": "Steps only: the name later steps and the mapping use for this step's response.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_bytes": {
+          "description": "Largest response body, in bytes (default 8 MiB, at most 32 MiB), counted after gzip is undone.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "method": {
+          "description": "\"GET\" (default) or \"POST\".",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paging": {
+          "description": "Fetch more pages of a long result.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PagingDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response": {
+          "description": "\"json\" (default; GeoJSON is JSON), \"xml\", \"csv\", \"tsv\", \"tle\" or \"auto\" (decided from the first character).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "description": "Several requests, run in order; a later one may use values from an earlier response. The mapping then reads a root object with one member per step id.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RequestDef"
+          }
+        },
+        "table": {
+          "description": "Reading of \"csv\" and \"tsv\" responses.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TableDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeout_seconds": {
+          "description": "Seconds before the request is given up (default 30, at most 120).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "url": {
+          "description": "`https://...` with `{placeholders}` (see DESIGN.md). Required, except on a request that has `steps`.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "xml": {
+          "description": "Reading of \"xml\" responses.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/XmlDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SortKey": {
+      "description": "One sort key. Missing values sort last.",
+      "type": "object",
+      "properties": {
+        "by": {
+          "description": "The value to sort by (not needed with `distance`).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "desc": {
+          "default": false,
+          "type": "boolean"
+        },
+        "distance": {
+          "description": "Sort by distance from the place to the item (its `near` geometry, else its `point`, else its `area`).",
+          "default": false,
+          "type": "boolean"
+        },
+        "number": {
+          "description": "Sort by the number at the start of the value.",
+          "default": false,
+          "type": "boolean"
+        },
+        "rank": {
+          "description": "The values in order (case-insensitive); a value not in the list sorts after them.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "time": {
+          "description": "Sort by time (the value is read as a time; RFC 3339 unless `by` says otherwise).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Spec": {
+      "description": "How one value is found and written. Exactly one of `path`, `const`, `template`, `first_of`, `distance`, `param`, `calc` gives the value; the rest are formatting steps applied in a fixed order (see `map.rs`).",
+      "type": "object",
+      "properties": {
+        "after_last": {
+          "description": "Keep only the text after the last occurrence of this (the last part of a URL: `\"/\"`), applied first.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "calc": {
+          "description": "Arithmetic on other values.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CalcSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "case": {
+          "description": "\"lower\" or \"upper\".",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compass": {
+          "description": "Degrees to a compass point (N, NE, E, ...).",
+          "default": false,
+          "type": "boolean"
+        },
+        "const": {
+          "default": null
+        },
+        "distance": {
+          "description": "Distance and compass direction from the place to a point, a line, an area or a coordinate pair: \"6.2 mi S\", or \"inside the area\". Missing when the item has no such geometry.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DistanceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "first_of": {
+          "description": "The first of these that has a value.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Spec"
+          }
+        },
+        "label": {
+          "description": "The label of a field (required for entries of `fields`, unused elsewhere).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lookup": {
+          "description": "Fixed table from a code to text; `\"*\"` is the fallback. A code that is not in it, with no `\"*\"`, is missing.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "max_chars": {
+          "description": "Cut longer text at a word end and add an ellipsis.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "max_value": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "min_value": {
+          "description": "A number below this (or above `max_value`) is missing: providers write -999 or -9999 for \"no reading\".",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "offset": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "omit_if": {
+          "description": "The value is missing when it equals one of these (compared as lower-case text).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "param": {
+          "description": "The value of a user parameter.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prefix": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "round": {
+          "description": "Decimals to round to (0 = whole numbers).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "scale": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "suffix": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "description": "Text with `{name}` holes filled from `vars`; the value is missing when any variable is.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TimeSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vars": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Spec"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TableDef": {
+      "type": "object",
+      "properties": {
+        "comment": {
+          "description": "Lines starting with this character are skipped (for example \"#\").",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delimiter": {
+          "description": "One character; default \",\" for csv and a tab for tsv.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "header": {
+          "description": "The first row names the columns (default true). Without it the columns are `c0`, `c1`, ...",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "skip_after_header": {
+          "description": "Rows to drop after the header (the type row of a tab-separated RDB file).",
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TimeSpec": {
+      "type": "object",
+      "required": [
+        "in"
+      ],
+      "properties": {
+        "assume": {
+          "description": "With \"pattern\" and no offset in it: \"place\" (default) or \"utc\".",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "in": {
+          "description": "How the response writes the time: \"local\" (no offset, in the place's offset: `2026-10-25T14:00` or a date), \"utc\" (no offset, in UTC: `2026-10-26 05:17:56.783` or `...Z`), \"rfc3339\" (with an offset), \"rfc2822\", \"unix\" (seconds), \"unix_ms\" (milliseconds) or \"pattern\" (see `pattern`).",
+          "type": "string"
+        },
+        "not_before": {
+          "description": "A date (`2000-01-01`) before which a time is missing: providers write year 0001 or 1970 for \"no time\".",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "out": {
+          "description": "\"datetime\" (`2026-10-25T14:00-06:00`, default), \"datetime_s\" (with seconds), \"date\", or a strftime pattern.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pattern": {
+          "description": "With \"pattern\": a strftime pattern the text follows (`%d/%m/%Y %H:%M`). With `%z` it has an offset; without, it is read in `assume`.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zone": {
+          "description": "\"place\": write it in the place's offset even when the response gave another. Default: keep the response's.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Validity": {
+      "type": "object",
+      "properties": {
+        "end_of_day": {
+          "description": "With `end_path`: the end is the end of that day (local midnight after it).",
+          "default": false,
+          "type": "boolean"
+        },
+        "end_path": {
+          "description": "Or: valid until the end time found at this path (a date or a date-time).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fixed_hours": {
+          "description": "Valid this many hours after the fetch.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "not_covered_after": {
+          "description": "With `end_path`: also report `not_covered_after` (the date of the end).",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "XmlDef": {
+      "type": "object",
+      "properties": {
+        "always_array": {
+          "description": "Element names that are always a list, even when the response has just one.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$id": "https://github.com/zvx-echo6/cache/schema/live-source-format-2.json"
+}
