@@ -59,3 +59,21 @@ Build without libzim: `cargo build --no-default-features` (Tantivy-only keyword 
 ## Licences
 
 See DESIGN.md, "Licences": libzim and Xapian are GPL-2.0-or-later, ICU has its own permissive licence.
+
+## iPhone (iOS arm64)
+
+The iPhone build uses Kiwix's official **CoreKiwix.xcframework** instead (Kiwix's own App Store app uses it), because openZIM
+publishes no iOS libzim. It is one static archive per slice with libkiwix, libzim, Xapian, ICU **including the ICU data**, zstd,
+lzma and zlib inside, so there is no `ICU_DATA` step on iPhone.
+
+| Item | Value |
+|---|---|
+| Version | libkiwix_xcframework 14.2.1-2 (2026-05-27); its libzim is **9.7.0** (Android and Windows use 9.8.2; the shim builds against both, it uses only API present in 9.7.0) |
+| Source | https://download.kiwix.org/release/libkiwix/libkiwix_xcframework-14.2.1-2.tar.gz (60,830,289 bytes) |
+| md5 | `78c0398d14228d11d2caf2c888314d04` (matches the `.md5` Kiwix publishes next to it) |
+| sha256 | `14820648788dddc3df8a89ff0820af60d7efc1cfda6c83602989455263ee1561` (recorded here; Kiwix publishes no sha256) |
+
+`native/zimx/fetch-libzim-ios.sh <build-dir>` downloads it, checks both sums and prints `LIBZIM_DIR` (the `ios-arm64` slice:
+`merged.a` and `Headers/`). `packages/cache_search/ios/build-core.sh` uses it, builds the core as a static library and copies
+`merged.a` to `ios/native/libCoreKiwix.a`; the pod links both into the app. Only the parts libzim needs are pulled out of
+`merged.a` (the curl, microhttpd and libkiwix server code stays out).

@@ -1,3 +1,6 @@
 .dart_tool/
 pubspec.lock
 build/
+
+# iOS native build output (ios/build-core.sh)
+/ios/native/

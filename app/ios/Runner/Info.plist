@@ -21,7 +21,18 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Cache uses your location to show where you are and to answer questions about places near you. It stays on this phone.</string>
+	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleName</key>
 	<string>cache</string>
 	<key>CFBundlePackageType</key>

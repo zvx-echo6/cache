@@ -44,6 +44,13 @@ if (ANDROID AND ANDROID_ABI STREQUAL "arm64-v8a")
   set(CACHE_LLAMA_BACKEND_DL   ON)
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  # Metal on the GPU; the shader source is embedded in the library and compiled by the system on first use, so the app
+  # carries no separate .metallib file.
+  set(GGML_METAL               ON  CACHE BOOL "" FORCE)
+  set(GGML_METAL_EMBED_LIBRARY ON  CACHE BOOL "" FORCE)
+endif()
+
 if (NOT ANDROID AND CACHE_LLAMA_X86_AVX2)
   set(GGML_AVX2 ON CACHE BOOL "" FORCE)
   set(GGML_FMA  ON CACHE BOOL "" FORCE)
@@ -62,7 +69,12 @@ if (CACHE_LLAMA_BACKEND_DL)
   endforeach()
 endif()
 
-add_library(cache_llama SHARED cache_llama.cpp)
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  # iOS: one static library, linked into the app and found with DynamicLibrary.process() (ios/build-native.sh).
+  add_library(cache_llama STATIC cache_llama.cpp)
+else()
+  add_library(cache_llama SHARED cache_llama.cpp)
+endif()
 target_link_libraries(cache_llama PRIVATE llama llama-common)
 # common/ does not export its include path, so add it (chat.h, common.h, sampling.h, json.h ...)
 target_include_directories(cache_llama PRIVATE

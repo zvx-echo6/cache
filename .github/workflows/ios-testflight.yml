@@ -1,0 +1,243 @@
+# Builds Cache for iPhone, signs it and (only when `upload` is ticked) sends it to TestFlight.
+# Manual trigger only: macOS runner minutes cost about 10x Linux on a private repo.
+#
+# Signing: a distribution certificate and an App Store provisioning profile made with the App Store Connect API (the account has no
+# registered devices, so Xcode's automatic development signing cannot work headless). They live only in the Actions secrets
+# IOS_DIST_P12_B64, IOS_DIST_P12_PASSWORD and IOS_PROFILE_B64. ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8_B64 are the API key (upload).
+#
+# Native parts (all cached, see the cache steps):
+#   core   Rust search core (aarch64-apple-ios static library) + Kiwix CoreKiwix.xcframework (libzim, Xapian, ICU with data)
+#   llama  llama.cpp with Metal + the chat engine, one static library
+#   app    flutter build, xcodebuild archive, export the .ipa
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload the .ipa to TestFlight
+        type: boolean
+        default: false
+      ref:
+        description: Branch, tag or commit to build (empty = the branch the workflow was started on)
+        type: string
+        default: ''
+      stage:
+        description: What to build (core or llama only, to test one native part cheaply)
+        type: choice
+        options: [all, core, llama]
+        default: all
+
+concurrency:
+  group: ios-testflight-${{ inputs.stage }}
+  cancel-in-progress: false
+
+env:
+  TEAM_ID: 7G87LQAK4J
+  BUNDLE_ID: com.happylittle.cache
+  FLUTTER_VERSION: 3.44.8
+  IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+
+jobs:
+  core:
+    if: inputs.stage == 'all' || inputs.stage == 'core'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Finished library cache
+        id: out
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/ios/native
+          key: core-out-${{ hashFiles('packages/cache_search/native/**/*.rs', 'packages/cache_search/native/**/Cargo.toml', 'packages/cache_search/native/Cargo.lock', 'packages/cache_search/native/zimx/**', 'packages/cache_search/ios/build-core.sh') }}
+      - name: Cargo registry cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-
+      - name: Cargo target cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-ios-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-ios-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: CoreKiwix download cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/libzim
+          key: corekiwix-14.2.1-2
+      - name: Build the Rust core
+        if: steps.out.outputs.cache-hit != 'true'
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+        run: |
+          rustup target add aarch64-apple-ios
+          rustc --version
+          xcodebuild -version
+          packages/cache_search/ios/build-core.sh "$RUNNER_TEMP/libzim"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-core
+          path: packages/cache_search/ios/native
+          retention-days: 2
+
+  llama:
+    if: inputs.stage == 'all' || inputs.stage == 'llama'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+      - name: Finished library cache
+        id: out
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_llama/ios/native/libcache_llama_all.a
+          key: llama-out-${{ hashFiles('packages/cache_llama/src/**', 'packages/cache_llama/ios/build-native.sh', 'packages/cache_llama/third_party/llama.cpp/CMakeLists.txt', 'packages/cache_llama/third_party/llama.cpp/src/**', 'packages/cache_llama/third_party/llama.cpp/ggml/src/**') }}
+      - name: Build llama.cpp (Metal) and the chat engine
+        if: steps.out.outputs.cache-hit != 'true'
+        run: |
+          cmake --version
+          xcodebuild -version
+          packages/cache_llama/ios/build-native.sh "$RUNNER_TEMP/llama-build"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-llama
+          path: packages/cache_llama/ios/native/libcache_llama_all.a
+          retention-days: 2
+
+  app:
+    if: inputs.stage == 'all'
+    needs: [core, llama]
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-core
+          path: packages/cache_search/ios/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-llama
+          path: packages/cache_llama/ios/native
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cocoapods
+          key: cocoapods-${{ hashFiles('app/pubspec.lock', 'app/ios/Podfile') }}
+          restore-keys: cocoapods-
+      - name: Flutter packages and Pods
+        working-directory: app
+        run: |
+          flutter --version
+          flutter pub get
+          flutter build ios --config-only --release --build-name=1.0.0 --build-number=${{ github.run_number }}
+          cd ios && pod install
+      - name: Signing certificate and profile
+        env:
+          P12: ${{ secrets.IOS_DIST_P12_B64 }}
+          P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_PROFILE_B64 }}
+        run: |
+          KC="$RUNNER_TEMP/build.keychain-db"
+          KCPW=$(uuidgen)
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          echo "$P12" | base64 -D > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" login.keychain-db
+          rm -f "$RUNNER_TEMP/dist.p12"
+          security find-identity -v -p codesigning "$KC"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROFILE" | base64 -D > "$RUNNER_TEMP/cache.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/cache.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
+          cp "$RUNNER_TEMP/cache.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          echo "profile: $(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist") $UUID"
+          rm -f "$RUNNER_TEMP/profile.plist"
+      - name: Archive
+        working-directory: app/ios
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -workspace Runner.xcworkspace -scheme Runner -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
+      - name: Check the native entry points are in the app
+        run: |
+          BIN="$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app/Runner"
+          ls -l "$BIN"
+          nm -gU "$BIN" > "$RUNNER_TEMP/syms.txt"
+          for s in _cs_open _cs_version _cl_load _cl_next; do grep -q " $s\$" "$RUNNER_TEMP/syms.txt" && echo "found $s" || { echo "MISSING $s"; exit 1; }; done
+          codesign -d --entitlements :- "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app" 2>/dev/null | grep -E "increased-memory|extended-virtual|time-sensitive"
+      - name: Export the .ipa
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>iOS Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict><key>${BUNDLE_ID}</key><string>Cache App Store</string></dict>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/ipa"
+          ls -l "$RUNNER_TEMP/ipa"
+          mkdir -p "$GITHUB_WORKSPACE/out" && cp "$RUNNER_TEMP"/ipa/*.ipa "$GITHUB_WORKSPACE/out/Cache-1.0.0-${{ github.run_number }}.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cache-ipa
+          path: out/*.ipa
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: ${{ runner.temp }}/archive.log
+          retention-days: 3
+      - name: Upload to TestFlight
+        if: inputs.upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
+        run: |
+          mkdir -p "$HOME/private_keys"
+          echo "$ASC_KEY_P8_B64" | base64 -D > "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          xcrun altool --upload-app -f out/*.ipa -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          rm -f "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+          rm -rf "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/private_keys"

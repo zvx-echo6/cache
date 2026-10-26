@@ -2,9 +2,9 @@
 //! symbols (a linker version script), so dependencies' `#[no_mangle]` symbols stay private. Other targets
 //! (macOS, Windows, wasm) use different linkers with other mechanisms and are not handled here.
 //!
-//! Cargo feature `xapian` (default): on Windows and Android, compile the C++ shim `../zimx` over the official prebuilt
+//! Cargo feature `xapian` (default): on Windows, Android and iOS, compile the C++ shim `../zimx` over the official prebuilt
 //! libzim (its built-in Xapian full-text index) and link it; the `zimx` cfg is set when that happened. On any other
-//! target the feature does nothing. The prebuilt libzim is found through the environment variable `LIBZIM_DIR`: the
+//! target the feature does nothing. (iOS also builds the shim, over the headers of Kiwix's CoreKiwix.xcframework.) The prebuilt libzim is found through the environment variable `LIBZIM_DIR`: the
 //! folder `native/zimx/fetch-libzim.ps1` (Windows) or `fetch-libzim.sh` (Android) unpacks, holding `include/`, `lib/`
 //! and, on Windows, `bin/` (zim-9.dll and the ICU DLLs, copied next to the built binaries).
 
@@ -20,7 +20,7 @@ fn main() {
         println!("cargo:rustc-cdylib-link-arg=-Wl,--version-script={dir}/cache_search.map");
         println!("cargo:rustc-cdylib-link-arg=-Wl,--exclude-libs,ALL");
     }
-    if std::env::var_os("CARGO_FEATURE_XAPIAN").is_some() && (os == "windows" || os == "android") {
+    if std::env::var_os("CARGO_FEATURE_XAPIAN").is_some() && (os == "windows" || os == "android" || os == "ios") {
         build_zimx(&os);
     }
 }
@@ -37,7 +37,8 @@ fn build_zimx(os: &str) {
              fetch-libzim.sh (Android), set LIBZIM_DIR to the folder it prints, or build with --no-default-features"
         );
     };
-    let include = dir.join("include");
+    // iOS: LIBZIM_DIR is the ios-arm64 slice of Kiwix's CoreKiwix.xcframework (merged.a + Headers/), see fetch-libzim-ios.sh.
+    let include = if os == "ios" { dir.join("Headers") } else { dir.join("include") };
     assert!(include.join("zim").join("archive.h").is_file(), "LIBZIM_DIR={}: no include/zim/archive.h", dir.display());
 
     cc::Build::new()
@@ -51,7 +52,10 @@ fn build_zimx(os: &str) {
         .flag_if_supported("/wd4530")
         .compile("zimx");
 
-    if os == "windows" {
+    if os == "ios" {
+        // Nothing is linked here: the core is built as a static library, and the app links merged.a (libzim, Xapian, ICU with its
+        // data) next to it through the cache_search pod (ios/cache_search.podspec).
+    } else if os == "windows" {
         let lib = dir.join("lib");
         assert!(lib.join("zim.lib").is_file(), "LIBZIM_DIR={}: no lib/zim.lib", dir.display());
         println!("cargo:rustc-link-search=native={}", lib.display());

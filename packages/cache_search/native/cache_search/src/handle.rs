@@ -81,7 +81,7 @@ struct Config {
 }
 
 fn default_prewarm() -> bool {
-    budget::prewarm_default(cfg!(target_os = "android"))
+    budget::prewarm_default(cfg!(any(target_os = "android", target_os = "ios")))
 }
 
 /// Threads that open libzim archives in the background after `set_sources`.
@@ -278,7 +278,7 @@ impl Handle {
             embedder: None,
             web: Arc::new(WebState::new()),
             ext: Default::default(),
-            zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(target_os = "android")) * budget::MIB)),
+            zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(any(target_os = "android", target_os = "ios"))) * budget::MIB)),
             fetcher: Arc::new(cache_tool::fetcher::PolicyFetcher::new()),
         };
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
@@ -446,7 +446,7 @@ impl Handle {
             dirent_cache: cfg.zim_dirent_cache.unwrap_or(budget::DEFAULT_DIRENT_CACHE),
             cluster_cache: cfg.zim_cluster_cache_mb.unwrap_or(budget::DEFAULT_CLUSTER_CACHE_MB).saturating_mul(budget::MIB),
         };
-        let limit_mb = cfg.zim_budget_mb.or(cfg.searcher_budget_mb).unwrap_or_else(|| budget::default_budget_mb(cfg!(target_os = "android")));
+        let limit_mb = cfg.zim_budget_mb.or(cfg.searcher_budget_mb).unwrap_or_else(|| budget::default_budget_mb(cfg!(any(target_os = "android", target_os = "ios"))));
         crate::zimx::set_cluster_cache_max(caps.cluster_cache);
         self.zim_budget.configure(limit_mb.saturating_mul(budget::MIB), budget::reserved_cost(&caps));
         let opts = crate::zimx::OpenOpts { dirent_cache: Some(caps.dirent_cache), ..Default::default() };

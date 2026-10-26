@@ -17,14 +17,15 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
-# Android only for now. TODO(ios): build the core for iOS (aarch64-apple-ios as an xcframework through the
-# podspec) and add `ios: ffiPlugin: true` here. TODO(windows): build cache_search.dll and add `windows:
+# Android and iOS (iPhone, device only: ios/build-core.sh). TODO(windows): build cache_search.dll and add `windows:
 # ffiPlugin: true`. Until then the app builds on those platforms without the core and Search says it is
 # not available (see README.md).
 flutter:
   plugin:
     platforms:
       android:
+        ffiPlugin: true
+      ios:
         ffiPlugin: true
   # The starter layer definitions and the live data source definitions (data) the app copies to the folders the core reads them from.
   assets:

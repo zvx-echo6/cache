@@ -1,1 +1,5 @@
 #include "Generated.xcconfig"
+// cs_* and cl_* are looked up in the running process (DynamicLibrary.process()), so the linker must keep them and the strip
+// step must not remove global symbols.
+DEAD_CODE_STRIPPING = NO
+STRIP_STYLE = non-global
