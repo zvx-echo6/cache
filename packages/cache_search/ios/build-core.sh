@@ -11,6 +11,8 @@ mkdir -p "$out"
 slice=$("$here/../native/zimx/fetch-libzim-ios.sh" "$1" | sed -n 's/^LIBZIM_DIR=//p')
 [ -f "$slice/merged.a" ] || { echo "no merged.a in $slice" >&2; exit 1; }
 cp "$slice/merged.a" "$out/libCoreKiwix.a"
+# Keep routing build products outside the checkout, alongside the Kiwix cache.
+bash "$here/../../valhalla/scripts/build-ios.sh" "$1/valhalla" "$out"
 export LIBZIM_DIR=$slice
 export IPHONEOS_DEPLOYMENT_TARGET=16.0
 cd "$here/../native"

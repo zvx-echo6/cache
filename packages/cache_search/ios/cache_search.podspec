@@ -1,6 +1,6 @@
 #
 # Native build for iPhone: the Rust search core and Kiwix's libzim (Xapian, ICU data), built by ios/build-core.sh into
-# ios/native/libcache_search.a and ios/native/libCoreKiwix.a (run it before `pod install`; the CI workflow does). Both are linked into
+# ios/native/libcache_search.a, libCoreKiwix.a and libcache_valhalla.a (run before `pod install`; CI does). All are linked into
 # the app and the C ABI is found with DynamicLibrary.process() (lib/src/native.dart). ICU data is inside libCoreKiwix.a, so no
 # ICU_DATA is needed on iPhone.
 #
@@ -20,7 +20,7 @@ The Cache search core (ZIMs and libraries, places, live data, navigation) called
   s.dependency 'Flutter'
   s.platform = :ios, '16.0'
 
-  s.vendored_libraries = 'native/libcache_search.a', 'native/libCoreKiwix.a'
+  s.vendored_libraries = 'native/libcache_search.a', 'native/libCoreKiwix.a', 'native/libcache_valhalla.a'
   s.frameworks = 'Security', 'CoreFoundation', 'SystemConfiguration', 'Foundation'
   s.libraries = 'c++', 'resolv', 'iconv', 'z'
 

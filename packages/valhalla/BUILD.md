@@ -143,3 +143,66 @@ adb -s 39191FDJH008WZ shell rm -rf /data/local/tmp/valhalla    # clean up afterw
 - Build only: vcpkg (MIT), CMake (BSD-3-Clause), Ninja (Apache-2.0).
 - OSM-derived tiles carry the ODbL; attribution is the app's job.
 - No LGPL or GPL code is linked.
+
+## iPhone device static build (iOS 16+, arm64)
+
+Run on a GitHub macOS runner with Xcode, CMake, Ninja and Rust already available:
+
+```sh
+packages/cache_search/ios/build-core.sh "$RUNNER_TEMP/libzim"
+# Or routing alone:
+bash packages/valhalla/scripts/build-ios.sh "$RUNNER_TEMP/valhalla" "$RUNNER_TEMP/routing-out"
+```
+
+The script checks out Valhalla commit `72f459fc5661fb906ad424be5378c4e32d9a5b3b`
+(tag 3.7.0) recursively and vcpkg commit `0e39c10736341cc8135b560438229bbda3d3219a`
+(the manifest baseline). Submodule commits and dependency versions come from those
+pinned trees. It bootstraps vcpkg only inside the runner work directory; no desktop
+packages are installed. `arm64-ios-rel` selects static Release libraries, the
+iphoneos SDK and deployment target 16.0. Host protoc runs on macOS; target protobuf
+is protobuf-lite. Features and dependencies match Android: no LZ4, HTTP, services,
+tools or tile building. This is device-only; it does not provide a simulator slice.
+
+CMake retains shared-library defaults for Android/Windows. iOS selects
+`CACHE_VALHALLA_STATIC=ON`, builds and links the existing C ABI harness, then merges
+the shim, libvalhalla and target dependency archives into `libcache_valhalla.a`.
+Host libraries, full protobuf and protoc archives are excluded. The script verifies
+arm64 and definitions for all ten shim functions, then links the C harness again
+against the merged archive with Apple's device compiler. It never executes an
+iPhone executable on the runner.
+
+`packages/cache_search/ios/native/libcache_valhalla.a` is linked by the pod alongside
+the Rust archive and CoreKiwix. Rust's linked iOS calls retain the shim. The existing
+force-load of the Rust archive retains FFI entry points. No dynamic library is
+loaded from app storage. Build provenance, SHA256 and symbol listing accompany
+the archive as `valhalla-build.txt` and `valhalla-symbols.txt`.
+
+The core output cache includes Rust sources/manifests, ZIM sources, all Valhalla
+recipe/shim/triplet inputs and the workflow. Toolchain identity covers Xcode,
+iphoneos SDK, Rust, CMake, Ninja and host architecture. Routing source/download/
+dependency/build cache is separate from Kiwix's nested download directory.
+Cache entries are exact by recipe/toolchain; Cargo incremental reuse is also
+partitioned by toolchain. Native caches/artifacts live on ephemeral Actions runners;
+no Windows compilation or C: build outputs are created.
+
+Dispatch `ios-testflight.yml` from `ios-routing` with `stage=all`,
+`ref=ios-routing`, `upload=false` after coordinating with the lead. The app job
+runs `flutter test --no-pub test/core_config_test.dart` and checks the final signed
+Runner for `_valhalla_shim_init` and `_valhalla_shim_route`, in addition to existing
+core/chat exports. Upload remains an explicit workflow input.
+
+Validation at implementation: both shell scripts pass Bash syntax checks on the
+desktop; whitespace diff checks pass. Device compile/link and final app checks
+require the coordinated macOS run; no claim of runtime routing follows from a
+link check. Host runtime smoke is deferred until that first compile is diagnosed.
+The lead supplied the public single-part Idaho extract for that follow-up:
+`https://github.com/zvx-echo6/cache-packs/releases/download/idaho-2026-10-25/valhalla-idaho-2026-10-25.tar.part00`,
+221798400 bytes, SHA256
+`41a0f5c548f904c8718cd53c90e662dc565cdf6a1a55546416d0537d959daf48`.
+The planned assertion is auto routing Burley (42.536,-113.792) to Boise
+(43.615,-116.202), 200-350 km with maneuvers. This is not yet a performed test.
+
+Primary build sources read: Valhalla 3.7.0 root/src/proto CMake files and
+`scripts/valhalla_build_config`; pinned vcpkg iOS toolchain and protobuf wrapper;
+Microsoft's triplet-variable documentation:
+https://learn.microsoft.com/en-us/vcpkg/users/triplets .

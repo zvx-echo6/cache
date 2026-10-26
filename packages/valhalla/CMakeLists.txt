@@ -1,7 +1,7 @@
 # Cache: Valhalla 3.7.0 as a library plus a small C shim (valhalla_shim).
 # Route follows Valhalla's documented vcpkg build and the valhalla-mobile layout:
 # routing-only modules (no data tools, services, HTTP, Python), Valhalla pulled in
-# with add_subdirectory, everything linked into one shared library.
+# with add_subdirectory, linked into a shared library or an iOS static archive.
 cmake_minimum_required(VERSION 3.21)
 project(valhalla_shim LANGUAGES C CXX)
 
@@ -23,7 +23,13 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_subdirectory("${VALHALLA_SRC}" valhalla)
 
-add_library(valhalla_shim SHARED shim/valhalla_shim.cc shim/valhalla_shim.h)
+option(CACHE_VALHALLA_STATIC "Build the shim as a static archive" OFF)
+option(CACHE_VALHALLA_BUILD_TEST "Build the C ABI link harness" ON)
+if(CACHE_VALHALLA_STATIC)
+  add_library(valhalla_shim STATIC shim/valhalla_shim.cc shim/valhalla_shim.h)
+else()
+  add_library(valhalla_shim SHARED shim/valhalla_shim.cc shim/valhalla_shim.h)
+endif()
 target_include_directories(valhalla_shim PUBLIC shim)
 target_compile_definitions(valhalla_shim PRIVATE VALHALLA_SHIM_BUILDING)
 target_link_libraries(valhalla_shim PRIVATE valhalla)
@@ -32,5 +38,7 @@ if(ANDROID)
 endif()
 
 # C test program (also what is pushed to the phone).
-add_executable(valhalla_shim_test test/shim_test.c)
-target_link_libraries(valhalla_shim_test PRIVATE valhalla_shim)
+if(CACHE_VALHALLA_BUILD_TEST)
+  add_executable(valhalla_shim_test test/shim_test.c)
+  target_link_libraries(valhalla_shim_test PRIVATE valhalla_shim)
+endif()
