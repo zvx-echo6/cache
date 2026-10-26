@@ -24,8 +24,9 @@ URLs:
   is the 30.8 MB data), `lib/zim.lib` (import library), `include/zim/*.h`. Built with MSVC; it needs the Visual C++
   redistributable (MSVCP140, VCRUNTIME140) on the target.
 - Android arm64: `lib/aarch64-linux-android/libzim.so` (16.2 MB unstripped, about 8.2 MB stripped), headers, and
-  `share/icu/73.2/icudt73l.dat` (ICU data, 11 MB). It needs `libc++_shared.so` from the NDK next to it. The Android
-  build is wired in `build.rs` but has not been built or run (Windows first).
+  `share/icu/73.2/icudt73l.dat` (ICU data, 11 MB; the ICU inside `libzim.so` has no data of its own, the app sets `ICU_DATA` to the
+  folder that holds the file). It needs `libc++_shared.so` from the NDK next to it. Built with cargo-ndk on 2026-10-26 (sizes and
+  what to ship: DESIGN.md "Android build"); not yet run on a device.
 
 ## Fetch and build
 
@@ -42,7 +43,11 @@ Android (bash):
 ```
 native/zimx/fetch-libzim.sh /path/to/build-dir
 export LIBZIM_DIR=/path/to/build-dir/libzim/android-arm64-9.8.2-1
+cargo ndk --platform 28 -t arm64-v8a build --release -p cache_search
 ```
+
+On a Windows machine without bash on the path, run the script with Git for Windows: `set PATH=C:\Program Files\Git\usr\bin;%PATH%`,
+then `"C:\Program Files\Git\bin\sh.exe" native/zimx/fetch-libzim.sh E:/cs-build`.
 
 Both scripts print the `LIBZIM_DIR` to use, stop on a checksum mismatch, and reuse a verified download.
 `build.rs` reads `LIBZIM_DIR`, compiles `zimx.cpp` with the `cc` crate, links `zim.lib`, and (Windows) copies `zim-9.dll` and the

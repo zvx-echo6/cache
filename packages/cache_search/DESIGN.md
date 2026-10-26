@@ -545,14 +545,16 @@ Decided by the Cache lead, 2026-10-26: the official prebuilt libzim 9.8.2 (Kiwix
 `native/zimx/LIBZIM.md`; fetch-and-verify scripts: `fetch-libzim.ps1` (Windows) and `fetch-libzim.sh` (Android), which download
 into the build directory, never the repository. `LIBZIM_DIR` names the unpacked folder at build time. On Windows
 `build.rs` copies `zim-9.dll` and the ICU 74 DLLs next to the built binaries; they must ship with them
-(the Visual C++ runtime is also needed). Android arm64 needs `libzim.so`, the NDK's `libc++_shared.so` and ICU data; that
-path is wired but not yet built or run.
+(the Visual C++ runtime is also needed). Android arm64 needs `libzim.so`, the NDK's `libc++_shared.so` and the ICU data
+file `icudt73l.dat`; it was built with cargo-ndk on 2026-10-26 (see "Android build" below) and has not yet been run on a device.
 
 What it is used for: keyword search and title suggestions over a ZIM's own indexes. `cs_read`, `cs_zim_get` and
 `cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (on a background thread once the sources are
 set, see "Prewarm"; otherwise on first search, suggest or status) for the indexes.
-- Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k)` (path,
-  title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k)` (path, title). Results are UTF-8 JSON strings
+- Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k, keep)` (path,
+  title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k, keep)` (path, title), `zimx_drop` (release
+  the kept searchers; `keep` = 0 on a search or suggestion uses a kept searcher if there is one and otherwise a temporary one;
+  see "Searcher memory budget"). Results are UTF-8 JSON strings
   freed with `zimx_free`. Every C++ exception is caught in the shim and returned as `{"error":...}` (the Rust side turns it into an
   `internal` error; a failed open into `io`). Nothing crosses the boundary as an exception.
 - Search: a Xapian query that libzim rejects (an unmatched quote or bracket) is retried with the query reduced to its
@@ -580,19 +582,121 @@ Differences from Tantivy that callers can see:
 - Prewarm cost, measured (`cs serve`, all 19 sources, debug build, process memory sampled every second from launch to 60 s
   after the port opened, the OS file cache warm from earlier runs so the cold-disk part of the saving is not in these
   figures): the port opens at 35.6 s in every run (the library). Private bytes at open+60 s: 542 MB without prewarm, 1005 MB with
-  it; after the first query both are 1019-1021 MB, so prewarm brings forward the same ~470 MB (the kept Xapian searchers) rather than adding
-  to it. Peak working set: 17.8 GB without, 18.1 GB with (the library's mapped files dominate). First query: 4.1-5.6 s without
+  it; after the first query both are 1019-1021 MB, so prewarm brings forward the same ~470 MB rather than adding
+  to it. (Correction, 2026-10-26: those ~470 MB are the opened archives, not the searchers: the "archive open" column of the
+  table in "Searcher memory budget" adds up to about 472 MiB for the 18 sources, 292 MiB of it Wikipedia. A searcher itself costs 1-2 MiB.) Peak working set: 17.8 GB without, 18.1 GB with (the library's mapped files dominate). First query: 4.1-5.6 s without
   prewarm, 3.8 s with it, the same whether it comes at once or 60 s after open; the build before this change (lazy opens,
   searchers rebuilt per call, no coverage reading) took 1.9-9.6 s on the same warm cache.
 - Coverage: libzim does not report which query terms a hit matched, and the `<b>` marks in its snippets did not appear
   on the real ZIMs tried, so Cache reads the top hits' articles (the first 300 KB, `max(k+offset, 10)` per source) and
   computes coverage and title coverage itself from the words of the title and the text (see "Search and merge"). Reading
   articles costs about a second over a full source set.
-- Searchers: the shim builds libzim's full-text and title searchers once per ZIM and keeps them (building one opens the
-  Xapian database, most of the cost of a first query); one mutex per handle serialises the calls that use them.
-- Prewarm: `set_sources` starts up to 4 background threads that open libzim on every ZIM with a built-in index and build its
-  searchers, so the first search does not pay for the opens. The config key `"prewarm": false` turns it off. A search that
-  arrives while a source is still being warmed waits for that source only.
+- Searchers: the shim builds libzim's full-text and title searchers on a ZIM's first search or suggestion and keeps them while
+  the memory budget allows (see "Searcher memory budget"); one mutex per handle serialises the calls that use them.
+- Prewarm: `set_sources` starts up to 4 background threads that open libzim on the ZIMs with a built-in index and build their
+  searchers, so the first search does not pay for the opens, but only for as many ZIMs as fit in the searcher memory budget,
+  cheapest first. The config key `"prewarm": false` turns it off; its default is `false` on Android (`target_os = "android"`)
+  and `true` elsewhere. A search that arrives while a source is still being warmed waits for that source only. Prewarm builds
+  the `Searcher` objects and opens the archive; the Xapian database itself opens on the ZIM's first search (about 7 ms with a warm
+  file cache, 91 ms for Wikipedia), so prewarm does not take that part off the first query.
+
+### Searcher memory budget
+
+Decided by the Cache lead, 2026-10-26; built on `tool-framework`. Config key `searcher_budget_mb` (default 256 on every
+target; 0 keeps no searcher). Code: `budget.rs` (policy, no libzim in it, unit-tested everywhere), `zimx.rs` (binds an open
+archive to the budget), `handle.rs` (one budget per handle, prewarm plan).
+
+- Every kept libzim searcher (full-text, title) is tracked with an estimated cost (below). When a query needs a searcher that is not
+  kept, it is admitted if it fits; to make room the least recently used kept searchers of other ZIMs are dropped (`zimx_drop`: the
+  archive stays open, the next query on that ZIM builds the searcher again).
+- A searcher whose cost alone is more than the whole budget is never kept: each query builds a temporary searcher and drops it when the
+  query ends. So a budget of 0 builds one per query per source.
+- Searches are correct whatever the budget; only latency changes (tests: results identical for budgets 0, one searcher, two, 3 MiB and
+  256 MiB, with queries and suggestions run twice over so kept, dropped and rebuilt searchers all answer).
+- Prewarm never drops anything. It takes the ZIMs in order of estimated cost, cheapest first, as long as the running total fits the
+  budget (`prewarm_plan`); the others build their searchers on their first search. Default `prewarm` is `false` on Android.
+- Cost estimate (`estimate_cost`): libzim does not report a searcher's memory, and the process's private bytes cannot be attributed to
+  one searcher while other threads allocate, so the cost is estimated: full-text 1.5 MiB + index size / 8192, title 1 MiB + index
+  size / 2048 (the sizes of the ZIM's `X/fulltext/xapian` and `X/title/xapian` entries, read with the `zim` crate). It is fitted to
+  the measurements below, not derived from them exactly.
+
+Measured 2026-10-26 on Windows (release build, libzim 9.8.2, one process per ZIM, private bytes = `PrivateUsage`, sampled after
+about 2.5 s of settling; `tests/searcher_cost.rs`, ignored by default). MiB. "Archive open": `Zimx::open`. "Full-text searcher": the
+searcher built and one count-only search run (k = 0), which opens the Xapian database. "After 10 results read": the same archive after
+a search that returns 10 results with snippets.
+
+| ZIM | file | full-text index | title index | archive open | full-text searcher (count-only search) | after 10 results read | title searcher |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| wikipedia_en_all_maxi_2026-02 | 115.5 GiB | 7.7 GiB | 3.2 GiB | 291.8 | 0.7 | 95.9 | 1.9 |
+| armypubs_en_all_2024-12 | 7.7 GiB | 27.0 MiB | 9.8 MiB | 9.1 | 1.9 | 76.2 | 0.3 |
+| ifixit_en_all_2025-12 | 3.3 GiB | 75.1 MiB | 28.1 MiB | 16.0 | 1.2 | 94.8 | 1.1 |
+| wikispecies_en_all_maxi_2026-07 | 3.2 GiB | 445.4 MiB | 261.4 MiB | 29.4 | 0.6 | 96.5 | 2.0 |
+| www.ready.gov_en_2024-12 | 2.3 GiB | 3.6 MiB | 0.6 MiB | 9.1 | 0.8 | 88.1 | 0.0 |
+| wikivoyage_en_all_maxi_2026-09 | 1021.5 MiB | 55.4 MiB | 9.1 MiB | 10.4 | 1.0 | 94.9 | 0.5 |
+| appropedia_en_all_maxi_2026-02 | 554.7 MiB | 44.5 MiB | 7.6 MiB | 9.6 | 2.1 | 90.1 | 0.5 |
+| cd3wdproject.org_en_all_2025-11 | 554.2 MiB | 22.3 MiB | 2.4 MiB | 9.1 | 1.5 | 86.8 | 0.0 |
+| 100r.co_en_all_2026-08 | 169.0 MiB | 0.5 MiB | 0.1 MiB | 9.6 | 0.7 | 21.7 | 0.0 |
+| wikipedia_en_medicine_mini_2026-10 | 166.3 MiB | 30.0 MiB | 54.6 MiB | 12.3 | 1.3 | 94.9 | 0.7 |
+| meshoskey.com_eng_2026-10_24 | 116.8 MiB | 0.8 MiB | 0.1 MiB | 8.4 | 1.4 | 2.1 | 0.0 |
+| meshtastic.org_eng_2026-10_25 | 104.8 MiB | 0.8 MiB | 0.3 MiB | 9.1 | 1.0 | 56.7 | 0.3 |
+| fas-military-medicine_en_2025-06 | 77.7 MiB | 0.0 MiB | 0.0 MiB | 7.9 | 1.6 | 1.6 | 0.0 |
+| wiktionary_af_all_nopic_2026-07 | 25.4 MiB | 9.0 MiB | 3.0 MiB | 9.6 | 1.1 | 88.9 | 0.3 |
+| nhs.uk_en_medicines_2025-12 | 16.2 MiB | 1.3 MiB | 0.8 MiB | 9.1 | 0.8 | 78.0 | 0.3 |
+| freq51.net_eng_2026-05_21 | 12.0 MiB | 0.1 MiB | 0.0 MiB | 8.4 | 1.2 | 2.8 | 0.0 |
+| reticulum.network_eng_2026-10_22 | 4.8 MiB | 0.1 MiB | 0.0 MiB | 8.4 | 1.1 | 1.1 | 0.0 |
+| wikiquote_af_all_maxi_2026-07 | 1.8 MiB | 0.2 MiB | 0.1 MiB | 8.4 | 1.6 | 2.8 | 0.1 |
+| docs.meshcore.io_eng_2026-10_23 | 0.7 MiB | 0.1 MiB | 0.0 MiB | 8.9 | 1.2 | 1.2 | 0.0 |
+
+What the numbers say:
+- A kept searcher is small: 0.6-2.1 MiB (full-text) and 0-2.0 MiB (title), whatever the index size (Wikipedia's 7.7 GiB full-text index
+  costs 0.7 MiB: the Xapian database is memory-mapped). Dropping a searcher gives back at most that. Rebuilding one takes about 7 ms
+  (Wikipedia 91 ms) with a warm file cache.
+- The memory is in the open archive, not in the searcher: 8-29 MiB at open (Wikipedia 292 MiB), and, after a search that reads results,
+  another 50-97 MiB on the typical ZIM (about 1-3 MiB on a few small ones). That stays when the searcher is dropped and goes only when the archive is
+  closed (private bytes fell back to within 1-3 MiB of the starting value). Emptying libzim's cluster cache (shared by all archives,
+  16 MiB limit by default) gave back about 7 MiB of it, so the rest is held elsewhere in the archive.
+- With all 18 sources and the library open, process private bytes stay at about 1020 MiB for a budget of 256, 8 or 0 MiB, and the mean warm
+  query time over 10 queries is 880, 884 and 888 ms (second pass; `searcher_budget_mb` 256 keeps all 36 searchers, an estimated 30 MiB). At 256 MiB nothing is ever
+  dropped on these sources; the desktop default stays 256.
+- So the budget bounds what it tracks, the searchers, and on the current sources that is a small part of libzim's footprint.
+  Bounding the footprint (about 1 GiB with these sources) would need a budget over the open archives (close the least recently
+  used archive, reopen it on its next query) and/or a lower limit on what an archive keeps after reading results. That changes
+  when archives open and close and is not part of this budget. Proposed, not approved.
+
+### Coverage-read cost (Xapian hits)
+
+A Xapian source's top hits (at least 10 per source) are read from the ZIM to compute term coverage (see "Search and merge"). Measured
+2026-10-26 on Windows (release build, sources-full.json: 18 ZIMs plus the recon library, warm, mean of 10 queries, two runs each
+way, the reads switched off with a temporary test-only switch that is not in the code): 967 and 951 ms per query with the reads, 681
+and 681 ms without, so the reads cost about 270-285 ms per query (29%).
+
+
+### Android build
+
+Built 2026-10-26 for `aarch64-linux-android` with the `xapian` feature on, the way the Flutter plugin builds the core
+(`cargo ndk --platform 28 -t arm64-v8a build --release -p cache_search`, NDK 28.2.13676358), with `LIBZIM_DIR` set to the folder
+`fetch-libzim.sh` unpacks (official `libzim_android-arm64-9.8.2-1.tar.gz`, md5 `59a6b769847b77dc0ace69c3b9727445` checked by the
+script). `build.rs` compiles `zimx.cpp` with the NDK's clang++ and links `libzim.so` and `libc++_shared.so`. What the app ships (sizes
+as built; none of it is committed):
+
+| File | Where | Size (bytes) |
+|---|---|---:|
+| `libcache_search.so` (release, stripped) | `jniLibs/arm64-v8a/` | 50,457,568 |
+| `libzim.so` (official prebuilt, `llvm-strip --strip-unneeded`; 16,230,992 unstripped) | `jniLibs/arm64-v8a/` | 8,247,096 |
+| `libc++_shared.so` (NDK 28.2, stripped copy) | `jniLibs/arm64-v8a/` | 1,253,544 |
+| `icudt73l.dat` (ICU 73.2 data) | a real file in app storage, not in `jniLibs` | 10,955,552 |
+| Total | | 70,913,760 (60.0 MB without the ICU data) |
+
+`libcache_search.so` needs `libzim.so` and `libc++_shared.so` (DT_NEEDED) and exports only the `cs_*` functions; every libzim symbol it
+uses is defined in `libzim.so`. All four files' LOAD segments are 16 KB aligned. `cargo ndk` also copies a stray
+`libcrc_fast-<hash>.so` (a dependency that is also a cdylib); nothing needs it and it is not shipped.
+
+ICU data: the official Android libzim is built with ICU linked in but without its data; libzim reads it from the directory named by
+the environment variable `ICU_DATA` (the string is in `libzim.so`) or from `zim::setICUDataDirectory(path)`, a C++ call that the
+core does not expose. So the app copies `icudt73l.dat` (the file name must stay exactly that) out of its assets to a real directory
+once, and sets `ICU_DATA` to that directory (not the file) in the process before the first `cs_open`, for example
+`android.system.Os.setenv("ICU_DATA", dir, true)` in the plugin or `setenv` through `dart:ffi`. Nothing else is needed to initialise
+libzim. The Android build has not been run on a device yet: whether libzim works with that data placement is unconfirmed.
 
 ### Licences
 
@@ -925,7 +1029,7 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
   to spaces), follow {name, trail_kind}. Off-road instruction text is generated from the fields exactly as AIDA's `_step_text` does. Not filled (null): county and
   distance_km (the geocoder's), `near` (navi's reverse geocode of the end), kind/street/locality/state of a place given as coordinates, er_tier. Not present: `pins`, `bridge`.
 - **Errors** (`ok:false`, `error`, then top-level `from_matched` / `to_matched` where AIDA attaches them): `geocode_empty` {which, query, searched_within_km, hint}
-  (no detail), `origin_unknown` (no from and no fix), `bad_arguments`, `nearby_empty` {to_type, warnings} + from_matched, `same_place` + both places, the router's own
+  (no detail), `origin_unknown` (no from and no fix), `bad_arguments`, `nearby_empty` {to_type, warnings (a list, `[]` when none, never null)} + from_matched, `same_place` + both places, the router's own
   code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
 - **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
   requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
