@@ -131,6 +131,25 @@ fn a_category_gives_its_row_then_the_nearest_places_from_the_anchor_town() {
 }
 
 #[test]
+fn an_anchor_can_be_a_small_place_but_not_a_word_the_categories_use() {
+    let t = Tmp::new("anchor");
+    write_fixture_pack(&t.pack());
+    let c = core(&t);
+    // Lowman is a hamlet in the fixture; "near Lowman" still anchors the search there
+    let v = search(&c, "pharmacy near Lowman", Some(BURLEY));
+    assert_eq!(v["interpreted"]["anchor"]["name"], "Lowman", "{v}");
+    // the pharmacies come nearest-first from Lowman, not from Burley
+    let places: Vec<&str> = v["results"].as_array().unwrap().iter().filter(|r| r["type"] == "place").map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(places.len(), 3);
+    // a run of words the categories themselves use is not read as a place name
+    let v = search(&c, "water", Some(BURLEY));
+    assert!(v["interpreted"]["anchor"].is_null());
+    // the town named with a state: "Stanley ID" is a name, not an anchor
+    let v = search(&c, "Stanley ID", Some(BURLEY));
+    assert_eq!(v["results"][0]["type"], "town");
+}
+
+#[test]
 fn a_name_with_a_town_finds_the_place() {
     let t = Tmp::new("nametown");
     write_fixture_pack(&t.pack());

@@ -247,7 +247,8 @@ fn route_object(legs: &[Directions], ends: &[&MapEnd], mode: TravelMode, land: B
             .map(|s| s["distance_m"].as_f64().unwrap_or(0.0))
             .sum()
     };
-    let (road_m, offroad_m) = (seg_len(true), seg_len(false));
+    // (+ 0.0 turns the -0.0 that an empty sum gives into 0.0)
+    let (road_m, offroad_m) = (seg_len(true) + 0.0, seg_len(false) + 0.0);
     let total_m = pts.len().checked_sub(1).map(at).unwrap_or(0.0);
     let duration_s: i64 = legs.iter().map(|d| d.duration_s).sum();
 

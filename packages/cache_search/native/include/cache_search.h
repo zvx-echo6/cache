@@ -323,9 +323,11 @@ char *cs_live_get(cs_handle *h, const char *request_json);
  *   Returns {"route_id","fix","matched":{lat,lon,distance_along_m,offset_m,segment,route_bearing_deg},"on_route","off_route",
  *   "off_route_count","arrived","progress","remaining":{distance_m,duration_s,eta?},"total","current","next","then","leg"}.
  *   "off_route" is true once the fix has been more than off_route_m from the route (or the GPS accuracy if larger; twice
- *   as much on an off-road leg) for off_route_fixes fixes in a row: the app then calls cs_map_route from the fix. "next" is
- *   the coming maneuver with the distance to it, "then" the one after, "leg" (off-road only) the bearing, distance and
- *   climb to the next point. "now" (ISO 8601) adds "eta". Free the result with cs_free_string. */
+ *   as much on an off-road leg) for off_route_fixes fixes in a row: the app then calls cs_map_route from the fix. "current",
+ *   "next" and "then" are maneuvers: {index,kind,type,instruction,street_names,travel,lat,lon,distance_m,length_m,cardinal,bearing_deg}
+ *   (and follow, elev_gain_m, elev_loss_m, grade_class for off-road ones); "next" is the coming maneuver with the distance to
+ *   it, "then" the one after (its distance is from "next"), "leg" (off-road only) the bearing, distance and climb to the
+ *   next point: {kind,target:{lat,lon},bearing_deg,cardinal,distance_m,climb_m,descent_m,grade_class,travel}. "now" (ISO 8601) adds "eta". Free the result with cs_free_string. */
 char *cs_map_search(cs_handle *h, const char *request_json);
 char *cs_map_route(cs_handle *h, const char *request_json);
 char *cs_map_progress(cs_handle *h, const char *request_json);

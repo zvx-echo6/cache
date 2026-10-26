@@ -33,8 +33,8 @@ use std::sync::Arc;
 const COS_LOW: f32 = 0.30;
 const COS_HIGH: f32 = 0.70;
 /// A category is a meaning match when its cosine is at least this and within `COS_MARGIN` of the best category.
-const COS_CATEGORY: f32 = 0.40;
-const COS_MARGIN: f32 = 0.08;
+const COS_CATEGORY: f32 = 0.50;
+const COS_MARGIN: f32 = 0.06;
 /// A place or town is a meaning match at this cosine.
 const COS_PLACE: f32 = 0.50;
 /// A category matches the words when its keyword strength reaches this (title words count 1, description words 0.5).
@@ -43,7 +43,7 @@ const KEYWORD_CATEGORY: f64 = 0.4;
 const W_RELEVANCE: f64 = 0.7;
 const CLOSE_KM: f64 = 25.0;
 /// Names that fit the words less than this are dropped when categories or meaning already answered the query.
-const NAME_FLOOR: f64 = 45.0;
+const NAME_FLOOR: f64 = 30.0;
 
 pub struct SearchOpts {
     /// The map centre or GPS fix: results report distance and direction from it.
@@ -323,13 +323,21 @@ fn cat_vocab(cats: &[Category]) -> CatVocab {
 }
 
 /// How well the query words fit a category: title and id words count 1, description words 0.5, each weighted by how few
-/// categories use the word. Words no category uses are left out of the average (they are a place name or filler).
+/// categories use the word. A word no category uses (a place name, filler) still counts, a little, against the match, so a
+/// long sentence with one category word in it is not a category search; words of one or two letters are not matched.
 fn keyword_strength(q: &[String], c: &Category, v: &CatVocab) -> f64 {
+    const UNKNOWN: f64 = 0.3;
     let head: HashSet<String> = stems(&c.id).into_iter().chain(stems(&c.title)).collect();
     let desc: HashSet<String> = stems(&c.description).into_iter().collect();
     let (mut got, mut all) = (0.0, 0.0);
     for w in q {
-        let Some(df) = v.df.get(w) else { continue };
+        if w.chars().count() < 3 {
+            continue;
+        }
+        let Some(df) = v.df.get(w) else {
+            all += UNKNOWN;
+            continue;
+        };
         let weight = 1.0 / *df as f64;
         all += weight;
         if head.contains(w) {
@@ -350,33 +358,40 @@ impl PlacesCore {
         PlacesCore { packs, geo }
     }
 
-    /// The first town or city whose name is exactly a run of the query's words (the longest run, the biggest town), with
-    /// the words that are left. A run that is the whole query is a name, not an anchor.
-    fn anchor(&self, packs: &[Arc<Pack>], q: &str) -> Option<(LocalityRow, String)> {
+    /// The town, city or village whose name is exactly a run of the query's words (the longest run; the bigger kind of place
+    /// and the bigger town win a tie), with the words that are left. A run that is the whole query is a name, not an anchor,
+    /// and a run made only of words the categories use ("water") is not a place name here.
+    fn anchor(&self, packs: &[Arc<Pack>], q: &str, vocab: &CatVocab) -> Option<(LocalityRow, String)> {
         let toks: Vec<&str> = q.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).collect();
         if toks.len() < 2 {
             return None;
         }
-        let mut best: Option<(usize, i64, LocalityRow, String)> = None;
-        for len in (1..toks.len()).rev().take(3) {
+        let rank = |kind: &str| match kind {
+            "city" => 3,
+            "town" => 2,
+            "village" => 1,
+            _ => 0,
+        };
+        let mut best: Option<(usize, i32, i64, LocalityRow, String)> = None;
+        for len in (1..=3.min(toks.len() - 1)).rev() {
             for start in 0..=(toks.len() - len) {
                 let span = toks[start..start + len].join(" ");
                 let span_norm = norm(&span);
-                if span_norm.is_empty() {
+                let ws = words(&span);
+                if span_norm.is_empty() || ws.iter().all(|w| vocab.df.contains_key(&stem(w))) {
                     continue;
                 }
-                let ws = words(&span);
                 let expr = ws.iter().map(|w| format!("\"{}\"", w.replace('"', ""))).collect::<Vec<_>>().join(" ");
                 for p in packs {
                     for (id, _) in p.fts_localities(&expr, 12).unwrap_or_default() {
                         let Ok(Some(l)) = p.locality(id) else { continue };
-                        if l.kind == "hamlet" || norm(&l.name) != span_norm {
+                        if norm(&l.name) != span_norm {
                             continue;
                         }
-                        let pop = l.population.unwrap_or(0);
+                        let (k, pop) = (rank(&l.kind), l.population.unwrap_or(0));
                         let rest: Vec<&str> = toks[..start].iter().chain(toks[start + len..].iter()).copied().collect();
-                        if best.as_ref().is_none_or(|(bl, bp, _, _)| len > *bl || (len == *bl && pop > *bp)) {
-                            best = Some((len, pop, l, rest.join(" ")));
+                        if best.as_ref().is_none_or(|(bl, bk, bp, _, _)| (len, k, pop) > (*bl, *bk, *bp)) {
+                            best = Some((len, k, pop, l, rest.join(" ")));
                         }
                     }
                 }
@@ -385,7 +400,12 @@ impl PlacesCore {
                 break;
             }
         }
-        best.map(|(_, _, l, rest)| (l, rest))
+        // "Stanley ID" names a town and its state: the geocoder reads that as one name, so there is no anchor
+        best.filter(|(_, _, _, _, rest)| {
+            let r = norm(rest);
+            r.is_empty() || !packs.iter().any(|p| p.states.iter().any(|s| norm(&s.code) == r || norm(&s.name) == r))
+        })
+        .map(|(_, _, _, l, rest)| (l, rest))
     }
 
     /// One query. `embed` makes the query vector when `opts` has none and the pack has vectors.
@@ -428,7 +448,9 @@ impl PlacesCore {
         }
 
         // 2. an anchor town
-        let anchor = self.anchor(&packs, q);
+        let cats = all_categories(&packs);
+        let vocab = cat_vocab(&cats);
+        let anchor = self.anchor(&packs, q, &vocab);
         let rest = anchor.as_ref().map(|(_, r)| r.clone());
         let centre = anchor.as_ref().map(|(l, _)| (l.lat, l.lon)).or(opts.near);
         let q_words = stems(rest.as_deref().unwrap_or(q));
@@ -437,8 +459,6 @@ impl PlacesCore {
         let mut cat_rows: Vec<(Category, f64, &'static str)> = Vec::new();
 
         // 4. categories by keyword
-        let cats = all_categories(&packs);
-        let vocab = cat_vocab(&cats);
         for c in &cats {
             let s = keyword_strength(&q_words, c, &vocab);
             if s >= KEYWORD_CATEGORY {
@@ -509,7 +529,8 @@ impl PlacesCore {
         }
 
         // 3. names (after the category and meaning steps, so a weak name hit can be dropped when they answered)
-        let answered = !cat_rows.is_empty() || !meaning_places.is_empty() || anchor.as_ref().is_some_and(|(_, r)| !r.trim().is_empty());
+        let answered = !cat_rows.is_empty() || !meaning_places.is_empty();
+        let anchor_town = anchor.as_ref().filter(|(_, r)| !r.trim().is_empty()).map(|(l, _)| format!("town:{}", l.source_id));
         let mut name_hits: Vec<GeoHit> = self.geo.forward(q, centre, 12);
         if let Some(r) = rest.as_deref().filter(|r| !r.trim().is_empty()) {
             name_hits.extend(self.geo.forward(r, centre, 8));
@@ -517,6 +538,9 @@ impl PlacesCore {
         let max_score = name_hits.iter().map(|h| h.score).fold(1.0, f64::max);
         for h in &name_hits {
             if answered && h.name_match < NAME_FLOOR {
+                continue;
+            }
+            if anchor_town.as_deref() == Some(h.address.as_str()) {
                 continue;
             }
             let rel = (0.85 * h.name_match / 100.0 + 0.15 * (h.score / max_score).clamp(0.0, 1.0)).min(1.0);
