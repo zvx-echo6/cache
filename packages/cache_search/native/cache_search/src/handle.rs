@@ -21,6 +21,10 @@ struct SourceCfg {
     /// Library settings (the v1 settings object); optional, guessed when absent.
     #[serde(default)]
     settings: Option<Value>,
+    /// ZIM sources: `false` keeps the ZIM on its Tantivy index even when it has a built-in Xapian index (default
+    /// `true`; see zimx.rs). For comparing the two engines and for tests of the Tantivy path.
+    #[serde(default)]
+    builtin_index: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,9 +70,26 @@ pub struct ZimSlot {
     pub src: ZimSource,
     pub index_dir: Option<PathBuf>,
     pub open: Option<OpenIndex>,
+    /// Use the ZIM's built-in Xapian index when it has one (the source's `builtin_index`, default true).
+    pub builtin: bool,
 }
 
 impl ZimSlot {
+    /// libzim's handle when this source keyword-searches through the ZIM's own Xapian index.
+    pub fn xapian(&self) -> Option<&crate::zimx::Zimx> {
+        if self.builtin { self.src.xapian() } else { None }
+    }
+
+    /// True when this source keyword-searches through the ZIM's own Xapian index (no libzim open needed to say so).
+    pub fn has_xapian(&self) -> bool {
+        self.builtin && self.src.has_xapian()
+    }
+
+    /// libzim's handle when this source suggests from the ZIM's title index.
+    pub fn title_index(&self) -> Option<&crate::zimx::Zimx> {
+        if self.builtin { self.src.title_index() } else { None }
+    }
+
     pub fn state(&self) -> IndexState {
         index::index_state(self.index_dir.as_deref(), &self.src.id)
     }
@@ -221,7 +242,7 @@ impl Handle {
     /// (same path) are reused rather than reopened.
     pub fn set_sources(&mut self, config_json: &str) -> Result<()> {
         enum Plan {
-            Reuse(usize, Option<PathBuf>),
+            Reuse(usize, Option<PathBuf>, bool),
             ReuseLib(usize, Option<PathBuf>, LibrarySettings, Option<Value>),
             ReuseOpening(usize, Option<PathBuf>),
             /// A library to open on a background thread (started only once the whole call has succeeded).
@@ -235,6 +256,7 @@ impl Handle {
         for sc in &cfg.sources {
             let path = PathBuf::from(&sc.path);
             let index_dir = sc.index_dir.as_ref().map(PathBuf::from);
+            let builtin = sc.builtin_index.unwrap_or(true);
             match sc.kind.as_str() {
                 "zim" => {
                     let existing = self
@@ -243,13 +265,13 @@ impl Handle {
                         .position(|s| matches!(s, Source::Zim(z) if z.src.path == path));
                     let (id, item) = match existing {
                         Some(i) => match &self.sources[i] {
-                            Source::Zim(z) => (Some(z.src.id.clone()), Plan::Reuse(i, index_dir)),
+                            Source::Zim(z) => (Some(z.src.id.clone()), Plan::Reuse(i, index_dir, builtin)),
                             _ => unreachable!(),
                         },
                         None => match ZimSource::open(&path) {
                             Ok(z) => {
                                 let id = z.id.clone();
-                                (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None })))
+                                (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None, builtin })))
                             }
                             Err(error) => {
                                 let title = stem_title(&path);
@@ -320,9 +342,10 @@ impl Handle {
         self.sources = plan
             .into_iter()
             .map(|p| match p {
-                Plan::Reuse(i, index_dir) => {
+                Plan::Reuse(i, index_dir, builtin) => {
                     let mut s = old[i].take().expect("reused twice");
                     if let Source::Zim(z) = &mut s {
+                        z.builtin = builtin;
                         if z.index_dir != index_dir {
                             z.index_dir = index_dir;
                             z.open = None;
@@ -468,6 +491,17 @@ impl Handle {
             .iter_mut()
             .map(|s| match s {
                 Source::Zim(z) => {
+                    // A ZIM with a built-in Xapian index is searched through it (no index_dir needed): indexed, with
+                    // "keyword_source":"own" (the field is present for these only; see cache_search.h).
+                    if z.has_xapian() {
+                        return json!({
+                            "id": z.src.id, "kind": "zim", "path": z.src.path.to_string_lossy(),
+                            "title": z.src.title, "language": z.src.language,
+                            "indexed": true, "building": false, "stale": false, "opening": false, "updating": false,
+                            "docs": z.src.entry_count(), "embedding_model": Value::Null, "keyword_source": "own",
+                            "error": Value::Null,
+                        });
+                    }
                     let st = z.state();
                     let (mut indexed, building, stale) = (
                         matches!(st, IndexState::Done(_)),

@@ -5,6 +5,7 @@ use crate::handle::{Handle, Source};
 use crate::library::{self, LibHit, LibKwHit};
 use crate::html;
 use crate::zimsrc;
+use crate::zimx::{clean_snippet, XHit};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -94,20 +95,26 @@ pub fn rrf(lists: &[Vec<(String, f32)>]) -> Vec<(String, f64)> {
 
 struct Hit {
     path: String,
-    addr: DocAddress,
+    /// The Tantivy document; `None` for a hit from the ZIM's built-in Xapian index (`SrcHits::engine`).
+    addr: Option<DocAddress>,
     /// Raw BM25 score from the source's index.
     raw: f32,
     /// Fraction of distinct query terms present in the document (title, lead or body).
     coverage: f32,
 }
 
+/// What produced a ZIM source's keyword list.
+enum Engine {
+    /// The source's Tantivy index (built by `index_zim`).
+    Tantivy { searcher: Searcher, query: Box<dyn Query>, lead: Field, title_f: Field },
+    /// The ZIM's own Xapian index, through libzim: the hits in the same order as `SrcHits::hits`.
+    Xapian(Vec<XHit>),
+}
+
 struct SrcHits {
     id: String,
     title: String,
-    searcher: Searcher,
-    query: Box<dyn Query>,
-    lead: Field,
-    title_f: Field,
+    engine: Engine,
     count: usize,
     /// Best first.
     hits: Vec<Hit>,
@@ -195,6 +202,31 @@ fn merge_keyword(lists: &[Vec<(f32, f32, String)>], min_cov: f32, need: usize) -
     }
 }
 
+/// The top `candidates` hits of a ZIM's Xapian index for `query`: the ranked list for the merge (libzim's score as the
+/// raw score; every hit counts as full term coverage, since libzim does not report which terms matched), the hits as
+/// libzim returned them, and the estimated match count. `None` when libzim fails, also after a retry with the query
+/// reduced to its words (Xapian's own query syntax can reject text such as an unmatched quote or parenthesis).
+fn xapian_list(x: &crate::zimx::Zimx, query: &str, candidates: usize) -> Option<(Vec<Hit>, Vec<XHit>, usize)> {
+    let found = x.search(query, 0, candidates).or_else(|_| {
+        let words: String = query.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+        if words.trim().is_empty() {
+            return Err(crate::error::Error::bad_json("empty query"));
+        }
+        x.search(words.trim(), 0, candidates)
+    });
+    let (found, count) = found.ok()?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let (mut hits, mut xhits) = (Vec::new(), Vec::new());
+    for h in found {
+        if h.path.is_empty() || !seen.insert(h.path.clone()) {
+            continue;
+        }
+        hits.push(Hit { path: h.path.clone(), addr: None, raw: h.score as f32, coverage: 1.0 });
+        xhits.push(h);
+    }
+    Some((hits, xhits, count))
+}
+
 /// Cap on how far the candidate window is widened to resolve a score tie at its boundary.
 const TIE_CAP: usize = 8192;
 
@@ -253,6 +285,14 @@ impl Handle {
                 }
             }
             let (id, title) = (z.src.id.clone(), z.src.title.clone());
+            // A ZIM with a built-in Xapian index uses it (no index_dir needed). If libzim fails on this query, the
+            // source falls back to its Tantivy index, if it has one.
+            if let Some(x) = z.xapian() {
+                if let Some((hits, xhits, count)) = xapian_list(x, query, candidates) {
+                    per.push(SrcHits { id, title, engine: Engine::Xapian(xhits), count, hits });
+                    continue;
+                }
+            }
             // Sources that are not `done`, or whose index cannot be opened, are skipped (cs_status reports them).
             let Ok(Some(oi)) = z.searchable() else { continue };
             let searcher = oi.reader.searcher();
@@ -267,15 +307,12 @@ impl Handle {
             let mut hits = Vec::with_capacity(top.len());
             for (raw, addr, path) in top {
                 let coverage = term_coverage(&searcher, addr, &terms, &fields);
-                hits.push(Hit { path, addr, raw, coverage });
+                hits.push(Hit { path, addr: Some(addr), raw, coverage });
             }
             per.push(SrcHits {
                 id,
                 title,
-                searcher,
-                query: q,
-                lead: oi.fields.lead,
-                title_f: oi.fields.title,
+                engine: Engine::Tantivy { searcher, query: q, lead: oi.fields.lead, title_f: oi.fields.title },
                 count,
                 hits,
             });
@@ -427,11 +464,42 @@ impl Handle {
             let p = &per[m_si];
             let h = &p.hits[hi];
             let address = zimsrc::format_address(&p.id, &h.path);
-            let Ok(doc) = p.searcher.doc::<TantivyDocument>(h.addr) else { continue };
-            let art_title = text_of(&doc, p.title_f);
-            let lead = text_of(&doc, p.lead);
+            let (searcher, query, lead_f, title_f) = match &p.engine {
+                Engine::Xapian(xhits) => {
+                    // libzim's own snippet (HTML with <b>), stripped and cut like every other snippet; an empty one
+                    // falls back to the start of the article text.
+                    let xh = &xhits[hi];
+                    let mut snippet = clean_snippet(&xh.snippet, snippet_chars);
+                    if snippet.is_empty() {
+                        if let Ok(e) = self.zim_get(&address) {
+                            if e.mime.to_ascii_lowercase().starts_with("text/html") {
+                                snippet = html::snippet_from_text(
+                                    &html::html_to_text(&String::from_utf8_lossy(&e.bytes)),
+                                    snippet_chars,
+                                );
+                            }
+                        }
+                    }
+                    let art_title = if xh.title.is_empty() { xh.path.clone() } else { xh.title.clone() };
+                    results.push(json!({
+                        "address": address,
+                        "title": format!("{}: {}", p.title, art_title),
+                        "snippet": snippet,
+                        "source_id": p.id,
+                        "source_kind": "zim",
+                        "source_title": p.title,
+                        "page": Value::Null,
+                    }));
+                    continue;
+                }
+                Engine::Tantivy { searcher, query, lead, title_f } => (searcher, query, *lead, *title_f),
+            };
+            let Some(addr) = h.addr else { continue };
+            let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else { continue };
+            let art_title = text_of(&doc, title_f);
+            let lead = text_of(&doc, lead_f);
             let gen = generators.entry(m_si).or_insert_with(|| {
-                let mut g = SnippetGenerator::create(&p.searcher, &*p.query, p.lead).ok();
+                let mut g = SnippetGenerator::create(searcher, &**query, lead_f).ok();
                 if let Some(g) = g.as_mut() {
                     g.set_max_num_chars(snippet_chars.max(1));
                 }

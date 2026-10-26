@@ -123,7 +123,7 @@ fn suggest_on_small_zim() {
     let _ = std::fs::remove_dir_all(&dir);
 
     // before indexing: the source is skipped, not an error
-    let h = open(vec![json!({"kind":"zim","path":zim,"index_dir":dir}), json!({"kind":"zim","path":"/nonexistent/x.zim","index_dir":"/nonexistent/i"})]);
+    let h = open(vec![json!({"kind":"zim","path":zim,"index_dir":dir,"builtin_index":false}), json!({"kind":"zim","path":"/nonexistent/x.zim","index_dir":"/nonexistent/i"})]);
     assert_eq!(titles(&suggest(h, "para", None)).len(), 0);
 
     let j = unsafe { cs_job_start(cstr("index_zim").as_ptr(), cstr(&json!({"zim_path": zim, "index_dir": dir, "heap_mb": 200}).to_string()).as_ptr()) };

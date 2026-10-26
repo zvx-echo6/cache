@@ -104,8 +104,10 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  *              "error":null|{"code","message"}}]}
  * "opening" is true for a library whose background open (see cs_open) has not finished: until then it has no
  * docs, no embedding_model unless settings were given, "indexed" false, and "keyword_source" null; search
- * skips it. "opening" is false for everything else, and always for ZIMs. "keyword_source" is null for ZIMs and
- * for a library that is still opening. A library that finished opening is reported as before.
+ * skips it. "opening" is false for everything else, and always for ZIMs. "keyword_source" is null for a library that
+ * is still opening. A ZIM that carries its own Xapian index (builds with the "xapian" feature: Windows, Android) is
+ * searched through it with no index_dir: it is "indexed":true, "building":false, "stale":false, "docs" its entry
+ * count, and has "keyword_source":"own" (placed after "embedding_model"); other ZIMs have no "keyword_source" field. A library that finished opening is reported as before.
  * "error" codes of a library source include "damaged" (see above) as well as "not_found" and "io".
  * "updating" is true for a library an update_library job owns (see cs_job_start): its shard is closed, search skips
  * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
@@ -157,7 +159,8 @@ uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t 
 char *cs_zim_main_page(cs_handle *h, const char *zim_id);
 
 /* Title suggestions for the address bar.
- * options_json: {"k":10,"sources":[ids]|null}. Returns {"suggestions":[{"title","address","source_id"}]} */
+ * options_json: {"k":10,"sources":[ids]|null}. Returns {"suggestions":[{"title","address","source_id"}]}
+ * A ZIM with a title index is answered from it (builds with the "xapian" feature), the others from their Tantivy index. */
 char *cs_suggest(cs_handle *h, const char *prefix, const char *options_json);
 
 /* --- [n] numbering, one cs_conv per chat --- */

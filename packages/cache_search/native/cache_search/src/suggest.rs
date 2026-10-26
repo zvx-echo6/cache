@@ -41,6 +41,9 @@ pub fn title_matches(title: &str, typed: &[String]) -> bool {
     typed.iter().all(|t| tw.iter().any(|w| w.starts_with(t.as_str())))
 }
 
+/// Reciprocal-rank constant used when libzim and Tantivy suggestions meet.
+const RANK_K: f32 = 60.0;
+
 struct Sugg {
     score: f32,
     title: String,
@@ -63,6 +66,8 @@ impl Handle {
         let limit = (opts.k * 50).clamp(1000, 5000);
 
         let mut all: Vec<Sugg> = Vec::new();
+        // Suggestions from libzim's title index: libzim gives an order, not a score.
+        let mut x_ranked: Vec<Sugg> = Vec::new();
         for s in self.sources.iter_mut() {
             let Source::Zim(z) = s else { continue };
             if let Some(f) = &filter {
@@ -71,6 +76,24 @@ impl Handle {
                 }
             }
             let id = z.src.id.clone();
+            // A ZIM with a title index (libzim, feature `xapian`) suggests from it, in libzim's order; the rest of the
+            // path below is for ZIMs without one.
+            if let Some(x) = z.title_index() {
+                if let Ok(list) = x.suggest(prefix, opts.k * 4) {
+                    for (rank, s) in list.into_iter().enumerate() {
+                        if s.title.is_empty() {
+                            continue;
+                        }
+                        x_ranked.push(Sugg {
+                            score: 1.0 / (RANK_K + rank as f32 + 1.0),
+                            title: s.title,
+                            address: zimsrc::format_address(&id, &s.path),
+                            source_id: id.clone(),
+                        });
+                    }
+                    continue;
+                }
+            }
             // sources that are not indexed (missing, stale, building) are skipped
             let Ok(Some(oi)) = z.searchable() else { continue };
             let title_f = oi.fields.title;
@@ -110,6 +133,18 @@ impl Handle {
                 }
                 all.push(Sugg { score, title, address: zimsrc::format_address(&id, &path), source_id: id.clone() });
             }
+        }
+        if !x_ranked.is_empty() {
+            // libzim hits carry no BM25 score, so mixing them with Tantivy ones ranks both by rank within their own
+            // source (reciprocal rank, k=60), as the search merge does for lists of different engines.
+            let mut tv: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            for s in all.iter_mut() {
+                let r = tv.entry(s.source_id.clone()).or_insert(0);
+                s.score = 1.0 / (RANK_K + *r as f32 + 1.0);
+                *r += 1;
+            }
+            all.append(&mut x_ranked);
         }
         all.sort_by(|a, b| {
             b.score

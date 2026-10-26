@@ -128,7 +128,7 @@ fn index_search_read() {
     assert!(!j.is_null());
     assert!(job_start(json!({"zim_path": ready, "index_dir": d_ready})).is_null());
     assert_eq!(thread_code(), "busy");
-    let h = open(vec![json!({"kind":"zim","path":ready,"index_dir":d_ready})]);
+    let h = open(vec![json!({"kind":"zim","path":ready,"builtin_index":false,"index_dir":d_ready})]);
     let st = status(h);
     assert_eq!(st["sources"][0]["building"], true, "{st}");
     assert_eq!(st["sources"][0]["indexed"], false);
@@ -180,7 +180,7 @@ fn index_search_read() {
     let cut = p["done"].as_u64().unwrap();
     assert!(cut > 0 && cut < p["total"].as_u64().unwrap(), "{p}");
     eprintln!("cancelled at {cut} of {}", p["total"]);
-    let h = open(vec![json!({"kind":"zim","path":ready,"index_dir":d_resume})]);
+    let h = open(vec![json!({"kind":"zim","path":ready,"builtin_index":false,"index_dir":d_resume})]);
     let st = status(h);
     assert_eq!(st["sources"][0]["indexed"], false);
     assert_eq!(st["sources"][0]["building"], false);
@@ -193,8 +193,8 @@ fn index_search_read() {
     assert_eq!(docs_of(h, READY), clean_docs, "resumed build must have the same documents as a clean build");
     // and the same search answers
     unsafe { cs_close(h) };
-    let hr = open(vec![json!({"kind":"zim","path":ready,"index_dir":d_resume})]);
-    let hc = open(vec![json!({"kind":"zim","path":ready,"index_dir":d_ready})]);
+    let hr = open(vec![json!({"kind":"zim","path":ready,"builtin_index":false,"index_dir":d_resume})]);
+    let hc = open(vec![json!({"kind":"zim","path":ready,"builtin_index":false,"index_dir":d_ready})]);
     // (equal-score ties may order differently between two builds, so compare the clear leaders only)
     assert_eq!(
         addrs(&search(hr, "flood insurance", json!({"k":4}))),
@@ -222,7 +222,7 @@ fn index_search_read() {
     )
     .unwrap();
 
-    let hs = open(vec![json!({"kind":"zim","path":ready,"index_dir":d_stale})]);
+    let hs = open(vec![json!({"kind":"zim","path":ready,"builtin_index":false,"index_dir":d_stale})]);
     let st = status(hs);
     assert_eq!(st["sources"][0]["stale"], true, "{st}");
     assert_eq!(st["sources"][0]["indexed"], false);
@@ -232,8 +232,8 @@ fn index_search_read() {
     // search over both, with a missing ZIM in the list
     let h = open(vec![
         json!({"kind":"zim","path":"/nonexistent/gone.zim","index_dir":"/nonexistent/gone.idx"}),
-        json!({"kind":"zim","path":ready,"index_dir":d_ready}),
-        json!({"kind":"zim","path":nhs,"index_dir":d_nhs}),
+        json!({"kind":"zim","path":ready,"builtin_index":false,"index_dir":d_ready}),
+        json!({"kind":"zim","path":nhs,"builtin_index":false,"index_dir":d_nhs}),
     ]);
     let st = status(h);
     let ss = st["sources"].as_array().unwrap();
@@ -485,7 +485,7 @@ fn manual_timing() {
     let p = index_fully(&zim, &dir);
     let secs = t0.elapsed().as_secs_f64();
     assert_eq!(p["state"], "done", "{p}");
-    let h = open(vec![json!({"kind":"zim","path":zim,"index_dir":dir})]);
+    let h = open(vec![json!({"kind":"zim","path":zim,"builtin_index":false,"index_dir":dir})]);
     let docs = status(h)["sources"][0]["docs"].as_u64().unwrap();
     let mut size = 0u64;
     for e in std::fs::read_dir(&dir).unwrap().flatten() {
