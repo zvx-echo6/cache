@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 cache_places = { path = "../cache_places" }
+cache_embed = { path = "../cache_embed" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 # OpenStreetMap PBF reader (MIT).
 osmpbf = "0.3"

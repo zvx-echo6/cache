@@ -3,6 +3,7 @@
 //!   places_pack build --id idaho --name Idaho --admin-state Idaho --admins admins.sqlite --out places.sqlite \
 //!       [--overture-csv places.csv] [--osm-pbf region.osm.pbf] [--rules categories.json] [--no-general]
 //!   places_pack wiki --pack places.sqlite --geo-tags F --page-props F --items-per-site F --index F --xml-url URL [--no-summaries]
+//!   places_pack embed --pack places.sqlite --embed-lib cache_llama.dll --embed-model bge-m3-Q8_0.gguf [--embed-model-id ID] [--embed-threads 4]
 //!   places_pack inspect places.sqlite
 
 mod admins;
@@ -96,6 +97,20 @@ fn run() -> Result<(), String> {
             println!("size {} bytes", std::fs::metadata(&o.pack).map(|m| m.len()).unwrap_or(0));
             Ok(())
         }
+        Some("embed") => {
+            // The meaning-search vectors: category texts, and places and towns that have a summary (cache_places::embedpack).
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
+            let threads: i32 = a.get("embed-threads").map(|t| t.parse().map_err(|_| "--embed-threads must be a number".to_string())).transpose()?.unwrap_or(4);
+            let model = need("embed-model")?;
+            let e = cache_embed::Embedder::load(&need("embed-lib")?, &model, a.get("embed-model-id").map(String::as_str), a.get("embed-sha256").map(String::as_str), threads).map_err(|e| e.to_string())?;
+            let sha = cache_embed::sha256_file(&model).map_err(|e| e.to_string())?;
+            let pack = PathBuf::from(need("pack")?);
+            let r = cache_places::embedpack::embed_pack(&pack, &e.model_id, &sha, &mut |t| e.embed(t).map_err(|x| x.to_string()), &mut |l| eprintln!("{l}"))?;
+            println!("embedded {} categories, {} places, {} towns ({} values each, model {})", r.categories, r.places, r.localities, r.dims, e.model_id);
+            println!("size {} bytes", std::fs::metadata(&pack).map(|m| m.len()).unwrap_or(0));
+            Ok(())
+        }
         Some("inspect") => {
             let p = argv.get(1).ok_or("inspect needs a pack path")?;
             let c = Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
@@ -110,7 +125,7 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
-        _ => Err("usage: places_pack build ... | places_pack inspect <places.sqlite>".into()),
+        _ => Err("usage: places_pack build ... | wiki ... | embed ... | inspect <places.sqlite>".into()),
     }
 }
 

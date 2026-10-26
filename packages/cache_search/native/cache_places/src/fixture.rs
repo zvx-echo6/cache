@@ -126,3 +126,44 @@ pub fn write_fixture_pack(path: &Path) {
         c.execute("INSERT INTO localities_fts(rowid, name, alt_names) VALUES (?1, ?2, '')", params![id, name]).unwrap();
     }
 }
+
+/// A stand-in embedder for tests: a hashed bag of (singular) words, 64 values, so two texts that share words are close.
+/// It is not a language model; the tests that use it check the plumbing, and real quality is measured with bge-m3.
+pub fn fake_embed(text: &str) -> Vec<f32> {
+    let mut v = vec![0.0f32; 64];
+    for w in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        let w = w.to_lowercase();
+        let w = w.strip_suffix('s').filter(|_| w.len() > 3).unwrap_or(&w).to_string();
+        let mut h: u32 = 2166136261;
+        for b in w.bytes() {
+            h = (h ^ b as u32).wrapping_mul(16777619);
+        }
+        v[(h % 64) as usize] += 1.0;
+    }
+    v
+}
+
+pub const FAKE_MODEL: &str = "fake-hash-64";
+
+/// Summaries for a few fixture rows (a place and a town), the way the wiki step fills them.
+pub fn add_fixture_summaries(path: &Path) {
+    let c = Connection::open(path).expect("open fixture pack");
+    for (name, wp, text) in [
+        ("Sawtooth Spring", "Sawtooth Spring", "A cold natural spring where hikers and campers fill their water bottles and refill drinking water."),
+        ("Stanley Lake", "Stanley Lake", "A large alpine lake beneath the Sawtooth Mountains, popular for camping and kayaking."),
+    ] {
+        c.execute("UPDATE places SET summary = ?2, wikipedia_title = ?3 WHERE name = ?1", params![name, text, wp]).unwrap();
+    }
+    c.execute(
+        "UPDATE localities SET summary = ?1, wikipedia_title = 'Stanley, Idaho' WHERE name = 'Stanley' AND state = 'ID'",
+        params!["A small mountain town in the Sawtooth Valley of Custer County, Idaho, at the foot of the Sawtooth Range."],
+    )
+    .unwrap();
+}
+
+/// The fixture pack with summaries and with vectors from `fake_embed`.
+pub fn write_fixture_pack_with_vectors(path: &Path) {
+    write_fixture_pack(path);
+    add_fixture_summaries(path);
+    crate::embedpack::embed_pack(path, FAKE_MODEL, "none", &mut |t| Ok(fake_embed(t)), &mut |_| {}).expect("embed the fixture");
+}
