@@ -212,7 +212,7 @@ fields below sit at the top level beside `error`, and `detail` is left out when 
 - `geocode_empty`: nothing matched a name. `error` has `which` (`from` or `to`), `query` and `searched_within_km`
   (null when unknown); no `detail`.
 - `origin_unknown`: no `from` was given and the phone's location is not known. (Navigate does not use `no_location`.)
-- `nearby_empty`: no place of that type was found. `error` has `to_type` and `warnings` (null); no `detail`.
+- `nearby_empty`: no place of that type was found. `error` has `to_type` and `warnings` (a list, `[]` when there are none, never null; AIDA `nav_runtime.py`); no `detail`.
 - `same_place`: the start and the destination are the same spot.
 - The router's own code is passed through as `error.type` when the route fails, with its message as `detail`:
   `no_route`, `too_far`, `out_of_coverage`, `route_too_long`, `upstream_timeout`, `internal`.
