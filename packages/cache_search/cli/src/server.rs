@@ -24,6 +24,7 @@
 //!   GET    /live/sources                                         -> cs_live_sources
 //!   POST   /live/fetch                   {request}               -> cs_live_fetch (the body is the request JSON)
 //!   POST   /live/get                     {request}               -> cs_live_get (the body is the request JSON)
+//!   POST   /map/search | /map/route | /map/progress  (the body is the request JSON) -> cs_map_search | cs_map_route | cs_map_progress
 //!   GET    /video/instances                                      -> cs_video_instances
 //!   POST   /video/{instance-add|instance-remove|login|refresh|me|channels|list|search|get|delete|resolve}
 //!                                        (the body is the request JSON) -> cs_video_<name>
@@ -190,6 +191,9 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
         (Method::Get, ["live", "sources"]) => st.engine.core.live_sources(),
         (Method::Post, ["live", "fetch"]) => st.engine.core.live_fetch(body),
         (Method::Post, ["live", "get"]) => st.engine.core.live_get(body),
+        (Method::Post, ["map", "search"]) => st.engine.core.map_search(body),
+        (Method::Post, ["map", "route"]) => st.engine.core.map_route(body),
+        (Method::Post, ["map", "progress"]) => st.engine.core.map_progress(body),
         (Method::Get, ["video", "instances"]) => st.engine.core.video_instances(),
         (Method::Get, ["video", "downloads"]) => st.engine.core.video_downloads(),
         (Method::Post, ["video", op]) => match *op {

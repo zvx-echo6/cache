@@ -501,6 +501,29 @@ pub unsafe extern "C" fn cs_live_get(h: *mut Handle, request_json: *const c_char
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_get(arg_str(request_json, "request_json")?)?))
 }
 
+// ---- the map: search, route, guidance (logic in cache_places::map and cache_navigate::map; see ext.rs) ----
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_map_search(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.map_search(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_map_route(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.map_route(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_map_progress(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.map_progress(arg_str(request_json, "request_json")?)?))
+}
+
 // ---- videos (logic in cache_video; see ext.rs) ----
 
 /// # Safety

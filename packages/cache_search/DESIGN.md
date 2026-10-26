@@ -802,6 +802,50 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 - **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
   requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
 
+## The map: search, route and guidance (`cs_map_search`, `cs_map_route`, `cs_map_progress`)
+
+The Maps tab calls these directly; the `navigate` tool is for the model and stays as it is. The JSON of each call is documented in `cache_search.h`.
+They need the `places` and `routing` sections of the `cs_open` config (`not_configured` otherwise); the CLI has `cs map-search`, `cs map-route` and `cs map-progress`
+(`--request <json>`, or `--query` / `--to` / `--from` shorthands) and `cs serve` has `POST /map/search`, `/map/route` and `/map/progress`. All three print the
+core's JSON as it came, so the doors agree byte for byte (`cli/tests/map.rs`).
+
+**Search (`cache_places::map`).** A query is read in this order. (1) *Coordinates*: decimal, degrees-minutes-seconds (also degrees and decimal minutes, hemisphere
+letters before or after), USNG / MGRS (zone, band, 100 km square, 2 to 10 digits; the inverse of the Kruger series that writes them), Plus Codes (full, padded, with
+grid digits; a short code is completed from `near`, or from a town named after it). The answer is one `coordinates` result with the point in every format and the
+nearest town. (2) *Text*: a run of words that is exactly the name of a city, town or village in the pack ("pharmacy near Burley") is the **anchor**; ranking is from
+there, not from the map centre. Nothing in this step is a list of words: the data says what is a town. (3) *Names*: the geocoder (FTS5, town boost) on the whole text
+and on what is left after the anchor. (4) *Categories*: the words (plurals folded) are matched against the pack's category ids, titles and descriptions; a word that
+many categories use weighs little ("station" is in fuel, police and fire), title words count twice a description word. A matching category gives a `category` row and
+its nearest places from the anchor or the centre. (5) *Meaning*, when the pack has vectors and the host has an embedder: the query vector is compared with the
+vectors of the category texts and of the name-and-summary texts of places and towns. A category counts at cosine 0.40 within 0.08 of the best, a place at 0.50. The
+host's embedder is the handle's query embedder (`set_query_embedder`, the one built-in `search` uses), or the request carries `query_vector`; its `model` must
+equal the pack's `embed_model`, else the answer's `meaning` says `model_mismatch` and keywords answer alone. Without an embedder or vectors the answer says
+`no_embedder` / `no_vectors`; the keyword steps (1 to 4) never need either.
+Ranking: `score = 0.7 * relevance + 0.3 * closeness`; closeness is `exp(-km / 25)` from the anchor, else the centre (0.5 if neither is known); relevance is the name
+match (0..1), the category match, or the cosine mapped from 0.30..0.70 onto 0..1. Every result carries `distance_m` and `direction` from `near` (the map centre or the GPS
+fix), the details a card shows (phone, hours, website, Wikipedia summary and title) and an `id` that the route call takes.
+
+**Vectors in the pack (`places_pack embed`).** The builder embeds each category as `title: description` and each place and town that has a summary as
+`name. summary`, with `cache_embed` (cache_llama's `cl_embed`, the same code and settings the `cs` query embedder uses), and writes them to the `vectors` table
+(`kind`, `ref`, `vec`): one byte per dimension plus a float scale, so Idaho's costs about 1 KB per embedded text. `meta` gets `embed_model` (the id a query vector
+must carry; the GGUF file name unless `--embed-model-id`), `embed_dims`, `embed_model_sha256` and `embed_count`. A pack without the table is a keyword-only pack.
+Places with no summary are found by name and category; the vectors are for the notable ones (peaks, lakes, towns, hot springs, landmarks).
+
+**Route (`cache_navigate::map`).** `NavCore` is the routing engine (Valhalla shim, off-road pack and elevation, opened on first use); the `navigate` tool and the map
+both route through `NavCore::navigate`, so a route has the same id, distance and time in both (a test compares them). The tool shortens the answer; the map keeps all of
+it: the geometry as a polyline6 string, the `segments` (road, off-road or trail, each with its way of travel and its range of points), every maneuver with its position,
+instruction, length and time and its range of points, the totals (road and off-road metres, climb and descent), the warnings, and Valhalla's alternatives
+(`alternates`, for a plain road route; an off-road route has none). Stops (`via`) are routed leg by leg and joined; each stop is a `via` maneuver. A route that cannot be made is
+`{"ok": false, "errors": [{code, message}]}`, not an error of the call.
+
+**Guidance (`cs_map_progress`).** Each route (and each alternative) is kept in the handle, newest eight, so a fix is matched by `route_id`; the app sends the route
+object again after a restart. A fix is matched to the nearest point of the route within 300 m behind and 3 km ahead of the last match, and only on the whole route
+when that finds nothing on it, so a route that passes itself (an out-and-back) is not mistaken for its other pass. `off_route` is true when the fix has been farther
+than `off_route_m` (50) from the route, or than the GPS accuracy if that is larger, for `off_route_fixes` (3) fixes in a row; an off-road leg is a straight line
+between turn points over a 30 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
+along the route, the next maneuver and the distance to it, the one after, the time and distance left, the ETA (if `now` is given) and, on an off-road leg, the bearing,
+distance and climb to the next point. `arrived` is true within `arrive_m` (25) of the end.
+
 ## Videos (crate `cache_video`, PeerTube)
 
 A generic PeerTube connector through PeerTube's official REST API only (no scraping): any instance, added by address; browse and
