@@ -1,8 +1,7 @@
 import 'package:flutter/services.dart';
 
-/// Whether the app may show notifications. From Android 13 that is a permission asked at run time; guidance runs as a
-/// foreground service whose ongoing notification (the way back to the app with the screen locked) only shows when it is
-/// granted. Other platforms and older Androids always have it.
+/// Whether the app may show notifications, requested through each platform's native permission flow.
+/// Android guidance uses an ongoing foreground-service notification; iOS uses its system notification authorization.
 abstract class NotificationAccess {
   /// Shows the system prompt when there is one and has not been answered; the answer is whether notifications are allowed.
   Future<bool> request();

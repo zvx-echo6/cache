@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_tts/flutter_tts.dart';
 
 /// Speaks the guidance prompts. The real one is the phone's own text-to-speech (flutter_tts: Android's TextToSpeech and iOS's
@@ -13,9 +15,10 @@ abstract class Speaker {
 /// flutter_tts. Prompts queue behind each other, the voice ducks other audio like a navigation app's, and nothing is sent
 /// anywhere.
 class FlutterTtsSpeaker implements Speaker {
-  FlutterTtsSpeaker({FlutterTts? tts}) : _tts = tts ?? FlutterTts();
+  FlutterTtsSpeaker({FlutterTts? tts, bool? isIOS}) : _tts = tts ?? FlutterTts(), _isIOS = isIOS ?? Platform.isIOS;
 
   final FlutterTts _tts;
+  final bool _isIOS;
   Future<void>? _ready;
 
   Future<void> _init() => _ready ??= () async {
@@ -30,7 +33,17 @@ class FlutterTtsSpeaker implements Speaker {
         await tryIt(() => _tts.setLanguage('en-US'));
         await tryIt(() => _tts.setSpeechRate(0.5));
         await tryIt(() => _tts.setQueueMode(1));
-        await tryIt(() => _tts.setAudioAttributesForNavigation());
+        if (_isIOS) {
+          await tryIt(() => _tts.setSharedInstance(true));
+          await tryIt(() => _tts.autoStopSharedSession(true));
+          await tryIt(() => _tts.setIosAudioCategory(
+            IosTextToSpeechAudioCategory.playback,
+            [IosTextToSpeechAudioCategoryOptions.duckOthers, IosTextToSpeechAudioCategoryOptions.interruptSpokenAudioAndMixWithOthers],
+            IosTextToSpeechAudioMode.voicePrompt,
+          ));
+        } else {
+          await tryIt(() => _tts.setAudioAttributesForNavigation());
+        }
         await tryIt(() => _tts.awaitSpeakCompletion(false));
       }();
 
