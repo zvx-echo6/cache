@@ -56,8 +56,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     try {
       await c.initialize();
+      if (!mounted) return;
       if (t.offsetS > 0) await c.seekTo(Duration(milliseconds: (t.offsetS * 1000).round()));
+      if (!mounted) return;
       await c.play();
+      if (!mounted) return;
       await _pickCaptions(on: false);
     } catch (e) {
       if (mounted) setState(() => _error = t.isLocal ? "This file can't be played." : "Can't play this video right now. Check the connection.");
@@ -94,7 +97,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (!_hasCaptions || _c == null) return;
     if (on) {
       final f = await _loadCaption();
-      if (f == null) return;
+      if (f == null || !mounted) return;
       await _c!.setClosedCaptionFile(Future.value(f));
     }
     if (mounted) setState(() => _captionsOn = on);
