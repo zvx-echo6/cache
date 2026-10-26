@@ -10,6 +10,10 @@
 //! same resolver `navigate` and `locate` use, so "Island Park, Idaho", "island park" and a misspelling find one town), or the
 //! phone's position when none is given. The data is that of the nearest place it was downloaded for within
 //! `live_radius_km`; the result says which place that was and how far it is from the one asked about.
+//!
+//! When there is no fresh data for the place and the host's `LiveFetcher` allows the source, the tool downloads once for the place
+//! asked about (`fetch_for`: the same fetch and quotas as `cs_live_fetch`, never for a source without its key) and answers from the
+//! stored row. Without a fetcher, or when it denies the source, nothing is downloaded.
 
 use crate::map::{age_words, date_of, minute_of, stamp};
 use crate::{address, here_key, now_from, Live, LiveCfg, Place};
@@ -32,6 +36,88 @@ impl LiveDataTool {
     pub fn live(&self) -> &Live {
         &self.live
     }
+
+    /// The stored data to answer from: the nearest place with data that has not expired (the asked place's own row whatever the
+    /// distance, others within `live_radius_km`); when all have expired, the nearest. The error says why nothing can be used.
+    fn pick(&self, c: &rusqlite::Connection, l: &crate::Loaded, asked: &Asked, now: i64) -> Result<(Place, f64, crate::View), ToolError> {
+        let radius = self.live.cfg.live_radius_km;
+        let stored = self.live.locations(c, &l.def.id, asked.lat, asked.lon).map_err(|e| err(ToolError::INTERNAL, e.message))?;
+        // the places data was downloaded for: the asked place's own row whatever the distance, the others within the radius
+        let usable: Vec<&(Place, f64)> =
+            stored.iter().filter(|(p, km)| *km <= radius || asked.key.as_deref() == Some(p.key.as_str())).collect();
+        if usable.is_empty() {
+            return Err(match stored.first() {
+                None => err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, asked.name)),
+                Some((p, km)) => err(
+                    ToolError::NO_DATA,
+                    format!(
+                        "no {} data within {} km of {}; the nearest place with data is {}, {} km away",
+                        l.def.id,
+                        radius,
+                        asked.name,
+                        p.name,
+                        km_words(*km)
+                    ),
+                ),
+            });
+        }
+        // the nearest whose data has not expired; when all have, the nearest (and the expired error says so)
+        let mut chosen: Option<(&(Place, f64), crate::View)> = None;
+        for u in &usable {
+            let Some(v) = self.live.view(c, l, &u.0, now).map_err(|e| err(ToolError::INTERNAL, e.message))? else { continue };
+            let fresh = !v.expired;
+            if chosen.is_none() || fresh {
+                chosen = Some((u, v));
+            }
+            if fresh {
+                break;
+            }
+        }
+        match chosen {
+            Some((u, v)) => Ok((u.0.clone(), u.1, v)),
+            None => Err(err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, asked.name))),
+        }
+    }
+
+    /// The on-demand fetch: one download for the place asked about, through the same path and quotas as `cs_live_fetch`, stored
+    /// under the place's key (a saved place's own, else the position rounded to 0.01 degrees so nearby asks share a row, which is
+    /// pruned like the phone's other positions). A source that needs a key the host does not hold is never fetched. Nothing in the
+    /// error holds the key (the fetch scrubs it).
+    fn fetch_for(&self, ctx: &ToolCtx, key: Option<String>, l: &crate::Loaded, asked: &Asked) -> Result<(), ToolError> {
+        let needs_key = l.def.api_key.as_ref().map(|k| k.required).unwrap_or(false) || l.def.basic_auth.as_ref().map(|b| b.required).unwrap_or(false);
+        if needs_key && key.as_deref().map(str::is_empty).unwrap_or(true) {
+            return Err(err(ToolError::KEY_MISSING, format!("{} needs an API key, and none is set on this phone", l.def.id)));
+        }
+        let mut place = Map::new();
+        place.insert("key".into(), json!(asked.key.clone().unwrap_or_else(|| here_key(asked.lat, asked.lon))));
+        place.insert("name".into(), json!(asked.name));
+        place.insert("lat".into(), json!(asked.lat));
+        place.insert("lon".into(), json!(asked.lon));
+        if let Some(f) = &asked.facts {
+            for (k, v) in [("state", &f.state), ("state_name", &f.state_name), ("county", &f.county), ("country", &f.country)] {
+                if let Some(v) = v.as_ref().filter(|v| !v.trim().is_empty()) {
+                    place.insert(k.into(), json!(v));
+                }
+            }
+        }
+        let mut req = Map::new();
+        req.insert("source".into(), json!(l.def.id));
+        req.insert("place".into(), Value::Object(place));
+        req.insert("now".into(), json!(ctx.now));
+        if let Some(k) = key.filter(|k| !k.is_empty()) {
+            req.insert("api_key".into(), json!(k));
+        }
+        self.live.fetch(&Value::Object(req).to_string(), ctx.places).map(|_| ()).map_err(|e| {
+            let code = match e.code {
+                "fetch_failed" => ToolError::FETCH_FAILED,
+                "quota" => ToolError::QUOTA,
+                "key_missing" => ToolError::KEY_MISSING,
+                "bad_response" => ToolError::BAD_RESPONSE,
+                _ => ToolError::INTERNAL,
+            };
+            err(code, e.message)
+        })
+    }
 }
 
 fn err(code: &str, detail: impl Into<String>) -> ToolError {
@@ -48,6 +134,8 @@ struct Asked {
     lon: f64,
     /// The saved place's key, or the phone-position key: data stored under it is taken whatever the distance.
     key: Option<String>,
+    /// What the places pack knows about a geocoded place (state, county, country), carried into an on-demand fetch.
+    facts: Option<cache_tool::places::ResolvedPlace>,
 }
 
 /// Whole km for the model (at least 1).
@@ -59,22 +147,22 @@ fn resolve_asked(ctx: &ToolCtx, text: Option<&str>) -> Result<Asked, ToolError> 
     match text {
         Some(name) => {
             if let Some(p) = ctx.places.resolve(name) {
-                return Ok(Asked { name: p.name, lat: p.lat, lon: p.lon, key: Some(p.key) });
+                return Ok(Asked { name: p.name, lat: p.lat, lon: p.lon, key: Some(p.key), facts: None });
             }
             if let Some((lat, lon)) = parse_latlon(name) {
-                return Ok(Asked { name: name.trim().to_string(), lat, lon, key: None });
+                return Ok(Asked { name: name.trim().to_string(), lat, lon, key: None, facts: None });
             }
             let near = ctx.location.map(|l| (l.lat, l.lon));
             match ctx.geocoder {
                 Some(g) => g
-                    .resolve(name, near)
-                    .map(|(name, lat, lon)| Asked { name, lat, lon, key: None })
+                    .resolve_full(name, near)
+                    .map(|p| Asked { name: p.name.clone(), lat: p.lat, lon: p.lon, key: None, facts: Some(p) })
                     .ok_or_else(|| err("geocode_empty", format!("no place called {:?} was found", name.trim()))),
                 None => Err(err("geocode_empty", format!("no saved place called {:?}", name.trim()))),
             }
         }
         None => match ctx.location {
-            Some(loc) => Ok(Asked { name: "current location".into(), lat: loc.lat, lon: loc.lon, key: Some(here_key(loc.lat, loc.lon)) }),
+            Some(loc) => Ok(Asked { name: "current location".into(), lat: loc.lat, lon: loc.lon, key: Some(here_key(loc.lat, loc.lon)), facts: None }),
             None => Err(err(ToolError::NO_LOCATION, "no place was given and the phone's location is not known")),
         },
     }
@@ -132,47 +220,31 @@ impl Tool for LiveDataTool {
         };
         let asked = resolve_asked(ctx, place_arg)?;
         let c = self.live.db().map_err(|e| err(ToolError::INTERNAL, e.message))?;
-        let radius = self.live.cfg.live_radius_km;
-        let stored = self.live.locations(&c, &l.def.id, asked.lat, asked.lon).map_err(|e| err(ToolError::INTERNAL, e.message))?;
-        // the places data was downloaded for: the asked place's own row whatever the distance, the others within the radius
-        let usable: Vec<&(Place, f64)> =
-            stored.iter().filter(|(p, km)| *km <= radius || asked.key.as_deref() == Some(p.key.as_str())).collect();
-        if usable.is_empty() {
-            return Err(match stored.first() {
-                None => err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, asked.name)),
-                Some((p, km)) => err(
-                    ToolError::NO_DATA,
-                    format!(
-                        "no {} data within {} km of {}; the nearest place with data is {}, {} km away",
-                        l.def.id,
-                        radius,
-                        asked.name,
-                        p.name,
-                        km_words(*km)
-                    ),
-                ),
-            });
-        }
-        // the nearest whose data has not expired; when all have, the nearest (and the expired error says so)
-        let mut chosen: Option<(&(Place, f64), crate::View)> = None;
-        for u in &usable {
-            let Some(v) = self.live.view(&c, &l, &u.0, now).map_err(|e| err(ToolError::INTERNAL, e.message))? else { continue };
-            let fresh = !v.expired;
-            if chosen.is_none() || fresh {
-                chosen = Some((u, v));
-            }
-            if fresh {
-                break;
+        // the stored data for the place; when there is none that is fresh, one on-demand fetch if the host allows it
+        let mut picked = self.pick(&c, &l, &asked, now);
+        let mut refresh_failed: Option<ToolError> = None;
+        if picked.as_ref().map(|p| p.2.expired).unwrap_or(true) {
+            if let Some(f) = ctx.live_fetcher.filter(|f| f.can_fetch(&l.def.id)) {
+                if let Err(e) = self.fetch_for(ctx, f.key_for(&l.def.id), &l, &asked) {
+                    refresh_failed = Some(e);
+                }
+                picked = self.pick(&c, &l, &asked, now);
             }
         }
-        let Some((&(ref place, km), v)) = chosen else {
-            return Err(err(ToolError::NO_DATA, format!("no {} data has been downloaded for {}", l.def.id, asked.name)));
+        let (place, km, v) = match picked {
+            Ok(p) => p,
+            // nothing stored and the fetch failed: the fetch's own reason is the more useful one
+            Err(e) => return Err(refresh_failed.unwrap_or(e)),
         };
         let own = asked.key.as_deref() == Some(place.key.as_str());
         let shown = if own { asked.name.clone() } else { place.name.clone() };
         let off = v.zone();
         if v.expired {
-            return Err(err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off))));
+            let mut e = err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off)));
+            if let Some(r) = refresh_failed {
+                e = e.with("refresh_failed", r.code);
+            }
+            return Err(e);
         }
         let more = v.items.len().saturating_sub(MAX_ITEMS);
         let items: Vec<Value> = v
