@@ -119,13 +119,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   void _onQueryChanged(String v) {
     _debounce?.cancel();
-    _hits = null;
-    _searchError = null;
     final id = _zimId;
-    if (v.trim().isEmpty || id == null) {
-      setState(() => _suggestions = const []);
-      return;
-    }
+    setState(() {
+      _hits = null;
+      _searchError = null;
+      if (v.trim().isEmpty || id == null) _suggestions = const [];
+    });
+    if (v.trim().isEmpty || id == null) return;
     _debounce = Timer(const Duration(milliseconds: 150), () async {
       try {
         final s = await widget.sources.suggest(v.trim(), k: 12, zimIds: [id]);
@@ -234,6 +234,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
             if (_finding) _findBar(k),
             Expanded(
               child: Stack(
+                fit: StackFit.expand,
                 children: [
                   Offstage(offstage: _searching, child: _page(k)),
                   if (_searching) Positioned.fill(child: _searchPanel(k)),
