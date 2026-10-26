@@ -265,6 +265,17 @@ mod xapian {
     }
 
     #[test]
+    fn scores_are_percentages_and_the_total_is_an_estimate_on_ready_gov() {
+        let Some(ready) = ready_zim() else { return };
+        let z = Zimx::open(Path::new(&ready)).unwrap();
+        // the score is a percentage and the best hit of a query is 100
+        let (hits, total) = z.search("flood", 0, 10).unwrap();
+        assert!(total >= hits.len() && !hits.is_empty());
+        assert_eq!(hits[0].score, 100, "{:?}", hits[0]);
+        assert!(hits.iter().all(|h| (0..=100).contains(&h.score) && h.score <= hits[0].score));
+    }
+
+    #[test]
     fn xapian_search_status_and_suggest_on_ready_gov() {
         let Some(ready) = ready_zim() else { return };
         // no index_dir at all: the ZIM's own index is the keyword index

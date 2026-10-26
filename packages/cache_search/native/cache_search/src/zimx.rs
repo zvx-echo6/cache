@@ -15,7 +15,8 @@ pub struct XHit {
     pub title: String,
     /// libzim's snippet: HTML with `<b>` around the matched words, not yet stripped.
     pub snippet: String,
-    /// libzim's integer relevance, best first.
+    /// libzim's relevance for this hit: Xapian's percentage (0-100), best first. The best hit of a query is 100 in
+    /// every ZIM, so it is relative to the ZIM's own best hit and cannot be compared between ZIMs.
     pub score: i32,
 }
 

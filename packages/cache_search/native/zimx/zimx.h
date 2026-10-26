@@ -7,8 +7,11 @@
  *   zimx_search -> {"total":<estimated matches>,"hits":[{"path","title","snippet","score"}...]}
  *   zimx_suggest -> {"total":<estimated matches>,"hits":[{"path","title"}...]}
  *
- * "snippet" is libzim's own snippet: HTML with <b> around matched words (the caller strips it). "score" is libzim's
- * integer relevance (best first).
+ * "snippet" is libzim's own snippet: HTML that may carry <b> around matched words (the caller strips it; on the real
+ * ZIMs tried none came back marked, so nothing relies on the marks). "score" is libzim's
+ * integer relevance (best first): Xapian's percentage, which is 100 for the best hit of the query in this ZIM and lower
+ * for the others (measured on 18 real ZIMs: the best hit is always 100). It is relative to this ZIM's best hit, so
+ * scores from two ZIMs cannot be compared with each other.
  *
  * A handle may be used from several threads at once (libzim's Archive is read-only and thread safe; the searchers are
  * created per call). */
