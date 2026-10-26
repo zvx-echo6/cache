@@ -99,6 +99,7 @@ fn classify(rules: &Rules, tags: &[(&str, &str)], id: String, lat: f64, lon: f64
             wiki: wiki_tags(tags),
             brand_wikidata: tag(tags, "brand:wikidata").map(|q| q.trim().to_string()).filter(|q| is_qid(q)),
             enrich: None,
+            matched: None,
         }),
     }
 }

@@ -30,12 +30,74 @@ pub(crate) fn installed_categories(packs: &[Arc<Pack>]) -> Vec<(String, String, 
     let mut out: Vec<(String, String, String)> = Vec::new();
     for p in packs {
         for c in &p.categories {
-            if c.place_count > 0 && !out.iter().any(|(id, _, _)| *id == c.id) {
+            let offered = c.place_count > 0
+                || c.fallback().is_some_and(|f| p.category(&f.category).is_some_and(|h| h.place_count > 0));
+            if offered && !out.iter().any(|(id, _, _)| *id == c.id) {
                 out.push((c.id.clone(), c.title.clone(), c.description.clone()));
             }
         }
     }
     out
+}
+
+/// One result of a category search.
+pub(crate) struct Ranked {
+    pub row: PlaceRow,
+    pub km: f64,
+    /// For categories with a fallback (emergency rooms): "confirmed" or "likely".
+    pub tier: Option<String>,
+    pub note: Option<String>,
+}
+
+/// The nearest places of a category across the packs, nearest first, deduplicated. A category with a fallback rule
+/// (emergency_room: hospitals that probably have one) lists its own places as the primary tier, then the fallback
+/// category's places (minus hospitals an emergency room row already stands for). They rank by distance, but a
+/// fallback place goes ahead of a primary one only when it is nearer by the rule's margin (10 miles).
+pub(crate) fn ranked(packs: &[Arc<Pack>], category: &str, lat: f64, lon: f64, limit: usize) -> Result<Vec<Ranked>, String> {
+    let gather = |cat: &str, want: usize| -> Result<Vec<(PlaceRow, f64)>, String> {
+        let mut found: Vec<(PlaceRow, f64)> = Vec::new();
+        for p in packs {
+            found.extend(p.nearby(cat, lat, lon, MAX_KM, want).map_err(|e| e.message)?);
+        }
+        found.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut kept: Vec<(PlaceRow, f64)> = Vec::new();
+        for (r, km) in found {
+            let dup = kept.iter().any(|(k, _)| {
+                k.source_id == r.source_id
+                    || (k.name.as_deref().map(norm) == r.name.as_deref().map(norm) && haversine_km(k.lat, k.lon, r.lat, r.lon) < 0.15)
+            });
+            if !dup {
+                kept.push((r, km));
+            }
+        }
+        Ok(kept)
+    };
+    let fallback = packs.iter().find_map(|p| p.category(category).and_then(|c| c.fallback()));
+    let Some(f) = fallback else {
+        return Ok(gather(category, limit * 3)?
+            .into_iter()
+            .take(limit)
+            .map(|(row, km)| Ranked { row, km, tier: None, note: None })
+            .collect());
+    };
+    let mut primary: std::collections::VecDeque<(PlaceRow, f64)> = gather(category, limit * 3)?.into();
+    let mut likely: std::collections::VecDeque<(PlaceRow, f64)> = gather(&f.category, limit * 6)?
+        .into_iter()
+        .filter(|(r, _)| !packs.iter().any(|p| p.matched.contains(&r.source_id)))
+        .collect();
+    let mut out = Vec::new();
+    while out.len() < limit {
+        let take_likely = match (primary.front(), likely.front()) {
+            (None, None) => break,
+            (Some(_), None) => false,
+            (None, Some(_)) => true,
+            (Some(p), Some(l)) => l.1 + f.advantage_km < p.1,
+        };
+        let (row, km) = if take_likely { likely.pop_front() } else { primary.pop_front() }.expect("checked above");
+        let (tier, note) = if take_likely { (f.tier.clone(), f.note.clone()) } else { (f.primary_tier.clone(), None) };
+        out.push(Ranked { row, km, tier: Some(tier), note });
+    }
+    Ok(out)
 }
 
 fn err(code: &str, detail: impl Into<String>) -> ToolError {
@@ -102,25 +164,7 @@ impl Tool for NearbyTool {
             return Err(err(ToolError::NOT_SET_UP, format!("no installed map region covers {}", center.label)));
         };
 
-        let mut found: Vec<(PlaceRow, f64)> = Vec::new();
-        for p in &packs {
-            found.extend(p.nearby(cat_id, center.lat, center.lon, MAX_KM, limit * 3).map_err(|e| err(ToolError::INTERNAL, e.message))?);
-        }
-        found.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        // The same place in two packs shows once.
-        let mut kept: Vec<(PlaceRow, f64)> = Vec::new();
-        for (r, km) in found {
-            let dup = kept.iter().any(|(k, _)| {
-                k.source_id == r.source_id
-                    || (k.name.as_deref().map(norm) == r.name.as_deref().map(norm) && haversine_km(k.lat, k.lon, r.lat, r.lon) < 0.15)
-            });
-            if !dup {
-                kept.push((r, km));
-            }
-            if kept.len() >= limit {
-                break;
-            }
-        }
+        let kept = ranked(&packs, cat_id, center.lat, center.lon, limit).map_err(|e| err(ToolError::INTERNAL, e))?;
         if kept.is_empty() {
             return Err(err("nearby_empty", format!("no {} within {} km of {}", cat_title.to_lowercase(), MAX_KM as u32, center.label))
                 .with("category", category)
@@ -129,10 +173,12 @@ impl Tool for NearbyTool {
 
         let places: Vec<Value> = kept
             .iter()
-            .map(|(r, km)| {
+            .map(|Ranked { row: r, km, tier, note }| {
                 let mut m = Map::new();
                 m.insert("address".into(), json!(format!("place:{}", r.source_id)));
-                m.insert("name".into(), json!(r.name.clone().unwrap_or_else(|| cat_title.clone())));
+                // An unnamed place is called by its own kind ("Hospital" for a likely emergency room), not by the category asked for.
+                let own_title = r.category.as_deref().and_then(|c| packs.iter().find_map(|p| p.category(c)).map(|c| c.title.clone()));
+                m.insert("name".into(), json!(r.name.clone().or(own_title).unwrap_or_else(|| cat_title.clone())));
                 for (k, v) in [("street", &r.street), ("locality", &r.locality), ("state", &r.state)] {
                     if let Some(v) = v {
                         m.insert(k.into(), json!(v));
@@ -140,7 +186,7 @@ impl Tool for NearbyTool {
                 }
                 m.insert("distance_mi".into(), json!(round_to(km_to_mi(*km), 1)));
                 m.insert("direction".into(), json!(compass8(bearing_deg(center.lat, center.lon, r.lat, r.lon))));
-                for (k, v) in [("phone", &r.phone), ("hours", &r.hours)] {
+                for (k, v) in [("phone", &r.phone), ("hours", &r.hours), ("er_tier", tier), ("note", note)] {
                     if let Some(v) = v {
                         m.insert(k.into(), json!(v));
                     }

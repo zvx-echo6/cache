@@ -134,4 +134,24 @@ impl<'a> Navigator<'a> {
         };
         Ok(env.directions(&dr))
     }
+
+    /// Up to `count` alternative road routes (see [`Env::alternatives`]); empty for an off-road-only request or when the
+    /// router gives none.
+    pub fn alternatives(&self, req: &NavigateRequest, count: usize) -> Result<Vec<Directions>, NavigateError> {
+        check_point(req.from.latlon(), "from")?;
+        check_point(req.to.latlon(), "to")?;
+        let mut dr = DirectionsRequest::new(req.from.latlon(), req.to.latlon(), req.mode);
+        dr.offroad = req.offroad;
+        dr.offroad_snap_m = req.offroad_snap_m;
+        dr.merge_bearing_deg = req.merge_bearing_deg;
+        dr.min_leg_m = req.min_leg_m;
+        dr.boundary = req.land_access;
+        dr.from_category = req.from.category();
+        dr.to_category = req.to.category();
+        let env = Env {
+            pack: self.pack, elevation: self.elevation, valhalla: self.valhalla, options: self.options.clone(), namer: None,
+            version: self.version.clone(),
+        };
+        Ok(env.alternatives(&dr, count))
+    }
 }

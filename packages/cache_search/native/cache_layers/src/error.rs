@@ -1,5 +1,5 @@
 //! Errors with the core's stable codes (`bad_json`, `not_found`, `io`, `not_configured`, `fetch_failed`,
-//! `bad_response`, `busy`, `unsupported`, `no_space`, `cancelled`, `limit_exceeded`, `offline`, `internal`).
+//! `bad_response`, `busy`, `unsupported`, `no_space`, `cancelled`, `limit_exceeded`, `offline`, `upstream_timeout`, `internal`).
 
 #[derive(Debug, Clone)]
 pub struct Error {
@@ -39,6 +39,14 @@ impl Error {
     pub fn busy(m: impl Into<String>) -> Error {
         Error::new("busy", m)
     }
+    /// An upstream request or a wait for a free connection of its layer ran out of time (the tile server answers a miss).
+    pub fn upstream_timeout(m: impl Into<String>) -> Error {
+        Error::new("upstream_timeout", m)
+    }
+    /// Raised under `http::Policy::LocalOnly` where the answer needs the network.
+    pub fn needs_upstream() -> Error {
+        Error::new("needs_upstream", "needs the network")
+    }
     pub fn limit(m: impl Into<String>) -> Error {
         Error::new("limit_exceeded", m)
     }
@@ -55,6 +63,7 @@ impl Error {
             "not_found" => 404,
             "offline" => 503,
             "fetch_failed" | "bad_response" => 502,
+            "upstream_timeout" => 504,
             _ => 500,
         }
     }

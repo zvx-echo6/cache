@@ -19,5 +19,6 @@ pub mod suggest;
 pub mod tools;
 pub mod web;
 pub mod zimsrc;
+pub mod zimx;
 
 pub use error::{Error, ErrorCode};

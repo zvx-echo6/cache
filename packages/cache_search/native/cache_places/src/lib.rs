@@ -6,10 +6,12 @@
 //! without reopening the handle, and `nearby` leaves itself out of the tool schemas while no pack is installed.
 
 pub mod coord;
+pub mod embedpack;
 pub mod fixture;
 pub mod geo;
 pub mod geocoder;
 pub mod locate;
+pub mod map;
 pub mod nearby;
 pub mod pack;
 pub mod source;
@@ -17,6 +19,7 @@ pub mod schema;
 
 pub use geocoder::{GeoHit, Geocoder, HitKind, Nearest, PackGeocoder};
 pub use locate::LocateTool;
+pub use map::PlacesCore;
 pub use nearby::NearbyTool;
 pub use pack::{Pack, PackSet};
 pub use source::PackPlaceSource;
@@ -24,7 +27,6 @@ pub use source::PackPlaceSource;
 use cache_tool::{Tool, ToolCtx, ToolError};
 use chrono::DateTime;
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The `places` section of the `cs_open` config.
@@ -40,10 +42,16 @@ pub fn tools(cfg: &PlacesCfg) -> Vec<Box<dyn Tool>> {
 
 /// The same tools plus the `PlaceSource` the navigate tool resolves names and `to_type` through, over the same packs.
 pub fn tools_and_source(cfg: &PlacesCfg) -> (Vec<Box<dyn Tool>>, Arc<dyn cache_tool::places::PlaceSource>) {
-    let packs = Arc::new(PackSet::new(cfg.packs.iter().map(PathBuf::from).collect()));
-    let geo: Arc<dyn Geocoder> = Arc::new(PackGeocoder::new(packs.clone()));
+    let (_, tools, source) = core_tools_and_source(cfg);
+    (tools, source)
+}
+
+/// `tools_and_source` plus the [`PlacesCore`] the map's search box (`cs_map_search`) runs on, over the same packs and geocoder.
+pub fn core_tools_and_source(cfg: &PlacesCfg) -> (Arc<PlacesCore>, Vec<Box<dyn Tool>>, Arc<dyn cache_tool::places::PlaceSource>) {
+    let core = Arc::new(PlacesCore::new(cfg));
+    let (packs, geo) = (core.packs.clone(), core.geo.clone());
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(NearbyTool::new(packs.clone(), geo.clone())), Box::new(LocateTool::new(packs.clone(), geo.clone()))];
-    (tools, Arc::new(PackPlaceSource::new(packs, geo)))
+    (core, tools, Arc::new(PackPlaceSource::new(packs, geo)))
 }
 
 /// "12 days old" for a pack built at `built_at`, as of `now` (both ISO 8601 with offset); None when either is unreadable.

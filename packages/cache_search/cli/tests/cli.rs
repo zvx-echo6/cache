@@ -2,7 +2,7 @@
 //! - ZIM tests run only when CS_TEST_ZIM_DIR and CS_TEST_IDX_DIR are set (they build an index of the small NHS ZIM).
 //! - The embedder test runs only when the embedding library and model are mounted (CS_TEST_EMB_DIR, default /emb).
 
-use cache_search_cli::embed::{Embedder, DECIDED_MODEL_FILE, DECIDED_MODEL_SHA256};
+use cache_embed::{Embedder, DECIDED_MODEL_FILE, DECIDED_MODEL_SHA256};
 use edge::{
     CreateIndex, Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, FieldIndexOperations, PayloadFieldSchema, PayloadSchemaParams,
     PointInsertOperations, PointOperations, PointStruct, TextIndexParams, TextScoringParams, UpdateOperation,
@@ -159,7 +159,7 @@ fn zim_fixture() -> Option<ZimFx> {
     let p = j(out.lines().last().unwrap());
     assert_eq!(p["state"], "done", "{p}");
     let config = tmp.path("sources.json");
-    std::fs::write(&config, json!({"sources": [{"kind": "zim", "path": zim, "index_dir": idx}]}).to_string()).unwrap();
+    std::fs::write(&config, json!({"sources": [{"kind": "zim", "path": zim, "index_dir": idx, "builtin_index": false}]}).to_string()).unwrap();
     Some(ZimFx { _tmp: tmp, idx, config })
 }
 
@@ -644,56 +644,87 @@ fn cs_env(args: &[&str], env: &[(&str, &str)]) -> Out {
 fn stand_in_kagi(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> String {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}/api/v1/search", l.local_addr().unwrap());
+    // Each connection is served on its own thread, so a client that connects and says nothing (a probe, a slow start
+    // under load) never holds up the one that follows; every read is bounded, and the answer is flushed and the
+    // connection closed in order (write side, then drain what is left) so a loaded machine cannot turn it into a reset.
     std::thread::spawn(move || {
-        for mut s in l.incoming().flatten() {
-            let mut raw: Vec<u8> = Vec::new();
-            let mut buf = vec![0u8; 4096];
-            let mut head_end = None;
-            while head_end.is_none() {
-                match s.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => raw.extend_from_slice(&buf[..n]),
-                }
-                head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4);
-            }
-            let Some(head_end) = head_end else { continue };
-            let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
-            let header = |name: &str| -> String {
-                head.lines()
-                    .find(|l| l.to_ascii_lowercase().starts_with(&format!("{name}:")))
-                    .unwrap_or("")
-                    .to_string()
-            };
-            let want: usize = header("content-length").split_once(':').and_then(|(_, v)| v.trim().parse().ok()).unwrap_or(0);
-            let mut body = raw[head_end..].to_vec();
-            while body.len() < want {
-                match s.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => body.extend_from_slice(&buf[..n]),
-                }
-            }
-            let auth = header("authorization");
-            seen.lock().unwrap().push(auth.clone());
-            let first = head.lines().next().unwrap_or("");
-            let parsed: Option<Value> = serde_json::from_slice(&body).ok();
-            let (status, out) = if auth.split_once(':').map(|(_, v)| v.trim()) != Some(format!("Bearer {WEB_KEY}").as_str()) {
-                (401, r#"{"error":[{"code":401,"msg":"unauthorized"}]}"#.to_string())
-            } else if !first.starts_with("POST /api/v1/search ")
-                || !parsed.as_ref().is_some_and(|b| b["query"].is_string() && b["limit"].is_u64())
-            {
-                (400, r#"{"error":[{"code":400,"msg":"bad request"}]}"#.to_string())
-            } else if parsed.as_ref().unwrap()["query"] == "nosnippet" {
-                (200, json!({"data": {"search": [{"url": "https://n.example/1", "title": "Bare"}]}}).to_string())
-            } else {
-                let r = json!({"meta": {}, "data": {"search": [
-                    {"url": "https://a.example/1", "title": "Burn ban lifted", "snippet": "Ended on Friday.", "rank": 1}],
-                    "related_searches": ["x"]}});
-                (200, r.to_string())
-            };
-            let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
+        for s in l.incoming().flatten() {
+            let seen = seen.clone();
+            std::thread::spawn(move || stand_in_kagi_connection(s, &seen));
         }
     });
     base
+}
+
+fn stand_in_kagi_connection(mut s: std::net::TcpStream, seen: &std::sync::Mutex<Vec<String>>) {
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+    let _ = s.set_nodelay(true);
+    let mut raw: Vec<u8> = Vec::new();
+    let mut buf = vec![0u8; 4096];
+    let mut head_end = None;
+    while head_end.is_none() {
+        match s.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+        }
+        head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4);
+    }
+    let Some(head_end) = head_end else { return };
+    let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+    let header = |name: &str| -> String {
+        head.lines()
+            .find(|l| l.to_ascii_lowercase().starts_with(&format!("{name}:")))
+            .unwrap_or("")
+            .to_string()
+    };
+    let want: usize = header("content-length").split_once(':').and_then(|(_, v)| v.trim().parse().ok()).unwrap_or(0);
+    let mut body = raw[head_end..].to_vec();
+    while body.len() < want {
+        match s.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+        }
+    }
+    let auth = header("authorization");
+    seen.lock().unwrap().push(auth.clone());
+    let first = head.lines().next().unwrap_or("");
+    let parsed: Option<Value> = serde_json::from_slice(&body).ok();
+    let (status, out) = if auth.split_once(':').map(|(_, v)| v.trim()) != Some(format!("Bearer {WEB_KEY}").as_str()) {
+        (401, r#"{"error":[{"code":401,"msg":"unauthorized"}]}"#.to_string())
+    } else if !first.starts_with("POST /api/v1/search ")
+        || !parsed.as_ref().is_some_and(|b| b["query"].is_string() && b["limit"].is_u64())
+    {
+        (400, r#"{"error":[{"code":400,"msg":"bad request"}]}"#.to_string())
+    } else if parsed.as_ref().unwrap()["query"] == "nosnippet" {
+        (200, json!({"data": {"search": [{"url": "https://n.example/1", "title": "Bare"}]}}).to_string())
+    } else {
+        let r = json!({"meta": {}, "data": {"search": [
+            {"url": "https://a.example/1", "title": "Burn ban lifted", "snippet": "Ended on Friday.", "rank": 1}],
+            "related_searches": ["x"]}});
+        (200, r.to_string())
+    };
+    let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
+    let _ = s.write_all(reply.as_bytes());
+    let _ = s.flush();
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    // read what the client still sends until it closes (bounded), so closing never resets the connection
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    while matches!(s.read(&mut buf), Ok(n) if n > 0) {}
+}
+
+/// `cs_env` for a call that must reach the stand-in server: the cs process makes one HTTP request with a fixed 6 s
+/// budget, which a heavily loaded machine can occasionally exhaust before the answer is read ("web search timed out",
+/// a transport timeout, not an answer). Only that exact outcome is retried, up to 3 attempts in all; any answer from the
+/// server, and every other failure, is returned as it is and checked by the test.
+fn cs_env_patient(args: &[&str], env: &[(&str, &str)]) -> Out {
+    let mut o = cs_env(args, env);
+    for _ in 0..2 {
+        if !(o.stdout.contains("web search timed out") || o.stderr.contains("web search timed out")) {
+            break;
+        }
+        o = cs_env(args, env);
+    }
+    o
 }
 
 #[test]
@@ -730,7 +761,7 @@ fn cs_tool_web_search_against_a_stand_in_server() {
     let cfg = empty_config();
     let env = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", WEB_KEY), ("CACHE_WEB_BASE_URL", base.as_str())];
     let args = ["tool", "web_search", "--config", cfg.as_str(), "--args", r#"{"query":"burn ban"}"#, "--now", NOW];
-    let o = cs_env(&args, &env);
+    let o = cs_env_patient(&args, &env);
     assert!(o.ok, "{}", o.stderr);
     let lines: Vec<&str> = o.stdout.lines().collect();
     assert_eq!(lines[0], "[1] Burn ban lifted (web, fetched 2026-10-25 14:20) \u{2014} Ended on Friday.");
@@ -739,7 +770,7 @@ fn cs_tool_web_search_against_a_stand_in_server() {
     // --json carries the timing next to content and ids
     let mut json_args = args.to_vec();
     json_args.push("--json");
-    let o = cs_env(&json_args, &env);
+    let o = cs_env_patient(&json_args, &env);
     let v = j(o.stdout.trim());
     assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
     assert!(v["timing_ms"]["search"].is_u64());
@@ -748,12 +779,12 @@ fn cs_tool_web_search_against_a_stand_in_server() {
     assert!(!o.stdout.contains(WEB_KEY) && !o.stderr.contains(WEB_KEY));
     // a result with no snippet is a line with no dash part
     let nosnip = ["tool", "web_search", "--config", cfg.as_str(), "--args", r#"{"query":"nosnippet"}"#, "--now", NOW];
-    let o = cs_env(&nosnip, &env);
+    let o = cs_env_patient(&nosnip, &env);
     assert!(o.ok, "{}", o.stderr);
     assert_eq!(o.stdout.lines().next().unwrap(), "[1] Bare (web, fetched 2026-10-25 14:20)");
     // a wrong key is a 401 from the stand-in: key_missing, and the key is not echoed
     let wrong = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", "not-the-key"), ("CACHE_WEB_BASE_URL", base.as_str())];
-    let o = cs_env(&args, &wrong);
+    let o = cs_env_patient(&args, &wrong);
     assert!(o.stdout.contains("key_missing") || o.stderr.contains("key_missing"), "{} {}", o.stdout, o.stderr);
 }
 

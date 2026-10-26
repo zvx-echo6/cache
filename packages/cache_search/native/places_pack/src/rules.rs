@@ -58,8 +58,23 @@ pub struct CatRule {
     pub tags: BTreeMap<String, String>,
     #[serde(default)]
     pub not: BTreeMap<String, String>,
+    /// Overture rows of this rule are emergency rooms only when an OSM place of this category is within the radius;
+    /// they take that place's name, address and phone, and rows with no such place are dropped.
     #[serde(default)]
-    pub enrich_from: Option<EnrichFrom>,
+    pub require_match: Option<EnrichFrom>,
+    /// `source: "category"` rules (read by the tools, not the builder): places of `category` are also offered under
+    /// this category with `tier`, after the confirmed ones (`primary_tier`), and rank ahead of a confirmed place only
+    /// when nearer by `beats_primary_only_if_nearer_by_mi`.
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub primary_tier: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub beats_primary_only_if_nearer_by_mi: Option<f64>,
 }
 
 /// One OSM tag condition: every `tags` pair must hold, and no `not` pair may. A value is `*` (any), one value, or
@@ -90,6 +105,7 @@ impl Rules {
                 match rule.source.as_str() {
                     "overture" if !rule.basic_category.is_empty() => {}
                     "osm" if !rule.tags.is_empty() => {}
+                    "category" if rule.category.is_some() && rule.tier.is_some() => {}
                     other => return Err(format!("category {}: rule of source {other:?} has nothing to match", c.id)),
                 }
             }
@@ -141,8 +157,18 @@ impl Rules {
                 if !r.not.is_empty() {
                     m.insert("not".into(), serde_json::to_value(&r.not).unwrap_or(Value::Null));
                 }
-                if let Some(e) = &r.enrich_from {
-                    m.insert("enrich_from".into(), serde_json::json!({"category": e.category, "radius_m": e.radius_m}));
+                if let Some(e) = &r.require_match {
+                    m.insert("require_match".into(), serde_json::json!({"category": e.category, "radius_m": e.radius_m}));
+                }
+                if r.source == "category" {
+                    for (k, v) in [("category", &r.category), ("primary_tier", &r.primary_tier), ("tier", &r.tier), ("note", &r.note)] {
+                        if let Some(v) = v {
+                            m.insert(k.into(), v.clone().into());
+                        }
+                    }
+                    if let Some(x) = r.beats_primary_only_if_nearer_by_mi {
+                        m.insert("beats_primary_only_if_nearer_by_mi".into(), x.into());
+                    }
                 }
                 Value::Object(m)
             })
@@ -188,7 +214,11 @@ mod tests {
         // Hospitals and urgent care are OSM only: Overture's medical categories are not used for them.
         assert!(r.overture_category("hospital", 0.99).is_none());
         assert!(r.overture_category("urgent_care_center", 0.99).is_none());
-        assert_eq!(r.overture_category("emergency_department", 0.9).unwrap().0.id, "emergency_room");
+        let (c, rule) = r.overture_category("emergency_department", 0.9).unwrap();
+        assert_eq!(c.id, "emergency_room");
+        assert_eq!(rule.require_match.as_ref().unwrap().category, "hospital");
+        let fb = c.rules.iter().find(|x| x.source == "category").unwrap();
+        assert_eq!((fb.category.as_deref(), fb.tier.as_deref(), fb.beats_primary_only_if_nearer_by_mi), (Some("hospital"), Some("likely"), Some(10.0)));
         assert!(r.overture_category("emergency_department", 0.3).is_none());
         assert_eq!(r.overture_category("gas_station", 0.8).unwrap().0.id, "fuel");
     }

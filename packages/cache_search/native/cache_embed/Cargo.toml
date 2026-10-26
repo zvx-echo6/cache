@@ -1,0 +1,11 @@
+[package]
+name = "cache_embed"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Text embedding through cache_llama's cl_embed (loaded at run time): shared by the cs command line and the places pack builder"
+
+[dependencies]
+libloading = "0.8"
+sha2 = "0.10"
+serde_json.workspace = true

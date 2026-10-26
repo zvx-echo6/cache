@@ -5,6 +5,8 @@ use crate::handle::{Handle, Source};
 use crate::library::{self, LibHit, LibKwHit};
 use crate::html;
 use crate::zimsrc;
+use crate::index;
+use crate::zimx::{clean_snippet, XHit};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -12,6 +14,7 @@ use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{Query, QueryParser};
 use tantivy::schema::{Field, IndexRecordOption, Value as _};
 use tantivy::snippet::SnippetGenerator;
+use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
 use tantivy::{DocAddress, DocSet, Searcher, TantivyDocument, Term};
 
 /// Reciprocal rank fusion constant.
@@ -94,20 +97,30 @@ pub fn rrf(lists: &[Vec<(String, f32)>]) -> Vec<(String, f64)> {
 
 struct Hit {
     path: String,
-    addr: DocAddress,
+    /// The Tantivy document; `None` for a hit from the ZIM's built-in Xapian index (`SrcHits::engine`).
+    addr: Option<DocAddress>,
     /// Raw BM25 score from the source's index.
     raw: f32,
-    /// Fraction of distinct query terms present in the document (title, lead or body).
+    /// Fraction of distinct query terms present in the document (title, lead or body); for a Xapian hit, in its title or
+    /// text (see `xapian_coverage`).
     coverage: f32,
+    /// Fraction of the query terms in the title (Xapian hits; a Tantivy hit's title is already boosted in its score, so
+    /// it carries its coverage here).
+    title_cov: f32,
+}
+
+/// What produced a ZIM source's keyword list.
+enum Engine {
+    /// The source's Tantivy index (built by `index_zim`).
+    Tantivy { searcher: Searcher, query: Box<dyn Query>, lead: Field, title_f: Field },
+    /// The ZIM's own Xapian index, through libzim: the hits in the same order as `SrcHits::hits`.
+    Xapian(Vec<XHit>),
 }
 
 struct SrcHits {
     id: String,
     title: String,
-    searcher: Searcher,
-    query: Box<dyn Query>,
-    lead: Field,
-    title_f: Field,
+    engine: Engine,
     count: usize,
     /// Best first.
     hits: Vec<Hit>,
@@ -163,17 +176,39 @@ struct Merged {
     pass: bool,
 }
 
-/// Merge keyword hits across sources; `lists[source][rank] = (raw score, coverage)`. Each hit scores `raw / (best raw in its source) * coverage`. Hits with
-/// coverage below `min_cov` are dropped unless fewer than `need` hits would remain; then the best of the dropped
-/// ones fill up to `need` (after all the kept ones). Ties on score go to the higher raw score, then the smaller address.
-fn merge_keyword(lists: &[Vec<(f32, f32, String)>], min_cov: f32, need: usize) -> Vec<Merged> {
+/// Share of a hit's score factor that comes from its title coverage (the rest from its overall coverage).
+const TITLE_WEIGHT: f64 = 0.5;
+
+/// One keyword hit as the merge sees it.
+#[derive(Clone, Debug)]
+struct KwItem {
+    addr: String,
+    raw: f32,
+    coverage: f32,
+    title_cov: f32,
+}
+
+/// Merge keyword hits across sources; `lists[source][rank]` (best first within a source). A hit's relevance `rel` is
+/// its raw score over the best raw score of its source (for a Xapian source the raw score is libzim's percentage, which
+/// is 100 for the source's best hit, so it is relative too). Its score is `rel * (coverage + title_cov) / 2`. A hit counts as good only when its coverage is at
+/// least `min_cov` and its `rel` at least `min_rel`; the others are dropped unless fewer than `need` good hits would
+/// remain, in which case the best of the dropped ones fill up to `need` (after all the good ones). Ties on score go
+/// to the higher raw score, then the smaller address.
+fn merge_keyword(lists: &[Vec<KwItem>], min_cov: f32, min_rel: f32, need: usize) -> Vec<Merged> {
     let mut all: Vec<Merged> = Vec::new();
     for (si, l) in lists.iter().enumerate() {
-        let top = l.iter().map(|h| h.0).fold(f32::MIN, f32::max);
-        for (hi, (raw, coverage, addr)) in l.iter().enumerate() {
-            let (raw, coverage) = (*raw, *coverage);
-            let norm = if top > 0.0 { (raw / top) as f64 } else { 1.0 };
-            all.push(Merged { si, hi, addr: addr.clone(), score: norm * coverage as f64, raw, pass: coverage >= min_cov });
+        let top = l.iter().map(|h| h.raw).fold(f32::MIN, f32::max);
+        for (hi, h) in l.iter().enumerate() {
+            let rel = if top > 0.0 { (h.raw / top) as f64 } else { 1.0 };
+            let factor = (1.0 - TITLE_WEIGHT) * h.coverage as f64 + TITLE_WEIGHT * h.title_cov as f64;
+            all.push(Merged {
+                si,
+                hi,
+                addr: h.addr.clone(),
+                score: rel * factor,
+                raw: h.raw,
+                pass: h.coverage >= min_cov && rel >= min_rel as f64,
+            });
         }
     }
     let cmp = |a: &Merged, b: &Merged| {
@@ -193,6 +228,98 @@ fn merge_keyword(lists: &[Vec<(f32, f32, String)>], min_cov: f32, need: usize) -
         a.extend(b);
         a
     }
+}
+
+/// The tokens `an` produces for `text`.
+fn analyzed(an: &mut TextAnalyzer, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut ts = an.token_stream(text);
+    while ts.advance() {
+        out.push(ts.token().text.clone());
+    }
+    out
+}
+
+/// The distinct words of the query, lowercased and split the way the indexes split text.
+fn query_words(query: &str) -> Vec<String> {
+    let mut an = TextAnalyzer::builder(SimpleTokenizer::default()).filter(RemoveLongFilter::limit(40)).filter(LowerCaser).build();
+    let mut out: Vec<String> = Vec::new();
+    for w in analyzed(&mut an, query) {
+        if !out.contains(&w) {
+            out.push(w);
+        }
+    }
+    out
+}
+
+/// Hits kept per Xapian source for the merge when fewer than this many results were asked for: their articles are read
+/// for coverage, so the window is bounded.
+const KEEP_PER_SOURCE: usize = 10;
+
+/// Bytes of an article read for its term coverage (the start of the page; a longer one is cut).
+const COVERAGE_READ_BYTES: usize = 300_000;
+
+/// Term coverage of a source's Xapian hits, which libzim does not report (it gives no list of matched terms, and the
+/// words it marks in snippets did not appear on the real ZIMs tried). For each hit the article is read and tokenised with
+/// the source's own analyzer: `coverage` is the fraction of the query words (compared after stemming) found in its title
+/// or text, `title_cov` the fraction found in its title. Only the first `keep` hits are read and kept. A hit that cannot be
+/// read as text is judged by its title alone. With no query words every hit counts as fully covered.
+fn xapian_coverage(src: &zimsrc::ZimSource, an: &mut TextAnalyzer, words: &[String], hits: &mut Vec<Hit>, xhits: &mut Vec<XHit>, keep: usize) {
+    hits.truncate(keep);
+    xhits.truncate(keep);
+    let stems: Vec<String> = words.iter().filter_map(|w| analyzed(an, w).into_iter().next()).collect();
+    if stems.is_empty() {
+        return;
+    }
+    let n = stems.len() as f32;
+    for (h, x) in hits.iter_mut().zip(xhits.iter()) {
+        let title: HashSet<String> = analyzed(an, &x.title).into_iter().collect();
+        let mut body: HashSet<String> = HashSet::new();
+        if let Ok(e) = src.get(&x.path) {
+            let m = e.mime.to_ascii_lowercase();
+            if m.starts_with("text/html") || m.starts_with("text/plain") {
+                let end = e.bytes.len().min(COVERAGE_READ_BYTES);
+                let raw = String::from_utf8_lossy(&e.bytes[..end]);
+                let text = if m.starts_with("text/html") { html::html_to_text(&raw) } else { raw.into_owned() };
+                body = analyzed(an, &text).into_iter().collect();
+            }
+        }
+        let in_title = stems.iter().filter(|s| title.contains(*s)).count() as f32;
+        let in_any = stems.iter().filter(|s| title.contains(*s) || body.contains(*s)).count() as f32;
+        h.coverage = in_any / n;
+        h.title_cov = in_title / n;
+    }
+}
+
+/// The top `candidates` hits of a ZIM's Xapian index for `query`: the ranked list for the merge (libzim's percentage as
+/// the raw score; coverage is filled in by `xapian_coverage`), the hits as
+/// libzim returned them, and the estimated match count. `None` when libzim fails, also after a retry with the query
+/// reduced to its words (Xapian's own query syntax can reject text such as an unmatched quote or parenthesis).
+fn xapian_list(x: &crate::zimx::Zimx, query: &str, candidates: usize) -> Option<(Vec<Hit>, Vec<XHit>, usize)> {
+    let found = x.search(query, 0, candidates).or_else(|_| {
+        let words: String = query.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+        if words.trim().is_empty() {
+            return Err(crate::error::Error::bad_json("empty query"));
+        }
+        x.search(words.trim(), 0, candidates)
+    });
+    let (found, count) = found.ok()?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let (mut hits, mut xhits) = (Vec::new(), Vec::new());
+    for h in found {
+        if h.path.is_empty() || !seen.insert(h.path.clone()) {
+            continue;
+        }
+        hits.push(Hit {
+            path: h.path.clone(),
+            addr: None,
+            raw: h.score as f32,
+            coverage: 1.0,
+            title_cov: 1.0,
+        });
+        xhits.push(h);
+    }
+    Some((hits, xhits, count))
 }
 
 /// Cap on how far the candidate window is widened to resolve a score tie at its boundary.
@@ -241,9 +368,11 @@ impl Handle {
         let candidates = self.candidates_per_list.max(1) as usize + opts.offset;
         let snippet_chars = self.snippet_chars as usize;
         let min_cov = self.min_term_coverage;
+        let min_rel = self.min_relevance;
         let filter: Option<Vec<String>> =
             opts.sources.as_ref().map(|v| v.iter().map(|s| s.to_ascii_lowercase()).collect());
 
+        let words = query_words(query);
         let mut per: Vec<SrcHits> = Vec::new();
         for s in self.sources.iter_mut() {
             let Source::Zim(z) = s else { continue };
@@ -253,6 +382,16 @@ impl Handle {
                 }
             }
             let (id, title) = (z.src.id.clone(), z.src.title.clone());
+            // A ZIM with a built-in Xapian index uses it (no index_dir needed). If libzim fails on this query, the
+            // source falls back to its Tantivy index, if it has one.
+            if let Some(x) = z.xapian() {
+                if let Some((mut hits, mut xhits, count)) = xapian_list(x, query, candidates) {
+                    let mut an = index::make_analyzer(index::tokenizer_name_for(z.src.language.as_deref()));
+                    xapian_coverage(&z.src, &mut an, &words, &mut hits, &mut xhits, (opts.offset + opts.k).max(KEEP_PER_SOURCE));
+                    per.push(SrcHits { id, title, engine: Engine::Xapian(xhits), count, hits });
+                    continue;
+                }
+            }
             // Sources that are not `done`, or whose index cannot be opened, are skipped (cs_status reports them).
             let Ok(Some(oi)) = z.searchable() else { continue };
             let searcher = oi.reader.searcher();
@@ -267,19 +406,17 @@ impl Handle {
             let mut hits = Vec::with_capacity(top.len());
             for (raw, addr, path) in top {
                 let coverage = term_coverage(&searcher, addr, &terms, &fields);
-                hits.push(Hit { path, addr, raw, coverage });
+                hits.push(Hit { path, addr: Some(addr), raw, coverage, title_cov: coverage });
             }
             per.push(SrcHits {
                 id,
                 title,
-                searcher,
-                query: q,
-                lead: oi.fields.lead,
-                title_f: oi.fields.title,
+                engine: Engine::Tantivy { searcher, query: q, lead: oi.fields.lead, title_f: oi.fields.title },
                 count,
                 hits,
             });
         }
+
 
         // Libraries' keyword lists (own scored index or device index) join the cross-source keyword merge.
         let mut lib_kw: Vec<LibKw> = Vec::new();
@@ -295,13 +432,28 @@ impl Handle {
             }
         }
 
-        let mut lists: Vec<Vec<(f32, f32, String)>> = per
+        let mut lists: Vec<Vec<KwItem>> = per
             .iter()
-            .map(|p| p.hits.iter().map(|h| (h.raw, h.coverage, zimsrc::format_address(&p.id, &h.path))).collect())
+            .map(|p| {
+                p.hits
+                    .iter()
+                    .map(|h| KwItem {
+                        addr: zimsrc::format_address(&p.id, &h.path),
+                        raw: h.raw,
+                        coverage: h.coverage,
+                        title_cov: h.title_cov,
+                    })
+                    .collect()
+            })
             .collect();
-        lists.extend(lib_kw.iter().map(|k| k.hits.iter().map(|h| (h.raw, h.coverage, h.address.clone())).collect()));
+        lists.extend(lib_kw.iter().map(|k| {
+            k.hits
+                .iter()
+                .map(|h| KwItem { addr: h.address.clone(), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
+                .collect()
+        }));
         let need = opts.offset + opts.k;
-        let merged = merge_keyword(&lists, min_cov, need);
+        let merged = merge_keyword(&lists, min_cov, min_rel, need);
         let entry_of = |m: &Merged| {
             if m.si < per.len() {
                 Entry::Zim(m.si, m.hi)
@@ -427,11 +579,42 @@ impl Handle {
             let p = &per[m_si];
             let h = &p.hits[hi];
             let address = zimsrc::format_address(&p.id, &h.path);
-            let Ok(doc) = p.searcher.doc::<TantivyDocument>(h.addr) else { continue };
-            let art_title = text_of(&doc, p.title_f);
-            let lead = text_of(&doc, p.lead);
+            let (searcher, query, lead_f, title_f) = match &p.engine {
+                Engine::Xapian(xhits) => {
+                    // libzim's own snippet (HTML with <b>), stripped and cut like every other snippet; an empty one
+                    // falls back to the start of the article text.
+                    let xh = &xhits[hi];
+                    let mut snippet = clean_snippet(&xh.snippet, snippet_chars);
+                    if snippet.is_empty() {
+                        if let Ok(e) = self.zim_get(&address) {
+                            if e.mime.to_ascii_lowercase().starts_with("text/html") {
+                                snippet = html::snippet_from_text(
+                                    &html::html_to_text(&String::from_utf8_lossy(&e.bytes)),
+                                    snippet_chars,
+                                );
+                            }
+                        }
+                    }
+                    let art_title = if xh.title.is_empty() { xh.path.clone() } else { xh.title.clone() };
+                    results.push(json!({
+                        "address": address,
+                        "title": format!("{}: {}", p.title, art_title),
+                        "snippet": snippet,
+                        "source_id": p.id,
+                        "source_kind": "zim",
+                        "source_title": p.title,
+                        "page": Value::Null,
+                    }));
+                    continue;
+                }
+                Engine::Tantivy { searcher, query, lead, title_f } => (searcher, query, *lead, *title_f),
+            };
+            let Some(addr) = h.addr else { continue };
+            let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else { continue };
+            let art_title = text_of(&doc, title_f);
+            let lead = text_of(&doc, lead_f);
             let gen = generators.entry(m_si).or_insert_with(|| {
-                let mut g = SnippetGenerator::create(&p.searcher, &*p.query, p.lead).ok();
+                let mut g = SnippetGenerator::create(searcher, &**query, lead_f).ok();
                 if let Some(g) = g.as_mut() {
                     g.set_max_num_chars(snippet_chars.max(1));
                 }
@@ -580,11 +763,15 @@ mod tests {
     }
 
     /// Give each hit an address that sorts in (source, rank) order.
-    fn addr(lists: &[Vec<(f32, f32)>]) -> Vec<Vec<(f32, f32, String)>> {
+    fn item(raw: f32, coverage: f32, addr: String) -> KwItem {
+        KwItem { addr, raw, coverage, title_cov: coverage }
+    }
+
+    fn addr(lists: &[Vec<(f32, f32)>]) -> Vec<Vec<KwItem>> {
         lists
             .iter()
             .enumerate()
-            .map(|(si, l)| l.iter().enumerate().map(|(hi, &(r, c))| (r, c, format!("s{si:02}h{hi:03}"))).collect())
+            .map(|(si, l)| l.iter().enumerate().map(|(hi, &(r, c))| item(r, c, format!("s{si:02}h{hi:03}"))).collect())
             .collect()
     }
 
@@ -596,7 +783,7 @@ mod tests {
     fn merge_keyword_drops_low_coverage_and_normalises_per_source() {
         // source 0: strong, full coverage. source 1: weak raw scores, one hit with 2/3 coverage, one with 1/3.
         let lists = vec![vec![(10.0, 1.0), (6.0, 1.0)], vec![(2.0, 0.67), (1.9, 0.34)]];
-        let m = merge_keyword(&addr(&lists), 0.5, 3);
+        let m = merge_keyword(&addr(&lists), 0.5, 0.0, 3);
         // (1,1) has coverage 0.34 < 0.5 and is dropped; 3 remain: (0,0)=1.0, (1,0)=0.67, (0,1)=0.6
         assert_eq!(order(&m), vec![(0, 0), (1, 0), (0, 1)]);
         // per-source normalisation: the weak source's best hit scores 1.0*coverage, not its tiny raw score
@@ -606,26 +793,55 @@ mod tests {
     #[test]
     fn merge_keyword_fills_up_to_need_when_too_few_pass() {
         let lists = vec![vec![(10.0, 0.2), (9.0, 0.4)], vec![(5.0, 0.3)]];
-        let m = merge_keyword(&addr(&lists), 0.5, 3);
+        let m = merge_keyword(&addr(&lists), 0.5, 0.0, 3);
         assert_eq!(m.len(), 3, "nothing passes, so the best ones are all kept");
         assert_eq!(order(&m), vec![(0, 1), (1, 0), (0, 0)]); // by normalised score x coverage
         // enough pass: the rest are dropped
         let lists = vec![vec![(10.0, 1.0), (9.0, 0.1)], vec![(5.0, 0.9)]];
-        let m = merge_keyword(&addr(&lists), 0.5, 2);
+        let m = merge_keyword(&addr(&lists), 0.5, 0.0, 2);
         assert_eq!(order(&m), vec![(0, 0), (1, 0)]);
         // passing hits stay ahead of fillers even when a filler scores higher
         let lists = vec![vec![(10.0, 0.45), (1.0, 0.9)]];
-        let m = merge_keyword(&addr(&lists), 0.5, 2);
+        let m = merge_keyword(&addr(&lists), 0.5, 0.0, 2);
         assert_eq!(order(&m), vec![(0, 1), (0, 0)]);
     }
 
     #[test]
     fn merge_keyword_empty_and_ties() {
-        assert!(merge_keyword(&[], 0.5, 5).is_empty());
+        assert!(merge_keyword(&[], 0.5, 0.0, 5).is_empty());
         // equal scores: the smaller address first, whatever the source order
-        let lists = vec![vec![(4.0, 1.0, "b".to_string())], vec![(4.0, 1.0, "a".to_string())]];
-        assert_eq!(order(&merge_keyword(&lists, 0.5, 2)), vec![(1, 0), (0, 0)]);
+        let lists = vec![vec![item(4.0, 1.0, "b".to_string())], vec![item(4.0, 1.0, "a".to_string())]];
+        assert_eq!(order(&merge_keyword(&lists, 0.5, 0.0, 2)), vec![(1, 0), (0, 0)]);
         let lists = vec![vec![(4.0, 1.0)], vec![(4.0, 1.0)]];
-        assert_eq!(order(&merge_keyword(&addr(&lists), 0.5, 2)), vec![(0, 0), (1, 0)]);
+        assert_eq!(order(&merge_keyword(&addr(&lists), 0.5, 0.0, 2)), vec![(0, 0), (1, 0)]);
+    }
+
+    fn xitem(addr: &str, rel: f32, coverage: f32, title_cov: f32) -> KwItem {
+        KwItem { addr: addr.into(), raw: rel * 100.0, coverage, title_cov }
+    }
+
+    #[test]
+    fn a_title_match_outranks_a_body_only_match_from_another_source() {
+        // two sources whose best hit is 100% of its own list; only the second has the query words in its title
+        let lists = vec![vec![xitem("a", 1.0, 1.0, 0.0)], vec![xitem("b", 1.0, 1.0, 1.0)]];
+        let m = merge_keyword(&lists, 0.5, 0.0, 2);
+        assert_eq!(order(&m), vec![(1, 0), (0, 0)]);
+        assert!((m[0].score - 1.0).abs() < 1e-9 && (m[1].score - 0.5).abs() < 1e-9, "{:?}", m.iter().map(|x| x.score).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_weak_source_does_not_get_a_free_first_place() {
+        // source 0 is a strong match; source 1's best hit matches one of three words; source 2's best matches two of five
+        // words and its second hit is only 30% of its best
+        let lists = vec![
+            vec![xitem("s0h0", 1.0, 1.0, 1.0), xitem("s0h1", 0.8, 1.0, 1.0)],
+            vec![xitem("s1h0", 1.0, 0.34, 0.34)],
+            vec![xitem("s2h0", 1.0, 0.4, 0.4), xitem("s2h1", 0.3, 1.0, 1.0)],
+        ];
+        let m = merge_keyword(&lists, 0.5, 0.5, 2);
+        assert_eq!(order(&m), vec![(0, 0), (0, 1)], "enough good hits: the weak ones are dropped");
+        // asked for 4 while only two are good: the dropped ones follow the good ones, best score first
+        let m = merge_keyword(&lists, 0.5, 0.5, 4);
+        assert_eq!(order(&m), vec![(0, 0), (0, 1), (2, 0), (1, 0), (2, 1)], "then 1.0 x 0.4, 1.0 x 0.34, 0.3 x 1.0");
     }
 }

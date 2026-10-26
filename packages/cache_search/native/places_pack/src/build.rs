@@ -193,8 +193,10 @@ fn dedupe(rows: &mut Vec<Raw>, rules: &Rules) -> usize {
     deduped
 }
 
-/// An emergency room takes its name, address and contact details from the hospital it sits in.
-fn enrich(rows: &mut [Raw]) -> usize {
+/// A confirmed emergency room is an Overture emergency-department row with an OSM hospital within the rule's radius: it
+/// takes that hospital's name, address, contact details and wiki ids, and remembers it (`matched`). A row with no hospital
+/// there (an air ambulance, a clinic) is not an emergency room and is dropped. Returns (confirmed, dropped).
+fn enrich(rows: &mut Vec<Raw>) -> (usize, usize) {
     let mut by_cat: HashMap<String, Grid> = HashMap::new();
     for (i, r) in rows.iter().enumerate() {
         if let Some(c) = &r.category {
@@ -202,9 +204,13 @@ fn enrich(rows: &mut [Raw]) -> usize {
         }
     }
     let mut n = 0;
+    let mut dead = vec![false; rows.len()];
     for i in 0..rows.len() {
         let Some((cat, radius)) = rows[i].enrich.clone() else { continue };
-        let Some(grid) = by_cat.get(&cat) else { continue };
+        let Some(grid) = by_cat.get(&cat) else {
+            dead[i] = true;
+            continue;
+        };
         let rings = (radius / 800.0).ceil() as i32 + 1;
         let best = grid
             .around(rows[i].lat, rows[i].lon, rings)
@@ -233,10 +239,19 @@ fn enrich(rows: &mut [Raw]) -> usize {
                 r.wiki = h.wiki.clone();
             }
             r.source = "overture+osm";
+            r.matched = Some(h.source_id.clone());
             n += 1;
+        } else {
+            dead[i] = true;
         }
     }
-    n
+    let dropped = dead.iter().filter(|d| **d).count();
+    let mut k = 0;
+    rows.retain(|_| {
+        k += 1;
+        !dead[k - 1]
+    });
+    (n, dropped)
 }
 
 /// Same name within 3 km is one town; the bigger one wins.
@@ -293,8 +308,8 @@ pub fn build(
     let mut rows = std::mem::take(&mut h.places);
     let merged = merge(&mut rows, rules);
     eprintln!("merged {merged} Overture records into OSM places");
-    let enriched = enrich(&mut rows);
-    eprintln!("enriched {enriched} places from their hospital");
+    let (enriched, er_dropped) = enrich(&mut rows);
+    eprintln!("{enriched} emergency rooms confirmed by a hospital; dropped {er_dropped} emergency-department records with no hospital");
     let deduped = dedupe(&mut rows, rules);
     eprintln!("dropped {deduped} duplicates");
     let locs = dedupe_localities(h.localities);
@@ -385,9 +400,9 @@ pub fn build(
                 .map(|(_, j)| locs[j].name.clone()),
         };
         tx.execute(
-            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, locality, state, country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata],
+            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, locality, state, country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched],
         )
         .map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, r.lat, r.lon]).map_err(|e| e.to_string())?;
@@ -476,6 +491,7 @@ mod tests {
             wiki: Wiki::default(),
             brand_wikidata: None,
             enrich: None,
+            matched: None,
         }
     }
 
@@ -526,11 +542,16 @@ mod tests {
         h.phone = Some("+1 208 678 4444".into());
         h.wiki.wikidata = Some("Q1".into());
         let mut rows = vec![er, h];
-        assert_eq!(enrich(&mut rows), 1);
+        let mut orphan = raw("overture", "overture:2", "Life Flight Network", Some("emergency_room"), 43.0, -116.0);
+        orphan.enrich = Some(("hospital".into(), 250.0));
+        rows.push(orphan);
+        assert_eq!(enrich(&mut rows), (1, 1));
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name.as_deref(), Some("Cassia Regional Hospital"));
         assert_eq!(rows[0].street.as_deref(), Some("1501 Hiland Ave"));
         assert_eq!(rows[0].source_id, "overture:1");
         assert_eq!(rows[0].wiki.wikidata.as_deref(), Some("Q1"));
+        assert_eq!(rows[0].matched.as_deref(), Some("osm:w1"));
         assert!(rows[0].alt.contains(&"Cassia Regional Emergency Dept".to_string()));
     }
 }

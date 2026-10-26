@@ -62,7 +62,9 @@ tasks.register("cargoNdkBuild", Exec) {
     // The release profile always: a debug Rust core is unusably slow.
     def cmd = ["cargo", "ndk", "--platform", "28", "-o", jniOut.absolutePath]
     coreAbis.each { cmd += ["-t", it] }
-    cmd += ["build", "--release", "-p", "cache_search"]
+    // No xapian feature yet: it needs the prebuilt libzim for Android (native/zimx/fetch-libzim.sh, LIBZIM.md), which is not built
+    // here. The core then reads ZIMs with Tantivy only. Remove --no-default-features once libzim for Android is in place.
+    cmd += ["build", "--release", "-p", "cache_search", "--no-default-features"]
     commandLine cmd
     doFirst {
         def sep = File.pathSeparator

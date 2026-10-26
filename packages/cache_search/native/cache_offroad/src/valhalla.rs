@@ -99,6 +99,11 @@ pub trait Valhalla: Send + Sync {
     fn route(&self, from: (f64, f64), to: (f64, f64), costing: &str) -> Result<Trip, ValhallaError>;
     /// `/trace_attributes` of a polyline6 shape with auto costing and the attributes navi filters for.
     fn trace_attributes(&self, encoded_polyline6: &str) -> Result<Trace, ValhallaError>;
+    /// Up to `count` alternative routes besides the best one (Valhalla's `alternates`), best first; none when the router gives
+    /// none or cannot ask. Only the map's route preview uses this.
+    fn alternatives(&self, _from: (f64, f64), _to: (f64, f64), _costing: &str, _count: usize) -> Vec<Trip> {
+        Vec::new()
+    }
 }
 
 /// STUB. Not a real Valhalla: every call reports "nothing found".

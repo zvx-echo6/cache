@@ -53,8 +53,8 @@ fn zims_through_the_c_abi() {
     let ready = format!("{dir}/www.ready.gov_en_2024-12.zim");
     let wiki = format!("{dir}/wikipedia_en_all_maxi_2026-02.zim");
     let cfg = serde_json::json!({"sources":[
-        {"kind":"zim","path":ready,"index_dir":"/tmp/none-ready.idx"},
-        {"kind":"zim","path":wiki,"index_dir":"/tmp/none-wiki.idx"},
+        {"kind":"zim","path":ready,"builtin_index":false,"index_dir":"/tmp/none-ready.idx"},
+        {"kind":"zim","path":wiki,"builtin_index":false,"index_dir":"/tmp/none-wiki.idx"},
         {"kind":"library","path":"/tmp/none-library","index_dir":"/tmp/none-lib.idx"}
     ]})
     .to_string();

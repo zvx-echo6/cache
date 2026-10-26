@@ -2,6 +2,8 @@
 
 use crate::error::{Error, ErrorCode, Result};
 use std::path::{Path, PathBuf};
+use crate::zimx::Zimx;
+use std::sync::{Arc, OnceLock};
 use zim::{DirectoryEntry, MimeType, Namespace, Target, Zim};
 
 /// Redirect hops followed before giving up.
@@ -14,6 +16,27 @@ pub struct ZimSource {
     pub path: PathBuf,
     pub title: String,
     pub language: Option<String>,
+    /// libzim's view of the same file, opened on first use: `None` when the `xapian` feature is not built in or libzim
+    /// could not open it (the `zim` crate stays the reader for `read` and `zim_get` either way).
+    x: Arc<OnceLock<Option<Zimx>>>,
+    /// Set once a prewarm of the libzim handle has been queued (see `warm_job`).
+    warm_queued: std::sync::atomic::AtomicBool,
+}
+
+/// Opening libzim on one ZIM and building its searchers, to run on a background thread (see `ZimSource::warm_job`).
+pub struct WarmJob {
+    path: PathBuf,
+    x: Arc<OnceLock<Option<Zimx>>>,
+    fulltext: bool,
+    titles: bool,
+}
+
+impl WarmJob {
+    pub fn run(self) {
+        if let Some(z) = self.x.get_or_init(|| Zimx::open(&self.path).ok()) {
+            let _ = z.prewarm(self.fulltext && z.has_fulltext(), self.titles && z.has_title_index());
+        }
+    }
 }
 
 /// A parsed `zim:<uuid>/<path>` address.
@@ -159,7 +182,55 @@ impl ZimSource {
             path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
         });
         let language = meta("Language");
-        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language })
+        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language, x: Arc::new(OnceLock::new()), warm_queued: Default::default() })
+    }
+
+    /// What a background thread needs to open libzim on this file and build its searchers before the first search asks
+    /// for them (`WarmJob::run`). `None` when there is nothing to warm (no libzim, or the ZIM has neither index) or the
+    /// job was already handed out. A search that comes while the job runs waits for the same open (`OnceLock`).
+    pub fn warm_job(&self) -> Option<WarmJob> {
+        if !Zimx::AVAILABLE {
+            return None;
+        }
+        let fulltext = self.zim.fulltext_index().ok().flatten().is_some();
+        let titles = self.zim.title_index().ok().flatten().is_some();
+        if !(fulltext || titles) || self.warm_queued.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        Some(WarmJob { path: self.path.clone(), x: self.x.clone(), fulltext, titles })
+    }
+
+    /// libzim's handle on this file (opened on first use), if the `xapian` feature is built in and it opens.
+    fn libzim(&self) -> Option<&Zimx> {
+        if !Zimx::AVAILABLE {
+            return None;
+        }
+        self.x.get_or_init(|| Zimx::open(&self.path).ok()).as_ref()
+    }
+
+    /// True when keyword search can use the ZIM's built-in Xapian full-text index (`X/fulltext/xapian`): the feature is
+    /// built in, the ZIM has the entry (a cheap lookup with the `zim` crate; libzim is not opened for it) and libzim
+    /// has not failed to open the file. `cs_status` asks this, so listing sources never opens libzim.
+    pub fn has_xapian(&self) -> bool {
+        Zimx::AVAILABLE
+            && !matches!(self.x.get(), Some(None))
+            && self.zim.fulltext_index().ok().flatten().is_some()
+    }
+
+    /// The libzim handle when `has_xapian`: keyword search uses it instead of a Tantivy index. Opens libzim on first use.
+    pub fn xapian(&self) -> Option<&Zimx> {
+        if !self.has_xapian() {
+            return None;
+        }
+        self.libzim().filter(|x| x.has_fulltext())
+    }
+
+    /// The libzim handle when this ZIM carries a title index (`X/title/xapian`): suggestions use it.
+    pub fn title_index(&self) -> Option<&Zimx> {
+        if !Zimx::AVAILABLE || self.zim.title_index().ok().flatten().is_none() {
+            return None;
+        }
+        self.libzim().filter(|x| x.has_title_index())
     }
 
     /// Number of directory entries in the file (all namespaces).

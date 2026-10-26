@@ -1,11 +1,11 @@
-//! Query embedding with cache_llama's `cl_embed`, loaded at run time with `libloading`.
+//! Text embedding with cache_llama's `cl_embed`, loaded at run time with `libloading` (shared by the `cs` command line and the
+//! `places_pack embed` step, so a pack's vectors and a query's vector come from the same code and settings).
 //!
 //! Why loaded at run time and not linked: the core never links llama.cpp (DESIGN.md), and `cl_embed` lives on
 //! another branch (cl-embed). The wrapper therefore opens the built `libcache_llama.so` from a path given on the
 //! command line and looks up the five symbols it needs. The app calls the same C functions with the same
 //! settings, so a query gets the same vector on the phone and here.
 
-use crate::engine::ApiError;
 use libloading::Library;
 use sha2::{Digest, Sha256};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -41,6 +41,27 @@ pub struct Embedder {
     // Keeps the shared library mapped for as long as the function pointers above are used. Declared last so it
     // is dropped after `Drop::drop` has freed the handle.
     _lib: Library,
+}
+
+/// An error as the core reports it: a stable code and a message.
+#[derive(Debug, Clone)]
+pub struct EmbedError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl std::fmt::Display for EmbedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+type ApiError = EmbedError;
+
+impl EmbedError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> EmbedError {
+        EmbedError { code, message: message.into() }
+    }
 }
 
 fn err(msg: impl Into<String>) -> ApiError {

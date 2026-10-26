@@ -21,6 +21,10 @@ struct SourceCfg {
     /// Library settings (the v1 settings object); optional, guessed when absent.
     #[serde(default)]
     settings: Option<Value>,
+    /// ZIM sources: `false` keeps the ZIM on its Tantivy index even when it has a built-in Xapian index (default
+    /// `true`; see zimx.rs). For comparing the two engines and for tests of the Tantivy path.
+    #[serde(default)]
+    builtin_index: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,12 +52,29 @@ struct Config {
     candidates_per_list: u32,
     #[serde(default = "default_min_cov")]
     min_term_coverage: f32,
+    #[serde(default = "default_min_rel")]
+    min_relevance: f32,
+    /// Open libzim on every ZIM source that has a built-in index, on background threads, as soon as the sources are
+    /// set (default `true`), so the first search does not pay for the opens. `false` leaves them to the first search.
+    #[serde(default = "default_prewarm")]
+    prewarm: bool,
     /// Not in the header: a test hook that makes each library's background open sleep first.
     #[serde(default)]
     open_delay_ms: u64,
 }
 
+fn default_prewarm() -> bool {
+    true
+}
+
+/// Threads that open libzim archives in the background after `set_sources`.
+const PREWARM_THREADS: usize = 4;
+
 fn default_min_cov() -> f32 {
+    0.5
+}
+
+fn default_min_rel() -> f32 {
     0.5
 }
 
@@ -69,9 +90,26 @@ pub struct ZimSlot {
     pub src: ZimSource,
     pub index_dir: Option<PathBuf>,
     pub open: Option<OpenIndex>,
+    /// Use the ZIM's built-in Xapian index when it has one (the source's `builtin_index`, default true).
+    pub builtin: bool,
 }
 
 impl ZimSlot {
+    /// libzim's handle when this source keyword-searches through the ZIM's own Xapian index.
+    pub fn xapian(&self) -> Option<&crate::zimx::Zimx> {
+        if self.builtin { self.src.xapian() } else { None }
+    }
+
+    /// True when this source keyword-searches through the ZIM's own Xapian index (no libzim open needed to say so).
+    pub fn has_xapian(&self) -> bool {
+        self.builtin && self.src.has_xapian()
+    }
+
+    /// libzim's handle when this source suggests from the ZIM's title index.
+    pub fn title_index(&self) -> Option<&crate::zimx::Zimx> {
+        if self.builtin { self.src.title_index() } else { None }
+    }
+
     pub fn state(&self) -> IndexState {
         index::index_state(self.index_dir.as_deref(), &self.src.id)
     }
@@ -178,6 +216,7 @@ pub struct Handle {
     pub snippet_chars: u32,
     pub candidates_per_list: u32,
     pub min_term_coverage: f32,
+    pub min_relevance: f32,
     pub last_error: Option<Error>,
     /// The tools registered by the host (see `tools.rs`); `search` and `read` are built in and not listed here.
     pub tools: Vec<Box<dyn Tool>>,
@@ -204,6 +243,7 @@ impl Handle {
             snippet_chars: 400,
             candidates_per_list: 50,
             min_term_coverage: 0.5,
+            min_relevance: 0.5,
             last_error: None,
             tools: Vec::new(),
             places: Box::new(NoSavedPlaces),
@@ -224,7 +264,7 @@ impl Handle {
     /// (same path) are reused rather than reopened.
     pub fn set_sources(&mut self, config_json: &str) -> Result<()> {
         enum Plan {
-            Reuse(usize, Option<PathBuf>),
+            Reuse(usize, Option<PathBuf>, bool),
             ReuseLib(usize, Option<PathBuf>, LibrarySettings, Option<Value>),
             ReuseOpening(usize, Option<PathBuf>),
             /// A library to open on a background thread (started only once the whole call has succeeded).
@@ -238,6 +278,7 @@ impl Handle {
         for sc in &cfg.sources {
             let path = PathBuf::from(&sc.path);
             let index_dir = sc.index_dir.as_ref().map(PathBuf::from);
+            let builtin = sc.builtin_index.unwrap_or(true);
             match sc.kind.as_str() {
                 "zim" => {
                     let existing = self
@@ -246,13 +287,13 @@ impl Handle {
                         .position(|s| matches!(s, Source::Zim(z) if z.src.path == path));
                     let (id, item) = match existing {
                         Some(i) => match &self.sources[i] {
-                            Source::Zim(z) => (Some(z.src.id.clone()), Plan::Reuse(i, index_dir)),
+                            Source::Zim(z) => (Some(z.src.id.clone()), Plan::Reuse(i, index_dir, builtin)),
                             _ => unreachable!(),
                         },
                         None => match ZimSource::open(&path) {
                             Ok(z) => {
                                 let id = z.id.clone();
-                                (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None })))
+                                (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None, builtin })))
                             }
                             Err(error) => {
                                 let title = stem_title(&path);
@@ -323,9 +364,10 @@ impl Handle {
         self.sources = plan
             .into_iter()
             .map(|p| match p {
-                Plan::Reuse(i, index_dir) => {
+                Plan::Reuse(i, index_dir, builtin) => {
                     let mut s = old[i].take().expect("reused twice");
                     if let Source::Zim(z) = &mut s {
+                        z.builtin = builtin;
                         if z.index_dir != index_dir {
                             z.index_dir = index_dir;
                             z.open = None;
@@ -360,9 +402,39 @@ impl Handle {
         self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
-        self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.places, cfg.video);
+        self.min_relevance = cfg.min_relevance;
+        if cfg.prewarm {
+            self.start_prewarm();
+        }
+        self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
         self.ext.configure_layers(cfg.layers)?;
         Ok(())
+    }
+
+    /// Open libzim on the ZIM sources that use their built-in index and build their searchers, on up to
+    /// `PREWARM_THREADS` background threads (each source once). Nothing waits for them: a search that needs a source
+    /// still being warmed waits for that source's open only.
+    fn start_prewarm(&self) {
+        let jobs: Vec<zimsrc::WarmJob> = self
+            .sources
+            .iter()
+            .filter_map(|s| match s {
+                Source::Zim(z) if z.builtin => z.src.warm_job(),
+                _ => None,
+            })
+            .collect();
+        let n = jobs.len().min(PREWARM_THREADS);
+        let queue = Arc::new(std::sync::Mutex::new(jobs));
+        for i in 0..n {
+            let q = queue.clone();
+            let _ = std::thread::Builder::new().name(format!("cs-prewarm-{i}")).spawn(move || loop {
+                let job = q.lock().ok().and_then(|mut g| g.pop());
+                match job {
+                    Some(j) => j.run(),
+                    None => break,
+                }
+            });
+        }
     }
 
     /// Bring the library sources up to date with what happened since the last call: an open that finished becomes
@@ -471,6 +543,17 @@ impl Handle {
             .iter_mut()
             .map(|s| match s {
                 Source::Zim(z) => {
+                    // A ZIM with a built-in Xapian index is searched through it (no index_dir needed): indexed, with
+                    // "keyword_source":"own" (the field is present for these only; see cache_search.h).
+                    if z.has_xapian() {
+                        return json!({
+                            "id": z.src.id, "kind": "zim", "path": z.src.path.to_string_lossy(),
+                            "title": z.src.title, "language": z.src.language,
+                            "indexed": true, "building": false, "stale": false, "opening": false, "updating": false,
+                            "docs": z.src.entry_count(), "embedding_model": Value::Null, "keyword_source": "own",
+                            "error": Value::Null,
+                        });
+                    }
                     let st = z.state();
                     let (mut indexed, building, stale) = (
                         matches!(st, IndexState::Done(_)),

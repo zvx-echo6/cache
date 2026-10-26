@@ -35,6 +35,9 @@ pub struct GeoHit {
     pub county: Option<String>,
     /// OSM "key:value" ("highway:trailhead") when the place comes from OSM.
     pub osm_category: Option<String>,
+    /// How well the name fits the query alone, 0 to 100 (100 exact, 90 an exact alternative name), before the town boost,
+    /// the text score and the distance bias.
+    pub name_match: f64,
     pub score: f64,
 }
 
@@ -274,6 +277,7 @@ impl Geocoder for PackGeocoder {
                         street: None,
                         county: l.county.clone(),
                         osm_category: None,
+                        name_match: ns,
                         score,
                     });
                 }
@@ -284,7 +288,8 @@ impl Geocoder for PackGeocoder {
                         continue;
                     }
                     let alts = p.alt_names(false, id).unwrap_or_default();
-                    let mut score = name_score(&q_norm, &q_words, &name, &alts) + if r.category.is_some() { 8.0 } else { 0.0 };
+                    let nm = name_score(&q_norm, &q_words, &name, &alts);
+                    let mut score = nm + if r.category.is_some() { 8.0 } else { 0.0 };
                     score += (-bm25).clamp(0.0, 20.0) * 0.3;
                     if let Some((blat, blon)) = bias {
                         score += 25.0 * (-haversine_km(blat, blon, r.lat, r.lon) / 60.0).exp();
@@ -303,6 +308,7 @@ impl Geocoder for PackGeocoder {
                         street: r.street.clone(),
                         county: r.county.clone(),
                         osm_category: osm_category(&r),
+                        name_match: nm,
                         score,
                     });
                 }

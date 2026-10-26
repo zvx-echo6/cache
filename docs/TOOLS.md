@@ -189,7 +189,7 @@ Fields:
   network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one.
 - `other_destination_candidates` has up to 2 other matches (the same place fields, no `near`); empty when none. On a
   nearest-place search each entry also has `drive_min` (the travel time in minutes, for every mode; null when it could not be timed).
-- `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": null}`; `ranked_by` is the mode name, e.g. `drive`) is present only for a `to_type` search, after `other_destination_candidates`.
+- `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (AIDA passes navi's values through: `navi_places/nearby.py` `_rank`.)
 - `major_roads` is a list of `{"name", "distance_km"}`.
 - Every step has `index`, `kind` (`road`, `offroad` or `offroad_follow`), `type`, `street_names`, `distance_mi`,
   `cardinal` and `instruction`. Off-road steps add `travel` (`foot`, `2w`, `4w` or `vehicle`), `grade_class`,

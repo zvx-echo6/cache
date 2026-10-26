@@ -1021,3 +1021,39 @@ fn closing_the_handle_while_a_library_is_still_opening_is_safe() {
     assert_eq!(status(h)["sources"][0]["docs"], TOTAL);
     unsafe { cs_close(h) };
 }
+
+/// A library's vector list and a ZIM's built-in Xapian keyword list join the same fusion. Needs a build with the
+/// `xapian` feature (Windows/Android) and CS_TEST_ZIM_DIR; otherwise it prints why and returns.
+#[cfg(zimx)]
+#[test]
+fn a_library_and_a_zim_with_a_builtin_index_merge() {
+    let Some(dir) = std::env::var("CS_TEST_ZIM_DIR").ok().filter(|s| !s.is_empty()) else {
+        eprintln!("CS_TEST_ZIM_DIR not set: skipping");
+        return;
+    };
+    let f = shared();
+    let zim = format!("{dir}/www.ready.gov_en_2024-12.zim");
+    let cfg = json!({"sources": [
+        {"kind": "library", "path": f.dir.to_str().unwrap(), "index_dir": "/nonexistent/idx", "settings": settings(default_leave_out(), true)},
+        {"kind": "zim", "path": zim}
+    ]});
+    let c = cstr(&cfg.to_string());
+    let h = unsafe { cs_open(c.as_ptr()) };
+    assert!(!h.is_null());
+    wait_ready(h);
+    let v = random_vec(500);
+    let opts = json!({"k": 10, "query_vector": {"model": MODEL, "vector": v}});
+    let r: Value = serde_json::from_str(&take(unsafe { cs_search(h, cstr("flood").as_ptr(), cstr(&opts.to_string()).as_ptr()) }).expect("search")).unwrap();
+    assert_eq!(r["vector_sources"], json!(["t"]), "{r}");
+    let kinds: Vec<&str> = r["results"].as_array().unwrap().iter().map(|x| x["source_kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"library") && kinds.contains(&"zim"), "{r}");
+    assert_eq!(r["results"].as_array().unwrap().len(), 10);
+    // the library's best point is still its query point; the ZIM hits carry zim: addresses and a stripped snippet
+    let lib_first = r["results"].as_array().unwrap().iter().find(|x| x["source_kind"] == "library").unwrap();
+    assert_eq!(lib_first["address"], "lib:t/500");
+    for x in r["results"].as_array().unwrap().iter().filter(|x| x["source_kind"] == "zim") {
+        assert!(x["address"].as_str().unwrap().starts_with("zim:"));
+        assert!(!x["snippet"].as_str().unwrap().contains('<'));
+    }
+    unsafe { cs_close(h) };
+}

@@ -494,6 +494,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_embed"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "cache_layers"
 version = "0.1.0"
 dependencies = [
@@ -577,6 +586,7 @@ dependencies = [
  "cache_tool",
  "cache_user",
  "cache_video",
+ "cc",
  "common",
  "edge",
  "html-escape",
@@ -598,6 +608,7 @@ dependencies = [
 name = "cache_search_cli"
 version = "0.1.0"
 dependencies = [
+ "cache_embed",
  "cache_places",
  "cache_search",
  "chrono",
@@ -3231,6 +3242,7 @@ name = "places_pack"
 version = "0.1.0"
 dependencies = [
  "bzip2",
+ "cache_embed",
  "cache_places",
  "chrono",
  "csv",

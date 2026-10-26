@@ -8,6 +8,5 @@
 
 pub mod args;
 pub mod commands;
-pub mod embed;
 pub mod engine;
 pub mod server;

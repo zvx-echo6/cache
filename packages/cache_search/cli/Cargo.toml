@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 cache_search = { path = "../native/cache_search" }
+cache_embed = { path = "../native/cache_embed" }
 serde_json.workspace = true
 libloading = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

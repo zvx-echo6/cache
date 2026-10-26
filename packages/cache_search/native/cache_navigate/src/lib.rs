@@ -12,12 +12,13 @@
 
 mod build;
 mod config;
+pub mod map;
 mod resolve;
 
 pub use config::{NavigateCfg, OffroadCfg, ValhallaCfg};
 pub use resolve::parse_latlon;
 
-use cache_offroad::directions::{DEFAULT_OFFROAD_SNAP_M, TravelMode};
+use cache_offroad::directions::{Directions, DEFAULT_OFFROAD_SNAP_M, TravelMode};
 use cache_offroad::navigate::{NavigateRequest, Navigator};
 use cache_offroad::pack::PackSource;
 use cache_offroad::router::{Boundary, RouteOptions};
@@ -42,18 +43,25 @@ const NEAREST_CANDIDATES: usize = 5;
 /// Two places closer than this are the same place.
 const SAME_PLACE_M: f64 = 30.0;
 
-struct OffroadData {
+pub(crate) struct OffroadData {
     pack: SqlitePack,
     elevation: PmtilesElevation,
 }
 
-pub struct NavigateTool {
+/// The routing engine behind both the `navigate` tool and the map's route call: the Valhalla shim and the off-road pack,
+/// opened on first use, and the one place a trip is routed ([`NavCore::navigate`]), so the assistant and the map get the
+/// same route from the same code.
+pub struct NavCore {
     cfg: NavigateCfg,
     places: PlaceSlot,
     valhalla: Mutex<Option<Arc<dyn Valhalla>>>,
     offroad: Mutex<Option<Arc<OffroadData>>>,
     /// Tests inject a Valhalla and skip the file checks.
     injected: bool,
+}
+
+pub struct NavigateTool {
+    core: Arc<NavCore>,
 }
 
 fn err(code: &str, detail: impl Into<String>) -> ToolError {
@@ -123,19 +131,59 @@ impl ModeArg {
 
 impl NavigateTool {
     pub fn new(cfg: NavigateCfg, places: PlaceSlot) -> NavigateTool {
-        NavigateTool { cfg, places, valhalla: Mutex::new(None), offroad: Mutex::new(None), injected: false }
+        NavigateTool { core: Arc::new(NavCore::new(cfg, places)) }
     }
 
     /// For tests: a Valhalla supplied by the caller; the file checks are skipped.
     pub fn with_valhalla(cfg: NavigateCfg, places: PlaceSlot, valhalla: Arc<dyn Valhalla>) -> NavigateTool {
-        NavigateTool { cfg, places, valhalla: Mutex::new(Some(valhalla)), offroad: Mutex::new(None), injected: true }
+        NavigateTool { core: Arc::new(NavCore::with_valhalla(cfg, places, valhalla)) }
+    }
+
+    /// The tool over an engine the map shares.
+    pub fn from_core(core: Arc<NavCore>) -> NavigateTool {
+        NavigateTool { core }
+    }
+
+    pub fn core(&self) -> Arc<NavCore> {
+        self.core.clone()
     }
 
     fn place_source(&self) -> Option<Arc<dyn PlaceSource>> {
-        self.places.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.core.place_source()
     }
 
     fn routing_installed(&self) -> bool {
+        self.core.routing_installed()
+    }
+
+    fn valhalla(&self) -> Result<Arc<dyn Valhalla>, ToolError> {
+        self.core.valhalla()
+    }
+
+    fn offroad(&self) -> Result<Option<Arc<OffroadData>>, ToolError> {
+        self.core.offroad()
+    }
+
+    fn to_types(&self) -> Vec<String> {
+        self.place_source().and_then(|p| p.categories()).unwrap_or_else(|| DEFAULT_TO_TYPES.iter().map(|s| s.to_string()).collect())
+    }
+}
+
+impl NavCore {
+    pub fn new(cfg: NavigateCfg, places: PlaceSlot) -> NavCore {
+        NavCore { cfg, places, valhalla: Mutex::new(None), offroad: Mutex::new(None), injected: false }
+    }
+
+    /// For tests: a Valhalla supplied by the caller; the file checks are skipped.
+    pub fn with_valhalla(cfg: NavigateCfg, places: PlaceSlot, valhalla: Arc<dyn Valhalla>) -> NavCore {
+        NavCore { cfg, places, valhalla: Mutex::new(Some(valhalla)), offroad: Mutex::new(None), injected: true }
+    }
+
+    pub(crate) fn place_source(&self) -> Option<Arc<dyn PlaceSource>> {
+        self.places.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn routing_installed(&self) -> bool {
         if self.injected {
             return true;
         }
@@ -152,7 +200,7 @@ impl NavigateTool {
         }
     }
 
-    fn valhalla(&self) -> Result<Arc<dyn Valhalla>, ToolError> {
+    pub(crate) fn valhalla(&self) -> Result<Arc<dyn Valhalla>, ToolError> {
         let mut g = lock(&self.valhalla);
         if let Some(v) = &*g {
             return Ok(v.clone());
@@ -166,7 +214,7 @@ impl NavigateTool {
     }
 
     /// The off-road pack and elevation, opened on first use; None while either file is missing.
-    fn offroad(&self) -> Result<Option<Arc<OffroadData>>, ToolError> {
+    pub(crate) fn offroad(&self) -> Result<Option<Arc<OffroadData>>, ToolError> {
         let mut g = lock(&self.offroad);
         if let Some(o) = &*g {
             return Ok(Some(o.clone()));
@@ -183,8 +231,57 @@ impl NavigateTool {
         Ok(Some(d))
     }
 
-    fn to_types(&self) -> Vec<String> {
-        self.place_source().and_then(|p| p.categories()).unwrap_or_else(|| DEFAULT_TO_TYPES.iter().map(|s| s.to_string()).collect())
+    fn route_options(&self) -> RouteOptions {
+        let mut o = RouteOptions::default();
+        if let Some(m) = self.cfg.offroad.as_ref().and_then(|o| o.max_cells) {
+            o.max_cells = m;
+        }
+        o
+    }
+
+    /// The one place a trip is routed: road routing with off-road legs where an end is away from the roads (when the off-road
+    /// data is installed). Returns the directions and whether off-road data was available. A failed route is `Ok` with
+    /// `ok == false` and its coded errors.
+    pub fn navigate(&self, mut req: NavigateRequest) -> Result<(Directions, bool), ToolError> {
+        let have_offroad = self.offroad().ok().flatten();
+        if have_offroad.is_none() {
+            req.offroad = cache_offroad::directions::OffroadChoice::Never;
+        }
+        let valhalla = self.valhalla()?;
+        let (no_pack, no_elev) = (NoPack, NoElevation);
+        let (pack, elev): (&dyn PackSource, &dyn ElevationSource) = match &have_offroad {
+            Some(o) => (&o.pack, &o.elevation),
+            None => (&no_pack, &no_elev),
+        };
+        let mut nav = Navigator::new(pack, elev, &*valhalla);
+        nav.options = self.route_options();
+        let d = nav.navigate(&req).map_err(|e| err(ToolError::BAD_ARGUMENTS, e.to_string()))?;
+        Ok((d, have_offroad.is_some()))
+    }
+
+    /// Alternative road routes for the same request (empty when the router gives none).
+    pub fn alternatives(&self, req: &NavigateRequest, count: usize) -> Result<Vec<Directions>, ToolError> {
+        let valhalla = self.valhalla()?;
+        let (no_pack, no_elev) = (NoPack, NoElevation);
+        let mut nav = Navigator::new(&no_pack, &no_elev, &*valhalla);
+        nav.options = self.route_options();
+        nav.alternatives(req, count).map_err(|e| err(ToolError::BAD_ARGUMENTS, e.to_string()))
+    }
+
+    /// Name and age of the installed map region (the tiles file).
+    pub fn region_info(&self, now: &str) -> (String, String) {
+        let Some(v) = &self.cfg.valhalla else { return (String::new(), "unknown".into()) };
+        let name = v.region.clone().unwrap_or_else(|| config::region_from_path(&v.tiles));
+        let age = std::fs::metadata(&v.tiles)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|t| {
+                let now = chrono::DateTime::parse_from_rfc3339(now.trim()).ok()?.timestamp();
+                Some(build::age_words(now - t.as_secs() as i64))
+            })
+            .unwrap_or_else(|| "unknown".into());
+        (name, age)
     }
 }
 
@@ -222,8 +319,6 @@ impl Tool for NavigateTool {
         if !self.routing_installed() {
             return Err(err(ToolError::NOT_SET_UP, "navigate is not set up: no map region is installed"));
         }
-        // off-road legs need the pack and the elevation file; without them road routing still works
-        let have_offroad = self.offroad().ok().flatten();
         let valhalla = self.valhalla()?;
         let r = resolve::Resolver { ctx, source: self.place_source() };
         let start_hint = ctx.location.is_some();
@@ -265,8 +360,8 @@ impl Tool for NavigateTool {
                 to
             }
             (None, Some(cat)) => {
-                let (to, ranked_by, rest) = self.nearest(&*valhalla, &a, cat, &from)?;
-                nearest_search = Some(json!({"to_type": cat, "ranked_by": ranked_by, "warnings": Value::Null}));
+                let (to, ranked_by, warnings, rest) = self.nearest(&*valhalla, &a, cat, &from)?;
+                nearest_search = Some(json!({"to_type": cat, "ranked_by": ranked_by, "warnings": warnings}));
                 others = rest;
                 to
             }
@@ -277,16 +372,8 @@ impl Tool for NavigateTool {
             return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to)));
         }
 
-        let mut req = NavigateRequest::new(from.waypoint(), to.waypoint(), a.mode.travel(), a.land_access);
-        req.offroad = if have_offroad.is_some() { cache_offroad::directions::OffroadChoice::Auto } else { cache_offroad::directions::OffroadChoice::Never };
-        let (no_pack, no_elev) = (NoPack, NoElevation);
-        let (pack, elev): (&dyn PackSource, &dyn ElevationSource) = match &have_offroad {
-            Some(o) => (&o.pack, &o.elevation),
-            None => (&no_pack, &no_elev),
-        };
-        let mut nav = Navigator::new(pack, elev, &*valhalla);
-        nav.options = self.route_options();
-        let d = nav.navigate(&req).map_err(|e| err(ToolError::BAD_ARGUMENTS, e.to_string()))?;
+        let req = NavigateRequest::new(from.waypoint(), to.waypoint(), a.mode.travel(), a.land_access);
+        let (d, have_offroad) = self.core.navigate(req)?;
         if !d.ok {
             return Err(build::route_error(&d, &from, &to));
         }
@@ -297,8 +384,8 @@ impl Tool for NavigateTool {
             location_bias: bias_source,
             others,
             nearest_search,
-            region: self.region_info(ctx.now),
-            synth_warnings: have_offroad.is_none(),
+            region: self.core.region_info(ctx.now),
+            synth_warnings: !have_offroad,
             snap_m: DEFAULT_OFFROAD_SNAP_M,
         };
         Ok(ToolOutput::Json(build::result(&d, &from, &to, a.mode.name(), x)))
@@ -306,17 +393,11 @@ impl Tool for NavigateTool {
 }
 
 impl NavigateTool {
-    fn route_options(&self) -> RouteOptions {
-        let mut o = RouteOptions::default();
-        if let Some(m) = self.cfg.offroad.as_ref().and_then(|o| o.max_cells) {
-            o.max_cells = m;
-        }
-        o
-    }
-
-    /// The nearest place of a category by travel time from `from`: the winner, how the ranking was done, and the others
+    /// The nearest place of a category by travel time from `from`: the winner, how the ranking was done (`"drive"` when
+    /// routing ranked the candidates, whatever the travel mode, or `"distance"` when no candidate could be routed and the
+    /// straight-line order stood: navi's `_rank` values), the warnings (a list, empty when there are none), and the others
     /// (at most 2, with `drive_min`).
-    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, String, Vec<Value>), ToolError> {
+    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, &'static str, Vec<Value>, Vec<Value>), ToolError> {
         let not_set_up = || err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone");
         let src = self.place_source().ok_or_else(not_set_up)?;
         let cats = src.categories().ok_or_else(not_set_up)?;
@@ -335,6 +416,10 @@ impl NavigateTool {
             .map(|m| (valhalla.route(origin, (m.lat, m.lon), costing).ok().map(|t| t.time_s / 60.0), m))
             .collect();
         let any_time = ranked.iter().any(|(t, _)| t.is_some());
+        let mut warnings: Vec<Value> = Vec::new();
+        if !any_time {
+            warnings.push(json!("routing failed for every candidate; ranked by straight-line distance"));
+        }
         if any_time {
             // routed ones first by time, unroutable ones after in the order the pack gave (nearest by straight line)
             ranked.sort_by(|x, y| match (x.0, y.0) {
@@ -347,23 +432,8 @@ impl NavigateTool {
         let mut it = ranked.into_iter();
         let (_, best) = it.next().expect("non-empty");
         let rest: Vec<Value> = it.take(2).map(|(t, m)| build::candidate(&resolve::Resolved::from_match(m), Some(t))).collect();
-        Ok((resolve::Resolved::from_match(best), a.mode.name().to_string(), rest))
-    }
-
-    /// Name and age of the installed map region (the tiles file).
-    fn region_info(&self, now: &str) -> (String, String) {
-        let Some(v) = &self.cfg.valhalla else { return (String::new(), "unknown".into()) };
-        let name = v.region.clone().unwrap_or_else(|| config::region_from_path(&v.tiles));
-        let age = std::fs::metadata(&v.tiles)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .and_then(|t| {
-                let now = chrono::DateTime::parse_from_rfc3339(now.trim()).ok()?.timestamp();
-                Some(build::age_words(now - t.as_secs() as i64))
-            })
-            .unwrap_or_else(|| "unknown".into());
-        (name, age)
+        let ranked_by = if any_time { "drive" } else { "distance" };
+        Ok((resolve::Resolved::from_match(best), ranked_by, warnings, rest))
     }
 }
 

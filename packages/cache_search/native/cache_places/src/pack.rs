@@ -3,6 +3,7 @@
 use crate::geo::{bbox_around, haversine_km};
 use crate::schema::FORMAT_VERSION;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -48,6 +49,33 @@ pub struct Category {
     pub title: String,
     pub description: String,
     pub place_count: i64,
+    /// The rules JSON the builder stored.
+    pub rules: String,
+}
+
+/// A category that also offers places of another category, after its own (emergency rooms: hospitals that probably have one).
+#[derive(Debug, Clone)]
+pub struct Fallback {
+    pub category: String,
+    pub primary_tier: String,
+    pub tier: String,
+    pub note: Option<String>,
+    /// A fallback place ranks ahead of a primary one only when it is nearer by at least this many km.
+    pub advantage_km: f64,
+}
+
+impl Category {
+    pub fn fallback(&self) -> Option<Fallback> {
+        let v: serde_json::Value = serde_json::from_str(&self.rules).ok()?;
+        let r = v.as_array()?.iter().find(|r| r["source"] == "category")?;
+        Some(Fallback {
+            category: r["category"].as_str()?.to_string(),
+            primary_tier: r["primary_tier"].as_str().unwrap_or("confirmed").to_string(),
+            tier: r["tier"].as_str()?.to_string(),
+            note: r["note"].as_str().map(str::to_string),
+            advantage_km: r["beats_primary_only_if_nearer_by_mi"].as_f64().unwrap_or(0.0) * crate::geo::KM_PER_MI,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +97,10 @@ pub struct PlaceRow {
     pub source: String,
     pub source_id: String,
     pub confidence: Option<f64>,
+    pub wikidata_id: Option<String>,
+    pub wikipedia_title: Option<String>,
+    /// The article's first paragraph (under 500 characters), when the wiki step matched one by ID.
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +115,8 @@ pub struct LocalityRow {
     pub state: Option<String>,
     pub country: Option<String>,
     pub source_id: String,
+    pub wikipedia_title: Option<String>,
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,8 +125,8 @@ pub struct StateRow {
     pub name: String,
 }
 
-const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence";
-const LOC_COLS: &str = "l.id, l.name, l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.source_id";
+const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary";
+const LOC_COLS: &str = "l.id, l.name, l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.source_id, l.wikipedia_title, l.summary";
 
 fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
     Ok(PlaceRow {
@@ -113,6 +147,9 @@ fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
         source: r.get(14)?,
         source_id: r.get(15)?,
         confidence: r.get(16)?,
+        wikidata_id: r.get(17)?,
+        wikipedia_title: r.get(18)?,
+        summary: r.get(19)?,
     })
 }
 
@@ -128,6 +165,8 @@ fn locality_row(r: &rusqlite::Row) -> rusqlite::Result<LocalityRow> {
         state: r.get(7)?,
         country: r.get(8)?,
         source_id: r.get(9)?,
+        wikipedia_title: r.get(10)?,
+        summary: r.get(11)?,
     })
 }
 
@@ -137,6 +176,8 @@ pub struct Pack {
     pub meta: Meta,
     pub categories: Vec<Category>,
     pub states: Vec<StateRow>,
+    /// Source ids of hospitals that an emergency room row was matched to.
+    pub matched: HashSet<String>,
     conn: Mutex<Connection>,
     stamp: (u64, u64),
 }
@@ -173,8 +214,8 @@ impl Pack {
             max_lon: num("max_lon")?,
         };
         let categories = {
-            let mut st = conn.prepare("SELECT id, title, description, place_count FROM categories ORDER BY sort, id")?;
-            let rows = st.query_map([], |r| Ok(Category { id: r.get(0)?, title: r.get(1)?, description: r.get(2)?, place_count: r.get(3)? }))?;
+            let mut st = conn.prepare("SELECT id, title, description, place_count, rules FROM categories ORDER BY sort, id")?;
+            let rows = st.query_map([], |r| Ok(Category { id: r.get(0)?, title: r.get(1)?, description: r.get(2)?, place_count: r.get(3)?, rules: r.get(4)? }))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         let states = {
@@ -182,7 +223,12 @@ impl Pack {
             let rows = st.query_map([], |r| Ok(StateRow { code: r.get(0)?, name: r.get(1)? }))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(Pack { path: path.to_path_buf(), meta, categories, states, conn: Mutex::new(conn), stamp: file_stamp(path) })
+        let matched = {
+            let mut st = conn.prepare("SELECT matched_source_id FROM places WHERE matched_source_id IS NOT NULL")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<HashSet<_>>>()?
+        };
+        Ok(Pack { path: path.to_path_buf(), meta, categories, states, matched, conn: Mutex::new(conn), stamp: file_stamp(path) })
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -266,6 +312,47 @@ impl Pack {
     pub fn locality(&self, id: i64) -> Result<Option<LocalityRow>> {
         let conn = self.conn();
         Ok(conn.query_row(&format!("SELECT {LOC_COLS} FROM localities l WHERE l.id = ?1"), params![id], locality_row).optional()?)
+    }
+
+    /// A place by the id a map result carries (`place:<source_id>` without the prefix).
+    pub fn place_by_source_id(&self, source_id: &str) -> Result<Option<PlaceRow>> {
+        let conn = self.conn();
+        Ok(conn.query_row(&format!("SELECT {PLACE_COLS} FROM places p WHERE p.source_id = ?1 LIMIT 1"), params![source_id], place_row).optional()?)
+    }
+
+    pub fn locality_by_source_id(&self, source_id: &str) -> Result<Option<LocalityRow>> {
+        let conn = self.conn();
+        Ok(conn.query_row(&format!("SELECT {LOC_COLS} FROM localities l WHERE l.source_id = ?1 LIMIT 1"), params![source_id], locality_row).optional()?)
+    }
+
+    /// The model id the pack's vectors were made with, and their length; None for a pack that was never embedded.
+    pub fn embedding(&self) -> Option<(String, usize)> {
+        let conn = self.conn();
+        let get = |k: &str| conn.query_row("SELECT value FROM meta WHERE key = ?1", params![k], |r| r.get::<_, String>(0)).optional().ok().flatten();
+        let model = get("embed_model")?;
+        let dims = get("embed_dims")?.parse::<usize>().ok()?;
+        let has: bool = conn.query_row("SELECT count(*) FROM sqlite_master WHERE name = 'vectors'", [], |r| r.get::<_, i64>(0)).ok()? > 0;
+        if has && dims > 0 { Some((model, dims)) } else { None }
+    }
+
+    /// The cosine of `query` (L2-normalised) with every stored vector of `kind` ("category", "place" or "locality"), best
+    /// `top` first as (ref, cosine).
+    pub fn vector_scan(&self, kind: &str, query: &[f32], top: usize) -> Result<Vec<(String, f32)>> {
+        let conn = self.conn();
+        let mut st = conn.prepare("SELECT ref, vec FROM vectors WHERE kind = ?1")?;
+        let mut rows = st.query(params![kind])?;
+        let mut best: Vec<(String, f32)> = Vec::new();
+        while let Some(r) = rows.next()? {
+            let blob: Vec<u8> = r.get(1)?;
+            let Some(c) = crate::schema::dot_packed(&blob, query) else { continue };
+            if best.len() < top || c > best[best.len() - 1].1 {
+                let id: String = r.get(0)?;
+                let at = best.iter().position(|(_, x)| c > *x).unwrap_or(best.len());
+                best.insert(at, (id, c));
+                best.truncate(top);
+            }
+        }
+        Ok(best)
     }
 
     /// The alternative names of a place or locality, joined by spaces (the FTS alt_names column).

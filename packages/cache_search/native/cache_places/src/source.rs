@@ -2,7 +2,7 @@
 //! names through, and where its `to_type` categories and "nearest place of a type" come from.
 
 use crate::geo::haversine_km;
-use crate::nearby::{installed_categories, MAX_KM};
+use crate::nearby::{installed_categories, ranked, MAX_KM};
 use crate::pack::{PackSet, PlaceRow};
 use crate::Geocoder;
 use cache_tool::places::{GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource};
@@ -29,10 +29,6 @@ fn from_row(r: &PlaceRow, title: &str, from: Option<(f64, f64)>) -> PlaceMatch {
     m.state = r.state.clone();
     m.distance_km = from.map(|(la, lo)| haversine_km(la, lo, r.lat, r.lon));
     m.osm_category = crate::geocoder::osm_category(r);
-    if r.category.as_deref() == Some("emergency_room") {
-        // An emergency-department listing that sits in an OSM hospital is tier 1; a listing on its own is tier 2.
-        m.er_tier = Some(if r.source == "overture+osm" { 1 } else { 2 });
-    }
     m
 }
 
@@ -84,25 +80,18 @@ impl PlaceSource for PackPlaceSource {
         let Some((id, title, _)) = cats.iter().find(|(id, _, _)| id == q.category) else {
             return Ok(GeocodeAnswer { matches: Vec::new(), searched_within_km: Some(MAX_KM) });
         };
-        let mut found: Vec<(PlaceRow, f64)> = Vec::new();
-        for p in &packs {
-            found.extend(p.nearby(id, q.from.0, q.from.1, MAX_KM, q.limit.max(1) * 2).map_err(|e| ToolError::new(ToolError::INTERNAL, e.message))?);
-        }
-        found.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let mut kept: Vec<(PlaceRow, f64)> = Vec::new();
-        for (r, km) in found {
-            if !kept.iter().any(|(k, _)| k.source_id == r.source_id) {
-                kept.push((r, km));
-            }
-            if kept.len() >= q.limit {
-                break;
-            }
-        }
-        let matches = kept
+        let ranked = ranked(&packs, id, q.from.0, q.from.1, q.limit.max(1)).map_err(|e| ToolError::new(ToolError::INTERNAL, e))?;
+        let matches = ranked
             .iter()
-            .map(|(r, km)| {
-                let mut m = from_row(r, title, Some(q.from));
-                m.distance_km = Some(*km);
+            .map(|r| {
+                let mut m = from_row(&r.row, title, Some(q.from));
+                m.distance_km = Some(r.km);
+                // navi's tiers: 1 = a hospital with an emergency department listing (confirmed), 3 = a hospital without one (likely).
+                m.er_tier = match r.tier.as_deref() {
+                    Some("confirmed") => Some(1),
+                    Some("likely") => Some(3),
+                    _ => None,
+                };
                 m
             })
             .collect();

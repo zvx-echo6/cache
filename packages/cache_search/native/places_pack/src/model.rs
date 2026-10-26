@@ -35,8 +35,11 @@ pub struct Raw {
     pub confidence: Option<f64>,
     pub wiki: Wiki,
     pub brand_wikidata: Option<String>,
-    /// From the category rule: take the name and details from a place of this category within the radius.
+    /// From the category rule: only a place when one of this category is within the radius, and it takes that place's
+    /// name and details (see `require_match` in categories.json).
     pub enrich: Option<(String, f64)>,
+    /// The source id of the place it was matched to.
+    pub matched: Option<String>,
 }
 
 #[derive(Debug, Clone)]

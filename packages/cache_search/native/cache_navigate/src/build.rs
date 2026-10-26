@@ -57,7 +57,7 @@ fn travel_phrase(t: &str) -> String {
 
 /// AIDA's `_step_text`: navi's instruction, or for an off-road step what to follow, heading, length, slope, climb and
 /// terrain, prefixed with how it is travelled (except walking legs on a walking trip).
-fn step_text(s: &Step, trip_mode: &str) -> String {
+pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
     if let Some(i) = s.instruction.as_deref().filter(|i| !i.is_empty()) {
         return i.to_string();
     }
@@ -214,12 +214,24 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
         o.insert("offroad_mi".into(), json!(round_py(offroad_mi, 2)));
         o.insert("offroad_note".into(), json!(OFFROAD_NOTE));
     }
+    let warnings = warnings(d, !x.synth_warnings, x.snap_m);
+    if !warnings.is_empty() {
+        o.insert("warnings".into(), Value::Array(warnings));
+    }
+    o.insert("map_region".into(), json!(x.region.0));
+    o.insert("map_region_age".into(), json!(x.region.1));
+    Value::Object(o)
+}
+
+/// The `offroad_unavailable` warnings of a route: an end away from the road network that got no off-road leg. With off-road
+/// data the router says so itself; without it the gap is read from how far each end snapped to the road.
+pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
     let mut warnings: Vec<Value> = Vec::new();
-    if x.synth_warnings {
+    if !have_offroad {
         let pts = cache_offroad::directions::shape_points(d);
         for (end, e, p) in [("from", &d.from, pts.first()), ("to", &d.to, pts.last())] {
             if let (Some(e), Some(p)) = (e, p) {
-                if e.snap_distance_m as f64 > x.snap_m {
+                if e.snap_distance_m as f64 > snap_m {
                     warnings.push(json!({"code": "offroad_unavailable", "end": end, "road_point": {"lat": round_py(p.0, 6), "lon": round_py(p.1, 6)}, "gap_m": e.snap_distance_m}));
                 }
             }
@@ -229,12 +241,7 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
             warnings.push(json!({"code": "offroad_unavailable", "end": w.end, "road_point": {"lat": round_py(w.road_point.0, 6), "lon": round_py(w.road_point.1, 6)}, "gap_m": w.gap_m}));
         }
     }
-    if !warnings.is_empty() {
-        o.insert("warnings".into(), Value::Array(warnings));
-    }
-    o.insert("map_region".into(), json!(x.region.0));
-    o.insert("map_region_age".into(), json!(x.region.1));
-    Value::Object(o)
+    warnings
 }
 
 /// AIDA's `{from_matched, to_matched}` that ride beside an error.

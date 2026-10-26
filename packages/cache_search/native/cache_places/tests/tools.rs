@@ -84,7 +84,46 @@ fn nearby_er_from_the_phone_location() {
     assert_eq!(v["center"], "current location");
     assert_eq!(v["places"][0]["name"], "St. Luke's Boise Medical Center");
     assert_eq!(v["places"][0]["direction"], "SW");
+    assert_eq!(v["places"][0]["er_tier"], "confirmed");
+    assert!(v["places"][0].get("note").is_none());
     assert_eq!(v["places"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn emergency_rooms_confirmed_first_and_likely_hospitals_when_clearly_closer() {
+    let (_d, ts, _) = setup("n6");
+    let n = tool(&ts, "nearby");
+    // Burley: no emergency room on file, but a hospital 0.6 mi away and another 8 mi away, both "likely"; the confirmed
+    // ones (Twin Falls, Boise) are far. A hospital that an emergency room row stands for is not listed twice.
+    let l = loc(42.536, -113.792);
+    let v = run(n, Some(&l), json!({"category": "emergency_room", "limit": 5}));
+    let seen: Vec<(String, String)> = v["places"].as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap().into(), p["er_tier"].as_str().unwrap().into())).collect();
+    assert_eq!(
+        seen,
+        [
+            ("Cassia Regional Hospital".to_string(), "likely".to_string()),
+            ("Heyburn Hospital".into(), "likely".into()),
+            ("Minidoka Memorial Hospital".into(), "likely".into()),
+            ("St. Luke's Magic Valley Regional Medical Center".into(), "confirmed".into()),
+            ("St. Luke's Boise Medical Center".into(), "confirmed".into()),
+        ]
+    );
+    assert_eq!(v["places"][0]["note"], "hospital, likely has an emergency room");
+    assert!(v["places"][3].get("note").is_none());
+
+    // Between Twin Falls and Heyburn: the likely hospital is nearer, but by about 7 mi, less than the 10 mi margin, so the
+    // confirmed emergency room stays first. A little further east it is nearer by about 14 mi and goes first.
+    let mid = loc(42.56, -114.05);
+    let v = run(n, Some(&mid), json!({"category": "emergency_room", "limit": 2}));
+    assert_eq!((v["places"][0]["name"].as_str().unwrap(), v["places"][0]["er_tier"].as_str().unwrap()), ("St. Luke's Magic Valley Regional Medical Center", "confirmed"));
+    assert_eq!(v["places"][1]["name"], "Cassia Regional Hospital");
+    let mid = loc(42.56, -113.98);
+    let v = run(n, Some(&mid), json!({"category": "emergency_room", "limit": 2}));
+    assert_eq!((v["places"][0]["name"].as_str().unwrap(), v["places"][0]["er_tier"].as_str().unwrap()), ("Cassia Regional Hospital", "likely"));
+
+    // Other categories have no tiers.
+    let v = run(n, Some(&l), json!({"category": "hospital", "limit": 1}));
+    assert!(v["places"][0].get("er_tier").is_none());
 }
 
 #[test]
@@ -225,7 +264,7 @@ fn reverse_gives_the_nearest_town() {
 
 #[test]
 fn place_source_for_navigate() {
-    use cache_tool::places::{GeocodeQuery, NearestQuery, PlaceSource};
+    use cache_tool::places::{GeocodeQuery, NearestQuery};
     let d = Dir::new("ps1");
     let pack = d.0.join("places.sqlite");
     let none = cache_places::tools_and_source(&PlacesCfg { packs: vec![pack.to_string_lossy().into_owned()] }).1;
@@ -250,7 +289,10 @@ fn place_source_for_navigate() {
     let n = src.nearest(&NearestQuery { category: "emergency_room", from: (43.828, -115.834), limit: 2 }).unwrap();
     assert_eq!(n.matches.len(), 2);
     assert_eq!(n.matches[0].place_name, "St. Luke's Boise Medical Center");
-    assert_eq!(n.matches[0].er_tier, Some(2));
+    assert_eq!(n.matches[0].er_tier, Some(1));
     assert!((n.matches[0].distance_km.unwrap() - 37.5).abs() < 2.0, "{:?}", n.matches[0].distance_km);
+    // Near Burley the likely hospitals come first, with navi's tier 3.
+    let b = src.nearest(&NearestQuery { category: "emergency_room", from: (42.536, -113.792), limit: 2 }).unwrap();
+    assert_eq!((b.matches[0].place_name.as_str(), b.matches[0].er_tier), ("Cassia Regional Hospital", Some(3)));
     assert!(src.nearest(&NearestQuery { category: "urgent_care", from: (43.8, -115.8), limit: 2 }).unwrap().matches.is_empty());
 }

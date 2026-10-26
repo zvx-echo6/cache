@@ -461,6 +461,31 @@ impl Env<'_> {
                 return self.fail(req, &rid, e);
             }
         };
+        self.directions_for_trip(req, &rid, trip)
+    }
+
+    /// Alternative road routes between the same two points (Valhalla's `alternates`), best first, each as full directions
+    /// with its own route id (`<id>-1`, `<id>-2`). Road only: an end away from the roads gets no off-road leg here, so callers
+    /// offer these only for a route that has none. Empty when the router gives no alternatives.
+    pub fn alternatives(&self, req: &DirectionsRequest, count: usize) -> Vec<Directions> {
+        if req.offroad == OffroadChoice::Always || count == 0 {
+            return vec![];
+        }
+        let rid = route_id(req.from, req.to, req.mode.name(), &self.version);
+        let mut road_only = req.clone();
+        road_only.offroad = OffroadChoice::Never;
+        self.valhalla
+            .alternatives(req.from, req.to, req.mode.costing(), count)
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| self.directions_for_trip(&road_only, &format!("{rid}-{}", i + 1), t))
+            .filter(|d| d.ok)
+            .collect()
+    }
+
+    /// Directions from a Valhalla trip: the steps, and (for `Auto`) the off-road lead and tail when an end is away from the road.
+    fn directions_for_trip(&self, req: &DirectionsRequest, rid: &str, trip: crate::valhalla::Trip) -> Directions {
+        let rid = rid.to_string();
         if trip.shape.is_empty() || trip.maneuvers.is_empty() {
             return self.fail(req, &rid, DirectionsError::new("no_route", "No route found"));
         }

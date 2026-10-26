@@ -24,7 +24,9 @@ library's settings file.
 ## Sources
 
 A handle is opened with a list of sources, of two kinds:
-- `zim`: a ZIM file plus its Tantivy index directory (prebuilt and downloaded, or built on the phone).
+- `zim`: a ZIM file plus its Tantivy index directory (prebuilt and downloaded, or built on the phone). On builds with
+  the `xapian` feature (Windows, Android; below), a ZIM that carries its own Xapian index is searched through that
+  index and needs no index directory.
 - `library`: a Qdrant collection's shard, used as it is: no export, no conversion, no splitting. Its settings
   file (below) says which payload fields mean what. Its keyword index is the library's own scored text index if
   it has one, otherwise a Tantivy directory built on the device (`index_library` job).
@@ -259,7 +261,15 @@ v1 format:
   This is the setting. What a library actually uses is reported by `cs_status` as `keyword_source`:
   `"own"`, `"device"` or `"none"` (null for ZIMs).
 
-## Keyword index (Tantivy)
+## Keyword index (Tantivy, and a ZIM's own Xapian index)
+
+Hybrid, per ZIM source. With the Cargo feature `xapian` (default; effective on Windows and Android, see
+"ZIM built-in index (libzim)" below):
+- a ZIM that has the full-text index `X/fulltext/xapian` is searched through it, with no `index_dir` needed. `cs_status`
+  lists it as `"indexed":true,"building":false,"stale":false` with `"keyword_source":"own"` (the ZIM's own index, the same
+  word as a library's own scored index; the field appears for these ZIMs only);
+- any other ZIM (no built-in index, or a build without the feature) uses its Tantivy index exactly as described next.
+An `index_zim` job still builds a Tantivy index for any ZIM; a ZIM with a built-in index simply does not use it.
 
 - One index per source. Each index_dir records the index format version and the tokenizer (from the ZIM or
   library language; English stemmer by default). An index from an older format is reported as stale.
@@ -276,13 +286,34 @@ at index time. If the library has its own scored text index (`keyword_source` "o
 
 `search(query, options)`; options carry `k`, `offset` (paging), a source filter and an optional query vector
 tagged with its embedding model id:
-1. Keyword: top 50 (plus offset) from each selected source's keyword index (BM25): a ZIM's Tantivy index, a
-   library's own scored index if present, else the library's device Tantivy index.
+1. Keyword: top 50 (plus offset) from each selected source's keyword index (BM25): a ZIM's own Xapian index
+   if it has one (feature `xapian`), else its Tantivy index; a library's own scored index if present, else the
+   library's device Tantivy index.
 2. Vector: only for libraries whose settings `embedding.model` matches the query vector's model id; other
    libraries are keyword-only, and the response says which sources used vectors.
-3. Merge: the keyword lists across all sources are merged with reciprocal rank fusion (k=60); where a
-   vector list exists it joins that fusion as another list (RRF k=60 between the keyword and vector lists);
-   one entry per address.
+3. Merge. The keyword lists of all sources (ZIMs and libraries) are scored hit by hit and merged into one list; where a
+   vector list exists it joins that list in a reciprocal rank fusion (k=60), one entry per address. A source's best hit
+   is not worth the same everywhere (the earlier merge gave every source's best hit 1.0, so with 19 sources the weak
+   matches of small ZIMs competed with the strong ones), so each hit gets a score of its own:
+   - `rel`: the hit's raw score over the best raw score of its source (Tantivy BM25; for a Xapian source libzim's
+     percentage, which is 100 for the source's best hit, so it is relative too). It orders hits inside a source; it
+     cannot compare two sources.
+   - `coverage`: the fraction of the query's distinct words (compared after the source's own stemming) found in the hit.
+     Tantivy hits: found in title, lead or body. Xapian hits: found in the title or the text of the article (read from the
+     ZIM; the first 300 KB), because libzim reports no matched terms. `title_cov`: the same fraction counting the title only
+     (for a Tantivy hit it equals `coverage`: the title is already boosted x2 in its BM25). Every word counts the same,
+     including "how" or "the": a chatty question is not cleaned up here (it is for the vector list, or for the model that
+     writes the query).
+   - `score = rel * (coverage + title_cov) / 2`. The title is the one signal that crosses sources: a hit whose title lacks
+     the query words keeps at most half its source-relative score, so an article that merely mentions the words cannot
+     outrank one about them from another source. (Measured on the 15 evaluation queries, top-3 hits for a title share
+     of 0 / 0.25 / 0.5 / 0.75 / 1.0: 8 / 11 / 14 / 13 / 12, so 0.5.)
+   - A hit is good if `coverage >= min_term_coverage` (default 0.5) and `rel >= min_relevance` (default 0.5; on the
+     evaluation queries 0.34-0.67 for the first and 0-0.7 for the second change nothing). Hits that
+     are not good are dropped before the merge, unless fewer than k+offset good hits exist; then the best of the dropped
+     ones fill up to k+offset after all the good ones.
+   - Sorted by score, ties by the higher raw score, then by address. Per Xapian source the merge sees the best
+     max(k+offset, 10) hits (their articles are read for coverage).
 4. Collapse duplicates after the merge and before [n] numbering: library hits with the same `document` field
    value and the same title collapse to the best-ranked one; with no `document` field mapped, hits with
    identical title plus identical snippet collapse. Then fill back up to k from the next-ranked hits.
@@ -298,9 +329,34 @@ Vector search over a library:
 Snippets and titles:
 - Library hit snippet: the `summary` field if mapped, else the start of the `text` field; at most 400 chars,
   cut at a sentence end. ZIM article: Tantivy snippet over `lead`, falling back to its first sentences, at most
-  400 chars.
+  400 chars. For a ZIM searched through its Xapian index: libzim's own snippet, with its HTML (`<b>` around matched
+  words) stripped and entities decoded, whitespace collapsed, a leading or trailing "..." removed, and cut to at most 400 chars at a sentence end
+  by the same rule; if libzim gives none, the first sentences of the article.
 - Library hit title: the mapped `title` (falling back to `title_fallback`); when the point has a page,
   `<title>, p. <page>`. For a ZIM hit: `<ZIM title>: <article title>`.
+
+### Search quality evaluation
+
+`packages/cache_search/eval/` holds `queries.json` (15 queries with the expected source and/or article title for the top 3)
+and `search_eval.py` (standard library only; it talks to a running `cs serve` and prints hit@3 and hit@5 per query). It is
+a script, not a cargo test, because it needs the real source set. The expectations were written by reading what the recon
+library and the ZIMs contain, each source searched alone, not from any ranking. Two queries come from the 2026-10-26 check
+("replace iphone battery", "flood"), the other 13 from heldout-v1 (never used for training). Run 2026-10-26 on Windows with
+the recon library (keyword only, no embedder) and the 18 ZIMs, k=5, a debug build:
+
+| | hit@3 | hit@5 |
+|---|---|---|
+| Tantivy only (every ZIM `"builtin_index": false`; Wikipedia has no finished Tantivy index and is left out, so the 3 queries answered by Wikipedia cannot hit: 6/12 and 8/12 on the others) | 6/15 | 8/15 |
+| Hybrid, before the ranking change (adf154e) | 8/15 | 8/15 |
+| Hybrid, after | 14/15 | 14/15 |
+
+Before the change the junk came from small ZIMs whose best hit counted as much as anyone's: "replace iphone battery" gave
+Hundred Rabbits, Meshtastic Settings and Wikivoyage Electrical systems and no iFixit page; "flood" opened with Hundred Rabbits.
+After it iFixit's iPhone battery guides take the first eight places and "flood" opens with Ready.gov. The one miss is
+"how do I know if I'm getting dehydrated?": for the whole chatty sentence no source's own top 50 holds a good article (the
+common words dominate Xapian and BM25 alike), so the merge has nothing to promote; that is for the vector list or for a model
+that rewrites the question. The ranking costs a warm query about 0.6 s more (mean 1.3 s to 1.9 s over the 15 queries, debug
+build) because the top hits' articles are read for coverage.
 
 ## read
 
@@ -480,6 +536,78 @@ output, error and status for the test key.
 **CLI.** `cs` turns web search on when both `CACHE_WEB_PROVIDER` and `CACHE_WEB_KEY` are set in the environment (it
 then assumes online); `CACHE_WEB_BASE_URL` points Kagi at another address for runs against a stand-in server.
 `cs serve` has `POST /web {"provider","key","online"}` and `DELETE /web`; the key is never echoed.
+
+## ZIM built-in index (libzim)
+
+Decided by the Cache lead, 2026-10-26: the official prebuilt libzim 9.8.2 (Kiwix; Xapian inside), a small C ABI shim
+`native/zimx/` (`zimx.h`, `zimx.cpp`) built by `cache_search/build.rs` with the `cc` crate, and a Cargo feature `xapian`
+(default; effective on Windows and Android only, other targets ignore it). Download URLs, versions and md5s:
+`native/zimx/LIBZIM.md`; fetch-and-verify scripts: `fetch-libzim.ps1` (Windows) and `fetch-libzim.sh` (Android), which download
+into the build directory, never the repository. `LIBZIM_DIR` names the unpacked folder at build time. On Windows
+`build.rs` copies `zim-9.dll` and the ICU 74 DLLs next to the built binaries; they must ship with them
+(the Visual C++ runtime is also needed). Android arm64 needs `libzim.so`, the NDK's `libc++_shared.so` and ICU data; that
+path is wired but not yet built or run.
+
+What it is used for: keyword search and title suggestions over a ZIM's own indexes. `cs_read`, `cs_zim_get` and
+`cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (on a background thread once the sources are
+set, see "Prewarm"; otherwise on first search, suggest or status) for the indexes.
+- Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k)` (path,
+  title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k)` (path, title). Results are UTF-8 JSON strings
+  freed with `zimx_free`. Every C++ exception is caught in the shim and returned as `{"error":...}` (the Rust side turns it into an
+  `internal` error; a failed open into `io`). Nothing crosses the boundary as an exception.
+- Search: a Xapian query that libzim rejects (an unmatched quote or bracket) is retried with the query reduced to its
+  words; if libzim still fails, the source falls back to its Tantivy index if it has one.
+- Suggest: a ZIM with a title index suggests from it in libzim's order (`Floods | Ready.gov`), with no extra filtering. When
+  such a source and a Tantivy one both answer, each list is ranked by its rank in its own source (1/(60+rank)) and the
+  title length breaks ties; with only Tantivy sources the existing BM25 ranking is unchanged.
+- Without the feature (`--no-default-features`) none of this is built and every ZIM uses Tantivy, which is also the
+  fallback if the licence decision below goes against GPL code.
+
+Differences from Tantivy that callers can see:
+- Ranking: Xapian's own weighting (BM25-based, with libzim's boosts) over the full article text, not Tantivy's title (x2) /
+  lead / body fields. libzim's integer score is a percentage that is 100 for the best hit of the query in that ZIM (measured
+  on all 18 ZIMs), so inside the cross-source merge it is a within-source figure like Tantivy's normalised BM25 (see "Search
+  and merge" for how sources are compared).
+- Stemming and stop words follow the language libzim chose when the ZIM was built, not Cache's tokenizers.
+- Snippets: libzim's snippet is built from the whole article, so it shows the matched passage, where Tantivy's is
+  cut from the first ~1,500 chars (`lead`). The same HTML-free, at-most-400-chars, sentence-end rule applies.
+- Titles are the ZIM's own entry titles (some ZIMs carry a site suffix, for example `Floods | Ready.gov`).
+- Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. Without prewarm libzim opens each
+  file on its first search, which on a cold disk took 39-52 s for the first query after a start (the 27M-entry Wikipedia
+  included); after that a search over every source takes about 1-2 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title
+  suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry
+  up with the `zim` crate).
+- Prewarm cost, measured (`cs serve`, all 19 sources, debug build, process memory sampled every second from launch to 60 s
+  after the port opened, the OS file cache warm from earlier runs so the cold-disk part of the saving is not in these
+  figures): the port opens at 35.6 s in every run (the library). Private bytes at open+60 s: 542 MB without prewarm, 1005 MB with
+  it; after the first query both are 1019-1021 MB, so prewarm brings forward the same ~470 MB (the kept Xapian searchers) rather than adding
+  to it. Peak working set: 17.8 GB without, 18.1 GB with (the library's mapped files dominate). First query: 4.1-5.6 s without
+  prewarm, 3.8 s with it, the same whether it comes at once or 60 s after open; the build before this change (lazy opens,
+  searchers rebuilt per call, no coverage reading) took 1.9-9.6 s on the same warm cache.
+- Coverage: libzim does not report which query terms a hit matched, and the `<b>` marks in its snippets did not appear
+  on the real ZIMs tried, so Cache reads the top hits' articles (the first 300 KB, `max(k+offset, 10)` per source) and
+  computes coverage and title coverage itself from the words of the title and the text (see "Search and merge"). Reading
+  articles costs about a second over a full source set.
+- Searchers: the shim builds libzim's full-text and title searchers once per ZIM and keeps them (building one opens the
+  Xapian database, most of the cost of a first query); one mutex per handle serialises the calls that use them.
+- Prewarm: `set_sources` starts up to 4 background threads that open libzim on every ZIM with a built-in index and build its
+  searchers, so the first search does not pay for the opens. The config key `"prewarm": false` turns it off. A search that
+  arrives while a source is still being warmed waits for that source only.
+
+### Licences
+
+- libzim: GPL-2.0-or-later. Xapian (statically inside libzim): GPL-2.0-or-later. ICU (the ICU DLLs, or the ICU data file on
+  Android): the Unicode/ICU licence (permissive; copyright notice and licence text to be carried). zstd and liblzma inside
+  libzim: BSD/GPL-2.0 dual and public domain.
+- Effect on Cache: the crates are `AGPL-3.0-or-later`. GPL-2.0-or-later code may be combined with AGPL-3.0-or-later code
+  (GPLv3 section 13), and the combined binaries stay under AGPL-3.0-or-later; because they would then carry GPL code,
+  anyone who receives them must be offered the corresponding source of the shim, Cache and the libzim and Xapian versions
+  used (LIBZIM.md names them; the sources are at https://github.com/openzim/libzim and https://xapian.org). A build
+  with `--no-default-features` links no libzim, Xapian or ICU and has none of these obligations.
+- The app's credits need lines for libzim and Xapian (GPL-2.0-or-later) and ICU. This repository keeps no third-party
+  credits file (the existing notes, such as the ODbL line for the timezone data, say "the app's credits need a line"), so
+  there is nothing to add here beyond this section.
+- Not legal advice: whether to ship the feature is the licence decision; turning the `xapian` feature off is the way back.
 
 ## ZIM reading
 
@@ -764,9 +892,11 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 **Pack (`places.sqlite`, one per region).** Tables: `places` (id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence), `places_rt` (R*Tree), `places_fts` (FTS5 over name and alternative names), `localities` (+ `_rt`, `_fts`: city, town, village, hamlet with OSM population), `categories` (id, title, one-line description for the model, rules JSON, place_count), `states`, `meta` (region, build time, bounding box). `category` is NULL for named places that are only there for the geocoder (`kind` says what they are). The schema is `cache_places/src/schema.rs`; the builder and the reader both use it.
 
-**Builder (`places_pack`).** Inputs are `PlaceSource`s (Overture CSV and an OSM PBF today; Overture GeoParquet and Geofabrik on GitHub Actions later, see `places_pack/RECIPE.md`). The category rules are data (`categories.json`, stored in the pack): hospital, urgent_care, water and shelter come from OSM tags only; emergency_room from Overture `emergency_department`, taking name, address and phone from an OSM hospital within 250 m; the rest merge Overture and OSM (same place: within 40 m, or within 200 m with similar names). State and country come from navi's admins.sqlite.
+**Builder (`places_pack`).** Inputs are `PlaceSource`s (Overture CSV and an OSM PBF today; Overture GeoParquet and Geofabrik on GitHub Actions later, see `places_pack/RECIPE.md`). The category rules are data (`categories.json`, stored in the pack): hospital, urgent_care, water and shelter come from OSM tags only; emergency_room from Overture `emergency_department`, and only where an OSM hospital (amenity=hospital or healthcare=hospital) is within 250 m: the row takes that hospital's name, address, phone and wiki ids and remembers it (`matched_source_id`); emergency-department records with no hospital there (air ambulances, ambulance services, clinics) are dropped; the rest merge Overture and OSM (same place: within 40 m, or within 200 m with similar names). State and country come from navi's admins.sqlite.
 
 **Geocoder (`Geocoder` trait, in cache_places until it moves to cache_tool).** `forward(query, near, limit)`: the query is split at commas ("Walgreens, Burley, ID": a state qualifier filters, a town qualifier biases); FTS5 over towns and places; a name that equals the query wins, a town match gets a boost, so a bare "Burley" is the town and not a school named after it; `near` pulls ties toward a point; when the words do not all match, any-word matching is tried. `reverse(lat, lon)`: nearest town (a hamlet only when it is within 3 km and clearly closer).
+
+**Emergency rooms: confirmed and likely (decided 2026-10-26; navi's approach).** The `emergency_room` category rule in `categories.json` has a second rule, `{"source":"category","category":"hospital","primary_tier":"confirmed","tier":"likely","note":"hospital, likely has an emergency room","beats_primary_only_if_nearer_by_mi":10}`, which the tools read from the pack. A search for `emergency_room` returns the confirmed rows (`er_tier` "confirmed") and then the OSM hospitals that no confirmed row stands for (`er_tier` "likely", with the note). They rank by distance, but a likely hospital goes ahead of a confirmed one only when it is nearer by more than 10 miles (the margin stands in for "15 minutes' drive" until Valhalla ranks by drive time). For navigate's `PlaceSource` the tiers are 1 (confirmed) and 3 (likely), navi's numbers. The rule is data and ids only: no name matching.
 
 **Tools.** `nearby` (schema None until a pack with places is installed; the category enum and descriptions come from the packs' category tables) and `locate` (always offered; a GPS fix needs no pack; nearest town and place names need one). Registered by the `places` section of the `cs_open` config, `{"packs": [paths]}`. Packs are opened on demand and reopened when the file changes. `nearby` ranks by straight-line distance (`ranked_by: "distance"`) out to 300 km; drive-time ranking comes with Valhalla. Citable addresses are `place:<source id>`, `town:<source id>` and `loc:<lat>,<lon>`. `locate` also returns `usng` and `plus_code` (computed offline in `cache_places::coord`).
 
@@ -799,6 +929,50 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
   code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
 - **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
   requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
+
+## The map: search, route and guidance (`cs_map_search`, `cs_map_route`, `cs_map_progress`)
+
+The Maps tab calls these directly; the `navigate` tool is for the model and stays as it is. The JSON of each call is documented in `cache_search.h`.
+They need the `places` and `routing` sections of the `cs_open` config (`not_configured` otherwise); the CLI has `cs map-search`, `cs map-route` and `cs map-progress`
+(`--request <json>`, or `--query` / `--to` / `--from` shorthands) and `cs serve` has `POST /map/search`, `/map/route` and `/map/progress`. All three print the
+core's JSON as it came, so the doors agree byte for byte (`cli/tests/map.rs`).
+
+**Search (`cache_places::map`).** A query is read in this order. (1) *Coordinates*: decimal, degrees-minutes-seconds (also degrees and decimal minutes, hemisphere
+letters before or after), USNG / MGRS (zone, band, 100 km square, 2 to 10 digits; the inverse of the Kruger series that writes them), Plus Codes (full, padded, with
+grid digits; a short code is completed from `near`, or from a town named after it). The answer is one `coordinates` result with the point in every format and the
+nearest town. (2) *Text*: a run of words that is exactly the name of a city, town or village in the pack ("pharmacy near Burley") is the **anchor**; ranking is from
+there, not from the map centre. Nothing in this step is a list of words: the data says what is a town. (3) *Names*: the geocoder (FTS5, town boost) on the whole text
+and on what is left after the anchor. (4) *Categories*: the words (plurals folded) are matched against the pack's category ids, titles and descriptions; a word that
+many categories use weighs little ("station" is in fuel, police and fire), title words count twice a description word. A matching category gives a `category` row and
+its nearest places from the anchor or the centre. (5) *Meaning*, when the pack has vectors and the host has an embedder: the query vector is compared with the
+vectors of the category texts and of the name-and-summary texts of places and towns. A category counts at cosine 0.40 within 0.08 of the best, a place at 0.50. The
+host's embedder is the handle's query embedder (`set_query_embedder`, the one built-in `search` uses), or the request carries `query_vector`; its `model` must
+equal the pack's `embed_model`, else the answer's `meaning` says `model_mismatch` and keywords answer alone. Without an embedder or vectors the answer says
+`no_embedder` / `no_vectors`; the keyword steps (1 to 4) never need either.
+Ranking: `score = 0.7 * relevance + 0.3 * closeness`; closeness is `exp(-km / 25)` from the anchor, else the centre (0.5 if neither is known); relevance is the name
+match (0..1), the category match, or the cosine mapped from 0.30..0.70 onto 0..1. Every result carries `distance_m` and `direction` from `near` (the map centre or the GPS
+fix), the details a card shows (phone, hours, website, Wikipedia summary and title) and an `id` that the route call takes.
+
+**Vectors in the pack (`places_pack embed`).** The builder embeds each category as `title: description` and each place and town that has a summary as
+`name. summary`, with `cache_embed` (cache_llama's `cl_embed`, the same code and settings the `cs` query embedder uses), and writes them to the `vectors` table
+(`kind`, `ref`, `vec`): one byte per dimension plus a float scale, so Idaho's costs about 1 KB per embedded text. `meta` gets `embed_model` (the id a query vector
+must carry; the GGUF file name unless `--embed-model-id`), `embed_dims`, `embed_model_sha256` and `embed_count`. A pack without the table is a keyword-only pack.
+Places with no summary are found by name and category; the vectors are for the notable ones (peaks, lakes, towns, hot springs, landmarks).
+
+**Route (`cache_navigate::map`).** `NavCore` is the routing engine (Valhalla shim, off-road pack and elevation, opened on first use); the `navigate` tool and the map
+both route through `NavCore::navigate`, so a route has the same id, distance and time in both (a test compares them). The tool shortens the answer; the map keeps all of
+it: the geometry as a polyline6 string, the `segments` (road, off-road or trail, each with its way of travel and its range of points), every maneuver with its position,
+instruction, length and time and its range of points, the totals (road and off-road metres, climb and descent), the warnings, and Valhalla's alternatives
+(`alternates`, for a plain road route; an off-road route has none). Stops (`via`) are routed leg by leg and joined; each stop is a `via` maneuver. A route that cannot be made is
+`{"ok": false, "errors": [{code, message}]}`, not an error of the call.
+
+**Guidance (`cs_map_progress`).** Each route (and each alternative) is kept in the handle, newest eight, so a fix is matched by `route_id`; the app sends the route
+object again after a restart. A fix is matched to the nearest point of the route within 300 m behind and 3 km ahead of the last match, and only on the whole route
+when that finds nothing on it, so a route that passes itself (an out-and-back) is not mistaken for its other pass. `off_route` is true when the fix has been farther
+than `off_route_m` (50) from the route, or than the GPS accuracy if that is larger, for `off_route_fixes` (3) fixes in a row; an off-road leg is a straight line
+between turn points over a 30 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
+along the route, the next maneuver and the distance to it, the one after, the time and distance left, the ETA (if `now` is given) and, on an off-road leg, the bearing,
+distance and climb to the next point. `arrived` is true within `arrive_m` (25) of the end.
 
 ## Videos (crate `cache_video`, PeerTube)
 
