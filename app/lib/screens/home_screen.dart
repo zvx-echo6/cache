@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../chat/chat_controller.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
+import 'settings_screen.dart';
 import 'sources_screen.dart';
 import 'models_screen.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.app, required this.sources, required this.onOpenAsk});
+  const HomeScreen({super.key, required this.app, required this.sources, required this.chat, required this.onOpenAsk});
 
   final AppState app;
   final SourcesState sources;
+  final ChatController chat;
   final VoidCallback onOpenAsk;
 
   void _comingSoon(BuildContext context) {
@@ -56,9 +59,13 @@ class HomeScreen extends StatelessWidget {
             icon: const Icon(Icons.more_vert),
             onSelected: (v) {
               if (v == 'theme') _pickTheme(context);
+              if (v == 'settings') {
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => SettingsScreen(chat: chat)));
+              }
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'theme', height: 52, child: Text('Theme')),
+              PopupMenuItem(value: 'settings', height: 52, child: Text('Settings')),
             ],
           ),
         ],

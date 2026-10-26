@@ -143,6 +143,49 @@ void main() {
       expect(updates.last.text, 'Final [1].');
     });
 
+    test('the cap is enforced at dispatch: a tool call after the cap is ignored and its text is the answer', () async {
+      final backend = FakeBackend([
+        (_) => toolCall('a'),
+        (_) => toolCall('b'),
+        (_) => toolCall('c'),
+        (_) => PartialMessage(
+              isFinal: true,
+              content: 'Answer from what I have [1].',
+              toolCalls: [ToolCall(id: 'c9', name: 'search', arguments: '{"query":"d"}')],
+            ),
+      ]);
+      final search = FakeSearch([[r('T', 'S')]]);
+      final loop = ToolLoop(backend: backend, tools: [search]);
+      final updates = await loop.ask('q').toList();
+      expect(search.calls, 3); // the fourth call was not run
+      expect(backend.requests.length, 4);
+      expect(updates.last.phase, TurnPhase.done);
+      expect(updates.last.text, 'Answer from what I have [1].');
+      expect([for (final m in loop.messages) m['role']], ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
+      expect(loop.messages.last.containsKey('tool_calls'), isFalse);
+    });
+
+    test('after the cap, a tool call with no text gets one more request without tools', () async {
+      final backend = FakeBackend([
+        (_) => toolCall('a'),
+        (_) => toolCall('b'),
+        (_) => toolCall('c'),
+        (_) => toolCall('d'),
+        (_) => answer('Done [1].'),
+      ]);
+      final search = FakeSearch([[r('T', 'S')]]);
+      final loop = ToolLoop(backend: backend, tools: [search]);
+      final updates = await loop.ask('q').toList();
+      expect(search.calls, 3);
+      expect(backend.requests.length, 5);
+      expect(backend.requests[3].containsKey('tools'), isFalse);
+      expect(backend.requests[4].containsKey('tools'), isFalse);
+      // The nudge is sent but not kept in the conversation.
+      expect((backend.requests[4]['messages'] as List).last['role'], 'user');
+      expect(loop.messages.where((m) => m['role'] == 'user').length, 1);
+      expect(updates.last.text, 'Done [1].');
+    });
+
     test('streams phases: thinking/searching/answering then done', () async {
       final backend = FakeBackend([(_) => toolCall('a'), (_) => answer('Hello there')]);
       final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);

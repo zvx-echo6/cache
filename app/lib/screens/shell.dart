@@ -54,6 +54,7 @@ class _ShellState extends State<Shell> {
           HomeScreen(
             app: widget.app,
             sources: widget.sources,
+            chat: widget.chat,
             onOpenAsk: () => setState(() => _index = 1),
           ),
           AskScreen(

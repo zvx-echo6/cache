@@ -1,4 +1,5 @@
 import 'package:cache_llama/cache_llama.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import 'chat_config.dart';
 import 'citations.dart';
@@ -13,6 +14,12 @@ const String kSystemPrompt =
     "not in the user's sources.";
 
 const int kMaxToolRounds = 3;
+
+/// Sent (not kept in the conversation) when the model asked for more tools after the cap and said nothing.
+const Map<String, dynamic> _kAnswerNow = {
+  'role': 'user',
+  'content': 'Answer now from the tool results above. No more tools are available.',
+};
 
 enum TurnPhase { thinking, searching, answering, done }
 
@@ -50,8 +57,17 @@ class ToolLoop {
     this.enableThinking = kEnableThinking,
     this.numbering,
     this.host,
+    List<Map<String, dynamic>> history = const [],
+    Iterable<NumberedResult> knownResults = const [],
   })
-      : _tools = {for (final t in tools) t.name: t};
+      : _tools = {for (final t in tools) t.name: t} {
+    // A conversation reopened from storage: its transcript and the results already numbered in it.
+    _messages.addAll(history);
+    for (final r in knownResults) {
+      _results[r.id] = r;
+    }
+    _nextId = _results.keys.fold(0, (a, b) => b > a ? b : a) + 1;
+  }
 
   final ModelBackend backend;
 
@@ -82,6 +98,37 @@ class ToolLoop {
     backend.stop();
   }
 
+  /// Takes the numbers already given from [numbering] (a restored conversation), so the citation check
+  /// knows them.
+  Future<void> syncNumbering() async {
+    final n = numbering;
+    if (n != null) await _syncIds(n, const []);
+  }
+
+  /// A request for the model made of this conversation plus [extra] (one more message that is not kept in
+  /// it), for side questions such as a title. With [withTools] the request carries the same tool
+  /// definitions as a normal turn, so the model's cached prompt start stays valid.
+  Map<String, dynamic> requestWith(Map<String, dynamic> extra, {bool withTools = false}) =>
+      _request(_messages, withTools && _schemas.isNotEmpty, prompt: _prompt, extra: extra);
+
+  /// The system prompt and tool schemas of the last turn are reused, so a side question keeps the model's cached
+  /// prompt start.
+  String? _lastPrompt;
+  String get _prompt => _lastPrompt ?? (systemPrompt?.call() ?? kSystemPrompt);
+  List<Map<String, dynamic>> _hostSchemas = const [];
+
+  List<Map<String, dynamic>> get _schemas => host == null ? [for (final t in _tools.values) t.toSchema()] : _hostSchemas;
+
+  Map<String, dynamic> _request(List<Map<String, dynamic>> messages, bool withTools, {required String prompt, Map<String, dynamic>? extra}) => {
+        'messages': [
+          {'role': 'system', 'content': prompt},
+          ...messages,
+          ?extra,
+        ],
+        'enable_thinking': enableThinking,
+        if (withTools) 'tools': _schemas,
+      };
+
   /// Frees the numbering in the core. The loop is not used afterwards.
   Future<void> dispose() async {
     await numbering?.dispose();
@@ -95,20 +142,13 @@ class ToolLoop {
     _messages.add({'role': 'user', 'content': userText});
     var rounds = 0;
     var promptTokens = 0, generatedTokens = 0;
-    final prompt = systemPrompt?.call() ?? kSystemPrompt;
+    final prompt = _lastPrompt = systemPrompt?.call() ?? kSystemPrompt;
+    var finalAnswer = false;
     try {
-      final hostSchemas = host == null ? const <Map<String, dynamic>>[] : await host!.schemas();
+      if (host != null) _hostSchemas = await host!.schemas();
       while (true) {
-        final schemas = host == null ? [for (final t in _tools.values) t.toSchema()] : hostSchemas;
-        final allowTools = rounds < kMaxToolRounds && schemas.isNotEmpty;
-        final request = <String, dynamic>{
-          'messages': [
-            {'role': 'system', 'content': prompt},
-            ..._messages,
-          ],
-          'enable_thinking': enableThinking,
-          if (allowTools) 'tools': schemas,
-        };
+        final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
+        final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);
 
         PartialMessage? last;
         await for (final p in backend.generate(request)) {
@@ -128,7 +168,15 @@ class ToolLoop {
         promptTokens += last.promptTokens;
         generatedTokens += last.generatedTokens;
 
-        if (last.hasToolCalls && !_stopped) {
+        // The cap is enforced here, not only by leaving the schemas out: once kMaxToolRounds rounds have run, a tool
+        // call the model returns anyway is ignored. Its text, if any, is the answer; with none, one more request
+        // goes out without tools to get one.
+        if (last.hasToolCalls && !_stopped && rounds >= kMaxToolRounds) {
+          if (last.content.trim().isEmpty && !finalAnswer) {
+            finalAnswer = true;
+            continue;
+          }
+        } else if (last.hasToolCalls && !_stopped) {
           _messages.add(last.toMessage());
           yield const TurnUpdate(phase: TurnPhase.searching);
           for (final call in last.toolCalls) {
@@ -160,6 +208,8 @@ class ToolLoop {
     if (host != null) {
       try {
         final r = await host.call(call.name, call.argumentsMap, DateTime.now());
+        // One line per call for logcat (no arguments or text): which tool ran and which [n] it gave.
+        debugPrint('cache tool ${call.name}: new ids ${[for (final i in r.ids) i.n]}, ${r.content.length} chars');
         for (final id in r.ids) {
           _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address)));
         }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'app_state.dart';
 import 'browse/browse_state.dart';
@@ -6,11 +7,13 @@ import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
+import 'history/conversation_store.dart';
 import 'location/location_service.dart';
 import 'maps/layers/fake_catalogue.dart' show kCatalogueUrl;
 import 'maps/layers/fake_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'search/core_numbering.dart';
+import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
@@ -51,12 +54,10 @@ class _CacheAppState extends State<CacheApp> {
     newNumbering: () =>
         sources.coreReady ? CoreNumbering(sources.newConversation) : null,
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
-    newHost: () => sources.core == null
+    newHost: (numbering) => sources.core == null || numbering is! CoreNumbering
         ? null
-        : CoreToolHost(
-            core: sources.core!,
-            newConversation: sources.newConversation,
-          ),
+        : CoreToolHost(core: sources.core!, numbering: numbering),
+    numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => location.fix != null,
   );
   CacheThemeId _applied = CacheThemeId.dark;
@@ -72,6 +73,22 @@ class _CacheAppState extends State<CacheApp> {
     video.init();
     location.init();
     maps.init();
+    _openHistory();
+  }
+
+  ConversationStore? _store;
+  int? _backendGeneration;
+
+  /// The conversations live in the app's private storage.
+  Future<void> _openHistory() async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      await dir.create(recursive: true);
+      _store = ConversationStore.open('${dir.path}/conversations.db');
+      chat.attachStore(_store!);
+    } catch (_) {
+      // Without the database the app still answers; it just keeps no history.
+    }
   }
 
   void _onApp() {
@@ -79,8 +96,14 @@ class _CacheAppState extends State<CacheApp> {
       _applied = app.theme;
       applySystemUi(_applied);
     }
-    // The chat talks to whatever model is active; a new model starts a new chat.
-    chat.setBackend(app.active == null ? null : LocalLlamaBackend(app.session));
+    // The chat talks to whatever model is active. A different model carries on the open conversation.
+    if (_backendGeneration != app.modelGeneration) {
+      _backendGeneration = app.modelGeneration;
+      chat.setBackend(
+        app.active == null ? null : LocalLlamaBackend(app.session),
+        modelName: app.active == null ? '' : app.displayName(app.active!),
+      );
+    }
   }
 
   @override
@@ -92,6 +115,7 @@ class _CacheAppState extends State<CacheApp> {
     video.dispose();
     location.dispose();
     maps.dispose();
+    _store?.close();
     super.dispose();
   }
 
