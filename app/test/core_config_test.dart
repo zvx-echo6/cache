@@ -35,6 +35,28 @@ void main() {
     expect(v['shim'], '/lib/libvalhalla_shim.so');
   });
 
+  test('linked routing needs tiles but does not need a dynamic library path', () {
+    final files = Directory.systemTemp.createTempSync('linked-files_');
+    final support = Directory.systemTemp.createTempSync('linked-support_');
+    addTearDown(() {
+      files.deleteSync(recursive: true);
+      support.deleteSync(recursive: true);
+    });
+    Map<String, dynamic> build() => buildCoreExtras(
+      filesDir: files, supportDir: support, useLinkedRouter: true,
+      shim: '/does-not-exist/libvalhalla_shim.so',
+    );
+    expect(build().containsKey('routing'), isFalse);
+    final tiles = File('${files.path}/packs/idaho/valhalla/tiles.tar')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('fixture');
+    final valhalla = (build()['routing'] as Map)['valhalla'] as Map;
+    expect(valhalla['shim'], 'linked');
+    expect(File(valhalla['tiles'] as String).absolute.uri, tiles.absolute.uri);
+    tiles.deleteSync();
+    expect(build().containsKey('routing'), isFalse);
+  });
+
   group('what is installed becomes the places, routing and user sections', () {
     late Directory files, support;
     setUp(() {

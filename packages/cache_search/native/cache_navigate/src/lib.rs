@@ -188,7 +188,7 @@ impl NavCore {
             return true;
         }
         match &self.cfg.valhalla {
-            Some(v) => Path::new(&v.tiles).is_file() && Path::new(&v.shim).is_file(),
+            Some(v) => Path::new(&v.tiles).is_file() && (cfg!(target_os = "ios") || Path::new(&v.shim).is_file()),
             None => false,
         }
     }

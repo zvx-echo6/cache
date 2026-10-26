@@ -1,12 +1,14 @@
 //! [`Valhalla`] on the C shim (packages/valhalla: `valhalla_shim.dll` on Windows, `libvalhalla_shim.so` on
-//! Android). The library is loaded at run time (`dlopen`/`LoadLibrary`) so cache_offroad builds and tests
-//! without it; enable the `shim` cargo feature.
+//! Android). iOS uses statically linked symbols. Other platforms load at run time (`dlopen`/`LoadLibrary`), so non-iOS builds and tests
+//! can run without the library. Enable the `shim` cargo feature.
 use crate::valhalla::*;
+#[cfg(not(target_os = "ios"))]
 use libloading::Library;
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::Path;
 
+#[cfg(not(target_os = "ios"))]
 type InitFn = unsafe extern "C" fn(*const c_char) -> *mut c_void;
 type CallFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_char;
 type FreeFn = unsafe extern "C" fn(*mut c_char);
@@ -15,6 +17,7 @@ type ErrFn = unsafe extern "C" fn(*mut c_void) -> *const c_char;
 type CodeFn = unsafe extern "C" fn(*mut c_void) -> c_int;
 
 pub struct ShimValhalla {
+    #[cfg(not(target_os = "ios"))]
     _lib: Library,
     h: *mut c_void,
     route: CallFn,
@@ -39,6 +42,7 @@ pub fn config_for_tiles(tile_extract: &Path) -> String {
 
 impl ShimValhalla {
     /// `lib_path`: the shim library; `config`: a Valhalla config (JSON text or a file path).
+    #[cfg(not(target_os = "ios"))]
     pub fn load(lib_path: &Path, config: &str) -> Result<ShimValhalla, String> {
         unsafe {
             let lib = Library::new(lib_path).map_err(|e| format!("{}: {e}", lib_path.display()))?;
@@ -63,6 +67,36 @@ impl ShimValhalla {
                 return Err(format!("valhalla_shim_init failed: {m}"));
             }
             Ok(ShimValhalla { _lib: lib, h, route, locate, trace, free, destroy, err, code })
+        }
+    }
+
+    /// iOS uses the engine linked into the signed app, never executable code in app storage.
+    #[cfg(target_os = "ios")]
+    pub fn load(_lib_path: &Path, config: &str) -> Result<ShimValhalla, String> {
+        extern "C" {
+            fn valhalla_shim_init(config: *const c_char) -> *mut c_void;
+            fn valhalla_shim_route(h: *mut c_void, request: *const c_char) -> *mut c_char;
+            fn valhalla_shim_locate(h: *mut c_void, request: *const c_char) -> *mut c_char;
+            fn valhalla_shim_trace_attributes(h: *mut c_void, request: *const c_char) -> *mut c_char;
+            fn valhalla_shim_string_free(s: *mut c_char);
+            fn valhalla_shim_destroy(h: *mut c_void);
+            fn valhalla_shim_last_error(h: *mut c_void) -> *const c_char;
+            fn valhalla_shim_last_error_code(h: *mut c_void) -> c_int;
+        }
+        let cfg = CString::new(config).map_err(|e| e.to_string())?;
+        unsafe {
+            let h = valhalla_shim_init(cfg.as_ptr());
+            if h.is_null() {
+                let message = valhalla_shim_last_error(std::ptr::null_mut());
+                let message = if message.is_null() { String::new() } else { CStr::from_ptr(message).to_string_lossy().into_owned() };
+                return Err(format!("valhalla_shim_init failed: {message}"));
+            }
+            Ok(ShimValhalla {
+                h, route: valhalla_shim_route, locate: valhalla_shim_locate,
+                trace: valhalla_shim_trace_attributes, free: valhalla_shim_string_free,
+                destroy: valhalla_shim_destroy, err: valhalla_shim_last_error,
+                code: valhalla_shim_last_error_code,
+            })
         }
     }
 

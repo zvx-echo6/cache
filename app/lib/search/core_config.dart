@@ -15,6 +15,7 @@ Map<String, dynamic> buildCoreExtras({
   required Directory supportDir,
   String shim = 'libvalhalla_shim.so',
   Directory? layerDefsDir,
+  bool? useLinkedRouter,
 }) {
   final packsDir = Directory('${filesDir.path}/packs');
   final places = <String>[];
@@ -46,7 +47,7 @@ Map<String, dynamic> buildCoreExtras({
     },
     if (tiles != null || offroadPack != null)
       'routing': {
-        if (tiles != null) 'valhalla': {'tiles': tiles, 'shim': shim},
+        if (tiles != null) 'valhalla': {'tiles': tiles, 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
         if (offroadPack != null) 'offroad': {'pack': offroadPack, 'elevation': elevation},
       },
   };
