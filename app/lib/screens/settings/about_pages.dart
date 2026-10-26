@@ -1,17 +1,25 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../settings/hub.dart';
 import '../../theme.dart';
 import '../../version.dart';
 import 'widgets.dart';
+
+/// Where the source code is published.
+const String kSourceUrl = 'https://github.com/zvx-echo6/cache';
 
 /// Where the credits text is bundled (a copy of CREDITS.md at the repository root; a test keeps them equal).
 const String kCreditsAsset = 'assets/credits.md';
 
 /// Settings > About and credits: the version, the licence, the credits and the open-source licences.
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key});
+  const AboutPage({super.key, this.openUrl = openInSystemBrowser});
+
+  /// How a link is opened (the phone's browser; a test passes its own).
+  final UrlOpener openUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +32,11 @@ class AboutPage extends StatelessWidget {
             SettingsRow(
               title: 'Licence',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
+            ),
+            SettingsRow(
+              key: const ValueKey('source-code'),
+              title: 'Source code',
+              statusWidget: _SourceNotice(openUrl: openUrl),
             ),
           ],
         ),
@@ -87,6 +100,45 @@ class CreditsPage extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Where the source is and what testers may do with it. The address is tappable (opens the browser) and the text is selectable.
+class _SourceNotice extends StatefulWidget {
+  const _SourceNotice({required this.openUrl});
+
+  final UrlOpener openUrl;
+
+  @override
+  State<_SourceNotice> createState() => _SourceNoticeState();
+}
+
+class _SourceNoticeState extends State<_SourceNotice> {
+  late final TapGestureRecognizer _tap = TapGestureRecognizer()..onTap = () => widget.openUrl(kSourceUrl);
+
+  @override
+  void dispose() {
+    _tap.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return SelectableText.rich(
+      TextSpan(
+        style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary),
+        children: [
+          const TextSpan(text: 'Cache is free software under the GNU AGPL-3.0 (or any later version). Copyright (C) 2026 Happy Little LLC. The source code is at '),
+          TextSpan(
+            text: kSourceUrl,
+            recognizer: _tap,
+            style: TextStyle(decoration: TextDecoration.underline, color: k.accent),
+          ),
+          const TextSpan(text: '. You may copy, share and modify Cache under the AGPL, including builds you receive through TestFlight.'),
+        ],
       ),
     );
   }

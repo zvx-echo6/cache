@@ -8,6 +8,7 @@ import 'package:cache/screens/settings/library_page.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/screens/settings/videos_page.dart';
 import 'package:cache/version.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -90,8 +91,17 @@ void main() {
 
   testWidgets('About: version, licence, credits and licences', (tester) async {
     final r = await SettingsRig.create(tester);
-    await r.show(tester, const AboutPage());
+    final opened = <String>[];
+    await r.show(tester, AboutPage(openUrl: (u) async => opened.add(u)));
     expect(find.text(kAppVersion), findsOneWidget);
+    expect(find.textContaining('Copyright (C) 2026 Happy Little LLC', findRichText: true), findsOneWidget);
+    expect(find.textContaining('including builds you receive through TestFlight', findRichText: true), findsOneWidget);
+    expect(find.byType(SelectableText), findsOneWidget, reason: 'the notice can be selected');
+    final link = find.byWidgetPredicate((w) => w is SelectableText && w.textSpan?.toPlainText().contains(kSourceUrl) == true);
+    expect(link, findsOneWidget);
+    final span = (tester.widget<SelectableText>(link).textSpan! as TextSpan).children!.whereType<TextSpan>().firstWhere((c) => c.text == kSourceUrl);
+    (span.recognizer! as TapGestureRecognizer).onTap!();
+    expect(opened, [kSourceUrl], reason: 'tapping the address opens it in the browser');
     expect(find.textContaining('AGPL-3.0-or-later'), findsWidgets);
     await tester.tap(find.byKey(const ValueKey('credits')));
     await tester.pump();
