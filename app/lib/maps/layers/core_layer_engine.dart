@@ -107,10 +107,21 @@ class CoreLayerEngine extends LayerEngine {
     }
   }
 
+  /// Calls that were already waiting on the core when the engine was disposed end here, not in a listener that is gone.
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    // Nothing will look at the running downloads again, so nobody may wait for them (a cancel in progress returns).
+    for (final r in _running.values) {
+      if (!r.done.isCompleted) r.done.complete();
+    }
     super.dispose();
   }
 
@@ -439,17 +450,35 @@ class CoreLayerEngine extends LayerEngine {
     notifyListeners();
   }
 
+  /// One look at every running download. The timer fires every [pollEvery] whether or not the last look has finished, and a look
+  /// awaits the core several times, so two looks used to overlap: both saw the same finished job, both freed it, and a reload in
+  /// one put back (as an unfinished download) the area the other had just deleted. One look at a time now: a look that finds
+  /// another still running skips, and the next timer tick comes back to it.
   Future<void> _tick() async {
-    if (_disposed) return;
+    if (_disposed || _ticking) return;
+    _ticking = true;
+    try {
+      await _look();
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  bool _ticking = false;
+
+  Future<void> _look() async {
     var changed = false;
     var reload = false;
+    final settled = <_Run>[];
     for (final r in List.of(_running.values)) {
+      if (_disposed) return;
       JobProgress p;
       try {
         p = await r.job.progress();
       } catch (_) {
         continue;
       }
+      if (_disposed) return;
       final a = r.area;
       if (p.total > 0) {
         if (!r.update) {
@@ -466,9 +495,11 @@ class CoreLayerEngine extends LayerEngine {
       changed = true;
       if (!p.isFinished) continue;
       _running.remove(a.id);
+      settled.add(r);
       try {
         await r.job.free();
       } catch (_) {}
+      if (_disposed) return;
       switch (p.state) {
         case JobState.done:
           a.error = null;
@@ -478,6 +509,7 @@ class CoreLayerEngine extends LayerEngine {
             try {
               await _core!.layers('delete', jsonEncode({'layer': _areaLayer[a.id] ?? a.layerId, 'area': a.id}));
             } catch (_) {}
+            if (_disposed) return;
             _areas.remove(_key(a.layerId, a.id));
           }
         default:
@@ -491,11 +523,16 @@ class CoreLayerEngine extends LayerEngine {
         await _reload();
       } catch (_) {}
     }
+    if (_disposed) return;
     if (_running.isEmpty) {
       _poll?.cancel();
       _poll = null;
     }
     if (changed) notifyListeners();
+    // A cancel is waiting for exactly this: the job ended, its leftovers are deleted and the lists are read again.
+    for (final r in settled) {
+      if (!r.done.isCompleted) r.done.complete();
+    }
   }
 
   static String _words(String? code, String? message) => switch (code) {
@@ -505,11 +542,14 @@ class CoreLayerEngine extends LayerEngine {
         _ => message == null || message.isEmpty ? 'The download stopped. Tap Update to continue.' : 'The download stopped: $message',
       };
 
+  /// Stops a download and returns when it has ended: the core has stopped the job, a first download's partial files are deleted
+  /// and the areas are listed again, so nothing of it is left to appear later.
   @override
   Future<void> cancel(String areaId) async {
     final r = _running[areaId];
     if (r == null) return;
     await r.job.cancel();
+    await r.done.future;
   }
 
   @override
@@ -517,6 +557,7 @@ class CoreLayerEngine extends LayerEngine {
     final r = _running[areaId];
     if (r != null) {
       await r.job.cancel();
+      await r.done.future;
     }
     final layer = _areaLayer[areaId] ?? _areas.values.where((a) => a.id == areaId).firstOrNull?.layerId;
     if (layer == null) return;
@@ -551,6 +592,9 @@ class CoreLayerEngine extends LayerEngine {
 
 class _Run {
   _Run(this.area, this.job, this.update);
+
+  /// Completes when the download has ended and been cleaned up (or the engine is disposed).
+  final Completer<void> done = Completer<void>();
   final DownloadedArea area;
   final CoreJobHandle job;
   final bool update;

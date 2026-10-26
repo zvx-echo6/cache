@@ -23,6 +23,7 @@ class _LayersNative implements CsNative {
   final Map<int, Map<String, dynamic>> jobs = {};
   final List<String> calls = [];
   int _job = 0;
+  int frees = 0;
 
   Map<String, dynamic> _def(String id, String kind, {Map<String, dynamic> extra = const {}}) =>
       {'format': 1, 'id': id, 'title': id, 'description': 'd', 'kind': kind, 'transform': 'as_is', 'license': 'l', 'attribution': 'a', ...extra};
@@ -67,6 +68,7 @@ class _LayersNative implements CsNative {
             }
         ],
         'online': online,
+        'job_frees': frees,
         'viewed_cache': {'bytes': 1000, 'max_bytes': 268435456},
       };
 
@@ -186,7 +188,7 @@ class _LayersNative implements CsNative {
   }
 
   @override
-  void jobFree(int job) {}
+  void jobFree(int job) => frees++;
 }
 
 CsNative _makeNative() => _LayersNative();
@@ -282,9 +284,41 @@ void main() {
 
   test('cancel stops a first download and leaves nothing', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
+    // cancel returns when the download has ended and been cleaned up, so there is nothing to wait for afterwards.
     await engine.cancel(a.id);
-    await until(() => engine.areasOf('hillshade').isEmpty);
+    expect(engine.areasOf('hillshade'), isEmpty);
     expect(engine.storageOf('hillshade'), 0);
+    // And nothing of it comes back when the lists are read again, nor on a later look at the downloads.
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(engine.areasOf('hillshade'), isEmpty);
+    expect(a.phase, isNot(AreaPhase.failed));
+  });
+
+  test('a cancel that is waiting when the engine is disposed returns, and nothing notifies a listener that is gone', () async {
+    final e = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': '/layers'},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+    );
+    await e.start();
+    var calls = 0;
+    e.addListener(() => calls++);
+    final a = await e.download('hillshade', home, label: 'This region');
+    final cancelled = e.cancel(a.id);
+    e.dispose();
+    await cancelled;
+    final seen = calls;
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(calls, seen, reason: 'no look at the downloads after dispose');
+  });
+
+  test('a finished job is freed once', () async {
+    final a = await engine.download('hillshade', home, label: 'This region');
+    await until(() => a.phase == AreaPhase.done);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect((await core.layers('list'))['job_frees'], 1);
+    expect(engine.areasOf('hillshade'), [a]);
   });
 
   test('update fetches the area again and keeps the old copy in use until it is done', () async {
