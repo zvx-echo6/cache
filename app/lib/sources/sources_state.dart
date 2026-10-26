@@ -110,7 +110,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     final support = await getApplicationSupportDirectory();
-    return buildCoreExtras(filesDir: files, supportDir: support);
+    return buildCoreExtras(
+      filesDir: files,
+      supportDir: support,
+      shim: shimPath(Platform.isAndroid ? nativeLibraryDir() : null),
+    );
   }
 
   /// The core, for the tools and the host that feed it (null until it is open).

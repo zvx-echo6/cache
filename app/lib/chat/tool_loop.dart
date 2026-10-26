@@ -145,7 +145,10 @@ class ToolLoop {
     final prompt = _lastPrompt = systemPrompt?.call() ?? kSystemPrompt;
     var finalAnswer = false;
     try {
-      if (host != null) _hostSchemas = await host!.schemas();
+      if (host != null) {
+        _hostSchemas = await host!.schemas();
+        debugPrint('cache tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
+      }
       while (true) {
         final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
         final request = _request(_messages, allowTools, prompt: prompt, extra: finalAnswer ? _kAnswerNow : null);

@@ -40,3 +40,21 @@ Map<String, dynamic> buildCoreExtras({required Directory filesDir, required Dire
       },
   };
 }
+
+/// The folder Android unpacked this app's native libraries to (where libvalhalla_shim.so is), found from the file the
+/// core library was loaded from. The core checks the shim with a plain file test, so it needs this full path, not a
+/// bare library name. Null when it cannot be found (not Android, or the library is not mapped).
+String? nativeLibraryDir({String mapsFile = '/proc/self/maps', String library = 'libcache_search.so'}) {
+  try {
+    for (final line in File(mapsFile).readAsLinesSync()) {
+      final i = line.indexOf('/');
+      if (i < 0 || !line.endsWith('/$library')) continue;
+      final path = line.substring(i);
+      return path.substring(0, path.length - library.length - 1);
+    }
+  } catch (_) {}
+  return null;
+}
+
+/// The shim's full path in [dir] ([nativeLibraryDir]), or the bare name when [dir] is null.
+String shimPath(String? dir, {String name = 'libvalhalla_shim.so'}) => dir == null ? name : '$dir/$name';
