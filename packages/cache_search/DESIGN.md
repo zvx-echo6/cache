@@ -806,7 +806,7 @@ and 681 ms without, so the reads cost about 270-285 ms per query (29%).
 
 ### Android build
 
-Built 2026-10-26 (rebuilt the same day for the memory budget, commit 17baa2c; `libzim.so`, `libc++_shared.so` and the ICU data are unchanged, only `libcache_search.so` differs, by 1,648 bytes) for `aarch64-linux-android` with the `xapian` feature on, the way the Flutter plugin builds the core
+Built 2026-10-26 (rebuilt the same day for the memory budget, commit 17baa2c, and again for one archive per ZIM, commit f64c7c9, v3: `libzim.so`, `libc++_shared.so` and the ICU data are unchanged, only `libcache_search.so` differs, by 13,040 bytes more than v2) for `aarch64-linux-android` with the `xapian` feature on, the way the Flutter plugin builds the core
 (`cargo ndk --platform 28 -t arm64-v8a build --release -p cache_search`, NDK 28.2.13676358), with `LIBZIM_DIR` set to the folder
 `fetch-libzim.sh` unpacks (official `libzim_android-arm64-9.8.2-1.tar.gz`, md5 `59a6b769847b77dc0ace69c3b9727445` checked by the
 script). `build.rs` compiles `zimx.cpp` with the NDK's clang++ and links `libzim.so` and `libc++_shared.so`. What the app ships (sizes
@@ -814,11 +814,11 @@ as built; none of it is committed):
 
 | File | Where | Size (bytes) |
 |---|---|---:|
-| `libcache_search.so` (release, stripped) | `jniLibs/arm64-v8a/` | 50,455,920 |
+| `libcache_search.so` (release, stripped) | `jniLibs/arm64-v8a/` | 50,468,960 |
 | `libzim.so` (official prebuilt, `llvm-strip --strip-unneeded`; 16,230,992 unstripped) | `jniLibs/arm64-v8a/` | 8,247,096 |
 | `libc++_shared.so` (NDK 28.2, stripped copy) | `jniLibs/arm64-v8a/` | 1,253,544 |
 | `icudt73l.dat` (ICU 73.2 data) | a real file in app storage, not in `jniLibs` | 10,955,552 |
-| Total | | 70,912,112 (60.0 MB without the ICU data) |
+| Total | | 70,925,152 (60.0 MB without the ICU data) |
 
 `libcache_search.so` needs `libzim.so` and `libc++_shared.so` (DT_NEEDED) and exports only the `cs_*` functions; every libzim symbol it
 uses is defined in `libzim.so`. All four files' LOAD segments are 16 KB aligned. `cargo ndk` also copies a stray
