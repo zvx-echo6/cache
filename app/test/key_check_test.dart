@@ -12,10 +12,12 @@ void main() {
       expect(keyCheckFromToolContent('No results found.').ok, isTrue);
     });
 
-    test('a rejected key: 401 and 403 (key_missing) and 400', () {
+    test('a rejected key is the core\'s key_missing, and only that: a bare HTTP 400 is not taken for one', () {
       const m = "Kagi didn't accept this key. Check you copied all of it.";
       expect(keyCheckFromToolContent(err('key_missing', 'web search key rejected')).message, m);
-      expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 400)')).message, m, reason: '400 is what a malformed key gets');
+      final other = keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 400)')).message;
+      expect(other, isNot(m), reason: 'the core says key_missing for a rejected key; a 400 without that is something else');
+      expect(other, contains('HTTP 400'));
     });
 
     test('no credit says so', () {

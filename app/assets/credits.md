@@ -582,6 +582,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - serde_derive 1.0.229: MIT OR Apache-2.0 (github.com/serde-rs/serde)
 - serde_derive_internals 0.29.1: MIT OR Apache-2.0 (github.com/serde-rs/serde)
 - serde_json 1.0.154: MIT OR Apache-2.0 (github.com/serde-rs/json)
+- serde_path_to_error 0.1.20: MIT OR Apache-2.0 (github.com/dtolnay/path-to-error)
 - serde_urlencoded 0.7.1: MIT OR Apache-2.0 (github.com/nox/serde_urlencoded)
 - serde_variant 0.1.3: Apache-2.0 OR MIT (github.com/d-e-s-o/serde_variant.git)
 - sha2 0.10.9: MIT OR Apache-2.0 (github.com/RustCrypto/hashes)
