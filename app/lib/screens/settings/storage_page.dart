@@ -41,7 +41,7 @@ class _StoragePageState extends State<StoragePage> {
     final k = context.t;
     final s = d.hub.settings;
     return ListenableBuilder(
-      listenable: Listenable.merge([u, s]),
+      listenable: Listenable.merge([u, s, d.app, d.video]),
       builder: (context, _) {
         final used = u.usedBytes;
         final free = u.freeBytes;
@@ -95,10 +95,16 @@ class _StoragePageState extends State<StoragePage> {
             ),
             SettingsGroup(
               rows: [
-                _kind('Library', colors[0], size(sizes[0]), () => _open(SourcesScreen(sources: d.sources))),
-                _kind('Maps', colors[1], size(sizes[1]), () => _open(layers.CatalogueScreen(maps: d.maps))),
-                _kind('Assistant models', colors[2], size(sizes[2]), () => _open(ModelsScreen(app: d.app))),
-                _kind('Videos', colors[3], size(sizes[3]), () => _open(LibraryScreen(video: d.video))),
+                _kind('Library', colors[0], [Part(size(sizes[0])), const Part('\nReading sources and their search indexes')], () => _open(SourcesScreen(sources: d.sources))),
+                _kind('Maps', colors[1], [Part(size(sizes[1])), const Part('\nDownloaded areas, the cache of tiles you viewed, and place and route packs')], () => _open(layers.CatalogueScreen(maps: d.maps))),
+                _kind('Assistant models', colors[2], [Part(size(sizes[2])), Part('\n${_modelList()}')], () => _open(ModelsScreen(app: d.app))),
+                _kind(
+                  'Videos',
+                  colors[3],
+                  // The folder holds the connector's own small files even when no video is saved: that is not worth a figure.
+                  [Part(d.video.saved.isEmpty && d.video.tasks.every((t) => !t.isActive) ? 'Nothing downloaded' : size(sizes[3]))],
+                  () => _open(LibraryScreen(video: d.video)),
+                ),
               ],
             ),
             SettingsGroup(
@@ -124,11 +130,18 @@ class _StoragePageState extends State<StoragePage> {
     );
   }
 
-  Widget _kind(String title, Color color, String size, VoidCallback onTap) => SettingsRow(
+  /// The files that make up the models figure: the chat model and the model that searches the map by meaning, each with its size.
+  String _modelList() {
+    final ms = d.app.models;
+    if (ms.isEmpty) return 'No models';
+    return ms.map((m) => '${d.app.displayName(m)} ${formatBytes(m.size)}').join(' · ');
+  }
+
+  Widget _kind(String title, Color color, List<Part> status, VoidCallback onTap) => SettingsRow(
     key: ValueKey('kind-$title'),
     leading: Container(width: 12, height: 12, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3))),
     title: title,
-    status: [Part(size)],
+    status: status,
     onTap: onTap,
   );
 }

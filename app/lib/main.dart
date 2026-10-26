@@ -12,6 +12,7 @@ import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
+import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
@@ -85,6 +86,18 @@ class _CacheAppState extends State<CacheApp> {
     secrets: const SecureTokenStore(),
     setWeb: (provider, key, online) async =>
         (await sources.whenCoreReady())?.setWeb(provider: provider, key: key, online: online),
+    // Checking a key is one real search through the core's own web_search tool, the request the assistant will make.
+    searchProbe: (key) async {
+      final core = await sources.whenCoreReady();
+      if (core == null) throw StateError('The search core is not available');
+      await core.setWeb(provider: WebSearchSetup.provider, key: key, online: true);
+      final conv = await core.newConversation();
+      try {
+        return (await conv.tool('web_search', {'query': 'Cache'}, now: isoWithOffset(DateTime.now()))).content;
+      } finally {
+        await conv.free();
+      }
+    },
   );
   late final SettingsHub hub = SettingsHub(
     settings: settings,

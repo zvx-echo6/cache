@@ -90,8 +90,8 @@ class SettingsRig {
   /// What the search core was told (provider, key, online), in order.
   final List<(String?, String?, bool)> webCalls = [];
 
-  /// What the key check answers (set per test).
-  KeyCheck keyAnswer = const KeyCheck.ok();
+  /// What the core's web_search tool answers to the test search (set per test): results, or the tool's error JSON.
+  String searchContent = '[1] Cache (web, fetched now) - a result';
 
   /// Folders the storage page measures, by kind.
   late Directory libraryDir;
@@ -131,12 +131,14 @@ class SettingsRig {
       secrets: r.secrets,
       setWeb: (provider, key, online) async => r.webCalls.add((provider, key, online)),
       probe: r.probe,
-      check: (key) async {
+      searchProbe: (key) async {
         r.keysChecked.add(key);
-        return r.keyAnswer;
+        return r.searchContent;
       },
     );
-    r.libraryDir = Directory('${r.dir.path}/library')..createSync();
+    r.sources = FakeSources(Directory('${r.dir.path}/zims')..createSync());
+    // The library folder is where the sources are (FakeSources keeps its indexes inside it, so it is measured once).
+    r.libraryDir = r.sources.zimsDir!;
     r.mapsDir = Directory('${r.dir.path}/maps')..createSync();
     r.modelsDir = Directory('${r.dir.path}/models')..createSync();
     r.videosDir = Directory('${r.dir.path}/videos')..createSync();
@@ -153,7 +155,6 @@ class SettingsRig {
     r.app = AppState(settingsDirOverride: r.dir, modelsDirOverride: r.modelsDir);
     r.store = ConversationStore.memory();
     r.chat = ChatController(tools: const [])..attachStore(r.store);
-    r.sources = FakeSources(Directory('${r.dir.path}/zims')..createSync());
     r.engine = TestLayerEngine(policy: r.policy);
     r.browse = BrowseState(sources: r.sources, policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     r.video = VideoState(

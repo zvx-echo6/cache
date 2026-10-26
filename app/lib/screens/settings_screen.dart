@@ -33,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     d.hub.storage.readFree();
+    d.hub.storage.measure();
     _readLive();
   }
 
@@ -46,7 +47,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _liveSources = n);
   }
 
-  void _open(Widget page) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  Future<void> _open(Widget page) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+    // Something may have been added or deleted on the page: measure again so every size agrees.
+    if (mounted) d.hub.storage.measure();
+  }
 
   List<Part> _assistant() {
     final app = d.app;
@@ -67,9 +72,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final s = d.sources;
     if (s.unavailable != null && s.zims.isEmpty) return const [Part('Not available', Tone.warn)];
     if (s.zims.isEmpty) return const [Part('No sources yet')];
-    final bytes = s.zims.fold<int>(0, (a, z) => a + z.size);
     final n = s.zims.length;
-    return [Part('$n ${n == 1 ? 'source' : 'sources'} · ${formatBytes(bytes)}')];
+    // The same figure as Storage and data: the sources and their search indexes, measured on disk.
+    final u = d.hub.storage;
+    return [Part('$n ${n == 1 ? 'source' : 'sources'}${u.measured ? ' · ${formatBytes(u.libraryBytes)}' : ''}')];
   }
 
   List<Part> _maps() {

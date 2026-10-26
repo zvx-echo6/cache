@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-import '../browse/opds.dart' show cacheUserAgent;
 import '../video/token_store.dart';
 import 'app_settings.dart';
 import 'data_policy.dart';
@@ -22,41 +20,45 @@ class KeyCheck {
 
 typedef KeyChecker = Future<KeyCheck> Function(String key);
 
+/// Runs one real web search in the search core with [key] and answers the tool's message (the search results, or the tool's error
+/// JSON). It throws when the core is not available.
+typedef SearchProbe = Future<String> Function(String key);
+
 /// Hands the web search settings to the search core (cs_set_web): provider (null: off), key, and whether the phone is online.
 typedef WebSetter = Future<void> Function(String? provider, String? key, bool online);
 
-/// Checks a Kagi key with one real search for one result (the same request the search core makes). Kagi charges for searches, so
-/// this is done once, when the key is saved, and never again.
-Future<KeyCheck> checkKagiKey(String key, {Uri? address, Duration timeout = const Duration(seconds: 15)}) async {
-  final client = HttpClient()
-    ..userAgent = cacheUserAgent
-    ..connectionTimeout = const Duration(seconds: 10);
+const String _rejected = "Kagi didn't accept this key. Check you copied all of it.";
+
+/// Turns what the core's web_search tool answered into the check: the tool's own error codes (key_missing, quota, fetch_failed,
+/// bad_response; docs/TOOLS.md) in words for people. A message that is not the error JSON is a set of results: the key works.
+/// A bad status comes back as `fetch_failed` with "(HTTP n)" in its detail: 400 is what Kagi answered a malformed key with, so it
+/// is a rejected key; 5xx is Kagi's own trouble; no status at all is a connection that did not work.
+KeyCheck keyCheckFromToolContent(String content) {
+  Map<String, dynamic>? j;
   try {
-    final req = await client.postUrl(address ?? Uri.parse('https://kagi.com/api/v1/search')).timeout(timeout);
-    req.headers
-      ..set(HttpHeaders.authorizationHeader, 'Bearer $key')
-      ..contentType = ContentType.json;
-    req.add(utf8.encode(jsonEncode({'query': 'Cache', 'limit': 1})));
-    final res = await req.close().timeout(timeout);
-    await res.drain<void>();
-    final code = res.statusCode;
-    if (code >= 200 && code < 300) return const KeyCheck.ok();
-    if (code == 401 || code == 403) return const KeyCheck.failed('Kagi did not accept this key. Check that you copied all of it.');
-    if (code == 402 || code == 429) {
-      return const KeyCheck.failed('Kagi accepted the key but says the account has no search credit left. Add credit, then try again.');
-    }
-    return KeyCheck.failed('Kagi answered with an error ($code). Try again in a moment.');
-  } on TimeoutException {
-    return const KeyCheck.failed("Kagi took too long to answer. Check the connection and try again.");
-  } on SocketException {
-    return const KeyCheck.failed("Can't reach Kagi. Check the connection and try again.");
-  } on HandshakeException {
-    return const KeyCheck.failed("Couldn't make a secure connection to Kagi.");
-  } catch (_) {
-    return const KeyCheck.failed("Couldn't check the key. Try again.");
-  } finally {
-    client.close(force: true);
+    final d = jsonDecode(content);
+    if (d is Map<String, dynamic>) j = d;
+  } catch (_) {}
+  if (j == null || j['ok'] != false) return const KeyCheck.ok();
+  final e = j['error'];
+  final type = e is Map ? '${e['type']}' : '';
+  final detail = e is Map ? '${e['detail']}' : '';
+  switch (type) {
+    case 'key_missing':
+      return const KeyCheck.failed(_rejected);
+    case 'quota':
+      return const KeyCheck.failed('Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.');
+    case 'bad_response':
+      return const KeyCheck.failed("Kagi answered with something Cache couldn't read. Try again later.");
+    case 'fetch_failed':
+      final m = RegExp(r'HTTP (\d{3})').firstMatch(detail);
+      if (m == null) return const KeyCheck.failed("Couldn't reach Kagi. Check your connection.");
+      final code = int.parse(m.group(1)!);
+      if (code == 400) return const KeyCheck.failed(_rejected);
+      if (code >= 500) return KeyCheck.failed('Kagi had a problem (HTTP $code). Try again in a moment.');
+      return KeyCheck.failed('Kagi answered with an error (HTTP $code).');
   }
+  return const KeyCheck.failed("Couldn't check the key. Try again.");
 }
 
 /// The search service for the assistant's web search: its key (kept in the phone's secure storage and never shown again), the
@@ -67,10 +69,17 @@ class WebSearchSetup extends ChangeNotifier {
     required this.settings,
     required this.secrets,
     required this.setWeb,
+    SearchProbe? searchProbe,
     KeyChecker? check,
     ConnectionProbe? probe,
-  }) : check = check ?? checkKagiKey,
+  }) : check = check ?? _viaCore(searchProbe),
        probe = probe ?? ConnectivityProbe();
+
+  /// The check through the core's own web_search: the request the assistant will make, so a key that passes works.
+  static KeyChecker _viaCore(SearchProbe? p) => (key) async {
+    if (p == null) return const KeyCheck.failed("Couldn't check the key. Try again.");
+    return keyCheckFromToolContent(await p(key));
+  };
 
   /// Where the key is kept in secure storage.
   static const String keyName = 'search.kagi.key';
@@ -129,7 +138,11 @@ class WebSearchSetup extends ChangeNotifier {
     } catch (_) {
       return const KeyCheck.failed("Couldn't check the key. Try again.");
     }
-    if (!r.ok) return r;
+    if (!r.ok) {
+      // The check lent the core the key for one search: put the core's settings back.
+      await apply();
+      return r;
+    }
     try {
       await secrets.write(keyName, key);
     } catch (_) {

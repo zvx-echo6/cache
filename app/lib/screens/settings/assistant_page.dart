@@ -41,11 +41,11 @@ class AssistantPage extends StatelessWidget {
       gives: 'Kagi searches the web for the assistant when you are online, so it can answer questions your library cannot. '
           'It is a paid service and you need your own key.',
       getKeyLabel: 'Get a key from Kagi',
-      getKeyUrl: 'https://kagi.com/settings/api',
+      getKeyUrl: 'https://kagi.com/api/keys',
       steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
       onSave: deps.hub.webSearch.saveKey,
       openUrl: deps.hub.openUrl,
-      savedNote: 'Saving checks the key with Kagi (one search) and turns on web search. The key stays on this phone and isn\'t shown again.',
+      savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this phone and isn\'t shown again.',
     );
     if (saved == true && context.mounted) say(context, 'Web search is on');
   }

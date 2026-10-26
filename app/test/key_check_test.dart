@@ -1,68 +1,76 @@
-import 'dart:io';
-
+import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/web_search_setup.dart';
+import 'package:cache/video/token_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-void main() {
-  late HttpServer server;
-  late int status;
-  late List<Map<String, String?>> seen;
+String err(String type, String detail) => '{"ok":false,"error":{"type":"$type","detail":"$detail"}}';
 
-  setUp(() async {
-    seen = [];
-    status = 200;
-    server = await HttpServer.bind('127.0.0.1', 0);
-    server.listen((req) async {
-      final body = await utf8StringOf(req);
-      seen.add({'method': req.method, 'auth': req.headers.value('authorization'), 'ua': req.headers.value('user-agent'), 'body': body});
-      req.response.statusCode = status;
-      req.response.write('{}');
-      await req.response.close();
+void main() {
+  group('what the core\'s web_search answered, in words for people', () {
+    test('results mean the key works', () {
+      expect(keyCheckFromToolContent('[1] Cache (web, fetched 2026-10-26 12:00) - a result').ok, isTrue);
+      expect(keyCheckFromToolContent('No results found.').ok, isTrue);
+    });
+
+    test('a rejected key: 401 and 403 (key_missing) and 400', () {
+      const m = "Kagi didn't accept this key. Check you copied all of it.";
+      expect(keyCheckFromToolContent(err('key_missing', 'web search key rejected')).message, m);
+      expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 400)')).message, m, reason: '400 is what a malformed key gets');
+    });
+
+    test('no credit says so', () {
+      final r = keyCheckFromToolContent(err('quota', 'web search limit reached'));
+      expect(r.ok, isFalse);
+      expect(r.message, contains('no search credit'));
+    });
+
+    test('no connection says so, and only a real 5xx says try again in a moment', () {
+      for (final d in ['could not reach the web search server', 'web search timed out', 'the web search request failed']) {
+        expect(keyCheckFromToolContent(err('fetch_failed', d)).message, "Couldn't reach Kagi. Check your connection.");
+      }
+      expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 500)')).message, contains('Try again in a moment'));
+      expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 503)')).message, contains('(HTTP 503)'));
+      expect(keyCheckFromToolContent(err('fetch_failed', 'web search failed (HTTP 404)')).message, isNot(contains('Try again in a moment')));
+      expect(keyCheckFromToolContent(err('bad_response', 'x')).message, isNot(contains('moment')));
+    });
+
+    test('no message ever holds the key', () {
+      final all = [
+        err('key_missing', 'web search key rejected'),
+        err('quota', 'q'),
+        err('fetch_failed', 'web search failed (HTTP 400)'),
+      ];
+      for (final c in all) {
+        expect(keyCheckFromToolContent(c).message, isNot(contains('secret')));
+      }
     });
   });
-  tearDown(() => server.close(force: true));
 
-  Uri at() => Uri.parse('http://127.0.0.1:${server.port}/api/v1/search');
-
-  test('one search for one result, with the key as a bearer token', () async {
-    final r = await checkKagiKey('the-key', address: at());
-    expect(r.ok, isTrue);
-    expect(seen, hasLength(1));
-    expect(seen.single['method'], 'POST');
-    expect(seen.single['auth'], 'Bearer the-key');
-    expect(seen.single['body'], contains('"limit":1'));
-    expect(seen.single['ua'], isNot(contains('@')), reason: 'no email or name in the user agent');
+  test('saving a key checks it with one search through the core, and puts the core back if it fails', () async {
+    final calls = <(String?, String?, bool)>[];
+    final probed = <String>[];
+    var answer = err('key_missing', 'web search key rejected');
+    final s = AppSettings();
+    final secrets = MemoryTokenStore();
+    final w = WebSearchSetup(
+      settings: s,
+      secrets: secrets,
+      setWeb: (p, k, o) async => calls.add((p, k, o)),
+      searchProbe: (k) async {
+        probed.add(k);
+        return answer;
+      },
+    );
+    final bad = await w.saveKey('wrong');
+    expect(bad.ok, isFalse);
+    expect(probed, ['wrong']);
+    expect(secrets.values, isEmpty);
+    expect(calls.last, (null, null, false));
+    answer = 'results';
+    final good = await w.saveKey('right');
+    expect(good.ok, isTrue);
+    expect(secrets.values[WebSearchSetup.keyName], 'right');
+    expect(calls.last.$1, 'kagi');
+    w.dispose();
   });
-
-  test('a refused key, an empty account and a server error each say what happened', () async {
-    status = 401;
-    expect((await checkKagiKey('k', address: at())).message, contains('did not accept'));
-    status = 403;
-    expect((await checkKagiKey('k', address: at())).ok, isFalse);
-    status = 402;
-    expect((await checkKagiKey('k', address: at())).message, contains('no search credit'));
-    status = 500;
-    expect((await checkKagiKey('k', address: at())).message, contains('(500)'));
-  });
-
-  test('no connection says so', () async {
-    final dead = Uri.parse('http://127.0.0.1:1/x');
-    final r = await checkKagiKey('k', address: dead);
-    expect(r.ok, isFalse);
-    expect(r.message, contains("Can't reach Kagi"));
-  });
-
-  test('the key never appears in a message', () async {
-    status = 401;
-    final r = await checkKagiKey('super-secret-key', address: at());
-    expect(r.message, isNot(contains('super-secret-key')));
-  });
-}
-
-Future<String> utf8StringOf(HttpRequest r) async {
-  final b = <int>[];
-  await for (final c in r) {
-    b.addAll(c);
-  }
-  return String.fromCharCodes(b);
 }

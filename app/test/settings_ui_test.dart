@@ -54,8 +54,11 @@ void main() {
         ..truncateSync(2 << 20)
         ..closeSync();
       await tester.runAsync(r.sources.refresh);
+      await tester.runAsync(r.storage.measure);
       await r.show(tester, SettingsScreen(deps: r.deps));
       expect(find.text('2 sources · 5.0 MB'), findsOneWidget);
+      // The Library page and Storage and data say the same figure.
+      expect(r.storage.libraryBytes, 5 << 20);
 
       r.settings.setAlertPopups(false);
       r.settings.setQuiet(const QuietHours(on: true, from: 23 * 60, to: 5 * 60 + 30));
@@ -120,7 +123,7 @@ void main() {
       // The button opens the provider's key page in the browser.
       await tester.tap(find.byKey(const ValueKey('get-key')));
       await tester.pump();
-      expect(r.opened, ['https://kagi.com/settings/api']);
+      expect(r.opened, ['https://kagi.com/api/keys']);
       await tester.enterText(find.byKey(const ValueKey('key-field')), '  kagi-secret-123  ');
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
@@ -149,7 +152,7 @@ void main() {
 
     testWidgets('a key that fails the check is not saved, and the error says why', (tester) async {
       final r = await SettingsRig.create(tester);
-      r.keyAnswer = const KeyCheck.failed('Kagi did not accept this key. Check that you copied all of it.');
+      r.searchContent = '{"ok":false,"error":{"type":"key_missing","detail":"web search key rejected"}}';
       await r.show(tester, AssistantPage(deps: r.deps));
       await tester.tap(find.text('Set up'));
       await tester.pumpAndSettle();
@@ -157,12 +160,12 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('key-error')), findsOneWidget);
-      expect(find.textContaining('Kagi did not accept this key'), findsOneWidget);
+      expect(find.text("Kagi didn't accept this key. Check you copied all of it."), findsOneWidget);
       expect(find.byKey(const ValueKey('key-field')), findsOneWidget, reason: 'the sheet stays so the key can be fixed');
       expect(r.secrets.values, isEmpty);
       expect(r.webSearch.hasKey, isFalse);
       expect(r.settings.webSearchOn, isFalse);
-      expect(r.webCalls.where((c) => c.$1 != null), isEmpty, reason: 'the core was never given a key');
+      expect(r.webCalls.last, (null, null, false), reason: 'the core is put back as it was: no key');
       // An empty field is refused before any call.
       await tester.enterText(find.byKey(const ValueKey('key-field')), '   ');
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
@@ -349,7 +352,8 @@ void main() {
       file(r.libraryDir, 'a.zim', 5 << 20);
       file(Directory('${r.libraryDir.path}/idx'), 'a.idx', 1 << 20);
       file(r.mapsDir, 'tiles.sqlite', 3 << 20);
-      file(r.modelsDir, 'm.gguf', 2 << 20);
+      file(r.modelsDir, 'other.gguf', 2 << 20);
+      await tester.runAsync(r.app.refreshModels);
       file(r.videosDir, 'v.mp4', 1 << 20);
       await r.show(tester, StoragePage(deps: r.deps));
       for (var i = 0; i < 40 && !r.storage.measured; i++) {
@@ -360,11 +364,13 @@ void main() {
       await tester.pump();
       expect(find.text('12.0 MB used'), findsOneWidget);
       expect(find.text('41.0 GB free'), findsOneWidget);
-      Finder kind(String t, String size) => find.descendant(of: find.byKey(ValueKey('kind-$t')), matching: find.text(size));
-      expect(kind('Library', '6.0 MB'), findsOneWidget);
-      expect(kind('Maps', '3.0 MB'), findsOneWidget);
-      expect(kind('Assistant models', '2.0 MB'), findsOneWidget);
-      expect(kind('Videos', '1.0 MB'), findsOneWidget);
+      Finder kindText(String t, String s) => find.descendant(of: find.byKey(ValueKey('kind-$t')), matching: find.textContaining(s));
+      expect(kindText('Library', '6.0 MB'), findsOneWidget);
+      expect(kindText('Library', 'search indexes'), findsOneWidget);
+      expect(kindText('Maps', '3.0 MB'), findsOneWidget);
+      expect(kindText('Assistant models', '2.0 MB'), findsOneWidget);
+      expect(kindText('Assistant models', 'other 2.0 MB'), findsOneWidget, reason: 'the models that make up the figure are listed');
+      expect(kindText('Videos', 'Nothing downloaded'), findsOneWidget, reason: 'the connector files alone are not a figure');
       // Mobile data: updates on, downloads off by default.
       expect(switchIn(tester, 'Use mobile data for updates').value, isTrue);
       expect(switchIn(tester, 'Use mobile data for downloads').value, isFalse);
