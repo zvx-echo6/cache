@@ -25,6 +25,17 @@ const String kPositionAccuracyLine = 'position-accuracy-line';
 const String kPositionDot = 'position-dot';
 const String kPositionHeading = 'position-heading';
 
+/// The sources the screen updates with the route being looked at or followed, and with the chosen place and the search results.
+const String kRouteSource = 'cache-route';
+const String kPinSource = 'cache-pin';
+const String kRouteAlt = 'route-alt';
+const String kRouteCasing = 'route-casing';
+const String kRouteRoad = 'route-road';
+const String kRouteFollow = 'route-follow';
+const String kRouteOffroad = 'route-offroad';
+const String kPinResults = 'pin-results';
+const String kPinSelected = 'pin-selected';
+
 /// The name of the heading marker image the screen adds to the style.
 const String kHeadingImage = 'position-heading';
 
@@ -157,6 +168,15 @@ Map<String, dynamic> buildMapStyle({
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
+  sources[kRouteSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  sources[kPinSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  all.addAll(_routeLayers(palette));
   all.addAll(_positionLayers(palette));
 
   return {
@@ -337,6 +357,75 @@ List<Map<String, dynamic>> _vectorOverlay(MapPalette p, LayerDef d, String src, 
   ];
 }
 
+/// The route: the other routes in grey, then the chosen one with an outline, drawn solid on roads, dashed over open ground
+/// and dotted along a trail; and the pins (search results small, the chosen place large).
+List<Map<String, dynamic>> _routeLayers(MapPalette p) => [
+      {
+        'id': kRouteAlt,
+        'type': 'line',
+        'source': kRouteSource,
+        'filter': ['==', ['get', 'alt'], true],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {'line-color': p.css('routeAlternate'), 'line-width': 6, 'line-opacity': 0.85},
+      },
+      {
+        'id': kRouteCasing,
+        'type': 'line',
+        'source': kRouteSource,
+        'filter': ['==', ['get', 'alt'], false],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {'line-color': p.css('routeCasing'), 'line-width': 10},
+      },
+      {
+        'id': kRouteRoad,
+        'type': 'line',
+        'source': kRouteSource,
+        'filter': ['all', ['==', ['get', 'alt'], false], ['==', ['get', 'kind'], 'road']],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {'line-color': p.css('route'), 'line-width': 6},
+      },
+      {
+        'id': kRouteFollow,
+        'type': 'line',
+        'source': kRouteSource,
+        'filter': ['all', ['==', ['get', 'alt'], false], ['==', ['get', 'kind'], 'follow']],
+        'layout': {'line-cap': 'butt', 'line-join': 'round'},
+        'paint': {'line-color': p.css('routeOffroad'), 'line-width': 6, 'line-dasharray': [1, 1]},
+      },
+      {
+        'id': kRouteOffroad,
+        'type': 'line',
+        'source': kRouteSource,
+        'filter': ['all', ['==', ['get', 'alt'], false], ['==', ['get', 'kind'], 'offroad']],
+        'layout': {'line-cap': 'butt', 'line-join': 'round'},
+        'paint': {'line-color': p.css('routeOffroad'), 'line-width': 6, 'line-dasharray': [2, 1.2]},
+      },
+      {
+        'id': kPinResults,
+        'type': 'circle',
+        'source': kPinSource,
+        'filter': ['==', ['get', 'role'], 'result'],
+        'paint': {
+          'circle-radius': 7,
+          'circle-color': p.css('pin'),
+          'circle-stroke-width': 2,
+          'circle-stroke-color': p.css('routeCasing'),
+        },
+      },
+      {
+        'id': kPinSelected,
+        'type': 'circle',
+        'source': kPinSource,
+        'filter': ['==', ['get', 'role'], 'selected'],
+        'paint': {
+          'circle-radius': 11,
+          'circle-color': p.css('pin'),
+          'circle-stroke-width': 4,
+          'circle-stroke-color': p.css('routeCasing'),
+        },
+      },
+    ];
+
 List<Map<String, dynamic>> _positionLayers(MapPalette p) => [
       {
         'id': kPositionAccuracyFill,
@@ -389,6 +478,13 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
   return [
     if (base != null) for (final l in template['layers'] as List) (l as Map)['id'] as String else 'background',
     for (final u in layers) ...overlayLayerIds(u.def),
+    kRouteAlt,
+    kRouteCasing,
+    kRouteRoad,
+    kRouteFollow,
+    kRouteOffroad,
+    kPinResults,
+    kPinSelected,
     kPositionAccuracyFill,
     kPositionAccuracyLine,
     kPositionDot,

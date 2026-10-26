@@ -65,6 +65,10 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// A fix from another source (navigation's own position stream) goes through the same door as the ones read here, so the map
+  /// dot and the camera follow it.
+  void publish(Fix f) => _publish(f);
+
   /// Makes sure there is a recent position, for a user who needs it now. If the permission was never asked,
   /// [explain] is shown first (a polite reason and a choice); the system prompt only follows a yes.
   /// Returns true when a position was read.

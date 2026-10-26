@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:cache_search/cache_search.dart' show MapRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -17,15 +18,23 @@ import '../maps/ui/download_sheet.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
+import '../nav/nav_geojson.dart';
+import '../nav/nav_state.dart';
+import '../nav/ui/guidance_panels.dart';
+import '../nav/ui/place_card.dart';
+import '../nav/ui/route_panel.dart';
+import '../nav/ui/search_panel.dart';
 import '../theme.dart';
 
 /// The Maps tab: a full-screen map with the phone's position, follow and north-up controls, a scale bar,
-/// credits, and a layer button. The style comes from the one style generator and the active theme's palette.
+/// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
+/// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.themeId});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId});
 
   final LocationService location;
   final MapsState maps;
+  final NavState nav;
   final CacheThemeId themeId;
 
   @override
@@ -52,6 +61,10 @@ class _MapsScreenState extends State<MapsScreen> {
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork());
 
   MapsState get maps => widget.maps;
+  NavState get nav => widget.nav;
+  String? _navSig;
+  String? _fitFor;
+  String? _focusFor;
   LocationService get location => widget.location;
   MapPalette get _palette => mapPaletteFor(widget.themeId);
   String get _key => '${widget.themeId.name}|${maps.styleKey}';
@@ -61,6 +74,7 @@ class _MapsScreenState extends State<MapsScreen> {
     super.initState();
     maps.addListener(_onMaps);
     location.addListener(_onLocation);
+    nav.addListener(_onNav);
     _lifecycle;
     final c = maps.savedCamera;
     if (c != null) {
@@ -82,6 +96,7 @@ class _MapsScreenState extends State<MapsScreen> {
     _lifecycle.dispose();
     maps.removeListener(_onMaps);
     location.removeListener(_onLocation);
+    nav.removeListener(_onNav);
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
     super.dispose();
@@ -150,6 +165,8 @@ class _MapsScreenState extends State<MapsScreen> {
       await c.addImage(kHeadingImage, await MapAssets.headingMarker(p['position'], p['positionRing']));
     } catch (_) {}
     await _pushPosition();
+    _navSig = null;
+    await _pushNav();
     _afterCameraSettles();
   }
 
@@ -157,6 +174,7 @@ class _MapsScreenState extends State<MapsScreen> {
     _lat = p.target.latitude;
     _lon = p.target.longitude;
     _zoom = p.zoom;
+    nav.setMapCentre(_lat, _lon);
     if ((_bearing - p.bearing).abs() > 0.5 || (p.bearing != 0 && _bearing == 0) || (p.bearing == 0 && _bearing != 0)) {
       setState(() => _bearing = p.bearing);
     } else {
@@ -235,15 +253,89 @@ class _MapsScreenState extends State<MapsScreen> {
   Future<void> _followTo(Fix fix) async {
     final c = _controller;
     if (c == null) return;
-    final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? _lastHeading ?? _bearing) : 0.0;
+    final guiding = nav.guiding;
+    // While guiding and standing still the map keeps pointing along the route.
+    final routeBearing = guiding ? nav.progress?.routeBearingDeg.toDouble() : null;
+    final bearing = maps.follow == FollowMode.headingUp ? (fix.heading ?? routeBearing ?? _lastHeading ?? _bearing) : 0.0;
     await c.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
         target: LatLng(fix.lat, fix.lon),
-        zoom: math.max(_zoom, 14),
+        zoom: math.max(_zoom, guiding ? 16 : 14),
         bearing: bearing,
       )),
-      duration: const Duration(milliseconds: 400),
+      duration: Duration(milliseconds: guiding ? 900 : 400),
     );
+  }
+
+  // ---- navigation: route, pins, camera --------------------------------------------------------------------
+
+  /// The route and pin sources follow the navigation state.
+  Future<void> _pushNav() async {
+    final c = _controller;
+    if (c == null || !_styleReady) return;
+    final sig = '${nav.routes.map((r) => r.routeId).join('+')}|${nav.routeIndex}|${nav.selected?.id}|${nav.searchOpen ? nav.results.map((r) => r.id).join(',') : ''}';
+    if (sig == _navSig) return;
+    _navSig = sig;
+    try {
+      await c.setGeoJsonSource(kRouteSource, routeGeoJson(nav.routes, nav.routeIndex));
+      await c.setGeoJsonSource(kPinSource, pinGeoJson(nav.selected, nav.searchOpen ? nav.results : const []));
+    } catch (_) {}
+  }
+
+  void _onNav() {
+    if (!mounted) return;
+    _pushNav();
+    final r = nav.route;
+    // A new set of routes: show all of the chosen one.
+    if (nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
+      _fitFor = r.routeId;
+      _fitRoute(r);
+    }
+    if (nav.phase == NavPhase.browsing) _fitFor = null;
+    // A place was chosen: bring it into view.
+    final sel = nav.selected;
+    if (nav.phase == NavPhase.browsing && sel != null && _focusFor != sel.id) {
+      _focusFor = sel.id;
+      _focusOn(sel.lat, sel.lon);
+    }
+    if (sel == null) _focusFor = null;
+    setState(() {});
+  }
+
+  Future<void> _fitRoute(MapRoute r) async {
+    final c = _controller;
+    if (c == null || r.points.length < 2) return;
+    final b = r.bounds;
+    final pad = MediaQuery.sizeOf(context);
+    try {
+      await c.animateCamera(
+        CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(b[0], b[1]), northeast: LatLng(b[2], b[3])), left: 48, right: 48, top: 120, bottom: math.min(pad.height * 0.5, 420)),
+        duration: const Duration(milliseconds: 600),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _focusOn(double lat, double lon) async {
+    final c = _controller;
+    if (c == null) return;
+    maps.setFollow(FollowMode.free);
+    try {
+      await c.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lon), math.max(_zoom, 14)), duration: const Duration(milliseconds: 500));
+    } catch (_) {}
+  }
+
+  void _onMapTap(math.Point<double> point, LatLng at) {
+    if (nav.searchOpen) {
+      nav.closeSearch(clear: false);
+    } else if (nav.phase == NavPhase.browsing && nav.selected != null) {
+      nav.clearSelection();
+    }
+  }
+
+  void _onMapLongPress(math.Point<double> point, LatLng at) {
+    if (nav.phase != NavPhase.browsing) return;
+    HapticFeedback.mediumImpact();
+    nav.dropPin(at.latitude, at.longitude);
   }
 
   /// The polite ask shown before the system prompt (never on launch, only when the user taps for location).
@@ -453,6 +545,8 @@ class _MapsScreenState extends State<MapsScreen> {
               onStyleLoadedCallback: _onStyleLoaded,
               onCameraMove: _onCameraMove,
               onCameraIdle: _onCameraIdle,
+              onMapClick: _onMapTap,
+              onMapLongClick: _onMapLongPress,
               trackCameraPosition: true,
               compassEnabled: false,
               tiltGesturesEnabled: false,
@@ -472,79 +566,8 @@ class _MapsScreenState extends State<MapsScreen> {
             ),
           ),
         if (!drawing) ...[
-          if (fix != null)
-            SafeArea(
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: _coordsChip(context, fix),
-                ),
-              ),
-            ),
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topRight,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    MapButton(
-                      icon: Icons.layers_outlined,
-                      tooltip: 'Layers',
-                      onPressed: () => showLayerSheet(context, maps, location),
-                    ),
-                    const SizedBox(height: 12),
-                    MapButton(
-                      icon: switch (follow) {
-                        FollowMode.free => fix == null ? Icons.location_searching : Icons.my_location,
-                        FollowMode.follow => Icons.my_location,
-                        FollowMode.headingUp => Icons.navigation_outlined,
-                      },
-                      tooltip: switch (follow) {
-                        FollowMode.free => 'Find me',
-                        FollowMode.follow => 'Following you, north up. Tap to turn with your heading',
-                        FollowMode.headingUp => 'Following you, heading up. Tap for north up',
-                      },
-                      active: follow != FollowMode.free,
-                      onPressed: _locate,
-                    ),
-                    if (_bearing.abs() > 0.5 || follow == FollowMode.headingUp) ...[
-                      const SizedBox(height: 12),
-                      MapButton(
-                        icon: Icons.navigation,
-                        tooltip: 'North up',
-                        onPressed: _northUp,
-                        child: CompassNeedle(bearing: _bearing),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-          SafeArea(
-            child: Align(
-              alignment: Alignment.bottomLeft,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (maps.notice != null) ...[
-                      Center(child: NoticePill(text: maps.notice!)),
-                      const SizedBox(height: 8),
-                    ],
-                    ScaleBarWidget(lat: _lat, zoom: _zoom),
-                    const SizedBox(height: 6),
-                    AttributionChip(lines: maps.attributions, onTap: _showCredits),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          _topLayer(context, fix, follow),
+          _bottomLayer(context),
         ],
         if (drawing)
           AreaDrawOverlay(
@@ -553,6 +576,120 @@ class _MapsScreenState extends State<MapsScreen> {
             onCancel: () => setState(() => _drawFor = null),
           ),
       ],
+    );
+  }
+
+  /// The top: the search bar (or the directions header, or the turn banner), and under it the controls.
+  Widget _topLayer(BuildContext context, Fix? fix, FollowMode follow) {
+    final guiding = nav.guiding;
+    final previewing = nav.phase == NavPhase.previewing;
+    final Widget top = guiding
+        ? GuidanceBanner(nav: nav, fmt: nav.fmt)
+        : previewing
+            ? DirectionsHeader(nav: nav)
+            : NavSearchBar(nav: nav, fmt: nav.fmt);
+    final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + (searching ? MediaQuery.viewInsetsOf(context).bottom : 0)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(child: top),
+            if (!searching) ...[
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (fix != null && !guiding) _coordsChip(context, fix),
+                  const Spacer(),
+                  _controls(context, fix, follow),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _controls(BuildContext context, Fix? fix, FollowMode follow) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!nav.guiding)
+          MapButton(
+            icon: Icons.layers_outlined,
+            tooltip: 'Layers',
+            onPressed: () => showLayerSheet(context, maps, location),
+          ),
+        if (!nav.guiding) const SizedBox(height: 12),
+        MapButton(
+          icon: switch (follow) {
+            FollowMode.free => fix == null ? Icons.location_searching : Icons.my_location,
+            FollowMode.follow => Icons.my_location,
+            FollowMode.headingUp => Icons.navigation_outlined,
+          },
+          tooltip: switch (follow) {
+            FollowMode.free => 'Find me',
+            FollowMode.follow => 'Following you, north up. Tap to turn with your heading',
+            FollowMode.headingUp => 'Following you, heading up. Tap for north up',
+          },
+          active: follow != FollowMode.free,
+          onPressed: _locate,
+        ),
+        if (_bearing.abs() > 0.5 || follow == FollowMode.headingUp) ...[
+          const SizedBox(height: 12),
+          MapButton(
+            icon: Icons.navigation,
+            tooltip: 'North up',
+            onPressed: _northUp,
+            child: CompassNeedle(bearing: _bearing),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// The bottom: the scale and credits, and above them the place card, the way to go, or the guidance bar.
+  Widget _bottomLayer(BuildContext context) {
+    final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
+    final sel = nav.selected;
+    Widget? panel;
+    if (nav.guiding) {
+      panel = GuidanceBar(nav: nav, fmt: nav.fmt);
+    } else if (nav.phase == NavPhase.previewing) {
+      panel = RoutePanel(nav: nav, fmt: nav.fmt);
+    } else if (sel != null && !searching) {
+      panel = PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection);
+    }
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 0, 12, panel == null ? 8 : 0),
+        child: SafeArea(
+          top: false,
+          bottom: panel == null,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (maps.notice != null && panel == null) ...[
+                Center(child: NoticePill(text: maps.notice!)),
+                const SizedBox(height: 8),
+              ],
+              if (!searching) ...[
+                ScaleBarWidget(lat: _lat, zoom: _zoom),
+                const SizedBox(height: 6),
+                AttributionChip(lines: maps.attributions, onTap: _showCredits),
+                const SizedBox(height: 6),
+              ],
+              if (panel != null && !searching) SizedBox(width: double.infinity, child: Padding(padding: const EdgeInsets.only(bottom: 8), child: panel)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

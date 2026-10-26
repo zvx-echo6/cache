@@ -43,6 +43,8 @@ dependencies:
   geolocator: ^14.0.2
   flutter_markdown_plus: ^1.0.12
   maplibre_gl: ^0.27.1
+  # Spoken turn prompts: the phone's own text-to-speech (Android TextToSpeech, iOS AVSpeechSynthesizer), on the device.
+  flutter_tts: ^4.2.3
 
 dev_dependencies:
   flutter_test:

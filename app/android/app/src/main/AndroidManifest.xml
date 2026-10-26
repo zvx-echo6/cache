@@ -2,6 +2,12 @@
     <!-- Where the phone is: asked only when the user first needs it (see LocationService). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Turn-by-turn guidance keeps the position coming with the screen locked: a foreground service of type location, with
+         its notification (geolocator runs it). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- Map tiles are streamed and downloaded when there is a connection. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application

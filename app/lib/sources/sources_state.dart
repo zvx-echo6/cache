@@ -26,12 +26,16 @@ enum ZimPhase { waiting, indexing, ready, failed }
 /// The sources the user added (today: ZIM files) and the search core that reads them. Owns the core,
 /// starts the index job of every new ZIM, and answers the assistant's search and read calls.
 class SourcesState extends ChangeNotifier implements SearchAccess {
-  SourcesState({this.zimsDirOverride, this.indexesDirOverride, this.nativeFactory});
+  SourcesState({this.zimsDirOverride, this.indexesDirOverride, this.nativeFactory, this.extraConfig});
 
   /// Test hooks.
   final Directory? zimsDirOverride;
   final Directory? indexesDirOverride;
   final CsNativeFactory? nativeFactory;
+
+  /// The other sections of the core's config (places, routing, saved places), found when the app starts: the map's search and
+  /// routing read them. Null for none.
+  final Future<Map<String, dynamic>> Function()? extraConfig;
 
   Directory? zimsDir;
   Directory? indexesDir;
@@ -58,6 +62,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   bool get coreReady => _core != null;
 
+  /// The search core, for the map's calls. Null until it is open (or when this device cannot open it).
+  SearchCore? get core => _core;
+
+  /// The sections of the config beyond the sources, as they were when the core was opened.
+  Map<String, dynamic> openedExtra = const {};
+
   Future<void> init() async {
     zimsDir = zimsDirOverride ?? await _defaultZimsDir();
     indexesDir = indexesDirOverride ?? Directory('${(await getApplicationSupportDirectory()).path}/indexes');
@@ -66,7 +76,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     _scan();
     notifyListeners();
     try {
-      _core = await SearchCore.open(_configs(), native: nativeFactory ?? _defaultNative);
+      openedExtra = await extraConfig?.call() ?? const {};
+      _core = await SearchCore.open(_configs(), native: nativeFactory ?? _defaultNative, extraConfig: openedExtra);
     } catch (e) {
       unavailable = e is CacheSearchException ? e.message : 'Search is not available on this device';
       notifyListeners();
