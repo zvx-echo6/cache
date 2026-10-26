@@ -5,6 +5,10 @@ import '../chat/tool.dart';
 
 /// Saves and restores one conversation's `[n]` numbering, so a conversation reopened after a restart goes
 /// on numbering where it stopped. The saved state is an opaque blob the store keeps with the conversation.
+///
+/// The real implementation maps onto the core's `cs_conversation_export(c) -> json` (the blob is that JSON,
+/// format 1) and `cs_conversation_import(json) -> cs_conv*` (NULL plus cs_last_error on failure: bad_json,
+/// or unsupported for an unknown format).
 abstract class NumberingState {
   /// The state of [numbering] as bytes, or null when this kind of numbering cannot be saved.
   Future<Uint8List?> save(ResultNumbering numbering);
@@ -14,11 +18,15 @@ abstract class NumberingState {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// STAND-IN. Remove this part when the search core has cs_conversation_export and cs_conversation_import.
-// Until then the state is kept by the app (the numbers, addresses and titles from cs_conversation_ids) and
-// a restored conversation is numbered in Dart with the same rules as the core's cs_format (rust
-// conv.rs). Binding the real calls means: make a `CoreNumberingState implements NumberingState` that calls
-// the two core functions, pass it to ChatController in main.dart, and delete everything below.
+// STAND-IN. To bind the core's calls, swap exactly this:
+//   1. add `CoreNumberingState implements NumberingState`: save() = cs_conversation_export of the
+//      conversation behind [numbering] (utf8 bytes of the JSON); restore() = cs_conversation_import(json),
+//      wrapped like CoreNumbering (null on a failed import);
+//   2. in main.dart pass `numberingState: CoreNumberingState(...)` to ChatController instead of the
+//      default StandInNumberingState;
+//   3. delete everything below this block (StandInNumberingState, StandInNumbering) and the stand-in test.
+// The stand-in writes the same JSON as the core's format 1 ({"format":1,"next_n":N,"ids":[{n,address,title}]},
+// without web_hits) and numbers a restored conversation in Dart with the rules of the core's cs_format.
 // ---------------------------------------------------------------------------------------------------
 
 /// Stand-in for the core's export and import (see the marked block above).
@@ -27,21 +35,21 @@ class StandInNumberingState implements NumberingState {
 
   @override
   Future<Uint8List?> save(ResultNumbering numbering) async {
-    final ids = await numbering.ids();
-    final entries = [
-      for (final i in [...ids]..sort((a, b) => a.n.compareTo(b.n))) [i.address, i.title],
-    ];
-    return Uint8List.fromList(utf8.encode(jsonEncode({'v': 1, 'entries': entries})));
+    final ids = [...await numbering.ids()]..sort((a, b) => a.n.compareTo(b.n));
+    return Uint8List.fromList(utf8.encode(jsonEncode({
+      'format': 1,
+      'next_n': ids.isEmpty ? 1 : ids.last.n + 1,
+      'ids': [for (final i in ids) {'n': i.n, 'address': i.address, 'title': i.title}],
+    })));
   }
 
   @override
   Future<ResultNumbering?> restore(Uint8List state) async {
     try {
       final j = jsonDecode(utf8.decode(state)) as Map<String, dynamic>;
-      if (j['v'] != 1) return null;
-      return StandInNumbering([
-        for (final e in j['entries'] as List) (address: (e as List)[0] as String, title: e[1] as String),
-      ]);
+      if (j['format'] != 1) return null;
+      final ids = [...(j['ids'] as List).cast<Map<String, dynamic>>()]..sort((a, b) => (a['n'] as int).compareTo(b['n'] as int));
+      return StandInNumbering([for (final e in ids) (address: e['address'] as String, title: (e['title'] ?? '') as String)]);
     } catch (_) {
       return null;
     }
