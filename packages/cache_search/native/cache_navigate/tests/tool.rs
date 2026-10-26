@@ -16,6 +16,8 @@ struct Fake {
     no_edges: bool,
     /// Extra seconds per degree of latitude travelled (0: every route takes the same time).
     per_deg_s: f64,
+    /// The first this many `route` calls fail (the later ones succeed).
+    fail_first: std::sync::atomic::AtomicUsize,
 }
 
 impl Valhalla for Fake {
@@ -27,6 +29,11 @@ impl Valhalla for Fake {
         }
     }
     fn route(&self, from: (f64, f64), to: (f64, f64), _costing: &str) -> Result<Trip, ValhallaError> {
+        let left = self.fail_first.load(std::sync::atomic::Ordering::SeqCst);
+        if left > 0 {
+            self.fail_first.store(left - 1, std::sync::atomic::Ordering::SeqCst);
+            return Err(ValhallaError { code: Some(442), message: "No path could be found for input".into(), timeout: false });
+        }
         if let Some(c) = self.fail {
             return Err(ValhallaError { code: Some(c), message: "No path could be found for input".into(), timeout: false });
         }
@@ -116,7 +123,7 @@ fn tool(fake: Fake, places: Option<Arc<dyn PlaceSource>>) -> NavigateTool {
 }
 
 fn fake() -> Fake {
-    Fake { maneuvers: 5, snap: 0.0, fail: None, no_edges: false, per_deg_s: 0.0 }
+    Fake { maneuvers: 5, snap: 0.0, fail: None, no_edges: false, per_deg_s: 0.0, fail_first: std::sync::atomic::AtomicUsize::new(0) }
 }
 
 const NOW: &str = "2026-10-25T12:00:00-06:00";
@@ -302,7 +309,7 @@ fn nearest_of_a_type_is_ranked_by_travel_time() {
     let t = tool(Fake { per_deg_s: 6000.0, ..fake() }, Some(Arc::new(Pack { empty: false })));
     let v = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"})).unwrap();
     assert_eq!(v["to_matched"]["place_name"], "Near Hospital");
-    assert_eq!(v["nearest_search"], json!({"to_type": "hospital", "ranked_by": "drive", "warnings": null}));
+    assert_eq!(v["nearest_search"], json!({"to_type": "hospital", "ranked_by": "drive", "warnings": []}));
     let c = &v["other_destination_candidates"][0];
     assert_eq!(keys(c), ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "drive_min"]);
     assert_eq!((c["place_name"].clone(), c["drive_min"].clone()), (json!("Far Hospital"), json!(57.5)));
@@ -316,6 +323,29 @@ fn nearest_of_a_type_is_ranked_by_travel_time() {
     assert_eq!(keys(&j), ["ok", "error", "from_matched"]);
     let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
     assert_eq!(code(run(&t, Some(&here()), json!({"to_type": "pharmacy", "mode": "drive"}))), "bad_arguments");
+}
+
+/// AIDA passes navi's `nearest_search` through: `ranked_by` is `drive` or `distance` (never the travel mode) and
+/// `warnings` is a list.
+#[test]
+fn nearest_search_ranked_by_is_drive_or_distance_and_warnings_is_a_list() {
+    for mode in ["drive", "walk", "bike"] {
+        let t = tool(Fake { per_deg_s: 6000.0, ..fake() }, Some(Arc::new(Pack { empty: false })));
+        let v = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": mode})).unwrap();
+        assert_eq!(v["mode"], mode);
+        assert_eq!(v["nearest_search"], json!({"to_type": "hospital", "ranked_by": "drive", "warnings": []}), "mode {mode}");
+        assert_eq!(v["to_matched"]["place_name"], "Near Hospital", "mode {mode}");
+    }
+    // routing fails for both candidates, then works for the chosen route: ranked by distance, with a warning string
+    let t = tool(Fake { fail_first: std::sync::atomic::AtomicUsize::new(2), ..fake() }, Some(Arc::new(Pack { empty: false })));
+    let v = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "walk"})).unwrap();
+    let ns = &v["nearest_search"];
+    assert_eq!((ns["to_type"].clone(), ns["ranked_by"].clone()), (json!("hospital"), json!("distance")));
+    let w = ns["warnings"].as_array().expect("warnings is a list");
+    assert_eq!(w.len(), 1);
+    assert!(w[0].is_string());
+    // the pack's order stands: "Far Hospital" was listed first
+    assert_eq!(v["to_matched"]["place_name"], "Far Hospital");
 }
 
 #[test]

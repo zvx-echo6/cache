@@ -360,8 +360,8 @@ impl Tool for NavigateTool {
                 to
             }
             (None, Some(cat)) => {
-                let (to, ranked_by, rest) = self.nearest(&*valhalla, &a, cat, &from)?;
-                nearest_search = Some(json!({"to_type": cat, "ranked_by": ranked_by, "warnings": Value::Null}));
+                let (to, ranked_by, warnings, rest) = self.nearest(&*valhalla, &a, cat, &from)?;
+                nearest_search = Some(json!({"to_type": cat, "ranked_by": ranked_by, "warnings": warnings}));
                 others = rest;
                 to
             }
@@ -393,9 +393,11 @@ impl Tool for NavigateTool {
 }
 
 impl NavigateTool {
-    /// The nearest place of a category by travel time from `from`: the winner, how the ranking was done, and the others
+    /// The nearest place of a category by travel time from `from`: the winner, how the ranking was done (`"drive"` when
+    /// routing ranked the candidates, whatever the travel mode, or `"distance"` when no candidate could be routed and the
+    /// straight-line order stood: navi's `_rank` values), the warnings (a list, empty when there are none), and the others
     /// (at most 2, with `drive_min`).
-    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, String, Vec<Value>), ToolError> {
+    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, &'static str, Vec<Value>, Vec<Value>), ToolError> {
         let not_set_up = || err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone");
         let src = self.place_source().ok_or_else(not_set_up)?;
         let cats = src.categories().ok_or_else(not_set_up)?;
@@ -414,6 +416,10 @@ impl NavigateTool {
             .map(|m| (valhalla.route(origin, (m.lat, m.lon), costing).ok().map(|t| t.time_s / 60.0), m))
             .collect();
         let any_time = ranked.iter().any(|(t, _)| t.is_some());
+        let mut warnings: Vec<Value> = Vec::new();
+        if !any_time {
+            warnings.push(json!("routing failed for every candidate; ranked by straight-line distance"));
+        }
         if any_time {
             // routed ones first by time, unroutable ones after in the order the pack gave (nearest by straight line)
             ranked.sort_by(|x, y| match (x.0, y.0) {
@@ -426,7 +432,8 @@ impl NavigateTool {
         let mut it = ranked.into_iter();
         let (_, best) = it.next().expect("non-empty");
         let rest: Vec<Value> = it.take(2).map(|(t, m)| build::candidate(&resolve::Resolved::from_match(m), Some(t))).collect();
-        Ok((resolve::Resolved::from_match(best), a.mode.name().to_string(), rest))
+        let ranked_by = if any_time { "drive" } else { "distance" };
+        Ok((resolve::Resolved::from_match(best), ranked_by, warnings, rest))
     }
 }
 
