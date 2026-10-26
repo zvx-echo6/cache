@@ -22,6 +22,12 @@
 //!   GET    /live/sources                                         -> cs_live_sources
 //!   POST   /live/fetch                   {request}               -> cs_live_fetch (the body is the request JSON)
 //!   POST   /live/get                     {request}               -> cs_live_get (the body is the request JSON)
+//!   GET    /video/instances                                      -> cs_video_instances
+//!   POST   /video/{instance-add|instance-remove|login|refresh|me|channels|list|search|get|delete|resolve}
+//!                                        (the body is the request JSON) -> cs_video_<name>
+//!   POST   /video/download {instance,video,choice?,token?} -> a video_download job, run to the end: its last progress
+//!                                                           JSON (the request is `cs video-download`'s)
+//!   GET    /video/downloads                                      -> cs_video_downloads
 //! Errors are `{"code","message"}` (the core's error) with a matching HTTP status.
 
 use crate::engine::{ApiError, Conv, Engine};
@@ -174,6 +180,24 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
         (Method::Get, ["live", "sources"]) => st.engine.core.live_sources(),
         (Method::Post, ["live", "fetch"]) => st.engine.core.live_fetch(body),
         (Method::Post, ["live", "get"]) => st.engine.core.live_get(body),
+        (Method::Get, ["video", "instances"]) => st.engine.core.video_instances(),
+        (Method::Get, ["video", "downloads"]) => st.engine.core.video_downloads(),
+        (Method::Post, ["video", op]) => match *op {
+            "instance-add" => st.engine.core.video_instance_add(body),
+            "instance-remove" => st.engine.core.video_instance_remove(body),
+            "login" => st.engine.core.video_login(body),
+            "refresh" => st.engine.core.video_refresh(body),
+            "me" => st.engine.core.video_me(body),
+            "channels" => st.engine.core.video_channels(body),
+            "list" => st.engine.core.video_list(body),
+            "search" => st.engine.core.video_search(body),
+            "get" => st.engine.core.video_get(body),
+            "delete" => st.engine.core.video_delete(body),
+            "resolve" => st.engine.core.video_resolve(body),
+            // runs the download job to the end before answering (requests are handled one at a time)
+            "download" => st.engine.video_download(&body_json(body)?, &mut |_| {}),
+            _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
+        },
         _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
     }
 }

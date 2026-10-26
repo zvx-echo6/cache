@@ -19,6 +19,8 @@ pub enum ErrorCode {
     Quota,
     KeyMissing,
     BadResponse,
+    AuthFailed,
+    OtpRequired,
     Internal,
 }
 
@@ -41,6 +43,8 @@ impl ErrorCode {
             ErrorCode::Quota => "quota",
             ErrorCode::KeyMissing => "key_missing",
             ErrorCode::BadResponse => "bad_response",
+            ErrorCode::AuthFailed => "auth_failed",
+            ErrorCode::OtpRequired => "otp_required",
             ErrorCode::Internal => "internal",
         }
     }
@@ -120,7 +124,7 @@ impl From<zim::Error> for Error {
 }
 
 impl ErrorCode {
-    /// The code for a stable code string from `cache_live` or `cache_user`; anything unknown is `internal`.
+    /// The code for a stable code string from `cache_live`, `cache_user` or `cache_video`; anything unknown is `internal`.
     pub fn from_str_code(s: &str) -> ErrorCode {
         match s {
             "bad_json" => ErrorCode::BadJson,
@@ -131,6 +135,12 @@ impl ErrorCode {
             "quota" => ErrorCode::Quota,
             "key_missing" => ErrorCode::KeyMissing,
             "bad_response" => ErrorCode::BadResponse,
+            "unsupported" => ErrorCode::Unsupported,
+            "no_space" => ErrorCode::NoSpace,
+            "damaged" => ErrorCode::Damaged,
+            "cancelled" => ErrorCode::Cancelled,
+            "auth_failed" => ErrorCode::AuthFailed,
+            "otp_required" => ErrorCode::OtpRequired,
             _ => ErrorCode::Internal,
         }
     }
@@ -164,6 +174,8 @@ mod tests {
             (ErrorCode::Quota, "quota"),
             (ErrorCode::KeyMissing, "key_missing"),
             (ErrorCode::BadResponse, "bad_response"),
+            (ErrorCode::AuthFailed, "auth_failed"),
+            (ErrorCode::OtpRequired, "otp_required"),
             (ErrorCode::Internal, "internal"),
         ];
         for (c, s) in all {

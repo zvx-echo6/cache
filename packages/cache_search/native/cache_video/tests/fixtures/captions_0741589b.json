@@ -1,0 +1,16 @@
+{
+ "total": 1,
+ "data": [
+  {
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "automaticallyGenerated": true,
+   "captionPath": "/lazy-static/video-captions/45af0bf4-986f-4110-ae5c-699f364cddfd-en.vtt",
+   "fileUrl": "https://example.org/lazy-static/video-captions/45af0bf4-986f-4110-ae5c-699f364cddfd-en.vtt",
+   "m3u8Url": null,
+   "updatedAt": "2026-04-15T23:56:50.929Z"
+  }
+ ]
+}

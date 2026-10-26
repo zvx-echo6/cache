@@ -2,7 +2,7 @@
 
 use crate::args::Args;
 use crate::embed::{Embedder, EMBED_DEFAULT_THREADS};
-use crate::engine::{ApiError, Conv, Core, Engine, JobRun};
+use crate::engine::{job_result, run_job_to_end, ApiError, Conv, Core, Engine};
 use crate::server;
 use serde_json::{json, Value};
 use std::io::Write;
@@ -32,13 +32,27 @@ cs: command line and HTTP wrapper over the cache_search core
   cs live-sources    --config <sources.json>
   cs live-fetch      --config <sources.json> --request <json {source,place,api_key?,force?,now?}>
   cs live-get        --config <sources.json> --request <json {source,place,now?}>
+  cs video-instances       --config <sources.json>
+  cs video-instance-add    --config <sources.json> --request <json {url}>
+  cs video-instance-remove --config <sources.json> --request <json {instance,delete_downloads?}>
+  cs video-login           --config <sources.json> --request <json {instance,username,password,otp?}>
+  cs video-refresh         --config <sources.json> --request <json {instance,refresh_token}>
+  cs video-me              --config <sources.json> --request <json {instance,token}>
+  cs video-channels        --config <sources.json> --request <json {instance,search?,start?,count?,token?}>
+  cs video-list            --config <sources.json> --request <json {instance,channel?,start?,count?,sort?,token?}>
+  cs video-search          --config <sources.json> --request <json {instance,query,start?,count?,sort?,token?}>
+  cs video-get             --config <sources.json> --request <json {instance,video,token?}>
+  cs video-download        --config <sources.json> --instance <id|address> --video <uuid> [--choice lowest|highest|audio|<resolution>] [--token <access token>]
+  cs video-downloads       --config <sources.json>
+  cs video-delete          --config <sources.json> --request <json {instance,video}>
+  cs video-resolve         --config <sources.json> --request <json {video,instance?,offset_s?,token?}>
   cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [EMBED] [--open-timeout 600]
 
   EMBED: --embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
          [--embed-model-id <id>] [--embed-threads 4]
 
 sources.json is the cs_open config JSON (\"user\": {\"db_path\"} for saved places, \"live\": {\"db_path\",\"sources_dir\"} for live data;
-the live_data tool is then reached with cs tool live_data). A library entry may carry \"settings_file\": \"<cache-library.json>\" in
+the live_data tool is then reached with cs tool live_data; \"video\": {\"dir\"} for the PeerTube video connector). A library entry may carry \"settings_file\": \"<cache-library.json>\" in
 place of \"settings\"; the file is read and passed to the core as \"settings\".
 Results go to stdout as the core's JSON; errors go to stderr as {\"code\",\"message\"} with exit status 1.";
 
@@ -121,7 +135,8 @@ fn open_engine_with(a: &Args, cfg: &str) -> Result<Engine, ApiError> {
         }
     }
     core.wait_ready(Duration::from_secs(a.num("open-timeout", 600u64).map_err(usage_err)?))?;
-    Ok(Engine { core, embedder })
+    let video_dir = serde_json::from_str::<Value>(cfg).ok().and_then(|v| v["video"]["dir"].as_str().map(str::to_string));
+    Ok(Engine { core, embedder, video_dir })
 }
 
 /// The current local time, ISO 8601 with offset.
@@ -134,42 +149,12 @@ fn print(s: &str) {
     let _ = std::io::stdout().flush();
 }
 
-/// The result of a finished job from its final progress JSON (`{"state","done","total","error"}`): `Ok` only for
-/// `done`. Any other state is an error that carries the job's own code and message, so a failed job, a panic
-/// in a job thread (the core reports it as `internal` with the text `panic: ...`) and a cancelled job are never
-/// reported as a bare failure.
-fn job_result(v: &Value) -> Result<(), ApiError> {
-    let state = v["state"].as_str().unwrap_or("?");
-    if state == "done" {
-        return Ok(());
-    }
-    let code = v["error"]["code"].as_str().unwrap_or(if state == "cancelled" { "cancelled" } else { "internal" });
-    let message = match v["error"]["message"].as_str().filter(|m| !m.is_empty()) {
-        Some(m) => format!("job {state}: {m}"),
-        None => format!("job {state} without an error message from the core"),
-    };
-    Err(ApiError::new(code, message))
-}
-
 /// Run a job to the end, printing `done/total` to stderr as it changes; prints the final progress JSON.
 /// A job that does not finish `done` returns the job's error (the caller prints it to stderr and exits non-zero).
 fn run_job(kind: &str, params: Value) -> Result<(), ApiError> {
-    let mut job = JobRun::start(kind, &params)?;
-    let mut last = String::new();
-    loop {
-        let p = job.progress()?;
-        let v: Value = serde_json::from_str(&p).map_err(|e| ApiError::new("internal", e.to_string()))?;
-        let line = format!("{} {}/{}", v["state"].as_str().unwrap_or("?"), v["done"], v["total"]);
-        if line != last {
-            eprintln!("{line}");
-            last = line;
-        }
-        if v["state"] != "running" {
-            print(&p);
-            return job_result(&v);
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
+    let end = run_job_to_end(kind, &params, &mut |l| eprintln!("{l}"))?;
+    print(&end.progress);
+    end.error.map_or(Ok(()), Err)
 }
 
 pub fn index_zim(argv: &[String]) -> Result<(), ApiError> {
@@ -357,6 +342,32 @@ pub fn live_get(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A video call with one JSON request (`--request`), or none.
+fn video_call(argv: &[String], f: impl FnOnce(&mut Engine, Option<&str>) -> Result<String, ApiError>, takes_request: bool) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "request", "open-timeout"], &[], false)?;
+    let req = if takes_request { Some(a.req("request").map_err(usage_err)?.to_string()) } else { None };
+    if !takes_request && a.get("request").is_some() {
+        return Err(usage_err("this command takes no --request"));
+    }
+    let mut e = open_engine(&a)?;
+    print(&f(&mut e, req.as_deref())?);
+    Ok(())
+}
+
+pub fn video_download(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "instance", "video", "choice", "token", "open-timeout"], &[], false)?;
+    let mut p = json!({"instance": a.req("instance").map_err(usage_err)?, "video": a.req("video").map_err(usage_err)?});
+    if let Some(c) = a.get("choice") {
+        p["choice"] = json!(c);
+    }
+    if let Some(t) = a.get("token") {
+        p["token"] = json!(t);
+    }
+    let e = open_engine(&a)?;
+    print(&e.video_download(&p, &mut |l| eprintln!("{l}"))?);
+    Ok(())
+}
+
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "listen", "open-timeout"], &["allow-non-loopback"], true)?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
@@ -395,6 +406,20 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "live-sources" => live_sources(rest),
         "live-fetch" => live_fetch(rest),
         "live-get" => live_get(rest),
+        "video-instances" => video_call(rest, |e, _| e.core.video_instances(), false),
+        "video-instance-add" => video_call(rest, |e, r| e.core.video_instance_add(r.unwrap()), true),
+        "video-instance-remove" => video_call(rest, |e, r| e.core.video_instance_remove(r.unwrap()), true),
+        "video-login" => video_call(rest, |e, r| e.core.video_login(r.unwrap()), true),
+        "video-refresh" => video_call(rest, |e, r| e.core.video_refresh(r.unwrap()), true),
+        "video-me" => video_call(rest, |e, r| e.core.video_me(r.unwrap()), true),
+        "video-channels" => video_call(rest, |e, r| e.core.video_channels(r.unwrap()), true),
+        "video-list" => video_call(rest, |e, r| e.core.video_list(r.unwrap()), true),
+        "video-search" => video_call(rest, |e, r| e.core.video_search(r.unwrap()), true),
+        "video-get" => video_call(rest, |e, r| e.core.video_get(r.unwrap()), true),
+        "video-download" => video_download(rest),
+        "video-downloads" => video_call(rest, |e, _| e.core.video_downloads(), false),
+        "video-delete" => video_call(rest, |e, r| e.core.video_delete(r.unwrap()), true),
+        "video-resolve" => video_call(rest, |e, r| e.core.video_resolve(r.unwrap()), true),
         "serve" => serve(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");

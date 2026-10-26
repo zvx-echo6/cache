@@ -34,6 +34,8 @@ struct Config {
     /// The navigate tool: Valhalla tiles and shim, and the off-road pack (see cache_navigate's config.rs).
     #[serde(default)]
     routing: Option<cache_navigate::NavigateCfg>,
+    #[serde(default)]
+    video: Option<cache_video::VideoCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -352,7 +354,7 @@ impl Handle {
         self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
-        self.configure_ext(cfg.user, cfg.live, cfg.routing);
+        self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video);
         Ok(())
     }
 

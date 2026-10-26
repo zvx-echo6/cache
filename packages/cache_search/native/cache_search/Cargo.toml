@@ -15,6 +15,8 @@ cache_user = { path = "../cache_user" }
 cache_live = { path = "../cache_live" }
 # The navigate tool (Valhalla road routing and off-road legs), registered from the "routing" section of the config.
 cache_navigate = { path = "../cache_navigate" }
+# Video sources (PeerTube): instances, browse, offline downloads, citation links; wired in ext.rs and job.rs.
+cache_video = { path = "../cache_video" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "1"

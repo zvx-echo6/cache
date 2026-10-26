@@ -1,0 +1,83 @@
+{
+ "total": 154,
+ "data": [
+  {
+   "url": "https://example.org/video-channels/civil-defense-engineer",
+   "name": "civil-defense-engineer",
+   "host": "example.org",
+   "avatars": [],
+   "id": 173,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-08-15T02:16:35.934Z",
+   "banners": [],
+   "displayName": "(YT)Civil Defense Engineer",
+   "description": "Mirror of https://www.youtube.com/@CivilDefenseEngineer",
+   "support": null,
+   "isLocal": true,
+   "updatedAt": "2026-08-15T02:26:55.449Z",
+   "ownerAccount": {
+    "url": "https://example.org/accounts/root",
+    "name": "root",
+    "host": "example.org",
+    "avatars": [],
+    "id": 2,
+    "hostRedundancyAllowed": false,
+    "displayName": "root"
+   }
+  },
+  {
+   "url": "https://example.org/video-channels/scl-general-survival",
+   "name": "scl-general-survival",
+   "host": "example.org",
+   "avatars": [],
+   "id": 172,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-04-15T16:17:51.764Z",
+   "banners": [],
+   "displayName": "SCL-General-Survival",
+   "description": "Survival Companion Library — SCL-General-Survival",
+   "support": null,
+   "isLocal": true,
+   "updatedAt": "2026-04-15T18:55:22.258Z",
+   "ownerAccount": {
+    "url": "https://example.org/accounts/root",
+    "name": "root",
+    "host": "example.org",
+    "avatars": [],
+    "id": 2,
+    "hostRedundancyAllowed": false,
+    "displayName": "root"
+   }
+  },
+  {
+   "url": "https://example.org/video-channels/scl-cbrn",
+   "name": "scl-cbrn",
+   "host": "example.org",
+   "avatars": [],
+   "id": 171,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-04-15T16:17:51.747Z",
+   "banners": [],
+   "displayName": "SCL-CBRN",
+   "description": "Survival Companion Library — SCL-CBRN",
+   "support": null,
+   "isLocal": true,
+   "updatedAt": "2026-04-15T16:23:28.921Z",
+   "ownerAccount": {
+    "url": "https://example.org/accounts/root",
+    "name": "root",
+    "host": "example.org",
+    "avatars": [],
+    "id": 2,
+    "hostRedundancyAllowed": false,
+    "displayName": "root"
+   }
+  }
+ ]
+}

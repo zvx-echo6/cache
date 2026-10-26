@@ -520,6 +520,7 @@ dependencies = [
  "cache_navigate",
  "cache_tool",
  "cache_user",
+ "cache_video",
  "common",
  "edge",
  "html-escape",
@@ -545,9 +546,11 @@ dependencies = [
  "chrono",
  "edge",
  "libloading",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tiny_http",
+ "url",
 ]
 
 [[package]]
@@ -566,6 +569,21 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cache_video"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq",
+ "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

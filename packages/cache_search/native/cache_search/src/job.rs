@@ -130,6 +130,7 @@ impl Job {
             "index_library" => Self::start_index_library(params_json),
             "update_library" => Self::start_update_library(params_json),
             "library_manifest" => Self::start_library_manifest(params_json),
+            "video_download" => Self::start_video_download(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -233,6 +234,18 @@ impl Job {
                 // cancelling is honoured only before the read-write load; `apply_manifest` asks at the right places
                 &|| sh.cancel.load(Ordering::SeqCst),
             )
+        })
+    }
+
+    /// Start a `video_download` job. Parameter errors and an unknown instance are reported here and no job exists; the
+    /// network work (details, free-space check, the file) runs on the job's thread. Progress is bytes of the video file.
+    fn start_video_download(params_json: &str) -> Result<Job> {
+        let prepared = cache_video::dl::prepare(params_json).map_err(crate::ext::video_err)?;
+        Self::spawn("cs-video-download", (), 0, move |sh| {
+            match prepared.run(&|d, t| sh.set_progress(d, t), &|| sh.cancel.load(Ordering::SeqCst)).map_err(crate::ext::video_err)? {
+                cache_video::Outcome::Done => Ok(Outcome::Done),
+                cache_video::Outcome::Cancelled => Ok(Outcome::Cancelled),
+            }
         })
     }
 
