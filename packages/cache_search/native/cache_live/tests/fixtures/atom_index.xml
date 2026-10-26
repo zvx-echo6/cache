@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Public alerts</title>
+  <updated>2026-10-25T16:00:00Z</updated>
+  <entry>
+    <id>urn:oid:2.49.0.1.840.0.aaa</id>
+    <title>Flood Warning</title>
+    <updated>2026-10-25T15:40:00Z</updated>
+    <link rel="alternate" type="application/cap+xml" href="__BASE__/cap/aaa"/>
+  </entry>
+  <entry>
+    <id>urn:oid:2.49.0.1.840.0.bbb</id>
+    <title>Red Flag Warning</title>
+    <updated>2026-10-25T15:10:00Z</updated>
+    <link rel="alternate" type="application/cap+xml" href="__BASE__/cap/bbb"/>
+  </entry>
+  <entry>
+    <id>urn:oid:2.49.0.1.840.0.ccc</id>
+    <title>Missing document</title>
+    <updated>2026-10-25T14:10:00Z</updated>
+    <link rel="alternate" type="application/cap+xml" href="__BASE__/cap/ccc"/>
+  </entry>
+</feed>

@@ -6,12 +6,18 @@
 //! (`LiveDataTool`): both come from the same stored row through the same code (`Live::view`).
 //! Nothing here reads the system clock unless the caller gives no time: every call takes `now`.
 
+pub mod convert;
 pub mod def;
 pub mod fetch;
 pub mod geo;
 pub mod map;
+pub mod params;
+pub mod preview;
+pub mod request;
 pub mod tool;
 pub mod tz;
+#[cfg(feature = "schema")]
+pub mod schema;
 
 use cache_tool::SavedPlaces;
 use chrono::DateTime;
@@ -182,7 +188,7 @@ fn open_db(path: &Path) -> Result<Connection> {
         "CREATE TABLE IF NOT EXISTS live_fetch(
             source TEXT NOT NULL, place_key TEXT NOT NULL, place_name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
             fetched_at INTEGER NOT NULL, valid_until INTEGER NOT NULL, utc_offset INTEGER, tz TEXT, not_covered_after TEXT,
-            def_hash TEXT NOT NULL, items_json TEXT NOT NULL, raw TEXT NOT NULL,
+            def_hash TEXT NOT NULL, items_json TEXT NOT NULL, raw TEXT NOT NULL, meta TEXT,
             PRIMARY KEY(source, place_key));
          CREATE TABLE IF NOT EXISTS live_error(
             source TEXT NOT NULL, place_key TEXT NOT NULL, at INTEGER NOT NULL, code TEXT NOT NULL, message TEXT NOT NULL,
@@ -192,6 +198,8 @@ fn open_db(path: &Path) -> Result<Connection> {
     )?;
     // a database made before the tz column existed
     let _ = c.execute("ALTER TABLE live_fetch ADD COLUMN tz TEXT", []);
+    // a database made before parameters, paging and steps
+    let _ = c.execute("ALTER TABLE live_fetch ADD COLUMN meta TEXT", []);
     Ok(c)
 }
 
@@ -207,14 +215,17 @@ pub struct Row {
     pub not_covered_after: Option<String>,
     pub def_hash: String,
     pub items: Vec<Item>,
+    /// The response tree the items were mapped from (JSON text; XML, CSV and steps are stored converted).
     pub raw: String,
+    /// Parameter values and completeness of the data (see `fetch::RowMeta`).
+    pub meta: Option<String>,
 }
 
 pub(crate) fn load_row(c: &Connection, source: &str, key: &str) -> Result<Option<Row>> {
     #[allow(clippy::type_complexity)]
     let r = c
         .query_row(
-            "SELECT place_name,lat,lon,fetched_at,valid_until,utc_offset,not_covered_after,def_hash,items_json,raw,tz
+            "SELECT place_name,lat,lon,fetched_at,valid_until,utc_offset,not_covered_after,def_hash,items_json,raw,tz,meta
              FROM live_fetch WHERE source=?1 AND place_key=?2",
             params![source, key],
             |r| {
@@ -228,23 +239,24 @@ pub(crate) fn load_row(c: &Connection, source: &str, key: &str) -> Result<Option
                     r.get::<_, String>(8)?,
                     r.get::<_, String>(9)?,
                     r.get::<_, Option<String>>(10)?,
+                    r.get::<_, Option<String>>(11)?,
                 ))
             },
         )
         .optional()?;
-    let Some((place, fetched_at, valid_until, utc_offset, not_covered_after, def_hash, items, raw, tz)) = r else {
+    let Some((place, fetched_at, valid_until, utc_offset, not_covered_after, def_hash, items, raw, tz, meta)) = r else {
         return Ok(None);
     };
     let items: Vec<Item> = serde_json::from_str(&items).map_err(|e| Error::internal(format!("stored items: {e}")))?;
-    Ok(Some(Row { place, fetched_at, valid_until, utc_offset, tz, not_covered_after, def_hash, items, raw }))
+    Ok(Some(Row { place, fetched_at, valid_until, utc_offset, tz, not_covered_after, def_hash, items, raw, meta }))
 }
 
 pub(crate) fn save_row(c: &Connection, source: &str, row: &Row) -> Result<()> {
     c.execute(
-        "INSERT INTO live_fetch(source,place_key,place_name,lat,lon,fetched_at,valid_until,utc_offset,not_covered_after,def_hash,items_json,raw,tz)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+        "INSERT INTO live_fetch(source,place_key,place_name,lat,lon,fetched_at,valid_until,utc_offset,not_covered_after,def_hash,items_json,raw,tz,meta)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
          ON CONFLICT(source,place_key) DO UPDATE SET place_name=?3,lat=?4,lon=?5,fetched_at=?6,valid_until=?7,
-            utc_offset=?8,not_covered_after=?9,def_hash=?10,items_json=?11,raw=?12,tz=?13",
+            utc_offset=?8,not_covered_after=?9,def_hash=?10,items_json=?11,raw=?12,tz=?13,meta=?14",
         params![
             source,
             row.place.key,
@@ -258,7 +270,8 @@ pub(crate) fn save_row(c: &Connection, source: &str, row: &Row) -> Result<()> {
             row.def_hash,
             serde_json::to_string(&row.items)?,
             row.raw,
-            row.tz
+            row.tz,
+            row.meta
         ],
     )?;
     Ok(())
@@ -345,6 +358,14 @@ struct GetOut<'a> {
     expired: bool,
     not_covered_after: Option<&'a str>,
     last_error: Option<&'a LastError>,
+    /// Only when true: a paged result was cut at the definition's page cap.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    truncated: bool,
+    /// Only when some repeated requests failed: how many.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missing_requests: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<&'a std::collections::BTreeMap<String, Value>>,
     items: Vec<GetItem>,
 }
 
@@ -404,6 +425,8 @@ impl Live {
                     "id": d.id, "title": d.title, "provider": d.provider, "description": d.description,
                     "attribution": d.attribution, "refresh_minutes": d.refresh_minutes,
                     "api_key": d.api_key.as_ref().map(|k| serde_json::json!({"alias": k.alias, "required": k.required})),
+                    "basic_auth": d.basic_auth.as_ref().map(|b| serde_json::json!({"user_alias": b.user_alias, "password_alias": b.password_alias, "required": b.required})),
+                    "params": d.params,
                     "quota": {"per_minute": d.quota.per_minute, "per_day": d.quota.per_day, "per_month": d.quota.per_month},
                 })
             })
@@ -430,8 +453,10 @@ impl Live {
     /// Delete everything stored for a place (when the saved place is deleted).
     pub fn forget_place(&self, key: &str) {
         if let Ok(c) = self.db() {
-            let _ = c.execute("DELETE FROM live_fetch WHERE place_key=?1", [key]);
-            let _ = c.execute("DELETE FROM live_error WHERE place_key=?1", [key]);
+            // rows of other parameter values are stored as "<key>~<hash>"
+            let cond = "(place_key=?1 OR (substr(place_key,1,length(?1)+1)=?1||'~'))";
+            let _ = c.execute(&format!("DELETE FROM live_fetch WHERE {cond}"), [key]);
+            let _ = c.execute(&format!("DELETE FROM live_error WHERE {cond}"), [key]);
         }
     }
 
@@ -441,7 +466,8 @@ impl Live {
         let Some(mut row) = load_row(c, &l.def.id, &place.key)? else { return Ok(None) };
         if row.def_hash != l.hash {
             let root: Value = serde_json::from_str(&row.raw).map_err(|e| Error::bad_response(format!("stored response: {e}")))?;
-            let m = map::map_response(&l.def, &root, row.fetched_at, row.place.lat, row.place.lon)?;
+            let params = fetch::RowMeta::of(&row).params;
+            let m = map::map_response_with(&l.def, &root, row.fetched_at, row.place.lat, row.place.lon, &params)?;
             row.items = m.items;
             row.set_zone(m.zone);
             row.valid_until = m.valid_until;
@@ -462,6 +488,7 @@ impl Live {
     fn view_json(&self, l: &Loaded, v: &View, fetched: Option<bool>) -> Result<String> {
         let d = &l.def;
         let off = v.zone();
+        let meta = fetch::RowMeta::of(&v.row);
         let out = GetOut {
             source: SourceOut { id: &d.id, title: &d.title, provider: &d.provider, description: &d.description, attribution: d.attribution.as_deref() },
             place: &v.row.place,
@@ -473,6 +500,9 @@ impl Live {
             expired: v.expired,
             not_covered_after: v.row.not_covered_after.as_deref(),
             last_error: v.last_error.as_ref(),
+            truncated: meta.truncated,
+            missing_requests: (meta.skipped > 0).then_some(meta.skipped),
+            params: (!meta.params.is_empty()).then_some(&meta.params),
             items: v
                 .items
                 .iter()
@@ -499,6 +529,9 @@ impl Live {
             source: String,
             #[serde(default)]
             place: Option<Value>,
+            /// The parameter values the data was fetched with (default: the definition's defaults).
+            #[serde(default)]
+            params: Option<serde_json::Map<String, Value>>,
             #[serde(default)]
             now: Option<String>,
         }
@@ -506,6 +539,7 @@ impl Live {
         let now = now_from(r.now.as_deref())?;
         let l = self.def(&r.source).ok_or_else(|| Error::not_found(format!("no live source {:?}", r.source)))?;
         let place = place_from(r.place.as_ref(), places)?;
+        let place = params::row_place(&l.def, &place, &params::resolve(&l.def, r.params.as_ref())?);
         let c = self.db()?;
         match self.view(&c, &l, &place, now)? {
             Some(v) => self.view_json(&l, &v, None),

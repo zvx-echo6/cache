@@ -1,21 +1,28 @@
-//! The field mapping: a response JSON plus a source definition become items. Small and declarative: paths and
+//! The field mapping: a response tree plus a source definition become items. Small and declarative: paths and
 //! fixed formatting steps, no scripting.
 //!
 //! Paths: dot-separated keys, with `[n]` array indexes (`[-1]` = last). A path starts at the current element
-//! (the element of the item group's `each` array, or the response root when there is none); `^` starts at the
-//! response root instead; `@` is the current element itself. `[#]` is the index of the current element, so a
-//! response that keeps one array per column (Open-Meteo's `daily`) is read with
-//! `"each": "daily.time"` and `"path": "^daily.temperature_2m_max[#]"`.
+//! (the element of the item group's `each`, or the response root when there is none); `^` starts at the
+//! response root instead; `@` is the current element itself; `@key` (the whole path) is the member name when `each`
+//! walks an object. `[#]` is the index of the current element, so a response that keeps one array per column
+//! (Open-Meteo's `daily`) is read with `"each": "daily.time"` and `"path": "^daily.temperature_2m_max[#]"`.
+//! XML attributes are keys that start with `@` (`link.@href`), and element text next to attributes is `#text`.
 //!
 //! Formatting steps of a value, in this order: time conversion or (scale, offset, round, compass) or plain text;
 //! `lookup` (replaces the result, keyed by the raw value); `omit_if`; `case`; `max_chars`; `prefix`/`suffix`.
+//!
+//! An item group is mapped, then `where` drops items, `near` drops items too far from the place, `sort` orders them and
+//! `limit` keeps the first few.
 
-use crate::def::{ItemDef, SourceDef, Spec, TimeSpec};
-use crate::{Error, Result};
+use crate::def::{CalcSpec, Cond, DistanceSpec, ItemDef, Num, SourceDef, Spec, TimeSpec};
+use crate::geo::{self, Near};
 use crate::tz::Zone;
+use crate::{Error, Result};
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 /// Labelled values in the order the definition lists them. Serialises as a JSON object.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -79,11 +86,19 @@ pub struct Mapped {
     pub not_covered_after: Option<String>,
 }
 
+/// The user parameters of a fetch (see `params.rs`).
+pub type Params = BTreeMap<String, Value>;
+
 struct Ctx<'a> {
     root: &'a Value,
     cur: &'a Value,
     idx: usize,
+    /// The member name when the group walks an object.
+    key: Option<&'a str>,
     zone: &'a Zone,
+    params: &'a Params,
+    /// When the data was fetched (Unix seconds), for `max_age_hours`.
+    now: i64,
     /// The place the data is for (distances are measured from it).
     lat: f64,
     lon: f64,
@@ -127,6 +142,19 @@ fn follow<'a>(ctx: &Ctx<'a>, path: &str) -> Option<&'a Value> {
     Some(v)
 }
 
+/// A value of a response tree by path, from its root (used by multi-step requests and paging).
+pub fn lookup<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+    static Z: Zone = Zone::UTC;
+    static P: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
+    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone: &Z, params: P.get_or_init(Params::new), now: 0, lat: 0.0, lon: 0.0 };
+    follow(&ctx, path)
+}
+
+/// A value as plain text (see `plain`), for placeholders.
+pub fn plain_text(v: &Value) -> Option<String> {
+    plain(v)
+}
+
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -154,6 +182,33 @@ fn as_num(v: &Value) -> Option<f64> {
     }
 }
 
+/// The number at the start of a text ("54 acres" -> 54, "-3.5%" -> -3.5).
+fn lead_num(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let mut end = 0;
+    let b = s.as_bytes();
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    for (i, c) in b.iter().enumerate() {
+        match c {
+            b'+' | b'-' if i == 0 => end = i + 1,
+            b'0'..=b'9' => {
+                seen_digit = true;
+                end = i + 1;
+            }
+            b'.' if !seen_dot => {
+                seen_dot = true;
+                end = i + 1;
+            }
+            _ => break,
+        }
+    }
+    if !seen_digit {
+        return None;
+    }
+    s[..end].parse().ok()
+}
+
 /// The value as plain text (strings on one line, numbers without a trailing .0, lists joined with ", ").
 fn plain(v: &Value) -> Option<String> {
     match v {
@@ -173,19 +228,52 @@ fn compass(deg: f64) -> &'static str {
     P[(((deg.rem_euclid(360.0)) / 45.0).round() as usize) % 8]
 }
 
+/// A date and time written without an offset, in the common shapes: `T` or a space between date and time, seconds and
+/// a fraction optional, a trailing `Z` or ` UTC` ignored; or a date alone (midnight).
+fn naive_flex(s: &str) -> Option<NaiveDateTime> {
+    let s = s.trim();
+    let s = s.strip_suffix('Z').or_else(|| s.strip_suffix(" UTC")).unwrap_or(s).trim_end();
+    for f in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
+        if let Ok(n) = NaiveDateTime::parse_from_str(s, f) {
+            return Some(n);
+        }
+    }
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0))
+}
+
 fn parse_time(v: &Value, t: &TimeSpec, zone: &Zone) -> Option<DateTime<FixedOffset>> {
     match t.input.as_str() {
         "unix" => {
             let secs = as_num(v)? as i64;
             Some(zone.convert(DateTime::from_timestamp(secs, 0)?.fixed_offset()))
         }
+        "unix_ms" => {
+            let ms = as_num(v)? as i64;
+            Some(zone.convert(DateTime::from_timestamp_millis(ms)?.fixed_offset()))
+        }
         "rfc3339" => DateTime::parse_from_rfc3339(v.as_str()?.trim()).ok(),
-        _ => {
+        "rfc2822" => DateTime::parse_from_rfc2822(v.as_str()?.trim()).ok(),
+        "utc" => {
+            let n = naive_flex(v.as_str()?)?;
+            Some(zone.convert(n.and_utc().fixed_offset()))
+        }
+        "pattern" => {
+            let pat = t.pattern.as_deref()?;
             let s = v.as_str()?.trim();
-            let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
-                .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M"))
+            if pat.contains("%z") || pat.contains("%:z") || pat.contains("%#z") {
+                return DateTime::parse_from_str(s, pat).ok();
+            }
+            let naive = NaiveDateTime::parse_from_str(s, pat)
                 .ok()
-                .or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0)))?;
+                .or_else(|| NaiveDate::parse_from_str(s, pat).ok().and_then(|d| d.and_hms_opt(0, 0, 0)))?;
+            if t.assume.as_deref() == Some("utc") {
+                Some(zone.convert(naive.and_utc().fixed_offset()))
+            } else {
+                zone.local(&naive)
+            }
+        }
+        _ => {
+            let naive = naive_flex(v.as_str()?)?;
             zone.local(&naive)
         }
     }
@@ -209,6 +297,10 @@ fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
         (None, Some(spec.first_of.iter().find_map(|s| eval(s, ctx))?))
     } else if let Some(d) = &spec.distance {
         (None, Some(distance_text(d, ctx)?))
+    } else if let Some(c) = &spec.calc {
+        (None, Some(calc(c, ctx)?))
+    } else if let Some(p) = &spec.param {
+        (Some(ctx.params.get(p)?.clone()), None)
     } else if let Some(t) = &spec.template {
         let mut out = String::new();
         let mut rest = t.as_str();
@@ -222,8 +314,21 @@ fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
         (None, Some(out))
     } else if let Some(c) = &spec.constant {
         (Some(c.clone()), None)
+    } else if spec.path.as_deref() == Some("@key") {
+        (Some(Value::String(ctx.key?.to_string())), None)
     } else {
         (Some(follow(ctx, spec.path.as_deref()?)?.clone()), None)
+    };
+    let (raw, base_text) = match &spec.after_last {
+        Some(sep) if !sep.is_empty() => {
+            let t = match (&raw, &base_text) {
+                (Some(v), _) => plain(v)?,
+                (None, Some(s)) => s.clone(),
+                _ => return None,
+            };
+            (None, Some(t.rsplit(sep.as_str()).next()?.to_string()))
+        }
+        _ => (raw, base_text),
     };
     let raw_ref = raw.as_ref();
     let mut text: String = if !spec.lookup.is_empty() {
@@ -238,7 +343,13 @@ fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
             (None, Some(s)) => Value::String(s.clone()),
             _ => return None,
         };
-        write_time(parse_time(&v, t, ctx.zone)?, t, ctx.zone)
+        let dt = parse_time(&v, t, ctx.zone)?;
+        if let Some(nb) = t.not_before.as_deref().and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()) {
+            if dt.date_naive() < nb {
+                return None;
+            }
+        }
+        write_time(dt, t, ctx.zone)
     } else if spec.compass || spec.scale.is_some() || spec.offset.is_some() || spec.round.is_some() {
         let n = match (raw_ref, &base_text) {
             (Some(v), _) => as_num(v)?,
@@ -261,6 +372,12 @@ fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
     if text.is_empty() {
         return None;
     }
+    if spec.min_value.is_some() || spec.max_value.is_some() {
+        let n = lead_num(&text)?;
+        if spec.min_value.map(|m| n < m).unwrap_or(false) || spec.max_value.map(|m| n > m).unwrap_or(false) {
+            return None;
+        }
+    }
     if spec.omit_if.iter().any(|o| o.to_lowercase() == text.to_lowercase()) {
         return None;
     }
@@ -282,13 +399,73 @@ fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
     Some(format!("{}{}{}", spec.prefix.as_deref().unwrap_or(""), text, spec.suffix.as_deref().unwrap_or("")))
 }
 
-/// "6.2 mi S", or "inside the area".
-fn distance_text(d: &crate::def::DistanceSpec, ctx: &Ctx) -> Option<String> {
-    let near = crate::geo::nearest(follow(ctx, &d.geometry)?, ctx.lat, ctx.lon)?;
+/// Arithmetic on the values of `args`, left to right.
+fn calc(c: &CalcSpec, ctx: &Ctx) -> Option<String> {
+    let mut nums = Vec::with_capacity(c.args.len());
+    for a in &c.args {
+        nums.push(lead_num(&eval(a, ctx)?)?);
+    }
+    let mut it = nums.into_iter();
+    let first = it.next()?;
+    let r = match c.op.as_str() {
+        "add" | "+" => it.fold(first, |a, b| a + b),
+        "sub" | "-" => it.fold(first, |a, b| a - b),
+        "mul" | "*" => it.fold(first, |a, b| a * b),
+        "div" | "/" => {
+            let mut acc = first;
+            for b in it {
+                if b == 0.0 {
+                    return None;
+                }
+                acc /= b;
+            }
+            acc
+        }
+        "min" => it.fold(first, f64::min),
+        "max" => it.fold(first, f64::max),
+        _ => return None,
+    };
+    if r.is_finite() {
+        Some(fmt_num(r, None))
+    } else {
+        None
+    }
+}
+
+fn point_of(p: &crate::def::PointDef, ctx: &Ctx) -> Option<(f64, f64)> {
+    let lat: f64 = lead_num(&eval(&p.lat, ctx)?)?;
+    let lon: f64 = lead_num(&eval(&p.lon, ctx)?)?;
+    if lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+        Some((lat, lon))
+    } else {
+        None
+    }
+}
+
+fn near_of_spec(d: &DistanceSpec, ctx: &Ctx) -> Option<Near> {
+    match (&d.geometry, &d.point) {
+        (Some(g), _) => geo::nearest(follow(ctx, g)?, ctx.lat, ctx.lon),
+        (None, Some(p)) => {
+            let (la, lo) = point_of(p, ctx)?;
+            Some(geo::to_point(ctx.lat, ctx.lon, la, lo))
+        }
+        _ => None,
+    }
+}
+
+/// "6.2 mi S", or "inside the area", or just the number with `number`.
+fn distance_text(d: &DistanceSpec, ctx: &Ctx) -> Option<String> {
+    let near = near_of_spec(d, ctx)?;
+    let (v, unit) = if d.unit == "km" { (near.km, "km") } else { (near.km * 0.621_371_192, "mi") };
+    if d.number {
+        return Some(fmt_num(if near.inside { 0.0 } else { v }, None));
+    }
     if near.inside {
         return Some("inside the area".into());
     }
-    let (v, unit) = if d.unit == "km" { (near.km, "km") } else { (near.km * 0.621_371_192, "mi") };
+    if near.km < 0.05 {
+        return Some("at the place".into());
+    }
     let num = if v < 10.0 { format!("{v:.1}") } else { format!("{v:.0}") };
     Some(format!("{num} {unit} {}", compass(near.bearing)))
 }
@@ -299,8 +476,35 @@ fn eval_instant(spec: &Spec, ctx: &Ctx) -> Option<i64> {
         return spec.first_of.iter().find_map(|s| eval_instant(s, ctx));
     }
     let v = follow(ctx, spec.path.as_deref()?)?;
-    let default = TimeSpec { input: "rfc3339".into(), out: None, zone: None };
+    let default = TimeSpec { input: "rfc3339".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
     parse_time(v, spec.time.as_ref().unwrap_or(&default), ctx.zone).map(|d| d.timestamp())
+}
+
+/// How far the item is from the place: its `near` geometry or point, else its `point`, else its `area`.
+fn item_near(g: &ItemDef, ctx: &Ctx) -> Option<Near> {
+    if let Some(n) = &g.near {
+        if let Some(p) = &n.point {
+            let (la, lo) = point_of(p, ctx)?;
+            return Some(geo::to_point(ctx.lat, ctx.lon, la, lo));
+        }
+        if let Some(path) = &n.geometry {
+            return geo::nearest(follow(ctx, path)?, ctx.lat, ctx.lon);
+        }
+    }
+    if let Some(p) = &g.point {
+        if let Some((la, lo)) = point_of(p, ctx) {
+            return Some(geo::to_point(ctx.lat, ctx.lon, la, lo));
+        }
+    }
+    let a = g.area.as_ref()?;
+    geo::nearest(follow(ctx, a)?, ctx.lat, ctx.lon)
+}
+
+fn num_of(n: &Num, ctx: &Ctx) -> Option<f64> {
+    match n {
+        Num::Lit(x) => Some(*x),
+        Num::Val(s) => lead_num(&eval(s, ctx)?),
+    }
 }
 
 fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
@@ -309,8 +513,7 @@ fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
     let fields: Vec<(String, String)> =
         def.fields.iter().filter_map(|f| Some((f.label.clone()?, eval(f, ctx)?))).collect();
     let point = def.point.as_ref().and_then(|p| {
-        let lat: f64 = eval(&p.lat, ctx)?.parse().ok()?;
-        let lon: f64 = eval(&p.lon, ctx)?.parse().ok()?;
+        let (lat, lon) = point_of(p, ctx)?;
         Some(Point { lat, lon })
     });
     Some(Item {
@@ -324,6 +527,95 @@ fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
     })
 }
 
+fn same(have: &str, want: &Value) -> bool {
+    match want {
+        Value::Number(n) => match (have.trim().parse::<f64>(), n.as_f64()) {
+            (Ok(a), Some(b)) => a == b,
+            _ => false,
+        },
+        Value::String(s) => one_line(s).to_lowercase() == have.trim().to_lowercase(),
+        Value::Bool(b) => have.trim().eq_ignore_ascii_case(&b.to_string()),
+        _ => false,
+    }
+}
+
+fn cond_ok(c: &Cond, item: &Item, ctx: &Ctx) -> bool {
+    if !c.or.is_empty() {
+        return c.or.iter().any(|x| cond_ok(x, item, ctx));
+    }
+    let have: Option<String> = if let Some(v) = &c.value {
+        eval(v, ctx)
+    } else if let Some(f) = &c.field {
+        item.fields.0.iter().find(|(l, _)| l == f).map(|(_, t)| t.clone())
+    } else {
+        None
+    };
+    if let Some(e) = c.exists {
+        if have.is_some() != e {
+            return false;
+        }
+    }
+    if let (Some(h), Some(v)) = (&c.max_age_hours, &c.value) {
+        let Some(hours) = num_of(h, ctx) else { return false };
+        // a value with a time is read as a time (RFC 3339 without one)
+        return match eval_instant(v, ctx) {
+            Some(t) => t >= ctx.now - (hours * 3600.0) as i64 && c.or.is_empty(),
+            None => false,
+        };
+    }
+    let Some(h) = have else {
+        // a missing value fails every test except the negative ones
+        let positive = c.equals.is_some()
+            || !c.one_of.is_empty()
+            || c.gt.is_some()
+            || c.ge.is_some()
+            || c.lt.is_some()
+            || c.le.is_some()
+            || c.contains.is_some()
+            || c.starts_with.is_some();
+        return !positive;
+    };
+    if let Some(w) = &c.equals {
+        if !same(&h, w) {
+            return false;
+        }
+    }
+    if let Some(w) = &c.not_equals {
+        if same(&h, w) {
+            return false;
+        }
+    }
+    if !c.one_of.is_empty() && !c.one_of.iter().any(|w| same(&h, w)) {
+        return false;
+    }
+    if c.not_in.iter().any(|w| same(&h, w)) {
+        return false;
+    }
+    let cmp = |want: &Option<Num>, ok: fn(Ordering) -> bool| -> bool {
+        match want {
+            None => true,
+            Some(n) => match (lead_num(&h), num_of(n, ctx)) {
+                (Some(a), Some(b)) => a.partial_cmp(&b).map(ok).unwrap_or(false),
+                _ => false,
+            },
+        }
+    };
+    if !cmp(&c.gt, |o| o == Ordering::Greater) || !cmp(&c.ge, |o| o != Ordering::Less) || !cmp(&c.lt, |o| o == Ordering::Less) || !cmp(&c.le, |o| o != Ordering::Greater) {
+        return false;
+    }
+    if let Some(t) = &c.contains {
+        if !h.to_lowercase().contains(&t.to_lowercase()) {
+            return false;
+        }
+    }
+    if let Some(t) = &c.starts_with {
+        if !h.to_lowercase().starts_with(&t.to_lowercase()) {
+            return false;
+        }
+    }
+    true
+}
+
 fn bad(m: String) -> Error {
     Error::bad_response(m)
 }
@@ -332,7 +624,8 @@ fn bad(m: String) -> Error {
 /// else UTC.
 pub fn zone_for(def: &SourceDef, root: &Value, lat: f64, lon: f64) -> Result<Zone> {
     let utc = Zone::UTC;
-    let probe = Ctx { root, cur: root, idx: 0, zone: &utc, lat, lon };
+    let none = Params::new();
+    let probe = Ctx { root, cur: root, idx: 0, key: None, zone: &utc, params: &none, now: 0, lat, lon };
     if let Some(p) = &def.timezone_path {
         if let Some(z) = follow(&probe, p).and_then(Value::as_str).and_then(Zone::from_name) {
             return Ok(z);
@@ -350,6 +643,7 @@ pub fn zone_for(def: &SourceDef, root: &Value, lat: f64, lon: f64) -> Result<Zon
 #[derive(PartialEq, PartialOrd)]
 enum KeyVal {
     Num(i64),
+    Flt(f64),
     Text(String),
 }
 
@@ -357,22 +651,34 @@ fn sort_keys(g: &ItemDef, ctx: &Ctx) -> Vec<Option<KeyVal>> {
     g.sort
         .iter()
         .map(|k| {
+            if k.distance {
+                return item_near(g, ctx).map(|n| KeyVal::Flt(if n.inside { 0.0 } else { n.km }));
+            }
+            let by = k.by.as_ref()?;
             if !k.rank.is_empty() {
-                let v = eval(&k.by, ctx)?.to_lowercase();
+                let v = eval(by, ctx)?.to_lowercase();
                 Some(KeyVal::Num(k.rank.iter().position(|r| r.to_lowercase() == v).unwrap_or(k.rank.len()) as i64))
             } else if k.time {
-                eval_instant(&k.by, ctx).map(KeyVal::Num)
+                eval_instant(by, ctx).map(KeyVal::Num)
+            } else if k.number {
+                lead_num(&eval(by, ctx)?).map(KeyVal::Flt)
             } else {
-                eval(&k.by, ctx).map(KeyVal::Text)
+                eval(by, ctx).map(KeyVal::Text)
             }
         })
         .collect()
 }
 
-/// Map a response for a place at (`lat`, `lon`). `fetched_at` (Unix seconds) is only used for a fixed-hours validity.
+/// Map a response for a place at (`lat`, `lon`) with the parameters' defaults left out (none). `fetched_at` (Unix
+/// seconds) is only used for a fixed-hours validity.
 pub fn map_response(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lon: f64) -> Result<Mapped> {
+    map_response_with(def, root, fetched_at, lat, lon, &Params::new())
+}
+
+/// `map_response` with the user's parameters (`{"param": "name"}` in the definition reads them).
+pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lon: f64, params: &Params) -> Result<Mapped> {
     let zone = zone_for(def, root, lat, lon)?;
-    let at = |cur| Ctx { root, cur, idx: 0, zone: &zone, lat, lon };
+    let at = |cur| Ctx { root, cur, idx: 0, key: None, zone: &zone, params, now: fetched_at, lat, lon };
     for p in &def.require {
         if follow(&at(root), p).is_none() {
             return Err(bad(format!("the response has no {p:?}")));
@@ -381,40 +687,61 @@ pub fn map_response(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lo
     let mut items = Vec::new();
     for g in &def.items {
         let mut group: Vec<(Vec<Option<KeyVal>>, Item)> = Vec::new();
+        let push = |ctx: Ctx, group: &mut Vec<(Vec<Option<KeyVal>>, Item)>| {
+            let Some(it) = map_item(g, &ctx) else { return };
+            if !g.filter.iter().all(|c| cond_ok(c, &it, &ctx)) {
+                return;
+            }
+            if let Some(n) = &g.near {
+                let Some(max) = num_of(&n.max, &ctx) else { return };
+                let Some(d) = item_near(g, &ctx) else { return };
+                let km = if d.inside { 0.0 } else { d.km };
+                let max_km = if n.unit == "mi" { max / 0.621_371_192 } else { max };
+                if km > max_km {
+                    return;
+                }
+            }
+            group.push((sort_keys(g, &ctx), it));
+        };
         match &g.each {
             Some(p) => {
-                let arr = follow(&at(root), p).and_then(Value::as_array).ok_or_else(|| bad(format!("no list at {p:?}")))?;
-                for (i, el) in arr.iter().enumerate() {
-                    let ctx = Ctx { root, cur: el, idx: i, zone: &zone, lat, lon };
-                    if let Some(it) = map_item(g, &ctx) {
-                        group.push((sort_keys(g, &ctx), it));
+                let target = follow(&at(root), p).ok_or_else(|| bad(format!("no list at {p:?}")))?;
+                match target {
+                    Value::Array(arr) => {
+                        for (i, el) in arr.iter().enumerate() {
+                            push(Ctx { root, cur: el, idx: i, key: None, zone: &zone, params, now: fetched_at, lat, lon }, &mut group);
+                        }
                     }
+                    Value::Object(obj) => {
+                        for (i, (k, el)) in obj.iter().enumerate() {
+                            push(Ctx { root, cur: el, idx: i, key: Some(k.as_str()), zone: &zone, params, now: fetched_at, lat, lon }, &mut group);
+                        }
+                    }
+                    _ => return Err(bad(format!("no list at {p:?}"))),
                 }
             }
-            None => {
-                let ctx = at(root);
-                if let Some(it) = map_item(g, &ctx) {
-                    group.push((sort_keys(g, &ctx), it));
-                }
-            }
+            None => push(at(root), &mut group),
         }
         if !g.sort.is_empty() {
             group.sort_by(|a, b| {
                 for (i, k) in g.sort.iter().enumerate() {
                     // missing values last, whatever the direction
                     let o = match (&a.0[i], &b.0[i]) {
-                        (None, None) => std::cmp::Ordering::Equal,
-                        (None, Some(_)) => return std::cmp::Ordering::Greater,
-                        (Some(_), None) => return std::cmp::Ordering::Less,
-                        (Some(x), Some(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+                        (None, None) => Ordering::Equal,
+                        (None, Some(_)) => return Ordering::Greater,
+                        (Some(_), None) => return Ordering::Less,
+                        (Some(x), Some(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
                     };
                     let o = if k.desc { o.reverse() } else { o };
-                    if o != std::cmp::Ordering::Equal {
+                    if o != Ordering::Equal {
                         return o;
                     }
                 }
-                std::cmp::Ordering::Equal
+                Ordering::Equal
             });
+        }
+        if let Some(n) = g.limit {
+            group.truncate(n);
         }
         items.extend(group.into_iter().map(|(_, it)| it));
     }
@@ -431,10 +758,11 @@ fn validity(def: &SourceDef, root: &Value, zone: &Zone, fetched_at: i64, lat: f6
         return Ok((fetched_at + (h * 3600.0) as i64, None));
     }
     let path = v.end_path.as_deref().unwrap_or("");
-    let ctx = Ctx { root, cur: root, idx: 0, zone, lat, lon };
+    let none = Params::new();
+    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now: fetched_at, lat, lon };
     let val = follow(&ctx, path).ok_or_else(|| bad(format!("no end time at {path:?}")))?;
-    let local = TimeSpec { input: "local".into(), out: None, zone: None };
-    let rfc = TimeSpec { input: "rfc3339".into(), out: None, zone: None };
+    let local = TimeSpec { input: "local".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
+    let rfc = TimeSpec { input: "rfc3339".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
     let dt = parse_time(val, &local, zone).or_else(|| parse_time(val, &rfc, zone)).ok_or_else(|| bad(format!("{path:?} is not a date")))?;
     let end = if v.end_of_day {
         let next = dt.date_naive() + Duration::days(1);
@@ -482,8 +810,9 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
     static Z: Zone = Zone::Fixed(-21600);
+    static NO_PARAMS: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
     fn ctx<'a>(root: &'a Value, cur: &'a Value, idx: usize) -> Ctx<'a> {
-        Ctx { root, cur, idx, zone: &Z, lat: 42.536, lon: -113.792 }
+        Ctx { root, cur, idx, key: None, zone: &Z, params: NO_PARAMS.get_or_init(Params::new), now: 1_792_000_000, lat: 42.536, lon: -113.792 }
     }
 
     #[test]
@@ -500,6 +829,7 @@ mod tests {
         assert_eq!(follow(&c, "v"), Some(&json!(5)));
         assert_eq!(follow(&c, "^t[1]"), Some(&json!("y")));
         assert_eq!(follow(&c, "@"), Some(&cur));
+        assert_eq!(lookup(&root, "a.b[-1]"), Some(&json!(30)));
     }
 
     #[test]
@@ -517,10 +847,24 @@ mod tests {
         assert_eq!(eval(&spec(json!({"path":"t","time":{"in":"local","out":"%a %d %b"}})), &c).unwrap(), "Sun 25 Oct");
         assert_eq!(eval(&spec(json!({"path":"s"})), &c).unwrap(), "a b");
         assert_eq!(eval(&spec(json!({"path":"u","case":"lower"})), &c).unwrap(), "severe");
+        let url = json!({"u": "https://api.weather.gov/stations/KBOI", "n": 5});
+        let cu = ctx(&url, &url, 0);
+        assert_eq!(eval(&spec(json!({"path":"u","after_last":"/"})), &cu).unwrap(), "KBOI");
+        assert_eq!(eval(&spec(json!({"path":"u","after_last":"/","lookup":{"KBOI":"Boise airport"}})), &cu).unwrap(), "Boise airport");
+        assert_eq!(eval(&spec(json!({"path":"n","after_last":"/"})), &cu).unwrap(), "5");
+        assert_eq!(eval(&spec(json!({"path":"u","after_last":"#"})), &cu).unwrap(), "https://api.weather.gov/stations/KBOI");
         assert_eq!(eval(&spec(json!({"path":"u","omit_if":["severe"]})), &c), None);
         assert_eq!(eval(&spec(json!({"path":"missing"})), &c), None);
         assert_eq!(eval(&spec(json!({"const":"Now"})), &c).unwrap(), "Now");
         assert_eq!(eval(&spec(json!({"first_of":[{"path":"nope"},{"path":"c"}]})), &c).unwrap(), "3");
+        // sentinels: -999 for "no reading", year 1 for "no time"
+        let s = json!({"v": -999.0, "w": 3.5, "t": "0001-01-01T00:00:00Z", "t2": "2026-10-25T14:00:00Z"});
+        let cs = ctx(&s, &s, 0);
+        assert_eq!(eval(&spec(json!({"path":"v","round":1,"min_value":-900})), &cs), None);
+        assert_eq!(eval(&spec(json!({"path":"w","round":1,"min_value":-900,"max_value":10,"suffix":" ft"})), &cs).unwrap(), "3.5 ft");
+        assert_eq!(eval(&spec(json!({"path":"w","max_value":3})), &cs), None);
+        assert_eq!(eval(&spec(json!({"path":"t","time":{"in":"rfc3339","not_before":"2000-01-01"}})), &cs), None);
+        assert!(eval(&spec(json!({"path":"t2","time":{"in":"rfc3339","not_before":"2000-01-01"}})), &cs).is_some());
         let long = spec(json!({"const":"alpha beta gamma delta epsilon","max_chars":14}));
         assert_eq!(eval(&long, &c).unwrap(), "alpha beta\u{2026}");
     }
@@ -549,6 +893,30 @@ mod tests {
     }
 
     #[test]
+    fn time_inputs_ms_utc_pattern() {
+        // 2026-10-25T19:40:00Z in milliseconds = 13:40 in the place (-06:00)
+        let ms = DateTime::parse_from_rfc3339("2026-10-25T19:40:00Z").unwrap().timestamp() * 1000 + 250;
+        let root = json!({"ms": ms, "utc1": "2026-10-25T19:40:00", "utc2": "2026-10-25 19:40:00.783", "utc3": "2026-10-25T19:40:00Z",
+                          "pat": "25/10/2026 13:40", "pat_z": "25 Oct 2026 19:40 +0000", "rfc2822": "Sun, 25 Oct 2026 19:40:00 +0000", "str_ms": "1792000000000"});
+        let c = ctx(&root, &root, 0);
+        let t = |v: Value| eval(&spec(v), &c);
+        assert_eq!(t(json!({"path":"ms","time":{"in":"unix_ms","out":"datetime_s"}})).unwrap(), "2026-10-25T13:40:00-06:00");
+        assert_eq!(t(json!({"path":"str_ms","time":{"in":"unix_ms","out":"date"}})).is_some(), true);
+        for p in ["utc1", "utc2", "utc3"] {
+            assert_eq!(t(json!({"path":p,"time":{"in":"utc","out":"%H:%M %:z"}})).unwrap(), "13:40 -06:00", "{p}");
+        }
+        assert_eq!(t(json!({"path":"pat","time":{"in":"pattern","pattern":"%d/%m/%Y %H:%M","out":"datetime"}})).unwrap(), "2026-10-25T13:40-06:00");
+        assert_eq!(t(json!({"path":"pat","time":{"in":"pattern","pattern":"%d/%m/%Y %H:%M","assume":"utc","out":"%H:%M"}})).unwrap(), "07:40");
+        assert_eq!(t(json!({"path":"pat_z","time":{"in":"pattern","pattern":"%d %b %Y %H:%M %z","zone":"place","out":"%H:%M"}})).unwrap(), "13:40");
+        assert_eq!(t(json!({"path":"rfc2822","time":{"in":"rfc2822","zone":"place","out":"%H:%M"}})).unwrap(), "13:40");
+        // as an instant (sort keys and ends)
+        let z = DateTime::parse_from_rfc3339("2026-10-25T19:40:00Z").unwrap().timestamp();
+        assert_eq!(eval_instant(&spec(json!({"path":"utc1","time":{"in":"utc"}})), &c), Some(z));
+        assert_eq!(eval_instant(&spec(json!({"path":"ms","time":{"in":"unix_ms"}})), &c), Some(z));
+        assert_eq!(t(json!({"path":"utc1","time":{"in":"bogus"}})), t(json!({"path":"utc1","time":{"in":"bogus"}})));
+    }
+
+    #[test]
     fn distance_text_and_sort() {
         let root = json!({"geometry": {"type":"Polygon","coordinates":[[[-113.9,42.636],[-113.7,42.636],[-113.7,42.7],[-113.9,42.7],[-113.9,42.636]]]},
                           "inside": {"type":"Polygon","coordinates":[[[-113.9,42.4],[-113.7,42.4],[-113.7,42.7],[-113.9,42.7],[-113.9,42.4]]]}});
@@ -557,6 +925,132 @@ mod tests {
         assert_eq!(eval(&spec(json!({"distance":{"geometry":"geometry","unit":"km"}})), &c).unwrap(), "11 km N");
         assert_eq!(eval(&spec(json!({"distance":{"geometry":"inside","unit":"mi"}})), &c).unwrap(), "inside the area");
         assert_eq!(eval(&spec(json!({"distance":{"geometry":"nothing","unit":"mi"}})), &c), None);
+    }
+
+    #[test]
+    fn distance_from_points_lines_and_pairs() {
+        let root = json!({"pt": {"type":"Point","coordinates":[-113.792, 42.636]},
+                          "feat": {"type":"Feature","geometry":{"type":"Point","coordinates":[-113.792, 42.636]}},
+                          "line": {"type":"LineString","coordinates":[[-113.5,42.0],[-113.5,43.0]]},
+                          "lat": "42.636", "lon": -113.792, "bad": "x"});
+        let c = ctx(&root, &root, 0);
+        let t = |v: Value| eval(&spec(v), &c);
+        // 0.1 degrees of latitude = 11.1 km = 6.9 mi, straight north
+        assert_eq!(t(json!({"distance":{"geometry":"pt","unit":"mi"}})).unwrap(), "6.9 mi N");
+        assert_eq!(t(json!({"distance":{"geometry":"feat","unit":"mi"}})).unwrap(), "6.9 mi N");
+        assert_eq!(t(json!({"distance":{"point":{"lat":{"path":"lat"},"lon":{"path":"lon"}},"unit":"km"}})).unwrap(), "11 km N");
+        // the line runs north-south 0.29 degrees of longitude east of the place: nearest point is due east
+        let l = t(json!({"distance":{"geometry":"line","unit":"km"}})).unwrap();
+        assert!(l.ends_with(" km E"), "{l}");
+        assert_eq!(t(json!({"distance":{"point":{"lat":{"path":"bad"},"lon":{"path":"lon"}},"unit":"km"}})), None);
+        // a number for arithmetic
+        assert_eq!(t(json!({"distance":{"geometry":"pt","unit":"km","number":true},"round":1})).unwrap(), "11.1");
+    }
+
+    #[test]
+    fn calc_and_param() {
+        let root = json!({"a": 10, "b": 4, "z": 0, "t": "20 mph"});
+        let mut params = Params::new();
+        params.insert("scale".into(), json!(3));
+        let c = Ctx { params: &params, ..ctx(&root, &root, 0) };
+        let t = |v: Value| eval(&spec(v), &c);
+        let arg = |p: &str| json!({"path": p});
+        assert_eq!(t(json!({"calc":{"op":"add","args":[arg("a"),arg("b")]}})).unwrap(), "14");
+        assert_eq!(t(json!({"calc":{"op":"+","args":[arg("a"),arg("b"),{"const":1}]}})).unwrap(), "15");
+        assert_eq!(t(json!({"calc":{"op":"sub","args":[arg("a"),arg("b")]}})).unwrap(), "6");
+        assert_eq!(t(json!({"calc":{"op":"mul","args":[arg("a"),arg("b")]}})).unwrap(), "40");
+        assert_eq!(t(json!({"calc":{"op":"div","args":[arg("a"),arg("b")]},"round":2})).unwrap(), "2.50");
+        assert_eq!(t(json!({"calc":{"op":"/","args":[arg("a"),arg("z")]}})), None);
+        assert_eq!(t(json!({"calc":{"op":"min","args":[arg("a"),arg("b")]}})).unwrap(), "4");
+        assert_eq!(t(json!({"calc":{"op":"max","args":[arg("a"),arg("b")]}})).unwrap(), "10");
+        // a missing argument makes the result missing; first_of supplies a fallback
+        assert_eq!(t(json!({"calc":{"op":"add","args":[arg("a"),arg("nope")]}})), None);
+        assert_eq!(t(json!({"calc":{"op":"add","args":[arg("a"),{"first_of":[arg("nope"),{"const":5}]}]}})).unwrap(), "15");
+        // the number at the start of a text counts, and a calc result goes through the other steps
+        assert_eq!(t(json!({"calc":{"op":"mul","args":[arg("t"),{"const":2}]},"suffix":" mph"})).unwrap(), "40 mph");
+        assert_eq!(t(json!({"calc":{"op":"mul","args":[arg("a"),{"param":"scale"}]}})).unwrap(), "30");
+        assert_eq!(t(json!({"param":"scale","suffix":"x"})).unwrap(), "3x");
+        assert_eq!(t(json!({"param":"other"})), None);
+    }
+
+    #[test]
+    fn where_near_sort_limit_and_each_object() {
+        let def: SourceDef = SourceDef::parse(
+            &json!({
+                "format": 2, "id": "t", "title": "t", "provider": "t", "description": "t",
+                "request": {"url": "https://x/"}, "refresh_minutes": 1, "validity": {"fixed_hours": 1},
+                "params": [{"name": "min_size", "type": "number", "default": 10}],
+                "items": [{
+                    "each": "list", "key": {"path": "id"}, "label": {"path": "name"},
+                    "point": {"lat": {"path": "lat"}, "lon": {"path": "lon"}},
+                    "fields": [{"label": "Size", "path": "size", "suffix": " acres"}, {"label": "Kind", "path": "kind"}],
+                    "where": [
+                        {"value": {"path": "size"}, "ge": {"param": "min_size"}},
+                        {"field": "Kind", "not_in": ["prescribed"]},
+                        {"or": [{"value": {"path": "state"}, "equals": "ID"}, {"value": {"path": "state"}, "equals": "OR"}]}
+                    ],
+                    "near": {"max": 100, "unit": "mi"},
+                    "sort": [{"by": {"path": "size"}, "number": true, "desc": true}],
+                    "limit": 3
+                }, {
+                    "each": "byday", "key": {"path": "@key"}, "label": {"template": "Day {d}", "vars": {"d": {"path": "@key"}}},
+                    "fields": [{"label": "High", "path": "hi"}],
+                    "sort": [{"by": {"path": "hi"}, "number": true}]
+                }, {
+                    "each": "list", "key": {"template": "near-{id}", "vars": {"id": {"path": "id"}}}, "label": {"path": "name"},
+                    "point": {"lat": {"path": "lat"}, "lon": {"path": "lon"}},
+                    "fields": [{"label": "From here", "distance": {"point": {"lat": {"path": "lat"}, "lon": {"path": "lon"}}, "unit": "mi"}}],
+                    "sort": [{"distance": true}], "limit": 2
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let root = json!({
+            "list": [
+                {"id": "a", "name": "Far", "lat": 46.0, "lon": -113.8, "size": 5000, "kind": "wildfire", "state": "ID"},
+                {"id": "b", "name": "Big", "lat": 42.7, "lon": -113.8, "size": "900", "kind": "wildfire", "state": "ID"},
+                {"id": "c", "name": "Small", "lat": 42.6, "lon": -113.8, "size": 4, "kind": "wildfire", "state": "ID"},
+                {"id": "d", "name": "Rx", "lat": 42.6, "lon": -113.8, "size": 500, "kind": "prescribed", "state": "ID"},
+                {"id": "e", "name": "Utah", "lat": 42.6, "lon": -113.8, "size": 700, "kind": "wildfire", "state": "UT"},
+                {"id": "f", "name": "Oregon", "lat": 42.5, "lon": -113.6, "size": 60, "kind": "wildfire", "state": "OR"},
+                {"id": "g", "name": "Nowhere", "size": 800, "kind": "wildfire", "state": "ID"}
+            ],
+            "byday": {"mon": {"hi": 51}, "tue": {"hi": "9"}, "wed": {"hi": 70}}
+        });
+        let m = map_response_with(&def, &root, 0, 42.536, -113.792, &BTreeMap::from([("min_size".to_string(), json!(10))])).unwrap();
+        let keys: Vec<&str> = m.items.iter().map(|i| i.key.as_str()).collect();
+        // group 1: Far is >100 mi away, Small is under the size limit, Rx is prescribed, Utah fails the OR, Nowhere has no point
+        // -> Big (900) then Oregon (60); group 2: ascending by number (9, 51, 70); group 3: the two nearest of all seven with a point
+        assert_eq!(keys, ["b", "f", "tue", "mon", "wed", "near-c", "near-d"]);
+        assert_eq!(m.items[2].label, "Day tue");
+        // distance sort: Small and Rx (4.4 mi) come before Oregon (10 mi)
+        assert!(m.items[5].fields.0[0].1.contains("mi"), "{:?}", m.items[5].fields);
+        // the same response with a lower limit on size
+        let m = map_response_with(&def, &root, 0, 42.536, -113.792, &BTreeMap::from([("min_size".to_string(), json!(1))])).unwrap();
+        assert!(m.items.iter().any(|i| i.key == "c"));
+        // exists / missing
+        let c = |v: Value| -> Cond { serde_json::from_value(v).unwrap() };
+        let it = Item { key: "k".into(), label: "l".into(), time: None, ends: None, fields: Fields(vec![("N".into(), "12 mph".into())]), point: None, area: None };
+        let r = json!({"x": 5, "s": "Hello World"});
+        let cx = ctx(&r, &r, 0);
+        assert!(cond_ok(&c(json!({"value":{"path":"x"},"exists":true})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"y"},"exists":false})), &it, &cx));
+        assert!(!cond_ok(&c(json!({"value":{"path":"y"},"equals":1})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"y"},"not_equals":1})), &it, &cx));
+        assert!(cond_ok(&c(json!({"field":"N","gt":10,"lt":13})), &it, &cx));
+        assert!(!cond_ok(&c(json!({"field":"N","gt":12})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"s"},"contains":"lo wo"})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"s"},"starts_with":"hell"})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"x"},"in":[1,5]})), &it, &cx));
+        // max_age_hours: relative to the fetch time (1_792_000_000 = 2026-10-14T17:46:40Z)
+        let r = json!({"fresh": "2026-10-14T15:00:00Z", "stale": "2026-10-10T15:00:00Z", "ms": 1_791_990_000_000i64});
+        let cx = ctx(&r, &r, 0);
+        assert!(cond_ok(&c(json!({"value":{"path":"fresh"},"max_age_hours":6})), &it, &cx));
+        assert!(!cond_ok(&c(json!({"value":{"path":"stale"},"max_age_hours":6})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"stale"},"max_age_hours":200})), &it, &cx));
+        assert!(cond_ok(&c(json!({"value":{"path":"ms","time":{"in":"unix_ms"}},"max_age_hours":6})), &it, &cx));
+        assert!(!cond_ok(&c(json!({"value":{"path":"nope"},"max_age_hours":6})), &it, &cx));
     }
 
     #[test]
@@ -569,5 +1063,8 @@ mod tests {
         assert_eq!(age_words(3 * 86400 + 5), "3 days old");
         assert_eq!(stamp(0, &Zone::Fixed(-21600)), "1969-12-31T18:00:00-06:00");
         assert_eq!(date_of(0, &Zone::Fixed(3600)), "1970-01-01");
+        assert_eq!(lead_num("54 acres"), Some(54.0));
+        assert_eq!(lead_num("-3.5%"), Some(-3.5));
+        assert_eq!(lead_num("x1"), None);
     }
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>urn:oid:2.49.0.1.840.0.aaa</identifier>
+  <sender>alerts@example.org</sender>
+  <sent>2026-10-25T09:40:00-06:00</sent>
+  <status>Actual</status>
+  <info>
+    <category>Met</category>
+    <event>Flood Warning</event>
+    <urgency>Immediate</urgency>
+    <severity>Severe</severity>
+    <expires>2026-10-25T18:00:00-06:00</expires>
+    <headline>Flood Warning issued October 25 until 6:00 PM MDT</headline>
+    <area><areaDesc>Cassia, ID</areaDesc></area>
+  </info>
+</alert>

@@ -1039,20 +1039,28 @@ the live data stored for it.
 
 ### Live sources (`cache_live`)
 
-"Every API data point works this way": one engine, no per-source code. A source is one JSON file; the app points
-`"live": {"db_path", "sources_dir"}` at a folder of them. The files that ship are in `packages/cache_search/sources/`
-(`weather.json`: Open-Meteo, `alerts.json`: NWS); the app copies them into its sources folder on install, and a user adds
-or shares more by dropping files there. An unreadable file is listed under `errors` by `cs_live_sources` and does not stop
-the others.
+"Every API data point works this way": one engine, no per-source code. A source is one JSON file, pure data, so the same file
+works on every platform; the app points `"live": {"db_path", "sources_dir"}` at a folder of them. The files that ship are in
+`packages/cache_search/sources/` (`weather.json`: Open-Meteo, `alerts.json`: NWS); the app copies them into its sources folder
+on install, and a user adds or shares more by dropping files there (the starter catalogue is `cache-packs/connectors/`). An
+unreadable file is listed under `errors` by `cs_live_sources` and does not stop the others.
 
-Definition (format 1; unknown keys are errors, so typos show):
+This section is the format reference. The format is **2**; format 1 files read unchanged (format 2 only adds). Unknown keys
+are errors, so typos show, and every error names its field (`items[0].fields[2].time.in: ...`). The JSON Schema of the format
+is generated from the Rust types and committed as `packages/cache_search/schema/live-source.schema.json` (editors that know JSON Schema
+complete and check against it; `UPDATE_SCHEMA=1 cargo test -p cache_live --features schema` rewrites it, and the same test
+fails when it is stale). Write and test a definition with `cs live-check` and `cs live-preview` (see "Builder's tools").
+
+#### Shape
 
 ```
-{ "format": 1, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
+{ "format": 2, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
   "description": "one line: what the model and the Home card see of this source",
-  "attribution": "optional credit line",
-  "request": { "url": "https://...?lat={lat}&lon={lon}", "headers": {"Accept": "..."} },
-  "api_key": { "alias": "eia", "required": true },      optional; "{api_key}" in url/headers
+  "attribution": "credit line shown with the data",
+  "request": { ... },                                    see Request
+  "api_key": { "alias": "eia", "required": true },       a key; "{api_key}" in url, headers or body
+  "basic_auth": { "user_alias": "u", "password_alias": "p" },   HTTP Basic login (instead of api_key)
+  "params": [ { "name": "radius", "type": "number", "default": 50 } ],   values the user sets
   "refresh_minutes": 180,                                a fetch inside this time returns the stored copy
   "quota": { "per_minute": 30, "per_day": 2000, "per_month": 30000 },       all optional
   "validity": { "fixed_hours": 6 }                       or { "end_path": "daily.time[-1]", "end_of_day": true,
@@ -1063,54 +1071,259 @@ Definition (format 1; unknown keys are errors, so typos show):
   "items": [ <item group>, ... ] }
 ```
 
-URL placeholders: `{lat}` `{lon}` (4 decimals; `{lat:2}` for another count), `{name}`, `{place_key}`, `{api_key}`; values
-are percent-encoded. https only (plain http only to 127.0.0.1/localhost, for tests). Every fetch sends the User-Agent
-`Cache/<version>` and nothing personal. The key value arrives in the fetch request, is used for that call and is never stored
-or written to an error message (the alias is what the app keeps in secure storage).
+#### Request
 
-Item group: `{ "each": "<path to an array>", "key": V, "label": V, "time": V?, "ends": V?, "fields": [ V+label ],
-"sort": [..]?, "point": {"lat": V, "lon": V}?, "area": "<path to a GeoJSON geometry>"? }`. One item per element of `each` (without `each`,
-one item from the response root). `key` is the item's stable id (it ends up in its address); `ends` is when the item stops
-being true (an alert's end; ended items are left out); `fields` are the labelled values, in order, a field with no value
-is left out; `point` and `area` are for map layers and Home cards (not given to the model).
+```
+"request": {
+  "url": "https://api.example.org/v1/near?lat={lat}&lon={lon}",   https only (http only to 127.0.0.1 and localhost, for tests)
+  "method": "GET",                      GET (default) or POST
+  "headers": { "Accept": "application/geo+json", "User-Agent": "Cache (https://example.org)" },
+  "body": { "q": "{name}", "radius": "{param:radius}" },   POST only; json (default), form or text, see below
+  "body_type": "json",
+  "timeout_seconds": 30,                default 30, at most 120 (the USGS Idaho bbox query needs about 45)
+  "max_bytes": 8388608,                 default 8 MiB, at most 32 MiB; counted after gzip is undone
+  "response": "json",                   json (GeoJSON too), xml, csv, tsv, tle or auto
+  "table": { ... }, "xml": { ... },     reading of csv/tsv and xml, see Response formats
+  "paging": { ... },                    more pages of a long result, see Paging
+  "steps": [ ... ] }                    several requests in order, see Steps (then url, body, response and paging go in the steps)
+```
 
-A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that
-has a value) or `distance`, then formatted by these steps, in this order: `time` (`{"in": "local"|"rfc3339"|"unix", "out":
-"datetime"|"datetime_s"|"date"|"<strftime>", "zone": "place"?}`) or `scale`, `offset`, `round` (decimals), `compass`
-(degrees to N/NE/...); `lookup` (a fixed table from a code to text, `"*"` is the fallback; replaces the result);
-`omit_if`; `case`; `max_chars`; `prefix`, `suffix`. No scripting.
+Every fetch sends the User-Agent `Cache/<version>` unless a header sets another (NWS asks for a contact; use the project, never a
+person). Gzip is asked for and undone whether or not the server says so. Keys, passwords and the Basic header are used for the
+call only, never stored, and removed from every error message and from the preview's request list.
 
-Paths are dot-separated keys with `[n]` indexes (`[-1]` last). A path starts at the current element (the `each` element),
-`^` starts at the response root, `@` is the element itself and `[#]` is its index, so a response with one array per column
-reads as `"each": "daily.time"` plus `"path": "^daily.temperature_2m_max[#]"`.
+**Placeholders** in the url, header values, the body and step urls (values are percent-encoded in a url or form; add `|raw` to
+insert as is, `{point:properties.forecast|raw}`; headers and JSON strings never encode):
 
-Times: every time the core writes (`fetched_at`, `valid_until`, `age` bases, item times, `last_error.at`) is in the place's
-local offset, as TOOLS.md says. The place's time zone is, in this order: the IANA name at `timezone_path` in the response
-(Open-Meteo `timezone`), a fixed offset at `utc_offset_path`, the offline lookup of the place's position, UTC. A named zone
-knows daylight saving, so a forecast that crosses the change (1 Nov) shows -06:00 before it and -07:00 after, and its
-`valid_until` (local midnight at the end of the last day) is exact. A time the provider wrote with its own offset is
-converted with `"zone": "place"` in its `time` step (the NWS definition does), otherwise it keeps the provider's offset.
-The zone is stored with the row, so a stored response is re-read in the same zone.
+| Placeholder | Value |
+|---|---|
+| `{lat}` `{lon}` | the place's degrees, 4 decimals; `{lat:2}` for another count |
+| `{latlon}` `{lonlat}` | `lat,lon` or `lon,lat` (`{latlon:2}`) |
+| `{lat_abs}` `{lat_hem}` `{lon_abs}` `{lon_hem}` | magnitude and `N`/`S`, `E`/`W` for APIs that want `43.6N 116.2W` |
+| `{name}` `{place_key}` | the place's name and key |
+| `{bbox:50km}` `{bbox:30mi}` `{bbox:$radius:mi}` | `west,south,east,north` of a box that far (half-width) around the place; `$radius` reads a parameter, the last part is its unit (default km) |
+| `{west:50km}` `{south:50km}` `{east:50km}` `{north:50km}` | one edge of that box, for APIs with a parameter per edge |
+| `{state}` `{state_name}` `{county}` `{county_fips}` `{country}` `{country_name}` | the place's detail, from optional members of the place the caller gives (`{"lat","lon","state":"ID","county":"Cassia","county_fips":"16031","country":"US",...}`; the app fills them from its geocoder). A place without the detail fails with a message that says which |
+| `{api_key}` | the key (declared in `api_key`); in the query, a header (`"Authorization": "Bearer {api_key}"`, any header name and prefix), the body or the path (`/csv/{api_key}/VIIRS/`) |
+| `{secret:alias}` | any other secret the caller gives under that alias |
+| `{param:name}` | a user parameter (see Parameters) |
+| `{now}` `{now-24h}` `{now+3d}` | the fetch time in UTC, `%Y-%m-%dT%H:%M:%SZ` by default; `{now-24h:unix}`, `{now:unix_ms}` or `{now:%Y-%m-%d}` for another form |
+| `{step:path}` `{item:path}` | a value from an earlier step's response, or the current element of a repeated step (see Steps) |
 
-Offline zone lookup: `tzf-rs` 2.1 (MIT) with its lite embedded boundary file, queried in place (`EmbeddedFinder`, no
-expansion into memory), and `chrono-tz` 0.10 (MIT OR Apache-2.0) for the offsets. The boundary data is from
-timezone-boundary-builder (ODbL-1.0): the app's credits need a line for it. Both add to the library size, reported with the
-release build.
+OAuth is not in the format (no token exchange, no redirects to a login page). A key, a header, Basic and a key in the path
+cover the public APIs that do not need it.
 
-Distance: a field value `{"distance": {"geometry": "<path to a GeoJSON geometry>", "unit": "mi"|"km"}}` is the distance from
-the place to the nearest point of the area and the compass direction of that point (`6.2 mi S`), or `inside the area` when
-the place is within it (holes count). An item with no geometry has no such field; nothing is estimated from the area name.
+**Bodies.** `"body_type": "json"` (default): the body is a JSON value, every string in it takes placeholders, and a string that is
+exactly `"{param:radius}"` keeps the parameter's type (`25`, `true`), so `{"radius": 25}` is sent. `"form"`: an object of strings,
+sent as `application/x-www-form-urlencoded`. `"text"`: a string. Example (a POST search):
 
-Sorting: an item group may have `"sort": [{"by": <value>, "rank": [..] | "time": true, "desc": false}, ...]` (first key
-first; missing values last). The alerts definition sorts by NWS severity (Extreme, Severe, Moderate, Minor, Unknown), then by
-onset.
+```
+"request": { "method": "POST", "url": "https://api.example.org/search",
+             "body": { "near": { "lat": "{lat}", "lon": "{lon}" }, "radius_km": "{param:radius}", "kinds": ["fire", "{param:kind}"] } }
+```
 
-Rows for the phone's position (`at:` keys) are pruned: after a fetch for one, the other `at:` rows of that source are deleted
-unless they are still within their validity, so only the newest fetch plus any still-valid row is kept. Saved places are
-never pruned.
+**Authentication examples.**
 
-Validity: `fixed_hours` after the fetch, or the end of the day found at `end_path` (a forecast is valid until its last day
-ends; `not_covered_after` then reports that date). After `valid_until` the data is expired.
+```
+key in the query     "url": "https://api.example.org/data?lat={lat}&key={api_key}"         + "api_key": {"alias": "example"}
+key in a header      "headers": { "X-Api-Token": "{api_key}" }                          Authorization: "Bearer {api_key}" works the same
+key in the path      "url": "https://api.example.org/area/csv/{api_key}/VIIRS_SNPP_NRT/{bbox:100km|raw}/1"
+HTTP Basic           "basic_auth": { "user_alias": "svc_user", "password_alias": "svc_pass" }   sent as Authorization: Basic ...
+```
+
+The caller gives the values in the fetch request (`"api_key": "..."` or `"secrets": {"svc_user": "...", "svc_pass": "..."}`); the app
+keeps them in secure storage under the aliases and `cs_live_sources` lists which a source needs. A response that points at
+another host is not followed with a key attached (see Steps).
+
+#### Parameters
+
+Values the user sets when adding the source (a gauge number, a radius, a fuel type). `{"name": "site", "label": "Gauge number",
+"type": "text"|"number"|"integer"|"bool"|"choice", "default": "13206000", "choices": [...], "min": 1, "max": 300, "required": true,
+"help": "..."}`. Use them as `{param:site}` in the request and `{"param": "site"}` as a value in the mapping (for example
+`"near": {"max": {"param": "radius"}, "unit": "mi"}`). A fetch or get request gives `"params": {"site": "13172500"}`; a missing
+one takes its default; a value outside its type or limits is `bad_json`. The row is stored under the place key when every
+parameter has its default, otherwise under `<place key>~<8 hex>`, so two gauges of one source for one place do not overwrite
+each other (`cs_live_get` reports the place with that key and the `params`; deleting a saved place deletes all of its rows).
+
+#### Response formats
+
+`"response"`: **json** (default; GeoJSON is JSON) and **auto** (decided by the first character).
+
+**xml**: converted to a tree before mapping. An element is an object; attributes are keys that start with `@` (`link.@href`); text
+next to attributes or children is `#text`; an element with only text is that text (empty: `null`); a repeated element is an
+array, and names listed in `"xml": {"always_array": ["info", "area"]}` are arrays even when they occur once (so
+`alert.info[0].event` works for one language or two); namespace prefixes are dropped; the root element is the single member of
+the tree (`feed.entry`). DOCTYPE entities are never expanded.
+
+```
+<feed><entry><id>a1</id><link href="https://x/a1"/></entry><entry>...</entry></feed>
+  ->  {"feed": {"entry": [ {"id": "a1", "link": {"@href": "https://x/a1"}}, ... ]}}
+```
+
+**csv** and **tsv**: an array of objects keyed by the header row, values as text. `"table": {"delimiter": ";", "header": false,
+"comment": "#", "skip_after_header": 1}`: another delimiter, no header row (columns `c0`, `c1`, ...), comment lines to skip, rows to
+drop after the header. The USGS RDB format is `"response": "tsv", "table": {"comment": "#", "skip_after_header": 1}`. Map the
+rows with `"each": "^"`.
+
+**tle**: two-line element sets (a name line is optional) as an array of `{name, norad_id, classification, intl_designator, epoch,
+inclination_deg, raan_deg, eccentricity, arg_perigee_deg, mean_anomaly_deg, mean_motion_rev_per_day, rev_number, line1, line2}`.
+Orbit and pass calculation is not a mapping and is not in the format.
+
+#### Steps: a later request using an earlier response
+
+```
+"request": { "headers": { "Accept": "application/geo+json" },       shared by every step
+  "steps": [
+    { "id": "point", "url": "https://api.weather.gov/points/{lat},{lon}" },
+    { "id": "fc",    "url": "{point:properties.forecast|raw}" },
+    { "id": "st",    "url": "{point:properties.observationStations|raw}" },
+    { "id": "obs",   "url": "https://api.weather.gov/stations/{s:properties.stationIdentifier}/observations/latest",
+      "for_each": { "from": "st", "path": "features", "as": "s", "limit": 3 } } ] }
+```
+
+Each step is a request of its own (own `url`, `method`, `body`, `response`, `paging`); `{id:path}` reads a path of an earlier step's
+response, `{id}` its text if it is one value. `for_each` repeats the step for the first `limit` elements (default 10, at most 50) of
+a list in an earlier, non-repeated step; the current element is `{as:path}`; the step's result is the list of responses. A
+repeated request that fails (404, a timeout) is left out and counted (`missing_requests` in `cs_live_get`); all failing is an error.
+At most 6 steps. The mapping reads one object with a member per step id: `"each": "fc.properties.periods"`,
+`"each": "obs"`, `"timezone_path": "point.properties.timeZone"`. A url taken from a response is only sent to hosts the definition
+names itself when the source has a key or login (a key is never sent to a host a response points at). Every request of every
+step counts once against the quota.
+
+#### Paging
+
+`"paging"` on a request or step fetches more pages and joins the list found at `list_path` across pages into the first page's
+tree; the mapping sees one list. It stops when a page has no items, when `more_path` says there is no more, or when the next
+page cannot be known; `max_pages` (default 5, at most 50) is a hard cap, and reaching it with more data left sets
+`"truncated": true` in `cs_live_get` and the preview. Every page counts against the quota.
+
+```
+offset     {"type": "offset", "param": "resultOffset", "size_param": "resultRecordCount", "page_size": 1000,
+            "list_path": "features", "more_path": "properties.exceededTransferLimit", "max_pages": 5}      ArcGIS
+page       {"type": "page", "param": "page", "size_param": "per_page", "page_size": 100, "start": 1, "list_path": "data"}
+cursor     {"type": "cursor", "param": "cursor", "next_path": "meta.next_cursor", "list_path": "data"}
+next_link  {"type": "next_link", "next_path": "links.next", "list_path": "data"}      absolute or /relative; same host only
+```
+
+Without `more_path`, an offset or page request continues while a page is full (`page_size` items). `param` and `size_param` are
+set in the url's query (replaced if already there). `list_path` empty or `"^"`: the response itself is the list.
+
+#### Rate limits, errors and size
+
+A `429` (or a `503` with `Retry-After`) is waited for as the provider asks (`Retry-After` seconds or a date; without it 2 s, 4 s),
+at most three tries, and each try counts against the quota. A provider that asks for more than 60 s is not waited for: the
+fetch fails at once with the wait in the message. Any other 4xx or 5xx fails with `fetch_failed` and a message such as
+`HTTP 404: No such site: 99` (the reason is taken from the response's `message`, `error`, `detail` or `reason` when it has one) plus
+`(the key or login was refused)` for 401/403. A failed fetch keeps the last good copy, and the message is recorded for the source
+and place (`last_error` in `cs_live_get`). A response over `max_bytes` is `bad_response`, never cut. A quota is checked before every
+request; `quota` ends the fetch.
+
+#### Item groups and values
+
+Item group: `{ "each": "<path>", "key": V, "label": V, "time": V?, "ends": V?, "fields": [ V+label ], "where": [..]?, "near": {..}?,
+"sort": [..]?, "limit": n?, "point": {"lat": V, "lon": V}?, "area": "<path to a GeoJSON geometry>"? }`. One item per element of
+`each`, an array, or an **object** (one item per member; `@key` is the member name, so `{"0": {...}, "1": {...}}` maps with
+`"each": "scales", "key": {"path": "@key"}`); without `each`, one item from the response root. `key` is the item's stable id (it ends
+up in its address); `ends` is when the item stops being true (ended items are left out); `fields` are the labelled values, in order,
+a field with no value is left out; `point` and `area` are for map layers and Home cards (not given to the model). Order of
+processing: map, `where`, `near`, `sort`, `limit`.
+
+A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that has a
+value), `distance`, `param` (a user parameter) or `calc`, then formatted by these steps, in this order: `after_last` (keep the text after the last `"/"`, for the last part of a URL); `time` or `scale`,
+`offset`, `round` (decimals), `compass` (degrees to N/NE/...); `lookup` (a fixed table from a code to text, `"*"` is the fallback;
+replaces the result); `omit_if` (values to treat as missing); `min_value`, `max_value` (a number outside them is missing: providers write -999 for "no reading"); `case`; `max_chars`; `prefix`, `suffix`. A `time` step may also have `not_before` (a date; earlier times, such as year 1 for "no time", are missing). No scripting.
+
+Paths are dot-separated keys with `[n]` indexes (`[-1]` last). A path starts at the current element (the `each` element), `^`
+starts at the response root, `@` is the element itself, `@key` (the whole path) the member name of an object, and `[#]` the index,
+so a response with one array per column reads as `"each": "daily.time"` plus `"path": "^daily.temperature_2m_max[#]"`. XML
+attributes are `@name` keys (`link.@href`).
+
+**calc**: arithmetic on other values, `{"calc": {"op": "add"|"sub"|"mul"|"div"|"min"|"max", "args": [V, V, ...]}}` (the signs
+`+ - * /` also work; left to right; division by zero or any missing argument gives no value; the number at the start of a text
+counts, so `"20 mph"` is 20). The result then takes `round`, `suffix` and the rest: wind speed ratio
+`{"calc": {"op": "div", "args": [{"path": "gust"}, {"path": "speed"}]}, "round": 1}`; a `first_of` argument gives a fallback.
+
+**Times.** `"time": {"in": ..., "out": ..., "zone": "place"?}`:
+
+| `in` | the response writes |
+|---|---|
+| `local` | no offset, the place's local time: `2026-10-25T14:00` (a space, seconds and a `Z` are also read), or a date |
+| `utc` | no offset, UTC: `2026-10-26 05:17:56.783`, `2026-10-26T12:00:00`; written in the place's offset |
+| `rfc3339` | with an offset (kept as the provider wrote it, or converted with `"zone": "place"`) |
+| `rfc2822` | `Sun, 25 Oct 2026 19:40:00 +0000` |
+| `unix` `unix_ms` | seconds or milliseconds since 1970 (USGS and ArcGIS dates); written in the place's offset |
+| `pattern` | `"pattern": "%d/%m/%Y %H:%M"` (strftime); with `%z` it has an offset, without it `"assume": "place"` (default) or `"utc"` |
+
+`out` is `datetime` (default `2026-10-25T14:00-06:00`), `datetime_s`, `date` or a strftime pattern. A sort key or `ends` reads the
+same `time` step; without one they read RFC 3339.
+
+**Distance.** `{"distance": {"geometry": "<path>" | "point": {"lat": V, "lon": V}, "unit": "mi"|"km", "number": false}}` is the distance
+from the place to the nearest point of a GeoJSON Point, LineString, Polygon, their Multi forms, a Feature, a collection, or of a coordinate
+pair, with the compass direction of that point (`6.2 mi S`), `inside the area` when the place is within an area (holes count) and
+`at the place` within 50 m; `"number": true` gives only the number, for `calc`, `where` and `round`. An item with no geometry has no such field;
+nothing is estimated from a name.
+
+**near.** `"near": {"max": 50, "unit": "mi"}` on a group drops items farther than that from the place, measured to the item's `point`
+(else its `area`), or to `"point": {...}` or `"geometry": "<path>"` named in `near`. `max` may be a value (`{"param": "radius"}`).
+An item with nothing to measure is dropped.
+
+**where.** `"where": [ {...}, ... ]` keeps items that pass every condition. A condition names what it tests with exactly one of `value`
+(a value `V` of the response), `field` (the label of one of the item's own `fields`; the number at the start of the text is used for
+comparisons) or `or` (a list of conditions, any of which may pass), and has one or more tests: `equals`, `not_equals`, `in`, `not_in`
+(text compares ignoring case, numbers numerically), `gt`, `ge`, `lt`, `le` (a number or a value such as `{"param": "min_size"}`),
+`contains`, `starts_with`, `exists`, and `max_age_hours` (the value is a time, read with its `time` step, no more than that many hours before the fetch: it leaves out gauges that stopped reporting). A missing value fails every test except `not_equals`, `not_in` and `exists: false`.
+No expressions: comparisons only.
+
+```
+"where": [ { "value": { "path": "properties.IncidentTypeCategory" }, "equals": "WF" },
+           { "or": [ { "value": { "path": "properties.POOState" }, "equals": "ID" }, { "value": { "path": "properties.POOState" }, "equals": "OR" } ] },
+           { "field": "Size", "ge": { "param": "min_acres" } } ]
+```
+
+**Sorting and limit.** `"sort": [{"by": V, "rank": [..] | "time": true | "number": true | "distance": true, "desc": false}, ...]` (first key first;
+missing values last; `rank` orders by a list, `number` by the number at the start of the value, `distance` by distance from the
+place to the item and needs no `by`); `"limit": 20` keeps the first items of the group after sorting. The alerts definition sorts by
+NWS severity then onset.
+
+#### Time zones, validity, rows
+
+Every time the core writes (`fetched_at`, `valid_until`, `age` bases, item times, `last_error.at`) is in the place's local offset, as
+TOOLS.md says. The place's time zone is, in this order: the IANA name at `timezone_path` in the response (Open-Meteo `timezone`), a
+fixed offset at `utc_offset_path`, the offline lookup of the place's position, UTC. A named zone knows daylight saving, so a
+forecast that crosses the change shows -06:00 before it and -07:00 after, and its `valid_until` (local midnight at the end of the last
+day) is exact. The zone is stored with the row, so a stored response is re-read in the same zone.
+
+Offline zone lookup: `tzf-rs` 2.1 (MIT) with its lite embedded boundary file, queried in place (`EmbeddedFinder`, no expansion into
+memory), and `chrono-tz` 0.10 (MIT OR Apache-2.0) for the offsets. The boundary data is from timezone-boundary-builder (ODbL-1.0):
+the app's credits need a line for it.
+
+Validity: `fixed_hours` after the fetch, or the end of the day found at `end_path` (a forecast is valid until its last day ends;
+`not_covered_after` then reports that date). After `valid_until` the data is expired. Rows for the phone's position (`at:` keys) are
+pruned: after a fetch for one, the other `at:` rows of that source are deleted unless they are still within their validity. Saved
+places are never pruned. The stored response is the converted tree (JSON as received, XML and CSV as their JSON form, steps as the
+object of step responses), so a changed definition re-maps it without a download, with the parameters it was fetched with.
+
+#### Builder's tools
+
+* `cs live-check <def.json>`: parses and validates a definition, prints every problem with its field
+  (`items[0].where[1]: needs a test`, `request.steps[1].for_each.from: no earlier step called "zzz"`) and warnings (no `require`, no
+  `quota`, no `attribution`). Needs no network and no config.
+* `cs live-preview <def.json> --place 42.536,-113.792 [--name ..] [--state ID --county Cassia --country US] [--param k=v]... [--key V | $CACHE_LIVE_KEY]
+  [--secret alias=v]...`: fetches once (every step and page, with the definition's timeout and size limit) and prints, as JSON, the
+  requests made (status, bytes, ms), the **raw response tree** cut down so it can be read (long lists keep their first elements and say how many
+  more; `--raw-chars` sets the size), the **paths** in it in the mapping's own syntax (`features[0].properties.name = "Fire"`), and the
+  **mapped items**. If the mapping fails the raw tree is still shown, with the reason. It stores nothing and counts against no quota.
+* `cs_live_preview(request_json)`: the same as one C call, without a handle, for an in-app connector builder: the definition as text plus
+  place, params and keys; see `include/cache_search.h`.
+* The JSON Schema above.
+
+Workflow: write the `request`, run `cs live-preview` with a throwaway `items`, read the paths, write the mapping, run `cs live-preview` again,
+then `cs live-check`.
+
+#### Not in the format, on purpose
+
+No OAuth or login flows, no scripting or free-form expressions, no per-source code, no cookies or sessions, no HTML scraping (a source is a
+documented API), no orbit or pass prediction, no unbounded loops (fan-out, steps and paging all have hard caps).
 
 ### Store and calls
 

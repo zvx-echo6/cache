@@ -501,6 +501,23 @@ pub unsafe extern "C" fn cs_live_get(h: *mut Handle, request_json: *const c_char
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.live_get(arg_str(request_json, "request_json")?)?))
 }
 
+/// `cs_live_preview`: no handle (nothing is opened or stored).
+///
+/// # Safety
+/// `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_live_preview(request_json: *const c_char) -> *mut c_char {
+    let r = guarded(|| {
+        let s = arg_str(request_json, "request_json")?;
+        let out = cache_live::preview::preview(s).map_err(|e| Error::new(crate::error::ErrorCode::from_str_code(e.code), e.message))?;
+        out_string(out)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
 // ---- the map: search, route, guidance (logic in cache_places::map and cache_navigate::map; see ext.rs) ----
 
 /// # Safety
@@ -776,6 +793,7 @@ mod tests {
             assert!(cs_live_sources(ptr::null_mut()).is_null());
             assert!(cs_live_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_get(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_live_preview(ptr::null()).is_null());
             assert!(cs_video_instances(ptr::null_mut()).is_null());
             assert!(cs_video_instance_add(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_instance_remove(ptr::null_mut(), ptr::null()).is_null());

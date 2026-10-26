@@ -1,0 +1,7 @@
+# ---------------------------------- WARNING ----------------------------------------
+# Provisional data.
+#
+agency_cd	site_no	station_nm	dec_lat_va	dec_long_va
+5s	15s	50s	16s	16s
+USGS	13206000	BOISE RIVER AT GLENWOOD BRIDGE NR BOISE ID	43.6	-116.3
+USGS	13172500	BOISE RIVER NR BOISE ID	43.54	-116.16

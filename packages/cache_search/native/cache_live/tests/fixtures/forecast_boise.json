@@ -1,0 +1,5 @@
+{"properties":{"updated":"2026-10-25T16:20:00+00:00","periods":[
+ {"number":1,"name":"Today","startTime":"2026-10-25T10:00:00-06:00","endTime":"2026-10-25T18:00:00-06:00","isDaytime":true,"temperature":58,"temperatureUnit":"F","windSpeed":"5 to 10 mph","windDirection":"NW","shortForecast":"Sunny","detailedForecast":"Sunny, with a high near 58."},
+ {"number":2,"name":"Tonight","startTime":"2026-10-25T18:00:00-06:00","endTime":"2026-10-26T06:00:00-06:00","isDaytime":false,"temperature":31,"temperatureUnit":"F","windSpeed":"5 mph","windDirection":"N","shortForecast":"Clear","detailedForecast":"Clear, with a low around 31."},
+ {"number":3,"name":"Monday","startTime":"2026-10-26T06:00:00-06:00","endTime":"2026-10-26T18:00:00-06:00","isDaytime":true,"temperature":61,"temperatureUnit":"F","windSpeed":"5 mph","windDirection":"E","shortForecast":"Mostly Sunny","detailedForecast":"Mostly sunny, with a high near 61."}
+]}}

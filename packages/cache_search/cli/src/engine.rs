@@ -86,6 +86,13 @@ fn cstring(s: &str, what: &str) -> Result<CString, ApiError> {
     CString::new(s).map_err(|_| ApiError::new("bad_json", format!("{what} contains NUL")))
 }
 
+/// `cs_live_preview`: check a connector definition, or fetch it once and show the raw tree and the mapped items. No handle.
+pub fn live_preview(request_json: &str) -> Result<String, ApiError> {
+    let c = cstring(request_json, "request")?;
+    let p = unsafe { cs_live_preview(c.as_ptr()) };
+    take(p).ok_or_else(thread_error)
+}
+
 /// A `cs_handle`, opened from the `cs_open` config JSON.
 pub struct Core {
     h: *mut Handle,
