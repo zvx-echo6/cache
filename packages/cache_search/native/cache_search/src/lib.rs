@@ -2,6 +2,7 @@
 //! jobs, keyword search over ZIM sources, and `cs_read`, all through the C ABI.
 //! The C ABI is declared in `include/cache_search.h`.
 
+pub mod budget;
 pub mod conv;
 pub mod error;
 pub mod ext;

@@ -1,5 +1,6 @@
 //! One opened ZIM file.
 
+use crate::budget::{estimate_cost, Kind, SearcherBudget};
 use crate::error::{Error, ErrorCode, Result};
 use std::path::{Path, PathBuf};
 use crate::zimx::Zimx;
@@ -21,6 +22,26 @@ pub struct ZimSource {
     x: Arc<OnceLock<Option<Zimx>>>,
     /// Set once a prewarm of the libzim handle has been queued (see `warm_job`).
     warm_queued: std::sync::atomic::AtomicBool,
+    /// The memory budget the libzim searchers of this ZIM answer to (set by the handle; see `set_budget`).
+    budget: OnceLock<Arc<SearcherBudget>>,
+}
+
+/// Sizes in bytes of the ZIM's full-text and title index entries (0 when it has none or they cannot be read): what the
+/// searcher cost estimate is made from.
+fn index_sizes(zim: &Zim) -> (u64, u64) {
+    fn len_of(c: Option<Option<zim::Content<'_>>>) -> u64 {
+        c.flatten().and_then(|c| c.len().ok()).unwrap_or(0) as u64
+    }
+    (len_of(zim.fulltext_index().ok()), len_of(zim.title_index().ok()))
+}
+
+/// Opens libzim for a ZIM and binds it to a budget: shared by `ZimSource::libzim` and `WarmJob::run`.
+fn open_bound(path: &Path, budget: Option<&Arc<SearcherBudget>>, sizes: (u64, u64)) -> Option<Zimx> {
+    let z = Zimx::open(path).ok()?;
+    if let Some(b) = budget {
+        z.bind(b.clone(), sizes.0, sizes.1);
+    }
+    Some(z)
 }
 
 /// Opening libzim on one ZIM and building its searchers, to run on a background thread (see `ZimSource::warm_job`).
@@ -29,11 +50,19 @@ pub struct WarmJob {
     x: Arc<OnceLock<Option<Zimx>>>,
     fulltext: bool,
     titles: bool,
+    budget: Option<Arc<SearcherBudget>>,
+    sizes: (u64, u64),
 }
 
 impl WarmJob {
+    /// Estimated memory of the searchers this job builds: what prewarm planning sorts and sums (`budget::prewarm_plan`).
+    pub fn cost(&self) -> u64 {
+        (if self.fulltext { estimate_cost(Kind::Fulltext, self.sizes.0) } else { 0 })
+            + (if self.titles { estimate_cost(Kind::Titles, self.sizes.1) } else { 0 })
+    }
+
     pub fn run(self) {
-        if let Some(z) = self.x.get_or_init(|| Zimx::open(&self.path).ok()) {
+        if let Some(z) = self.x.get_or_init(|| open_bound(&self.path, self.budget.as_ref(), self.sizes)) {
             let _ = z.prewarm(self.fulltext && z.has_fulltext(), self.titles && z.has_title_index());
         }
     }
@@ -182,7 +211,18 @@ impl ZimSource {
             path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
         });
         let language = meta("Language");
-        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language, x: Arc::new(OnceLock::new()), warm_queued: Default::default() })
+        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language, x: Arc::new(OnceLock::new()), warm_queued: Default::default(), budget: OnceLock::new() })
+    }
+
+    /// Put the libzim searchers of this ZIM under `budget` (the handle's, shared by all its ZIMs). The first call wins. A
+    /// ZIM never given one keeps every searcher it builds.
+    pub fn set_budget(&self, budget: Arc<SearcherBudget>) {
+        if self.budget.set(budget.clone()).is_ok() {
+            if let Some(Some(z)) = self.x.get() {
+                let (ft, ti) = index_sizes(&self.zim);
+                z.bind(budget, ft, ti);
+            }
+        }
     }
 
     /// What a background thread needs to open libzim on this file and build its searchers before the first search asks
@@ -197,7 +237,7 @@ impl ZimSource {
         if !(fulltext || titles) || self.warm_queued.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return None;
         }
-        Some(WarmJob { path: self.path.clone(), x: self.x.clone(), fulltext, titles })
+        Some(WarmJob { path: self.path.clone(), x: self.x.clone(), fulltext, titles, budget: self.budget.get().cloned(), sizes: index_sizes(&self.zim) })
     }
 
     /// libzim's handle on this file (opened on first use), if the `xapian` feature is built in and it opens.
@@ -205,7 +245,7 @@ impl ZimSource {
         if !Zimx::AVAILABLE {
             return None;
         }
-        self.x.get_or_init(|| Zimx::open(&self.path).ok()).as_ref()
+        self.x.get_or_init(|| open_bound(&self.path, self.budget.get(), index_sizes(&self.zim))).as_ref()
     }
 
     /// True when keyword search can use the ZIM's built-in Xapian full-text index (`X/fulltext/xapian`): the feature is

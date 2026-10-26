@@ -14,7 +14,7 @@
  * scores from two ZIMs cannot be compared with each other.
  *
  * A handle may be used from several threads at once (libzim's Archive is read-only and thread safe); the searchers are
- * built once and kept, and calls that use them are serialised by a mutex inside the handle. */
+ * built when the caller says to keep them and released with zimx_drop, and calls that use them are serialised by a mutex inside the handle. */
 #ifndef ZIMX_H
 #define ZIMX_H
 
@@ -38,13 +38,22 @@ ZIMX_API void zimx_close(zimx *z);
 ZIMX_API int zimx_has_fulltext(zimx *z);
 ZIMX_API int zimx_has_title_index(zimx *z);
 
-/* Full-text search: results offset..offset+k. */
-ZIMX_API char *zimx_search(zimx *z, const char *query, int offset, int k);
+/* Full-text search: results offset..offset+k. keep != 0 builds the searcher if needed and keeps it; keep == 0 uses a kept
+ * searcher if there is one and otherwise builds a temporary one that is dropped before the call returns. */
+ZIMX_API char *zimx_search(zimx *z, const char *query, int offset, int k, int keep);
 /* Build and keep the full-text and/or title searchers now (opens the Xapian databases), so the first search or suggestion
  * does not pay for it. Returns {"ok":true}, or {"error":...}. A searcher the ZIM cannot have is skipped. */
 ZIMX_API char *zimx_prewarm(zimx *z, int fulltext, int titles);
-/* Title-prefix suggestions: the first k. */
-ZIMX_API char *zimx_suggest(zimx *z, const char *prefix, int k);
+/* Release the kept full-text and/or title searcher (the archive stays open). Returns {"ok":true}, or {"error":...}. */
+ZIMX_API char *zimx_drop(zimx *z, int fulltext, int titles);
+/* Title-prefix suggestions: the first k. keep as for zimx_search. */
+ZIMX_API char *zimx_suggest(zimx *z, const char *prefix, int k, int keep);
+
+/* libzim's cluster cache, which is shared by every archive in the process (not by one handle): {"current":<bytes>,"max":<bytes>}. */
+ZIMX_API char *zimx_cluster_cache(void);
+
+/* Set the cluster cache limit in bytes (process-wide; entries over the new limit are dropped). Measurement hook: the core does not call it. */
+ZIMX_API char *zimx_set_cluster_cache_max(unsigned long long bytes);
 
 /* libzim's version string, e.g. "9.8.2". */
 ZIMX_API char *zimx_version(void);

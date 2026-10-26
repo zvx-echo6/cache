@@ -407,7 +407,7 @@ impl NavigateTool {
         let origin = (from.lat, from.lon);
         let ans = src.nearest(&cache_tool::places::NearestQuery { category: cat, from: origin, limit: NEAREST_CANDIDATES })?;
         if ans.matches.is_empty() {
-            return Err(build::with_ends(err("nearby_empty", "").with("to_type", cat).with("warnings", Value::Null), from, None));
+            return Err(build::with_ends(err("nearby_empty", "").with("to_type", cat).with("warnings", Value::Array(Vec::new())), from, None));
         }
         let costing = a.mode.travel().costing();
         let mut ranked: Vec<(Option<f64>, cache_tool::places::PlaceMatch)> = ans

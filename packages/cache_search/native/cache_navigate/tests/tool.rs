@@ -319,7 +319,8 @@ fn nearest_of_a_type_is_ranked_by_travel_time() {
     let t = tool(fake(), Some(Arc::new(Pack { empty: true })));
     let e = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"})).unwrap_err();
     let j = e.to_json();
-    assert_eq!(j["error"], json!({"type": "nearby_empty", "to_type": "hospital", "warnings": null}));
+    assert_eq!(j["error"], json!({"type": "nearby_empty", "to_type": "hospital", "warnings": []}));
+    assert!(j["error"]["warnings"].is_array(), "warnings is a list, never null: {j}");
     assert_eq!(keys(&j), ["ok", "error", "from_matched"]);
     let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
     assert_eq!(code(run(&t, Some(&here()), json!({"to_type": "pharmacy", "mode": "drive"}))), "bad_arguments");

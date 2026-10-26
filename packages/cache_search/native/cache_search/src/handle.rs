@@ -1,5 +1,6 @@
 //! A handle: the list of open sources plus the last error.
 
+use crate::budget::{self, SearcherBudget};
 use crate::error::{Error, Result};
 use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
@@ -55,16 +56,25 @@ struct Config {
     #[serde(default = "default_min_rel")]
     min_relevance: f32,
     /// Open libzim on every ZIM source that has a built-in index, on background threads, as soon as the sources are
-    /// set (default `true`), so the first search does not pay for the opens. `false` leaves them to the first search.
+    /// set, so the first search does not pay for the opens (default `true`, but `false` on Android). Only as many
+    /// searchers are built as fit in `searcher_budget_mb`, smallest first. `false` leaves them to the first search.
     #[serde(default = "default_prewarm")]
     prewarm: bool,
+    /// Memory budget in MiB for the libzim searchers kept built (default 256; 0 keeps none, each query builds its own).
+    /// See budget.rs and DESIGN.md "Searcher memory budget".
+    #[serde(default = "default_searcher_budget_mb")]
+    searcher_budget_mb: u64,
     /// Not in the header: a test hook that makes each library's background open sleep first.
     #[serde(default)]
     open_delay_ms: u64,
 }
 
 fn default_prewarm() -> bool {
-    true
+    budget::prewarm_default(cfg!(target_os = "android"))
+}
+
+fn default_searcher_budget_mb() -> u64 {
+    budget::DEFAULT_BUDGET_MB
 }
 
 /// Threads that open libzim archives in the background after `set_sources`.
@@ -230,6 +240,8 @@ pub struct Handle {
     pub web: Arc<WebState>,
     /// Saved places and live data, configured from the `user` and `live` sections (ext.rs).
     pub ext: crate::ext::Ext,
+    /// Memory budget of the kept libzim searchers, shared by all this handle's ZIM sources (budget.rs).
+    pub searcher_budget: Arc<SearcherBudget>,
 }
 
 fn stem_title(path: &std::path::Path) -> String {
@@ -251,6 +263,7 @@ impl Handle {
             embedder: None,
             web: Arc::new(WebState::new()),
             ext: Default::default(),
+            searcher_budget: Arc::new(SearcherBudget::new(budget::DEFAULT_BUDGET_MB * budget::MIB)),
         };
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
         // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
@@ -292,6 +305,7 @@ impl Handle {
                         },
                         None => match ZimSource::open(&path) {
                             Ok(z) => {
+                                z.set_budget(self.searcher_budget.clone());
                                 let id = z.id.clone();
                                 (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None, builtin })))
                             }
@@ -403,6 +417,7 @@ impl Handle {
         self.candidates_per_list = cfg.candidates_per_list;
         self.min_term_coverage = cfg.min_term_coverage;
         self.min_relevance = cfg.min_relevance;
+        self.searcher_budget.set_limit(cfg.searcher_budget_mb.saturating_mul(budget::MIB));
         if cfg.prewarm {
             self.start_prewarm();
         }
@@ -412,10 +427,11 @@ impl Handle {
     }
 
     /// Open libzim on the ZIM sources that use their built-in index and build their searchers, on up to
-    /// `PREWARM_THREADS` background threads (each source once). Nothing waits for them: a search that needs a source
-    /// still being warmed waits for that source's open only.
+    /// `PREWARM_THREADS` background threads (each source once), but only the sources whose searchers fit in the memory
+    /// budget, cheapest first (`budget::prewarm_plan`); the others build theirs on their first search. Nothing waits for
+    /// them: a search that needs a source still being warmed waits for that source's open only.
     fn start_prewarm(&self) {
-        let jobs: Vec<zimsrc::WarmJob> = self
+        let all: Vec<zimsrc::WarmJob> = self
             .sources
             .iter()
             .filter_map(|s| match s {
@@ -423,6 +439,11 @@ impl Handle {
                 _ => None,
             })
             .collect();
+        let costs: Vec<u64> = all.iter().map(|j| j.cost()).collect();
+        let plan = budget::prewarm_plan(&costs, self.searcher_budget.limit());
+        let mut slots: Vec<Option<zimsrc::WarmJob>> = all.into_iter().map(Some).collect();
+        // `pop` takes from the end, so the queue holds the plan's most expensive first
+        let jobs: Vec<zimsrc::WarmJob> = plan.iter().rev().filter_map(|&i| slots[i].take()).collect();
         let n = jobs.len().min(PREWARM_THREADS);
         let queue = Arc::new(std::sync::Mutex::new(jobs));
         for i in 0..n {

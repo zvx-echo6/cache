@@ -4,6 +4,7 @@
 #include <iostream>  // zim/version.h uses std::cout without including it
 
 #include <zim/archive.h>
+#include <zim/tools.h>
 #include <zim/search.h>
 #include <zim/search_iterator.h>
 #include <zim/suggestion.h>
@@ -23,6 +24,10 @@
 // The searchers are built once (on the first search or suggestion, or by zimx_prewarm) and kept: building one opens the
 // Xapian database, which is most of the cost of the first query. libzim's Searcher is thread safe but its
 // SuggestionSearcher is not, so one mutex serialises the searches on a handle.
+//
+// Which searchers stay built is decided by the caller (the memory budget in zimx.rs): `keep` = 1 builds and keeps the
+// searcher, `keep` = 0 uses a kept one if there is one and otherwise builds a temporary one that is dropped when the call
+// ends; zimx_drop releases a kept one (the archive stays open).
 struct zimx {
   zim::Archive archive;
   std::mutex mu;
@@ -175,13 +180,21 @@ int zimx_has_title_index(zimx *z) {
   }
 }
 
-char *zimx_search(zimx *z, const char *query, int offset, int k) {
+char *zimx_search(zimx *z, const char *query, int offset, int k, int keep) {
   return guarded([&]() -> std::string {
     if (!z || !query) throw std::invalid_argument("null argument");
     if (offset < 0 || k < 0) throw std::invalid_argument("negative offset or k");
     std::lock_guard<std::mutex> lock(z->mu);
     zim::Query q{std::string(query)};
-    zim::Search search = z->fulltext().search(q);
+    std::unique_ptr<zim::Searcher> temp;  // outlives `search` and the results below
+    zim::Searcher *sr;
+    if (keep || z->searcher) {
+      sr = &z->fulltext();
+    } else {
+      temp.reset(new zim::Searcher(z->archive));
+      sr = temp.get();
+    }
+    zim::Search search = sr->search(q);
     std::string o = "{\"total\":" + std::to_string(search.getEstimatedMatches()) + ",\"hits\":[";
     bool first = true;
     if (k > 0) {
@@ -213,12 +226,30 @@ char *zimx_prewarm(zimx *z, int fulltext, int titles) {
   });
 }
 
-char *zimx_suggest(zimx *z, const char *prefix, int k) {
+char *zimx_drop(zimx *z, int fulltext, int titles) {
+  return guarded([&]() -> std::string {
+    if (!z) throw std::invalid_argument("null argument");
+    std::lock_guard<std::mutex> lock(z->mu);
+    if (fulltext) z->searcher.reset();
+    if (titles) z->suggester.reset();
+    return "{\"ok\":true}";
+  });
+}
+
+char *zimx_suggest(zimx *z, const char *prefix, int k, int keep) {
   return guarded([&]() -> std::string {
     if (!z || !prefix) throw std::invalid_argument("null argument");
     if (k < 0) throw std::invalid_argument("negative k");
     std::lock_guard<std::mutex> lock(z->mu);
-    zim::SuggestionSearch s = z->titles().suggest(std::string(prefix));
+    std::unique_ptr<zim::SuggestionSearcher> temp;
+    zim::SuggestionSearcher *sr;
+    if (keep || z->suggester) {
+      sr = &z->titles();
+    } else {
+      temp.reset(new zim::SuggestionSearcher(z->archive));
+      sr = temp.get();
+    }
+    zim::SuggestionSearch s = sr->suggest(std::string(prefix));
     std::string o = "{\"total\":" + std::to_string(s.getEstimatedMatches()) + ",\"hits\":[";
     bool first = true;
     if (k > 0) {
@@ -235,6 +266,20 @@ char *zimx_suggest(zimx *z, const char *prefix, int k) {
     }
     o += "]}";
     return o;
+  });
+}
+
+char *zimx_cluster_cache(void) {
+  return guarded([]() -> std::string {
+    return "{\"current\":" + std::to_string(zim::getClusterCacheCurrentSize()) + ",\"max\":" +
+           std::to_string(zim::getClusterCacheMaxSize()) + "}";
+  });
+}
+
+char *zimx_set_cluster_cache_max(unsigned long long bytes) {
+  return guarded([&]() -> std::string {
+    zim::setClusterCacheMaxSize(static_cast<size_t>(bytes));
+    return "{\"ok\":true}";
   });
 }
 
