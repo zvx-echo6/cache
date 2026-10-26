@@ -1,15 +1,26 @@
 //! One opened ZIM file.
+//!
+//! With libzim built in (the `xapian` feature on Windows and Android) a ZIM has ONE archive: libzim's, opened when a search,
+//! a suggestion or a read first needs it, kept while the memory budget allows (`budget.rs`) and closed by it otherwise.
+//! Searches, suggestions, `get` and `main_page_path` (that is `cs_read`, `cs_zim_get`, `cs_zim_main_page`) all go through it, and
+//! each counts as a use of the archive for the budget's least-recently-used order. `ZimSource::open` reads the ZIM's facts (id,
+//! title, language, entry count, index sizes) with the `zim` crate and drops that reader again; nothing of it stays open. The
+//! `zim` crate reader is opened again, on demand and kept, only for the Tantivy index build and for a ZIM libzim cannot open;
+//! builds without libzim open it at once and read through it as before.
 
 use crate::budget::{archive_cost, Caps, Evict, Profile, ZimBudget};
 use crate::error::{Error, ErrorCode, Result};
-use crate::zimx::{OpenOpts, Zimx};
+use crate::zimx::{OpenOpts, XGet, XMain, Zimx};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use zim::{DirectoryEntry, MimeType, Namespace, Target, Zim};
 
 /// Redirect hops followed before giving up.
 pub const MAX_REDIRECT_HOPS: u32 = 10;
+
+/// Redirect hops the main page may take (the `zim` crate's own limit for `main_page`).
+const MAIN_PAGE_HOPS: u32 = 50;
 
 /// What a ZIM's libzim archive answers to: the budget, its owner id there, the estimated cost and the open options.
 #[derive(Clone)]
@@ -113,14 +124,28 @@ impl Shared {
 }
 
 pub struct ZimSource {
-    pub zim: Zim,
+    /// The `zim` crate's reader, opened on demand by `zim()`. It serves the Tantivy index build, and the reads of a build
+    /// without libzim (`Zimx::AVAILABLE` false), where it is opened at once and kept. With libzim it is not kept open: `open`
+    /// reads what it needs from it and drops it, and `get` and `main_page_path` go through libzim's archive (see `x`).
+    crate_zim: OnceLock<Zim>,
+    /// Serialises the lazy open of `crate_zim`.
+    crate_opening: Mutex<()>,
     /// The ZIM's UUID, lowercase hyphenated.
     pub id: String,
     pub path: PathBuf,
     pub title: String,
     pub language: Option<String>,
-    /// libzim's view of the same file, opened when a search or suggestion needs it and closed again by the memory budget (see
-    /// `Shared`). The `zim` crate stays the reader for `read` and `zim_get` either way.
+    /// Directory entries in the file (all namespaces), from the header.
+    entries: u64,
+    /// The ZIM carries the Xapian full-text index (`X/fulltext/xapian`) / the title index (`X/title/xapian`), and their
+    /// sizes in bytes (0 when it has none), read once at open.
+    has_ft: bool,
+    has_ti: bool,
+    ft_bytes: u64,
+    ti_bytes: u64,
+    /// libzim's view of the same file, opened when a search, a suggestion or a read needs it and closed again by the memory
+    /// budget (see `Shared`). It is the one archive of this ZIM: with libzim built in, searches, suggestions, `get` and
+    /// `main_page_path` all use it; the `zim` crate reader is only the fallback when libzim cannot open the file.
     x: Arc<Shared>,
     /// Set once a prewarm of the libzim handle has been queued (see `warm_job`).
     warm_queued: AtomicBool,
@@ -307,6 +332,10 @@ impl ZimSource {
             path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
         });
         let language = meta("Language");
+        let (ft_bytes, ti_bytes) = index_sizes(&zim);
+        let has_ft = zim.fulltext_index().ok().flatten().is_some();
+        let has_ti = zim.title_index().ok().flatten().is_some();
+        let entries = zim.header.article_count as u64;
         let x = Arc::new(Shared {
             path: path.to_path_buf(),
             cur: Mutex::new(None),
@@ -314,13 +343,50 @@ impl ZimSource {
             failed: AtomicBool::new(false),
             mem: Mutex::new(None),
         });
-        Ok(ZimSource { zim, id, path: path.to_path_buf(), title, language, x, warm_queued: Default::default() })
+        // With libzim the reader is not kept: everything the source needs was read above, and the file is read through
+        // libzim's archive from here on (one open archive per ZIM, under the memory budget).
+        let crate_zim = OnceLock::new();
+        if !Zimx::AVAILABLE {
+            let _ = crate_zim.set(zim);
+        }
+        Ok(ZimSource {
+            crate_zim,
+            crate_opening: Mutex::new(()),
+            id,
+            path: path.to_path_buf(),
+            title,
+            language,
+            entries,
+            has_ft,
+            has_ti,
+            ft_bytes,
+            ti_bytes,
+            x,
+            warm_queued: Default::default(),
+        })
+    }
+
+    /// The `zim` crate's reader for this file, opened on first use and kept (the Tantivy index build and builds without
+    /// libzim use it; with libzim the reads do not).
+    pub fn zim(&self) -> Result<&Zim> {
+        if let Some(z) = self.crate_zim.get() {
+            return Ok(z);
+        }
+        let _g = self.crate_opening.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(z) = self.crate_zim.get() {
+            return Ok(z);
+        }
+        let z = Zim::new(&self.path).map_err(|e| {
+            let mut e = Error::from(e);
+            e.message = format!("{}: {}", self.path.display(), e.message);
+            e
+        })?;
+        Ok(self.crate_zim.get_or_init(|| z))
     }
 
     /// What this ZIM's archive costs (`budget::archive_cost`): from its entry count and index sizes, with `caps` on libzim's caches.
     pub fn archive_cost(&self, caps: &Caps) -> u64 {
-        let (ft, ti) = index_sizes(&self.zim);
-        archive_cost(&Profile { entries: self.entry_count(), fulltext_bytes: ft, title_bytes: ti }, caps)
+        archive_cost(&Profile { entries: self.entry_count(), fulltext_bytes: self.ft_bytes, title_bytes: self.ti_bytes }, caps)
     }
 
     /// Put the libzim archive of this ZIM under `budget` (the handle's, shared by all its ZIMs), with `caps` on libzim's caches
@@ -355,8 +421,7 @@ impl ZimSource {
         if !Zimx::AVAILABLE {
             return None;
         }
-        let fulltext = self.zim.fulltext_index().ok().flatten().is_some();
-        let titles = self.zim.title_index().ok().flatten().is_some();
+        let (fulltext, titles) = (self.has_ft, self.has_ti);
         if !(fulltext || titles) || self.warm_queued.swap(true, Ordering::SeqCst) {
             return None;
         }
@@ -374,12 +439,12 @@ impl ZimSource {
     }
 
     /// True when keyword search can use the ZIM's built-in Xapian full-text index (`X/fulltext/xapian`): the feature is
-    /// built in, the ZIM has the entry (a cheap lookup with the `zim` crate; libzim is not opened for it) and libzim
+    /// built in, the ZIM has the entry (known from open; libzim is not opened for it) and libzim
     /// has not failed to open the file. `cs_status` asks this, so listing sources never opens libzim.
     pub fn has_xapian(&self) -> bool {
         Zimx::AVAILABLE
             && !self.x.failed.load(Ordering::SeqCst)
-            && self.zim.fulltext_index().ok().flatten().is_some()
+            && self.has_ft
     }
 
     /// The libzim handle when `has_xapian`: keyword search uses it instead of a Tantivy index. Opens libzim when needed.
@@ -392,7 +457,7 @@ impl ZimSource {
 
     /// The libzim handle when this ZIM carries a title index (`X/title/xapian`): suggestions use it.
     pub fn title_index(&self) -> Option<Arc<Zimx>> {
-        if !Zimx::AVAILABLE || self.zim.title_index().ok().flatten().is_none() {
+        if !Zimx::AVAILABLE || !self.has_ti {
             return None;
         }
         self.libzim().filter(|x| x.has_title_index())
@@ -405,49 +470,78 @@ impl ZimSource {
 
     /// Number of directory entries in the file (all namespaces).
     pub fn entry_count(&self) -> u64 {
-        self.zim.header.article_count as u64
+        self.entries
     }
 
-    /// Follow redirects (at most `MAX_REDIRECT_HOPS`) to an entry that holds content.
-    fn follow(&self, mut entry: DirectoryEntry) -> Result<DirectoryEntry> {
+    /// Follow redirects (at most `MAX_REDIRECT_HOPS`) to an entry that holds content (`zim` crate reader).
+    fn follow(&self, zim: &Zim, mut entry: DirectoryEntry) -> Result<DirectoryEntry> {
         for _ in 0..=MAX_REDIRECT_HOPS {
             match entry.target {
-                Some(Target::Redirect(idx)) => entry = self.zim.get_by_url_index(idx)?,
+                Some(Target::Redirect(idx)) => entry = zim.get_by_url_index(idx)?,
                 _ => return Ok(entry),
             }
         }
-        Err(Error::internal(format!("redirect chain longer than {MAX_REDIRECT_HOPS} hops")))
+        Err(redirect_chain_error())
     }
 
-    /// Find `path` exactly (no decoding) in the namespaces of `LOOKUP_NAMESPACES`, first match wins.
-    fn find_exact(&self, path: &str) -> Result<Option<DirectoryEntry>> {
+    /// Find `path` exactly (no decoding) in the namespaces of `LOOKUP_NAMESPACES`, first match wins (`zim` crate reader).
+    fn find_exact(&self, zim: &Zim, path: &str) -> Result<Option<DirectoryEntry>> {
         for ns in LOOKUP_NAMESPACES {
-            if let Some(e) = self.zim.get_by_path(ns, path)? {
+            if let Some(e) = zim.get_by_path(ns, path)? {
                 return Ok(Some(e));
             }
         }
         Ok(None)
     }
 
-    /// Look up the path part of an address (see `path_candidates` for the order) and follow redirects.
+    /// Look up the path part of an address (see `path_candidates` for the order) and follow redirects (`zim` crate reader).
     pub fn lookup(&self, path: &str) -> Result<DirectoryEntry> {
+        let zim = self.zim()?;
         for cand in path_candidates(path) {
-            if let Some(e) = self.find_exact(&cand)? {
-                return self.follow(e);
+            if let Some(e) = self.find_exact(zim, &cand)? {
+                return self.follow(zim, e);
             }
         }
-        Err(Error::not_found(format!("no entry {path:?} in zim {}", self.id)))
+        Err(self.no_entry(path))
     }
 
-    /// Bytes and mime type of the entry at `path`, following redirects.
+    fn no_entry(&self, path: &str) -> Error {
+        Error::not_found(format!("no entry {path:?} in zim {}", self.id))
+    }
+
+    /// Bytes and mime type of the entry at `path`, following redirects. Through the libzim archive (the one the searches
+    /// use, under the memory budget; a read counts as a use of it) when libzim is built in and opens the file; otherwise
+    /// through the `zim` crate.
     pub fn get(&self, path: &str) -> Result<RawEntry> {
+        match self.libzim() {
+            Some(x) => self.get_libzim(&x, path),
+            None => self.get_crate(path),
+        }
+    }
+
+    /// `get` through libzim's archive `x`: the same candidates in the same order, redirects followed within the same limit.
+    #[doc(hidden)]
+    pub fn get_libzim(&self, x: &Zimx, path: &str) -> Result<RawEntry> {
+        for cand in path_candidates(path) {
+            match x.get(&cand, MAX_REDIRECT_HOPS + 1)? {
+                XGet::Found(e) => return Ok(RawEntry { bytes: e.bytes, mime: e.mime, path: e.path, title: e.title }),
+                XGet::Loop => return Err(redirect_chain_error()),
+                XGet::Missing => {}
+            }
+        }
+        Err(self.no_entry(path))
+    }
+
+    /// `get` through the `zim` crate (the reader of builds without libzim; also run beside libzim's by the byte-identity test).
+    #[doc(hidden)]
+    pub fn get_crate(&self, path: &str) -> Result<RawEntry> {
+        let zim = self.zim()?;
         let entry = self.lookup(path)?;
         let mime = match &entry.mime_type {
             MimeType::Type(s) => s.clone(),
             _ => return Err(Error::not_found(format!("entry {path:?} has no content"))),
         };
-        let content = self
-            .zim
+        let content = zim
             .entry_content(&entry)?
             .ok_or_else(|| Error::not_found(format!("entry {path:?} has no content")))?;
         let bytes = content.to_vec()?;
@@ -457,7 +551,26 @@ impl ZimSource {
 
     /// Path of the main page (redirect followed), or `not_found` if the ZIM has none.
     pub fn main_page_path(&self) -> Result<String> {
-        match self.zim.main_page() {
+        match self.libzim() {
+            Some(x) => self.main_page_libzim(&x),
+            None => self.main_page_crate(),
+        }
+    }
+
+    /// `main_page_path` through libzim's archive `x` (same hop limit as the `zim` crate's).
+    #[doc(hidden)]
+    pub fn main_page_libzim(&self, x: &Zimx) -> Result<String> {
+        match x.main_page(MAIN_PAGE_HOPS)? {
+            XMain::Found(p) => Ok(p),
+            XMain::Missing => Err(Error::not_found(format!("zim {} has no main page", self.id))),
+            XMain::Loop => Err(Error::internal("redirect loop while resolving the main page")),
+        }
+    }
+
+    /// `main_page_path` through the `zim` crate.
+    #[doc(hidden)]
+    pub fn main_page_crate(&self) -> Result<String> {
+        match self.zim()?.main_page() {
             Ok(Some(e)) => Ok(e.url),
             Ok(None) => Err(Error::not_found(format!("zim {} has no main page", self.id))),
             Err(e) => {
@@ -471,6 +584,10 @@ impl ZimSource {
             }
         }
     }
+}
+
+fn redirect_chain_error() -> Error {
+    Error::internal(format!("redirect chain longer than {MAX_REDIRECT_HOPS} hops"))
 }
 
 #[cfg(test)]

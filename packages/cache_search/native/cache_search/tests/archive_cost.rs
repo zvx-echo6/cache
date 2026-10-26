@@ -112,11 +112,11 @@ fn zim_crate_reader_cost() {
         let src = ZimSource::open(Path::new(path)).unwrap();
         let opened = settled();
         // what cs_read and zim_get do: a path lookup and an article read, over spread-out entries
-        let n = src.zim.header.article_count.max(1) as u64;
+        let n = src.zim().unwrap().header.article_count.max(1) as u64;
         let mut read = 0usize;
         for i in 0..40u64 {
-            if let Ok(e) = src.zim.get_by_url_index((i * n / 40) as u32) {
-                if let Ok(Some(c)) = src.zim.entry_content(&e) {
+            if let Ok(e) = src.zim().unwrap().get_by_url_index((i * n / 40) as u32) {
+                if let Ok(Some(c)) = src.zim().unwrap().entry_content(&e) {
                     read += c.to_vec().map(|v| v.len()).unwrap_or(0);
                 }
             }

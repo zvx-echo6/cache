@@ -55,8 +55,8 @@ fn searcher_cost_one_zim() {
     let query = std::env::var("CS_COST_QUERY").unwrap_or_else(|_| "water".to_string());
     let base = settled();
     let src = ZimSource::open(Path::new(&path)).unwrap();
-    let ft_bytes = src.zim.fulltext_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
-    let ti_bytes = src.zim.title_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
+    let ft_bytes = src.zim().unwrap().fulltext_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
+    let ti_bytes = src.zim().unwrap().title_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
     let after_src = settled();
     let z = Zimx::open(Path::new(&path)).unwrap();
     let a_open = settled();

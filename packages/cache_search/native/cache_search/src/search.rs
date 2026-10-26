@@ -687,17 +687,24 @@ impl Handle {
             .to_string());
         }
         let e = self.zim_get(address)?;
-        let m = e.mime.to_ascii_lowercase();
-        let text = if m.starts_with("text/html") {
-            html::html_to_text(&String::from_utf8_lossy(&e.bytes))
-        } else if m.starts_with("text/plain") {
-            String::from_utf8_lossy(&e.bytes).trim().to_string()
-        } else {
-            return Err(Error::unsupported(format!("cannot read {} as text", e.mime)));
-        };
-        let (text, truncated) = html::cut_at_paragraph(&text, max_chars as usize);
-        Ok(json!({"address": address, "title": e.title, "text": text, "truncated": truncated}).to_string())
+        read_zim_entry(address, &e, max_chars)
     }
+}
+
+/// The `read` result for a ZIM entry: its text (HTML converted, plain text trimmed), cut at a paragraph end to `max_chars`.
+/// Public (hidden) so the byte-identity test can run it on an entry read by either reader.
+#[doc(hidden)]
+pub fn read_zim_entry(address: &str, e: &zimsrc::RawEntry, max_chars: i32) -> Result<String> {
+    let m = e.mime.to_ascii_lowercase();
+    let text = if m.starts_with("text/html") {
+        html::html_to_text(&String::from_utf8_lossy(&e.bytes))
+    } else if m.starts_with("text/plain") {
+        String::from_utf8_lossy(&e.bytes).trim().to_string()
+    } else {
+        return Err(Error::unsupported(format!("cannot read {} as text", e.mime)));
+    };
+    let (text, truncated) = html::cut_at_paragraph(&text, max_chars as usize);
+    Ok(json!({"address": address, "title": e.title, "text": text, "truncated": truncated}).to_string())
 }
 
 #[cfg(test)]

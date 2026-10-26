@@ -1,4 +1,5 @@
-//! A ZIM's built-in indexes through libzim: the Xapian full-text index (`X/fulltext/xapian`) and the title index.
+//! A ZIM through libzim: its built-in indexes (the Xapian full-text index `X/fulltext/xapian` and the title index) and its
+//! entries (`get`, `main_page`), all on the one open archive of the ZIM.
 //!
 //! The C++ shim `native/zimx` wraps the official prebuilt libzim (feature `xapian`, Windows and Android). Without
 //! the `zimx` cfg this module is a stub whose `open` always fails with `unsupported`, so callers need no `cfg` of
@@ -38,6 +39,35 @@ pub struct XSuggestion {
     pub title: String,
 }
 
+/// An entry read through libzim: the bytes and what describes them, after redirects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XEntry {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    /// Path of the entry that holds the content (no namespace).
+    pub path: String,
+    /// Its title (its path when it has none).
+    pub title: String,
+}
+
+/// Result of `Zimx::get`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum XGet {
+    Found(XEntry),
+    /// No entry has that path.
+    Missing,
+    /// The redirect chain did not end within the allowed number of entries.
+    Loop,
+}
+
+/// Result of `Zimx::main_page`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum XMain {
+    Found(String),
+    Missing,
+    Loop,
+}
+
 #[cfg(zimx)]
 mod imp {
     use super::*;
@@ -54,6 +84,8 @@ mod imp {
         fn zimx_suggest(z: *mut c_void, prefix: *const c_char, k: c_int, keep: c_int) -> *mut c_char;
         fn zimx_prewarm(z: *mut c_void, fulltext: c_int, titles: c_int) -> *mut c_char;
         fn zimx_drop(z: *mut c_void, fulltext: c_int, titles: c_int) -> *mut c_char;
+        fn zimx_get(z: *mut c_void, path: *const c_char, iterations: c_int, data: *mut *mut u8, len: *mut i64) -> *mut c_char;
+        fn zimx_main_page(z: *mut c_void, iterations: c_int) -> *mut c_char;
         fn zimx_cluster_cache() -> *mut c_char;
         fn zimx_set_cluster_cache_max(bytes: u64) -> *mut c_char;
         fn zimx_version() -> *mut c_char;
@@ -185,6 +217,39 @@ mod imp {
             let _ = parse(unsafe { zimx_drop(self.inner.p, fulltext as c_int, titles as c_int) });
         }
 
+        /// The entry at `path` (exact; no decoding, see `zimx.h` `zimx_get`) with its bytes, redirects followed: at most
+        /// `iterations` entries are examined. Reads through the same open archive as the searches.
+        pub fn get(&self, path: &str, iterations: u32) -> Result<XGet> {
+            let c = CString::new(path).map_err(|_| Error::not_found(format!("no entry {path:?}")))?;
+            let mut data: *mut u8 = std::ptr::null_mut();
+            let mut len: i64 = -1;
+            let r = parse(unsafe { zimx_get(self.inner.p, c.as_ptr(), iterations.min(i32::MAX as u32) as c_int, &mut data, &mut len) });
+            // take the bytes first, so they are freed on every path
+            let bytes = if data.is_null() || len < 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(data, len as usize) }.to_vec()
+            };
+            if !data.is_null() {
+                unsafe { zimx_free(data as *mut c_char) };
+            }
+            let v = r?;
+            if v["found"].as_bool() != Some(true) {
+                return Ok(if v["loop"].as_bool() == Some(true) { XGet::Loop } else { XGet::Missing });
+            }
+            let text = |f: &str| v.get(f).and_then(Value::as_str).unwrap_or("").to_string();
+            Ok(XGet::Found(XEntry { bytes, mime: text("mime"), path: text("path"), title: text("title") }))
+        }
+
+        /// The main page's path (redirects followed within `iterations` entries).
+        pub fn main_page(&self, iterations: u32) -> Result<XMain> {
+            let v = parse(unsafe { zimx_main_page(self.inner.p, iterations.min(i32::MAX as u32) as c_int) })?;
+            if v["found"].as_bool() == Some(true) {
+                return Ok(XMain::Found(v["path"].as_str().unwrap_or("").to_string()));
+            }
+            Ok(if v["loop"].as_bool() == Some(true) { XMain::Loop } else { XMain::Missing })
+        }
+
         /// The first `k` title suggestions for `prefix`, in libzim's order.
         pub fn suggest(&self, prefix: &str, k: usize) -> Result<Vec<XSuggestion>> {
             let q = CString::new(prefix.replace('\0', " ")).unwrap();
@@ -253,6 +318,12 @@ mod imp {
             false
         }
         pub fn search(&self, _q: &str, _offset: usize, _k: usize) -> Result<(Vec<XHit>, usize)> {
+            Err(Error::unsupported("built without the xapian feature"))
+        }
+        pub fn get(&self, _path: &str, _iterations: u32) -> Result<XGet> {
+            Err(Error::unsupported("built without the xapian feature"))
+        }
+        pub fn main_page(&self, _iterations: u32) -> Result<XMain> {
             Err(Error::unsupported("built without the xapian feature"))
         }
         pub fn suggest(&self, _p: &str, _k: usize) -> Result<Vec<XSuggestion>> {

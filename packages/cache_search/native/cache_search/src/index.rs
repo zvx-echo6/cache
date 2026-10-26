@@ -407,6 +407,7 @@ pub fn build_zim_index(
 ) -> Result<Outcome> {
     let dir = p.index_dir;
     let zim = p.zim;
+    let czim = zim.zim()?;
     let total = zim.entry_count();
     let tokenizer = tokenizer_name_for(zim.language.as_deref());
 
@@ -473,7 +474,7 @@ pub fn build_zim_index(
         while next < total && cands.len() < checkpoint {
             let idx = next as u32;
             next += 1;
-            let Ok(e) = zim.zim.get_by_url_index(idx) else { continue };
+            let Ok(e) = czim.get_by_url_index(idx) else { continue };
             if !matches!(e.namespace, Namespace::UserContent | Namespace::Articles) {
                 continue;
             }
@@ -494,7 +495,7 @@ pub fn build_zim_index(
             while j < cands.len() && cands[j].cluster == c0 {
                 j += 1;
             }
-            if let Ok(cl) = zim.zim.get_cluster(c0) {
+            if let Ok(cl) = czim.get_cluster(c0) {
                 if let Ok(g) = cl.read() {
                     for c in &cands[i..j] {
                         let Ok(blob) = g.blob(c.blob) else { continue };
