@@ -35,7 +35,7 @@ void main() {
       expect(find.text('Choose a model · Web search off'), findsOneWidget);
       expect(find.text('No sources yet'), findsOneWidget);
       expect(find.textContaining('Nothing downloaded · '), findsOneWidget);
-      expect(find.text('Not set up'), findsOneWidget, reason: 'Weather and alerts');
+      expect(find.text('Nothing on'), findsOneWidget, reason: 'Weather and alerts');
       expect(find.text('No instances · 0 downloaded'), findsOneWidget);
       expect(find.text('Pop-ups on · Quiet 10 PM to 6 AM'), findsOneWidget);
       expect(find.text('41.0 GB free · Updates on any connection'), findsOneWidget);
@@ -76,7 +76,7 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Share this setup cannot be tapped; Weather and alerts says it is not built', (tester) async {
+    testWidgets('Share this setup cannot be tapped; Weather and alerts opens its page', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.tap(find.text('Share this setup'));
@@ -84,8 +84,8 @@ void main() {
       expect(find.byType(SnackBar), findsNothing);
       expect(find.text('Share this setup'), findsOneWidget, reason: 'still on Settings');
       await tester.tap(find.text('Weather and alerts'));
-      await tester.pump();
-      expect(find.textContaining('not built yet'), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(find.text('Update now'), findsOneWidget, reason: 'the Weather and alerts page');
       await r.dispose(tester);
     });
 

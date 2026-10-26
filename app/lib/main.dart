@@ -33,6 +33,10 @@ import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
 import 'video/token_store.dart';
+import 'weather/live_core.dart';
+import 'weather/places.dart';
+import 'weather/weather_state.dart';
+import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
 import 'sources/sources_state.dart';
@@ -99,10 +103,31 @@ class _CacheAppState extends State<CacheApp> {
       }
     },
   );
+  // Weather, alerts and fires: the sources that are on, their keys, the places watched, and Update now. The search core is told what it
+  // may fetch (the policy) and holds the keys in memory only.
+  late final WeatherState weather = WeatherState(
+    settings: settings,
+    policy: policy,
+    core: SearchLiveCore(sources.whenCoreReady),
+    secrets: const SecureTokenStore(),
+    catalogueDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/live-catalogues'),
+    liveDir: () async {
+      await sources.whenCoreReady();
+      final dir = (sources.openedExtra['live'] as Map?)?['sources_dir'];
+      return dir is String ? Directory(dir) : null;
+    },
+    builtIns: readLiveSourceAssets,
+    position: () {
+      final f = location.fix;
+      return f == null ? null : (lat: f.lat, lon: f.lon);
+    },
+    regions: () => regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+  );
   late final SettingsHub hub = SettingsHub(
     settings: settings,
     policy: policy,
     webSearch: webSearch,
+    weather: weather,
     storage: StorageUsage(
       library: () => [sources.zimsDir, sources.indexesDir],
       maps: () => [
@@ -157,7 +182,12 @@ class _CacheAppState extends State<CacheApp> {
       if (mounted) setState(() => _coreDone = true);
     });
     app.init();
-    settings.init().then((_) => webSearch.init());
+    final settingsRead = settings.init();
+    settingsRead.then((_) => webSearch.init());
+    // The weather part starts once the settings are read and the core is open.
+    settingsRead.then((_) => sources.whenCoreReady()).then((core) {
+      if (core != null) weather.start();
+    });
     layout.init();
     sources.init();
     browse.init();
@@ -210,6 +240,7 @@ class _CacheAppState extends State<CacheApp> {
     location.dispose();
     maps.dispose();
     webSearch.dispose();
+    weather.dispose();
     settings.dispose();
     _store?.close();
     super.dispose();

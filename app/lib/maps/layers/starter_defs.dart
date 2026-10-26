@@ -13,10 +13,18 @@ Future<void> installStarterLayers(Directory dir, {AssetBundle? bundle}) => _inst
 /// Where the live data source definitions (weather, alerts) are bundled: the cache_search package's `sources/` folder.
 const String kLiveSourcesAssetDir = 'packages/cache_search/sources/';
 
-/// Writes the live data source definitions to [dir] (the core's `live.sources_dir`), rewritten on every start. They ship in the app
-/// from the same commit as the core, because the core reads them strictly: a definition with a field an older core does not know
-/// (alerts.json's `none_label`) is refused. Files in [dir] the app does not ship (a definition someone added) are left alone.
-Future<void> installLiveSources(Directory dir, {AssetBundle? bundle}) => _installJson(dir, kLiveSourcesAssetDir, bundle);
+/// The text of each live data source definition the app ships (the built-in sources: weather and alerts). They ship in the app from
+/// the same commit as the core, because the core reads them strictly: a definition with a field an older core does not know
+/// (alerts.json's `none_label`) is refused. The weather part of the app puts the ones that are switched on in the core's folder.
+Future<List<String>> readLiveSourceAssets({AssetBundle? bundle}) async {
+  final b = bundle ?? rootBundle;
+  final manifest = await AssetManifest.loadFromAssetBundle(b);
+  final names = [
+    for (final asset in manifest.listAssets())
+      if (asset.startsWith(kLiveSourcesAssetDir) && asset.endsWith('.json') && !asset.substring(kLiveSourcesAssetDir.length).contains('/')) asset,
+  ]..sort();
+  return [for (final n in names) await b.loadString(n)];
+}
 
 Future<void> _installJson(Directory dir, String assetDir, AssetBundle? bundle) async {
   final b = bundle ?? rootBundle;

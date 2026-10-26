@@ -21,21 +21,15 @@ class _Bundle extends CachingAssetBundle {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('the live data source definitions in the app are written to the core\'s folder, rewritten when they change, and others are left alone', () async {
-    final dir = Directory.systemTemp.createTempSync('livesrc');
-    addTearDown(() => dir.deleteSync(recursive: true));
-    File('${dir.path}/mine.json').writeAsStringSync('{"mine":1}');
-    File('${dir.path}/alerts.json').writeAsStringSync('{"old":true}');
+  test('the built-in live source definitions are read from the app bundle, files in the sources folder only', () async {
     final bundle = _Bundle({
       '${kLiveSourcesAssetDir}alerts.json': '{"none_label":"No active alerts"}',
       '${kLiveSourcesAssetDir}weather.json': '{"id":"weather"}',
+      '${kLiveSourcesAssetDir}nested/other.json': '{"id":"other"}',
       '${kStarterLayersAssetDir}contours.json': '{"id":"contours"}',
     });
-    await installLiveSources(dir, bundle: bundle);
-    expect(File('${dir.path}/alerts.json').readAsStringSync(), '{"none_label":"No active alerts"}');
-    expect(File('${dir.path}/weather.json').readAsStringSync(), '{"id":"weather"}');
-    expect(File('${dir.path}/mine.json').readAsStringSync(), '{"mine":1}');
-    expect(File('${dir.path}/contours.json').existsSync(), isFalse, reason: 'layer definitions are not live sources');
+    final texts = await readLiveSourceAssets(bundle: bundle);
+    expect(texts, ['{"none_label":"No active alerts"}', '{"id":"weather"}']);
   });
 
   test('the live source definitions the app ships are the ones in the core\'s folder, byte for byte', () {

@@ -209,6 +209,20 @@ class SearchCore {
   Future<Map<String, dynamic>> liveFetch(Map<String, dynamic> request) => _map('liveFetch', {'request': request});
   Future<Map<String, dynamic>> liveGet(Map<String, dynamic> request) => _map('liveGet', {'request': request});
 
+  /// The host's grant for network fetches (cs_live_set_fetch_policy): `{"online","allow_metered","metered","enabled_sources":[ids]}`.
+  /// Null clears it, and the core fetches nothing. Push it at start and whenever the connection or the settings change.
+  Future<void> liveSetFetchPolicy(Map<String, dynamic>? policy) => _call('liveSetFetchPolicy', {'policy': policy});
+
+  /// A source's key (cs_live_set_key), kept in the core's memory only and never read back; null forgets it.
+  Future<void> liveSetKey(String sourceId, String? key) => _call('liveSetKey', {'source': sourceId, 'key': key});
+
+  /// Checks a connector definition without downloading (cs_live_preview with `check_only`): `{"valid":true,"source":{...},
+  /// "requests":[...],"warnings":[...]}`, or a [CacheSearchException] whose message names every problem field.
+  Future<Map<String, dynamic>> liveCheck(Object definition) => _map('livePreview', {'request': {'definition': definition, 'check_only': true}});
+
+  /// Downloads once with a definition (cs_live_preview): to check a key, and for a connector's author. Nothing is stored.
+  Future<Map<String, dynamic>> livePreview(Map<String, dynamic> request) => _map('livePreview', {'request': request});
+
   /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache; [arg]
   /// is that call's one string (see cache_search.h).
   Future<Map<String, dynamic>> layers(String op, [String? arg]) => _map('layers', {'op': op, 'arg': arg});
@@ -452,6 +466,12 @@ void _workerMain(List<dynamic> init) {
           result = eng().liveFetch((a['request'] as Map).cast<String, dynamic>());
         case 'liveGet':
           result = eng().liveGet((a['request'] as Map).cast<String, dynamic>());
+        case 'liveSetFetchPolicy':
+          eng().liveSetFetchPolicy((a['policy'] as Map?)?.cast<String, dynamic>());
+        case 'liveSetKey':
+          eng().liveSetKey(a['source'] as String, a['key'] as String?);
+        case 'livePreview':
+          result = eng().livePreview((a['request'] as Map).cast<String, dynamic>());
         case 'layers':
           result = eng().layers(a['op'] as String, a['arg'] as String?);
         case 'convFree':

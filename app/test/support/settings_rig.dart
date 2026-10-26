@@ -17,12 +17,15 @@ import 'package:cache/settings/web_search_setup.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/video/token_store.dart';
 import 'package:cache/video/video_state.dart';
+import 'package:cache/weather/places.dart';
+import 'package:cache/weather/weather_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../browse/fakes.dart';
 import '../nav_fakes.dart';
 import '../video_fake.dart';
+import 'weather_fakes.dart';
 import 'test_layer_engine.dart';
 
 class FakeAccess implements LocationAccessProbe {
@@ -84,6 +87,20 @@ class SettingsRig {
   late MapsState maps;
   late TestLayerEngine engine;
   late SettingsHub hub;
+  late WeatherState weather;
+  late FakeLiveCore liveCore;
+  late FakeWeb web;
+  late Directory liveDir;
+  late Directory catalogueDir;
+
+  /// The phone's position for "Where I am" (null: no fix yet).
+  Position? here = (lat: 42.54, lon: -113.79);
+
+  /// The time the weather part sees; tests move it.
+  DateTime clock = DateTime(2026, 10, 26, 12, 0);
+
+  /// Downloaded regions the weather part offers.
+  List<WatchRegion> regionList = [];
   final List<String> opened = [];
   final List<String> keysChecked = [];
 
@@ -165,11 +182,29 @@ class SettingsRig {
     );
     r.location = LocationService(source: r.position, settingsDirOverride: r.dir);
     r.maps = MapsState(engine: r.engine, settingsDirOverride: r.dir);
+    r.liveDir = Directory('${r.dir.path}/live-sources');
+    r.catalogueDir = Directory('${r.dir.path}/live-catalogues');
+    r.liveCore = FakeLiveCore(r.liveDir);
+    r.web = FakeWeb()..serve('https://cache.echo6.co/connectors/', standardCatalogue());
+    r.weather = WeatherState(
+      settings: r.settings,
+      policy: r.policy,
+      core: r.liveCore,
+      secrets: r.secrets,
+      catalogueDir: () async => r.catalogueDir,
+      liveDir: () async => r.liveDir,
+      builtIns: () async => builtInDefinitions(),
+      position: () => r.here,
+      regions: () => r.regionList,
+      fetch: r.web.fetch,
+      clock: () => r.clock,
+    );
     r.hub = SettingsHub(
       settings: r.settings,
       policy: r.policy,
       webSearch: r.webSearch,
       storage: r.storage,
+      weather: r.weather,
       locationAccess: r.access,
       openUrl: (u) async => r.opened.add(u),
     );
@@ -180,6 +215,10 @@ class SettingsRig {
       await r.video.init();
       await r.app.init();
       await r.maps.init();
+      await r.weather.start();
+      while (r.weather.refreshingCatalogues) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
     });
     return r;
   }
@@ -197,6 +236,7 @@ class SettingsRig {
     sources.dispose();
     store.close();
     webSearch.dispose();
+    weather.dispose();
     await tester.runAsync(() async {
       try {
         await dir.delete(recursive: true);

@@ -5,7 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A stand-in for the native library: answers from canned JSON and records what it was given.
-class FakeNative implements CsNative {
+class FakeNative implements CsNative, CsLiveNative {
   // The tool, location, places and live calls are not used by these tests.
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -102,6 +102,30 @@ class FakeNative implements CsNative {
   int jobCancel(int job) => jobCancelResult;
   @override
   void jobFree(int job) => calls.add('jobFree:$job');
+
+  bool livePolicyAvailable = true;
+  int liveResult = 0;
+  final List<String> liveCalls = [];
+
+  @override
+  bool get hasLivePolicy => livePolicyAvailable;
+  @override
+  int liveSetFetchPolicy(int handle, String? policyJson) {
+    liveCalls.add('policy:$policyJson');
+    return liveResult;
+  }
+
+  @override
+  int liveSetKey(int handle, String sourceId, String? key) {
+    liveCalls.add('key:$sourceId:${key == null ? 'null' : 'set'}');
+    return liveResult;
+  }
+
+  @override
+  String? livePreview(String requestJson) {
+    liveCalls.add('preview:$requestJson');
+    return replies['livePreview'];
+  }
 }
 
 const _zim = SourceConfig.zim(path: '/z/wikimed.zim', indexDir: '/i/wikimed.idx');
@@ -342,6 +366,46 @@ void main() {
       final n = FakeNative()..error = '{"code":"not_configured","message":"no layers section"}';
       final e = SearchEngine.open(n, [_zim]);
       expect(() => e.layers('list'), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'not_configured')));
+    });
+  });
+
+  group('live fetch policy, keys and the checker', () {
+    test('the policy is sent as JSON, null clears it', () {
+      final n = FakeNative();
+      final e = SearchEngine.open(n, [_zim]);
+      e.liveSetFetchPolicy({'online': true, 'allow_metered': false, 'metered': true, 'enabled_sources': ['weather']});
+      e.liveSetFetchPolicy(null);
+      expect(jsonDecode(n.liveCalls[0].substring('policy:'.length)), {'online': true, 'allow_metered': false, 'metered': true, 'enabled_sources': ['weather']});
+      expect(n.liveCalls[1], 'policy:null');
+    });
+
+    test('a key goes to the core by source id and null forgets it', () {
+      final n = FakeNative();
+      final e = SearchEngine.open(n, [_zim]);
+      e.liveSetKey('firms-viirs-near', 'abc');
+      e.liveSetKey('firms-viirs-near', null);
+      expect(n.liveCalls, ['key:firms-viirs-near:set', 'key:firms-viirs-near:null']);
+    });
+
+    test('a refused call raises the handle error, and an older core says unsupported', () {
+      final n = FakeNative()
+        ..liveResult = -1
+        ..error = '{"code":"bad_json","message":"policy: unknown field"}';
+      final e = SearchEngine.open(n, [_zim]);
+      expect(() => e.liveSetFetchPolicy({'online': true}), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'bad_json')));
+      n.livePolicyAvailable = false;
+      expect(() => e.liveSetKey('a', 'b'), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'unsupported')));
+    });
+
+    test('the checker takes a definition and answers the core\'s verdict, or its problems', () {
+      final n = FakeNative()..replies['livePreview'] = '{"valid":true,"source":{"id":"x"},"requests":[],"warnings":[]}';
+      final e = SearchEngine.open(n, [_zim]);
+      final r = e.livePreview({'definition': {'id': 'x'}, 'check_only': true});
+      expect(r['valid'], true);
+      expect(jsonDecode(n.liveCalls.single.substring('preview:'.length)), {'definition': {'id': 'x'}, 'check_only': true});
+      n.replies['livePreview'] = null;
+      n.error = '{"code":"bad_json","message":"items[0].label: missing"}';
+      expect(() => e.livePreview({'definition': {}}), throwsA(isA<CacheSearchException>().having((x) => x.message, 'message', contains('items[0].label'))));
     });
   });
 }

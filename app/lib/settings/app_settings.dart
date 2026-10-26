@@ -4,6 +4,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+/// Where connectors are published: the catalogue the app starts with (configurable in Advanced).
+const String kDefaultCatalogueUrl = 'https://cache.echo6.co/connectors/catalogue.json';
+
+/// The id of "Where I am" among the watched places: the place follows the phone.
+const String kWatchHere = 'here';
+
 /// "10 PM", "6:30 AM": a time of day in minutes after midnight, as people say it.
 String formatMinutes(int minutes) {
   final m = ((minutes % 1440) + 1440) % 1440;
@@ -64,6 +70,10 @@ class AppSettings extends ChangeNotifier {
   bool _mobileForUpdates = true;
   bool _mobileForDownloads = false;
   bool _webSearchOn = false;
+  Set<String> _liveOn = {};
+  Set<String> _watched = {kWatchHere};
+  String? _catalogueUrl;
+  List<String> _extraCatalogues = [];
   File? _file;
 
   /// Weather alerts and fires near the person's places show as pop-ups.
@@ -83,6 +93,20 @@ class AppSettings extends ChangeNotifier {
 
   /// The person's switch for searching the web. Only has an effect once a search service has a key.
   bool get webSearchOn => _webSearchOn;
+
+  /// The live data sources that are switched on (weather, alerts, fires...), by source id. Nothing is downloaded for a source that
+  /// is not here. A source and the built-in one it replaces (see liveReplaces in weather/catalogue.dart) are on or off together.
+  Set<String> get liveSourcesOn => Set.unmodifiable(_liveOn);
+
+  /// The places weather, alerts and fires are kept for: [kWatchHere] ("Where I am"), `place:<key>` (a saved place) or `region:<name>`
+  /// (a downloaded region). "Where I am" is watched until the person unchecks it.
+  Set<String> get watchedPlaces => Set.unmodifiable(_watched);
+
+  /// The address of the connector catalogue the person set in Advanced, or null for the default ([kDefaultCatalogueUrl]).
+  String? get catalogueUrl => _catalogueUrl;
+
+  /// Catalogues the person added from a link, in the order added.
+  List<String> get extraCatalogues => List.unmodifiable(_extraCatalogues);
 
   Future<void> init() async {
     final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
@@ -110,10 +134,17 @@ class AppSettings extends ChangeNotifier {
       _mobileForUpdates = j['mobileForUpdates'] != false;
       _mobileForDownloads = j['mobileForDownloads'] == true;
       _webSearchOn = j['webSearchOn'] == true;
+      _liveOn = _strings(j['liveSourcesOn']).toSet();
+      if (j['watchedPlaces'] is List) _watched = _strings(j['watchedPlaces']).toSet();
+      final u = j['catalogueUrl'];
+      _catalogueUrl = u is String && u.trim().isNotEmpty ? u.trim() : null;
+      _extraCatalogues = _strings(j['extraCatalogues']);
     } catch (_) {
       // A damaged file is ignored; the defaults apply.
     }
   }
+
+  static List<String> _strings(Object? v) => v is List ? [for (final e in v) if (e is String && e.isNotEmpty) e] : <String>[];
 
   void _save() {
     notifyListeners();
@@ -125,6 +156,10 @@ class AppSettings extends ChangeNotifier {
         'mobileForUpdates': _mobileForUpdates,
         'mobileForDownloads': _mobileForDownloads,
         'webSearchOn': _webSearchOn,
+        'liveSourcesOn': _liveOn.toList()..sort(),
+        'watchedPlaces': _watched.toList()..sort(),
+        'catalogueUrl': _catalogueUrl,
+        'extraCatalogues': _extraCatalogues,
       }));
     } catch (_) {}
   }
@@ -162,6 +197,50 @@ class AppSettings extends ChangeNotifier {
   void setWebSearchOn(bool v) {
     if (v == _webSearchOn) return;
     _webSearchOn = v;
+    _save();
+  }
+
+  /// Switches live data sources on or off, by id (all of [ids] at once).
+  void setLiveSourcesOn(Iterable<String> ids, bool on) {
+    final next = {..._liveOn};
+    on ? next.addAll(ids) : next.removeAll(ids);
+    if (next.length == _liveOn.length && next.containsAll(_liveOn)) return;
+    _liveOn = next;
+    _save();
+  }
+
+  /// Watches or stops watching a place (see [watchedPlaces]).
+  void setWatched(String placeId, bool on) {
+    if (on == _watched.contains(placeId)) return;
+    _watched = on ? {..._watched, placeId} : ({..._watched}..remove(placeId));
+    _save();
+  }
+
+  /// Forgets a watched place that no longer exists (a deleted saved place).
+  void forgetWatched(Iterable<String> ids) {
+    final next = {..._watched}..removeAll(ids);
+    if (next.length == _watched.length) return;
+    _watched = next;
+    _save();
+  }
+
+  /// The catalogue address from Advanced; null or empty puts the default back.
+  void setCatalogueUrl(String? url) {
+    final v = url == null || url.trim().isEmpty ? null : url.trim();
+    if (v == _catalogueUrl) return;
+    _catalogueUrl = v;
+    _save();
+  }
+
+  void addCatalogue(String url) {
+    if (_extraCatalogues.contains(url)) return;
+    _extraCatalogues = [..._extraCatalogues, url];
+    _save();
+  }
+
+  void removeCatalogue(String url) {
+    if (!_extraCatalogues.contains(url)) return;
+    _extraCatalogues = [..._extraCatalogues]..remove(url);
     _save();
   }
 
