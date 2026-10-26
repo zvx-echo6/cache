@@ -16,6 +16,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
     required this.emergency,
     required this.warning,
     required this.ok,
+    this.monoDark,
+    this.monoLight,
   });
 
   final Color background;
@@ -32,6 +34,11 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
   final Color warning;
   final Color ok;
 
+  /// Single-hue themes only: the painted brand art (tiles, wordmark, launch scene) is drawn in this theme's own hue, with
+  /// its darkest tone mapped to [monoDark] and its lightest to [monoLight]. Null keeps the art in full colour.
+  final Color? monoDark;
+  final Color? monoLight;
+
   @override
   CacheTokens copyWith({
     Color? background,
@@ -44,6 +51,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
     Color? emergency,
     Color? warning,
     Color? ok,
+    Color? monoDark,
+    Color? monoLight,
   }) =>
       CacheTokens(
         background: background ?? this.background,
@@ -56,6 +65,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
         emergency: emergency ?? this.emergency,
         warning: warning ?? this.warning,
         ok: ok ?? this.ok,
+        monoDark: monoDark ?? this.monoDark,
+        monoLight: monoLight ?? this.monoLight,
       );
 
   @override
@@ -72,7 +83,28 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
       emergency: Color.lerp(emergency, other.emergency, t)!,
       warning: Color.lerp(warning, other.warning, t)!,
       ok: Color.lerp(ok, other.ok, t)!,
+      monoDark: Color.lerp(monoDark, other.monoDark, t),
+      monoLight: Color.lerp(monoLight, other.monoLight, t),
     );
+  }
+
+  /// A colour filter that turns the brand art into this theme's hue (luminance mapped from [monoDark] to [monoLight], with
+  /// extra contrast so glyph and tile stay apart), or null for the full-colour themes.
+  ColorFilter? get brandFilter {
+    final d = monoDark, l = monoLight;
+    if (d == null || l == null) return null;
+    const gain = 1.35;
+    List<double> row(double dark, double light) {
+      final diff = (light - dark) * gain;
+      return [diff * 0.2126, diff * 0.7152, diff * 0.0722, 0, 255 * dark + (light - dark) * 255 * (0.5 - 0.5 * gain)];
+    }
+
+    return ColorFilter.matrix([
+      ...row(d.r, l.r),
+      ...row(d.g, l.g),
+      ...row(d.b, l.b),
+      0, 0, 0, 1, 0,
+    ]);
   }
 }
 
@@ -162,6 +194,8 @@ const Map<CacheThemeId, CacheTokens> cacheTokens = {
     emergency: Color(0xFFFF2D1F),
     warning: Color(0xFFC24A1E),
     ok: Color(0xFFB23A2E),
+    monoDark: Color(0xFF260806),
+    monoLight: Color(0xFFFF6A58),
   ),
 };
 
