@@ -399,6 +399,11 @@ class NavState extends ChangeNotifier {
       } catch (_) {}
       if (phase != NavPhase.guiding) return; // ended while the prompt was up
     }
+    location.holdStream(true);
+    if (phase != NavPhase.guiding) {
+      location.holdStream(false);
+      return;
+    }
     _fixSub = positionSource.start(title: 'Cache navigation', text: 'Guiding you to $name').listen(_onFix);
     // The first fix may already be known; the stream gives the next ones.
     final f = location.fix;
@@ -507,6 +512,7 @@ class NavState extends ChangeNotifier {
     await _fixSub?.cancel();
     _fixSub = null;
     await positionSource.stop();
+    location.holdStream(false);
     await speaker.stop();
     phase = NavPhase.browsing;
     routes = const [];
@@ -532,6 +538,7 @@ class NavState extends ChangeNotifier {
     _meaningTimer?.cancel();
     _fixSub?.cancel();
     positionSource.stop();
+    location.holdStream(false);
     _events.close();
     super.dispose();
   }

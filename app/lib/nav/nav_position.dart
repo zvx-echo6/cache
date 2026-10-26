@@ -17,6 +17,11 @@ abstract class NavPositionSource {
 }
 
 class GeolocatorNavSource implements NavPositionSource {
+  /// [positions] makes the plugin's position stream; tests give their own.
+  GeolocatorNavSource({Stream<Position> Function(LocationSettings settings)? positions})
+      : _positions = positions ?? ((s) => Geolocator.getPositionStream(locationSettings: s));
+
+  final Stream<Position> Function(LocationSettings settings) _positions;
   StreamController<Fix>? _out;
   StreamSubscription<Position>? _sub;
 
@@ -30,7 +35,12 @@ class GeolocatorNavSource implements NavPositionSource {
 
   @override
   Stream<Fix> start({required String title, required String text}) {
-    stop();
+    // Let go of the old stream first and without waiting: stop() is asynchronous, and if it ran after this method had made the
+    // new stream it would cancel and close the new one instead, leaving the position service running with nobody listening.
+    final old = (_sub, _out);
+    _sub = null;
+    _out = null;
+    unawaited(_release(old.$1, old.$2));
     final LocationSettings settings = Platform.isAndroid
         ? AndroidSettings(
             accuracy: LocationAccuracy.best,
@@ -56,18 +66,23 @@ class GeolocatorNavSource implements NavPositionSource {
             : const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 0);
     final out = StreamController<Fix>.broadcast();
     _out = out;
-    _sub = Geolocator.getPositionStream(locationSettings: settings).listen(
+    _sub = _positions(settings).listen(
       (p) => out.add(_fix(p)),
       onError: out.addError,
     );
     return out.stream;
   }
 
+  static Future<void> _release(StreamSubscription<Position>? sub, StreamController<Fix>? out) async {
+    await sub?.cancel();
+    await out?.close();
+  }
+
   @override
   Future<void> stop() async {
-    await _sub?.cancel();
+    final sub = _sub, out = _out;
     _sub = null;
-    await _out?.close();
     _out = null;
+    await _release(sub, out);
   }
 }

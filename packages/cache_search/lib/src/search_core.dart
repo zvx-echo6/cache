@@ -354,6 +354,7 @@ void _workerMain(List<dynamic> init) {
                 'opening': s.opening,
                 'updating': s.updating,
                 'docs': s.docs,
+                'keyword_source': s.keywordSource,
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];

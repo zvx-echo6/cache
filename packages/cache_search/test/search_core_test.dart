@@ -8,7 +8,9 @@ CsNative _fake() => FakeNative()
   ..replies['search'] = '{"results":[{"address":"zim:u/A","title":"A","snippet":"s","source_id":"u","source_kind":"zim","source_title":"U"}],"total_estimate":1}'
   ..replies['format'] = '{"tool_message":"[1] A — s","ids":[{"n":1,"address":"zim:u/A","title":"A"}]}'
   ..replies['ids'] = '{"ids":[{"n":1,"address":"zim:u/A","title":"A"}]}'
-  ..replies['jobProgress'] = '{"state":"done","done":5,"total":5,"error":null}';
+  ..replies['jobProgress'] = '{"state":"done","done":5,"total":5,"error":null}'
+  ..replies['status'] =
+      '{"sources":[{"id":"u","kind":"zim","path":"/z/a.zim","title":"U","indexed":true,"building":false,"stale":false,"opening":false,"updating":false,"docs":7,"keyword_source":"own","error":null}]}';
 
 CsNative _failing() => FakeNative()
   ..openResult = 0
@@ -27,6 +29,9 @@ void main() {
     final job = await core.startJob('index_zim', {'zim_path': '/z/a.zim', 'index_dir': '/i/a.idx'});
     expect((await job.progress()).state, JobState.done);
     await job.free();
+    final status = (await core.status()).single;
+    expect(status.docs, 7);
+    expect(status.keywordSource, 'own', reason: 'the worker passes where keyword search comes from on to the app');
     await core.close();
     await expectLater(core.status(), throwsA(isA<CacheSearchException>()));
   });

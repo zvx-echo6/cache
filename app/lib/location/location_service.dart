@@ -34,6 +34,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   File? _file;
   StreamSubscription<Fix>? _sub;
   bool _foreground = true;
+  bool _held = false;
 
   Future<void> init() async {
     final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
@@ -116,11 +117,28 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _listen() {
-    if (_sub != null || !_foreground) return;
+    if (_sub != null || !_foreground || _held) return;
     _sub = _source.stream().listen(_publish, onError: (Object _) {
       problem = LocationProblem.noFix;
       notifyListeners();
     });
+  }
+
+  /// Navigation reads the position through its own service (a foreground service with a notification) while guidance runs, and
+  /// the plugin shares one position stream between every listener in the app: a stream already running here would be the one
+  /// guidance got, without the foreground service, and the position would stop with the screen locked. So this stream lets go
+  /// while [hold] is true (and the last fix stays), and starts again when it is false.
+  void holdStream(bool hold) {
+    _held = hold;
+    if (hold) {
+      // Not awaited: the plugin drops its shared stream the moment the last listener cancels, which happens inside this call, and
+      // a cancel that waits on the platform would hold guidance up (and a widget test with it).
+      final s = _sub;
+      _sub = null;
+      unawaited(s?.cancel());
+    } else if (enabled && permission == LocationPermissionState.granted) {
+      _listen();
+    }
   }
 
   void _unlisten() {
