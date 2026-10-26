@@ -1,4 +1,4 @@
-# C.A.C.H.E. — Crisis Assistant for Contingencies, Hardship & Emergencies
+# Cache
 
 An offline survival and preparedness assistant for phones and computers. Everything runs on the device with no network: a local LLM, a library, Kiwix, maps and routing.
 
@@ -9,7 +9,7 @@ Cache is built to pull data while online and then work offline for long periods,
 Cache aims to be an all-in-one emergency app: install it, configure it while things are normal, and not find out in a crisis that some other app should have been installed beforehand.
 
 - **Repo:** github.com/zvx-echo6/cache (private)
-- **Board:** GitHub project "C.A.C.H.E." (owner zvx-echo6). Status lives on the board.
+- **Board:** GitHub project "Cache" (owner zvx-echo6). Status lives on the board.
 - **Audience:** the owner, family and close friends first; the app stores possibly later.
 - **Decided 2026-10-20 to 2026-10-24.**
 
@@ -17,7 +17,7 @@ Cache aims to be an all-in-one emergency app: install it, configure it while thi
 
 | Area | Decision |
 |---|---|
-| Name | C.A.C.H.E. — Crisis Assistant for Contingencies, Hardship & Emergencies. Called "Cache". |
+| Name | Cache. |
 | Assistant name | Not decided yet. The assistant is not called AIDA in Cache. |
 | App layout | Four tabs: Home, Ask, Browse, Maps. Home: an Ask box, quick actions (Hospital, First aid, Water, Navigate) and small status cards (model, reading, maps, search, weather; a card shows when data has expired and needs a connection). Ask: ChatGPT-style chat, sources collapsed into one pill. Browse: the offline browser, including connected video sources and downloaded videos. Maps: full-screen map with one search bar; nearby and routing appear after a search or a tap. Models and Downloads open from Home. Dark theme, calm screens, one main thing per screen. Decided 2026-10-24 from mockups. |
 | Platforms | Android and iPhone first; Windows later. |
@@ -46,6 +46,7 @@ Cache aims to be an all-in-one emergency app: install it, configure it while thi
 | Distribution | Android: APK sideload. iPhone: TestFlight, through the Apple Developer Program (no device IDs to register). |
 | Build machine | Android and Windows: the owner's Windows desktop (Flutter, Android SDK, phone over USB). Never cortex. |
 | iPhone builds | GitHub Actions macOS runners: the workflow runs `flutter build ipa`, signs with a distribution certificate and provisioning profile kept in the repo's Actions secrets, and uploads to TestFlight with an App Store Connect API key. No Mac needed: the signing request is made with openssl. The iPhone job runs only on demand (manual trigger), not on every push, because macOS runner minutes cost about 10x Linux. Decided 2026-10-24. |
+| Licence | AGPL-3.0-or-later for Cache's code (GPL-3 is the floor because of libzim and Xapian, GPL-2.0-or-later, plus Apache-2.0 components; AGPL chosen because Cache will have network roles: the Windows household model server and possible off-grid relays). Data keeps its own licences; OSM-derived packs are ODbL. iPhone App Store compatibility to be checked before the first iPhone build. Copyright held by Happy Little LLC. Decided 2026-10-26. |
 
 ## Device tiers
 
@@ -96,7 +97,7 @@ Each step ends with something usable on a phone. Riskiest first. Updated 2026-10
 3. **Browse.** The offline browser: ZIMs and library packs open like websites. Kiwix's public catalogue (showing mini, no-pictures and full variants with sizes), added catalogues (OPDS), import from a file; start page, tabs, bookmarks, history. Web links the model writes (for example Wikipedia URLs) open the local ZIM copy when one exists, otherwise they are marked not available offline.
 4. **Search.** Tantivy (Rust) index across ZIMs and library packs, one search box. Background indexing of each new ZIM on the phone; ready-made indexes for large ZIMs published with the packs.
 5. **Model library.** Hugging Face search and download inside the app, with size and RAM fit. Cached models (the owner's trained models) listed at the top. Also the optional network model connector (OpenAI-compatible, local Wi-Fi or internet; mDNS discovery or IP address and port), picked here as on-device or network. Tool check for every model (on-device and network); only models that pass can be used.
-6. **The assistant's brain.** Train E2B on a C.A.C.H.E. version of the AIDA course (same tool use, complete answers), quiz it, then wire its tools to the library, Kiwix and search. Then E4B, 12B, and last Qwen (needs the course converted to ChatML). Published on Hugging Face as Cached models.
+6. **The assistant's brain.** Train E2B on a Cache version of the AIDA course (same tool use, complete answers), quiz it, then wire its tools to the library, Kiwix and search. Then E4B, 12B, and last Qwen (needs the course converted to ChatML). Published on Hugging Face as Cached models.
 7. **Region packs.** The build pipeline from public open data (see Map data sources) and publishing to Hugging Face datasets. Baseline regions chosen by the owner.
 8. **Live sources.** The on-device source engine (definition files, fetch once and share, coalescing, quotas, secure key storage, validity and expiry, scheduled refresh when online, field mapping), the starter emergency catalogue, Home status cards for live data, and the assistant tools: weather (cached Open-Meteo forecasts per place, with their age), fuel_prices, alerts. Alert matching against location and saved places, notifications, and "Ask about this alert".
 9. **Maps.** Offline maps from region packs at full navi parity: basemap, hillshade and terrain, land cover, land ownership, places, geocoder, nearby (MapLibre + PMTiles). Coordinates: lat/long, USNG/MGRS and Plus Codes offline; what3words online with cached words for saved places. Imported repeater lists on the map and in nearby.
@@ -151,3 +152,4 @@ Each step ends with something usable on a phone. Riskiest first. Updated 2026-10
 - "My supplies": a list of what the user has on hand, so alert checklists can say what is missing (the owner considers it scope creep for now).
 - A tick-off checklist saved with an alert.
 - Point family phones at the owner's Conduit for sources that need keys, so the keys stay on the server and quotas are shared.
+- Community modules. Modules that run code run as separate programs talking to Cache through a documented local interface (this keeps licences separate and is the permission boundary). Data-only modules install from a link on every platform; code modules install from a link on Android and desktop, and are built in at build time on iPhone. A Reticulum module is the first candidate: the official RNS package, unmodified, run as its own process, never ported or rewritten. Not approved; the owner to decide how.
