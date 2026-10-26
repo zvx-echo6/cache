@@ -14,6 +14,10 @@
 
 use cache_search::zimsrc::ZimSource;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Both tests look at the same files from one process, and "held" is process-wide: they must not run at the same time.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// Is anything in this process still holding `path` open or mapped?
 #[cfg(windows)]
@@ -49,6 +53,7 @@ fn zims() -> Vec<PathBuf> {
 
 #[test]
 fn the_check_sees_a_held_reader() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let all = zims();
     let Some(p) = all.first() else {
         eprintln!("CS_TEST_ZIM_DIR not set (or empty): skipping");
@@ -63,6 +68,7 @@ fn the_check_sees_a_held_reader() {
 
 #[test]
 fn open_leaves_nothing_of_the_zim_crate_open() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let all = zims();
     if all.is_empty() {
         eprintln!("CS_TEST_ZIM_DIR not set (or empty): skipping");
