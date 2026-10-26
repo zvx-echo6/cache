@@ -1,7 +1,7 @@
 //! The `cs` subcommands. Each one reads its flags, makes the core calls and prints the core's JSON.
 
 use crate::args::Args;
-use crate::embed::{Embedder, EMBED_DEFAULT_THREADS};
+use cache_embed::{Embedder, EMBED_DEFAULT_THREADS};
 use crate::engine::{job_result, run_job_to_end, ApiError, Conv, Core, Engine};
 use crate::server;
 use serde_json::{json, Value};

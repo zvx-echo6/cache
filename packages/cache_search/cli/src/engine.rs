@@ -2,7 +2,7 @@
 //! returns the JSON string the core produced, untouched. The only logic added here is the query embedding
 //! (see `Engine::search`).
 
-use crate::embed::Embedder;
+use cache_embed::Embedder;
 use cache_search::conv::Conversation;
 use cache_search::ffi::*;
 use cache_search::handle::Handle;

@@ -2,7 +2,7 @@
 //! - ZIM tests run only when CS_TEST_ZIM_DIR and CS_TEST_IDX_DIR are set (they build an index of the small NHS ZIM).
 //! - The embedder test runs only when the embedding library and model are mounted (CS_TEST_EMB_DIR, default /emb).
 
-use cache_search_cli::embed::{Embedder, DECIDED_MODEL_FILE, DECIDED_MODEL_SHA256};
+use cache_embed::{Embedder, DECIDED_MODEL_FILE, DECIDED_MODEL_SHA256};
 use edge::{
     CreateIndex, Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, FieldIndexOperations, PayloadFieldSchema, PayloadSchemaParams,
     PointInsertOperations, PointOperations, PointStruct, TextIndexParams, TextScoringParams, UpdateOperation,
