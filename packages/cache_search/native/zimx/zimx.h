@@ -6,6 +6,8 @@
  *
  *   zimx_search -> {"total":<estimated matches>,"hits":[{"path","title","snippet","score"}...]}
  *   zimx_suggest -> {"total":<estimated matches>,"hits":[{"path","title"}...]}
+ *   zimx_get -> {"found":true,"path","title","mime"} plus the raw bytes in *data; zimx_main_page -> {"found":true,"path"}
+ *   (the entry reads of cs_read / cs_zim_get / cs_zim_main_page: the same open archive as the searches, see below)
  *
  * "snippet" is libzim's own snippet: HTML that may carry <b> around matched words (the caller strips it; on the real
  * ZIMs tried none came back marked, so nothing relies on the marks). "score" is libzim's
@@ -54,6 +56,20 @@ ZIMX_API char *zimx_prewarm(zimx *z, int fulltext, int titles);
 ZIMX_API char *zimx_drop(zimx *z, int fulltext, int titles);
 /* Title-prefix suggestions: the first k. keep as for zimx_search. */
 ZIMX_API char *zimx_suggest(zimx *z, const char *prefix, int k, int keep);
+
+/* Read one entry through the same open archive the searches use (so it counts against the memory budget and shares libzim's
+ * caches). `path` is the path as the ZIM stores it for a new-scheme archive; for an old-scheme one it is the path without
+ * the namespace and the namespaces C, A, I and - are tried in that order. Only an exact path matches (libzim's own
+ * "strip a leading namespace" fallback is not taken). Redirects are followed: `iterations` is how many entries are
+ * examined at most (an entry that is not a redirect ends it).
+ * Returns {"found":true,"path":<path of the entry holding the content, no namespace>,"title":<its title, or its path when
+ * it has none>,"mime":<its MIME type>} and sets *data (malloc'd, free with zimx_free) and *len to the raw bytes;
+ * {"found":false} when there is no such entry; {"found":false,"loop":true} when the redirect chain does not end within
+ * `iterations`; {"error":...} on failure (then *data is NULL and *len is -1). */
+ZIMX_API char *zimx_get(zimx *z, const char *path, int iterations, unsigned char **data, long long *len);
+/* The main page: {"found":true,"path":<path without namespace, redirects followed within `iterations`>}, {"found":false}
+ * when the ZIM has none, {"found":false,"loop":true} for a redirect chain that does not end, or {"error":...}. */
+ZIMX_API char *zimx_main_page(zimx *z, int iterations);
 
 /* libzim's cluster cache, which is shared by every archive in the process (not by one handle): {"current":<bytes>,"max":<bytes>}. */
 ZIMX_API char *zimx_cluster_cache(void);

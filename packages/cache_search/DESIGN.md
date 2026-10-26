@@ -548,14 +548,18 @@ into the build directory, never the repository. `LIBZIM_DIR` names the unpacked 
 (the Visual C++ runtime is also needed). Android arm64 needs `libzim.so`, the NDK's `libc++_shared.so` and the ICU data
 file `icudt73l.dat`; it was built with cargo-ndk on 2026-10-26 (see "Android build" below) and has not yet been run on a device.
 
-What it is used for: keyword search and title suggestions over a ZIM's own indexes. `cs_read`, `cs_zim_get` and
-`cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (on a background thread once the sources are
-set, see "Prewarm"; otherwise on first search, suggest or status) for the indexes.
+What it is used for: keyword search and title suggestions over a ZIM's own indexes, and, since 2026-10-26, every read of the ZIM:
+`cs_read`, `cs_zim_get` and `cs_zim_main_page` go through the same open libzim archive (**one archive per ZIM**; see "Memory
+budget"). libzim is opened on a background thread once the sources are set (see "Prewarm") or on the first search, suggestion or read.
 - Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k, keep)` (path,
   title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k, keep)` (path, title), `zimx_drop` (release
   the kept searchers; `keep` = 0 on a search or suggestion uses a kept searcher if there is one and otherwise a temporary one; the
   core always passes 1 and lets the archive's lifetime decide, see "Memory budget"), `zimx_open_with` (open with `OpenConfig` and a
-  dirent cache cap), `zimx_archive_info`, `zimx_cluster_cache`/`zimx_set_cluster_cache_max`. Results are UTF-8 JSON strings
+  dirent cache cap), `zimx_archive_info`, `zimx_cluster_cache`/`zimx_set_cluster_cache_max`, and the two entry reads:
+  `zimx_get(handle, path, iterations, &data, &len)` (the entry's bytes in `*data`, plus `{"found","path","title","mime"}`; follows
+  redirects, examining at most `iterations` entries; exact paths only, so libzim's own "strip a leading namespace" fallback is not
+  taken, and an old-scheme archive tries namespaces `C`, `A`, `I`, `-` in turn) and `zimx_main_page(handle, iterations)`. Both run on the
+  archive the searches use, take no lock (libzim's `Archive` is thread safe) and catch every exception. Results are UTF-8 JSON strings
   freed with `zimx_free`. Every C++ exception is caught in the shim and returned as `{"error":...}` (the Rust side turns it into an
   `internal` error; a failed open into `io`). Nothing crosses the boundary as an exception.
 - Search: a Xapian query that libzim rejects (an unmatched quote or bracket) is retried with the query reduced to its
@@ -578,8 +582,8 @@ Differences from Tantivy that callers can see:
 - Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. Without prewarm libzim opens each
   file on its first search, which on a cold disk took 39-52 s for the first query after a start (the 27M-entry Wikipedia
   included); after that a search over every source takes about 1-2 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title
-  suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry
-  up with the `zim` crate).
+  suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (whether the ZIM has an index
+  is read once when the source is opened).
 - Prewarm cost, measured (`cs serve`, all 19 sources, debug build, process memory sampled every second from launch to 60 s
   after the port opened, the OS file cache warm from earlier runs so the cold-disk part of the saving is not in these
   figures): the port opens at 35.6 s in every run (the library). Private bytes at open+60 s: 542 MB without prewarm, 1005 MB with
@@ -604,7 +608,8 @@ Differences from Tantivy that callers can see:
 ### Memory budget
 
 Decided by the Cache lead (ref-a5), 2026-10-26; built on `tool-framework`. One budget covers everything libzim holds for a ZIM:
-the open archive, its searchers and the caps on its caches. Config key `zim_budget_mb`: default 384 on Android, 1024 on every
+the open archive, its searchers and the caps on its caches. A ZIM has exactly one archive, opened once, and it serves searches, suggestions
+and reads alike (`cs_read`, `cs_zim_get`, `cs_zim_main_page`), so nothing else holds the file open and the budget is the whole of a ZIM's memory. Config key `zim_budget_mb`: default 384 on Android, 1024 on every
 other target; 0 keeps no archive open. The earlier key `searcher_budget_mb` (searchers only, default 256) is still read as an alias
 when `zim_budget_mb` is absent, and `zim_budget_mb` wins when both are given, so an existing config keeps working; but it now
 bounds the archives too, which is a different number (the old 256 would keep no Wikipedia). Code: `budget.rs` (policy and cost model,
@@ -621,8 +626,12 @@ binding), `handle.rs` (one budget per handle, the config, the prewarm plan).
 - A query that already holds an archive keeps it open until it ends, even if another query's admission closed it meanwhile, so the
   process can briefly hold more than the budget (by the archives in flight).
 - Prewarm never closes anything: it opens only the cheapest archives that fit (`prewarm_plan`); the others open on their first query.
-- The results of a query never depend on the budget (tests below); only latency does. The `zim` crate reader used by `cs_read` and
-  `cs_zim_get` is separate and not in the budget (see "The `zim` crate reader").
+- Reads are part of the same bookkeeping: `cs_read`, `cs_zim_get` and `cs_zim_main_page` lease the ZIM's archive exactly as a
+  search does (open it if it is closed, admitting it under the budget and closing least recently used ones to make room), so a read
+  counts as a use, and the memory of everything that reads a ZIM is inside the budget. A read of a ZIM over the whole budget opens it,
+  reads and closes it again, like a search.
+- The results of a query never depend on the budget (tests below); only latency does. The bytes, MIME type, title, text and errors
+  of a read are the same as the `zim` crate reader's gave (the byte-identity test below).
 
 **What libzim 9.8.2 offers to bound memory** (read from its headers `zim/archive.h` and `zim/zim.h`; there is no `OpenConfig` memory
 limit, and no setting for Xapian's own cache):
@@ -672,7 +681,7 @@ alone in a fresh process, cluster cap 4 MiB, after opening it and running four f
 cluster cache at 4 MiB, 2-3 MiB the searchers' state, about 9 MiB the process set-up, and the rest the archive.) The model is
 meant to be at or above the measurement, never below it, for one archive in a fresh process. For many archives in one process it is
 above by about a fifth: all 18 sources (the `sources-full.json` ZIMs without the library) measured 368 MiB of private bytes for libzim
-after 20 queries (640 MiB in all, of which 272 MiB is the `zim` crate readers opened by `cs_open`), against a model of 404 + 41 = 445
+after 20 queries (640 MiB in all, of which 272 MiB was the `zim` crate readers opened by `cs_open` at the time; they are no longer held), against a model of 404 + 41 = 445
 MiB; the first few archives opened pay about 9 MiB each and the later ones about nothing, because the heap reuses what it has.
 What the entries term stands for: libzim keeps about 10 to 12 bytes per entry in memory on Windows (Wikipedia 292 MiB, wikispecies
 28.7 for 1.83M entries, ifixit 7 to 16 for 0.89M). The cluster cache is the large moving part: with the default cap of 16 MiB it
@@ -693,7 +702,7 @@ the process total stays under about 1 GiB with the recon library. Both are setti
 
 **Measured with the budget** (Windows, release build, `sources-full.json`: 18 ZIMs and the recon library, default caps; private
 bytes sampled 3 s after the 20 queries; 20 varied queries run twice, warm time is the second pass; "ZIMs only" is the same without the library
-and so with the 272 MiB of `zim` crate readers visible):
+and so with the 272 MiB of `zim` crate readers visible; they are no longer held, see "One archive per ZIM"):
 
 | Config | Budget (MiB) | Cluster cap (MiB) | Private bytes (MiB) | Warm mean / median query (ms) | Archive closes per pass |
 |---|---:|---:|---:|---:|---:|
@@ -722,7 +731,7 @@ bounds the large archives well, the small ones poorly; and what is open stays bo
 recon library's own memory varied from 340 to 538 MiB between runs of the same config (measured 3 s after it finished opening), so
 compare rows of the "ZIMs only" half to see the effect of the budget.
 
-**Cold reopen of Wikipedia** (what the least-recently-used close costs when the archive is the biggest one). Windows, release build, the 115 GiB `wikipedia_en_all_maxi_2026-02.zim`, one source in the handle (the `zim` crate reader already open), the archive
+**Cold reopen of Wikipedia** (what the least-recently-used close costs when the archive is the biggest one). Windows, release build, the 115 GiB `wikipedia_en_all_maxi_2026-02.zim`, one source in the handle (the `zim` crate reader already open at the time of that measurement; it no longer is), the archive
 closed by setting the budget to 0 and then restored. The same sequence is run three times in a process, and the process twice. Open =
 `Zimx::open` (the shim, with the Xapian preload); first query = `cs_search` k=10 with the searcher build, the Xapian database open and the
 coverage reads; first suggestion = `cs_suggest` k=5.
@@ -744,13 +753,41 @@ emptied here (nothing is installed to do it), so the true cold cost on a phone i
 open itself (115 ms) is small because libzim maps rather than loads most of the file; what an eviction of Wikipedia mostly costs
 is the first query after it.
 
-**The `zim` crate reader** (`ZimSource::zim`, used by `cs_read`, `cs_zim_get`, the title lookups and the coverage reads) is opened by
-`set_sources` for every ZIM and held for the life of the handle. It is not in the budget. Measured in one process, opening it costs
-about 2 MiB of private bytes per GiB of ZIM file (Wikipedia 231 MiB, armypubs 15, ifixit 6.5, wikispecies 6.4, ready.gov 4.3,
-wikivoyage 1.9), and 40 reads of spread-out entries added nothing measurable (under 0.5 MiB per ZIM). All 18 sources: 270 MiB, of
-which Wikipedia is 231 MiB. So it holds as much as the whole libzim budget on a phone with Wikipedia installed. Proposed, not built
-(needs the owner's or the lead's go): open the `zim` crate reader on first use and close it with the libzim archive under the same budget
-(its cost is the file size in GiB times 2 MiB), at the price of reopening it for `cs_read` after an eviction.
+**One archive per ZIM (the `zim` crate reader is gone from the xapian builds).** Until 2026-10-26 the `zim` crate reader (`ZimSource::zim`),
+used by `cs_read`, `cs_zim_get`, `cs_zim_main_page`, the title lookups and the coverage reads, was opened by `set_sources` for every ZIM and held
+for the life of the handle, outside the budget. Opening it cost about 2 MiB of private bytes per GiB of ZIM file (the page tables of the
+mapping of the whole file: Wikipedia 231 MiB, armypubs 15, ifixit 6.5, wikispecies 6.4, ready.gov 4.3, wikivoyage 1.9; all 18 sources 270 MiB),
+which on a phone with Wikipedia is as much as the whole libzim budget. Now, with libzim built in:
+- `ZimSource::open` opens the crate reader only to read what the source needs for good (UUID, title, language, entry count, whether the
+  ZIM has the full-text and title indexes and their sizes, which the cost model needs) and drops it before it returns. Opens run one at a
+  time, so the peak is the largest ZIM's mapping (Wikipedia: about 230 MiB, for the milliseconds that takes) and nothing of it stays.
+- Reads (`get`, `main_page_path`) lease libzim's archive, as above. The crate reader is opened again, lazily and kept, only for the
+  Tantivy index build of a ZIM without a built-in index (`index.rs`) and as the fallback for a ZIM libzim cannot open.
+- Builds without libzim (`--no-default-features`, Linux) keep the crate reader open and read through it, as before.
+- The old and the new reader are both in every xapian build, so the byte-identity test can run them side by side
+  (`ZimSource::get_crate` / `main_page_crate` against `get` / `main_page_path`).
+
+**Measured, before and after** (Windows, release build, `cs serve` run once per row with `sources-full.json`: the recon library and
+the 18 ZIMs, no `index_dir`, prewarm off, default caps; PrivateUsage of the process after the library opened, after 20 varied
+queries (`k` 10) and after 20 reads of the first ZIM hit of each query at 6000 characters; the same 20 queries as the budget table above):
+
+| Build | Budget (MiB) | After open | After 20 queries | After 20 reads |
+|---|---:|---:|---:|---:|
+| before (a042c1c, crate readers) | 1024 | 538 | 904 | 904 |
+| after (one archive per ZIM) | 1024 | 267 | 636 | 631 |
+| before | 384 | 539 | 892 | 892 |
+| after | 384 | 269 | 621 | 608 |
+
+About 270 MiB less at open (the crate readers), and 270 to 285 MiB less after the queries and reads; the reads themselves add nothing
+visible because their clusters go through libzim's capped cluster cache. A read takes 2 to 4 ms on both builds (warm file cache).
+
+**Byte-identity test** (`tests/zim_read_identity.rs`, `#[ignore]`d, needs `CS_TEST_ZIM_DIR`; run with
+`cargo test -p cache_search --test zim_read_identity -- --ignored --nocapture`): on Wikipedia maxi, the medicine mini ZIM, ready.gov, iFixit, NHS,
+Appropedia and armypubs it samples entries spread over the file with the crate reader (10 articles, 2 redirects, 2 images, a CSS or
+script file and another type where the ZIM has them) and compares, for each path, the crate reader against the library
+(`ZimSource::get`, `Handle::zim_get`: bytes, MIME type, path, title) and `cs_read` (the whole JSON at 300 and 6000 characters). It adds
+variants of an article path (with `#fragment`, percent-encoded, with `?query`, with an `A/` namespace prefix), a path that is not there,
+`X/fulltext/xapian`, `M/Title`, and the main page. Errors must match too (code and message). 508 comparisons, 0 differences.
 
 **Tests** (`budget.rs` unit tests, no ZIMs; `tests/zim_budget_ffi.rs` on three real ZIMs, needs `CS_TEST_ZIM_DIR`): a budget of 0 opens
 and closes per query and answers correctly (nothing is left open after any query, `per_query` counts every one); a tiny budget closes the least

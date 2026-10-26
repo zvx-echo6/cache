@@ -86,7 +86,7 @@ char *cs_version(void);
  *                                  on background threads as soon as the sources are set, so the first search does not pay
  *                                  for it; only as many as fit in zim_budget_mb, smallest first
  *   "zim_budget_mb": 1024          optional, default 384 on Android and 1024 elsewhere: memory budget in MiB for the open
- *                                  libzim archives together with their searchers and caches (the old name of this key,
+ *                                  libzim archives together with their searchers and caches, which also serve cs_read and cs_zim_get (the old name of this key,
  *                                  "searcher_budget_mb", is still read when "zim_budget_mb" is absent). Each ZIM costs an
  *                                  estimate of about 10 MiB plus ~11 bytes per entry plus its searchers; when opening one
  *                                  would go over the budget the least recently used archives are closed first (they reopen
@@ -172,6 +172,9 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
  * 2. the percent-decoded path (UTF-8) is looked up; 3. then the path as given; 4. if it contains "?", steps 2-3
  * are repeated with the "?query" removed. Each lookup tries namespace 'C', then 'A', 'I' and '-' (old ZIMs).
  * cs_read uses the same lookup. Relative links must be made absolute by the caller.
+ * With libzim built in (the xapian feature) cs_read, cs_zim_get and cs_zim_main_page read through the same open libzim archive
+ * the searches use, so they count against zim_budget_mb and keep that archive recently used; a ZIM libzim cannot open, and a
+ * build without the feature, use the Rust zim crate reader. The bytes, MIME type, title and errors are identical either way.
  * address: "zim:<uuid>/<path>". *mime_out is set to a string freed with cs_free_string.
  * Returns NULL on error (cs_last_error). Free the buffer with cs_free_bytes. */
 uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t *len_out);
