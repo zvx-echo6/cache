@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The release build removes resources nothing in the code names. The guidance notification's small icon is looked up by
+     name at run time (the position plugin is given "ic_stat_cache"), so it is kept here. Without it Android shows its own
+     "CACHE is running" notice in place of the guidance one. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/ic_stat_cache" />
