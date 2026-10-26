@@ -750,7 +750,7 @@ mod tests {
     fn version_json() {
         let v: serde_json::Value = serde_json::from_str(&take(cs_version()).unwrap()).unwrap();
         assert_eq!(v["version"], "0.1.0");
-        assert_eq!(v["index_format"], 2);
+        assert_eq!(v["index_format"], 3);
         assert_eq!(v.as_object().unwrap().len(), 2, "only what the header documents: {v}");
     }
 

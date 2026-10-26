@@ -46,7 +46,7 @@ typedef struct cs_handle cs_handle;
 typedef struct cs_conv cs_conv;
 typedef struct cs_job cs_job;
 
-/* {"version":"0.1.0","index_format":2} */
+/* {"version":"0.1.0","index_format":3} */
 char *cs_version(void);
 
 /* --- handle and sources --- */

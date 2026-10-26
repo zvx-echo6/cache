@@ -150,7 +150,7 @@ fn index_search_read() {
     unsafe { cs_close(h) };
     let meta: Value = serde_json::from_str(&std::fs::read_to_string(format!("{d_ready}/cache_search_index.json")).unwrap()).unwrap();
     assert_eq!(meta["state"], "done");
-    assert_eq!(meta["index_format"], 2);
+    assert_eq!(meta["index_format"], 3);
     assert_eq!(meta["tokenizer"], "en_stem");
     assert_eq!(meta["zim_uuid"], READY);
     assert_eq!(meta["next_entry"], meta["total"]);
