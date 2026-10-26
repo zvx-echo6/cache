@@ -222,3 +222,35 @@ fn reverse_gives_the_nearest_town() {
     let n = g.reverse(44.0900, -115.6200).unwrap();
     assert_eq!(n.name, "Lowman");
 }
+
+#[test]
+fn place_source_for_navigate() {
+    use cache_tool::places::{GeocodeQuery, NearestQuery, PlaceSource};
+    let d = Dir::new("ps1");
+    let pack = d.0.join("places.sqlite");
+    let none = cache_places::tools_and_source(&PlacesCfg { packs: vec![pack.to_string_lossy().into_owned()] }).1;
+    assert!(none.categories().is_none());
+    assert_eq!(none.geocode(&GeocodeQuery { text: "Burley", near: None, bias: None, limit: 3 }).unwrap_err().code, "not_set_up");
+    assert_eq!(none.nearest(&NearestQuery { category: "fuel", from: (42.5, -113.8), limit: 3 }).unwrap_err().code, "not_set_up");
+
+    write_fixture_pack(&pack);
+    let src = none; // the same source sees the pack that appeared
+    assert_eq!(src.categories().unwrap(), ["emergency_room", "hospital", "pharmacy", "fuel", "police", "water"]);
+
+    let a = src.geocode(&GeocodeQuery { text: "Walgreens", near: Some("Burley, Idaho"), bias: Some((42.5357, -113.7928)), limit: 3 }).unwrap();
+    let m = &a.matches[0];
+    assert_eq!((m.place_name.as_str(), m.kind.as_deref(), m.street.as_deref(), m.locality.as_deref(), m.state.as_deref()), ("Walgreens", Some("pharmacy"), Some("1414 Overland Ave"), Some("Burley"), Some("ID")));
+    assert_eq!(m.osm_category.as_deref(), Some("amenity:pharmacy"));
+    assert!(m.distance_km.unwrap() < 1.0);
+
+    let t = src.geocode(&GeocodeQuery { text: "Stanley", near: Some("Idaho"), bias: None, limit: 1 }).unwrap();
+    assert_eq!((t.matches[0].place_name.as_str(), t.matches[0].kind.as_deref(), t.matches[0].state.as_deref()), ("Stanley", Some("town"), Some("ID")));
+    assert!(src.geocode(&GeocodeQuery { text: "Nowhereville", near: None, bias: None, limit: 3 }).unwrap().matches.is_empty());
+
+    let n = src.nearest(&NearestQuery { category: "emergency_room", from: (43.828, -115.834), limit: 2 }).unwrap();
+    assert_eq!(n.matches.len(), 2);
+    assert_eq!(n.matches[0].place_name, "St. Luke's Boise Medical Center");
+    assert_eq!(n.matches[0].er_tier, Some(2));
+    assert!((n.matches[0].distance_km.unwrap() - 37.5).abs() < 2.0, "{:?}", n.matches[0].distance_km);
+    assert!(src.nearest(&NearestQuery { category: "urgent_care", from: (43.8, -115.8), limit: 2 }).unwrap().matches.is_empty());
+}

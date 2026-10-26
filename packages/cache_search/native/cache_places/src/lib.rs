@@ -12,12 +12,14 @@ pub mod geocoder;
 pub mod locate;
 pub mod nearby;
 pub mod pack;
+pub mod source;
 pub mod schema;
 
 pub use geocoder::{GeoHit, Geocoder, HitKind, Nearest, PackGeocoder};
 pub use locate::LocateTool;
 pub use nearby::NearbyTool;
 pub use pack::{Pack, PackSet};
+pub use source::PackPlaceSource;
 
 use cache_tool::{Tool, ToolCtx, ToolError};
 use chrono::DateTime;
@@ -33,9 +35,15 @@ pub struct PlacesCfg {
 
 /// `nearby` and `locate`, sharing one set of packs and one geocoder.
 pub fn tools(cfg: &PlacesCfg) -> Vec<Box<dyn Tool>> {
+    tools_and_source(cfg).0
+}
+
+/// The same tools plus the `PlaceSource` the navigate tool resolves names and `to_type` through, over the same packs.
+pub fn tools_and_source(cfg: &PlacesCfg) -> (Vec<Box<dyn Tool>>, Arc<dyn cache_tool::places::PlaceSource>) {
     let packs = Arc::new(PackSet::new(cfg.packs.iter().map(PathBuf::from).collect()));
     let geo: Arc<dyn Geocoder> = Arc::new(PackGeocoder::new(packs.clone()));
-    vec![Box::new(NearbyTool::new(packs.clone(), geo.clone())), Box::new(LocateTool::new(packs, geo))]
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(NearbyTool::new(packs.clone(), geo.clone())), Box::new(LocateTool::new(packs.clone(), geo.clone()))];
+    (tools, Arc::new(PackPlaceSource::new(packs, geo)))
 }
 
 /// "12 days old" for a pack built at `built_at`, as of `now` (both ISO 8601 with offset); None when either is unreadable.

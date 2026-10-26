@@ -19,7 +19,7 @@ use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// The default Kagi search endpoint.
-pub const KAGI_URL: &str = "https://kagi.com/api/v0/search";
+pub const KAGI_URL: &str = "https://kagi.com/api/v1/search";
 /// Time for `web_search` from the call to the result.
 pub const SEARCH_BUDGET: Duration = Duration::from_secs(6);
 /// Time for the fetch, download and parse of `read` on a web result.
@@ -30,6 +30,9 @@ pub const PAGE_CAP: usize = 2 * 1024 * 1024;
 const API_CAP: usize = 1024 * 1024;
 /// Results `web_search` returns.
 pub const WEB_HITS: usize = 5;
+/// A fetched page whose extracted text is shorter than this many characters is treated as having little readable text
+/// (a script-rendered shell with only navigation or a footer): `read` adds the stored snippet and a closing marker.
+pub const LITTLE_TEXT_CHARS: usize = 500;
 /// Redirects followed.
 const MAX_REDIRECTS: usize = 5;
 /// Longest title shown, in characters.
@@ -62,41 +65,61 @@ pub struct WebHit {
 /// The `key` is the account key; a provider must send it only to its own service.
 pub trait WebSearchProvider: Send + Sync {
     fn search(&self, query: &str, limit: usize, key: &str, deadline: Instant) -> std::result::Result<Vec<WebHit>, ToolError>;
+
+    /// Debug data the service sent with the last answer (for Kagi, its `meta` object: request id, timing). It goes to
+    /// the debug timing field only and is never shown to the model. Taking it clears it.
+    fn take_meta(&self) -> Option<Value> {
+        None
+    }
 }
 
-/// Kagi's search API (v0). UNVERIFIED against the live API: written from Kagi's documented response shape and tested
-/// only against a local stand-in server.
-#[derive(Clone, Debug)]
+/// Kagi's search API (v1): `POST` with a JSON body and `Authorization: Bearer <key>`. It matches the request AIDA uses in
+/// production (Open WebUI kagi.py); live-verified: pending. Tested against a local stand-in server.
+#[derive(Debug)]
 pub struct KagiProvider {
     pub base_url: String,
+    meta: Mutex<Option<Value>>,
 }
 
 impl Default for KagiProvider {
     fn default() -> Self {
-        KagiProvider { base_url: KAGI_URL.to_string() }
+        KagiProvider::with_base_url(KAGI_URL)
     }
 }
 
 impl KagiProvider {
     /// Kagi at another address (tests point it at a local server).
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        KagiProvider { base_url: base_url.into() }
+        KagiProvider { base_url: base_url.into(), meta: Mutex::new(None) }
     }
 }
 
 impl WebSearchProvider for KagiProvider {
     fn search(&self, query: &str, limit: usize, key: &str, deadline: Instant) -> std::result::Result<Vec<WebHit>, ToolError> {
-        let mut url = reqwest::Url::parse(&self.base_url)
+        let url = reqwest::Url::parse(&self.base_url)
             .map_err(|_| ToolError::new(ToolError::NOT_CONFIGURED, "the web search address is not valid"))?;
-        url.query_pairs_mut().append_pair("q", query).append_pair("limit", &limit.to_string());
-        let auth = format!("Bot {key}");
-        let reply = http_get(url.as_str(), &[("Authorization", auth.as_str()), ("Accept", "application/json")], deadline, API_CAP)
-            .map_err(|f| match f {
+        let auth = format!("Bearer {key}");
+        let body = json!({"query": query, "limit": limit}).to_string();
+        let reply = http_request(
+            url.as_str(),
+            &[("Authorization", auth.as_str()), ("Accept", "application/json"), ("Content-Type", "application/json")],
+            Some(body),
+            deadline,
+            API_CAP,
+        )
+        .map_err(|f| match f {
                 HttpFail::TimedOut => ToolError::new(ToolError::FETCH_FAILED, "web search timed out"),
                 HttpFail::Connect => ToolError::new(ToolError::FETCH_FAILED, "could not reach the web search server"),
                 HttpFail::Other => ToolError::new(ToolError::FETCH_FAILED, "the web search request failed"),
             })?;
-        parse_kagi(reply.status, &reply.body, limit)
+        *lock(&self.meta) = None;
+        let (hits, meta) = parse_kagi_full(reply.status, &reply.body, limit)?;
+        *lock(&self.meta) = meta;
+        Ok(hits)
+    }
+
+    fn take_meta(&self) -> Option<Value> {
+        lock(&self.meta).take()
     }
 }
 
@@ -108,9 +131,24 @@ fn quota_reached() -> ToolError {
     ToolError::new(ToolError::QUOTA, "web search limit reached")
 }
 
-/// Kagi's answer as hits or a tool error. `data` is a list; objects with `t: 0` are search results (other `t`
-/// values, such as related searches, are skipped). Failures are an `error` list of `{code, msg}`.
+/// Kagi's answer as hits or a tool error. The results are `data.search`, an array of objects with `url`, `title` and an
+/// optional `snippet`; other fields and other `data` members are ignored. A failure is an `error` array or object (shape
+/// unverified against the live API: a 401/403 code or status is a rejected key, a 402/429 code or a message about
+/// balance, credit or quota is `quota`). A 200 with an `error`, or without a `data` object, is `bad_response` (its
+/// detail lists the key names, never values). A `data` object whose `search` is missing or null is zero results.
 pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result<Vec<WebHit>, ToolError> {
+    parse_kagi_full(status, body, limit).map(|(hits, _)| hits)
+}
+
+/// Names of the members of a JSON object (at most 20, each cut to 40 chars, one line); never any value.
+fn key_names(v: &Value) -> String {
+    let Some(o) = v.as_object() else { return "none".to_string() };
+    let names: Vec<String> = o.keys().take(20).map(|k| one_line(&k.chars().take(40).collect::<String>())).collect();
+    if names.is_empty() { "none".to_string() } else { names.join(", ") }
+}
+
+/// `parse_kagi` plus Kagi's `meta` object, when the answer has one.
+pub fn parse_kagi_full(status: u16, body: &[u8], limit: usize) -> std::result::Result<(Vec<WebHit>, Option<Value>), ToolError> {
     if status == 401 || status == 403 {
         return Err(key_rejected());
     }
@@ -118,9 +156,16 @@ pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result
         return Err(quota_reached());
     }
     let parsed: Option<Value> = serde_json::from_slice(body).ok();
-    let errors: Vec<&Value> = parsed.as_ref().and_then(|v| v["error"].as_array()).map(|a| a.iter().collect()).unwrap_or_default();
+    let errors: Vec<&Value> = match parsed.as_ref().map(|v| &v["error"]) {
+        Some(Value::Array(a)) => a.iter().collect(),
+        Some(e @ Value::Object(_)) | Some(e @ Value::String(_)) => vec![e],
+        _ => Vec::new(),
+    };
+    let msg_of = |e: &Value| -> String {
+        e.as_str().or_else(|| e["msg"].as_str()).or_else(|| e["message"].as_str()).unwrap_or("").to_string()
+    };
     for e in &errors {
-        let msg = e["msg"].as_str().unwrap_or("").to_lowercase();
+        let msg = msg_of(e).to_lowercase();
         match e["code"].as_i64() {
             Some(401) | Some(403) => return Err(key_rejected()),
             Some(402) | Some(429) => return Err(quota_reached()),
@@ -134,20 +179,32 @@ pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result
         return Err(ToolError::new(ToolError::FETCH_FAILED, format!("web search failed (HTTP {status})")));
     }
     if let Some(e) = errors.first() {
-        let msg: String = e["msg"].as_str().unwrap_or("").chars().take(120).collect();
+        let msg: String = msg_of(e).chars().take(120).collect();
         return Err(ToolError::new(ToolError::BAD_RESPONSE, format!("web search error: {}", one_line(&msg))));
     }
     let Some(v) = parsed else {
         return Err(ToolError::new(ToolError::BAD_RESPONSE, "web search answered with something unreadable"));
     };
-    let Some(data) = v["data"].as_array() else {
-        return Err(ToolError::new(ToolError::BAD_RESPONSE, "web search answered without a result list"));
+    let meta = v["meta"].as_object().filter(|m| !m.is_empty()).map(|_| v["meta"].clone());
+    if !v["data"].is_object() {
+        return Err(ToolError::new(
+            ToolError::BAD_RESPONSE,
+            format!("web search answered without a result list (keys: {})", key_names(&v)),
+        ));
+    }
+    let empty = Vec::new();
+    let data = match &v["data"]["search"] {
+        Value::Null => &empty,
+        Value::Array(a) => a,
+        _ => {
+            return Err(ToolError::new(
+                ToolError::BAD_RESPONSE,
+                format!("web search answered without a result list (keys: {}; data keys: {})", key_names(&v), key_names(&v["data"])),
+            ));
+        }
     };
     let mut hits = Vec::new();
     for item in data {
-        if item["t"].as_i64() != Some(0) {
-            continue;
-        }
         let Some(url) = item["url"].as_str().map(str::trim).filter(|u| !u.is_empty()) else { continue };
         hits.push(WebHit {
             url: url.to_string(),
@@ -158,7 +215,7 @@ pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result
             break;
         }
     }
-    Ok(hits)
+    Ok((hits, meta))
 }
 
 // ---- HTTP ------------------------------------------------------------------------------------------------
@@ -188,7 +245,7 @@ fn fail_of(e: &reqwest::Error) -> HttpFail {
     }
 }
 
-fn get_blocking(url: &str, headers: &[(String, String)], deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
+fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(HttpFail::TimedOut);
@@ -199,7 +256,10 @@ fn get_blocking(url: &str, headers: &[(String, String)], deadline: Instant, cap:
         .user_agent(user_agent())
         .build()
         .map_err(|_| HttpFail::Other)?;
-    let mut req = client.get(url);
+    let mut req = match body {
+        Some(b) => client.post(url).body(b),
+        None => client.get(url),
+    };
     for (k, v) in headers {
         let mut value = reqwest::header::HeaderValue::from_str(v).map_err(|_| HttpFail::Other)?;
         if k.eq_ignore_ascii_case("authorization") {
@@ -226,6 +286,11 @@ fn get_blocking(url: &str, headers: &[(String, String)], deadline: Instant, cap:
 /// runs on its own thread; if it has not answered by the deadline the call returns `TimedOut` and the thread ends by
 /// itself when its own request times out.
 pub fn http_get(url: &str, headers: &[(&str, &str)], deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
+    http_request(url, headers, None, deadline, cap)
+}
+
+/// `http_get`, or a POST with `body` when one is given (no redirects are followed differently; same limits).
+pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(HttpFail::TimedOut);
@@ -234,7 +299,7 @@ pub fn http_get(url: &str, headers: &[(&str, &str)], deadline: Instant, cap: usi
     let headers: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(get_blocking(&url, &headers, deadline, cap));
+        let _ = tx.send(send_blocking(&url, &headers, body, deadline, cap));
     });
     match rx.recv_timeout(remaining) {
         Ok(r) => r,
@@ -386,13 +451,18 @@ impl WebState {
         std::mem::take(&mut *lock(&self.pending))
     }
 
-    /// Debug timing of the last web call: `{"search": ms}` or `{"fetch": ms}`. Never shown to the model.
+    /// Debug timing of the last web call: `{"search": ms}` (plus `"kagi_meta"` when the provider sent one) or
+    /// `{"fetch": ms}`. Never shown to the model.
     pub fn take_timing(&self) -> Option<Value> {
         lock(&self.timing).take()
     }
 
-    fn set_timing(&self, what: &str, since: Instant) {
-        *lock(&self.timing) = Some(json!({ what: since.elapsed().as_millis() as u64 }));
+    fn set_timing(&self, what: &str, since: Instant, meta: Option<Value>) {
+        let mut t = json!({ what: since.elapsed().as_millis() as u64 });
+        if let Some(m) = meta {
+            t["kagi_meta"] = m;
+        }
+        *lock(&self.timing) = Some(t);
     }
 
     /// `read` of a web result: the page as text within the read budget. Offline, nothing is fetched.
@@ -406,7 +476,7 @@ impl WebState {
         }
         let t0 = Instant::now();
         let page = fetch_page(url, t0 + budget, cap);
-        self.set_timing("fetch", t0);
+        self.set_timing("fetch", t0, None);
         page
     }
 }
@@ -424,6 +494,12 @@ pub fn fetched_stamp(now: &str) -> String {
 
 /// Text from the web made safe for a result line: one line, no address markers, and (titles) no ` — `, which
 /// the numbering reads as the end of the title.
+/// A title or snippet from the web as plain text: tags removed, entities (named, decimal, hex) decoded, whitespace
+/// collapsed. It runs before `clean`, so text that decodes to `{{` or ` — ` is still made safe there.
+fn plain_fragment(s: &str) -> String {
+    one_line(&html::strip(s))
+}
+
 fn clean(s: &str, title: bool) -> String {
     let mut t = one_line(s).replace("{{", "{ {");
     if title {
@@ -470,7 +546,7 @@ impl Tool for WebSearchTool {
         let query = args["query"].as_str().unwrap_or("");
         let t0 = Instant::now();
         let result = provider.search(query, WEB_HITS, &key, t0 + budget);
-        self.0.set_timing("search", t0);
+        self.0.set_timing("search", t0, provider.take_meta());
         let hits = result.map_err(|e| scrub(e, &key))?;
         let stamp = fetched_stamp(ctx.now);
         let mut seen: Vec<String> = Vec::new();
@@ -482,11 +558,11 @@ impl Tool for WebSearchTool {
                 continue;
             }
             seen.push(url.clone());
-            let mut title = html::snippet_from_text(&clean(&h.title, true), TITLE_CHARS);
+            let mut title = html::snippet_from_text(&clean(&plain_fragment(&h.title), true), TITLE_CHARS);
             if title.is_empty() {
                 title = clean(&url, true);
             }
-            let snippet = html::snippet_from_text(&clean(&h.snippet, false), snippet_chars);
+            let snippet = html::snippet_from_text(&clean(&plain_fragment(&h.snippet), false), snippet_chars);
             let address = format!("web:{url}");
             let mut line = format!("{} {title} (web, fetched {stamp})", text_marker(&address));
             if !snippet.is_empty() {
@@ -520,14 +596,14 @@ mod tests {
     }
 
     #[test]
-    fn results_are_read_and_other_kinds_skipped() {
-        let body = r#"{"meta":{"id":"x","ms":12,"api_balance":4.2},"data":[
-            {"t":0,"rank":1,"url":"https://a.example/1","title":"One","snippet":"First.","published":null},
-            {"t":1,"list":["related one","related two"]},
-            {"t":0,"rank":2,"url":"https://b.example/2","title":"Two"},
-            {"t":0,"url":"","title":"No url"},
-            {"url":"https://c.example/3","title":"No t"},
-            {"t":0,"rank":3,"url":"https://d.example/4","title":"Four","snippet":"4th"}]}"#;
+    fn results_are_read_and_extra_fields_tolerated() {
+        let body = r#"{"meta":{"id":"x","ms":12},"data":{"search":[
+            {"rank":1,"url":"https://a.example/1","title":"One","snippet":"First.","published":null},
+            {"rank":2,"url":"https://b.example/2","title":"Two"},
+            {"url":"","title":"No url"},
+            {"title":"No url at all"},
+            {"rank":3,"url":"https://d.example/4","title":"Four","snippet":"4th","extra":{"x":1}}],
+            "related_searches":["related one"]}}"#;
         let hits = parse(200, body).unwrap();
         assert_eq!(
             hits,
@@ -541,10 +617,9 @@ mod tests {
 
     #[test]
     fn limit_is_honoured_and_empty_is_empty() {
-        let body = r#"{"data":[{"t":0,"url":"https://a/1","title":"A"},{"t":0,"url":"https://a/2","title":"B"},{"t":0,"url":"https://a/3","title":"C"}]}"#;
+        let body = r#"{"data":{"search":[{"url":"https://a/1","title":"A"},{"url":"https://a/2","title":"B"},{"url":"https://a/3","title":"C"}]}}"#;
         assert_eq!(parse_kagi(200, body.as_bytes(), 2).unwrap().len(), 2);
-        assert_eq!(parse(200, r#"{"meta":{},"data":[]}"#).unwrap(), vec![]);
-        assert_eq!(parse(200, r#"{"data":[{"t":1,"list":["x"]}]}"#).unwrap(), vec![]);
+        assert_eq!(parse(200, r#"{"meta":{},"data":{"search":[]}}"#).unwrap(), vec![]);
     }
 
     #[test]
@@ -568,8 +643,13 @@ mod tests {
         assert_eq!(code(parse(200, k)).0, "key_missing");
         let other = r#"{"data":null,"error":[{"code":7,"msg":"Bad\nquery"}]}"#;
         assert_eq!(code(parse(200, other)), ("bad_response".into(), "web search error: Bad query".into()));
+        // an error object or string is judged the same way
+        assert_eq!(code(parse(200, r#"{"error":{"message":"Out of credit"}}"#)).0, "quota");
+        assert_eq!(code(parse(200, r#"{"error":"Insufficient balance"}"#)).0, "quota");
+        assert_eq!(code(parse(200, r#"{"error":{"code":403,"message":"no"}}"#)).0, "key_missing");
+        assert_eq!(code(parse(200, r#"{"error":{"message":"odd"},"data":{"search":[]}}"#)).0, "bad_response");
         // an empty error list is no error
-        assert!(parse(200, r#"{"data":[],"error":[]}"#).unwrap().is_empty());
+        assert!(parse(200, r#"{"data":{"search":[]},"error":[]}"#).unwrap().is_empty());
     }
 
     #[test]
@@ -578,6 +658,62 @@ mod tests {
         assert_eq!(code(parse(200, "")).0, "bad_response");
         assert_eq!(code(parse(200, r#"{"meta":{}}"#)).0, "bad_response");
         assert_eq!(code(parse(200, r#"{"data":"x"}"#)).0, "bad_response");
+        assert_eq!(code(parse(200, r#"{"data":[]}"#)).0, "bad_response");
+        assert_eq!(code(parse(200, r#"{"data":{"search":"x"}}"#)).0, "bad_response");
+    }
+
+    #[test]
+    fn a_data_object_without_a_result_list_is_zero_results() {
+        assert!(parse(200, r#"{"meta":{"id":"x"},"data":{}}"#).unwrap().is_empty());
+        assert!(parse(200, r#"{"data":{"search":null}}"#).unwrap().is_empty());
+        assert!(parse(200, r#"{"data":{"related_searches":["a"]}}"#).unwrap().is_empty());
+        // an error still wins, and no data at all is still bad
+        assert_eq!(code(parse(200, r#"{"data":{},"error":[{"msg":"boom"}]}"#)).0, "bad_response");
+        assert_eq!(code(parse(200, r#"{"meta":{}}"#)).0, "bad_response");
+    }
+
+    #[test]
+    fn bad_response_detail_has_key_names_and_no_values() {
+        let (c, d) = code(parse(200, r#"{"meta":{"id":"SECRETVALUE"},"other":"SECRETVALUE2"}"#));
+        assert_eq!(c, "bad_response");
+        assert!(d.contains("keys: meta, other"), "{d}");
+        assert!(!d.contains("SECRETVALUE"), "{d}");
+        let (_, d) = code(parse(200, r#"{"data":{"search":"SECRETVALUE","zeta":1}}"#));
+        assert!(d.contains("keys: data") && d.contains("data keys: search, zeta"), "{d}");
+        assert!(!d.contains("SECRETVALUE"), "{d}");
+        let (_, d) = code(parse(200, r#"{"data":[1]}"#));
+        assert!(d.contains("keys: data") && !d.contains("data keys"), "{d}");
+        let (_, d) = code(parse(200, "[1]"));
+        assert!(d.contains("keys: none"), "{d}");
+    }
+
+    #[test]
+    fn kagi_meta_is_returned_when_present() {
+        let (hits, meta) = parse_kagi_full(200, br#"{"meta":{"id":"r1","ms":5},"data":{"search":[{"url":"https://a/"}]}}"#, 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(meta, Some(json!({"id": "r1", "ms": 5})));
+        let (_, meta) = parse_kagi_full(200, br#"{"data":{}}"#, 5).unwrap();
+        assert_eq!(meta, None);
+        let w = WebState::new();
+        w.set_timing("search", Instant::now(), Some(json!({"id": "r1"})));
+        let t = w.take_timing().unwrap();
+        assert!(t["search"].is_u64());
+        assert_eq!(t["kagi_meta"], json!({"id": "r1"}));
+        w.set_timing("fetch", Instant::now(), None);
+        assert!(w.take_timing().unwrap().get("kagi_meta").is_none());
+    }
+
+    #[test]
+    fn html_in_titles_and_snippets_becomes_plain_text() {
+        let s = "Instinct took Silicon Valley by storm. Meet the &#39;brilliant&#39; 23-year-old";
+        assert_eq!(clean(&plain_fragment(s), false), "Instinct took Silicon Valley by storm. Meet the 'brilliant' 23-year-old");
+        let s = "<strong>Long</strong>, <strong>Duncan</strong> \u{b7} View all 11 copies";
+        assert_eq!(clean(&plain_fragment(s), false), "Long, Duncan \u{b7} View all 11 copies");
+        assert_eq!(plain_fragment("a &quot;b&quot; &amp; c&#x21;  d\n<br>e"), "a \"b\" & c! d e");
+        // decoded text is still made safe afterwards
+        assert_eq!(clean(&plain_fragment("a &#123;&#x7B; b"), false), "a { { b");
+        assert_eq!(clean(&plain_fragment("Site &mdash; Home"), true), "Site - Home");
+        assert_eq!(clean(&plain_fragment("Site &#8212; Home"), true), "Site - Home");
     }
 
     #[test]

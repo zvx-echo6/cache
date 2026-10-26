@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub mod places;
+
 /// Start of an address marker in tool text.
 /// A citable line starts with `{{addr:<address>}}`; the framework replaces the marker with `[n]`.
 pub const ADDRESS_MARKER_OPEN: &str = "{{addr:";
@@ -79,6 +81,8 @@ pub struct ToolError {
     pub code: String,
     pub detail: String,
     pub extra: Map<String, Value>,
+    /// Fields beside `error` at the top level of the result (navigate attaches `from_matched` and `to_matched`).
+    pub top: Map<String, Value>,
 }
 
 impl ToolError {
@@ -97,7 +101,7 @@ impl ToolError {
     pub const BAD_RESPONSE: &'static str = "bad_response";
 
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        ToolError { code: code.into(), detail: detail.into(), extra: Map::new() }
+        ToolError { code: code.into(), detail: detail.into(), extra: Map::new(), top: Map::new() }
     }
 
     /// Adds an extra field after the existing ones.
@@ -106,17 +110,29 @@ impl ToolError {
         self
     }
 
-    /// `{"ok":false,"error":{"type":code,"detail":detail,<extra in insertion order>}}`.
+    /// Adds a top-level field after `error`.
+    pub fn with_top(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.top.insert(key.into(), value.into());
+        self
+    }
+
+    /// `{"ok":false,"error":{"type":code,"detail":detail,<extra in insertion order>},<top in insertion order>}`.
+    /// An empty detail is left out.
     pub fn to_json(&self) -> Value {
         let mut err = Map::new();
         err.insert("type".into(), Value::String(self.code.clone()));
-        err.insert("detail".into(), Value::String(self.detail.clone()));
+        if !self.detail.is_empty() {
+            err.insert("detail".into(), Value::String(self.detail.clone()));
+        }
         for (k, v) in &self.extra {
             err.insert(k.clone(), v.clone());
         }
         let mut out = Map::new();
         out.insert("ok".into(), Value::Bool(false));
         out.insert("error".into(), Value::Object(err));
+        for (k, v) in &self.top {
+            out.insert(k.clone(), v.clone());
+        }
         Value::Object(out)
     }
 }

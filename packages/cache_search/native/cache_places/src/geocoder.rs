@@ -29,6 +29,12 @@ pub struct GeoHit {
     pub locality: Option<String>,
     pub state: Option<String>,
     pub category: Option<String>,
+    /// What it is in plain words: "town", or the category id, or the raw type ("amenity=school").
+    pub what: Option<String>,
+    pub street: Option<String>,
+    pub county: Option<String>,
+    /// OSM "key:value" ("highway:trailhead") when the place comes from OSM.
+    pub osm_category: Option<String>,
     pub score: f64,
 }
 
@@ -164,6 +170,15 @@ fn name_score(q_norm: &str, q_words: &[String], name: &str, alts: &str) -> f64 {
     20.0 * have as f64 / q_words.len().max(1) as f64
 }
 
+/// "amenity=hospital" -> "amenity:hospital" for places that come from OSM.
+pub(crate) fn osm_category(p: &PlaceRow) -> Option<String> {
+    if p.source.starts_with("osm") {
+        p.kind.as_ref().filter(|k| k.contains('=')).map(|k| k.replacen('=', ":", 1))
+    } else {
+        None
+    }
+}
+
 fn place_label(p: &PlaceRow) -> String {
     let name = p.name.clone().unwrap_or_default();
     match (&p.locality, &p.state) {
@@ -255,6 +270,10 @@ impl Geocoder for PackGeocoder {
                         locality: Some(l.name.clone()),
                         state: l.state.clone(),
                         category: None,
+                        what: Some(l.kind.clone()),
+                        street: None,
+                        county: l.county.clone(),
+                        osm_category: None,
                         score,
                     });
                 }
@@ -280,6 +299,10 @@ impl Geocoder for PackGeocoder {
                         locality: r.locality.clone(),
                         state: r.state.clone(),
                         category: r.category.clone(),
+                        what: r.category.clone().or_else(|| r.kind.clone()),
+                        street: r.street.clone(),
+                        county: r.county.clone(),
+                        osm_category: osm_category(&r),
                         score,
                     });
                 }

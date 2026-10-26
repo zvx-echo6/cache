@@ -428,6 +428,27 @@ fn library_manifest_and_update_library_commands() {
     assert_eq!(st["sources"][0]["updating"], false);
 }
 
+#[test]
+fn index_library_failure_prints_the_job_error_and_exits_non_zero() {
+    let tmp = TempDir::new("idxfail");
+    // an existing folder that is not a library: the job starts, then fails on its own thread
+    let notlib = tmp.path("notalib");
+    std::fs::create_dir_all(&notlib).unwrap();
+    let idx = tmp.path("idx");
+    let o = cs(&["index-library", "--library", &notlib, "--index-dir", &idx]);
+    assert!(!o.ok, "a failed job must exit non-zero");
+    let last = o.stderr.lines().last().expect("stderr must not be empty");
+    let e = j(last);
+    assert!(e["code"].as_str().is_some_and(|c| !c.is_empty()), "error code missing: {}", o.stderr);
+    assert!(e["message"].as_str().is_some_and(|m| m.starts_with("job failed:") && m.len() > "job failed: ".len()), "message missing: {}", o.stderr);
+    assert!(o.stderr.contains("failed"), "{}", o.stderr);
+    let fin = j(o.stdout.trim());
+    assert_eq!(fin["state"], "failed");
+    assert_eq!(fin["error"]["code"], e["code"]);
+    // the lock is released: nothing stale is left behind
+    assert!(!Path::new(&idx).join("cache_search_index.lock").exists());
+}
+
 // ---- tools -------------------------------------------------------------------------------------------------------
 
 const NOW: &str = "2026-10-25T14:20:05-06:00";
@@ -584,23 +605,60 @@ fn cs_env(args: &[&str], env: &[(&str, &str)]) -> Out {
     Out { ok: o.status.success(), stdout: String::from_utf8(o.stdout).unwrap(), stderr: String::from_utf8(o.stderr).unwrap() }
 }
 
-/// A one-answer HTTP server standing in for Kagi (no real network is touched). Returns its base address; it records
-/// the Authorization header of each request.
+/// A one-answer HTTP server standing in for Kagi's v1 API (no real network is touched). Returns its base address. It
+/// insists on a POST to /api/v1/search with `Authorization: Bearer <WEB_KEY>` and a JSON body with `query` and `limit`
+/// (a wrong header gets 401, anything else wrong gets 400), and records the Authorization header of each request. A
+/// query of "nosnippet" gets a result with no snippet.
 fn stand_in_kagi(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> String {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}/api/v0/search", l.local_addr().unwrap());
+    let base = format!("http://{}/api/v1/search", l.local_addr().unwrap());
     std::thread::spawn(move || {
         for mut s in l.incoming().flatten() {
+            let mut raw: Vec<u8> = Vec::new();
             let mut buf = vec![0u8; 4096];
-            let n = s.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            let auth = req.lines().find(|l| l.to_ascii_lowercase().starts_with("authorization:")).unwrap_or("").to_string();
-            seen.lock().unwrap().push(auth);
-            let body = json!({"meta": {}, "data": [
-                {"t": 0, "url": "https://a.example/1", "title": "Burn ban lifted", "snippet": "Ended on Friday."},
-                {"t": 1, "list": ["x"]}]})
-            .to_string();
-            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let mut head_end = None;
+            while head_end.is_none() {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => raw.extend_from_slice(&buf[..n]),
+                }
+                head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4);
+            }
+            let Some(head_end) = head_end else { continue };
+            let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+            let header = |name: &str| -> String {
+                head.lines()
+                    .find(|l| l.to_ascii_lowercase().starts_with(&format!("{name}:")))
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let want: usize = header("content-length").split_once(':').and_then(|(_, v)| v.trim().parse().ok()).unwrap_or(0);
+            let mut body = raw[head_end..].to_vec();
+            while body.len() < want {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                }
+            }
+            let auth = header("authorization");
+            seen.lock().unwrap().push(auth.clone());
+            let first = head.lines().next().unwrap_or("");
+            let parsed: Option<Value> = serde_json::from_slice(&body).ok();
+            let (status, out) = if auth.split_once(':').map(|(_, v)| v.trim()) != Some(format!("Bearer {WEB_KEY}").as_str()) {
+                (401, r#"{"error":[{"code":401,"msg":"unauthorized"}]}"#.to_string())
+            } else if !first.starts_with("POST /api/v1/search ")
+                || !parsed.as_ref().is_some_and(|b| b["query"].is_string() && b["limit"].is_u64())
+            {
+                (400, r#"{"error":[{"code":400,"msg":"bad request"}]}"#.to_string())
+            } else if parsed.as_ref().unwrap()["query"] == "nosnippet" {
+                (200, json!({"data": {"search": [{"url": "https://n.example/1", "title": "Bare"}]}}).to_string())
+            } else {
+                let r = json!({"meta": {}, "data": {"search": [
+                    {"url": "https://a.example/1", "title": "Burn ban lifted", "snippet": "Ended on Friday.", "rank": 1}],
+                    "related_searches": ["x"]}});
+                (200, r.to_string())
+            };
+            let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
         }
     });
     base
@@ -654,8 +712,17 @@ fn cs_tool_web_search_against_a_stand_in_server() {
     assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
     assert!(v["timing_ms"]["search"].is_u64());
     // the key went out as a header, and appears in nothing cs printed
-    assert_eq!(seen.lock().unwrap()[0].to_ascii_lowercase(), format!("authorization: bot {}", WEB_KEY.to_ascii_lowercase()));
+    assert_eq!(seen.lock().unwrap()[0].split_once(':').unwrap().1.trim(), format!("Bearer {WEB_KEY}"));
     assert!(!o.stdout.contains(WEB_KEY) && !o.stderr.contains(WEB_KEY));
+    // a result with no snippet is a line with no dash part
+    let nosnip = ["tool", "web_search", "--config", cfg.as_str(), "--args", r#"{"query":"nosnippet"}"#, "--now", NOW];
+    let o = cs_env(&nosnip, &env);
+    assert!(o.ok, "{}", o.stderr);
+    assert_eq!(o.stdout.lines().next().unwrap(), "[1] Bare (web, fetched 2026-10-25 14:20)");
+    // a wrong key is a 401 from the stand-in: key_missing, and the key is not echoed
+    let wrong = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", "not-the-key"), ("CACHE_WEB_BASE_URL", base.as_str())];
+    let o = cs_env(&args, &wrong);
+    assert!(o.stdout.contains("key_missing") || o.stderr.contains("key_missing"), "{} {}", o.stdout, o.stderr);
 }
 
 #[test]

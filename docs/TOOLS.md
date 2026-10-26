@@ -22,7 +22,8 @@ tool definitions or retraining. `web_search` is a sixth fixed tool that exists o
 configured and the phone is online; without them it is left out of the tool list.
 
 **Errors (every tool).** `{"ok": false, "error": {"type": "<code>", "detail": "<short text>"}}`. Shared codes:
-`bad_arguments`, `no_location` (the tool needs a place and none was given or known), `not_set_up` (the needed
+`bad_arguments`, `no_location` (the tool needs a place and none was given or known; nearby and locate use it, navigate uses
+`origin_unknown` instead), `not_set_up` (the needed
 data, such as a map region or the alerts source, isn't on the phone), `internal`, and these, added with the
 tool framework:
 - `not_configured`: the tool needs a setting that has not been made;
@@ -30,6 +31,9 @@ tool framework:
 - `quota`: the provider's usage limit is reached;
 - `key_missing`: an API key the tool needs is not set;
 - `bad_response`: the provider answered with something the tool cannot use.
+
+A tool may also put fields at the top level beside `error` (navigate adds `from_matched` and `to_matched`), and `detail`
+is left out when it is empty.
 
 **Dated data (live sources).** Every item from a live source carries:
 - `fetched_at`: local time it was downloaded, ISO 8601 with offset;
@@ -102,7 +106,7 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
 ```json
 {"type": "function", "function": {
   "name": "navigate",
-  "description": "Directions in one call, to a named place (to) or to the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns the places actually matched, so a wrong match can be seen.",
+  "description": "Directions in one call, to a named place (to) or to the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns the places actually matched, so a wrong match can be seen. When an end is away from roads, the route includes off-road legs (straight lines with heading, length and climb).",
   "strict": true,
   "parameters": {"type": "object", "properties": {
     "from": {"type": "string", "maxLength": 300,
@@ -114,32 +118,112 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
                 "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."},
     "mode": {"type": "string", "enum": ["drive", "walk", "bike"]},
     "near": {"type": "string", "minLength": 1, "maxLength": 200,
-             "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."}},
+             "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
+    "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
+                    "description": "Off-road legs only: how private or closed land is treated. strict never crosses it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it."}},
     "required": ["mode"], "additionalProperties": false}}}
 ```
 
-Steps are capped at 15 in the result (`steps_truncated`, `steps_omitted`), to fit the 8k context.
+`to_type` lists the categories in the installed places pack; the 11 above are the default list while no pack says otherwise.
+Give exactly one of `to` and `to_type`. `mode` is `drive`, `walk` or `bike`, as in AIDA. `land_access` is the one
+argument added to AIDA's, and the last: it defaults to `pragmatic` and only matters for off-road legs.
+
+**Off-road.** There is no off-road mode. When the start or the destination is away from the road network and the
+off-road data (pack and elevation file) is installed, the off-road legs come back automatically inside the route:
+a drive uses the vehicle-class modes, a walk goes on foot, a bike uses a two-wheeler. Off-road steps have
+`kind` `offroad` or `offroad_follow` and carry AIDA's fields (below). Without the off-road data the road route is
+returned and the end that could not be reached gets a `warnings` entry.
+
+**Steps.** `step_count` is the real number of steps. At most 12 are shown (AIDA's cap, to fit the 8k context) and
+`steps_truncated` is true when some were left out. Over the cap, every off-road step is kept (the last 12 if they alone
+exceed the cap), the first road steps fill the rest, and they stay in route order. `road_steps_omitted` gives how many
+road steps were left out and `offroad_steps_omitted` how many off-road steps; both follow `steps_truncated`, and
+`offroad_steps_omitted` is present only when it is above zero.
 
 Differences from AIDA: no Meshtastic waypoint or `pins`/`bridge` fields; the start defaults to the phone's GPS
-position instead of the sender's node; `water` and `shelter` added to the categories (from the map pack's OSM
-data). Off-road legs come in 1.x; until then a destination off the road network returns the road route plus a
-`warnings` entry `{"code": "offroad_unavailable", "gap_m": N}`.
+position instead of the sender's node (`location_bias` is then `sender_node_position`, AIDA's value, for the phone's
+fix); `water` and `shelter` added to the categories (from the map pack's OSM data); `land_access` added; the result
+adds `map_region` and `map_region_age`.
 
-Result (JSON): the same fields as AIDA's navigate result, plus `"n"`:
+Result (JSON). The tool writes `"address": "nav:<route_id>"` as the first field; the framework replaces it with `"n"`
+and puts `"ok": true` in front (the example shows `ok`; the app's `n` follows it). The example below is the recorded
+AIDA result `offroad-v24-12-t1-h` (`packages/cache_search/cli/tests/fixtures/aida_navigate/`, request: from "Kuna",
+to "Swan Falls Dam", near "Kuna, Idaho", mode drive), with its values as recorded, the fields written in the order the
+tool writes them, `pins` taken out (Cache has no pins), and `map_region` and `map_region_age` added as the tool emits
+them. The recording shows AIDA's geocoder values for `county`, `distance_km` and `near`; see the places-pack note below.
 
 ```json
-{"ok": true, "n": 6, "mode": "drive", "location_bias": "phone_location",
- "from_matched": {"place_name": "current location", "lat": 42.536, "lon": -113.792},
- "to_matched": {"place_name": "Cassia Regional Hospital", "kind": "hospital", "street": "1501 Hiland Ave", "locality": "Burley", "state": "ID", "lat": 42.531, "lon": -113.785},
- "other_destination_candidates": [{"place_name": "Minidoka Memorial Hospital", "locality": "Rupert", "state": "ID", "drive_min": 14.2}],
- "nearest_search": {"to_type": "emergency_room", "ranked_by": "drive_time"},
- "distance_mi": 1.1, "distance_km": 1.8, "duration_minutes": 4.0, "major_roads": ["Overland Ave"],
- "step_count": 5, "steps": [{"index": 0, "kind": "road", "street_names": ["Main St"], "distance_mi": 0.3, "cardinal": "S", "instruction": "Head south on Main St"}],
- "steps_truncated": false, "steps_omitted": 0, "map_region": "Idaho", "map_region_age": "12 days old"}
+{"ok": true, "mode": "drive", "location_bias": "near:Kuna, Ada, Idaho, United States", "route_id": "a7650ad16e34abd2",
+ "from_matched": {"place_name": "Kuna High School", "kind": "poi", "street": "East Deer Flat Road", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 1.4, "near": {"county": "Ada", "distance_m": 0, "housenumber": "637", "locality": "Kuna", "name": "Kuna High School", "state": "ID", "street": "East Deer Flat Road"}, "snap_distance_m": 10},
+ "to_matched": {"place_name": "Swan Falls Storage", "kind": "poi", "street": "South Swan Falls Road", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 0.7, "near": {"county": "Ada", "distance_m": 0, "housenumber": "387", "locality": "Kuna", "name": "Swan Falls Storage", "state": "ID", "street": "South Swan Falls Road"}, "snap_distance_m": 21},
+ "other_destination_candidates": [
+   {"place_name": "Swan Falls Assisted Living", "kind": "poi", "street": "West White Way", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 1.2},
+   {"place_name": "Swan Falls Family Dentistry", "kind": "poi", "street": "North Linder Road", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 1.5}],
+ "distance_mi": 1.99, "distance_km": 3.21, "duration_minutes": 6.0,
+ "major_roads": [{"name": "North Linder Road", "distance_km": 1.38}, {"name": "East Deer Flat Road", "distance_km": 0.54}, {"name": "South Swan Falls Road", "distance_km": 0.39}],
+ "step_count": 12,
+ "steps": [
+   {"index": 0, "kind": "offroad", "type": "offroad_leg", "street_names": [], "distance_mi": 0.11, "cardinal": "N", "instruction": "By dirt bike or mountain bike: Off-road N 0.11 mi, flat, built up (-1 m)", "travel": "2w", "grade_class": "flat", "elev_gain_m": 0, "elev_loss_m": 1, "terrain": "built up"},
+   {"index": 1, "kind": "road", "type": "start_right", "street_names": [], "distance_mi": 0.12, "cardinal": "NE", "instruction": "Drive east."},
+   {"index": 2, "kind": "road", "type": "right", "street_names": [], "distance_mi": 0.04, "cardinal": "NE", "instruction": "Turn right."},
+   {"index": 3, "kind": "road", "type": "left", "street_names": ["East Deer Flat Road"], "distance_mi": 0.34, "cardinal": "W", "instruction": "Turn left onto East Deer Flat Road."},
+   {"index": 4, "kind": "road", "type": "left", "street_names": ["North Linder Road"], "distance_mi": 0.86, "cardinal": "S", "instruction": "Turn left onto North Linder Road."},
+   {"index": 5, "kind": "road", "type": "roundabout_enter", "street_names": [], "distance_mi": 0.02, "cardinal": "SW", "instruction": "Enter the roundabout and take the 2nd exit onto North Linder Avenue."},
+   {"index": 6, "kind": "road", "type": "roundabout_exit", "street_names": ["North Linder Avenue"], "distance_mi": 0.02, "cardinal": "S", "instruction": "Exit the roundabout onto North Linder Avenue."},
+   {"index": 7, "kind": "road", "type": "right", "street_names": ["North Linder Avenue"], "distance_mi": 0.1, "cardinal": "S", "instruction": "Turn right to stay on North Linder Avenue."},
+   {"index": 8, "kind": "road", "type": "right", "street_names": ["South Swan Falls Road"], "distance_mi": 0.24, "cardinal": "SW", "instruction": "Turn right onto South Swan Falls Road."},
+   {"index": 9, "kind": "road", "type": "right", "street_names": [], "distance_mi": 0.03, "cardinal": "W", "instruction": "Turn right."},
+   {"index": 10, "kind": "road", "type": "right", "street_names": [], "distance_mi": 0.11, "cardinal": "N", "instruction": "Turn right."},
+   {"index": 11, "kind": "road", "type": "destination_left", "street_names": [], "distance_mi": 0.0, "cardinal": "NW", "instruction": "Your destination is on the left."}],
+ "steps_truncated": false,
+ "offroad_mi": 0.11, "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
+ "map_region": "Idaho", "map_region_age": "12 days old"}
 ```
 
-Errors (AIDA's codes kept): `geocode_empty` (with `which`, `query`, `searched_within_km`), `origin_unknown`,
-`nearby_empty`, `same_place`, `route_failed`, plus `not_set_up` when no map region covers the area.
+Fields:
+- `location_bias` says where matches were preferred: `sender_node_position` (the phone's fix), `near:<town>` (the
+  place found for `near`), or `from_place` (the matched start); null when none applied.
+- `route_id` is the router's id for the route, the same value the tool's `n` address is built from.
+- `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
+  (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
+  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one.
+- `other_destination_candidates` has up to 2 other matches (the same place fields, no `near`); empty when none. On a
+  nearest-place search each entry also has `drive_min` (the travel time in minutes, for every mode; null when it could not be timed).
+- `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": null}`; `ranked_by` is the mode name, e.g. `drive`) is present only for a `to_type` search, after `other_destination_candidates`.
+- `major_roads` is a list of `{"name", "distance_km"}`.
+- Every step has `index`, `kind` (`road`, `offroad` or `offroad_follow`), `type`, `street_names`, `distance_mi`,
+  `cardinal` and `instruction`. Off-road steps add `travel` (`foot`, `2w`, `4w` or `vehicle`), `grade_class`,
+  `elev_gain_m`, `elev_loss_m`, `terrain` (only when known) and, on `offroad_follow`, `follow` (`name` and
+  `trail_kind`). The off-road `instruction` is AIDA's text, written by the tool; road steps carry the router's text.
+- `offroad_mi` and `offroad_note` appear only when the route has off-road legs.
+- `warnings` appears only when there is one. Each entry is `{"code": "offroad_unavailable", "end": "from" | "to",
+  "road_point": {"lat", "lon"}, "gap_m": N}`: that end is away from the road network, the route stops at
+  `road_point`, and `gap_m` is how many metres short of the requested end it stops. It is how the road route is
+  returned when the off-road data is not installed, or does not cover that end.
+- `map_region` and `map_region_age` name the installed map region and how old it is ("12 days old"; "unknown" when
+  the age cannot be read).
+
+**Places pack.** `county`, `distance_km`, `near` and `er_tier` come from the places pack. Until the pack is installed
+they are `null` (`county`, `distance_km`, `near`; a place the user gave as coordinates or a saved place has them null
+too), and `er_tier` is left out. Cache has no reverse geocoder, so `near` is `null` on every result for now.
+
+**Errors.** `{"ok": false, "error": {"type": ..., "detail": ...}}` as in the Conventions, with two differences: the
+fields below sit at the top level beside `error`, and `detail` is left out when it is empty.
+- `geocode_empty`: nothing matched a name. `error` has `which` (`from` or `to`), `query` and `searched_within_km`
+  (null when unknown); no `detail`.
+- `origin_unknown`: no `from` was given and the phone's location is not known. (Navigate does not use `no_location`.)
+- `nearby_empty`: no place of that type was found. `error` has `to_type` and `warnings` (null); no `detail`.
+- `same_place`: the start and the destination are the same spot.
+- The router's own code is passed through as `error.type` when the route fails, with its message as `detail`:
+  `no_route`, `too_far`, `out_of_coverage`, `route_too_long`, `upstream_timeout`, `internal`.
+- `not_set_up`: no map region is installed (or the router could not start), or the places data is missing for a
+  `to_type` search.
+- `bad_arguments`: for example neither or both of `to` and `to_type`.
+
+`from_matched` and `to_matched` (the place fields above, without `near` and `snap_distance_m`) ride at the top
+level beside `error` on `same_place` and on the router's failures; `nearby_empty` carries `from_matched` only. When
+the phone's location is known, `error` also has a `hint` on `geocode_empty` for `from` and on `same_place`, telling the
+model it can omit `from`.
 
 ### nearby
 
@@ -295,6 +379,10 @@ If the budget runs out before the page loads, `read` returns the snippet instead
 it, and the marker is the last line. If the page cannot be had for another reason (the server refused, it is not an
 HTML or text page, or it has no text), the same output ends with `[full page not available]`. Neither is an error.
 
+If the page loads but its text is under 500 characters (a page drawn by JavaScript often gives only navigation or a
+footer), `read` returns the first line, the snippet, the text that was found (if any), and the last line
+`[page had little readable text]`. That is not an error either.
+
 Errors: `key_missing`, `fetch_failed`, `quota`, `bad_response`. Without a key, or with the phone offline, the tool is
 not in the tool list, so the model cannot call it.
 
@@ -303,10 +391,7 @@ fetched.
 
 ## 1.x additions
 
-### navigate, off-road
-
-`mode` gains `"offroad_vehicle"` and `"offroad_foot"`; results gain AIDA's off-road step fields (`travel`,
-`grade_class`, `elev_gain_m`, `elev_loss_m`, `terrain`, `follow`, `offroad_mi`, `offroad_note`).
+None at present. Off-road navigate (the `offroad_vehicle` and `offroad_foot` modes, `land_access` and the off-road step fields) is part of navigate in 1.0, above.
 
 ---
 

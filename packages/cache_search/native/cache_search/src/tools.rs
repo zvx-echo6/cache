@@ -9,7 +9,7 @@ use crate::conv::{one_line, Conversation};
 use crate::error::{Error, ErrorCode, Result};
 use crate::handle::Handle;
 use crate::html;
-use crate::web::Page;
+use crate::web::{Page, LITTLE_TEXT_CHARS};
 use cache_tool::{Location, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput, ADDRESS_MARKER_CLOSE, ADDRESS_MARKER_OPEN};
 use serde_json::{json, Value};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -399,13 +399,28 @@ impl Handle {
     /// `read` on a `web:<url>` result: fetch the page within the read budget. When it loads, `[n] <title> (web,
     /// fetched <time>)`, the text and `[truncated]` as for any read. When it does not, the same first line, the
     /// snippet kept from the search, and `[full page did not load in time]` or `[full page not available]`; that is
-    /// still a result, not an error.
+    /// still a result, not an error. A page with under `LITTLE_TEXT_CHARS` of text gives the first line, the snippet,
+    /// the text, and `[page had little readable text]`.
     fn read_web(&mut self, conv: &Conversation, n: usize, address: &str, url: &str) -> ToolOutput {
         let head = match conv.web_note(address) {
             Some(w) => format!("[{n}] {} (web, fetched {})", w.title, w.fetched),
             None => format!("[{n}] {}", conv.entry(n).map(|(_, t)| one_line(t)).unwrap_or_default()),
         };
         let text = match self.web.read_page(url) {
+            Page::Text { text, .. } if text.trim().chars().count() < LITTLE_TEXT_CHARS => {
+                // a script-rendered shell: show the snippet first, then whatever text there was, then say so
+                let mut s = head;
+                if let Some(w) = conv.web_note(address).filter(|w| !w.snippet.is_empty()) {
+                    s.push('\n');
+                    s.push_str(&w.snippet);
+                }
+                if !text.trim().is_empty() {
+                    s.push('\n');
+                    s.push_str(text.trim());
+                }
+                s.push_str("\n[page had little readable text]");
+                s
+            }
             Page::Text { text, capped } => {
                 let (cut, was_cut) = html::cut_at_paragraph(text.trim(), READ_MAX_CHARS as usize);
                 let mut s = format!("{head}\n{cut}");
@@ -655,6 +670,24 @@ mod tests {
         ));
         let v = call(&mut h, &mut c, "locate", "{}");
         assert_eq!(v["content"], r#"{"ok":false,"error":{"type":"no_location","detail":"no fix","hint":"turn on GPS"}}"#);
+        assert_eq!(v["ids"], json!([]));
+    }
+
+    #[test]
+    fn a_tool_error_keeps_top_level_fields_in_order_and_omits_an_empty_detail() {
+        let mut h = handle();
+        let mut c = Conversation::new();
+        h.register_tool(dummy(
+            "locate",
+            Box::new(|_, _| {
+                Err(ToolError::new("no_route", "").with_top("from_matched", json!({"place_name": "A"})).with_top("to_matched", json!(null)))
+            }),
+        ));
+        let v = call(&mut h, &mut c, "locate", "{}");
+        assert_eq!(
+            v["content"],
+            r#"{"ok":false,"error":{"type":"no_route"},"from_matched":{"place_name":"A"},"to_matched":null}"#
+        );
         assert_eq!(v["ids"], json!([]));
     }
 

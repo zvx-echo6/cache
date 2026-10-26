@@ -61,6 +61,8 @@ char *cs_version(void);
  *   "places": {"packs": [".../idaho/places.sqlite"]},  optional: registers the nearby and locate tools over these places
  *                                  packs (docs/TOOLS.md). Packs are opened on demand: nearby is left out of
  *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack
+ *   "routing": {"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll"},   optional: the navigate tool
+ *               "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles"}},  (see DESIGN.md)
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are dropped unless that leaves fewer than k+offset results
  * }

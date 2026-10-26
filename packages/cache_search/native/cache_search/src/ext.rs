@@ -17,6 +17,8 @@ pub struct UserCfg {
 pub struct Ext {
     pub user: Option<UserStore>,
     pub live: Option<Live>,
+    /// Where a places pack plugs into the navigate tool (see `Handle::set_place_source`).
+    pub places: cache_navigate::PlaceSlot,
 }
 
 fn user_err(e: cache_user::Error) -> Error {
@@ -33,8 +35,16 @@ impl crate::handle::Handle {
     /// `live`: the `live_data` tool (cache_live) is registered; it leaves itself out of `cs_tool_schemas` while no source
     /// definition is installed in `sources_dir`.
     /// `places`: `{"packs": [...]}` registers `nearby` (cache_places; left out of `cs_tool_schemas` while no pack is installed)
-    /// and `locate` (always available: a GPS fix needs no pack).
-    pub(crate) fn configure_ext(&mut self, user: Option<UserCfg>, live: Option<LiveCfg>, places: Option<cache_places::PlacesCfg>) {
+    /// and `locate` (always available: a GPS fix needs no pack), and plugs the same packs into the navigate tool as its
+    /// `PlaceSource` (names for `to`, `from` and `near`, and the `to_type` categories).
+    /// `routing`: the navigate tool (cache_navigate).
+    pub(crate) fn configure_ext(
+        &mut self,
+        user: Option<UserCfg>,
+        live: Option<LiveCfg>,
+        routing: Option<cache_navigate::NavigateCfg>,
+        places: Option<cache_places::PlacesCfg>,
+    ) {
         if let Some(u) = user {
             self.ext.user = Some(UserStore::new(&u.db_path));
             self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
@@ -44,10 +54,23 @@ impl crate::handle::Handle {
             self.register_tool(Box::new(cache_live::LiveDataTool::new(l)));
         }
         if let Some(p) = places {
-            for t in cache_places::tools(&p) {
+            let (tools, source) = cache_places::tools_and_source(&p);
+            for t in tools {
                 self.register_tool(t);
             }
+            self.set_place_source(Some(source));
         }
+        if let Some(r) = routing {
+            self.register_tool(Box::new(cache_navigate::NavigateTool::new(r, self.ext.places.clone())));
+        }
+    }
+}
+
+impl crate::handle::Handle {
+    /// Plug the places pack into the navigate tool: it then looks up `to`, `from` and `near` names and finds the
+    /// nearest place of a `to_type`. Without one the tool resolves only saved places and "lat,lon" text.
+    pub fn set_place_source(&mut self, source: Option<std::sync::Arc<dyn cache_tool::places::PlaceSource>>) {
+        *self.ext.places.write().unwrap_or_else(|e| e.into_inner()) = source;
     }
 }
 

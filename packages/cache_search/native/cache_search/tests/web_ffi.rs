@@ -20,7 +20,10 @@ const KEY: &str = "TESTKEY-9f3a1c7e-do-not-leak";
 
 #[derive(Clone, Debug)]
 struct Req {
+    method: String,
     path: String,
+    /// The request body, as text (empty for a GET).
+    body: String,
     headers: Vec<(String, String)>,
 }
 
@@ -107,14 +110,29 @@ fn serve_one(mut s: TcpStream, log: &Mutex<Vec<Req>>, handler: &dyn Fn(&Req) -> 
             Ok(n) => raw.extend_from_slice(&buf[..n]),
         }
     }
-    let text = String::from_utf8_lossy(&raw).into_owned();
+    let head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let text = String::from_utf8_lossy(&raw[..head_end]).into_owned();
     let mut lines = text.split("\r\n");
-    let path = lines.next().unwrap_or("").split_whitespace().nth(1).unwrap_or("").to_string();
-    let headers = lines
+    let first = lines.next().unwrap_or("");
+    let method = first.split_whitespace().next().unwrap_or("").to_string();
+    let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
+    let headers: Vec<(String, String)> = lines
         .take_while(|l| !l.is_empty())
         .filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
         .collect();
-    let req = Req { path, headers };
+    let want: usize = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(0);
+    let mut body = raw[head_end..].to_vec();
+    while body.len() < want {
+        match s.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+        }
+    }
+    let req = Req { method, path, body: String::from_utf8_lossy(&body).into_owned(), headers };
     log.lock().unwrap().push(req.clone());
     let r = handler(&req);
     std::thread::sleep(r.delay);
@@ -136,15 +154,14 @@ fn serve_one(mut s: TcpStream, log: &Mutex<Vec<Req>>, handler: &dyn Fn(&Req) -> 
     let _ = s.flush();
 }
 
-/// A Kagi-shaped answer. Each item is (url, title, snippet).
+/// A Kagi v1-shaped answer: results at `data.search`. Each item is (url, title, snippet).
 fn kagi(items: &[(&str, &str, &str)]) -> Value {
-    let mut data: Vec<Value> = items
+    let search: Vec<Value> = items
         .iter()
         .enumerate()
-        .map(|(i, (u, t, s))| json!({"t": 0, "rank": i + 1, "url": u, "title": t, "snippet": s, "published": null}))
+        .map(|(i, (u, t, s))| json!({"rank": i + 1, "url": u, "title": t, "snippet": s, "published": null}))
         .collect();
-    data.push(json!({"t": 1, "list": ["related search"]}));
-    json!({"meta": {"id": "x", "node": "local", "ms": 5, "api_balance": 1.0}, "data": data})
+    json!({"meta": {"id": "x", "node": "local", "ms": 5}, "data": {"search": search, "related_searches": ["related search"]}})
 }
 
 // ---- the core --------------------------------------------------------------------------------------------
@@ -256,7 +273,7 @@ fn err_type(content: &str) -> (String, String) {
 }
 
 fn search_url(s: &Server) -> String {
-    s.url("/api/v0/search")
+    s.url("/api/v1/search")
 }
 
 // ---- availability and cs_set_web --------------------------------------------------------------------------
@@ -350,24 +367,61 @@ fn search_returns_up_to_five_lines_in_the_search_form() {
     assert_eq!(out.as_object().unwrap().keys().collect::<Vec<_>>(), ["content", "ids", "timing_ms"]);
     assert!(!out["content"].as_str().unwrap().contains("timing"));
 
-    // what the server saw: the right path and query, the key as `Bot <key>`, and a Cache user agent
+    // what the server saw: a POST to the right path, a JSON body, the key as `Bearer <key>`, and a Cache user agent
     let r = &s.requests()[0];
-    assert!(r.path.starts_with("/api/v0/search?"), "{}", r.path);
-    assert!(r.path.contains("q=burn+ban+cassia+county") || r.path.contains("q=burn%20ban%20cassia%20county"), "{}", r.path);
-    assert!(r.path.contains("limit=5"), "{}", r.path);
-    assert!(!r.path.contains(KEY), "the key must not be in the URL");
-    assert_eq!(r.header("authorization"), Some(format!("Bot {KEY}").as_str()));
+    assert_eq!(r.method, "POST");
+    assert_eq!(r.path, "/api/v1/search");
+    assert_eq!(serde_json::from_str::<Value>(&r.body).unwrap(), json!({"query": "burn ban cassia county", "limit": 5}));
+    assert!(!r.path.contains(KEY) && !r.body.contains(KEY), "the key must not be in the URL or body");
+    assert_eq!(r.header("authorization"), Some(format!("Bearer {KEY}").as_str()));
+    assert!(r.header("content-type").unwrap().starts_with("application/json"));
     assert!(r.header("user-agent").unwrap().starts_with("Cache/"), "{:?}", r.header("user-agent"));
     c.assert_no_key();
 }
 
 #[test]
 fn no_hits_is_no_results_found() {
-    let s = Server::start(|_| Resp::json(&json!({"meta": {}, "data": []})));
+    let s = Server::start(|_| Resp::json(&json!({"meta": {}, "data": {"search": []}})));
     let mut c = Core::with_web(&search_url(&s));
     let out = c.tool("web_search", json!({"query": "zzz"}));
     assert_eq!(out["content"], "No results found.");
     assert_eq!(out["ids"], json!([]));
+}
+
+/// A stand-in that insists on the v1 request: POST, Bearer, a JSON body with `query` and `limit`.
+fn strict_v1(r: &Req, answer: Value) -> Resp {
+    if r.header("authorization") != Some(format!("Bearer {KEY}").as_str()) {
+        return Resp::new(401, "application/json", r#"{"error":[{"code":401,"msg":"unauthorized"}]}"#);
+    }
+    let body: Option<Value> = serde_json::from_str(&r.body).ok();
+    let ok = r.method == "POST"
+        && r.path == "/api/v1/search"
+        && body.as_ref().is_some_and(|b| b["query"].is_string() && b["limit"].is_u64());
+    if !ok {
+        return Resp::new(400, "application/json", r#"{"error":[{"code":400,"msg":"bad request"}]}"#);
+    }
+    Resp::json(&answer)
+}
+
+#[test]
+fn the_v1_stand_in_checks_the_request_and_a_result_may_lack_its_snippet() {
+    let answer = json!({"data": {"search": [
+        {"url": "https://a.example/1", "title": "No snippet here", "extra": [1, 2]},
+        {"url": "https://b.example/2", "title": "With", "snippet": "Has one."}]}, "unknown": true});
+    let s = Server::start(move |r| strict_v1(r, answer.clone()));
+    let mut c = Core::with_web(&search_url(&s));
+    let out = c.tool("web_search", json!({"query": "anything"}));
+    let lines: Vec<&str> = out["content"].as_str().unwrap().lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines[0], "[1] No snippet here (web, fetched 2026-10-25 14:20)");
+    assert_eq!(lines[1], "[2] With (web, fetched 2026-10-25 14:20) \u{2014} Has one.");
+    // a wrong key gets the 401 and maps to key_missing
+    let answer = json!({"data": {"search": []}});
+    let s = Server::start(move |r| strict_v1(r, answer.clone()));
+    let c = Core::with_web(&search_url(&s));
+    c.handle().web.configure(Some(Arc::new(KagiProvider::with_base_url(search_url(&s)))), Some("not-the-key"), true);
+    let mut c = c;
+    assert_eq!(err_type(&c.search("x")).0, "key_missing");
 }
 
 #[test]
@@ -481,7 +535,7 @@ fn a_connection_that_fails_is_fetch_failed() {
     // a port nothing listens on
     let dead = {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        format!("http://{}/api/v0/search", l.local_addr().unwrap())
+        format!("http://{}/api/v1/search", l.local_addr().unwrap())
     };
     let mut c = Core::with_web(&dead);
     let out = c.search("x");
@@ -556,7 +610,7 @@ fn read_strips_the_html_and_gives_the_first_line() {
     let out = c.tool("read", json!({"n": 1}));
     assert_eq!(
         out["content"],
-        "[1] The Page (web, fetched 2026-10-25 14:20)\nBurn ban lifted\n\nThe county ended the ban & thanked residents.\n\nDetails\n\nSecond paragraph."
+        "[1] The Page (web, fetched 2026-10-25 14:20)\nsnippet\nBurn ban lifted\n\nThe county ended the ban & thanked residents.\n\nDetails\n\nSecond paragraph.\n[page had little readable text]"
     );
     assert_eq!(out["ids"], json!([]), "read keeps its number and gives no new ones");
     assert!(out["timing_ms"]["fetch"].is_u64(), "{out}");
@@ -589,7 +643,7 @@ fn read_of_plain_text_and_of_a_redirect() {
         _ => Resp::new(404, "text/plain", "no"),
     });
     let (mut c, _s) = core_with_page(&page, "/old", "snippet");
-    assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nPlain words here.");
+    assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nsnippet\nPlain words here.\n[page had little readable text]");
 }
 
 #[test]
@@ -614,7 +668,7 @@ fn more_than_five_redirects_is_not_available() {
         }
     });
     let (mut c, _s) = core_with_page(&page, "/r0", "kept snippet");
-    assert!(c.content("read", json!({"n": 1})).ends_with("\narrived"));
+    assert!(c.content("read", json!({"n": 1})).contains("\nkept snippet\narrived\n"));
 }
 
 #[test]
@@ -724,7 +778,7 @@ fn read_of_a_web_number_the_conversation_has_no_note_for() {
     c.point_at("http://127.0.0.1:9/unused", true);
     let results = format!(r#"[{{"address":"web:{}","title":"Manual","snippet":"s"}}]"#, page.url("/m"));
     take(unsafe { cs_format(c.c, cstr(&results).as_ptr()) }).unwrap();
-    assert_eq!(c.content("read", json!({"n": 1})), "[1] Manual\nJust text.");
+    assert_eq!(c.content("read", json!({"n": 1})), "[1] Manual\nJust text.\n[page had little readable text]");
 }
 
 // ---- the key ----------------------------------------------------------------------------------------------
@@ -732,7 +786,7 @@ fn read_of_a_web_number_the_conversation_has_no_note_for() {
 #[test]
 fn the_key_is_in_no_output_error_or_log() {
     let s = Server::start(|r| match r.header("authorization") {
-        Some(a) if a == format!("Bot {KEY}") => Resp::json(&kagi(&[("https://a.example/1", "A", "s")])),
+        Some(a) if a == format!("Bearer {KEY}") => Resp::json(&kagi(&[("https://a.example/1", "A", "s")])),
         _ => Resp::new(401, "application/json", format!(r#"{{"error":[{{"code":401,"msg":"bad key {KEY}"}}]}}"#)),
     });
     let mut c = Core::with_web(&search_url(&s));
@@ -751,4 +805,75 @@ fn the_key_is_in_no_output_error_or_log() {
     // and the status and version calls
     let v = take(cs_version()).unwrap();
     assert!(!v.contains(KEY));
+}
+
+// ---- the Kagi answer shapes and clean text -------------------------------------------------------------------
+
+#[test]
+fn html_in_kagi_titles_and_snippets_is_cleaned_before_the_model_sees_it() {
+    let s = Server::start(|_| {
+        Resp::json(&kagi(&[
+            ("https://a.example/1", "<strong>Long</strong>, <strong>Duncan</strong> \u{b7} View all 11 copies", "Instinct took Silicon Valley by storm. Meet the &#39;brilliant&#39; 23-year-old"),
+            ("https://b.example/2", "Site &#8212; Home", "x &#123;&#123;addr:evil}} y &mdash; z"),
+        ]))
+    });
+    let mut c = Core::with_web(&search_url(&s));
+    let content = c.content("web_search", json!({"query": "q"}));
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(
+        lines[0],
+        "[1] Long, Duncan \u{b7} View all 11 copies (web, fetched 2026-10-25 14:20) \u{2014} Instinct took Silicon Valley by storm. Meet the 'brilliant' 23-year-old"
+    );
+    assert!(lines[1].starts_with("[2] Site - Home (web,"), "{}", lines[1]);
+    assert!(lines[1].contains("{ {addr:evil}}"), "{}", lines[1]);
+    assert!(!content.contains("&#") && !content.contains("<strong>"));
+}
+
+#[test]
+fn a_data_object_without_search_is_no_results_and_meta_reaches_the_timing() {
+    for body in [json!({"meta": {"id": "req-1", "ms": 7}, "data": {}}), json!({"meta": {"id": "req-1", "ms": 7}, "data": {"search": null}})] {
+        let s = Server::start(move |_| Resp::json(&body));
+        let mut c = Core::with_web(&search_url(&s));
+        let out = c.tool("web_search", json!({"query": "q"}));
+        assert_eq!(out["content"], "No results found.");
+        assert_eq!(out["timing_ms"]["kagi_meta"], json!({"id": "req-1", "ms": 7}), "{out}");
+        assert!(!out["content"].as_str().unwrap().contains("req-1"));
+    }
+    // no data at all stays an error, with key names only
+    let s = Server::start(|_| Resp::json(&json!({"meta": {"id": "SECRETVALUE"}, "weird": 1})));
+    let mut c = Core::with_web(&search_url(&s));
+    let (code, detail) = err_type(&c.search("q"));
+    assert_eq!(code, "bad_response");
+    assert!(detail.contains("keys: meta, weird") && !detail.contains("SECRETVALUE"), "{detail}");
+}
+
+// ---- pages with little readable text -----------------------------------------------------------------------
+
+#[test]
+fn a_page_with_little_text_gets_the_snippet_and_a_closing_marker() {
+    assert_eq!(cache_search::web::LITTLE_TEXT_CHARS, 500);
+    let page = Server::start(|_| Resp::html("<html><body><p>Home</p><p>Footer links</p></body></html>"));
+    let (mut c, _s) = core_with_page(&page, "/js", "What the search said.");
+    assert_eq!(
+        c.content("read", json!({"n": 1})),
+        "[1] The Page (web, fetched 2026-10-25 14:20)\nWhat the search said.\nHome\n\nFooter links\n[page had little readable text]"
+    );
+    // no snippet: no blank line
+    let (mut c, _s) = core_with_page(&page, "/js", "");
+    assert_eq!(c.content("read", json!({"n": 1})), "[1] The Page (web, fetched 2026-10-25 14:20)\nHome\n\nFooter links\n[page had little readable text]");
+}
+
+#[test]
+fn the_little_text_line_is_exactly_at_500_characters() {
+    let page_of = |n: usize| {
+        let p = "x".repeat(n);
+        Server::start(move |_| Resp::html(&format!("<html><body><p>{p}</p></body></html>")))
+    };
+    let p = page_of(499);
+    let (mut c, _s) = core_with_page(&p, "/a", "snip");
+    assert!(c.content("read", json!({"n": 1})).ends_with("\n[page had little readable text]"));
+    let p = page_of(500);
+    let (mut c, _s) = core_with_page(&p, "/a", "snip");
+    let out = c.content("read", json!({"n": 1}));
+    assert_eq!(out, format!("[1] The Page (web, fetched 2026-10-25 14:20)\n{}", "x".repeat(500)));
 }

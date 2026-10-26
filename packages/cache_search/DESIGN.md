@@ -333,9 +333,8 @@ in the conversation.
 `Handle::register_tool` (a tool registered again under the same name replaces the first), sets the user's saved
 places with `set_saved_places` (default `NoSavedPlaces`) and the query embedder of `search` with
 `set_query_embedder` (a callback `&str -> Option<(model id, vector)>`; with none, search is keyword-only, as
-`cs_search` is without a `query_vector`). The core does not depend on `cache_live` or `cache_user`; `cs_open` will
-register their tools from the config's "live" and "user" sections once those crates are on this branch (a comment
-marks the place). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
+`cs_search` is without a `query_vector`). `cs_open` registers the tools of the config's "user", "live" and "routing"
+sections (see Wiring and headless, and navigate below). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
 web_search (a tool with another name follows, in registration order) and leaves out a tool whose `schema()` is
 None.
 
@@ -391,18 +390,24 @@ and `read` (built in, it has the conversation) handles `web:` addresses. A host 
 
 **Provider interface.** `trait WebSearchProvider: Send + Sync { fn search(&self, query, limit, key, deadline) ->
 Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provider maps its own failures to the shared
-error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v0/search`, overridable for tests) sends
-`GET ?q=<query>&limit=<n>` with `Authorization: Bot <key>`, reads `data` (objects with `t: 0` are results with `url`,
-`title`, `snippet`; other `t` values are skipped) and the `error` list. HTTP 401/403 or an error code 401/403 is
-`key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is `quota`; a
-timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be used is
-`bad_response`. **The Kagi parser is unverified against the live API:** it was written from Kagi's documented v0
-response shape and tested only against a local stand-in server, until the owner approves a live test.
+error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/search`, overridable for tests) sends
+`POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
+from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
+matches the request AIDA uses in production (Open WebUI kagi.py); live-verified: pending. HTTP 401/403 or an error code
+401/403 is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
+`quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
+used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
+top-level key names (and `data`'s) but never a value, and never the key or the query. A `data` object whose `search`
+is missing or null is zero results (`No results found.`). Kagi's `meta` object (request id, timing), when present,
+goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
+mapping of a balance, credit or quota message to `quota` are a judgement from the previous API's shape, not seen from
+v1; only the 200 response shape above is known from AIDA's use.
 
 **Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
 now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
 boundary with `…`), the title to 150 characters. Repeated URLs are dropped. Text from the web is made safe for the
-line: whitespace runs become one space, `{{` becomes `{ {` so a page cannot forge an address marker, and a ` — ` in
+line: first the HTML is removed (tags stripped, named, decimal and hex entities decoded, as `html::strip` does for a
+page), then whitespace runs become one space, `{{` becomes `{ {` so a page cannot forge an address marker, and a ` — ` in
 a title becomes ` - ` (the numbering reads the title up to the first ` — `). Nothing found: `No results found.`
 
 **Read.** `read` on a `web:` number fetches the URL (GET, up to 5 redirects, `User-Agent: Cache/<version>`), strips
@@ -412,7 +417,10 @@ text, and `[truncated]` when cut (or when the download hit the cap). When the pa
 same first line, the snippet the search showed (the conversation keeps each web hit's title, snippet and fetch time
 beside its number), and a last line `[full page did not load in time]` (timeout) or `[full page not available]`
 (connection failure, bad status, a content type that is not HTML or text, a page with no text, or the phone being
-offline, in which case nothing is fetched). That is a result, not an error. Compression is not requested: the
+offline, in which case nothing is fetched). That is a result, not an error. A page that loads but whose extracted text is
+under 500 characters (`LITTLE_TEXT_CHARS`; a script-rendered shell that gives only navigation or a footer) is not
+a full page: the output is the first line, the stored snippet, the extracted text (if not empty), and a last line
+`[page had little readable text]`. This is a length rule on machine output. Compression is not requested: the
 reqwest already in the lockfile has no gzip support and the decoder crate it would need is not in the lockfile.
 
 **Budgets.** Search 6 s from the call to the result; read 8 s for connect, download and parse; a page download is
@@ -723,6 +731,36 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 **Geocoder (`Geocoder` trait, in cache_places until it moves to cache_tool).** `forward(query, near, limit)`: the query is split at commas ("Walgreens, Burley, ID": a state qualifier filters, a town qualifier biases); FTS5 over towns and places; a name that equals the query wins, a town match gets a boost, so a bare "Burley" is the town and not a school named after it; `near` pulls ties toward a point; when the words do not all match, any-word matching is tried. `reverse(lat, lon)`: nearest town (a hamlet only when it is within 3 km and clearly closer).
 
 **Tools.** `nearby` (schema None until a pack with places is installed; the category enum and descriptions come from the packs' category tables) and `locate` (always offered; a GPS fix needs no pack; nearest town and place names need one). Registered by the `places` section of the `cs_open` config, `{"packs": [paths]}`. Packs are opened on demand and reopened when the file changes. `nearby` ranks by straight-line distance (`ranked_by: "distance"`) out to 300 km; drive-time ranking comes with Valhalla. Citable addresses are `place:<source id>`, `town:<source id>` and `loc:<lat>,<lon>`. `locate` also returns `usng` and `plus_code` (computed offline in `cache_places::coord`).
+
+### navigate
+
+`cs_open` with a `"routing"` section registers `cache_navigate::NavigateTool` (docs/TOOLS.md, "navigate"):
+`{"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll", "region": "Idaho"}, "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles", "max_cells": 8000000}}`
+(`region`, `offroad` and `max_cells` optional; `region` defaults to the tiles' folder name, "Idaho" for `packs/idaho/valhalla/tiles.tar`).
+
+- **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
+  (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
+- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
+  Off-road legs come back inside the route, as in AIDA: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
+  off-road lead-in or tail (drive uses the vehicle-class modes, walk foot, bike a two-wheeler), and a trip with no road gets a whole off-road route. Without the
+  off-road files the road route is returned with an `offroad_unavailable` warning.
+- **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
+  `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` and `to_type` is `not_set_up`; the `to_type`
+  enum is TOOLS.md's list until a pack supplies its categories. The nearest place of a type is chosen by routing to the pack's 5 nearest by straight line.
+- **Result = AIDA's navigate contract** (`nav_runtime.py navigate()`), in its build order: `ok`, `n` (from `address` = `nav:<route_id>`), `mode`, `location_bias`
+  (`sender_node_position` for the phone's fix, `near:<name>`, `from_place`, null), `route_id`, `from_matched`, `to_matched` (place_name, kind, street, locality,
+  county, state, distance_km, [er_tier], near, snap_distance_m), `other_destination_candidates` (always, at most 2; `drive_min` on a nearest search),
+  `nearest_search` {to_type, ranked_by, warnings}, `distance_mi`, `distance_km`, `duration_minutes`, `major_roads` [{name, distance_km}], `step_count`, `steps`
+  (at most 12; every off-road step is kept, the first road steps fill the rest), `steps_truncated`, `road_steps_omitted` / `offroad_steps_omitted`,
+  `offroad_mi` + `offroad_note` (AIDA's text), `warnings` [{code, end, road_point, gap_m}]; then Cache's `map_region`, `map_region_age`. A step is index, kind,
+  type, street_names, distance_mi, cardinal, instruction; off-road steps add travel, grade_class, elev_gain_m, elev_loss_m, terrain (only when known, underscores
+  to spaces), follow {name, trail_kind}. Off-road instruction text is generated from the fields exactly as AIDA's `_step_text` does. Not filled (null): county and
+  distance_km (the geocoder's), `near` (navi's reverse geocode of the end), kind/street/locality/state of a place given as coordinates, er_tier. Not present: `pins`, `bridge`.
+- **Errors** (`ok:false`, `error`, then top-level `from_matched` / `to_matched` where AIDA attaches them): `geocode_empty` {which, query, searched_within_km, hint}
+  (no detail), `origin_unknown` (no from and no fix), `bad_arguments`, `nearby_empty` {to_type, warnings} + from_matched, `same_place` + both places, the router's own
+  code as the type (no_route, too_far, out_of_coverage, route_too_long, upstream_timeout, internal) with its message + both places, and `not_set_up`.
+- **Tests.** `cache_navigate/tests/tool.rs` (a fake Valhalla); `cli/tests/navigate.rs` runs the Idaho routes through the CLI, serve and the C ABI and
+  requires byte-identical output, and compares four requests with AIDA's recorded results in `cli/tests/fixtures/aida_navigate` (skipped unless `OFFROAD_VALHALLA_TILES`, `OFFROAD_VALHALLA_LIB`, `OFFROAD_IDAHO_PACK`, `OFFROAD_IDAHO_ELEVATION` are set).
 
 ## Open (needs decisions)
 
