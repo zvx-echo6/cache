@@ -541,6 +541,38 @@ fn a_connection_that_fails_is_fetch_failed() {
     let out = c.search("x");
     assert_eq!(err_type(&out).0, "fetch_failed", "{out}");
     c.assert_no_key();
+
+    // the detail says which layer failed; the full chain is in the debug timing; neither has the query
+    let t = c.tool("web_search", json!({"query": "needle-query-words"}));
+    let (code, detail) = err_type(t["content"].as_str().unwrap());
+    assert_eq!(code, "fetch_failed");
+    assert!(detail.starts_with("could not reach the web search server (connect: "), "{detail}");
+    let chain = t["timing_ms"]["failure"].as_str().unwrap_or_else(|| panic!("no failure in the timing: {t}"));
+    assert!(!chain.is_empty());
+    assert!(!t.to_string().contains("needle-query-words"), "{t}");
+    c.assert_no_key();
+}
+
+#[test]
+fn a_tls_failure_is_fetch_failed_with_its_layer() {
+    // a server that answers a TLS hello with plain HTTP: the handshake fails in rustls, as a bad certificate would
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("https://{}/api/v1/search", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        if let Ok((mut s, _)) = l.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        }
+    });
+    let mut c = Core::with_web(&base);
+    let t = c.tool("web_search", json!({"query": "needle-query-words"}));
+    let (code, detail) = err_type(t["content"].as_str().unwrap());
+    assert_eq!(code, "fetch_failed");
+    assert!(detail.starts_with("could not reach the web search server (tls: "), "{detail}");
+    assert!(t["timing_ms"]["failure"].is_string(), "{t}");
+    assert!(!t.to_string().contains("needle-query-words"), "{t}");
+    c.assert_no_key();
 }
 
 #[test]

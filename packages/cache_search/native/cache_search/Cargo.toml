@@ -37,9 +37,10 @@ tantivy = "0.27"
 html-escape = "0.3"
 # Same xz2 the zim crate uses; enabling "static" (feature unification) builds liblzma into the library instead of linking liblzma.so.5.
 xz2 = { version = "0.1.7", features = ["static"] }
-# HTTP client for web_search and web reads: the reqwest 0.13.5 already in the lockfile (Qdrant's object store uses it with
-# rustls and HTTP/2). Only the blocking API is added; gzip is not enabled (async-compression is not in the lockfile).
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "http2"] }
+# HTTP client for web_search and web reads: blocking ureq with rustls and the compiled-in root certificates (webpki-roots),
+# the same client as cache_live, cache_layers and cache_video. NOT reqwest: its rustls feature verifies with the platform
+# verifier, which on Android needs the JVM handed to it and so fails in a Dart FFI library.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
 common = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1" }
 shard = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }

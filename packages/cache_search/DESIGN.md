@@ -515,15 +515,18 @@ Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provide
 error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/search`, overridable for tests) sends
 `POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
 from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
-matches the request AIDA uses in production (Open WebUI kagi.py); live-verified: pending. HTTP 401/403 or an error code
-401/403 is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
+matches the request AIDA uses in production (Open WebUI kagi.py); live-verified for the invalid-key answer only (below). HTTP 401/403, an error code
+401/403, or the code `general.invalid_token` (what Kagi answers to an invalid key, with HTTP 400) is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
 `quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
 used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
 top-level key names (and `data`'s) but never a value, and never the key or the query. A `data` object whose `search`
 is missing or null is zero results (`No results found.`). Kagi's `meta` object (request id, timing), when present,
-goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
-mapping of a balance, credit or quota message to `quota` are a judgement from the previous API's shape, not seen from
-v1; only the 200 response shape above is known from AIDA's use.
+goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Seen live, once (2026-10-26, one request with a made-up key):** HTTP **400**, `content-type: application/json`, body
+`{"meta":{"trace","ms","node"},"data":null,"errors":[{"code":"general.invalid_token","url":"https://kagi.com/api#todo","message":"Token signature failed to verify. Ensure your token has been correctly copied from your dashboard, containing no extra spaces or newlines."}]}`.
+So v1 puts failures in `errors` (plural; `error` is read too), the code is a string, and a bad key is a 400, not a 401/403. A
+valid-but-revoked key, 401/403 and the quota answers have **not** been seen: the 401/403 mapping and the mapping of a
+balance, credit or quota message to `quota` stay a judgement from the previous API's shape. Any other non-2xx answer is
+`fetch_failed` "web search failed (HTTP n, <code>)" with the service's code when it gave one.
 
 **Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
 now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
@@ -542,14 +545,22 @@ beside its number), and a last line `[full page did not load in time]` (timeout)
 offline, in which case nothing is fetched). That is a result, not an error. A page that loads but whose extracted text is
 under 500 characters (`LITTLE_TEXT_CHARS`; a script-rendered shell that gives only navigation or a footer) is not
 a full page: the output is the first line, the stored snippet, the extracted text (if not empty), and a last line
-`[page had little readable text]`. This is a length rule on machine output. Compression is not requested: the
-reqwest already in the lockfile has no gzip support and the decoder crate it would need is not in the lockfile.
+`[page had little readable text]`. This is a length rule on machine output. Compression is not requested (ureq is built
+without its gzip feature).
 
 **Budgets.** Search 6 s from the call to the result; read 8 s for connect, download and parse; a page download is
 capped at 2 MB (the rest is dropped). Each network call runs on its own thread and the caller waits only until the
 deadline, so a stalled name lookup or a slow body cannot hold the handle longer; the abandoned thread ends when its
-own request times out. The client is `reqwest` 0.13.5 (blocking API, rustls), already in the lockfile through
-Qdrant's object store; no crate was added.
+own request times out. The client is `ureq` 2.12 (blocking, rustls with the compiled-in webpki roots), the same as `cache_live`, `cache_layers`
+and `cache_video`; no crate was added. It was reqwest's `rustls` feature until v4, which verifies certificates with
+rustls-platform-verifier; on Android that needs the JVM handed to it from Kotlin, which a Dart FFI library never does, so
+every HTTPS request failed ("couldn't reach") while the app's own connection worked. `web::tls_roots()` names the choice
+(`Bundled`) and a test checks the manifest has no reqwest.
+
+**Failures.** A transport failure's detail carries the layer and a short cause, `could not reach the web search server
+(tls: invalid peer certificate: UnknownIssuer)`, `(dns: ...)`, `(connect: ...)`, or `the web search request failed (io: ...)`;
+a timeout stays `web search timed out`. The whole error chain goes into the debug timing as `"failure"`. Neither holds the key
+(a header) or a query string (the search query is in the POST body; a page URL's query is cut out).
 
 **Never stored.** Nothing from the web is written to disk or added to a library. Hits and their snippets live in the
 `Conversation` and die with it.
