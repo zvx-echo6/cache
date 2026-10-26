@@ -11,6 +11,7 @@ import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
 import 'history/conversation_store.dart';
+import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
@@ -62,6 +63,7 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final VideoState video = VideoState();
+  late final LayoutState layout = LayoutState();
   late final ChatController chat = ChatController(
     tools: [SearchTool(sources), ReadTool(sources)],
     newNumbering: () =>
@@ -104,6 +106,7 @@ class _CacheAppState extends State<CacheApp> {
       if (mounted) setState(() => _coreDone = true);
     });
     app.init();
+    layout.init();
     sources.init();
     browse.init();
     video.init();
@@ -151,6 +154,7 @@ class _CacheAppState extends State<CacheApp> {
     queryEmbedder.dispose();
     sources.dispose();
     video.dispose();
+    layout.dispose();
     location.dispose();
     maps.dispose();
     _store?.close();
@@ -189,6 +193,7 @@ class _CacheAppState extends State<CacheApp> {
           video: video,
           browse: browse,
           nav: nav,
+          layout: layout,
         ),
       ),
     );

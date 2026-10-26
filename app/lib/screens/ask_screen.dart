@@ -6,6 +6,7 @@ import '../chat/chat_controller.dart';
 import '../chat/tool_loop.dart';
 import '../browse/zim_urls.dart';
 import '../history/share.dart';
+import '../layout/layout_state.dart';
 import '../theme.dart';
 import 'history_drawer.dart';
 import 'models_screen.dart';
@@ -17,7 +18,11 @@ class AskScreen extends StatefulWidget {
     required this.chat,
     this.onOpenSource,
     this.share = shareMarkdown,
+    this.layout,
   });
+
+  /// Where a chat's "Add to Home" puts its shortcut.
+  final LayoutState? layout;
 
   final AppState app;
   final ChatController chat;
@@ -82,7 +87,7 @@ class _AskScreenState extends State<AskScreen> {
     final k = context.t;
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      drawer: HistoryDrawer(chat: widget.chat),
+      drawer: HistoryDrawer(chat: widget.chat, layout: widget.layout),
       appBar: AppBar(
         titleSpacing: 0,
         leading: Builder(

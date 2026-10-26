@@ -1,50 +1,28 @@
 import 'package:flutter/material.dart';
 
-import '../app_state.dart';
 import '../brand.dart';
-import '../chat/chat_controller.dart';
-import '../sources/sources_state.dart';
+import '../layout/edit_home_screen.dart';
+import '../layout/layout_state.dart';
 import '../theme.dart';
-import 'settings_screen.dart';
-import 'sources_screen.dart';
-import 'models_screen.dart';
 
+/// Home: the blocks the person chose, in the order they chose (Ask box, Weather, Alerts, Shortcuts by default), a gear
+/// for Settings at the top right, and "Edit Home" at the bottom.
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.app, required this.sources, required this.chat, required this.onOpenAsk});
+  const HomeScreen({
+    super.key,
+    required this.layout,
+    required this.onOpenAsk,
+    required this.onOpenSettings,
+    required this.onOpenShortcut,
+  });
 
-  final AppState app;
-  final SourcesState sources;
-  final ChatController chat;
+  final LayoutState layout;
   final VoidCallback onOpenAsk;
+  final VoidCallback onOpenSettings;
+  final void Function(Shortcut) onOpenShortcut;
 
-  void _comingSoon(BuildContext context) {
-    final m = ScaffoldMessenger.of(context);
-    m.hideCurrentSnackBar();
-    m.showSnackBar(const SnackBar(content: Text('Coming soon')));
-  }
-
-  Future<void> _pickTheme(BuildContext context) async {
-    final chosen = await showDialog<CacheThemeId>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Theme'),
-        children: [
-          for (final id in CacheThemeId.values)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, id),
-              padding: EdgeInsets.zero,
-              child: ListTile(
-                minTileHeight: 56,
-                leading: Icon(id == app.theme ? Icons.radio_button_checked : Icons.radio_button_off,
-                    color: ctx.t.accent),
-                title: Text(id.label, style: const TextStyle(fontSize: 18)),
-                subtitle: Text(id.hint),
-              ),
-            ),
-        ],
-      ),
-    );
-    if (chosen != null) app.setTheme(chosen);
+  void _editHome(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditHomeScreen(layout: layout)));
   }
 
   @override
@@ -55,187 +33,214 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const BrandWordmark(height: 30),
         actions: [
-          PopupMenuButton<String>(
-            tooltip: 'Menu',
-            icon: const Icon(Icons.more_vert),
-            onSelected: (v) {
-              if (v == 'theme') _pickTheme(context);
-              if (v == 'settings') {
-                Navigator.of(context).push(MaterialPageRoute(builder: (_) => SettingsScreen(chat: chat)));
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'theme', height: 52, child: Text('Theme')),
-              PopupMenuItem(value: 'settings', height: 52, child: Text('Settings')),
-            ],
+          IconButton(
+            key: const ValueKey('home-settings'),
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: onOpenSettings,
           ),
         ],
       ),
       body: ListenableBuilder(
-        listenable: Listenable.merge([app, sources]),
+        listenable: layout,
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
-            InkWell(
-              onTap: onOpenAsk,
-              borderRadius: BorderRadius.circular(28),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 56),
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(28)),
-                child: Row(
-                  children: [
-                    Icon(Icons.search, color: k.secondary),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text('Ask anything', style: TextStyle(fontSize: 18, color: k.secondary)),
-                    ),
-                  ],
-                ),
+            for (final b in layout.visibleBlocks) ...[
+              switch (b) {
+                HomeBlock.ask => _askBox(k),
+                HomeBlock.weather => _InfoCard(tile: BrandTile.weather, title: 'Weather', value: 'Not set up yet'),
+                HomeBlock.alerts => _InfoCard(tile: BrandTile.alerts, title: 'Alerts', value: 'Not set up yet'),
+                HomeBlock.shortcuts => _shortcuts(context, k),
+              },
+              const SizedBox(height: 16),
+            ],
+            Align(
+              alignment: Alignment.center,
+              child: TextButton(
+                key: const ValueKey('edit-home'),
+                onPressed: () => _editHome(context),
+                child: const Text('Edit Home', style: TextStyle(fontSize: 17)),
               ),
             ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                _QuickAction(icon: Icons.local_hospital_outlined, label: 'Hospital', color: k.emergency, onTap: () => _comingSoon(context)),
-                _QuickAction(icon: Icons.healing_outlined, label: 'First aid', color: k.emergency, onTap: () => _comingSoon(context)),
-                _QuickAction(icon: Icons.water_drop_outlined, label: 'Water', color: k.accent, onTap: () => _comingSoon(context)),
-                _QuickAction(tile: BrandTile.routes, icon: Icons.navigation_outlined, label: 'Navigate', color: k.accent, onTap: () => _comingSoon(context)),
-              ],
-            ),
-            const SizedBox(height: 28),
-            Text('On this phone', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            _cards(context),
           ],
         ),
       ),
     );
   }
 
-  Widget _cards(BuildContext context) {
-    final k = context.t;
-    final String modelValue;
-    final Color modelColor;
-    if (app.loading != null) {
-      modelValue = 'Loading…';
-      modelColor = k.secondary;
-    } else if (app.active != null) {
-      modelValue = 'Ready';
-      modelColor = k.ok;
-    } else {
-      modelValue = 'No model';
-      modelColor = k.warning;
-    }
-    final cards = [
-      _StatusCard(
-        icon: Icons.memory,
-        title: app.active == null ? 'Model' : app.displayName(app.active!),
-        value: modelValue,
-        valueColor: modelColor,
-        onTap: () => openModels(context, app),
-      ),
-      _StatusCard(
-        icon: Icons.menu_book_outlined,
-        tile: BrandTile.library,
-        title: 'Reading',
-        value: sources.summary,
-        onTap: () {
-          sources.refresh();
-          Navigator.of(context).push(MaterialPageRoute(builder: (_) => SourcesScreen(sources: sources)));
-        },
-      ),
-      const _StatusCard(icon: Icons.map_outlined, tile: BrandTile.maps, title: 'Maps', value: 'Not set up yet'),
-      const _StatusCard(icon: Icons.cloud_outlined, tile: BrandTile.weather, title: 'Weather', value: 'Not set up yet'),
-    ];
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.45,
-      children: cards,
+  Widget _askBox(CacheTokens k) => InkWell(
+        key: const ValueKey('home-ask'),
+        onTap: onOpenAsk,
+        borderRadius: BorderRadius.circular(28),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 56),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(28)),
+          child: Row(
+            children: [
+              Icon(Icons.search, color: k.secondary),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Ask anything', style: TextStyle(fontSize: 18, color: k.secondary))),
+            ],
+          ),
+        ),
+      );
+
+  Widget _shortcuts(BuildContext context, CacheTokens k) {
+    final items = layout.shortcuts;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Shortcuts', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 12),
+        if (items.isEmpty)
+          Text(
+            'Nothing here yet. Use "Add to Home" on a module, a place on the map, a Library page or a chat.',
+            style: TextStyle(fontSize: 16, color: k.secondary),
+          )
+        else
+          GridView(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              mainAxisExtent: 132,
+            ),
+            children: [
+              for (final s in items)
+                ShortcutCard(
+                  key: ValueKey('shortcut-${s.key}'),
+                  shortcut: s,
+                  onTap: () => onOpenShortcut(s),
+                  onLongPress: () => _manage(context, s),
+                ),
+            ],
+          ),
+      ],
     );
   }
-}
 
-class _QuickAction extends StatelessWidget {
-  const _QuickAction({this.tile, required this.icon, required this.label, required this.color, required this.onTap});
-
-  final BrandTile? tile;
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: Material(
-          color: k.surface,
-          borderRadius: BorderRadius.circular(16),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: onTap,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 84),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  tile != null ? BrandTileImage(tile!, size: 30) : Icon(icon, size: 28, color: color),
-                  const SizedBox(height: 6),
-                  Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text)),
-                ],
+  /// Long press on a card: remove it, or move it earlier or later.
+  Future<void> _manage(BuildContext context, Shortcut s) async {
+    final i = layout.shortcuts.indexWhere((x) => x.key == s.key);
+    final last = layout.shortcuts.length - 1;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: ctx.t.text)),
               ),
             ),
-          ),
+            if (i > 0)
+              ListTile(minTileHeight: 56, leading: Icon(Icons.arrow_back, color: ctx.t.text), title: const Text('Move earlier', style: TextStyle(fontSize: 18)), onTap: () => Navigator.pop(ctx, 'earlier')),
+            if (i >= 0 && i < last)
+              ListTile(minTileHeight: 56, leading: Icon(Icons.arrow_forward, color: ctx.t.text), title: const Text('Move later', style: TextStyle(fontSize: 18)), onTap: () => Navigator.pop(ctx, 'later')),
+            ListTile(
+              minTileHeight: 56,
+              leading: Icon(Icons.delete_outline, color: ctx.t.emergency),
+              title: Text('Remove from Home', style: TextStyle(fontSize: 18, color: ctx.t.emergency)),
+              onTap: () => Navigator.pop(ctx, 'remove'),
+            ),
+          ],
         ),
       ),
     );
+    switch (choice) {
+      case 'earlier':
+        layout.nudgeShortcut(s, -1);
+      case 'later':
+        layout.nudgeShortcut(s, 1);
+      case 'remove':
+        layout.removeShortcut(s);
+    }
   }
 }
 
-class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.icon, this.tile, required this.title, required this.value, this.valueColor, this.onTap});
+/// A shortcut card: the module's painted tile (or an icon for the rest), the name and what it is.
+class ShortcutCard extends StatelessWidget {
+  const ShortcutCard({super.key, required this.shortcut, required this.onTap, required this.onLongPress});
 
-  final IconData icon;
-  final BrandTile? tile;
-  final String title;
-  final String value;
-  final Color? valueColor;
-  final VoidCallback? onTap;
+  final Shortcut shortcut;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
+    final s = shortcut;
+    final Widget art = switch (s.kind) {
+      ShortcutKind.module => BrandTileImage(s.module!.tile, size: 48),
+      ShortcutKind.chat => const BrandTileImage(BrandTile.chat, size: 48),
+      ShortcutKind.page => const BrandTileImage(BrandTile.library, size: 48),
+      ShortcutKind.place => SizedBox(height: 48, width: 48, child: Icon(Icons.place_outlined, size: 34, color: k.accent)),
+    };
     return Material(
       color: k.surface,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              tile != null ? Align(alignment: Alignment.centerLeft, child: BrandTileImage(tile!, size: 48)) : Icon(icon, color: k.secondary),
+              art,
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
-                  const SizedBox(height: 2),
-                  Text(value, style: TextStyle(fontSize: 15, color: valueColor ?? k.secondary)),
+                  Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                  if (s.subtitle.isNotEmpty)
+                    Text(s.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
                 ],
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _InfoCard extends StatelessWidget {
+  const _InfoCard({required this.tile, required this.title, required this.value});
+
+  final BrandTile tile;
+  final String title;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+      child: Row(
+        children: [
+          BrandTileImage(tile, size: 48),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                const SizedBox(height: 2),
+                Text(value, style: TextStyle(fontSize: 15, color: k.secondary)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

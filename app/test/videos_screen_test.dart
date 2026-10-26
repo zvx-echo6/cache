@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:cache/screens/browse_screen.dart';
 import 'package:cache/screens/videos/video_screen.dart';
+import 'package:cache/screens/videos/videos_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/video/token_store.dart';
 import 'package:cache/video/video_state.dart';
@@ -19,18 +19,15 @@ Future<void> settle(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('Browse > Videos: add an instance, open a video, pick a download size', timeout: const Timeout(Duration(seconds: 60)), (tester) async {
+  testWidgets('Videos: add an instance, open a video, pick a download size', timeout: const Timeout(Duration(seconds: 60)), (tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
     final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('video-ui')))!;
     final v = VideoState(dirOverride: dir, nativeFactory: fakeVideoNative, tokens: MemoryTokenStore());
     await tester.runAsync(v.init);
-    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: BrowseScreen(video: v)));
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: VideosScreen(video: v)));
     expect(find.text('Videos'), findsOneWidget);
-    expect(find.text('Connect a PeerTube site'), findsOneWidget);
-
-    await tester.tap(find.text('Videos'));
     await tester.pumpAndSettle();
     expect(find.text('Saved on this phone'), findsOneWidget);
     expect(find.textContaining('No instances yet'), findsOneWidget);

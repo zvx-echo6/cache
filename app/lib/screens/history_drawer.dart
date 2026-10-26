@@ -4,14 +4,19 @@ import '../chat/chat_controller.dart';
 import '../history/conversation_store.dart';
 import '../history/date_groups.dart';
 import '../history/share.dart';
+import '../layout/layout_state.dart';
+import '../layout/modules_screen.dart' show addToHome;
 import '../theme.dart';
 
 /// The list of past conversations, opened from the Ask top bar: New chat, a search box, then Pinned and
 /// the conversations grouped by date.
 class HistoryDrawer extends StatefulWidget {
-  const HistoryDrawer({super.key, required this.chat, this.now, this.share = shareMarkdown});
+  const HistoryDrawer({super.key, required this.chat, this.now, this.share = shareMarkdown, this.layout});
 
   final ChatController chat;
+
+  /// Where "Add to Home" puts a chat shortcut; the item is hidden when null.
+  final LayoutState? layout;
 
   /// The clock for the date groups (a test hook).
   final DateTime Function()? now;
@@ -75,6 +80,7 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
             _sheetTile(ctx, Icons.edit_outlined, 'Rename', 'rename'),
             _sheetTile(ctx, c.pinned ? Icons.push_pin : Icons.push_pin_outlined, c.pinned ? 'Unpin' : 'Pin', 'pin'),
             _sheetTile(ctx, Icons.ios_share, 'Share as Markdown', 'share'),
+            if (widget.layout != null) _sheetTile(ctx, Icons.add_home_outlined, 'Add to Home', 'home'),
             _sheetTile(ctx, Icons.delete_outline, 'Delete', 'delete', color: ctx.t.emergency),
           ],
         ),
@@ -87,6 +93,8 @@ class _HistoryDrawerState extends State<HistoryDrawer> {
         if (title != null) await widget.chat.renameConversation(c.id, title);
       case 'pin':
         widget.chat.setPinned(c.id, !c.pinned);
+      case 'home':
+        addToHome(context, widget.layout!, Shortcut.chat(id: c.id, title: c.title));
       case 'share':
         final md = widget.chat.exportMarkdown(c.id);
         if (md != null) await widget.share(c.title, md);
