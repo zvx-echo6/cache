@@ -41,8 +41,40 @@ struct Out {
     stderr: String,
 }
 
+/// Run a command to the end like `Command::output`, but never wait more than `secs`: the child is killed and the
+/// test fails with what it had printed so far, so no test can wait forever.
+fn output_bounded(cmd: &mut Command, secs: u64) -> std::process::Output {
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("run cs");
+    let mut so = child.stdout.take().unwrap();
+    let mut se = child.stderr.take().unwrap();
+    let t_out = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = so.read_to_end(&mut v);
+        v
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = se.read_to_end(&mut v);
+        v
+    });
+    let t0 = std::time::Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait().expect("wait for cs") {
+            break st;
+        }
+        if t0.elapsed().as_secs() >= secs {
+            let _ = child.kill();
+            let _ = child.wait();
+            let err = String::from_utf8_lossy(&t_err.join().unwrap_or_default()).into_owned();
+            panic!("cs did not finish within {secs} s and was killed; stderr so far: {err}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    std::process::Output { status, stdout: t_out.join().unwrap_or_default(), stderr: t_err.join().unwrap_or_default() }
+}
+
 fn cs(args: &[&str]) -> Out {
-    let o = Command::new(env!("CARGO_BIN_EXE_cs")).args(args).output().expect("run cs");
+    let o = output_bounded(Command::new(env!("CARGO_BIN_EXE_cs")).args(args), 180);
     Out { ok: o.status.success(), stdout: String::from_utf8(o.stdout).unwrap(), stderr: String::from_utf8(o.stderr).unwrap() }
 }
 

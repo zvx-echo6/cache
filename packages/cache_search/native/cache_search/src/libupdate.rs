@@ -205,6 +205,32 @@ fn hand_back_open(library: &Path, entry: &LibEntry) -> Result<()> {
 }
 
 /// Test hook: wait `ms`, cancellably. `false` when cancelled (also checked once after the wait).
+/// A snapshot must start with a valid tar header (512 bytes whose checksum field matches). Anything else is
+/// refused at once with a clear message, before a single file is created.
+fn check_tar_header(path: &Path) -> Result<()> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| op(&format!("opening the snapshot {}", path.display()), e))?;
+    let mut h = [0u8; 512];
+    let mut n = 0;
+    while n < h.len() {
+        match f.read(&mut h[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) => return Err(op("reading the snapshot", e)),
+        }
+    }
+    if n < h.len() {
+        return Err(Error::io(format!("the snapshot is not a tar archive: only {n} bytes")));
+    }
+    let field = std::str::from_utf8(&h[148..156]).unwrap_or("").trim_matches(|c: char| c == '\0' || c == ' ');
+    let stored = u64::from_str_radix(field, 8).ok();
+    let sum: u64 = h.iter().enumerate().map(|(i, b)| if (148..156).contains(&i) { 32 } else { *b as u64 }).sum();
+    if stored != Some(sum) {
+        return Err(Error::io("the snapshot is not a tar archive: its first header has a bad checksum"));
+    }
+    Ok(())
+}
+
 fn hold(ms: u64, cancelled: &dyn Fn() -> bool) -> bool {
     let mut waited = 0;
     while waited < ms {
@@ -610,6 +636,7 @@ pub fn apply_update(
     }
     progress(1, STEPS);
     // 2
+    check_tar_header(&req.snapshot)?;
     let tmp = unpack_dir(&req.library)?;
     let _ = std::fs::remove_dir_all(&tmp);
     let _cleanup = RemoveDir(tmp.clone());

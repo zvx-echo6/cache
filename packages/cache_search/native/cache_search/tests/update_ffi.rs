@@ -251,7 +251,7 @@ fn wait_job(j: *mut Job) -> Value {
         if p["state"] != "running" {
             return p;
         }
-        assert!(t0.elapsed().as_secs() < 300, "job did not finish: {p}");
+        assert!(t0.elapsed().as_secs() < 300, "job still {} after {} s (bounded wait): {p}", p["state"], t0.elapsed().as_secs());
         std::thread::sleep(Duration::from_millis(5));
     }
 }
