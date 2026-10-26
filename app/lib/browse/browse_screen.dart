@@ -2,27 +2,28 @@ import 'package:flutter/material.dart';
 
 import '../sources/sources_state.dart';
 import '../theme.dart';
-import '../video/video_state.dart';
-import '../screens/videos/videos_screen.dart';
+import '../layout/layout_state.dart';
 import 'browse_state.dart';
 import 'catalogue_screen.dart';
 import 'reader_screen.dart';
 import 'zim_urls.dart';
 
-/// The Browse tab: the ZIMs on this phone (open one like a web site), the downloads running, the updates
+/// The Library module: the ZIMs on this phone (open one like a web site), the downloads running, the updates
 /// found, and the way to the Kiwix library.
 class BrowseScreen extends StatefulWidget {
   const BrowseScreen({
     super.key,
     required this.browse,
     required this.active,
-    this.video,
+    this.layout,
   });
 
   final BrowseState browse;
-  final VideoState? video;
 
-  /// True while the Browse tab is the one showing.
+  /// Where "Add to Home" on a page puts its shortcut (the reader offers it only when this is given).
+  final LayoutState? layout;
+
+  /// True while the Library is the screen showing.
   final bool active;
 
   @override
@@ -86,7 +87,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) =>
-            ZimReaderScreen(sources: sources, zim: z, address: address),
+            ZimReaderScreen(sources: sources, zim: z, address: address, layout: widget.layout),
       ),
     );
   }
@@ -94,7 +95,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   void _openZim(ZimFile z) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ZimReaderScreen(sources: sources, zim: z),
+        builder: (_) => ZimReaderScreen(sources: sources, zim: z, layout: widget.layout),
       ),
     );
   }
@@ -111,7 +112,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
-        title: const Text('Browse'),
+        title: const Text('Library'),
         actions: [
           IconButton(
             tooltip: 'Check for updates',
@@ -144,20 +145,6 @@ class _BrowseScreenState extends State<BrowseScreen> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
-              if (widget.video != null)
-                Card(
-                  child: ListTile(
-                    leading: Icon(Icons.play_circle_outline, color: k.accent),
-                    title: const Text('Videos'),
-                    subtitle: const Text('Browse PeerTube and saved videos'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => VideosScreen(video: widget.video!),
-                      ),
-                    ),
-                  ),
-                ),
               if (b.checkingUpdates)
                 const Padding(
                   padding: EdgeInsets.only(bottom: 8),

@@ -5,6 +5,8 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../layout/layout_state.dart';
+import '../layout/modules_screen.dart' show addToHome;
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import 'zim_urls.dart';
@@ -18,7 +20,11 @@ class ZimReaderScreen extends StatefulWidget {
     required this.sources,
     required this.zim,
     this.address,
+    this.layout,
   });
+
+  /// Where "Add to Home" puts a shortcut to the page being read; the menu item is hidden when null.
+  final LayoutState? layout;
 
   final SourcesState sources;
   final ZimFile zim;
@@ -52,6 +58,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   Uri? _start;
   String? _startError;
   String _pageTitle = '';
+  String? _currentAddress;
   bool _canBack = false;
   bool _canForward = false;
   double _progress = 0;
@@ -184,6 +191,19 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     }
   }
 
+  /// A Home shortcut to the page on screen.
+  void _addToHome() {
+    final address = _currentAddress ?? widget.address;
+    final layout = widget.layout;
+    if (address == null || layout == null) return;
+    final lib = widget.sources.titleOf(widget.zim);
+    addToHome(
+      context,
+      layout,
+      Shortcut.page(address: address, title: _pageTitle.isEmpty ? lib : _pageTitle, library: lib),
+    );
+  }
+
   Future<void> _goHome() async {
     final id = _zimId;
     if (id == null) return;
@@ -253,6 +273,14 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                 ),
                 onPressed: _toggleFind,
               ),
+              if (widget.layout != null)
+                PopupMenuButton<String>(
+                  tooltip: 'More',
+                  onSelected: (v) {
+                    if (v == 'home') _addToHome();
+                  },
+                  itemBuilder: (_) => const [PopupMenuItem(value: 'home', height: 52, child: Text('Add to Home'))],
+                ),
             ],
           ],
           bottom: _progress > 0 && _progress < 1
@@ -390,7 +418,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         }
       },
       onLoadStop: (c, u) => _syncNav(),
-      onUpdateVisitedHistory: (c, u, r) => _syncNav(),
+      onUpdateVisitedHistory: (c, u, r) {
+        final uri = u?.uriValue;
+        if (uri != null) _currentAddress = addressOfUrl(uri) ?? _currentAddress;
+        _syncNav();
+      },
     );
   }
 

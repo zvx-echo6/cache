@@ -1,18 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
+import '../browse/reader_screen.dart';
+import '../browse/zim_urls.dart';
 import '../chat/chat_controller.dart';
+import '../layout/layout_state.dart';
+import '../layout/modules.dart';
+import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../nav/nav_state.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
-import 'browse_screen.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
+import 'settings_screen.dart';
+import 'videos/videos_screen.dart';
 
+/// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
+/// shown and then kept alive.
 class Shell extends StatefulWidget {
   const Shell({
     super.key,
@@ -24,6 +35,7 @@ class Shell extends StatefulWidget {
     required this.video,
     required this.browse,
     required this.nav,
+    required this.layout,
   });
 
   final AppState app;
@@ -34,78 +46,167 @@ class Shell extends StatefulWidget {
   final VideoState video;
   final BrowseState browse;
   final NavState nav;
+  final LayoutState layout;
 
   @override
   State<Shell> createState() => _ShellState();
 }
 
 class _ShellState extends State<Shell> {
-  int _index = 0;
+  /// The module on screen; null with [_onModules] false is Home.
+  ModuleId? _module;
+  bool _onModules = false;
+  final Set<ModuleId> _built = {};
+  StreamSubscription<NavEvent>? _navEvents;
+
+  @override
+  void initState() {
+    super.initState();
+    _navEvents = widget.nav.events.listen((e) {
+      if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
+    });
+  }
+
+  @override
+  void dispose() {
+    _navEvents?.cancel();
+    super.dispose();
+  }
+
+  void _goHome() => setState(() {
+        _module = null;
+        _onModules = false;
+      });
+
+  void _goModules() => setState(() {
+        _module = null;
+        _onModules = true;
+      });
+
+  void _goModule(ModuleId m) => setState(() {
+        _module = m;
+        _onModules = false;
+        _built.add(m);
+      });
 
   void _openSource(String address) {
-    setState(() => _index = 2);
+    _goModule(ModuleId.library);
     widget.browse.openAddress(address);
   }
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => SettingsScreen(app: widget.app, chat: widget.chat, sources: widget.sources)),
+    );
+  }
+
+  void _say(String text) {
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// A Home shortcut was tapped: open what it points at.
+  void _openShortcut(Shortcut s) {
+    switch (s.kind) {
+      case ShortcutKind.module:
+        final m = s.module;
+        if (m != null) _goModule(m);
+      case ShortcutKind.place:
+        final p = s.place;
+        if (p == null) return;
+        if (widget.nav.phase != NavPhase.browsing) {
+          _say('Finish or end the route first');
+          return;
+        }
+        widget.nav.select(p);
+        _goModule(ModuleId.maps);
+      case ShortcutKind.page:
+        final address = s.address;
+        final id = address == null ? null : zimIdOfAddress(address);
+        final z = id == null ? null : widget.sources.zimById(id);
+        if (address == null || z == null) {
+          _say('That page is not on this phone any more');
+          return;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ZimReaderScreen(sources: widget.sources, zim: z, address: address, layout: widget.layout),
+          ),
+        );
+      case ShortcutKind.chat:
+        final id = s.chatId;
+        if (id == null || widget.chat.store?.get(id) == null) {
+          _say('That chat is gone');
+          return;
+        }
+        widget.chat.openConversation(id);
+        _goModule(ModuleId.ask);
+    }
+  }
+
+  Widget _moduleScreen(ModuleId m) => switch (m) {
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, onOpenSource: _openSource, layout: widget.layout),
+        ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme),
+        ModuleId.videos => VideosScreen(video: widget.video),
+        ModuleId.settings => SettingsScreen(app: widget.app, chat: widget.chat, sources: widget.sources),
+      };
 
   @override
   Widget build(BuildContext context) {
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-    return Scaffold(
-      body: IndexedStack(
-        index: _index,
-        children: [
-          HomeScreen(
-            app: widget.app,
-            sources: widget.sources,
-            chat: widget.chat,
-            onOpenAsk: () => setState(() => _index = 1),
+    final layout = widget.layout;
+    return ListenableBuilder(
+      listenable: layout,
+      builder: (context, _) {
+        final pinned = layout.pinned;
+        // The bar: Home, the pinned modules, Modules. A module that is open but not pinned shows under Modules.
+        final int selected;
+        if (_onModules) {
+          selected = pinned.length + 1;
+        } else if (_module == null) {
+          selected = 0;
+        } else {
+          final i = pinned.indexOf(_module!);
+          selected = i < 0 ? pinned.length + 1 : i + 1;
+        }
+        final show = _onModules ? 1 : (_module == null ? 0 : 2 + ModuleId.values.indexOf(_module!));
+        return Scaffold(
+          body: IndexedStack(
+            index: show,
+            children: [
+              HomeScreen(
+                layout: layout,
+                onOpenAsk: () => _goModule(ModuleId.ask),
+                onOpenSettings: _openSettings,
+                onOpenShortcut: _openShortcut,
+              ),
+              ModulesScreen(layout: layout, onOpen: _goModule),
+              for (final m in ModuleId.values) _built.contains(m) ? _moduleScreen(m) : const SizedBox.shrink(),
+            ],
           ),
-          AskScreen(
-            app: widget.app,
-            chat: widget.chat,
-            onOpenSource: _openSource,
-          ),
-          BrowseScreen(
-            video: widget.video,
-            browse: widget.browse,
-            active: _index == 2,
-          ),
-          MapsScreen(
-            location: widget.location,
-            maps: widget.maps,
-            nav: widget.nav,
-            themeId: widget.app.theme,
-          ),
-        ],
-      ),
-      bottomNavigationBar: keyboardOpen
-          ? null
-          : NavigationBar(
-              selectedIndex: _index,
-              onDestinationSelected: (i) => setState(() => _index = i),
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home),
-                  label: 'Home',
+          bottomNavigationBar: keyboardOpen
+              ? null
+              : NavigationBar(
+                  selectedIndex: selected,
+                  onDestinationSelected: (i) {
+                    if (i == 0) {
+                      _goHome();
+                    } else if (i == pinned.length + 1) {
+                      _goModules();
+                    } else {
+                      _goModule(pinned[i - 1]);
+                    }
+                  },
+                  destinations: [
+                    const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
+                    for (final m in pinned) NavigationDestination(icon: Icon(m.icon), selectedIcon: Icon(m.selectedIcon), label: m.label),
+                    const NavigationDestination(icon: Icon(Icons.apps_outlined), selectedIcon: Icon(Icons.apps), label: 'Modules'),
+                  ],
                 ),
-                NavigationDestination(
-                  icon: Icon(Icons.chat_bubble_outline),
-                  selectedIcon: Icon(Icons.chat_bubble),
-                  label: 'Ask',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.menu_book_outlined),
-                  selectedIcon: Icon(Icons.menu_book),
-                  label: 'Browse',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.map_outlined),
-                  selectedIcon: Icon(Icons.map),
-                  label: 'Maps',
-                ),
-              ],
-            ),
+        );
+      },
     );
   }
 }

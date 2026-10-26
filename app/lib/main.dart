@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'app_state.dart';
+import 'brand.dart';
 import 'browse/browse_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
 import 'history/conversation_store.dart';
+import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
@@ -61,6 +63,7 @@ class _CacheAppState extends State<CacheApp> {
     ),
   );
   late final VideoState video = VideoState();
+  late final LayoutState layout = LayoutState();
   late final ChatController chat = ChatController(
     tools: [SearchTool(sources), ReadTool(sources)],
     newNumbering: () =>
@@ -91,12 +94,19 @@ class _CacheAppState extends State<CacheApp> {
   );
   CacheThemeId _applied = CacheThemeId.dark;
 
+  /// The search core has finished starting (opened or failed); with [AppState.started] it ends the launch screen.
+  bool _coreDone = false;
+
   @override
   void initState() {
     super.initState();
     app.addListener(_onApp);
     applySystemUi(_applied);
+    sources.whenCoreReady().then((_) {
+      if (mounted) setState(() => _coreDone = true);
+    });
     app.init();
+    layout.init();
     sources.init();
     browse.init();
     video.init();
@@ -144,6 +154,7 @@ class _CacheAppState extends State<CacheApp> {
     queryEmbedder.dispose();
     sources.dispose();
     video.dispose();
+    layout.dispose();
     location.dispose();
     maps.dispose();
     _store?.close();
@@ -158,6 +169,21 @@ class _CacheAppState extends State<CacheApp> {
         title: 'CACHE',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
+        builder: (context, child) => Stack(
+          fit: StackFit.expand,
+          children: [
+            child!,
+            IgnorePointer(
+              ignoring: app.started && _coreDone,
+              child: AnimatedOpacity(
+                opacity: app.started && _coreDone ? 0 : 1,
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeOut,
+                child: const LaunchScreen(),
+              ),
+            ),
+          ],
+        ),
         home: Shell(
           app: app,
           chat: chat,
@@ -167,6 +193,7 @@ class _CacheAppState extends State<CacheApp> {
           video: video,
           browse: browse,
           nav: nav,
+          layout: layout,
         ),
       ),
     );

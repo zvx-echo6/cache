@@ -50,6 +50,7 @@ class GeolocatorNavSource implements NavPositionSource {
               notificationTitle: title,
               notificationText: text,
               notificationChannelName: 'Navigation',
+              notificationIcon: AndroidResource(name: 'ic_stat_cache', defType: 'drawable'),
               enableWakeLock: true,
               setOngoing: true,
             ),
