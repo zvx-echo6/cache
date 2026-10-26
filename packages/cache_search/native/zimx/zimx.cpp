@@ -4,6 +4,9 @@
 #include <iostream>  // zim/version.h uses std::cout without including it
 
 #include <zim/archive.h>
+#include <zim/entry.h>
+#include <zim/error.h>
+#include <zim/item.h>
 #include <zim/tools.h>
 #include <zim/search.h>
 #include <zim/search_iterator.h>
@@ -21,6 +24,10 @@
 #include <stdexcept>
 #include <string>
 
+// One zim::Archive per ZIM serves everything: full-text search, title suggestions and the entry reads of cs_read, cs_zim_get and
+// cs_zim_main_page (zimx_get, zimx_main_page). The caller (zimsrc.rs) opens it once under the memory budget and closes it
+// through zimx_close; there is no second reader of the file.
+//
 // The searchers are built once (on the first search or suggestion, or by zimx_prewarm) and kept: building one opens the
 // Xapian database, which is most of the cost of the first query. libzim's Searcher is thread safe but its
 // SuggestionSearcher is not, so one mutex serialises the searches on a handle.
@@ -33,7 +40,17 @@ struct zimx {
   std::mutex mu;
   std::unique_ptr<zim::Searcher> searcher;
   std::unique_ptr<zim::SuggestionSearcher> suggester;
-  explicit zimx(const char *path) : archive(std::string(path)) {}
+  zimx(const char *path, int preload_xapian, int dirent_ranges, long long dirent_cache)
+      : archive(std::string(path), make_config(preload_xapian, dirent_ranges)) {
+    if (dirent_cache >= 0) archive.setDirentCacheMaxSize(static_cast<size_t>(dirent_cache));
+  }
+  // -1 keeps libzim's default for that option (the default OpenConfig preloads the Xapian database and some dirent ranges).
+  static zim::OpenConfig make_config(int preload_xapian, int dirent_ranges) {
+    zim::OpenConfig oc;
+    if (preload_xapian >= 0) oc.preloadXapianDb(preload_xapian != 0);
+    if (dirent_ranges >= 0) oc.preloadDirentRanges(dirent_ranges);
+    return oc;
+  }
   zim::Searcher &fulltext() {  // call with mu held
     if (!searcher) searcher.reset(new zim::Searcher(archive));
     return *searcher;
@@ -133,16 +150,34 @@ char *guarded(F f) {
   return p;
 }
 
+// The path of an entry as the callers see it: without the namespace ("A/foo" -> "foo") on an old-scheme archive.
+std::string plain_path(const zim::Archive &a, const zim::Entry &e) {
+  std::string p = e.getPath();
+  if (!a.hasNewNamespaceScheme() && p.size() >= 2 && p[1] == '/') p.erase(0, 2);
+  return p;
+}
+
+// Follow redirects: at most `iterations` entries are examined; true when one that is not a redirect was reached.
+bool follow_redirects(zim::Entry &e, int iterations) {
+  for (int i = 0; i < iterations; i++) {
+    if (!e.isRedirect()) return true;
+    e = e.getRedirectEntry();
+  }
+  return false;
+}
+
 }  // namespace
 
 extern "C" {
 
-zimx *zimx_open(const char *path, char **err) {
+zimx *zimx_open(const char *path, char **err) { return zimx_open_with(path, -1, -1, -1, err); }
+
+zimx *zimx_open_with(const char *path, int preload_xapian, int dirent_ranges, long long dirent_cache, char **err) {
   if (err) *err = nullptr;
   std::string msg;
   try {
     if (!path) throw std::invalid_argument("null path");
-    return new zimx(path);
+    return new zimx(path, preload_xapian, dirent_ranges, dirent_cache);
   } catch (const std::exception &e) {
     msg = std::string("libzim: ") + e.what();
   } catch (...) {
@@ -265,6 +300,74 @@ char *zimx_suggest(zimx *z, const char *prefix, int k, int keep) {
       }
     }
     o += "]}";
+    return o;
+  });
+}
+
+char *zimx_archive_info(zimx *z) {
+  return guarded([&]() -> std::string {
+    if (!z) throw std::invalid_argument("null argument");
+    return "{\"dirent_cache_max\":" + std::to_string(z->archive.getDirentCacheMaxSize()) + ",\"dirent_cache_current\":" +
+           std::to_string(z->archive.getDirentCacheCurrentSize()) + ",\"all_entries\":" + std::to_string(z->archive.getAllEntryCount()) + "}";
+  });
+}
+
+char *zimx_get(zimx *z, const char *path, int iterations, unsigned char **data, long long *len) {
+  if (data) *data = nullptr;
+  if (len) *len = -1;
+  return guarded([&]() -> std::string {
+    if (!z || !path || !data || !len) throw std::invalid_argument("null argument");
+    const std::string want(path);
+    std::unique_ptr<zim::Entry> found;
+    auto probe = [&](const std::string &full) {
+      try {
+        zim::Entry e = z->archive.getEntryByPath(full);
+        if (e.getPath() == full) found.reset(new zim::Entry(e));  // exact only: no namespace-stripping fallback
+      } catch (const zim::EntryNotFound &) {
+      }
+    };
+    if (z->archive.hasNewNamespaceScheme()) {
+      probe(want);
+    } else {
+      for (const char *ns : {"C/", "A/", "I/", "-/"}) {
+        probe(std::string(ns) + want);
+        if (found) break;
+      }
+    }
+    if (!found) return "{\"found\":false}";
+    zim::Entry e = *found;
+    if (!follow_redirects(e, iterations)) return "{\"found\":false,\"loop\":true}";
+    zim::Item item = e.getItem(false);
+    zim::Blob blob = item.getData();
+    size_t n = static_cast<size_t>(blob.size());
+    std::unique_ptr<unsigned char, void (*)(void *)> buf(static_cast<unsigned char *>(std::malloc(n ? n : 1)), std::free);
+    if (!buf) throw std::bad_alloc();
+    if (n) std::memcpy(buf.get(), blob.data(), n);
+    std::string p = plain_path(z->archive, e);
+    std::string title = e.getTitle();
+    if (title.empty()) title = p;
+    std::string o = "{\"found\":true,\"path\":";
+    json_str(o, p);
+    o += ",\"title\":";
+    json_str(o, title);
+    o += ",\"mime\":";
+    json_str(o, item.getMimetype());
+    o += '}';
+    *data = buf.release();
+    *len = static_cast<long long>(n);
+    return o;
+  });
+}
+
+char *zimx_main_page(zimx *z, int iterations) {
+  return guarded([&]() -> std::string {
+    if (!z) throw std::invalid_argument("null argument");
+    if (!z->archive.hasMainEntry()) return "{\"found\":false}";
+    zim::Entry e = z->archive.getMainEntry();
+    if (!follow_redirects(e, iterations)) return "{\"found\":false,\"loop\":true}";
+    std::string o = "{\"found\":true,\"path\":";
+    json_str(o, plain_path(z->archive, e));
+    o += '}';
     return o;
   });
 }

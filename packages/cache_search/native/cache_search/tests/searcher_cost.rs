@@ -3,18 +3,15 @@
 //! - `searcher_cost_one_zim`: the private bytes a kept libzim searcher costs on one ZIM (`CS_COST_ZIM` = the .zim path).
 //!   Run it once per ZIM, in a fresh process each time, so allocator state does not carry over. Prints one line.
 //! - `cluster_cache_effect`: the same kind of reading with libzim's cluster cache emptied.
-//! - `latency_for_budget`: the mean warm query time over the sources in `CS_COST_CONFIG` (a cs config file such as
-//!   sources-full.json) for one `searcher_budget_mb` (`CS_COST_BUDGET_MB`).
+//! (The process-wide numbers for a whole config and the Wikipedia reopen cost are in `budget_measure.rs`.)
 //!
 //! Private bytes are the process's PrivateUsage (the same number as .NET's PrivateMemorySize64) on Windows; elsewhere
 //! the measurement prints 0 and says so.
 
 #![cfg(zimx)]
 
-use cache_search::ffi::*;
 use cache_search::zimsrc::ZimSource;
 use cache_search::zimx::Zimx;
-use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -58,8 +55,8 @@ fn searcher_cost_one_zim() {
     let query = std::env::var("CS_COST_QUERY").unwrap_or_else(|_| "water".to_string());
     let base = settled();
     let src = ZimSource::open(Path::new(&path)).unwrap();
-    let ft_bytes = src.zim.fulltext_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
-    let ti_bytes = src.zim.title_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
+    let ft_bytes = src.zim().unwrap().fulltext_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
+    let ti_bytes = src.zim().unwrap().title_index().ok().flatten().and_then(|c| c.len().ok()).unwrap_or(0);
     let after_src = settled();
     let z = Zimx::open(Path::new(&path)).unwrap();
     let a_open = settled();
@@ -129,61 +126,6 @@ fn searcher_cost_one_zim() {
     m.insert("warm_search_ms".into(), serde_json::json!(warm_ms));
     m.insert("k0_search_ms".into(), serde_json::json!(k0_ms));
     println!("COST {}", serde_json::Value::Object(m));
-}
-
-fn take(p: *mut c_char) -> Option<String> {
-    if p.is_null() {
-        return None;
-    }
-    let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_string();
-    unsafe { cs_free_string(p) };
-    Some(s)
-}
-
-/// Mean warm query time over `CS_COST_CONFIG` for one searcher budget (`CS_COST_BUDGET_MB`): what a small budget costs in
-/// latency when every query touches every source (so the least recently used searcher is always the next one needed).
-#[test]
-#[ignore]
-fn latency_for_budget() {
-    let (Ok(cfg_path), Ok(mb)) = (std::env::var("CS_COST_CONFIG"), std::env::var("CS_COST_BUDGET_MB")) else {
-        eprintln!("CS_COST_CONFIG and CS_COST_BUDGET_MB not set");
-        return;
-    };
-    let mut cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
-    cfg["searcher_budget_mb"] = serde_json::json!(mb.parse::<u64>().unwrap());
-    let c = CString::new(cfg.to_string()).unwrap();
-    let h = unsafe { cs_open(c.as_ptr()) };
-    assert!(!h.is_null());
-    let queries = [
-        "flood insurance", "water purification", "meshtastic firmware", "radio antenna", "first aid burns",
-        "solar panel wiring", "reticulum transport", "hypothermia treatment", "battery storage", "emergency shelter",
-    ];
-    let opts = CString::new("{\"k\":10}").unwrap();
-    std::thread::sleep(Duration::from_secs(20));
-    let mut results = Vec::new();
-    for pass in 0..2 {
-        let mut per = Vec::new();
-        for q in queries {
-            let c = CString::new(q).unwrap();
-            let t = Instant::now();
-            let r = take(unsafe { cs_search(h, c.as_ptr(), opts.as_ptr()) });
-            assert!(r.is_some(), "{q}");
-            per.push(t.elapsed().as_secs_f64() * 1000.0);
-        }
-        let mean = per.iter().sum::<f64>() / per.len() as f64;
-        results.push(mean);
-        let s = unsafe { &*h }.searcher_budget.snapshot();
-        println!(
-            "LATENCY budget {mb} MiB pass {pass}: mean {mean:.0} ms; per query {:?}; kept {} ({:.0} MiB est.), evictions {}, per-query builds {}, private {:.0} MiB",
-            per.iter().map(|x| x.round() as i64).collect::<Vec<_>>(),
-            s.kept.len(),
-            s.total as f64 / 1048576.0,
-            s.evictions,
-            s.per_query,
-            private_bytes() as f64 / 1048576.0
-        );
-    }
-    unsafe { cs_close(h) };
 }
 
 /// Where the memory of a search that reads results goes: libzim's cluster cache (shared by all archives). Reads ten results,

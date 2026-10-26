@@ -911,7 +911,7 @@ impl LibSlot {
 
     /// State of the device keyword index in `index_dir`.
     pub fn device_state(&self) -> IndexState {
-        index::index_state(self.index_dir.as_deref(), &libindex::source_key(self.id()))
+        index::index_state_for(self.index_dir.as_deref(), &libindex::source_key(self.id()), index::LIB_INDEX_FORMAT)
     }
 
     /// The opened device index if (and only if) it is `done`.

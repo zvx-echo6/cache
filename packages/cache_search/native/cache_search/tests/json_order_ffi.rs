@@ -49,7 +49,7 @@ impl Drop for TempDir {
 
 #[test]
 fn version_and_numbering_bytes() {
-    assert_eq!(take(cs_version()).unwrap(), r#"{"version":"0.1.0","index_format":2}"#);
+    assert_eq!(take(cs_version()).unwrap(), r#"{"version":"0.1.0","index_format":3}"#);
     let c = cs_conversation_new();
     let f = |json: &str| take(unsafe { cs_format(c, cstr(json).as_ptr()) }).unwrap();
     assert_eq!(f("[]"), r#"{"tool_message":"No results found.","ids":[]}"#);

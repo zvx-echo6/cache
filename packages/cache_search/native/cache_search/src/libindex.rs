@@ -16,7 +16,7 @@
 use crate::error::{Error, Result};
 use crate::index::{
     cap_bytes, make_analyzer, read_meta, stamp_of, tv, wipe_dir, write_meta, IndexMeta, Outcome, ANALYZER,
-    INDEX_FORMAT, MAX_BODY_BYTES,
+    LIB_INDEX_FORMAT, MAX_BODY_BYTES,
 };
 use crate::library::{open_shard_for_scroll, resolve_settings};
 use crate::search::{query_term_texts, term_coverage, top_deterministic};
@@ -189,7 +189,7 @@ pub fn build_library_index(
     let key = source_key(&settings.library_id);
 
     let mut meta = IndexMeta {
-        index_format: INDEX_FORMAT,
+        index_format: LIB_INDEX_FORMAT,
         tokenizer: TOKENIZER.to_string(),
         zim_uuid: key.clone(),
         state: "building".into(),
@@ -200,7 +200,7 @@ pub fn build_library_index(
     let index: Index;
     let mut cp = Checkpoint { offset: None, scrolled: 0, indexed: 0, finished: false };
     match read_meta(dir) {
-        Some(m) if m.index_format == INDEX_FORMAT && m.zim_uuid == key => {
+        Some(m) if m.index_format == LIB_INDEX_FORMAT && m.zim_uuid == key => {
             if m.state == "done" && tantivy_meta_exists {
                 progress(m.total, m.total);
                 return Ok(Outcome::Done);

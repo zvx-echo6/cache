@@ -8,12 +8,16 @@
 //! - Every network call runs on its own thread and the caller waits at most until the deadline, so a stalled DNS
 //!   lookup or a slow server cannot hold the handle past the budget.
 //! - Nothing from the web is written to disk or added to a library; it lives in the conversation only.
+//! - HTTP is `ureq` with rustls and the compiled-in root certificates (webpki-roots), the same client as `cache_live`,
+//!   `cache_layers` and `cache_video`. It does not use the platform certificate verifier: that one needs the Android
+//!   JVM handed to it at start-up, which a Dart FFI library never does (see `tls_roots`).
 
 use crate::conv::one_line;
 use crate::error::{Error, Result};
 use crate::html;
 use cache_tool::{text_marker, Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Value};
+use std::error::Error as StdError;
 use std::io::Read;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -71,14 +75,21 @@ pub trait WebSearchProvider: Send + Sync {
     fn take_meta(&self) -> Option<Value> {
         None
     }
+
+    /// The full error chain of the last failed request (transport failures only), for the debug timing field and never shown
+    /// to the model. It holds no key and no query. Taking it clears it.
+    fn take_failure(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Kagi's search API (v1): `POST` with a JSON body and `Authorization: Bearer <key>`. It matches the request AIDA uses in
-/// production (Open WebUI kagi.py); live-verified: pending. Tested against a local stand-in server.
+/// production (Open WebUI kagi.py); the invalid-key answer is live-verified (2026-10-26), a valid search is not. Tested against a local stand-in server.
 #[derive(Debug)]
 pub struct KagiProvider {
     pub base_url: String,
     meta: Mutex<Option<Value>>,
+    failure: Mutex<Option<String>>,
 }
 
 impl Default for KagiProvider {
@@ -90,28 +101,35 @@ impl Default for KagiProvider {
 impl KagiProvider {
     /// Kagi at another address (tests point it at a local server).
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        KagiProvider { base_url: base_url.into(), meta: Mutex::new(None) }
+        KagiProvider { base_url: base_url.into(), meta: Mutex::new(None), failure: Mutex::new(None) }
     }
 }
 
 impl WebSearchProvider for KagiProvider {
     fn search(&self, query: &str, limit: usize, key: &str, deadline: Instant) -> std::result::Result<Vec<WebHit>, ToolError> {
-        let url = reqwest::Url::parse(&self.base_url)
-            .map_err(|_| ToolError::new(ToolError::NOT_CONFIGURED, "the web search address is not valid"))?;
+        let lower = self.base_url.trim().to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            return Err(ToolError::new(ToolError::NOT_CONFIGURED, "the web search address is not valid"));
+        }
         let auth = format!("Bearer {key}");
         let body = json!({"query": query, "limit": limit}).to_string();
+        *lock(&self.failure) = None;
         let reply = http_request(
-            url.as_str(),
+            self.base_url.trim(),
             &[("Authorization", auth.as_str()), ("Accept", "application/json"), ("Content-Type", "application/json")],
             Some(body),
             deadline,
             API_CAP,
         )
-        .map_err(|f| match f {
+        .map_err(|f| {
+            // the key is in a header and the query in the body, neither in an error; the tool scrubs the key from both anyway
+            *lock(&self.failure) = Some(f.chain.clone());
+            match f.kind {
                 HttpFail::TimedOut => ToolError::new(ToolError::FETCH_FAILED, "web search timed out"),
-                HttpFail::Connect => ToolError::new(ToolError::FETCH_FAILED, "could not reach the web search server"),
-                HttpFail::Other => ToolError::new(ToolError::FETCH_FAILED, "the web search request failed"),
-            })?;
+                HttpFail::Connect => ToolError::new(ToolError::FETCH_FAILED, format!("could not reach the web search server ({})", f.cause)),
+                HttpFail::Other => ToolError::new(ToolError::FETCH_FAILED, format!("the web search request failed ({})", f.cause)),
+            }
+        })?;
         *lock(&self.meta) = None;
         let (hits, meta) = parse_kagi_full(reply.status, &reply.body, limit)?;
         *lock(&self.meta) = meta;
@@ -120,6 +138,10 @@ impl WebSearchProvider for KagiProvider {
 
     fn take_meta(&self) -> Option<Value> {
         lock(&self.meta).take()
+    }
+
+    fn take_failure(&self) -> Option<String> {
+        lock(&self.failure).take()
     }
 }
 
@@ -132,8 +154,8 @@ fn quota_reached() -> ToolError {
 }
 
 /// Kagi's answer as hits or a tool error. The results are `data.search`, an array of objects with `url`, `title` and an
-/// optional `snippet`; other fields and other `data` members are ignored. A failure is an `error` array or object (shape
-/// unverified against the live API: a 401/403 code or status is a rejected key, a 402/429 code or a message about
+/// optional `snippet`; other fields and other `data` members are ignored. A failure is an `error` array or object (seen
+/// once live: HTTP 400 with `errors[].code` "general.invalid_token" is a rejected key; also a 401/403 code or status, a 402/429 code or a message about
 /// balance, credit or quota is `quota`). A 200 with an `error`, or without a `data` object, is `bad_response` (its
 /// detail lists the key names, never values). A `data` object whose `search` is missing or null is zero results.
 pub fn parse_kagi(status: u16, body: &[u8], limit: usize) -> std::result::Result<Vec<WebHit>, ToolError> {
@@ -156,11 +178,15 @@ pub fn parse_kagi_full(status: u16, body: &[u8], limit: usize) -> std::result::R
         return Err(quota_reached());
     }
     let parsed: Option<Value> = serde_json::from_slice(body).ok();
-    let errors: Vec<&Value> = match parsed.as_ref().map(|v| &v["error"]) {
-        Some(Value::Array(a)) => a.iter().collect(),
-        Some(e @ Value::Object(_)) | Some(e @ Value::String(_)) => vec![e],
-        _ => Vec::new(),
-    };
+    // Kagi v1 answers a failure with `errors` (an array); `error` is the older spelling and is read too
+    let mut errors: Vec<&Value> = Vec::new();
+    for name in ["errors", "error"] {
+        match parsed.as_ref().map(|v| &v[name]) {
+            Some(Value::Array(a)) => errors.extend(a.iter()),
+            Some(e @ Value::Object(_)) | Some(e @ Value::String(_)) => errors.push(e),
+            _ => {}
+        }
+    }
     let msg_of = |e: &Value| -> String {
         e.as_str().or_else(|| e["msg"].as_str()).or_else(|| e["message"].as_str()).unwrap_or("").to_string()
     };
@@ -171,12 +197,19 @@ pub fn parse_kagi_full(status: u16, body: &[u8], limit: usize) -> std::result::R
             Some(402) | Some(429) => return Err(quota_reached()),
             _ => {}
         }
+        // observed 2026-10-26: an invalid key is HTTP 400 with code "general.invalid_token"
+        if e["code"].as_str().is_some_and(|c| c == "general.invalid_token") {
+            return Err(key_rejected());
+        }
         if ["balance", "quota", "credit"].iter().any(|w| msg.contains(w)) {
             return Err(quota_reached());
         }
     }
     if !(200..300).contains(&status) {
-        return Err(ToolError::new(ToolError::FETCH_FAILED, format!("web search failed (HTTP {status})")));
+        // the service's error code (a short identifier such as "general.invalid_token"), when it gave one
+        let code: String = errors.iter().find_map(|e| e["code"].as_str()).map(|c| c.chars().filter(|c| c.is_ascii_alphanumeric() || "._-".contains(*c)).take(40).collect()).unwrap_or_default();
+        let tail = if code.is_empty() { String::new() } else { format!(", {code}") };
+        return Err(ToolError::new(ToolError::FETCH_FAILED, format!("web search failed (HTTP {status}{tail})")));
     }
     if let Some(e) = errors.first() {
         let msg: String = msg_of(e).chars().take(120).collect();
@@ -220,6 +253,7 @@ pub fn parse_kagi_full(status: u16, body: &[u8], limit: usize) -> std::result::R
 
 // ---- HTTP ------------------------------------------------------------------------------------------------
 
+#[derive(Debug)]
 pub struct HttpReply {
     pub status: u16,
     pub content_type: Option<String>,
@@ -228,54 +262,157 @@ pub struct HttpReply {
     pub capped: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// The class of a failed request, which decides the message the model sees.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum HttpFail {
     TimedOut,
+    /// Name lookup, connecting, or the TLS handshake failed: the server was not reached.
     Connect,
     Other,
 }
 
-fn fail_of(e: &reqwest::Error) -> HttpFail {
-    if e.is_timeout() {
-        HttpFail::TimedOut
-    } else if e.is_connect() {
-        HttpFail::Connect
-    } else {
-        HttpFail::Other
+/// A failed request. `cause` is one short line led by the layer that failed (`tls: invalid peer certificate: UnknownIssuer`,
+/// `dns: ...`, `connect: ...`, `timeout`, `io: ...`) and goes into the error detail. `chain` is the whole error chain and
+/// goes only into the debug timing field. Neither holds the key (a header), the request body, or a URL's query string.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HttpFailure {
+    pub kind: HttpFail,
+    pub cause: String,
+    pub chain: String,
+}
+
+impl HttpFailure {
+    fn timed_out(chain: impl Into<String>) -> HttpFailure {
+        HttpFailure { kind: HttpFail::TimedOut, cause: "timeout".to_string(), chain: chain.into() }
+    }
+
+    fn other(layer: &str, chain: impl Into<String>) -> HttpFailure {
+        let chain: String = chain.into();
+        HttpFailure { kind: HttpFail::Other, cause: cap_chars(&format!("{layer}: {chain}"), CAUSE_CHARS), chain }
     }
 }
 
-fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
+/// Longest cause in an error detail, in characters.
+const CAUSE_CHARS: usize = 120;
+
+fn cap_chars(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}...", s.chars().take(n).collect::<String>())
+    }
+}
+
+/// Where the web client gets the root certificates it trusts.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum TlsRoots {
+    /// The roots compiled into the library (webpki-roots, through ureq's rustls): the same on every platform.
+    Bundled,
+    /// The operating system's verifier (rustls-platform-verifier). On Android it needs the JVM and the app context handed
+    /// to it from Kotlin before the first request; a Dart FFI library gets neither, so every HTTPS request failed.
+    /// This is what `reqwest`'s `rustls` feature used here until v4. Nothing builds a client with it any more.
+    Platform,
+}
+
+/// The roots the web client verifies servers against. `web_agent` is the only place a client is built and it takes no
+/// platform verifier; the test `the_web_client_uses_bundled_roots` checks the dependency that selects it.
+pub const fn tls_roots() -> TlsRoots {
+    TlsRoots::Bundled
+}
+
+/// The one HTTP client of web search and web reads: `ureq` (blocking, rustls, `tls_roots()`), a fresh agent per request so
+/// the request's own timeout is the remaining time to the deadline.
+fn web_agent(timeout: Duration) -> ureq::Agent {
+    // ureq's limit counts the final request too: `redirects(n)` follows n - 1 redirects, so one more than MAX_REDIRECTS
+    ureq::AgentBuilder::new().timeout(timeout).redirects(MAX_REDIRECTS as u32 + 1).user_agent(&user_agent()).build()
+}
+
+/// `s` with `url`'s query string taken out wherever the URL (or just its query) appears.
+fn scrub_url(s: &str, url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else { return s.to_string() };
+    let query = query.split('#').next().unwrap_or("");
+    let mut out = s.replace(url, base);
+    if !query.is_empty() {
+        out = out.replace(query, "...");
+    }
+    out
+}
+
+/// The failure of one request as a layer, a short cause and the full chain. Walks the transport error and every source
+/// beneath it (an I/O error, a rustls error), which `Display` of the transport alone does not show.
+fn describe(t: &ureq::Transport, url: &str) -> HttpFailure {
+    let mut parts: Vec<String> = Vec::new();
+    let mut add = |s: String| {
+        let s = one_line(&scrub_url(&s, url));
+        if !s.is_empty() && !parts.iter().any(|p| p.contains(&s)) {
+            parts.push(s);
+        }
+    };
+    if let Some(m) = t.message() {
+        add(m.to_string());
+    }
+    let mut timed_out = false;
+    let mut src = StdError::source(t);
+    while let Some(e) = src {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            timed_out |= matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock);
+        }
+        add(e.to_string());
+        src = e.source();
+    }
+    // the part that says the most is the deepest one that is not a bare wrapper
+    let chain = if parts.is_empty() { format!("{:?}", t.kind()) } else { parts.join(" <- ") };
+    let detail = parts.last().cloned().unwrap_or_else(|| format!("{:?}", t.kind()));
+    if timed_out || chain.to_ascii_lowercase().contains("timed out") {
+        return HttpFailure::timed_out(chain);
+    }
+    let lower = chain.to_ascii_lowercase();
+    let tls = ["certificate", "handshake", "tls", "rustls", "peer ", "alert", "invalid message", "corrupt"].iter().any(|w| lower.contains(w));
+    use ureq::ErrorKind as K;
+    let (kind, layer) = match t.kind() {
+        K::Io | K::ConnectionFailed if tls => (HttpFail::Connect, "tls"),
+        K::Dns => (HttpFail::Connect, "dns"),
+        K::ConnectionFailed => (HttpFail::Connect, "connect"),
+        K::Io => (HttpFail::Other, "io"),
+        K::TooManyRedirects => (HttpFail::Other, "redirects"),
+        K::BadStatus | K::BadHeader => (HttpFail::Other, "protocol"),
+        K::InvalidUrl | K::UnknownScheme | K::InsecureRequestHttpsOnly => (HttpFail::Other, "url"),
+        K::InvalidProxyUrl | K::ProxyConnect | K::ProxyUnauthorized => (HttpFail::Other, "proxy"),
+        K::HTTP => (HttpFail::Other, "http"),
+    };
+    HttpFailure { kind, cause: cap_chars(&format!("{layer}: {detail}"), CAUSE_CHARS), chain }
+}
+
+fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return Err(HttpFail::TimedOut);
+        return Err(HttpFailure::timed_out("the deadline had passed before the request started"));
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(remaining)
-        .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-        .user_agent(user_agent())
-        .build()
-        .map_err(|_| HttpFail::Other)?;
+    let agent = web_agent(remaining);
     let mut req = match body {
-        Some(b) => client.post(url).body(b),
-        None => client.get(url),
+        Some(_) => agent.post(url),
+        None => agent.get(url),
     };
     for (k, v) in headers {
-        let mut value = reqwest::header::HeaderValue::from_str(v).map_err(|_| HttpFail::Other)?;
-        if k.eq_ignore_ascii_case("authorization") {
-            value.set_sensitive(true);
-        }
-        req = req.header(k.as_str(), value);
+        req = req.set(k, v);
     }
-    let mut resp = req.send().map_err(|e| fail_of(&e))?;
-    let status = resp.status().as_u16();
-    let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let sent = match &body {
+        Some(b) => req.send_string(b),
+        None => req.call(),
+    };
+    let resp = match sent {
+        Ok(r) => r,
+        // an HTTP error status is an answer: the callers read its body and judge the status
+        Err(ureq::Error::Status(_, r)) => r,
+        Err(ureq::Error::Transport(t)) => return Err(describe(&t, url)),
+    };
+    let status = resp.status();
+    let content_type = resp.header("content-type").map(str::to_string);
     let mut body = Vec::new();
-    if let Err(e) = (&mut resp).take(cap as u64 + 1).read_to_end(&mut body) {
-        let timed_out = e.kind() == std::io::ErrorKind::TimedOut
-            || Instant::now() >= deadline
-            || e.get_ref().and_then(|s| s.downcast_ref::<reqwest::Error>()).is_some_and(|r| r.is_timeout());
-        return Err(if timed_out { HttpFail::TimedOut } else { HttpFail::Other });
+    if let Err(e) = resp.into_reader().take(cap as u64 + 1).read_to_end(&mut body) {
+        let chain = scrub_url(&one_line(&e.to_string()), url);
+        let timed_out = matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) || Instant::now() >= deadline;
+        return Err(if timed_out { HttpFailure::timed_out(chain) } else { HttpFailure::other("io", chain) });
     }
     let capped = body.len() > cap;
     body.truncate(cap);
@@ -285,15 +422,15 @@ fn send_blocking(url: &str, headers: &[(String, String)], body: Option<String>, 
 /// GET `url` and read at most `cap` bytes of the body, finishing by `deadline`. Follows up to 5 redirects. The work
 /// runs on its own thread; if it has not answered by the deadline the call returns `TimedOut` and the thread ends by
 /// itself when its own request times out.
-pub fn http_get(url: &str, headers: &[(&str, &str)], deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
+pub fn http_get(url: &str, headers: &[(&str, &str)], deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
     http_request(url, headers, None, deadline, cap)
 }
 
 /// `http_get`, or a POST with `body` when one is given (no redirects are followed differently; same limits).
-pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFail> {
+pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, deadline: Instant, cap: usize) -> std::result::Result<HttpReply, HttpFailure> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return Err(HttpFail::TimedOut);
+        return Err(HttpFailure::timed_out("the deadline had passed before the request started"));
     }
     let url = url.to_string();
     let headers: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -303,8 +440,8 @@ pub fn http_request(url: &str, headers: &[(&str, &str)], body: Option<String>, d
     });
     match rx.recv_timeout(remaining) {
         Ok(r) => r,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(HttpFail::TimedOut),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(HttpFail::Other),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(HttpFailure::timed_out("no answer by the deadline")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(HttpFailure::other("internal", "the request thread ended without an answer")),
     }
 }
 
@@ -322,18 +459,28 @@ pub enum Page {
 /// Fetch `url` and turn it into text by `deadline`: HTML like a ZIM article (headings kept, script and style
 /// removed), plain text as it is. Other content types, a bad status, or a page with no text are `Unavailable`.
 pub fn fetch_page(url: &str, deadline: Instant, cap: usize) -> Page {
+    fetch_page_why(url, deadline, cap).0
+}
+
+/// `fetch_page`, and why it failed when it did (a debug chain without the URL's query; see `HttpFailure`).
+pub fn fetch_page_why(url: &str, deadline: Instant, cap: usize) -> (Page, Option<String>) {
     let lower = url.to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-        return Page::Unavailable;
+        return (Page::Unavailable, Some("not an http or https address".to_string()));
     }
     let reply = match http_get(url, &[("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1")], deadline, cap) {
         Ok(r) => r,
-        Err(HttpFail::TimedOut) => return Page::TimedOut,
-        Err(_) => return Page::Unavailable,
+        Err(f) if f.kind == HttpFail::TimedOut => return (Page::TimedOut, Some(f.chain)),
+        Err(f) => return (Page::Unavailable, Some(format!("{}: {}", f.cause, f.chain))),
     };
     if !(200..300).contains(&reply.status) {
-        return Page::Unavailable;
+        return (Page::Unavailable, Some(format!("HTTP status {}", reply.status)));
     }
+    let page = page_of(reply, deadline);
+    (page, None)
+}
+
+fn page_of(reply: HttpReply, deadline: Instant) -> Page {
     let ct = reply.content_type.as_deref().unwrap_or("text/html").to_ascii_lowercase();
     let is_html = ct.starts_with("text/html") || ct.starts_with("application/xhtml");
     let raw = String::from_utf8_lossy(&reply.body);
@@ -452,15 +599,19 @@ impl WebState {
     }
 
     /// Debug timing of the last web call: `{"search": ms}` (plus `"kagi_meta"` when the provider sent one) or
-    /// `{"fetch": ms}`. Never shown to the model.
+    /// `{"fetch": ms}`, plus `"failure"` (the full error chain: layer, TLS, DNS, connect, status, timeout) when the request
+    /// failed. Never shown to the model; never holds the key or a query string.
     pub fn take_timing(&self) -> Option<Value> {
         lock(&self.timing).take()
     }
 
-    fn set_timing(&self, what: &str, since: Instant, meta: Option<Value>) {
+    fn set_timing(&self, what: &str, since: Instant, meta: Option<Value>, failure: Option<String>) {
         let mut t = json!({ what: since.elapsed().as_millis() as u64 });
         if let Some(m) = meta {
             t["kagi_meta"] = m;
+        }
+        if let Some(f) = failure {
+            t["failure"] = Value::String(f);
         }
         *lock(&self.timing) = Some(t);
     }
@@ -475,8 +626,8 @@ impl WebState {
             return Page::Unavailable;
         }
         let t0 = Instant::now();
-        let page = fetch_page(url, t0 + budget, cap);
-        self.set_timing("fetch", t0, None);
+        let (page, why) = fetch_page_why(url, t0 + budget, cap);
+        self.set_timing("fetch", t0, None, why);
         page
     }
 }
@@ -546,7 +697,8 @@ impl Tool for WebSearchTool {
         let query = args["query"].as_str().unwrap_or("");
         let t0 = Instant::now();
         let result = provider.search(query, WEB_HITS, &key, t0 + budget);
-        self.0.set_timing("search", t0, provider.take_meta());
+        let failure = provider.take_failure().map(|f| if key.is_empty() { f } else { f.replace(&key, "***") });
+        self.0.set_timing("search", t0, provider.take_meta(), failure);
         let hits = result.map_err(|e| scrub(e, &key))?;
         let stamp = fetched_stamp(ctx.now);
         let mut seen: Vec<String> = Vec::new();
@@ -653,6 +805,17 @@ mod tests {
     }
 
     #[test]
+    fn kagi_invalid_key_as_seen_live() {
+        // verbatim shape of Kagi's answer to an invalid token (2026-10-26): HTTP 400, `errors`, a string code
+        let body = r#"{"meta":{"trace":"t","ms":23,"node":"us-central1"},"data":null,"errors":[{"code":"general.invalid_token","url":"https://kagi.com/api#todo","message":"Token signature failed to verify. Ensure your token has been correctly copied from your dashboard, containing no extra spaces or newlines."}]}"#;
+        assert_eq!(code(parse(400, body)), ("key_missing".into(), "web search key rejected".into()));
+        assert_eq!(code(parse(200, body)).0, "key_missing");
+        // another 400 keeps its code in the detail and is not a key problem
+        let other = r#"{"data":null,"errors":[{"code":"search.bad_query","message":"x"}]}"#;
+        assert_eq!(code(parse(400, other)), ("fetch_failed".into(), "web search failed (HTTP 400, search.bad_query)".into()));
+    }
+
+    #[test]
     fn unreadable_answers_are_bad_response() {
         assert_eq!(code(parse(200, "<html>")).0, "bad_response");
         assert_eq!(code(parse(200, "")).0, "bad_response");
@@ -695,12 +858,14 @@ mod tests {
         let (_, meta) = parse_kagi_full(200, br#"{"data":{}}"#, 5).unwrap();
         assert_eq!(meta, None);
         let w = WebState::new();
-        w.set_timing("search", Instant::now(), Some(json!({"id": "r1"})));
+        w.set_timing("search", Instant::now(), Some(json!({"id": "r1"})), None);
         let t = w.take_timing().unwrap();
         assert!(t["search"].is_u64());
         assert_eq!(t["kagi_meta"], json!({"id": "r1"}));
-        w.set_timing("fetch", Instant::now(), None);
-        assert!(w.take_timing().unwrap().get("kagi_meta").is_none());
+        w.set_timing("fetch", Instant::now(), None, Some("dns: x".into()));
+        let t = w.take_timing().unwrap();
+        assert!(t.get("kagi_meta").is_none());
+        assert_eq!(t["failure"], "dns: x");
     }
 
     #[test]
@@ -749,6 +914,94 @@ mod tests {
         w.configure_named(None, Some("k"), true).unwrap();
         assert!(!w.available());
         assert_eq!(w.configure_named(Some("bing"), Some("k"), true).unwrap_err().code, crate::ErrorCode::BadJson);
+    }
+
+    /// A server that accepts one connection, sends `reply` (or nothing) and closes.
+    fn one_shot_server(reply: &'static [u8]) -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = l.accept() {
+                use std::io::Write;
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(reply);
+            }
+        });
+        addr.to_string()
+    }
+
+    fn soon() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
+    #[test]
+    fn the_web_client_uses_bundled_roots() {
+        // the config kind the one client builder uses
+        assert_eq!(tls_roots(), TlsRoots::Bundled);
+        // and the dependency that selects it: ureq with its own rustls and webpki-roots, not reqwest's platform verifier
+        let manifest = include_str!("../Cargo.toml");
+        let dep = |name: &str| manifest.lines().find(|l| l.trim_start().starts_with(&format!("{name} =")));
+        assert!(dep("reqwest").is_none(), "reqwest (rustls-platform-verifier) must not be a dependency of the web client");
+        let ureq = dep("ureq").expect("ureq is the web client");
+        assert!(ureq.contains("default-features = false") && ureq.contains("\"tls\""), "{ureq}");
+        assert!(!manifest.contains("platform-verifier"));
+    }
+
+    #[test]
+    fn a_tls_failure_names_the_tls_layer_and_hides_the_query() {
+        // a server that answers a TLS hello with plain text: the handshake fails in rustls
+        let addr = one_shot_server(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        let f = http_get(&format!("https://{addr}/search?q=secret-query-text"), &[], soon(), 1 << 16).unwrap_err();
+        assert_eq!(f.kind, HttpFail::Connect, "{f:?}");
+        assert!(f.cause.starts_with("tls: "), "{f:?}");
+        assert!(f.cause.chars().count() <= CAUSE_CHARS + 3);
+        assert!(!f.cause.contains("secret-query-text") && !f.chain.contains("secret-query-text"), "{f:?}");
+    }
+
+    #[test]
+    fn a_refused_connection_names_the_connect_layer() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        drop(l);
+        let f = http_get(&format!("http://{addr}/p?x=1"), &[], soon(), 1 << 16).unwrap_err();
+        assert_eq!(f.kind, HttpFail::Connect, "{f:?}");
+        assert!(f.cause.starts_with("connect: "), "{f:?}");
+    }
+
+    #[test]
+    fn a_dns_failure_names_the_dns_layer() {
+        let f = http_get("http://no-such-host.invalid/p", &[], soon(), 1 << 16).unwrap_err();
+        assert_eq!(f.kind, HttpFail::Connect, "{f:?}");
+        assert!(f.cause.starts_with("dns: "), "{f:?}");
+    }
+
+    #[test]
+    fn a_silent_server_is_a_timeout() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _held = l.accept();
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        let f = http_get(&format!("http://{addr}/p"), &[], Instant::now() + Duration::from_millis(300), 1 << 16).unwrap_err();
+        assert_eq!(f.kind, HttpFail::TimedOut, "{f:?}");
+        assert_eq!(f.cause, "timeout");
+    }
+
+    #[test]
+    fn an_http_error_status_is_an_answer_with_its_body() {
+        let addr = one_shot_server(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"e\":\"nope\"}");
+        let r = http_get(&format!("http://{addr}/p"), &[], soon(), 1 << 16).unwrap();
+        assert_eq!(r.status, 403);
+        assert!(r.body.starts_with(b"{\"e\""));
+    }
+
+    #[test]
+    fn scrub_url_takes_out_the_query() {
+        assert_eq!(scrub_url("GET https://a/b?q=1&r=2 failed", "https://a/b?q=1&r=2"), "GET https://a/b failed");
+        assert_eq!(scrub_url("bad q=1&r=2 here", "https://a/b?q=1&r=2"), "bad ... here");
+        assert_eq!(scrub_url("nothing", "https://a/b"), "nothing");
     }
 
     #[test]

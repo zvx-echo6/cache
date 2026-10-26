@@ -67,7 +67,57 @@ pub struct NearestQuery<'a> {
     pub limit: usize,
 }
 
+/// A name to one point: the lookup a tool needs when it only wants to know where a place is (`live_data`). `cache_places`
+/// implements it over the installed places pack, with the same resolver `navigate` and `locate` use.
+pub trait Geocoder: Send + Sync {
+    /// The best match for `text` ("Island Park, Idaho", "island park", a close misspelling of a town): its name as it is shown
+    /// ("Island Park, ID") and its position. `near` is a point to prefer when several places share the name (the phone's
+    /// position). `None` when nothing fits.
+    fn resolve(&self, text: &str, near: Option<(f64, f64)>) -> Option<(String, f64, f64)>;
+
+    /// `resolve`, plus what the places data also says about the match (state, state name, county, country). The default
+    /// knows only the name and the position; `cache_places` fills in the rest where its pack has it.
+    fn resolve_full(&self, text: &str, near: Option<(f64, f64)>) -> Option<ResolvedPlace> {
+        self.resolve(text, near).map(|(name, lat, lon)| ResolvedPlace { name, lat, lon, ..Default::default() })
+    }
+}
+
+/// A place a `Geocoder` resolved: name, position and the optional administrative facts live-data connectors can use in
+/// their URLs (`{state}`, `{state_name}`, `{county}`, `{country}`). A fact the pack does not have is `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedPlace {
+    pub name: String,
+    pub lat: f64,
+    pub lon: f64,
+    /// Two-letter state code ("ID").
+    pub state: Option<String>,
+    /// The state's name ("Idaho"), from the pack's state list.
+    pub state_name: Option<String>,
+    pub county: Option<String>,
+    /// Country code ("US").
+    pub country: Option<String>,
+}
+
+/// "44.0543,-115.4237" or "44.0543 -115.4237" (also with a space after the comma): two numbers in range.
+pub fn parse_latlon(text: &str) -> Option<(f64, f64)> {
+    let t = text.trim();
+    let parts: Vec<&str> = if t.contains(',') { t.split(',').map(str::trim).collect() } else { t.split_whitespace().collect() };
+    if parts.len() != 2 {
+        return None;
+    }
+    let (lat, lon) = (parts[0].parse::<f64>().ok()?, parts[1].parse::<f64>().ok()?);
+    if lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+        Some((lat, lon))
+    } else {
+        None
+    }
+}
+
 pub trait PlaceSource: Send + Sync {
+    /// The same pack as a `Geocoder` (for `ToolCtx::geocoder`); `None` for a source that only does `geocode` and `nearest`.
+    fn geocoder(&self) -> Option<&dyn Geocoder> {
+        None
+    }
     /// The categories `to_type` may use, or None while no places data is installed.
     fn categories(&self) -> Option<Vec<String>>;
     fn geocode(&self, q: &GeocodeQuery) -> Result<GeocodeAnswer, ToolError>;

@@ -60,6 +60,9 @@ const LOCALITIES: &[(&str, &str, f64, f64, i64, &str)] = &[
     ("Stanley", "town", 44.2210, -114.9360, 100, "ID"),
     ("Lowman", "hamlet", 44.0900, -115.6200, 40, "ID"),
     ("Stanley", "town", 46.3000, -97.2000, 80, "ND"),
+    ("Island Park", "city", 44.4238, -111.3714, 300, "ID"),
+    // A big town one edit from Boise ("Boyse"): a test that an exact name beats a close fuzzy candidate.
+    ("Boyse", "city", 46.0000, -112.5000, 900000, "ID"),
 ];
 
 /// Writes the fixture pack to `path` (replacing any file there).

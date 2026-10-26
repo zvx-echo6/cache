@@ -342,7 +342,14 @@ impl Handle {
             (Some(Builtin::Search), _) => self.run_search(args),
             (Some(Builtin::Read), _) => self.run_read(conv, args),
             (None, i) => {
-                let ctx = ToolCtx { location: self.location.as_ref(), places: &*self.places, now };
+                // the installed places pack (if any) is the geocoder tools resolve names through
+                let source = self.ext.places.read().unwrap_or_else(|e| e.into_inner()).clone();
+                let ctx = ToolCtx {
+                    location: self.location.as_ref(),
+                    places: &*self.places,
+                    now,
+                    geocoder: source.as_deref().and_then(|s| s.geocoder()),
+                };
                 self.tools[i.expect("checked above")].run(&ctx, args)
             }
         }));

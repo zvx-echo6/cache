@@ -1,0 +1,6 @@
+{"type":"FeatureCollection","features":[
+ {"id":"q1","type":"Feature","properties":{"mag":3.1,"place":"12 km NW of Burley, Idaho","time":1792000000000,"url":"https://earthquake.usgs.gov/earthquakes/eventpage/q1"},"geometry":{"type":"Point","coordinates":[-113.9,42.62,8.0]}},
+ {"id":"q2","type":"Feature","properties":{"mag":4.4,"place":"Stanley, Idaho","time":1791990000000,"url":"https://earthquake.usgs.gov/earthquakes/eventpage/q2"},"geometry":{"type":"Point","coordinates":[-114.9,44.2,5.0]}},
+ {"id":"q3","type":"Feature","properties":{"mag":2.6,"place":"3 km S of Rupert, Idaho","time":1791995000000,"url":"https://earthquake.usgs.gov/earthquakes/eventpage/q3"},"geometry":{"type":"Point","coordinates":[-113.67,42.59,6.5]}},
+ {"id":"q4","type":"Feature","properties":{"mag":5.0,"place":"Pocatello, Idaho","time":1791980000000,"url":"https://earthquake.usgs.gov/earthquakes/eventpage/q4"},"geometry":{"type":"Point","coordinates":[-112.4,42.9,9.0]}}
+]}

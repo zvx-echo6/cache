@@ -2,7 +2,7 @@
 
 use crate::args::Args;
 use cache_embed::{Embedder, EMBED_DEFAULT_THREADS};
-use crate::engine::{job_result, run_job_to_end, ApiError, Conv, Core, Engine};
+use crate::engine::{job_result, live_preview as core_live_preview, run_job_to_end, ApiError, Conv, Core, Engine};
 use crate::server;
 use serde_json::{json, Value};
 use std::io::Write;
@@ -37,6 +37,10 @@ cs: command line and HTTP wrapper over the cache_search core
   cs live-sources    --config <sources.json>
   cs live-fetch      --config <sources.json> --request <json {source,place,api_key?,force?,now?}>
   cs live-get        --config <sources.json> --request <json {source,place,now?}>
+  cs live-check      <def.json>
+  cs live-preview    <def.json> --place <lat,lon | json {lat,lon,name?,state?,county?,country?}> [--name <text>] [--state XX] [--county <name>]
+                     [--county-fips <code>] [--country XX] [--param k=v]... [--key <value> | $CACHE_LIVE_KEY] [--secret alias=value]...
+                     [--now <iso8601>] [--raw-chars 12000] [--max-items 20]
   cs video-instances       --config <sources.json>
   cs video-instance-add    --config <sources.json> --request <json {url}>
   cs video-instance-remove --config <sources.json> --request <json {instance,delete_downloads?}>
@@ -409,6 +413,123 @@ pub fn live_fetch(argv: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The definition file named first on the command line, and the flags after it.
+fn def_file(argv: &[String]) -> Result<(String, &[String]), ApiError> {
+    let f = argv.first().filter(|a| !a.starts_with("--")).ok_or_else(|| usage_err("the first argument is the definition file (<def.json>)"))?;
+    let text = std::fs::read_to_string(f).map_err(|e| ApiError::new("io", format!("reading {f}: {e}")))?;
+    Ok((text, &argv[1..]))
+}
+
+/// Take every `--name value` (or `--name=value`) out of `argv`; the rest is returned.
+fn take_repeated(argv: &[String], name: &str) -> Result<(Vec<String>, Vec<String>), ApiError> {
+    let (mut found, mut rest) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < argv.len() {
+        let a = &argv[i];
+        if let Some(v) = a.strip_prefix(&format!("--{name}=")) {
+            found.push(v.to_string());
+        } else if *a == format!("--{name}") {
+            i += 1;
+            found.push(argv.get(i).cloned().ok_or_else(|| usage_err(format!("--{name} needs a value")))?);
+        } else {
+            rest.push(a.clone());
+        }
+        i += 1;
+    }
+    Ok((found, rest))
+}
+
+fn pairs(list: Vec<String>, what: &str) -> Result<serde_json::Map<String, Value>, ApiError> {
+    let mut m = serde_json::Map::new();
+    for p in list {
+        let (k, v) = p.split_once('=').ok_or_else(|| usage_err(format!("--{what} takes name=value, not {p:?}")))?;
+        // a number or true/false stays one; the core reads it against the parameter's type either way
+        let val = serde_json::from_str::<Value>(v).ok().filter(|x| x.is_number() || x.is_boolean()).unwrap_or_else(|| Value::String(v.to_string()));
+        m.insert(k.to_string(), val);
+    }
+    Ok(m)
+}
+
+fn pretty(s: &str) -> String {
+    serde_json::from_str::<Value>(s).and_then(|v| serde_json::to_string_pretty(&v)).unwrap_or_else(|_| s.to_string())
+}
+
+/// `cs live-check <def.json>`: parse and validate a connector definition; every problem is printed with its field.
+pub fn live_check(argv: &[String]) -> Result<(), ApiError> {
+    let (text, rest) = def_file(argv)?;
+    parse(rest, &[], &[], false)?;
+    let req = json!({"definition": text, "check_only": true}).to_string();
+    match core_live_preview(&req) {
+        Ok(out) => {
+            let v: Value = serde_json::from_str(&out).map_err(|e| ApiError::new("internal", e.to_string()))?;
+            let s = &v["source"];
+            println!(
+                "ok: {} (format {}): {} item group(s), {} request(s){}{}",
+                s["id"].as_str().unwrap_or(""),
+                s["format"],
+                s["items"],
+                v["requests"].as_array().map(Vec::len).unwrap_or(0),
+                s["needs_key"].as_str().map(|k| format!(", needs the key {k:?}")).unwrap_or_default(),
+                s["params"].as_array().filter(|p| !p.is_empty()).map(|p| format!(", {} parameter(s)", p.len())).unwrap_or_default()
+            );
+            for w in v["warnings"].as_array().into_iter().flatten() {
+                println!("warning: {}", w.as_str().unwrap_or(""));
+            }
+            Ok(())
+        }
+        Err(e) if e.code == "bad_json" => {
+            let problems: Vec<&str> = e.message.split("; ").collect();
+            for p in &problems {
+                eprintln!("error: {p}");
+            }
+            Err(ApiError::new("bad_json", format!("{} problem(s) in the definition", problems.len())))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// `cs live-preview <def.json> --place ...`: fetch once; print the raw response tree (cut down), the paths in it and the mapped items.
+pub fn live_preview(argv: &[String]) -> Result<(), ApiError> {
+    let (text, rest) = def_file(argv)?;
+    let (params, rest) = take_repeated(rest, "param")?;
+    let (secrets, rest) = take_repeated(&rest, "secret")?;
+    let a = parse(&rest, &["place", "name", "state", "county", "county-fips", "country", "key", "now", "raw-chars", "max-items"], &[], false)?;
+    let place_arg = a.req("place").map_err(usage_err)?;
+    let mut place: Value = if place_arg.trim_start().starts_with('{') {
+        serde_json::from_str(place_arg).map_err(|e| usage_err(format!("--place: {e}")))?
+    } else {
+        let (la, lo) = place_arg.split_once(',').ok_or_else(|| usage_err("--place is lat,lon (for example 42.536,-113.792) or a JSON object"))?;
+        let num = |s: &str| s.trim().parse::<f64>().map_err(|_| usage_err(format!("--place: {s:?} is not a number")));
+        json!({"lat": num(la)?, "lon": num(lo)?})
+    };
+    for (flag, key) in [("name", "name"), ("state", "state"), ("county", "county"), ("county-fips", "county_fips"), ("country", "country")] {
+        if let Some(v) = a.get(flag) {
+            place[key] = json!(v);
+        }
+    }
+    let mut req = json!({"definition": text, "place": place});
+    if !params.is_empty() {
+        req["params"] = Value::Object(pairs(params, "param")?);
+    }
+    if !secrets.is_empty() {
+        req["secrets"] = Value::Object(pairs(secrets, "secret")?.into_iter().map(|(k, v)| (k, Value::String(v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())))).collect());
+    }
+    if let Some(k) = a.get("key").map(str::to_string).or_else(|| std::env::var("CACHE_LIVE_KEY").ok().filter(|k| !k.is_empty())) {
+        req["api_key"] = json!(k);
+    }
+    if let Some(n) = a.get("now") {
+        req["now"] = json!(n);
+    }
+    if a.get("raw-chars").is_some() {
+        req["raw_chars"] = json!(a.num("raw-chars", 12000usize).map_err(usage_err)?);
+    }
+    if a.get("max-items").is_some() {
+        req["max_items"] = json!(a.num("max-items", 20usize).map_err(usage_err)?);
+    }
+    print(&pretty(&core_live_preview(&req.to_string())?));
+    Ok(())
+}
+
 pub fn live_get(argv: &[String]) -> Result<(), ApiError> {
     let a = parse(argv, &["config", "request", "open-timeout"], &[], false)?;
     let r = a.req("request").map_err(usage_err)?.to_string();
@@ -568,6 +689,8 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "live-sources" => live_sources(rest),
         "live-fetch" => live_fetch(rest),
         "live-get" => live_get(rest),
+        "live-check" => live_check(rest),
+        "live-preview" => live_preview(rest),
         "video-instances" => video_call(rest, |e, _| e.core.video_instances(), false),
         "video-instance-add" => video_call(rest, |e, r| e.core.video_instance_add(r.unwrap()), true),
         "video-instance-remove" => video_call(rest, |e, r| e.core.video_instance_remove(r.unwrap()), true),

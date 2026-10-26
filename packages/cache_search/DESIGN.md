@@ -331,7 +331,12 @@ Snippets and titles:
   cut at a sentence end. ZIM article: Tantivy snippet over `lead`, falling back to its first sentences, at most
   400 chars. For a ZIM searched through its Xapian index: libzim's own snippet, with its HTML (`<b>` around matched
   words) stripped and entities decoded, whitespace collapsed, a leading or trailing "..." removed, and cut to at most 400 chars at a sentence end
-  by the same rule; if libzim gives none, the first sentences of the article.
+  by the same rule; if libzim gives none, the first sentences of the article. Main-content check (all ZIM hits, both
+  engines): libzim picks its passage from the whole page, menus and footers included, and an index built before main-content
+  extraction has menu text in its `lead`. So the article is read, and a snippet whose text (letters and digits only, each
+  "..."-joined passage on its own) is not in the article's main text is replaced by a snippet cut from the main text,
+  starting at the sentence of the first query term (matched after stemming with the source's analyzer; the first
+  sentences when no term is found). A snippet that is main text is left as it is.
 - Library hit title: the mapped `title` (falling back to `title_fallback`); when the point has a page,
   `<title>, p. <page>`. For a ZIM hit: `<ZIM title>: <article title>`.
 
@@ -360,9 +365,34 @@ build) because the top hits' articles are read for coverage.
 
 ## read
 
-`read(address, max_chars)`: ZIM → the article text (HTML stripped to plain text, headings kept); library → the
+`read(address, max_chars)`: ZIM → the article text (HTML stripped to plain text, headings kept, main content only: see
+below); library → the
 point's title and mapped text field, plus author, page and source type (null where unmapped) so the app can
 render the page.
+
+### Main-content extraction (`html::extract`, used by `read`, by the coverage read, by snippets and by the index's `lead`)
+
+Menus, banners and footers come before the article in a page's text, so the text of a ZIM page is the page's main content.
+Structure and measures only (element names, ARIA roles, link density, text length); no word lists.
+
+1. Chrome is left out: `nav`, `aside`, `footer`, `head`, `script`, `style` and the other elements the stripper drops; any element
+   with `role` navigation, banner, contentinfo, complementary or search, or `aria-hidden="true"`; and a `header` that is not inside an
+   `article`, `aside`, `main`, `nav` or `section` (inside one it is that section's title block and stays).
+2. If the page has `main`, `article` or `role="main"` elements, the largest one is the content. (Kiwix/mwoffliner Wikipedia
+   pages are `main#content`; MkDocs, Docusaurus, DevDocs, NHS, ready.gov, Sphinx and Appropedia pages carry `main` or
+   `article`; Stack Exchange has `role="main"`.)
+3. Otherwise the density walk: starting at `body`, enter the container child (`div`, `section`, `table`, `td`, `center`,
+   `font`, `form`...) that holds at least 70% of the element's text, with link text not counted (so a menu counts for
+   nothing), while it holds at least half of the text `body` held. The element where the walk stops is the content; blocks
+   in it of which 80% or more of the text is link text (at least two links) are left out (previous/next rows, related
+   lists). The optional end tags of `p`, `li`, `dt`, `dd`, `tr`, `td` and `th` are implied when the tree is built.
+4. If the density walk's text is under 200 characters (`MIN_DENSITY_CHARS`), the whole page text is used, as before: a page
+   that short has no room for a menu to bury it. A declared `main` that has no text counts as absent.
+
+Wikipedia pages go through step 2 and give the byte-identical text the earlier code gave (checked on sampled articles of the
+maxi and medicine ZIMs, `tests/zim_main_text.rs`). Existing Tantivy indexes are not rebuilt (`INDEX_FORMAT` is unchanged);
+their `lead` may still hold menu text, which the snippet check above corrects when a result is shown. New indexes store the
+`lead` of the main text.
 
 ## Browse
 
@@ -445,7 +475,7 @@ number it was given, so it writes `[n]` itself and gives no marker.
    None is `not_set_up`.
 2. Validate the arguments against the schema's `parameters` (below). A violation is `bad_arguments`, detail
    `"<field>: <what>"`. Defaults in the schema are not filled in; the tool applies them.
-3. Run it with a `ToolCtx` (the handle's location and saved places, and `now`) inside `catch_unwind`; a panic is
+3. Run it with a `ToolCtx` (the handle's location and saved places, `now`, and the places pack's `Geocoder` when one is installed) inside `catch_unwind`; a panic is
    `internal`, "<tool> failed".
 4. Number the result in the conversation (the numbering `cs_format` uses, so an address seen before keeps its
    number): in text, each `{{addr:<address>}}` becomes `[n]` and the title is the text after the marker up to ` — `
@@ -485,15 +515,18 @@ Result<Vec<WebHit>, ToolError> }`, `WebHit { url, title, snippet }`. The provide
 error codes. `KagiProvider { base_url }` (default `https://kagi.com/api/v1/search`, overridable for tests) sends
 `POST` with `Authorization: Bearer <key>` and the JSON body `{"query": "<q>", "limit": <n>}`, and reads the results
 from `data.search`, an array of objects with `url`, `title` and an optional `snippet` (extra fields are ignored). This
-matches the request AIDA uses in production (Open WebUI kagi.py); live-verified: pending. HTTP 401/403 or an error code
-401/403 is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
+matches the request AIDA uses in production (Open WebUI kagi.py); live-verified for the invalid-key answer only (below). HTTP 401/403, an error code
+401/403, or the code `general.invalid_token` (what Kagi answers to an invalid key, with HTTP 400) is `key_missing` ("web search key rejected"); 402/429, or an error mentioning balance, quota or credit, is
 `quota`; a timeout, a refused connection, or any other bad status (500, ...) is `fetch_failed`; JSON that cannot be
 used is `bad_response`, including a 200 with an `error` field or without a `data` object; the detail then lists the
 top-level key names (and `data`'s) but never a value, and never the key or the query. A `data` object whose `search`
 is missing or null is zero results (`No results found.`). Kagi's `meta` object (request id, timing), when present,
-goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Unverified:** the shape of v1's error body. The `error` array-or-object (`code`, `msg` or `message`) and the
-mapping of a balance, credit or quota message to `quota` are a judgement from the previous API's shape, not seen from
-v1; only the 200 response shape above is known from AIDA's use.
+goes into the debug timing field as `kagi_meta`, never to the model (the detail never contains the key). **Seen live, once (2026-10-26, one request with a made-up key):** HTTP **400**, `content-type: application/json`, body
+`{"meta":{"trace","ms","node"},"data":null,"errors":[{"code":"general.invalid_token","url":"https://kagi.com/api#todo","message":"Token signature failed to verify. Ensure your token has been correctly copied from your dashboard, containing no extra spaces or newlines."}]}`.
+So v1 puts failures in `errors` (plural; `error` is read too), the code is a string, and a bad key is a 400, not a 401/403. A
+valid-but-revoked key, 401/403 and the quota answers have **not** been seen: the 401/403 mapping and the mapping of a
+balance, credit or quota message to `quota` stay a judgement from the previous API's shape. Any other non-2xx answer is
+`fetch_failed` "web search failed (HTTP n, <code>)" with the service's code when it gave one.
 
 **Results.** Up to 5 lines in the form of `search`: `{{addr:web:<url>}} <title> (web, fetched <YYYY-MM-DD HH:MM from
 now>) — <snippet>`; the snippet is cut by the library-search rule (`snippet_chars`, a sentence end or a word
@@ -512,14 +545,22 @@ beside its number), and a last line `[full page did not load in time]` (timeout)
 offline, in which case nothing is fetched). That is a result, not an error. A page that loads but whose extracted text is
 under 500 characters (`LITTLE_TEXT_CHARS`; a script-rendered shell that gives only navigation or a footer) is not
 a full page: the output is the first line, the stored snippet, the extracted text (if not empty), and a last line
-`[page had little readable text]`. This is a length rule on machine output. Compression is not requested: the
-reqwest already in the lockfile has no gzip support and the decoder crate it would need is not in the lockfile.
+`[page had little readable text]`. This is a length rule on machine output. Compression is not requested (ureq is built
+without its gzip feature).
 
 **Budgets.** Search 6 s from the call to the result; read 8 s for connect, download and parse; a page download is
 capped at 2 MB (the rest is dropped). Each network call runs on its own thread and the caller waits only until the
 deadline, so a stalled name lookup or a slow body cannot hold the handle longer; the abandoned thread ends when its
-own request times out. The client is `reqwest` 0.13.5 (blocking API, rustls), already in the lockfile through
-Qdrant's object store; no crate was added.
+own request times out. The client is `ureq` 2.12 (blocking, rustls with the compiled-in webpki roots), the same as `cache_live`, `cache_layers`
+and `cache_video`; no crate was added. It was reqwest's `rustls` feature until v4, which verifies certificates with
+rustls-platform-verifier; on Android that needs the JVM handed to it from Kotlin, which a Dart FFI library never does, so
+every HTTPS request failed ("couldn't reach") while the app's own connection worked. `web::tls_roots()` names the choice
+(`Bundled`) and a test checks the manifest has no reqwest.
+
+**Failures.** A transport failure's detail carries the layer and a short cause, `could not reach the web search server
+(tls: invalid peer certificate: UnknownIssuer)`, `(dns: ...)`, `(connect: ...)`, or `the web search request failed (io: ...)`;
+a timeout stays `web search timed out`. The whole error chain goes into the debug timing as `"failure"`. Neither holds the key
+(a header) or a query string (the search query is in the POST body; a page URL's query is cut out).
 
 **Never stored.** Nothing from the web is written to disk or added to a library. Hits and their snippets live in the
 `Conversation` and die with it.
@@ -548,13 +589,18 @@ into the build directory, never the repository. `LIBZIM_DIR` names the unpacked 
 (the Visual C++ runtime is also needed). Android arm64 needs `libzim.so`, the NDK's `libc++_shared.so` and the ICU data
 file `icudt73l.dat`; it was built with cargo-ndk on 2026-10-26 (see "Android build" below) and has not yet been run on a device.
 
-What it is used for: keyword search and title suggestions over a ZIM's own indexes. `cs_read`, `cs_zim_get` and
-`cs_zim_main_page` stay on the Rust `zim` crate reader: libzim is only opened (on a background thread once the sources are
-set, see "Prewarm"; otherwise on first search, suggest or status) for the indexes.
+What it is used for: keyword search and title suggestions over a ZIM's own indexes, and, since 2026-10-26, every read of the ZIM:
+`cs_read`, `cs_zim_get` and `cs_zim_main_page` go through the same open libzim archive (**one archive per ZIM**; see "Memory
+budget"). libzim is opened on a background thread once the sources are set (see "Prewarm") or on the first search, suggestion or read.
 - Shim: `zimx_open/close`, `zimx_has_fulltext`, `zimx_has_title_index`, `zimx_search(handle, query, offset, k, keep)` (path,
   title, libzim snippet, score, estimated total), `zimx_suggest(handle, prefix, k, keep)` (path, title), `zimx_drop` (release
-  the kept searchers; `keep` = 0 on a search or suggestion uses a kept searcher if there is one and otherwise a temporary one;
-  see "Searcher memory budget"). Results are UTF-8 JSON strings
+  the kept searchers; `keep` = 0 on a search or suggestion uses a kept searcher if there is one and otherwise a temporary one; the
+  core always passes 1 and lets the archive's lifetime decide, see "Memory budget"), `zimx_open_with` (open with `OpenConfig` and a
+  dirent cache cap), `zimx_archive_info`, `zimx_cluster_cache`/`zimx_set_cluster_cache_max`, and the two entry reads:
+  `zimx_get(handle, path, iterations, &data, &len)` (the entry's bytes in `*data`, plus `{"found","path","title","mime"}`; follows
+  redirects, examining at most `iterations` entries; exact paths only, so libzim's own "strip a leading namespace" fallback is not
+  taken, and an old-scheme archive tries namespaces `C`, `A`, `I`, `-` in turn) and `zimx_main_page(handle, iterations)`. Both run on the
+  archive the searches use, take no lock (libzim's `Archive` is thread safe) and catch every exception. Results are UTF-8 JSON strings
   freed with `zimx_free`. Every C++ exception is caught in the shim and returned as `{"error":...}` (the Rust side turns it into an
   `internal` error; a failed open into `io`). Nothing crosses the boundary as an exception.
 - Search: a Xapian query that libzim rejects (an unmatched quote or bracket) is retried with the query reduced to its
@@ -577,91 +623,219 @@ Differences from Tantivy that callers can see:
 - Speed (Windows, 18 ZIMs plus the recon library, measured 2026-10-26): no build step. Without prewarm libzim opens each
   file on its first search, which on a cold disk took 39-52 s for the first query after a start (the 27M-entry Wikipedia
   included); after that a search over every source takes about 1-2 s, Wikipedia alone 0.2-1.8 s, and a Wikipedia title
-  suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (it looks the index entry
-  up with the `zim` crate).
+  suggestion 0.3-2.3 s warm (35 s for the very first one, cold). `cs_status` does not open libzim (whether the ZIM has an index
+  is read once when the source is opened).
 - Prewarm cost, measured (`cs serve`, all 19 sources, debug build, process memory sampled every second from launch to 60 s
   after the port opened, the OS file cache warm from earlier runs so the cold-disk part of the saving is not in these
   figures): the port opens at 35.6 s in every run (the library). Private bytes at open+60 s: 542 MB without prewarm, 1005 MB with
   it; after the first query both are 1019-1021 MB, so prewarm brings forward the same ~470 MB rather than adding
   to it. (Correction, 2026-10-26: those ~470 MB are the opened archives, not the searchers: the "archive open" column of the
-  table in "Searcher memory budget" adds up to about 472 MiB for the 18 sources, 292 MiB of it Wikipedia. A searcher itself costs 1-2 MiB.) Peak working set: 17.8 GB without, 18.1 GB with (the library's mapped files dominate). First query: 4.1-5.6 s without
+  table in "Memory budget" adds up to about 472 MiB for the 18 sources, 292 MiB of it Wikipedia. A searcher itself costs 1-2 MiB.) Peak working set: 17.8 GB without, 18.1 GB with (the library's mapped files dominate). First query: 4.1-5.6 s without
   prewarm, 3.8 s with it, the same whether it comes at once or 60 s after open; the build before this change (lazy opens,
   searchers rebuilt per call, no coverage reading) took 1.9-9.6 s on the same warm cache.
 - Coverage: libzim does not report which query terms a hit matched, and the `<b>` marks in its snippets did not appear
   on the real ZIMs tried, so Cache reads the top hits' articles (the first 300 KB, `max(k+offset, 10)` per source) and
   computes coverage and title coverage itself from the words of the title and the text (see "Search and merge"). Reading
   articles costs about a second over a full source set.
-- Searchers: the shim builds libzim's full-text and title searchers on a ZIM's first search or suggestion and keeps them while
-  the memory budget allows (see "Searcher memory budget"); one mutex per handle serialises the calls that use them.
+- Searchers: the shim builds libzim's full-text and title searchers on a ZIM's first search or suggestion and keeps them for as long
+  as the archive is open, which the memory budget decides (see "Memory budget"); one mutex per handle serialises the calls that use them.
 - Prewarm: `set_sources` starts up to 4 background threads that open libzim on the ZIMs with a built-in index and build their
-  searchers, so the first search does not pay for the opens, but only for as many ZIMs as fit in the searcher memory budget,
+  searchers, so the first search does not pay for the opens, but only for as many ZIMs as fit in the memory budget (`zim_budget_mb`),
   cheapest first. The config key `"prewarm": false` turns it off; its default is `false` on Android (`target_os = "android"`)
   and `true` elsewhere. A search that arrives while a source is still being warmed waits for that source only. Prewarm builds
   the `Searcher` objects and opens the archive; the Xapian database itself opens on the ZIM's first search (about 7 ms with a warm
   file cache, 91 ms for Wikipedia), so prewarm does not take that part off the first query.
 
-### Searcher memory budget
+### Memory budget
 
-Decided by the Cache lead, 2026-10-26; built on `tool-framework`. Config key `searcher_budget_mb` (default 256 on every
-target; 0 keeps no searcher). Code: `budget.rs` (policy, no libzim in it, unit-tested everywhere), `zimx.rs` (binds an open
-archive to the budget), `handle.rs` (one budget per handle, prewarm plan).
+Decided by the Cache lead (ref-a5), 2026-10-26; built on `tool-framework`. One budget covers everything libzim holds for a ZIM:
+the open archive, its searchers and the caps on its caches. A ZIM has exactly one archive, opened once, and it serves searches, suggestions
+and reads alike (`cs_read`, `cs_zim_get`, `cs_zim_main_page`), so nothing else holds the file open and the budget is the whole of a ZIM's memory. Config key `zim_budget_mb`: default 384 on Android, 1024 on every
+other target; 0 keeps no archive open. The earlier key `searcher_budget_mb` (searchers only, default 256) is still read as an alias
+when `zim_budget_mb` is absent, and `zim_budget_mb` wins when both are given, so an existing config keeps working; but it now
+bounds the archives too, which is a different number (the old 256 would keep no Wikipedia). Code: `budget.rs` (policy and cost model,
+no libzim in it, unit-tested on every target), `zimsrc.rs` (opens, shares and closes a source's archive), `zimx.rs` (the libzim
+binding), `handle.rs` (one budget per handle, the config, the prewarm plan).
 
-- Every kept libzim searcher (full-text, title) is tracked with an estimated cost (below). When a query needs a searcher that is not
-  kept, it is admitted if it fits; to make room the least recently used kept searchers of other ZIMs are dropped (`zimx_drop`: the
-  archive stays open, the next query on that ZIM builds the searcher again).
-- A searcher whose cost alone is more than the whole budget is never kept: each query builds a temporary searcher and drops it when the
-  query ends. So a budget of 0 builds one per query per source.
-- Searches are correct whatever the budget; only latency changes (tests: results identical for budgets 0, one searcher, two, 3 MiB and
-  256 MiB, with queries and suggestions run twice over so kept, dropped and rebuilt searchers all answer).
-- Prewarm never drops anything. It takes the ZIMs in order of estimated cost, cheapest first, as long as the running total fits the
-  budget (`prewarm_plan`); the others build their searchers on their first search. Default `prewarm` is `false` on Android.
-- Cost estimate (`estimate_cost`): libzim does not report a searcher's memory, and the process's private bytes cannot be attributed to
-  one searcher while other threads allocate, so the cost is estimated: full-text 1.5 MiB + index size / 8192, title 1 MiB + index
-  size / 2048 (the sizes of the ZIM's `X/fulltext/xapian` and `X/title/xapian` entries, read with the `zim` crate). It is fitted to
-  the measurements below, not derived from them exactly.
+**Behaviour.**
+- A ZIM source's libzim archive is opened when a search or suggestion first needs it (or by prewarm) and stays open, with its
+  searchers, while the budget allows. Opening one that would take the total over the budget first closes the least recently used
+  archives of other sources (their searchers go with them); the most recently used archives stay open. A closed archive reopens on
+  its next query, transparently.
+- An archive whose estimated cost alone is more than what the budget leaves (the limit less the reserved part, below) is never
+  kept: the query opens it, uses it and closes it when the query ends. A budget of 0 does that for every source of every query.
+- A query that already holds an archive keeps it open until it ends, even if another query's admission closed it meanwhile, so the
+  process can briefly hold more than the budget (by the archives in flight).
+- Prewarm never closes anything: it opens only the cheapest archives that fit (`prewarm_plan`); the others open on their first query.
+- Reads are part of the same bookkeeping: `cs_read`, `cs_zim_get` and `cs_zim_main_page` lease the ZIM's archive exactly as a
+  search does (open it if it is closed, admitting it under the budget and closing least recently used ones to make room), so a read
+  counts as a use, and the memory of everything that reads a ZIM is inside the budget. A read of a ZIM over the whole budget opens it,
+  reads and closes it again, like a search.
+- The results of a query never depend on the budget (tests below); only latency does. The bytes, MIME type, title, text and errors
+  of a read are the same as the `zim` crate reader's gave (the byte-identity test below).
 
-Measured 2026-10-26 on Windows (release build, libzim 9.8.2, one process per ZIM, private bytes = `PrivateUsage`, sampled after
-about 2.5 s of settling; `tests/searcher_cost.rs`, ignored by default). MiB. "Archive open": `Zimx::open`. "Full-text searcher": the
-searcher built and one count-only search run (k = 0), which opens the Xapian database. "After 10 results read": the same archive after
-a search that returns 10 results with snippets.
+**What libzim 9.8.2 offers to bound memory** (read from its headers `zim/archive.h` and `zim/zim.h`; there is no `OpenConfig` memory
+limit, and no setting for Xapian's own cache):
+- `zim::setClusterCacheMaxSize(bytes)`, `getClusterCacheMaxSize()`, `getClusterCacheCurrentSize()`: ONE cache for the whole process,
+  shared by every archive; default 16 MiB. libzim counts the compressed size of what it caches; the process holds the decompressed
+  clusters, so what it costs is several times the cap (below). Lowering the cap drops entries at once.
+- `Archive::setDirentCacheMaxSize(n)`, `getDirentCacheMaxSize()`, `getDirentCacheCurrentSize()`: a cache of `n` dirents PER archive;
+  default 512. Its memory is too small to see (32 against 512 changed no measurement by more than noise), so it is only passed through.
+- `zim::OpenConfig` (the `Archive(path, OpenConfig)` constructor): `preloadXapianDb(bool)` and `preloadDirentRanges(int)`. Turning the
+  Xapian preload off removes most of an archive's open cost, but then libzim cannot create a search at all ("Cannot create Search
+  without FT Xapian index", every query fails on all 18 ZIMs), so it stays on. The dirent-range preload changed no memory
+  measurement; it stays at libzim's default.
+- Nothing exists to cap an archive's own tables or the Xapian database. They are what an archive's cost is made of.
 
-| ZIM | file | full-text index | title index | archive open | full-text searcher (count-only search) | after 10 results read | title searcher |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| wikipedia_en_all_maxi_2026-02 | 115.5 GiB | 7.7 GiB | 3.2 GiB | 291.8 | 0.7 | 95.9 | 1.9 |
-| armypubs_en_all_2024-12 | 7.7 GiB | 27.0 MiB | 9.8 MiB | 9.1 | 1.9 | 76.2 | 0.3 |
-| ifixit_en_all_2025-12 | 3.3 GiB | 75.1 MiB | 28.1 MiB | 16.0 | 1.2 | 94.8 | 1.1 |
-| wikispecies_en_all_maxi_2026-07 | 3.2 GiB | 445.4 MiB | 261.4 MiB | 29.4 | 0.6 | 96.5 | 2.0 |
-| www.ready.gov_en_2024-12 | 2.3 GiB | 3.6 MiB | 0.6 MiB | 9.1 | 0.8 | 88.1 | 0.0 |
-| wikivoyage_en_all_maxi_2026-09 | 1021.5 MiB | 55.4 MiB | 9.1 MiB | 10.4 | 1.0 | 94.9 | 0.5 |
-| appropedia_en_all_maxi_2026-02 | 554.7 MiB | 44.5 MiB | 7.6 MiB | 9.6 | 2.1 | 90.1 | 0.5 |
-| cd3wdproject.org_en_all_2025-11 | 554.2 MiB | 22.3 MiB | 2.4 MiB | 9.1 | 1.5 | 86.8 | 0.0 |
-| 100r.co_en_all_2026-08 | 169.0 MiB | 0.5 MiB | 0.1 MiB | 9.6 | 0.7 | 21.7 | 0.0 |
-| wikipedia_en_medicine_mini_2026-10 | 166.3 MiB | 30.0 MiB | 54.6 MiB | 12.3 | 1.3 | 94.9 | 0.7 |
-| meshoskey.com_eng_2026-10_24 | 116.8 MiB | 0.8 MiB | 0.1 MiB | 8.4 | 1.4 | 2.1 | 0.0 |
-| meshtastic.org_eng_2026-10_25 | 104.8 MiB | 0.8 MiB | 0.3 MiB | 9.1 | 1.0 | 56.7 | 0.3 |
-| fas-military-medicine_en_2025-06 | 77.7 MiB | 0.0 MiB | 0.0 MiB | 7.9 | 1.6 | 1.6 | 0.0 |
-| wiktionary_af_all_nopic_2026-07 | 25.4 MiB | 9.0 MiB | 3.0 MiB | 9.6 | 1.1 | 88.9 | 0.3 |
-| nhs.uk_en_medicines_2025-12 | 16.2 MiB | 1.3 MiB | 0.8 MiB | 9.1 | 0.8 | 78.0 | 0.3 |
-| freq51.net_eng_2026-05_21 | 12.0 MiB | 0.1 MiB | 0.0 MiB | 8.4 | 1.2 | 2.8 | 0.0 |
-| reticulum.network_eng_2026-10_22 | 4.8 MiB | 0.1 MiB | 0.0 MiB | 8.4 | 1.1 | 1.1 | 0.0 |
-| wikiquote_af_all_maxi_2026-07 | 1.8 MiB | 0.2 MiB | 0.1 MiB | 8.4 | 1.6 | 2.8 | 0.1 |
-| docs.meshcore.io_eng_2026-10_23 | 0.7 MiB | 0.1 MiB | 0.0 MiB | 8.9 | 1.2 | 1.2 | 0.0 |
+So the caps Cache sets are the cluster cache (config `zim_cluster_cache_mb`, default 4 MiB of compressed data instead of libzim's 16; the
+last `cs_open` or `cs_set_sources` in the process sets it) and the dirent cache (config `zim_dirent_cache`, default 512, libzim's own;
+applied to each archive when it opens). A change of either closes the open archives, which reopen with it.
 
-What the numbers say:
-- A kept searcher is small: 0.6-2.1 MiB (full-text) and 0-2.0 MiB (title), whatever the index size (Wikipedia's 7.7 GiB full-text index
-  costs 0.7 MiB: the Xapian database is memory-mapped). Dropping a searcher gives back at most that. Rebuilding one takes about 7 ms
-  (Wikipedia 91 ms) with a warm file cache.
-- The memory is in the open archive, not in the searcher: 8-29 MiB at open (Wikipedia 292 MiB), and, after a search that reads results,
-  another 50-97 MiB on the typical ZIM (about 1-3 MiB on a few small ones). That stays when the searcher is dropped and goes only when the archive is
-  closed (private bytes fell back to within 1-3 MiB of the starting value). Emptying libzim's cluster cache (shared by all archives,
-  16 MiB limit by default) gave back about 7 MiB of it, so the rest is held elsewhere in the archive.
-- With all 18 sources and the library open, process private bytes stay at about 1020 MiB for a budget of 256, 8 or 0 MiB, and the mean warm
-  query time over 10 queries is 880, 884 and 888 ms (second pass; `searcher_budget_mb` 256 keeps all 36 searchers, an estimated 30 MiB). At 256 MiB nothing is ever
-  dropped on these sources; the desktop default stays 256.
-- So the budget bounds what it tracks, the searchers, and on the current sources that is a small part of libzim's footprint.
-  Bounding the footprint (about 1 GiB with these sources) would need a budget over the open archives (close the least recently
-  used archive, reopen it on its next query) and/or a lower limit on what an archive keeps after reading results. That changes
-  when archives open and close and is not part of this budget. Proposed, not approved.
+**Cost model** (`budget::archive_cost`, `budget::reserved_cost`), all from numbers readable without libzim:
+
+```
+archive cost  = 2 MiB                                   (archive base)
+              + 11 bytes x entries                       (the header's article count)
+              + 1.5 MiB + full-text index bytes / 8192   (if the ZIM has X/fulltext/xapian: the searcher and Xapian state)
+              + 1 MiB   + title index bytes / 2048       (if it has X/title/xapian)
+              + 256 bytes x dirent cache cap             (zim_dirent_cache; 128 KiB at 512)
+reserved      = 9 MiB                                    (first archive in a process: libzim, Xapian, ICU set-up, heap growth)
+              + 8 x cluster cache cap                    (zim_cluster_cache_mb; 32 MiB at 4)
+available for archives = zim_budget_mb - reserved
+```
+
+Calibration (Windows, release build, libzim 9.8.2, process `PrivateUsage`; `tests/archive_cost.rs`, `tests/budget_measure.rs`, ignored by default). Each ZIM
+alone in a fresh process, cluster cap 4 MiB, after opening it and running four full-text searches with 10 results and one suggestion
+(MiB; "model" is archive cost plus reserved):
+
+| ZIM | entries | measured | model |
+|---|---:|---:|---:|
+| docs.meshcore.io (0.7 MiB file) | 52 | 11.5 | 45.6 |
+| nhs.uk medicines | 2,081 | 40.5 | 45.6 |
+| www.ready.gov | 6,738 | 38.6 | 45.7 |
+| wikipedia_en_medicine_mini | 340,829 | 43.8 | 49.2 |
+| ifixit | 894,836 | 39.6 | 55.0 |
+| wikispecies | 1,829,580 | 61.7 | 65.0 |
+| wikipedia_en_all_maxi (115 GiB) | 27,199,921 | 323.7 | 333.5 |
+
+(These read tables of different ZIMs against one cluster cache: about 30 MiB of every figure for a ZIM that reads results is the
+cluster cache at 4 MiB, 2-3 MiB the searchers' state, about 9 MiB the process set-up, and the rest the archive.) The model is
+meant to be at or above the measurement, never below it, for one archive in a fresh process. For many archives in one process it is
+above by about a fifth: all 18 sources (the `sources-full.json` ZIMs without the library) measured 368 MiB of private bytes for libzim
+after 20 queries (640 MiB in all, of which 272 MiB was the `zim` crate readers opened by `cs_open` at the time; they are no longer held), against a model of 404 + 41 = 445
+MiB; the first few archives opened pay about 9 MiB each and the later ones about nothing, because the heap reuses what it has.
+What the entries term stands for: libzim keeps about 10 to 12 bytes per entry in memory on Windows (Wikipedia 292 MiB, wikispecies
+28.7 for 1.83M entries, ifixit 7 to 16 for 0.89M). The cluster cache is the large moving part: with the default cap of 16 MiB it
+cost 143 to 148 MiB after four searches and a suggestion (cap 8: 68 to 71; cap 4: 24 to 33; cap 1: 2 to 4), which is the factor of 8 in the model, and
+setting the cap to 4 MiB saves about 118 MiB of private bytes on the full source set at no cost in query time (warm mean 903 ms
+against 904 ms with 16 MiB, over the 18 ZIMs, 20 queries).
+
+Android: the model is fitted to Windows private bytes and has not been measured on a device. Where libzim maps a file rather than
+reading it, the pages are file-backed and the kernel can drop them, which would make the estimate high for Android; whether that is
+so for the per-entry tables was not determined. The default of 384 MiB leaves 343 MiB for archives, which holds
+Wikipedia alone (about 293 MiB estimated) or a dozen small ZIMs, and everything else is closed in turn.
+
+**Why these defaults.** Android 384 MiB: the Wikipedia ZIM is the biggest single archive (293 MiB estimated, 292 measured at open) and
+should be able to stay open together with a few small ZIMs and the cluster cache; more than that is a large share of a phone app's
+memory when the library, the model and the map layers share the process. The desktop default is 1024 MiB: the 18 ZIMs of
+`sources-full.json` are estimated at 445 MiB in all (measured 368 for libzim) so everything stays open with room for a larger set, and
+the process total stays under about 1 GiB with the recon library. Both are settings; the numbers were not tuned on a device.
+
+**Measured with the budget** (Windows, release build, `sources-full.json`: 18 ZIMs and the recon library, default caps; private
+bytes sampled 3 s after the 20 queries; 20 varied queries run twice, warm time is the second pass; "ZIMs only" is the same without the library
+and so with the 272 MiB of `zim` crate readers visible; they are no longer held, see "One archive per ZIM"):
+
+| Config | Budget (MiB) | Cluster cap (MiB) | Private bytes (MiB) | Warm mean / median query (ms) | Archive closes per pass |
+|---|---:|---:|---:|---:|---:|
+| 18 ZIMs + library | 1024 | 4 | 905 | 996 / 1055 | 0 |
+| 18 ZIMs + library | 768 | 4 | 904 | 1028 / 957 | 0 |
+| 18 ZIMs + library | 384 | 4 | 893 | 1142 / 1176 | 360 |
+| 18 ZIMs + library | 1024 | 16 | 1021 | 946 / 1000 | 0 |
+| 18 ZIMs + library | 384 | 16 | 739 | 1054 / 1074 | 0 (Wikipedia opened per query) |
+| 18 ZIMs only | 1024 | 4 | 640, 638 (two runs) | 903 / 925, 917 / 974 | 0 |
+| 18 ZIMs only | 768 | 4 | 640 | 1006 / 1104 | 0 |
+| 18 ZIMs only | 384 | 4 | 629 | 1139 / 1165 | 360 |
+| 18 ZIMs only | 256 | 4 | 356 | 1095 / 1144 | 0 (Wikipedia opened per query) |
+| 18 ZIMs only | 128 | 4 | 358 | 1138 / 1182 | 340 (and Wikipedia per query) |
+| 18 ZIMs only | 1024 | 16 | 758 | 904 / 926 | 0 |
+
+The first pass of the very first run (1024 MiB, with the library) took 7936 ms per query on average, 71 s for the slowest: the OS
+file cache was cold, not the budget; every other first pass was within 15% of its second. Over the 20 queries the answers were
+identical in every run (the integration test checks that; the timing runs only count). With the whole set resident (1024 and 768) nothing
+is ever closed, so those two differ only by noise; at 384 MiB (343 available) Wikipedia stays open and the 17 small ZIMs take turns in the
+rest: 360 closes and reopens per pass of 20 queries cost about 140 ms of a 1000 ms query (about 8 ms each, with the OS file cache warm).
+
+What the table says: the archives' memory goes back when a closed archive is large (Wikipedia per query: 1021 to 739 MiB at 384 MiB
+with a 16 MiB cluster cap, and 640 to 355 MiB without the library at 256 MiB), but closing and reopening many small archives gives
+back almost nothing (384 against 1024 MiB: 893 against 905 MiB), because the heap keeps what small archives used. The budget therefore
+bounds the large archives well, the small ones poorly; and what is open stays bounded by the cost model, which is conservative. The
+recon library's own memory varied from 340 to 538 MiB between runs of the same config (measured 3 s after it finished opening), so
+compare rows of the "ZIMs only" half to see the effect of the budget.
+
+**Cold reopen of Wikipedia** (what the least-recently-used close costs when the archive is the biggest one). Windows, release build, the 115 GiB `wikipedia_en_all_maxi_2026-02.zim`, one source in the handle (the `zim` crate reader already open at the time of that measurement; it no longer is), the archive
+closed by setting the budget to 0 and then restored. The same sequence is run three times in a process, and the process twice. Open =
+`Zimx::open` (the shim, with the Xapian preload); first query = `cs_search` k=10 with the searcher build, the Xapian database open and the
+coverage reads; first suggestion = `cs_suggest` k=5.
+
+| Run | Open | First full-text query | First suggestion | Total | Private bytes while open |
+|---|---:|---:|---:|---:|---:|
+| 1, first open, terms never used before ("pangolin conservation status", "pangol") | 115 ms | 2402 ms | 644 ms | 3162 ms | +322 MiB |
+| 1, after eviction (same terms) | 111 ms | 183 ms | 7 ms | 300 ms | +321 MiB |
+| 1, after a second eviction | 117 ms | 185 ms | 6 ms | 307 ms | +321 MiB |
+| 2 (process repeated), first open, same terms | 114 ms | 194 ms | 6 ms | 314 ms | +322 MiB |
+| 2, after eviction | 118 ms | 185 ms | 6 ms | 310 ms | +321 MiB |
+
+Closing it gives all of it back (private bytes 0 to 2 MiB above the start after each close). The two figures that matter are the
+first row, 3.2 s, which reads pages of the file that nothing has touched since the machine started using them, and the rest, about
+0.3 s, where the OS file cache holds everything that open and those queries read. The first is the closer to the phone: the desktop
+has far more RAM than the 115 GiB file's hot pages need and keeps them cached, so a reopen here costs 0.3 s, where the phone's
+page cache is a few GB shared with everything else and a reopened Wikipedia reads its pages back from flash. The cache could not be
+emptied here (nothing is installed to do it), so the true cold cost on a phone is at least the first row and was not measured. The
+open itself (115 ms) is small because libzim maps rather than loads most of the file; what an eviction of Wikipedia mostly costs
+is the first query after it.
+
+**One archive per ZIM (the `zim` crate reader is gone from the xapian builds).** Until 2026-10-26 the `zim` crate reader (`ZimSource::zim`),
+used by `cs_read`, `cs_zim_get`, `cs_zim_main_page`, the title lookups and the coverage reads, was opened by `set_sources` for every ZIM and held
+for the life of the handle, outside the budget. Opening it cost about 2 MiB of private bytes per GiB of ZIM file (the page tables of the
+mapping of the whole file: Wikipedia 231 MiB, armypubs 15, ifixit 6.5, wikispecies 6.4, ready.gov 4.3, wikivoyage 1.9; all 18 sources 270 MiB),
+which on a phone with Wikipedia is as much as the whole libzim budget. Now, with libzim built in:
+- `ZimSource::open` opens the crate reader only to read what the source needs for good (UUID, title, language, entry count, whether the
+  ZIM has the full-text and title indexes and their sizes, which the cost model needs) and drops it before it returns. Opens run one at a
+  time, so the peak is the largest ZIM's mapping (Wikipedia: about 230 MiB, for the milliseconds that takes) and nothing of it stays.
+- Reads (`get`, `main_page_path`) lease libzim's archive, as above. The crate reader is opened again, lazily and kept, only for the
+  Tantivy index build of a ZIM without a built-in index (`index.rs`) and as the fallback for a ZIM libzim cannot open.
+- Builds without libzim (`--no-default-features`, Linux) keep the crate reader open and read through it, as before.
+- The old and the new reader are both in every xapian build, so the byte-identity test can run them side by side
+  (`ZimSource::get_crate` / `main_page_crate` against `get` / `main_page_path`).
+
+**Measured, before and after** (Windows, release build, `cs serve` run once per row with `sources-full.json`: the recon library and
+the 18 ZIMs, no `index_dir`, prewarm off, default caps; PrivateUsage of the process after the library opened, after 20 varied
+queries (`k` 10) and after 20 reads of the first ZIM hit of each query at 6000 characters; the same 20 queries as the budget table above):
+
+| Build | Budget (MiB) | After open | After 20 queries | After 20 reads |
+|---|---:|---:|---:|---:|
+| before (a042c1c, crate readers) | 1024 | 538 | 904 | 904 |
+| after (one archive per ZIM) | 1024 | 267 | 636 | 631 |
+| before | 384 | 539 | 892 | 892 |
+| after | 384 | 269 | 621 | 608 |
+
+About 270 MiB less at open (the crate readers), and 270 to 285 MiB less after the queries and reads; the reads themselves add nothing
+visible because their clusters go through libzim's capped cluster cache. A read takes 2 to 4 ms on both builds (warm file cache).
+
+**Byte-identity test** (`tests/zim_read_identity.rs`, `#[ignore]`d, needs `CS_TEST_ZIM_DIR`; run with
+`cargo test -p cache_search --test zim_read_identity -- --ignored --nocapture`): on Wikipedia maxi, the medicine mini ZIM, ready.gov, iFixit, NHS,
+Appropedia and armypubs it samples entries spread over the file with the crate reader (10 articles, 2 redirects, 2 images, a CSS or
+script file and another type where the ZIM has them) and compares, for each path, the crate reader against the library
+(`ZimSource::get`, `Handle::zim_get`: bytes, MIME type, path, title) and `cs_read` (the whole JSON at 300 and 6000 characters). It adds
+variants of an article path (with `#fragment`, percent-encoded, with `?query`, with an `A/` namespace prefix), a path that is not there,
+`X/fulltext/xapian`, `M/Title`, and the main page. Errors must match too (code and message). 508 comparisons, 0 differences.
+
+**Tests** (`budget.rs` unit tests, no ZIMs; `tests/zim_budget_ffi.rs` on three real ZIMs, needs `CS_TEST_ZIM_DIR`): a budget of 0 opens
+and closes per query and answers correctly (nothing is left open after any query, `per_query` counts every one); a tiny budget closes the least
+recently used archive and reopens it on demand; the most recently used archives stay open and are never reopened while the
+budget fits them; an archive over the whole budget closes after its query; results and the estimated totals are identical for budgets
+0, under the smallest archive, one archive, two archives, all three and the default, with the queries and suggestions run twice;
+`searcher_budget_mb` works as an alias and loses to `zim_budget_mb`; prewarm opens only what fits and closes nothing.
 
 ### Coverage-read cost (Xapian hits)
 
@@ -673,7 +847,7 @@ and 681 ms without, so the reads cost about 270-285 ms per query (29%).
 
 ### Android build
 
-Built 2026-10-26 for `aarch64-linux-android` with the `xapian` feature on, the way the Flutter plugin builds the core
+Built 2026-10-26 (rebuilt the same day for the memory budget, commit 17baa2c, and again for one archive per ZIM, commit f64c7c9, v3: `libzim.so`, `libc++_shared.so` and the ICU data are unchanged, only `libcache_search.so` differs, by 13,040 bytes more than v2) for `aarch64-linux-android` with the `xapian` feature on, the way the Flutter plugin builds the core
 (`cargo ndk --platform 28 -t arm64-v8a build --release -p cache_search`, NDK 28.2.13676358), with `LIBZIM_DIR` set to the folder
 `fetch-libzim.sh` unpacks (official `libzim_android-arm64-9.8.2-1.tar.gz`, md5 `59a6b769847b77dc0ace69c3b9727445` checked by the
 script). `build.rs` compiles `zimx.cpp` with the NDK's clang++ and links `libzim.so` and `libc++_shared.so`. What the app ships (sizes
@@ -681,11 +855,11 @@ as built; none of it is committed):
 
 | File | Where | Size (bytes) |
 |---|---|---:|
-| `libcache_search.so` (release, stripped) | `jniLibs/arm64-v8a/` | 50,457,568 |
+| `libcache_search.so` (release, stripped) | `jniLibs/arm64-v8a/` | 50,468,960 |
 | `libzim.so` (official prebuilt, `llvm-strip --strip-unneeded`; 16,230,992 unstripped) | `jniLibs/arm64-v8a/` | 8,247,096 |
 | `libc++_shared.so` (NDK 28.2, stripped copy) | `jniLibs/arm64-v8a/` | 1,253,544 |
 | `icudt73l.dat` (ICU 73.2 data) | a real file in app storage, not in `jniLibs` | 10,955,552 |
-| Total | | 70,913,760 (60.0 MB without the ICU data) |
+| Total | | 70,925,152 (60.0 MB without the ICU data) |
 
 `libcache_search.so` needs `libzim.so` and `libc++_shared.so` (DT_NEEDED) and exports only the `cs_*` functions; every libzim symbol it
 uses is defined in `libzim.so`. All four files' LOAD segments are 16 KB aligned. `cargo ndk` also copies a stray
@@ -876,20 +1050,28 @@ the live data stored for it.
 
 ### Live sources (`cache_live`)
 
-"Every API data point works this way": one engine, no per-source code. A source is one JSON file; the app points
-`"live": {"db_path", "sources_dir"}` at a folder of them. The files that ship are in `packages/cache_search/sources/`
-(`weather.json`: Open-Meteo, `alerts.json`: NWS); the app copies them into its sources folder on install, and a user adds
-or shares more by dropping files there. An unreadable file is listed under `errors` by `cs_live_sources` and does not stop
-the others.
+"Every API data point works this way": one engine, no per-source code. A source is one JSON file, pure data, so the same file
+works on every platform; the app points `"live": {"db_path", "sources_dir"}` at a folder of them. The files that ship are in
+`packages/cache_search/sources/` (`weather.json`: Open-Meteo, `alerts.json`: NWS); the app copies them into its sources folder
+on install, and a user adds or shares more by dropping files there (the starter catalogue is `cache-packs/connectors/`). An
+unreadable file is listed under `errors` by `cs_live_sources` and does not stop the others.
 
-Definition (format 1; unknown keys are errors, so typos show):
+This section is the format reference. The format is **2**; format 1 files read unchanged (format 2 only adds). Unknown keys
+are errors, so typos show, and every error names its field (`items[0].fields[2].time.in: ...`). The JSON Schema of the format
+is generated from the Rust types and committed as `packages/cache_search/schema/live-source.schema.json` (editors that know JSON Schema
+complete and check against it; `UPDATE_SCHEMA=1 cargo test -p cache_live --features schema` rewrites it, and the same test
+fails when it is stale). Write and test a definition with `cs live-check` and `cs live-preview` (see "Builder's tools").
+
+#### Shape
 
 ```
-{ "format": 1, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
+{ "format": 2, "id": "weather", "title": "Weather forecast", "provider": "Open-Meteo",
   "description": "one line: what the model and the Home card see of this source",
-  "attribution": "optional credit line",
-  "request": { "url": "https://...?lat={lat}&lon={lon}", "headers": {"Accept": "..."} },
-  "api_key": { "alias": "eia", "required": true },      optional; "{api_key}" in url/headers
+  "attribution": "credit line shown with the data",
+  "request": { ... },                                    see Request
+  "api_key": { "alias": "eia", "required": true },       a key; "{api_key}" in url, headers or body
+  "basic_auth": { "user_alias": "u", "password_alias": "p" },   HTTP Basic login (instead of api_key)
+  "params": [ { "name": "radius", "type": "number", "default": 50 } ],   values the user sets
   "refresh_minutes": 180,                                a fetch inside this time returns the stored copy
   "quota": { "per_minute": 30, "per_day": 2000, "per_month": 30000 },       all optional
   "validity": { "fixed_hours": 6 }                       or { "end_path": "daily.time[-1]", "end_of_day": true,
@@ -900,54 +1082,259 @@ Definition (format 1; unknown keys are errors, so typos show):
   "items": [ <item group>, ... ] }
 ```
 
-URL placeholders: `{lat}` `{lon}` (4 decimals; `{lat:2}` for another count), `{name}`, `{place_key}`, `{api_key}`; values
-are percent-encoded. https only (plain http only to 127.0.0.1/localhost, for tests). Every fetch sends the User-Agent
-`Cache/<version>` and nothing personal. The key value arrives in the fetch request, is used for that call and is never stored
-or written to an error message (the alias is what the app keeps in secure storage).
+#### Request
 
-Item group: `{ "each": "<path to an array>", "key": V, "label": V, "time": V?, "ends": V?, "fields": [ V+label ],
-"sort": [..]?, "point": {"lat": V, "lon": V}?, "area": "<path to a GeoJSON geometry>"? }`. One item per element of `each` (without `each`,
-one item from the response root). `key` is the item's stable id (it ends up in its address); `ends` is when the item stops
-being true (an alert's end; ended items are left out); `fields` are the labelled values, in order, a field with no value
-is left out; `point` and `area` are for map layers and Home cards (not given to the model).
+```
+"request": {
+  "url": "https://api.example.org/v1/near?lat={lat}&lon={lon}",   https only (http only to 127.0.0.1 and localhost, for tests)
+  "method": "GET",                      GET (default) or POST
+  "headers": { "Accept": "application/geo+json", "User-Agent": "Cache (https://example.org)" },
+  "body": { "q": "{name}", "radius": "{param:radius}" },   POST only; json (default), form or text, see below
+  "body_type": "json",
+  "timeout_seconds": 30,                default 30, at most 120 (the USGS Idaho bbox query needs about 45)
+  "max_bytes": 8388608,                 default 8 MiB, at most 32 MiB; counted after gzip is undone
+  "response": "json",                   json (GeoJSON too), xml, csv, tsv, tle or auto
+  "table": { ... }, "xml": { ... },     reading of csv/tsv and xml, see Response formats
+  "paging": { ... },                    more pages of a long result, see Paging
+  "steps": [ ... ] }                    several requests in order, see Steps (then url, body, response and paging go in the steps)
+```
 
-A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that
-has a value) or `distance`, then formatted by these steps, in this order: `time` (`{"in": "local"|"rfc3339"|"unix", "out":
-"datetime"|"datetime_s"|"date"|"<strftime>", "zone": "place"?}`) or `scale`, `offset`, `round` (decimals), `compass`
-(degrees to N/NE/...); `lookup` (a fixed table from a code to text, `"*"` is the fallback; replaces the result);
-`omit_if`; `case`; `max_chars`; `prefix`, `suffix`. No scripting.
+Every fetch sends the User-Agent `Cache/<version>` unless a header sets another (NWS asks for a contact; use the project, never a
+person). Gzip is asked for and undone whether or not the server says so. Keys, passwords and the Basic header are used for the
+call only, never stored, and removed from every error message and from the preview's request list.
 
-Paths are dot-separated keys with `[n]` indexes (`[-1]` last). A path starts at the current element (the `each` element),
-`^` starts at the response root, `@` is the element itself and `[#]` is its index, so a response with one array per column
-reads as `"each": "daily.time"` plus `"path": "^daily.temperature_2m_max[#]"`.
+**Placeholders** in the url, header values, the body and step urls (values are percent-encoded in a url or form; add `|raw` to
+insert as is, `{point:properties.forecast|raw}`; headers and JSON strings never encode):
 
-Times: every time the core writes (`fetched_at`, `valid_until`, `age` bases, item times, `last_error.at`) is in the place's
-local offset, as TOOLS.md says. The place's time zone is, in this order: the IANA name at `timezone_path` in the response
-(Open-Meteo `timezone`), a fixed offset at `utc_offset_path`, the offline lookup of the place's position, UTC. A named zone
-knows daylight saving, so a forecast that crosses the change (1 Nov) shows -06:00 before it and -07:00 after, and its
-`valid_until` (local midnight at the end of the last day) is exact. A time the provider wrote with its own offset is
-converted with `"zone": "place"` in its `time` step (the NWS definition does), otherwise it keeps the provider's offset.
-The zone is stored with the row, so a stored response is re-read in the same zone.
+| Placeholder | Value |
+|---|---|
+| `{lat}` `{lon}` | the place's degrees, 4 decimals; `{lat:2}` for another count |
+| `{latlon}` `{lonlat}` | `lat,lon` or `lon,lat` (`{latlon:2}`) |
+| `{lat_abs}` `{lat_hem}` `{lon_abs}` `{lon_hem}` | magnitude and `N`/`S`, `E`/`W` for APIs that want `43.6N 116.2W` |
+| `{name}` `{place_key}` | the place's name and key |
+| `{bbox:50km}` `{bbox:30mi}` `{bbox:$radius:mi}` | `west,south,east,north` of a box that far (half-width) around the place; `$radius` reads a parameter, the last part is its unit (default km) |
+| `{west:50km}` `{south:50km}` `{east:50km}` `{north:50km}` | one edge of that box, for APIs with a parameter per edge |
+| `{state}` `{state_name}` `{county}` `{county_fips}` `{country}` `{country_name}` | the place's detail, from optional members of the place the caller gives (`{"lat","lon","state":"ID","county":"Cassia","county_fips":"16031","country":"US",...}`; the app fills them from its geocoder; `cs_live_fetch` also does it for a `place` that is a name no saved place has: the installed places pack resolves it, keys it `at:<lat>,<lon>` and adds `state`, `state_name`, `county` and `country` where the pack has them, `county_fips` and `country_name` it does not). A place without the detail fails with a message that says which |
+| `{api_key}` | the key (declared in `api_key`); in the query, a header (`"Authorization": "Bearer {api_key}"`, any header name and prefix), the body or the path (`/csv/{api_key}/VIIRS/`) |
+| `{secret:alias}` | any other secret the caller gives under that alias |
+| `{param:name}` | a user parameter (see Parameters) |
+| `{now}` `{now-24h}` `{now+3d}` | the fetch time in UTC, `%Y-%m-%dT%H:%M:%SZ` by default; `{now-24h:unix}`, `{now:unix_ms}` or `{now:%Y-%m-%d}` for another form |
+| `{step:path}` `{item:path}` | a value from an earlier step's response, or the current element of a repeated step (see Steps) |
 
-Offline zone lookup: `tzf-rs` 2.1 (MIT) with its lite embedded boundary file, queried in place (`EmbeddedFinder`, no
-expansion into memory), and `chrono-tz` 0.10 (MIT OR Apache-2.0) for the offsets. The boundary data is from
-timezone-boundary-builder (ODbL-1.0): the app's credits need a line for it. Both add to the library size, reported with the
-release build.
+OAuth is not in the format (no token exchange, no redirects to a login page). A key, a header, Basic and a key in the path
+cover the public APIs that do not need it.
 
-Distance: a field value `{"distance": {"geometry": "<path to a GeoJSON geometry>", "unit": "mi"|"km"}}` is the distance from
-the place to the nearest point of the area and the compass direction of that point (`6.2 mi S`), or `inside the area` when
-the place is within it (holes count). An item with no geometry has no such field; nothing is estimated from the area name.
+**Bodies.** `"body_type": "json"` (default): the body is a JSON value, every string in it takes placeholders, and a string that is
+exactly `"{param:radius}"` keeps the parameter's type (`25`, `true`), so `{"radius": 25}` is sent. `"form"`: an object of strings,
+sent as `application/x-www-form-urlencoded`. `"text"`: a string. Example (a POST search):
 
-Sorting: an item group may have `"sort": [{"by": <value>, "rank": [..] | "time": true, "desc": false}, ...]` (first key
-first; missing values last). The alerts definition sorts by NWS severity (Extreme, Severe, Moderate, Minor, Unknown), then by
-onset.
+```
+"request": { "method": "POST", "url": "https://api.example.org/search",
+             "body": { "near": { "lat": "{lat}", "lon": "{lon}" }, "radius_km": "{param:radius}", "kinds": ["fire", "{param:kind}"] } }
+```
 
-Rows for the phone's position (`at:` keys) are pruned: after a fetch for one, the other `at:` rows of that source are deleted
-unless they are still within their validity, so only the newest fetch plus any still-valid row is kept. Saved places are
-never pruned.
+**Authentication examples.**
 
-Validity: `fixed_hours` after the fetch, or the end of the day found at `end_path` (a forecast is valid until its last day
-ends; `not_covered_after` then reports that date). After `valid_until` the data is expired.
+```
+key in the query     "url": "https://api.example.org/data?lat={lat}&key={api_key}"         + "api_key": {"alias": "example"}
+key in a header      "headers": { "X-Api-Token": "{api_key}" }                          Authorization: "Bearer {api_key}" works the same
+key in the path      "url": "https://api.example.org/area/csv/{api_key}/VIIRS_SNPP_NRT/{bbox:100km|raw}/1"
+HTTP Basic           "basic_auth": { "user_alias": "svc_user", "password_alias": "svc_pass" }   sent as Authorization: Basic ...
+```
+
+The caller gives the values in the fetch request (`"api_key": "..."` or `"secrets": {"svc_user": "...", "svc_pass": "..."}`); the app
+keeps them in secure storage under the aliases and `cs_live_sources` lists which a source needs. A response that points at
+another host is not followed with a key attached (see Steps).
+
+#### Parameters
+
+Values the user sets when adding the source (a gauge number, a radius, a fuel type). `{"name": "site", "label": "Gauge number",
+"type": "text"|"number"|"integer"|"bool"|"choice", "default": "13206000", "choices": [...], "min": 1, "max": 300, "required": true,
+"help": "..."}`. Use them as `{param:site}` in the request and `{"param": "site"}` as a value in the mapping (for example
+`"near": {"max": {"param": "radius"}, "unit": "mi"}`). A fetch or get request gives `"params": {"site": "13172500"}`; a missing
+one takes its default; a value outside its type or limits is `bad_json`. The row is stored under the place key when every
+parameter has its default, otherwise under `<place key>~<8 hex>`, so two gauges of one source for one place do not overwrite
+each other (`cs_live_get` reports the place with that key and the `params`; deleting a saved place deletes all of its rows).
+
+#### Response formats
+
+`"response"`: **json** (default; GeoJSON is JSON) and **auto** (decided by the first character).
+
+**xml**: converted to a tree before mapping. An element is an object; attributes are keys that start with `@` (`link.@href`); text
+next to attributes or children is `#text`; an element with only text is that text (empty: `null`); a repeated element is an
+array, and names listed in `"xml": {"always_array": ["info", "area"]}` are arrays even when they occur once (so
+`alert.info[0].event` works for one language or two); namespace prefixes are dropped; the root element is the single member of
+the tree (`feed.entry`). DOCTYPE entities are never expanded.
+
+```
+<feed><entry><id>a1</id><link href="https://x/a1"/></entry><entry>...</entry></feed>
+  ->  {"feed": {"entry": [ {"id": "a1", "link": {"@href": "https://x/a1"}}, ... ]}}
+```
+
+**csv** and **tsv**: an array of objects keyed by the header row, values as text. `"table": {"delimiter": ";", "header": false,
+"comment": "#", "skip_after_header": 1}`: another delimiter, no header row (columns `c0`, `c1`, ...), comment lines to skip, rows to
+drop after the header. The USGS RDB format is `"response": "tsv", "table": {"comment": "#", "skip_after_header": 1}`. Map the
+rows with `"each": "^"`.
+
+**tle**: two-line element sets (a name line is optional) as an array of `{name, norad_id, classification, intl_designator, epoch,
+inclination_deg, raan_deg, eccentricity, arg_perigee_deg, mean_anomaly_deg, mean_motion_rev_per_day, rev_number, line1, line2}`.
+Orbit and pass calculation is not a mapping and is not in the format.
+
+#### Steps: a later request using an earlier response
+
+```
+"request": { "headers": { "Accept": "application/geo+json" },       shared by every step
+  "steps": [
+    { "id": "point", "url": "https://api.weather.gov/points/{lat},{lon}" },
+    { "id": "fc",    "url": "{point:properties.forecast|raw}" },
+    { "id": "st",    "url": "{point:properties.observationStations|raw}" },
+    { "id": "obs",   "url": "https://api.weather.gov/stations/{s:properties.stationIdentifier}/observations/latest",
+      "for_each": { "from": "st", "path": "features", "as": "s", "limit": 3 } } ] }
+```
+
+Each step is a request of its own (own `url`, `method`, `body`, `response`, `paging`); `{id:path}` reads a path of an earlier step's
+response, `{id}` its text if it is one value. `for_each` repeats the step for the first `limit` elements (default 10, at most 50) of
+a list in an earlier, non-repeated step; the current element is `{as:path}`; the step's result is the list of responses. A
+repeated request that fails (404, a timeout) is left out and counted (`missing_requests` in `cs_live_get`); all failing is an error.
+At most 6 steps. The mapping reads one object with a member per step id: `"each": "fc.properties.periods"`,
+`"each": "obs"`, `"timezone_path": "point.properties.timeZone"`. A url taken from a response is only sent to hosts the definition
+names itself when the source has a key or login (a key is never sent to a host a response points at). Every request of every
+step counts once against the quota.
+
+#### Paging
+
+`"paging"` on a request or step fetches more pages and joins the list found at `list_path` across pages into the first page's
+tree; the mapping sees one list. It stops when a page has no items, when `more_path` says there is no more, or when the next
+page cannot be known; `max_pages` (default 5, at most 50) is a hard cap, and reaching it with more data left sets
+`"truncated": true` in `cs_live_get` and the preview. Every page counts against the quota.
+
+```
+offset     {"type": "offset", "param": "resultOffset", "size_param": "resultRecordCount", "page_size": 1000,
+            "list_path": "features", "more_path": "properties.exceededTransferLimit", "max_pages": 5}      ArcGIS
+page       {"type": "page", "param": "page", "size_param": "per_page", "page_size": 100, "start": 1, "list_path": "data"}
+cursor     {"type": "cursor", "param": "cursor", "next_path": "meta.next_cursor", "list_path": "data"}
+next_link  {"type": "next_link", "next_path": "links.next", "list_path": "data"}      absolute or /relative; same host only
+```
+
+Without `more_path`, an offset or page request continues while a page is full (`page_size` items). `param` and `size_param` are
+set in the url's query (replaced if already there). `list_path` empty or `"^"`: the response itself is the list.
+
+#### Rate limits, errors and size
+
+A `429` (or a `503` with `Retry-After`) is waited for as the provider asks (`Retry-After` seconds or a date; without it 2 s, 4 s),
+at most three tries, and each try counts against the quota. A provider that asks for more than 60 s is not waited for: the
+fetch fails at once with the wait in the message. Any other 4xx or 5xx fails with `fetch_failed` and a message such as
+`HTTP 404: No such site: 99` (the reason is taken from the response's `message`, `error`, `detail` or `reason` when it has one) plus
+`(the key or login was refused)` for 401/403. A failed fetch keeps the last good copy, and the message is recorded for the source
+and place (`last_error` in `cs_live_get`). A response over `max_bytes` is `bad_response`, never cut. A quota is checked before every
+request; `quota` ends the fetch.
+
+#### Item groups and values
+
+Item group: `{ "each": "<path>", "key": V, "label": V, "time": V?, "ends": V?, "fields": [ V+label ], "where": [..]?, "near": {..}?,
+"sort": [..]?, "limit": n?, "point": {"lat": V, "lon": V}?, "area": "<path to a GeoJSON geometry>"? }`. One item per element of
+`each`, an array, or an **object** (one item per member; `@key` is the member name, so `{"0": {...}, "1": {...}}` maps with
+`"each": "scales", "key": {"path": "@key"}`); without `each`, one item from the response root. `key` is the item's stable id (it ends
+up in its address); `ends` is when the item stops being true (ended items are left out); `fields` are the labelled values, in order,
+a field with no value is left out; `point` and `area` are for map layers and Home cards (not given to the model). Order of
+processing: map, `where`, `near`, `sort`, `limit`.
+
+A value `V` is found by exactly one of `path`, `const`, `template` (`"{a} mph {b}"` with `vars`), `first_of` (first that has a
+value), `distance`, `param` (a user parameter) or `calc`, then formatted by these steps, in this order: `after_last` (keep the text after the last `"/"`, for the last part of a URL); `time` or `scale`,
+`offset`, `round` (decimals), `compass` (degrees to N/NE/...); `lookup` (a fixed table from a code to text, `"*"` is the fallback;
+replaces the result); `omit_if` (values to treat as missing); `min_value`, `max_value` (a number outside them is missing: providers write -999 for "no reading"); `case`; `max_chars`; `prefix`, `suffix`. A `time` step may also have `not_before` (a date; earlier times, such as year 1 for "no time", are missing). No scripting.
+
+Paths are dot-separated keys with `[n]` indexes (`[-1]` last). A path starts at the current element (the `each` element), `^`
+starts at the response root, `@` is the element itself, `@key` (the whole path) the member name of an object, and `[#]` the index,
+so a response with one array per column reads as `"each": "daily.time"` plus `"path": "^daily.temperature_2m_max[#]"`. XML
+attributes are `@name` keys (`link.@href`).
+
+**calc**: arithmetic on other values, `{"calc": {"op": "add"|"sub"|"mul"|"div"|"min"|"max", "args": [V, V, ...]}}` (the signs
+`+ - * /` also work; left to right; division by zero or any missing argument gives no value; the number at the start of a text
+counts, so `"20 mph"` is 20). The result then takes `round`, `suffix` and the rest: wind speed ratio
+`{"calc": {"op": "div", "args": [{"path": "gust"}, {"path": "speed"}]}, "round": 1}`; a `first_of` argument gives a fallback.
+
+**Times.** `"time": {"in": ..., "out": ..., "zone": "place"?}`:
+
+| `in` | the response writes |
+|---|---|
+| `local` | no offset, the place's local time: `2026-10-25T14:00` (a space, seconds and a `Z` are also read), or a date |
+| `utc` | no offset, UTC: `2026-10-26 05:17:56.783`, `2026-10-26T12:00:00`; written in the place's offset |
+| `rfc3339` | with an offset (kept as the provider wrote it, or converted with `"zone": "place"`) |
+| `rfc2822` | `Sun, 25 Oct 2026 19:40:00 +0000` |
+| `unix` `unix_ms` | seconds or milliseconds since 1970 (USGS and ArcGIS dates); written in the place's offset |
+| `pattern` | `"pattern": "%d/%m/%Y %H:%M"` (strftime); with `%z` it has an offset, without it `"assume": "place"` (default) or `"utc"` |
+
+`out` is `datetime` (default `2026-10-25T14:00-06:00`), `datetime_s`, `date` or a strftime pattern. A sort key or `ends` reads the
+same `time` step; without one they read RFC 3339.
+
+**Distance.** `{"distance": {"geometry": "<path>" | "point": {"lat": V, "lon": V}, "unit": "mi"|"km", "number": false}}` is the distance
+from the place to the nearest point of a GeoJSON Point, LineString, Polygon, their Multi forms, a Feature, a collection, or of a coordinate
+pair, with the compass direction of that point (`6.2 mi S`), `inside the area` when the place is within an area (holes count) and
+`at the place` within 50 m; `"number": true` gives only the number, for `calc`, `where` and `round`. An item with no geometry has no such field;
+nothing is estimated from a name.
+
+**near.** `"near": {"max": 50, "unit": "mi"}` on a group drops items farther than that from the place, measured to the item's `point`
+(else its `area`), or to `"point": {...}` or `"geometry": "<path>"` named in `near`. `max` may be a value (`{"param": "radius"}`).
+An item with nothing to measure is dropped.
+
+**where.** `"where": [ {...}, ... ]` keeps items that pass every condition. A condition names what it tests with exactly one of `value`
+(a value `V` of the response), `field` (the label of one of the item's own `fields`; the number at the start of the text is used for
+comparisons) or `or` (a list of conditions, any of which may pass), and has one or more tests: `equals`, `not_equals`, `in`, `not_in`
+(text compares ignoring case, numbers numerically), `gt`, `ge`, `lt`, `le` (a number or a value such as `{"param": "min_size"}`),
+`contains`, `starts_with`, `exists`, and `max_age_hours` (the value is a time, read with its `time` step, no more than that many hours before the fetch: it leaves out gauges that stopped reporting). A missing value fails every test except `not_equals`, `not_in` and `exists: false`.
+No expressions: comparisons only.
+
+```
+"where": [ { "value": { "path": "properties.IncidentTypeCategory" }, "equals": "WF" },
+           { "or": [ { "value": { "path": "properties.POOState" }, "equals": "ID" }, { "value": { "path": "properties.POOState" }, "equals": "OR" } ] },
+           { "field": "Size", "ge": { "param": "min_acres" } } ]
+```
+
+**Sorting and limit.** `"sort": [{"by": V, "rank": [..] | "time": true | "number": true | "distance": true, "desc": false}, ...]` (first key first;
+missing values last; `rank` orders by a list, `number` by the number at the start of the value, `distance` by distance from the
+place to the item and needs no `by`); `"limit": 20` keeps the first items of the group after sorting. The alerts definition sorts by
+NWS severity then onset.
+
+#### Time zones, validity, rows
+
+Every time the core writes (`fetched_at`, `valid_until`, `age` bases, item times, `last_error.at`) is in the place's local offset, as
+TOOLS.md says. The place's time zone is, in this order: the IANA name at `timezone_path` in the response (Open-Meteo `timezone`), a
+fixed offset at `utc_offset_path`, the offline lookup of the place's position, UTC. A named zone knows daylight saving, so a
+forecast that crosses the change shows -06:00 before it and -07:00 after, and its `valid_until` (local midnight at the end of the last
+day) is exact. The zone is stored with the row, so a stored response is re-read in the same zone.
+
+Offline zone lookup: `tzf-rs` 2.1 (MIT) with its lite embedded boundary file, queried in place (`EmbeddedFinder`, no expansion into
+memory), and `chrono-tz` 0.10 (MIT OR Apache-2.0) for the offsets. The boundary data is from timezone-boundary-builder (ODbL-1.0):
+the app's credits need a line for it.
+
+Validity: `fixed_hours` after the fetch, or the end of the day found at `end_path` (a forecast is valid until its last day ends;
+`not_covered_after` then reports that date). After `valid_until` the data is expired. Rows for the phone's position (`at:` keys) are
+pruned: after a fetch for one, the other `at:` rows of that source are deleted unless they are still within their validity. Saved
+places are never pruned. The stored response is the converted tree (JSON as received, XML and CSV as their JSON form, steps as the
+object of step responses), so a changed definition re-maps it without a download, with the parameters it was fetched with.
+
+#### Builder's tools
+
+* `cs live-check <def.json>`: parses and validates a definition, prints every problem with its field
+  (`items[0].where[1]: needs a test`, `request.steps[1].for_each.from: no earlier step called "zzz"`) and warnings (no `require`, no
+  `quota`, no `attribution`). Needs no network and no config.
+* `cs live-preview <def.json> --place 42.536,-113.792 [--name ..] [--state ID --county Cassia --country US] [--param k=v]... [--key V | $CACHE_LIVE_KEY]
+  [--secret alias=v]...`: fetches once (every step and page, with the definition's timeout and size limit) and prints, as JSON, the
+  requests made (status, bytes, ms), the **raw response tree** cut down so it can be read (long lists keep their first elements and say how many
+  more; `--raw-chars` sets the size), the **paths** in it in the mapping's own syntax (`features[0].properties.name = "Fire"`), and the
+  **mapped items**. If the mapping fails the raw tree is still shown, with the reason. It stores nothing and counts against no quota.
+* `cs_live_preview(request_json)`: the same as one C call, without a handle, for an in-app connector builder: the definition as text plus
+  place, params and keys; see `include/cache_search.h`.
+* The JSON Schema above.
+
+Workflow: write the `request`, run `cs live-preview` with a throwaway `items`, read the paths, write the mapping, run `cs live-preview` again,
+then `cs live-check`.
+
+#### Not in the format, on purpose
+
+No OAuth or login flows, no scripting or free-form expressions, no per-source code, no cookies or sessions, no HTML scraping (a source is a
+documented API), no orbit or pass prediction, no unbounded loops (fan-out, steps and paging all have hard caps).
 
 ### Store and calls
 
@@ -965,6 +1352,36 @@ reproduce; only a missing `now` falls back to the system clock.
 The phone's own position as a place: the key `at:<lat>,<lon>` with both rounded to 2 decimals (about 1 km) and the name
 `current location`. The `live_data` tool uses it when no place is given and a location is known, so the app fetches
 for the current position with a place object carrying that key.
+
+### `live_data` and the places pack
+
+Decided by the Cache lead (ref-a5), 2026-10-26. The `place` the model gives is not matched against saved place names only. The
+tool resolves it, in this order:
+
+1. a saved place (key or name, ignoring case): its own stored data is used whatever the distance;
+2. `lat,lon` text (the form `navigate` takes: `"44.4238,-111.3714"`): the point as written, shown as written;
+3. a name the places pack resolves, through `ToolCtx::geocoder` (`cache_tool::places::Geocoder`,
+   `resolve(text, near) -> Option<(name, lat, lon)>`; `near` is the phone's position when it is known, to choose between towns of
+   one name). `cache_places::PackPlaceSource` implements it over the same `PackGeocoder` that `navigate` and `locate` use:
+   `forward` search (name, alternative names, prefix, state or county after a comma) when its first match fits the name
+   (`name_score` 40 or more), else the town whose name is the text with a typing slip in it (`fuzzy_town`: optimal string
+   alignment distance, nothing to do with the language: no edits allowed under 4 letters, 1 up to 9, 2 from 10; ties go to the
+   town nearer the phone, then to the larger one). A match that only has one of the words in its name is not a match;
+4. no place text: the phone's position (`here_key`).
+
+With no places pack installed `geocoder` is `None` and only 1 and 2 apply: any other text is `geocode_empty` (as before).
+A text the pack cannot resolve is `geocode_empty` too.
+
+The data is then looked up by distance, not by key: every place the source has stored data for (saved places, and the positions
+the phone fetched at) is a candidate, and the nearest one within `live_radius_km` (the `live` config key, default 30) is used;
+the nearest whose data has not expired when there is a choice. The result's `place` is that place, and when it is not the one
+asked about and is at least 1 km from it, `asked_place` (the name that was resolved, or the text for coordinates and
+`current location` for the fix) and `distance_from_asked_km` (whole km, at least 1) follow it, so the assistant can say "I
+only have Ashton, 40 km from Island Park". The item addresses are those of the place the data is for.
+
+Nothing within the radius is `no_data` with the nearest stored place and its distance in the detail (`no weather data within 30 km
+of Island Park, ID; the nearest place with data is Ashton, ID, 40 km away`), never `geocode_empty`; when nothing at all has
+been downloaded for the source the older wording stays (`no weather data has been downloaded for X`).
 
 HTTP is `ureq` (blocking, rustls with bundled root certificates, no async runtime): the app's scheduler or the CLI calls
 fetch from a worker thread, so a blocking client is enough and it adds far fewer crates than reqwest (tokio, hyper).

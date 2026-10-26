@@ -46,7 +46,7 @@ typedef struct cs_handle cs_handle;
 typedef struct cs_conv cs_conv;
 typedef struct cs_job cs_job;
 
-/* {"version":"0.1.0","index_format":2} */
+/* {"version":"0.1.0","index_format":3} */
 char *cs_version(void);
 
 /* --- handle and sources --- */
@@ -65,7 +65,9 @@ char *cs_version(void);
  *   "video": {"dir": ".../videos"},                 optional: PeerTube instances, offline downloads (cs_video_*, job
  *                                                   kind video_download); holds instances.json and downloads/
  *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
- *            "sources_dir": ".../sources"},          the source definition files (*.json, see DESIGN.md)
+ *            "sources_dir": ".../sources",           the source definition files (*.json, see DESIGN.md)
+ *            "live_radius_km": 30},                  optional, default 30: live_data uses the nearest stored place's data
+ *                                                    within this distance of the place asked about
  *   "places": {"packs": [".../idaho/places.sqlite"]},  optional: registers the nearby and locate tools over these places
  *                                  packs (docs/TOOLS.md). Packs are opened on demand: nearby is left out of
  *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack
@@ -84,10 +86,19 @@ char *cs_version(void);
  *                                  best hit are dropped on the same terms
  *   "prewarm": true                optional, default true (false on Android): open libzim on the ZIMs with a built-in index
  *                                  on background threads as soon as the sources are set, so the first search does not pay
- *                                  for it; only as many as fit in searcher_budget_mb, smallest first
- *   "searcher_budget_mb": 256      optional, default 256: memory budget for the libzim searchers kept built (estimated cost
- *                                  per searcher, least recently used dropped first); a searcher over the whole budget is
- *                                  built per query; 0 keeps none. Changes speed only, never the results. See DESIGN.md
+ *                                  for it; only as many as fit in zim_budget_mb, smallest first
+ *   "zim_budget_mb": 1024          optional, default 384 on Android and 1024 elsewhere: memory budget in MiB for the open
+ *                                  libzim archives together with their searchers and caches, which also serve cs_read and cs_zim_get (the old name of this key,
+ *                                  "searcher_budget_mb", is still read when "zim_budget_mb" is absent). Each ZIM costs an
+ *                                  estimate of about 10 MiB plus ~11 bytes per entry plus its searchers; when opening one
+ *                                  would go over the budget the least recently used archives are closed first (they reopen
+ *                                  on their next query); an archive over the whole budget is opened for the query and closed
+ *                                  after it; 0 does that for every query. Changes speed only, never the results. See DESIGN.md
+ *   "zim_cluster_cache_mb": 4      optional, default 4 (libzim's own default is 16): limit in MiB of compressed data of
+ *                                  libzim's cluster cache, shared by all archives in the process (the last cs_open or
+ *                                  cs_set_sources in the process sets it). What it holds is about 8 times larger once
+ *                                  decompressed, and that is taken off the top of zim_budget_mb
+ *   "zim_dirent_cache": 512        optional, default 512 (libzim's own default): dirents each open archive's dirent cache holds
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
  * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it
@@ -163,6 +174,9 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
  * 2. the percent-decoded path (UTF-8) is looked up; 3. then the path as given; 4. if it contains "?", steps 2-3
  * are repeated with the "?query" removed. Each lookup tries namespace 'C', then 'A', 'I' and '-' (old ZIMs).
  * cs_read uses the same lookup. Relative links must be made absolute by the caller.
+ * With libzim built in (the xapian feature) cs_read, cs_zim_get and cs_zim_main_page read through the same open libzim archive
+ * the searches use, so they count against zim_budget_mb and keep that archive recently used; a ZIM libzim cannot open, and a
+ * build without the feature, use the Rust zim crate reader. The bytes, MIME type, title and errors are identical either way.
  * address: "zim:<uuid>/<path>". *mime_out is set to a string freed with cs_free_string.
  * Returns NULL on error (cs_last_error). Free the buffer with cs_free_bytes. */
 uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t *len_out);
@@ -275,31 +289,61 @@ char *cs_place_delete(cs_handle *h, const char *key);
  * the cs_open config has no "live" section. */
 
 /* {"sources":[{"id","title","provider","description","attribution","refresh_minutes",
- *              "api_key":null|{"alias","required"},"quota":{"per_minute","per_day","per_month"}}],
+ *              "api_key":null|{"alias","required"},"basic_auth":null|{"user_alias","password_alias","required"},
+ *              "params":[{"name","label"?,"type"?,"default"?,"required","choices","min"?,"max"?,"help"?}],
+ *              "quota":{"per_minute","per_day","per_month"}}],
  *  "errors":[{"file","message"}]}   (definition files that could not be read) */
 char *cs_live_sources(cs_handle *h);
 
-/* request_json: {"source":"weather","place":<place>,"api_key"?:"...","force"?:false,"now"?:"<ISO 8601 with offset>"}
+/* request_json: {"source":"weather","place":<place>,"params"?:{"<name>":value},"api_key"?:"...","secrets"?:{"<alias>":"..."},
+ *                "force"?:false,"now"?:"<ISO 8601 with offset>"}
  * <place> is a saved place's key or name (a string) or {"key","name","lat","lon"} (the app passes the phone's
  * position this way; for "where the phone is" use the key "at:<lat>,<lon>" rounded to 2 decimals, which is the key the
- * live_data tool looks for). "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
+ * live_data tool looks for). An object place may also carry "state","state_name","county","county_fips","country",
+ * "country_name" (from the app's geocoder) for sources whose request needs them ({state} in the definition); a source
+ * that needs one the place lacks fails with "fetch_failed" saying which. "params" are the user's values for the source's
+ * "params" (cs_live_sources lists them; a missing one takes its default). With parameters other than the defaults the
+ * row is stored under the place key "<key>~<8 hex>" (reported in the result's "place"). "secrets" gives other
+ * secrets by alias (a Basic login: both of its aliases); "api_key" is the value for the source's api_key alias. "now" defaults to the system clock. Downloads (HTTPS; User-Agent "Cache/<version>")
  * unless the stored copy is younger than the source's refresh interval and still valid (then "fetched":false and no
  * network); maps the response with the definition and stores it with the raw response. The API key is used for this
  * call only and never stored. A failed download returns NULL (codes fetch_failed, quota, key_missing, bad_response,
- * not_found, bad_json) and keeps the last good copy; cs_live_get then shows it with "last_error".
+ * not_found, bad_json) and keeps the last good copy; cs_live_get then shows it with "last_error" (an upstream 4xx/5xx reads
+ * like "HTTP 404: No such site"; a rate limit is waited for as the provider asks, inside the quotas).
  * Returns what cs_live_get returns plus "fetched":true|false. */
 char *cs_live_fetch(cs_handle *h, const char *request_json);
 
-/* request_json: {"source","place","now"?}. The stored data for Home cards and map layers, expired or not:
+/* request_json: {"source","place","params"?,"now"?}. The stored data for Home cards and map layers, expired or not:
  * {"source":{"id","title","provider","description","attribution"},"place":{"key","name","lat","lon"},
  *  "fetched_at","valid_until","age":"2 hours old","age_seconds","expired":bool,"not_covered_after":null|"<date>",
- *  "last_error":null|{"code","message","at"},
+ *  "last_error":null|{"code","message","at"},"truncated"?:true (a paged result was cut at the definition's page cap),
+ *  "missing_requests"?:n (repeated requests that failed and are missing),"params"?:{...} (the values it was fetched with),
  *  "items":[{"address":"live:<source>/<place-key>/<item-key>","label","time"?,"fields":{"<label>":"<value with unit>"},
  *            "point"?:{"lat","lon"},"area"?:<GeoJSON geometry>}]}
  * Times are ISO 8601 in the place's local offset (the zone comes from the response, else from an offline lookup of the
  * place's position; daylight saving is applied). Items that have ended are left out. This is the same data the live_data tool gives the model, from the same code. "not_found" when nothing
  * was ever downloaded for that source and place. */
 char *cs_live_get(cs_handle *h, const char *request_json);
+
+/* For writing a connector (the future in-app builder, and `cs live-check` / `cs live-preview`). No handle: nothing is
+ * opened, stored or counted against a quota. request_json:
+ *   {"definition": <the source definition as a JSON object, or its text>,
+ *    "place"?: {"lat","lon","name"?,"state"?,"state_name"?,"county"?,"county_fips"?,"country"?,"country_name"?},
+ *    "params"?: {"<name>": value}, "api_key"?: "...", "secrets"?: {"<alias>": "..."}, "now"?: "<ISO 8601 with offset>",
+ *    "check_only"?: false, "raw_chars"?: 12000, "max_items"?: 20}
+ * With "check_only": parses and validates only (no network, no place needed) and returns
+ *   {"valid":true,"source":{"id","title","provider","format","refresh_minutes","needs_key","needs_login","params","items"},
+ *    "requests":[{"step","method","url"}],"warnings":["..."]}.
+ * Otherwise downloads once (every step and page; the definition's own timeout and size limit apply) and returns
+ *   {"valid":true,"source":{...},"place":{...},"params":{...},"requests":[{"step","method","url"(secrets removed),"status","bytes","ms"}],
+ *    "truncated":bool,"missing_requests"?:n,"raw":<the response tree, long lists and text cut so it can be read>,
+ *    "paths":["features  (list of 25)","features[0].properties.name = \"...\"", ...],   (paths in the mapping's syntax)
+ *    "zone","valid_until","not_covered_after"?,"item_count":n,"items":[<as cs_live_get items, without address>],
+ *    "mapping_error"?:{"code","message"},"warnings":[...]}
+ * A definition the mapping cannot read still returns the raw tree, with "mapping_error". An invalid definition is
+ * "bad_json" with every problem in the message, each naming its field (items[0].fields[2].time.in: ...); a failed
+ * download is "fetch_failed"/"bad_response"/"key_missing" as cs_live_fetch. NULL on error: cs_last_error(NULL). */
+char *cs_live_preview(const char *request_json);
 
 /* --- the map: search, route, guidance (cache_places::map, cache_navigate::map) ---
  * The Maps tab's own calls, direct (no model in the loop). They need the "places" and "routing" sections of the cs_open config

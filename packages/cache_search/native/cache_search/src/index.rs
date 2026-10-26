@@ -25,7 +25,12 @@ use tantivy::tokenizer::{Language, LowerCaser, RemoveLongFilter, SimpleTokenizer
 use tantivy::{doc, Index, IndexReader, ReloadPolicy, TantivyDocument};
 use zim::{MimeType, Namespace, Target};
 
-pub const INDEX_FORMAT: u32 = 2;
+/// Format 3: the body text comes from `html::html_to_text` with main-content extraction (menus, sidebars and footers no longer
+/// rank), where format 2 held the stripper's text of the whole page, menus and sidebars made of plain `div`s included. A format-2 index reports `stale` and is skipped until it is rebuilt.
+pub const INDEX_FORMAT: u32 = 3;
+/// The format of a library's device keyword index (`libindex`): built from the library's plain text fields, no HTML, so the
+/// ZIM body change above does not touch it and a built device index stays valid.
+pub const LIB_INDEX_FORMAT: u32 = 2;
 pub const META_FILE: &str = "cache_search_index.json";
 pub const LOCK_FILE: &str = "cache_search_index.lock";
 /// Name under which the ZIM's analyzer is registered in Tantivy (stored in the schema).
@@ -306,12 +311,17 @@ pub enum IndexState {
 }
 
 pub fn index_state(dir: Option<&Path>, zim_uuid: &str) -> IndexState {
+    index_state_for(dir, zim_uuid, INDEX_FORMAT)
+}
+
+/// `index_state` for an index of `format` (a ZIM's `INDEX_FORMAT`, a library device index's `LIB_INDEX_FORMAT`).
+pub fn index_state_for(dir: Option<&Path>, zim_uuid: &str, format: u32) -> IndexState {
     let Some(dir) = dir else { return IndexState::Missing };
     if lock_is_live(dir) {
         return IndexState::Building;
     }
     let Some(m) = read_meta(dir) else { return IndexState::Missing };
-    if m.index_format != INDEX_FORMAT {
+    if m.index_format != format {
         return IndexState::Stale;
     }
     if m.zim_uuid != zim_uuid {
@@ -407,6 +417,7 @@ pub fn build_zim_index(
 ) -> Result<Outcome> {
     let dir = p.index_dir;
     let zim = p.zim;
+    let czim = zim.zim()?;
     let total = zim.entry_count();
     let tokenizer = tokenizer_name_for(zim.language.as_deref());
 
@@ -473,7 +484,7 @@ pub fn build_zim_index(
         while next < total && cands.len() < checkpoint {
             let idx = next as u32;
             next += 1;
-            let Ok(e) = zim.zim.get_by_url_index(idx) else { continue };
+            let Ok(e) = czim.get_by_url_index(idx) else { continue };
             if !matches!(e.namespace, Namespace::UserContent | Namespace::Articles) {
                 continue;
             }
@@ -494,7 +505,7 @@ pub fn build_zim_index(
             while j < cands.len() && cands[j].cluster == c0 {
                 j += 1;
             }
-            if let Ok(cl) = zim.zim.get_cluster(c0) {
+            if let Ok(cl) = czim.get_cluster(c0) {
                 if let Ok(g) = cl.read() {
                     for c in &cands[i..j] {
                         let Ok(blob) = g.blob(c.blob) else { continue };
@@ -662,6 +673,11 @@ mod tests {
         m.index_format = 0;
         write_meta(&d, &m).unwrap();
         assert_eq!(index_state(Some(&d), "u"), IndexState::Stale);
+        // a ZIM index of format 2 (body text before main-content extraction) is stale; a library's device index of format 2 is not
+        m.index_format = 2;
+        write_meta(&d, &m).unwrap();
+        assert_eq!(index_state(Some(&d), "u"), IndexState::Stale);
+        assert!(matches!(index_state_for(Some(&d), "u", LIB_INDEX_FORMAT), IndexState::Done(_)));
         let _ = std::fs::remove_dir_all(&d);
     }
 }
