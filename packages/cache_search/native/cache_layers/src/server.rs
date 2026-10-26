@@ -9,6 +9,7 @@
 //! connection (`X-Cache-Status: needs-connection`); 400/404/502 with a JSON error otherwise.
 
 use crate::core::{Inner, TileOut};
+use crate::sched::{self, Outcome, Sched};
 use crate::error::{Error, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -29,9 +30,10 @@ impl TileServer {
         let server = Arc::new(Tiny::http("127.0.0.1:0").map_err(|e| Error::io(format!("cannot start the tile server: {e}")))?);
         let port = server.server_addr().to_ip().map(|a| a.port()).ok_or_else(|| Error::internal("no port"))?;
         let stop = Arc::new(AtomicBool::new(false));
+        let sched = Sched::new(inner.clone(), format!("http://127.0.0.1:{port}"));
         let mut threads = Vec::new();
         for i in 0..WORKERS {
-            let (s, inner, stop) = (server.clone(), inner.clone(), stop.clone());
+            let (s, inner, stop, sched) = (server.clone(), inner.clone(), stop.clone(), sched.clone());
             threads.push(
                 std::thread::Builder::new()
                     .name(format!("cs-tiles-{i}"))
@@ -39,7 +41,7 @@ impl TileServer {
                         while !stop.load(Ordering::Relaxed) {
                             match s.recv_timeout(std::time::Duration::from_millis(250)) {
                                 Ok(Some(req)) => {
-                                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&inner, port, req)));
+                                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&inner, &sched, port, req)));
                                     let _ = r;
                                 }
                                 Ok(None) => {}
@@ -115,23 +117,62 @@ pub fn route(path: &str) -> Route<'_> {
     }
 }
 
-fn handle(inner: &Arc<Inner>, port: u16, req: Request) {
+fn tile_response(req: Request, t: Result<TileOut>) {
+    match t {
+        Ok(TileOut::Tile { bytes, mime, from }) => respond(req, 200, bytes, vec![hdr("Content-Type", mime), hdr("X-Cache-Status", from)]),
+        Ok(TileOut::Empty) => respond(req, 204, Vec::new(), vec![hdr("X-Cache-Status", "empty")]),
+        Ok(TileOut::Miss) => respond(req, 404, b"not on this device and no connection".to_vec(), vec![hdr("X-Cache-Status", "miss"), hdr("Content-Type", "text/plain")]),
+        Ok(TileOut::NeedsConnection) => respond(req, 503, b"needs a connection".to_vec(), vec![hdr("X-Cache-Status", "needs-connection"), hdr("Content-Type", "text/plain")]),
+        Err(e) => json_err(req, e.http_status(), &e),
+    }
+}
+
+fn json_response(req: Request, v: Result<serde_json::Value>) {
+    match v {
+        Ok(v) => respond(req, 200, v.to_string().into_bytes(), vec![hdr("Content-Type", "application/json")]),
+        Err(e) => json_err(req, e.http_status(), &e),
+    }
+}
+
+/// Answer what local storage can answer right here; hand anything that needs the source to the layer's lane, which
+/// answers the request later from its own thread (this worker is free for the next request at once).
+fn handle(inner: &Arc<Inner>, sched: &Arc<Sched>, port: u16, req: Request) {
     if *req.method() != Method::Get && *req.method() != Method::Head {
         return respond(req, 405, b"method not allowed".to_vec(), vec![]);
     }
     let url = req.url().to_string();
     match route(&url) {
         Route::Health => respond(req, 200, br#"{"ok":true}"#.to_vec(), vec![hdr("Content-Type", "application/json")]),
-        Route::TileJson(id) => match inner.tilejson(id, &format!("http://127.0.0.1:{port}")) {
-            Ok(v) => respond(req, 200, v.to_string().into_bytes(), vec![hdr("Content-Type", "application/json")]),
-            Err(e) => json_err(req, e.http_status(), &e),
-        },
-        Route::Tile(id, z, x, y) => match inner.tile(id, z, x, y) {
-            Ok(TileOut::Tile { bytes, mime, from }) => respond(req, 200, bytes, vec![hdr("Content-Type", mime), hdr("X-Cache-Status", from)]),
-            Ok(TileOut::Empty) => respond(req, 204, Vec::new(), vec![hdr("X-Cache-Status", "empty")]),
-            Ok(TileOut::Miss) => respond(req, 404, b"not on this device and no connection".to_vec(), vec![hdr("X-Cache-Status", "miss"), hdr("Content-Type", "text/plain")]),
-            Ok(TileOut::NeedsConnection) => respond(req, 503, b"needs a connection".to_vec(), vec![hdr("X-Cache-Status", "needs-connection"), hdr("Content-Type", "text/plain")]),
-            Err(e) => json_err(req, e.http_status(), &e),
+        Route::TileJson(id) => {
+            if !inner.tilejson_needs_upstream(id) {
+                return json_response(req, inner.tilejson(id, &format!("http://127.0.0.1:{port}")));
+            }
+            let cap = inner.def(id).map(|d| d.max_parallel()).unwrap_or(4);
+            sched.submit(
+                (id.to_string(), sched::TILEJSON, 0, 0),
+                cap,
+                Box::new(move |o| match o {
+                    Outcome::Json(v) => json_response(req, Ok(v)),
+                    Outcome::Err(e) => json_response(req, Err(e)),
+                    Outcome::Tile(_) => json_response(req, Err(Error::internal("no TileJSON"))),
+                }),
+            );
+        }
+        Route::Tile(id, z, x, y) => match inner.tile_local(id, z, x, y) {
+            Ok(Some(t)) => tile_response(req, Ok(t)),
+            Err(e) => tile_response(req, Err(e)),
+            Ok(None) => {
+                let cap = inner.def(id).map(|d| d.max_parallel()).unwrap_or(4);
+                sched.submit(
+                    (id.to_string(), z, x, y),
+                    cap,
+                    Box::new(move |o| match o {
+                        Outcome::Tile(t) => tile_response(req, Ok(t)),
+                        Outcome::Err(e) => tile_response(req, Err(e)),
+                        Outcome::Json(_) => tile_response(req, Err(Error::internal("no tile"))),
+                    }),
+                );
+            }
         },
         Route::None => respond(req, 404, b"not found".to_vec(), vec![]),
     }
