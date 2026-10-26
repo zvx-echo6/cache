@@ -137,6 +137,7 @@ class SourceStatus {
     required this.updating,
     required this.docs,
     this.error,
+    this.keywordSource,
   });
 
   factory SourceStatus.fromJson(Map<String, dynamic> j) {
@@ -152,6 +153,7 @@ class SourceStatus {
       opening: (j['opening'] ?? false) as bool,
       updating: (j['updating'] ?? false) as bool,
       docs: (j['docs'] ?? 0) as int,
+      keywordSource: j['keyword_source'] as String?,
       error: e is Map ? CoreSourceError(e['code'] as String, (e['message'] ?? '') as String) : null,
     );
   }
@@ -165,6 +167,10 @@ class SourceStatus {
   final bool stale;
   final bool opening;
   final bool updating;
+
+  /// Where keyword search for this source comes from: "own" (the ZIM's built-in Xapian index, read through libzim), "device"
+  /// (the index built on this device), "none", or null when the core does not say (other ZIMs).
+  final String? keywordSource;
   final int docs;
   final CoreSourceError? error;
 

@@ -12,6 +12,7 @@ import '../chat/system_prompt.dart';
 import '../chat/tool.dart';
 import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
+import '../search/icu_data.dart';
 import '../search/search_access.dart';
 
 /// One ZIM file in the sources folder.
@@ -127,6 +128,12 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     final support = await getApplicationSupportDirectory();
+    // libzim reads its ICU data from the folder ICU_DATA names, so this comes before the first cs_open.
+    try {
+      await installIcuData(supportDir: support);
+    } catch (e) {
+      debugPrint('ICU data: $e');
+    }
     final defs = Directory('${support.path}/layer-defs');
     await installStarterLayers(defs);
     return buildCoreExtras(
@@ -312,10 +319,17 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
   }
 
+  final Set<String> _loggedStatus = {};
+
   Future<void> _readStatus(SearchCore core) async {
     _status
       ..clear()
       ..addEntries([for (final s in await core.status()) MapEntry(s.path, s)]);
+    // One line per change, for logcat: where each source's keyword search comes from (the ZIM's own Xapian index through libzim).
+    for (final s in _status.values) {
+      final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}';
+      if (_loggedStatus.add(line)) debugPrint(line);
+    }
   }
 
   Future<void> _startIndex(SearchCore core, ZimFile z) async {

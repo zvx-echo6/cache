@@ -28,6 +28,8 @@ apply plugin: "com.android.library"
 def coreAbis = (project.findProperty("cacheSearchAbis") ?: "arm64-v8a").toString().split(",").collect { it.trim() }
 def nativeDir = file("../native")
 def jniOut = layout.buildDirectory.dir("cargo-ndk/jniLibs").get().asFile
+// libzim and its companions are copied to a folder of their own (a Gradle Copy task would clear files in a folder it shares with cargo-ndk).
+def jniExtra = layout.buildDirectory.dir("core-extra/jniLibs").get().asFile
 
 android {
     namespace = "co.cache.cache_search"
@@ -47,7 +49,49 @@ android {
     sourceSets {
         main {
             jniLibs.srcDirs += jniOut
+            jniLibs.srcDirs += jniExtra
         }
+    }
+}
+
+// ---- libzim (the `xapian` feature: a ZIM's own full-text and title indexes) ----------------------------------------------------
+// The core is built WITH the xapian feature by default. It links Kiwix's official prebuilt libzim (native/zimx/LIBZIM.md), which is
+// fetched by native/zimx/fetch-libzim.sh into a build folder OUTSIDE the repository (the script refuses one inside it), with an md5
+// check, and never committed. Where the folder is: -PcacheLibzimBuildDir=..., or the environment variable CACHE_LIBZIM_BUILD_DIR,
+// or ~/.cache/cache-libzim. LIBZIM_DIR (environment) names an already unpacked libzim and skips the fetch.
+// -PcacheSearchXapian=false builds the Tantivy-only core, with no libzim.
+//
+// The APK carries, next to libcache_search.so in lib/arm64-v8a: libzim.so, the NDK's libc++_shared.so (libzim needs it), and the ICU
+// data libzim reads at run time, as libcache_icu_data.so (it is a data file, not a library; being in the native library folder it
+// is unpacked to a real file on disk, which the app copies to icu/icudt73l.dat and points ICU_DATA at, see lib/search/icu_data.dart).
+def useXapian = (project.findProperty("cacheSearchXapian") ?: "true").toString() == "true"
+def libzimVersion = "9.8.2-1"
+def libzimBuildDir = file((System.getenv("CACHE_LIBZIM_BUILD_DIR") ?: project.findProperty("cacheLibzimBuildDir") ?:
+    (System.getProperty("user.home") + File.separator + ".cache" + File.separator + "cache-libzim")).toString())
+def libzimEnv = System.getenv("LIBZIM_DIR")
+def libzimDir = libzimEnv ? file(libzimEnv) : new File(libzimBuildDir, "libzim/android-arm64-" + libzimVersion)
+def isWindows = System.getProperty("os.name").toLowerCase().contains("windows")
+
+def fwd = { File f -> f.absolutePath.replace(File.separator, "/") }
+
+tasks.register("fetchLibzim", Exec) {
+    group = "build"
+    description = "Fetches the official prebuilt libzim for Android (md5 checked) into the build folder"
+    onlyIf { useXapian && libzimEnv == null }
+    // Git for Windows brings sh, curl, tar and md5sum; elsewhere they are on the PATH.
+    def gitRoots = isWindows ? [System.getenv("ProgramFiles") + "\\Git", System.getenv("ProgramW6432") + "\\Git"].findAll { it != null && !it.startsWith("null") } : []
+    def gitRoot = gitRoots.find { new File(it, "bin/sh.exe").exists() }
+    def shell = gitRoot != null ? new File(gitRoot, "bin/sh.exe").absolutePath : "sh"
+    commandLine shell, fwd(file("../native/zimx/fetch-libzim.sh")), fwd(libzimBuildDir)
+    doFirst {
+        libzimBuildDir.mkdirs()
+        if (gitRoot != null) {
+            def sep = File.pathSeparator
+            environment("PATH", new File(gitRoot, "usr/bin").absolutePath + sep + new File(gitRoot, "mingw64/bin").absolutePath + sep + System.getenv("PATH"))
+        }
+    }
+    doLast {
+        if (!new File(libzimDir, "lib/aarch64-linux-android/libzim.so").exists()) throw new GradleException("libzim.so not found in " + libzimDir)
     }
 }
 
@@ -58,20 +102,40 @@ def cargoBin = new File(cargoHome, "bin")
 tasks.register("cargoNdkBuild", Exec) {
     group = "build"
     description = "Builds libcache_search.so with cargo-ndk"
+    dependsOn "fetchLibzim"
     workingDir nativeDir
     // The release profile always: a debug Rust core is unusably slow.
     def cmd = ["cargo", "ndk", "--platform", "28", "-o", jniOut.absolutePath]
     coreAbis.each { cmd += ["-t", it] }
-    // No xapian feature yet: it needs the prebuilt libzim for Android (native/zimx/fetch-libzim.sh, LIBZIM.md), which is not built
-    // here. The core then reads ZIMs with Tantivy only. Remove --no-default-features once libzim for Android is in place.
-    cmd += ["build", "--release", "-p", "cache_search", "--no-default-features"]
+    cmd += ["build", "--release", "-p", "cache_search"]
+    if (!useXapian) cmd += ["--no-default-features"]
     commandLine cmd
     doFirst {
         def sep = File.pathSeparator
         environment("PATH", cargoBin.absolutePath + sep + System.getenv("PATH"))
         def ndk = android.ndkDirectory
         if (ndk != null) environment("ANDROID_NDK_HOME", ndk.absolutePath)
+        if (useXapian) {
+            if (coreAbis != ["arm64-v8a"]) throw new GradleException("The xapian core is built for arm64-v8a only (the libzim prebuilt is arm64); use -PcacheSearchXapian=false for other ABIs")
+            environment("LIBZIM_DIR", libzimDir.absolutePath)
+        }
     }
+}
+
+// libzim.so, libc++_shared.so and the ICU data go next to libcache_search.so (cargo-ndk copies only the core itself).
+tasks.register("copyCoreLibs", Copy) {
+    group = "build"
+    description = "Copies libzim, libc++_shared and the ICU data next to libcache_search.so"
+    dependsOn "cargoNdkBuild"
+    onlyIf { useXapian }
+    into new File(jniExtra, "arm64-v8a")
+    from(new File(libzimDir, "lib/aarch64-linux-android/libzim.so"))
+    from({
+        def prebuilt = new File(android.ndkDirectory, "toolchains/llvm/prebuilt")
+        def host = prebuilt.listFiles().find { it.isDirectory() }
+        new File(host, "sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+    })
+    from(new File(libzimDir, "share/icu/73.2/icudt73l.dat")) { rename { "libcache_icu_data.so" } }
 }
 
 // Run before Gradle merges the native libraries (the task name differs per variant, so hook all of them).
@@ -79,5 +143,5 @@ tasks.register("cargoNdkBuild", Exec) {
 // says it is not available.
 def skipCore = (project.findProperty("cacheSearchSkipCore") ?: "false").toString() == "true"
 tasks.configureEach { t ->
-    if (t.name == "preBuild" && !skipCore) t.dependsOn("cargoNdkBuild")
+    if (t.name == "preBuild" && !skipCore) t.dependsOn("copyCoreLibs")
 }

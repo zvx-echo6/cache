@@ -144,6 +144,19 @@ void main() {
       expect(() => e.setSources([_zim]), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'io')));
     });
 
+    test('status keeps where keyword search comes from: the ZIM\'s own Xapian index, or nothing said', () {
+      final n = FakeNative()
+        ..replies['status'] = jsonEncode({
+          'sources': [
+            {'id': 'a', 'kind': 'zim', 'path': '/z/a.zim', 'title': 'A', 'indexed': true, 'building': false, 'stale': false, 'opening': false, 'updating': false, 'docs': 9, 'keyword_source': 'own'},
+            {'id': 'b', 'kind': 'zim', 'path': '/z/b.zim', 'title': 'B', 'indexed': false, 'building': false, 'stale': false, 'opening': false, 'updating': false, 'docs': 3},
+          ],
+        });
+      final s = SearchEngine.open(n, [_zim]).status();
+      expect(s[0].keywordSource, 'own');
+      expect(s[1].keywordSource, isNull);
+    });
+
     test('status parses sources, a failed ZIM keeps its error', () {
       final n = FakeNative()
         ..replies['status'] = jsonEncode({
