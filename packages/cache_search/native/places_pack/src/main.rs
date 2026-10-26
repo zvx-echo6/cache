@@ -73,6 +73,9 @@ fn run() -> Result<(), String> {
             for (k, v) in &r.per_source {
                 println!("  source {k:<14} {v}");
             }
+            for (k, v) in &r.per_kind {
+                println!("  kind {k:<28} {v}");
+            }
             for n in &r.notes {
                 println!("note: {n}");
             }
@@ -122,6 +125,21 @@ fn run() -> Result<(), String> {
             for r in rows {
                 let (id, title, n, d) = r.map_err(|e| e.to_string())?;
                 println!("  {id:<15} {n:>6}  {title}: {d}");
+            }
+            let meta = |k: &str| c.query_row("SELECT value FROM meta WHERE key = ?1", [k], |r| r.get::<_, String>(0)).unwrap_or_else(|_| "-".into());
+            println!("format {}, built {}, embed model {} ({} vectors)", meta("format_version"), meta("built_at"), meta("embed_model"), q("SELECT count(*) FROM vectors"));
+            println!("sources: {}", meta("sources"));
+            println!("places with a summary {}", q("SELECT count(*) FROM places WHERE summary IS NOT NULL AND summary <> ''"));
+            if q("SELECT count(*) FROM sqlite_master WHERE name = 'kinds'") > 0 {
+                println!("places with no kind {}", q("SELECT count(*) FROM places WHERE kind_id IS NULL"));
+                let mut st = c.prepare("SELECT id, label, category, place_count FROM kinds ORDER BY sort").map_err(|e| e.to_string())?;
+                let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?))).map_err(|e| e.to_string())?;
+                for r in rows {
+                    let (id, label, cat, n) = r.map_err(|e| e.to_string())?;
+                    if cat.is_some() || n >= 200 {
+                        println!("  kind {id:<22} {n:>6}  {label} ({})", cat.unwrap_or_else(|| "no category".into()));
+                    }
+                }
             }
             Ok(())
         }

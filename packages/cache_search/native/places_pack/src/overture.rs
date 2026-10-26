@@ -2,7 +2,7 @@
 //! `PlaceSource` that produces the same `Raw` records; nothing after this file knows which one was used.
 
 use crate::model::{format_phone, Harvest, PlaceSource, Raw, Wiki};
-use crate::rules::Rules;
+use crate::rules::{generic_kind_id, Rules};
 use std::path::PathBuf;
 
 pub struct OvertureCsv {
@@ -77,6 +77,7 @@ impl PlaceSource for OvertureCsv {
                 source_id: format!("overture:{}", rec.get(c_id).unwrap_or("").trim()),
                 name,
                 alt,
+                kind_id: Some(rules.overture_kind(category.as_deref(), basic).map(|k| k.id.clone()).unwrap_or_else(|| generic_kind_id(basic))),
                 category,
                 kind: basic.to_string(),
                 lat,

@@ -11,6 +11,10 @@ pub struct Rules {
     pub merge: MergeCfg,
     pub general: General,
     pub categories: Vec<CategoryDef>,
+    /// What kind of place each source record is (see `KindDef`). Optional: rules without kinds give every place the kind its
+    /// raw type names (`generic_kind_id`).
+    #[serde(default)]
+    pub kinds: Vec<KindDef>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -38,6 +42,20 @@ pub struct CategoryDef {
     pub id: String,
     pub title: String,
     pub description: String,
+    pub rules: Vec<CatRule>,
+}
+
+/// One kind of place, a stable machine id with a label and a line of description, and the source tags (OSM) or
+/// categories (Overture) that make a place this kind. Kinds are tried in file order and the first match wins, so a more
+/// specific kind goes before a general one. A kind with a `category` applies only to places of that category, one without
+/// only to places of no category (the geocoder's named places). The rules are data, like the category rules.
+#[derive(Debug, Deserialize, Clone)]
+pub struct KindDef {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    #[serde(default)]
+    pub category: Option<String>,
     pub rules: Vec<CatRule>,
 }
 
@@ -100,6 +118,31 @@ pub fn osm_matches(tags: &[(&str, &str)], rule_tags: &BTreeMap<String, String>, 
 impl Rules {
     pub fn parse(json: &str) -> Result<Rules, String> {
         let r: Rules = serde_json::from_str(json).map_err(|e| format!("categories rules: {e}"))?;
+        let mut seen: Vec<&str> = Vec::new();
+        for k in &r.kinds {
+            if k.id.is_empty() || !k.id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+                return Err(format!("kind {:?}: the id must be lowercase letters, digits and underscores", k.id));
+            }
+            if seen.contains(&k.id.as_str()) {
+                return Err(format!("kind {}: listed twice", k.id));
+            }
+            seen.push(&k.id);
+            if k.label.trim().is_empty() || k.description.trim().is_empty() {
+                return Err(format!("kind {}: needs a label and a description", k.id));
+            }
+            if let Some(c) = &k.category {
+                if !r.categories.iter().any(|x| &x.id == c) {
+                    return Err(format!("kind {}: category {c:?} does not exist", k.id));
+                }
+            }
+            for rule in &k.rules {
+                match rule.source.as_str() {
+                    "overture" if !rule.basic_category.is_empty() => {}
+                    "osm" if !rule.tags.is_empty() => {}
+                    other => return Err(format!("kind {}: rule of source {other:?} has nothing to match", k.id)),
+                }
+            }
+        }
         for c in &r.categories {
             for rule in &c.rules {
                 match rule.source.as_str() {
@@ -137,10 +180,46 @@ impl Rules {
         self.general.osm.iter().any(|r| osm_matches(tags, &r.tags, &r.not))
     }
 
+    /// The kind of an OSM element from its tags, among the kinds of `category` (None: the kinds that belong to no category).
+    pub fn osm_kind(&self, category: Option<&str>, tags: &[(&str, &str)]) -> Option<&KindDef> {
+        self.kinds
+            .iter()
+            .filter(|k| k.category.as_deref() == category)
+            .find(|k| k.rules.iter().any(|r| r.source == "osm" && osm_matches(tags, &r.tags, &r.not)))
+    }
+
+    /// The kind of an Overture record from its basic category, among the kinds of `category`.
+    pub fn overture_kind(&self, category: Option<&str>, basic_category: &str) -> Option<&KindDef> {
+        self.kinds
+            .iter()
+            .filter(|k| k.category.as_deref() == category)
+            .find(|k| k.rules.iter().any(|r| r.source == "overture" && r.basic_category.iter().any(|b| b == basic_category)))
+    }
+
+    /// The label of a kind id the rules define, else the id read as words ("picnic_shelter" -> "Picnic shelter").
+    pub fn kind_label(&self, id: &str) -> String {
+        match self.kinds.iter().find(|k| k.id == id) {
+            Some(k) => k.label.clone(),
+            None => {
+                let words = id.replace('_', " ");
+                let mut c = words.chars();
+                c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+            }
+        }
+    }
+
     /// The rules of one category as JSON text, for the pack's categories table.
     pub fn rules_json(c: &CategoryDef) -> String {
-        let v: Vec<Value> = c
-            .rules
+        Self::cat_rules_json(&c.rules)
+    }
+
+    /// The rules of one kind as JSON text, for the pack's kinds table.
+    pub fn kind_rules_json(k: &KindDef) -> String {
+        Self::cat_rules_json(&k.rules)
+    }
+
+    fn cat_rules_json(rules: &[CatRule]) -> String {
+        let v: Vec<Value> = rules
             .iter()
             .map(|r| {
                 let mut m = serde_json::Map::new();
@@ -177,6 +256,22 @@ impl Rules {
     }
 }
 
+/// The kind id of a place no kind rule covers: the value of its raw type ("amenity=school" -> "school", Overture's
+/// "pharmacy_and_drug_store" as it is). A bare "yes", "no" or "unknown" says nothing, so the key names it instead
+/// ("mountain_pass=yes" -> "mountain_pass"). Characters outside a-z, 0-9 become an underscore. This reads the source's own
+/// type tag; it never looks at a place's name.
+pub fn generic_kind_id(raw_kind: &str) -> String {
+    let raw = raw_kind.trim().to_lowercase();
+    let (key, value) = match raw.split_once('=') {
+        Some((k, v)) => (k, v),
+        None => ("", raw.as_str()),
+    };
+    let pick = if matches!(value, "" | "yes" | "no" | "unknown") && !key.is_empty() { key } else { value };
+    let id: String = pick.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() { c } else { '_' }).collect();
+    let id = id.trim_matches('_').to_string();
+    if id.is_empty() || id == "unknown" { "place".to_string() } else { id }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +301,95 @@ mod tests {
         assert!(r.osm_category(&[("amenity", "shelter"), ("shelter_type", "public_transport")]).is_none());
         assert!(r.osm_category(&[("amenity", "school")]).is_none());
         assert!(r.osm_general(&[("amenity", "school")]));
+    }
+
+    fn kind<'a>(r: &'a Rules, category: Option<&str>, tags: &[(&str, &str)]) -> Option<&'a str> {
+        r.osm_kind(category, tags).map(|k| k.id.as_str())
+    }
+
+    #[test]
+    fn kinds_of_sample_tags() {
+        let r = Rules::parse(DEFAULT).unwrap();
+        let w = Some("water");
+        assert_eq!(kind(&r, w, &[("amenity", "drinking_water")]), Some("drinking_water"));
+        assert_eq!(kind(&r, w, &[("amenity", "water_point")]), Some("water_point"));
+        assert_eq!(kind(&r, w, &[("natural", "spring")]), Some("spring"));
+        assert_eq!(kind(&r, w, &[("man_made", "water_well"), ("drinking_water", "yes")]), Some("water_well"));
+        assert_eq!(kind(&r, w, &[("man_made", "water_tap"), ("drinking_water", "yes")]), Some("water_tap"));
+        // A spring that says it is not for drinking is not a water-category kind at all.
+        assert_eq!(kind(&r, w, &[("natural", "spring"), ("drinking_water", "no")]), None);
+        let s = Some("shelter");
+        assert_eq!(kind(&r, s, &[("amenity", "shelter"), ("shelter_type", "picnic_shelter")]), Some("picnic_shelter"));
+        assert_eq!(kind(&r, s, &[("amenity", "shelter"), ("shelter_type", "bomb_shelter")]), Some("emergency_shelter"));
+        assert_eq!(kind(&r, s, &[("amenity", "shelter"), ("shelter_type", "lean_to")]), Some("trail_shelter"));
+        assert_eq!(kind(&r, s, &[("amenity", "shelter"), ("shelter_type", "weather_shelter")]), Some("weather_shelter"));
+        assert_eq!(kind(&r, s, &[("tourism", "wilderness_hut")]), Some("wilderness_hut"));
+        assert_eq!(kind(&r, s, &[("amenity", "shelter")]), Some("shelter_unspecified"));
+        assert_eq!(kind(&r, Some("hospital"), &[("healthcare", "hospital")]), Some("hospital"));
+        assert_eq!(kind(&r, Some("urgent_care"), &[("amenity", "clinic")]), Some("clinic"));
+        assert_eq!(kind(&r, Some("fuel"), &[("amenity", "fuel")]), Some("fuel"));
+        // A kind of one category never applies to a place of another, or of none.
+        assert_eq!(kind(&r, None, &[("amenity", "drinking_water")]), None);
+        assert_eq!(kind(&r, Some("shelter"), &[("amenity", "drinking_water")]), None);
+        // A lake is a water body, and only among the places that belong to no category.
+        assert_eq!(kind(&r, None, &[("natural", "water")]), Some("water_body"));
+        assert_eq!(kind(&r, w, &[("natural", "water")]), None);
+        assert_eq!(r.overture_kind(Some("pharmacy"), "pharmacy_and_drug_store").unwrap().id, "pharmacy");
+        assert_eq!(r.overture_kind(Some("emergency_room"), "emergency_department").unwrap().id, "emergency_room");
+        assert!(r.overture_kind(None, "pharmacy_and_drug_store").is_none());
+    }
+
+    #[test]
+    fn every_category_rule_has_a_kind() {
+        // The category rules and the kind rules are separate data; this keeps them in step: whatever a category rule lets in has a
+        // kind of that category.
+        let r = Rules::parse(DEFAULT).unwrap();
+        for c in &r.categories {
+            for rule in c.rules.iter().filter(|x| x.source == "osm" || x.source == "overture") {
+                if rule.source == "osm" {
+                    // every alternative of every tag, one at a time, the other tags at their first alternative
+                    for (k, v) in &rule.tags {
+                        for alt in v.split('|') {
+                            let tags: Vec<(&str, &str)> = rule.tags.iter().map(|(k2, v2)| if k2 == k { (k2.as_str(), alt) } else { (k2.as_str(), v2.split('|').next().unwrap()) }).collect();
+                            assert!(r.osm_kind(Some(&c.id), &tags).is_some(), "category {} tags {:?} have no kind", c.id, tags);
+                        }
+                    }
+                } else {
+                    for b in &rule.basic_category {
+                        assert!(r.overture_kind(Some(&c.id), b).is_some(), "category {} overture {b} has no kind", c.id);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kind_ids_from_raw_types() {
+        assert_eq!(generic_kind_id("amenity=school"), "school");
+        assert_eq!(generic_kind_id("natural=hot_spring"), "hot_spring");
+        assert_eq!(generic_kind_id("mountain_pass=yes"), "mountain_pass");
+        assert_eq!(generic_kind_id("tourism=yes"), "tourism");
+        assert_eq!(generic_kind_id("restaurant"), "restaurant");
+        assert_eq!(generic_kind_id("Pharmacy & Drug"), "pharmacy___drug");
+        assert_eq!(generic_kind_id("unknown"), "place");
+        assert_eq!(generic_kind_id(""), "place");
+        let r = Rules::parse(DEFAULT).unwrap();
+        assert_eq!(r.kind_label("picnic_shelter"), "Picnic shelter");
+        assert_eq!(r.kind_label("hot_spring"), "Hot spring");
+    }
+
+    #[test]
+    fn bad_kinds_are_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(DEFAULT).unwrap();
+        v["kinds"][0]["category"] = serde_json::json!("nope");
+        assert!(Rules::parse(&v.to_string()).unwrap_err().contains("does not exist"));
+        let mut v: serde_json::Value = serde_json::from_str(DEFAULT).unwrap();
+        v["kinds"][1]["id"] = v["kinds"][0]["id"].clone();
+        assert!(Rules::parse(&v.to_string()).unwrap_err().contains("twice"));
+        // Rules with no kinds at all still parse (every place then takes the kind its raw type names).
+        let mut v: serde_json::Value = serde_json::from_str(DEFAULT).unwrap();
+        v.as_object_mut().unwrap().remove("kinds");
+        assert!(Rules::parse(&v.to_string()).unwrap().kinds.is_empty());
     }
 
     #[test]

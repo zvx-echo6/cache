@@ -3,7 +3,8 @@
 
 use crate::geo::haversine_km;
 use crate::nearby::{installed_categories, ranked, MAX_KM};
-use crate::pack::{PackSet, PlaceRow};
+use crate::kind::shown;
+use crate::pack::{Pack, PackSet, PlaceRow};
 use crate::Geocoder as PackGeo;
 use cache_tool::places::{Geocoder, GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource, ResolvedPlace};
 use cache_tool::ToolError;
@@ -20,8 +21,9 @@ impl PackPlaceSource {
     }
 }
 
-fn from_row(r: &PlaceRow, title: &str, from: Option<(f64, f64)>) -> PlaceMatch {
-    let mut m = PlaceMatch::new(r.name.clone().unwrap_or_else(|| title.to_string()), r.lat, r.lon);
+fn from_row(packs: &[Arc<Pack>], r: &PlaceRow, title: &str, from: Option<(f64, f64)>) -> PlaceMatch {
+    // An unnamed place is called by its kind ("Drinking water tap"), not by the category's bare title.
+    let mut m = PlaceMatch::new(shown(packs, r, title).name, r.lat, r.lon);
     m.kind = r.category.clone().or_else(|| r.kind.clone());
     m.street = r.street.clone();
     m.locality = r.locality.clone();
@@ -126,7 +128,7 @@ impl PlaceSource for PackPlaceSource {
         let matches = ranked
             .iter()
             .map(|r| {
-                let mut m = from_row(&r.row, title, Some(q.from));
+                let mut m = from_row(&packs, &r.row, title, Some(q.from));
                 m.distance_km = Some(r.km);
                 // navi's tiers: 1 = a hospital with an emergency department listing (confirmed), 3 = a hospital without one (likely).
                 m.er_tier = match r.tier.as_deref() {

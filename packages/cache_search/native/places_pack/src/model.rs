@@ -23,7 +23,11 @@ pub struct Raw {
     pub alt: Vec<String>,
     /// A starter category id, or None for a named place that is only here for the geocoder.
     pub category: Option<String>,
+    /// The raw type: "amenity=school" (OSM) or Overture's basic category.
     pub kind: String,
+    /// What kind of place it is (a `kinds` id), from the kind rules; None until a source sets it (the builder then derives it
+    /// from the raw type).
+    pub kind_id: Option<String>,
     pub lat: f64,
     pub lon: f64,
     pub street: Option<String>,

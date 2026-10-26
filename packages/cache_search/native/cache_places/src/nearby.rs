@@ -4,6 +4,7 @@
 //! of the installed packs, so `schema()` is None until a pack with places is installed.
 
 use crate::geo::{bearing_deg, compass8, haversine_km, km_to_mi, round_to};
+use crate::kind::shown;
 use crate::pack::{Pack, PackSet, PlaceRow};
 use crate::{age_words, resolve_center, Geocoder};
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
@@ -176,9 +177,12 @@ impl Tool for NearbyTool {
             .map(|Ranked { row: r, km, tier, note }| {
                 let mut m = Map::new();
                 m.insert("address".into(), json!(format!("place:{}", r.source_id)));
-                // An unnamed place is called by its own kind ("Hospital" for a likely emergency room), not by the category asked for.
+                // An unnamed place is called by its kind ("Drinking water tap", "Picnic shelter"), never by a bare generic word. In a
+                // pack without kinds it is called by its own category ("Hospital" for a likely emergency room), else the one asked for.
                 let own_title = r.category.as_deref().and_then(|c| packs.iter().find_map(|p| p.category(c)).map(|c| c.title.clone()));
-                m.insert("name".into(), json!(r.name.clone().or(own_title).unwrap_or_else(|| cat_title.clone())));
+                let shown = shown(&packs, r, &own_title.unwrap_or_else(|| cat_title.clone()));
+                m.insert("name".into(), json!(shown.name));
+                shown.put_kind(&mut m);
                 for (k, v) in [("street", &r.street), ("locality", &r.locality), ("state", &r.state)] {
                     if let Some(v) = v {
                         m.insert(k.into(), json!(v));

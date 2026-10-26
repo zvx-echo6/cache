@@ -73,7 +73,8 @@ fn nearby_pharmacy_around_burley() {
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["category", "center", "ranked_by", "places", "map_region", "map_region_age"]);
     let pk: Vec<&String> = p.as_object().unwrap().keys().collect();
-    assert_eq!(pk, ["address", "name", "street", "locality", "state", "distance_mi", "direction", "phone", "hours"]);
+    assert_eq!(pk, ["address", "name", "kind", "kind_label", "street", "locality", "state", "distance_mi", "direction", "phone", "hours"]);
+    assert_eq!((p["kind"].as_str(), p["kind_label"].as_str()), (Some("pharmacy"), Some("Pharmacy")));
 }
 
 #[test]
@@ -148,7 +149,7 @@ fn schema_is_filled_from_the_pack_and_absent_without_one() {
     let sc = tool(&ts, "nearby").schema().unwrap();
     let cat = &sc["function"]["parameters"]["properties"]["category"];
     // Only categories with places in the pack; urgent_care has none.
-    assert_eq!(cat["enum"], json!(["emergency_room", "hospital", "pharmacy", "fuel", "police", "water"]));
+    assert_eq!(cat["enum"], json!(["emergency_room", "hospital", "pharmacy", "fuel", "police", "water", "shelter"]));
     let d = cat["description"].as_str().unwrap();
     assert!(d.contains("emergency_room = hospital emergency rooms; for a hospital in an emergency use emergency_room"), "{d}");
     assert!(!d.contains("urgent_care"));
@@ -274,7 +275,7 @@ fn place_source_for_navigate() {
 
     write_fixture_pack(&pack);
     let src = none; // the same source sees the pack that appeared
-    assert_eq!(src.categories().unwrap(), ["emergency_room", "hospital", "pharmacy", "fuel", "police", "water"]);
+    assert_eq!(src.categories().unwrap(), ["emergency_room", "hospital", "pharmacy", "fuel", "police", "water", "shelter"]);
 
     let a = src.geocode(&GeocodeQuery { text: "Walgreens", near: Some("Burley, Idaho"), bias: Some((42.5357, -113.7928)), limit: 3 }).unwrap();
     let m = &a.matches[0];
