@@ -18,7 +18,7 @@ class SourcesScreen extends StatelessWidget {
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Remove ${z.name}?'),
+        title: Text('Remove ${sources.titleOf(z)}?'),
         content: const Text('The file and its index are deleted from this phone.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
@@ -143,7 +143,7 @@ class SourcesScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(z.name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                      Text(sources.titleOf(z), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
                       const SizedBox(height: 2),
                       Text('${_size(z.size)} · $status', style: TextStyle(fontSize: 15, color: statusColor)),
                       if (phase == ZimPhase.indexing) ...[

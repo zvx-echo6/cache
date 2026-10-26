@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
@@ -6,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../browse/opds.dart';
 import '../chat/tool.dart';
 import '../search/search_access.dart';
 
@@ -18,6 +20,9 @@ class ZimFile {
 
   String get fileName => path.split(RegExp(r'[\\/]')).last;
   String get name => fileName.replaceFirst(RegExp(r'\.zim$', caseSensitive: false), '');
+
+  /// The catalogue identity from the file name (Kiwix's naming), or null.
+  ZimOrigin? get nameOrigin => ZimOrigin.fromFileName(fileName);
 }
 
 /// Where a ZIM stands: its index is made on the phone, slowly, in the background.
@@ -85,6 +90,46 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   String _indexDir(ZimFile z) => '${indexesDir!.path}/${z.fileName}.idx';
 
   List<SourceConfig> _configs() => [for (final z in zims) SourceConfig.zim(path: z.path, indexDir: _indexDir(z))];
+
+  /// Where unfinished downloads wait, on the same file system as the ZIMs so finishing is a rename.
+  Directory get partialDir => Directory('${zimsDir!.path}/.partial');
+
+  File _originFile(String zimPath) => File('$zimPath.origin.json');
+  File _iconFile(String zimPath) => File('$zimPath.icon.png');
+
+  /// The icon saved when the ZIM came from the catalogue, or null.
+  File? iconOf(ZimFile z) {
+    final f = _iconFile(z.path);
+    return f.existsSync() ? f : null;
+  }
+
+  /// What this ZIM is in the catalogue's terms: the record saved at install, else the file name's.
+  ZimOrigin? originOf(ZimFile z) {
+    try {
+      final f = _originFile(z.path);
+      if (f.existsSync()) return ZimOrigin.fromJson((jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>());
+    } catch (_) {}
+    return z.nameOrigin;
+  }
+
+  /// The ZIM's own title from its metadata (the file name until the core has opened it).
+  String titleOf(ZimFile z) {
+    final t = _status[z.path]?.title;
+    if (t != null && t.isNotEmpty) return t;
+    final o = originOf(z);
+    if (o != null && o.title.isNotEmpty) return o.title;
+    return z.name;
+  }
+
+  /// The ZIM's UUID (the id its addresses use), or null until the core has opened it.
+  String? idOf(ZimFile z) => _status[z.path]?.id;
+
+  ZimFile? zimById(String id) {
+    for (final z in zims) {
+      if (idOf(z) == id) return z;
+    }
+    return null;
+  }
 
   void _scan() {
     final found = <ZimFile>[];
@@ -254,6 +299,48 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     await refresh();
   }
 
+  /// Moves a finished download into the sources folder, records where it came from, and indexes it.
+  /// [entry] is the catalogue entry it came from; [icon] the entry's icon bytes if they were fetched.
+  Future<ZimFile> installDownloaded(File finished, {CatalogEntry? entry, Uint8List? icon, String? fileName}) async {
+    final name = fileName ?? finished.path.split(RegExp(r'[\\/]')).last.replaceFirst(RegExp(r'\.part$'), '');
+    final dest = File('${zimsDir!.path}/$name');
+    if (dest.existsSync()) dest.deleteSync();
+    try {
+      finished.renameSync(dest.path);
+    } on FileSystemException {
+      // Another file system: copy, then drop the original.
+      await finished.copy(dest.path);
+      finished.deleteSync();
+    }
+    if (entry != null) {
+      await _originFile(dest.path).writeAsString(jsonEncode(ZimOrigin.fromEntry(entry).toJson()));
+      if (icon != null && icon.isNotEmpty) await _iconFile(dest.path).writeAsBytes(icon);
+    }
+    _failed.remove(dest.path);
+    await refresh();
+    return zims.firstWhere((z) => z.path == dest.path, orElse: () => ZimFile(path: dest.path, size: dest.lengthSync()));
+  }
+
+  /// True when the ZIM at [path] can be searched.
+  bool isReadyPath(String path) {
+    final s = _status[path];
+    return s != null && s.searchable;
+  }
+
+  /// Raw bytes of an entry (the reader serves them to its page).
+  Future<ZimBytes> zimGet(String address) async =>
+      (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet'))).zimGet(address);
+
+  Future<String> zimMainPage(String zimId) async =>
+      (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet'))).zimMainPage(zimId);
+
+  Future<List<Suggestion>> suggest(String prefix, {int k = 10, List<String>? zimIds}) async =>
+      (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet'))).suggest(prefix, k: k, sources: zimIds);
+
+  /// Full-text search, optionally limited to some ZIMs.
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+      (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet'))).search(query, k: k, offset: offset, sources: zimIds);
+
   /// Removes a ZIM and its index from the phone.
   Future<void> remove(ZimFile z) async {
     final job = _jobs.remove(z.path);
@@ -273,6 +360,9 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     try {
       final f = File(z.path);
       if (f.existsSync()) f.deleteSync();
+      for (final side in [_originFile(z.path), _iconFile(z.path)]) {
+        if (side.existsSync()) side.deleteSync();
+      }
       final idx = Directory(_indexDir(z));
       if (idx.existsSync()) idx.deleteSync(recursive: true);
     } catch (e) {
