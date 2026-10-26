@@ -10,8 +10,8 @@ void main() {
     final maps = File('${dir.path}/maps')
       ..writeAsStringSync(
         '7a00000000-7a00100000 r--p 00000000 fd:03 123 /system/lib64/libc.so\n'
-        '7b00000000-7b00200000 r-xp 00000000 fd:03 456 /data/app/~~x/co.cache.cache-y/lib/arm64/libcache_search.so\n'
-        '7b00200000-7b00300000 rw-p 00200000 fd:03 456 /data/app/~~x/co.cache.cache-y/lib/arm64/libcache_search.so\n',
+        '7b00000000-7b00200000 r-xp 00000000 fd:03 456 /data/app/~~x/co.cache.cache-y/lib/arm64/libflutter.so\n'
+        '7b00200000-7b00300000 rw-p 00200000 fd:03 456 /data/app/~~x/co.cache.cache-y/lib/arm64/libflutter.so\n',
       );
     final lib = nativeLibraryDir(mapsFile: maps.path);
     expect(lib, '/data/app/~~x/co.cache.cache-y/lib/arm64');
