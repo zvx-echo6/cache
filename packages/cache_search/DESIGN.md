@@ -1404,13 +1404,31 @@ core has no callbacks into the host, so the host pushes its state in:
   serialisation and no accessor except `key_for`; the key is in no error, status, log or result (tests search every string
   the core returns for a sentinel key). A null (or empty) key clears it; `cs_close` clears the policy and every key, and the
   key strings are overwritten before they are freed.
-- The fetch itself (the on-demand fetch in `live_data`, the row keys and pruning) is built on top of this plumbing and is not
-  part of it: `live_data`'s behaviour is unchanged.
+- The on-demand fetch is built on top of this plumbing (next section).
 - CLI: `--live-policy <json>` (`cs tool`, `cs tool-schemas`, `cs serve`) and `CACHE_LIVE_KEY_<SOURCE>` environment variables
   (source id in capitals, any other character `_`: `nws-alerts` is `CACHE_LIVE_KEY_NWS_ALERTS`; read at start for each
   installed source). `cs serve`: `POST /live/policy` (the body is the policy), `DELETE /live/policy`,
   `POST /live/key {"source_id","key"}` (a null key clears it), `DELETE /live/key/{source_id}`; each answers `{"ok":true}` and
   never echoes a key.
+
+### On-demand fetch in live_data
+
+When `live_data` finds no fresh stored data for the place asked about, and `ToolCtx.live_fetcher` allows the source
+(`can_fetch(source)`), it downloads once for that place and then answers from the stored row. Everything else is the existing
+path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors), the same stored row and the same expiry.
+
+- "No fresh data" means no row for the place, or for another place within `live_radius_km`, that has not expired. Data a nearby
+  place already holds is shared, as before, and nothing is downloaded.
+- The row is stored under the place's key: a saved place's own key; the phone's position or a geocoded town as
+  `at:<lat>,<lon>` rounded to 0.01 degrees (about 1 km), so nearby asks share a row. Position rows are pruned like the phone's
+  other positions (`prune_here`); saved places never are. A geocoded town carries its state, county and country (the places
+  pack's facts) into the request.
+- A source whose definition requires a key is never requested without it: no key from `key_for` is `key_missing` before any
+  request is made. The key goes to `Live::fetch` for that call only; no result, error or stored row holds it.
+- With no fetcher (no policy pushed), or a policy that does not allow the source (offline, metered without permission, not
+  enabled), `live_data` behaves exactly as before. A failed download answers with its own error (`fetch_failed`, `quota`,
+  `key_missing`, `bad_response`) when there is nothing stored; when the stored copy has expired the `expired` error carries
+  `refresh_failed: <code>`.
 
 ### Nothing to report is a numbered entry
 
