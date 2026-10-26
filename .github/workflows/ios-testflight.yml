@@ -101,11 +101,13 @@ jobs:
           path: ${{ runner.temp }}/libzim/libzim
           key: corekiwix-14.2.1-2
       - name: Valhalla source and dependency cache
+        id: routing-cache
         if: steps.out.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/libzim/valhalla
-          key: valhalla-ios-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}
+          key: valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-
       - name: Build the Rust core
         if: steps.out.outputs.cache-hit != 'true'
         env:
@@ -115,6 +117,12 @@ jobs:
           rustc --version
           xcodebuild -version
           packages/cache_search/ios/build-core.sh "$RUNNER_TEMP/libzim"
+      - name: Save resumable Valhalla dependencies
+        if: always() && steps.out.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-primary-key != '' && steps.routing-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/libzim/valhalla
+          key: ${{ steps.routing-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: native-core

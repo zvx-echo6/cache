@@ -206,3 +206,9 @@ Primary build sources read: Valhalla 3.7.0 root/src/proto CMake files and
 `scripts/valhalla_build_config`; pinned vcpkg iOS toolchain and protobuf wrapper;
 Microsoft's triplet-variable documentation:
 https://learn.microsoft.com/en-us/vcpkg/users/triplets .
+
+Dependency-cache bring-up: restore/save are separate. The save step uses always(),
+so failed native builds preserve downloads and partial dependency/build work.
+Restore is restricted to the exact recipe and toolchain prefix; run/attempt suffixes
+allow later partial progress to supersede earlier snapshots. Finished core-output
+caches and native-core artifacts remain success-only.
