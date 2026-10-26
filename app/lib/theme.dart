@@ -11,6 +11,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
     required this.text,
     required this.secondary,
     required this.accent,
+    required this.primary,
+    required this.onPrimary,
     required this.emergency,
     required this.warning,
     required this.ok,
@@ -20,7 +22,12 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
   final Color surface;
   final Color text;
   final Color secondary;
+  /// Highlights, links and selected labels; always readable as text on [background] and [surface].
   final Color accent;
+
+  /// Filled primary actions, and the colour of the text or icons on them.
+  final Color primary;
+  final Color onPrimary;
   final Color emergency;
   final Color warning;
   final Color ok;
@@ -32,6 +39,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
     Color? text,
     Color? secondary,
     Color? accent,
+    Color? primary,
+    Color? onPrimary,
     Color? emergency,
     Color? warning,
     Color? ok,
@@ -42,6 +51,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
         text: text ?? this.text,
         secondary: secondary ?? this.secondary,
         accent: accent ?? this.accent,
+        primary: primary ?? this.primary,
+        onPrimary: onPrimary ?? this.onPrimary,
         emergency: emergency ?? this.emergency,
         warning: warning ?? this.warning,
         ok: ok ?? this.ok,
@@ -56,6 +67,8 @@ class CacheTokens extends ThemeExtension<CacheTokens> {
       text: Color.lerp(text, other.text, t)!,
       secondary: Color.lerp(secondary, other.secondary, t)!,
       accent: Color.lerp(accent, other.accent, t)!,
+      primary: Color.lerp(primary, other.primary, t)!,
+      onPrimary: Color.lerp(onPrimary, other.onPrimary, t)!,
       emergency: Color.lerp(emergency, other.emergency, t)!,
       warning: Color.lerp(warning, other.warning, t)!,
       ok: Color.lerp(ok, other.ok, t)!,
@@ -87,36 +100,56 @@ extension CacheThemeIdInfo on CacheThemeId {
   bool get isLight => this == CacheThemeId.light || this == CacheThemeId.parchment;
 }
 
+/// The brand palette. Dark, Light and Parchment are built from it; Tactical is deliberately not (red only, to
+/// protect night vision).
+abstract final class Brand {
+  static const forest = Color(0xFF3B4D3A);
+  static const olive = Color(0xFF6B7F4E);
+  static const parchment = Color(0xFFDCC9A3);
+  static const charcoal = Color(0xFF1A1D1F);
+  static const slate = Color(0xFF2A3036);
+  static const clay = Color(0xFFCB7A3C);
+}
+
 const Map<CacheThemeId, CacheTokens> cacheTokens = {
+  // Charcoal ground, Slate cards, Parchment text, Clay actions.
   CacheThemeId.dark: CacheTokens(
-    background: Color(0xFF0F1115),
-    surface: Color(0xFF1A1D23),
-    text: Color(0xFFE8EAED),
-    secondary: Color(0xFF8A9099),
-    accent: Color(0xFF6BB4DE),
-    emergency: Color(0xFFFF6B5E),
+    background: Brand.charcoal,
+    surface: Brand.slate,
+    text: Brand.parchment,
+    secondary: Color(0xFFB0A58A),
+    accent: Color(0xFFDB8A4B), // Clay, lifted a little so it reads as text on Slate
+    primary: Brand.clay,
+    onPrimary: Brand.charcoal,
+    emergency: Color(0xFFFF7A6E),
     warning: Color(0xFFE0B45A),
-    ok: Color(0xFF5FB98A),
+    ok: Color(0xFF8FB36A),
   ),
+  // Parchment-tinted ground, near-white cards, Charcoal text, Forest actions, Clay (darkened to read as text) accent.
   CacheThemeId.light: CacheTokens(
-    background: Color(0xFFF7F7F5),
-    surface: Color(0xFFFFFFFF),
-    text: Color(0xFF15171A),
-    secondary: Color(0xFF5C636E),
-    accent: Color(0xFF1F6FA8),
-    emergency: Color(0xFFC62E24),
-    warning: Color(0xFF8A5A00),
-    ok: Color(0xFF1E7A4B),
-  ),
-  CacheThemeId.parchment: CacheTokens(
-    background: Color(0xFFF3E9D2),
-    surface: Color(0xFFEADCBE),
-    text: Color(0xFF2B2118),
-    secondary: Color(0xFF6B5A45),
-    accent: Color(0xFF7A4E1D),
-    emergency: Color(0xFFA3261C),
-    warning: Color(0xFF8A5A00),
+    background: Color(0xFFF3EBD9),
+    surface: Color(0xFFFFFDF8),
+    text: Brand.charcoal,
+    secondary: Color(0xFF55594F),
+    accent: Color(0xFF9C5320),
+    primary: Brand.forest,
+    onPrimary: Color(0xFFF3EBD9),
+    emergency: Color(0xFFB3281E),
+    warning: Color(0xFF7A5200),
     ok: Color(0xFF3F6B2E),
+  ),
+  // Parchment itself as the paper, a lighter sheet for cards.
+  CacheThemeId.parchment: CacheTokens(
+    background: Brand.parchment,
+    surface: Color(0xFFE8DBBC),
+    text: Brand.charcoal,
+    secondary: Color(0xFF4A4638),
+    accent: Color(0xFF7E4416),
+    primary: Brand.forest,
+    onPrimary: Color(0xFFF3EBD9),
+    emergency: Color(0xFF9A1F16),
+    warning: Color(0xFF6E4A00),
+    ok: Color(0xFF2F5A22),
   ),
   CacheThemeId.tactical: CacheTokens(
     background: Color(0xFF000000),
@@ -124,6 +157,8 @@ const Map<CacheThemeId, CacheTokens> cacheTokens = {
     text: Color(0xFFE0473C),
     secondary: Color(0xFF8E2B24),
     accent: Color(0xFFFF5A4A),
+    primary: Color(0xFFFF5A4A),
+    onPrimary: Color(0xFF000000),
     emergency: Color(0xFFFF2D1F),
     warning: Color(0xFFC24A1E),
     ok: Color(0xFFB23A2E),
@@ -133,22 +168,21 @@ const Map<CacheThemeId, CacheTokens> cacheTokens = {
 ThemeData buildTheme(CacheThemeId id) {
   final k = cacheTokens[id]!;
   final brightness = id.isLight ? Brightness.light : Brightness.dark;
-  // Text and icons on top of the accent colour.
-  final onAccent = k.background;
+  final tactical = id == CacheThemeId.tactical;
   final scheme = ColorScheme(
     brightness: brightness,
-    primary: k.accent,
-    onPrimary: onAccent,
+    primary: k.primary,
+    onPrimary: k.onPrimary,
     primaryContainer: k.surface,
     onPrimaryContainer: k.text,
-    secondary: k.accent,
-    onSecondary: onAccent,
-    secondaryContainer: k.surface,
+    secondary: tactical ? k.accent : Brand.olive,
+    onSecondary: tactical ? k.background : Brand.charcoal,
+    secondaryContainer: id == CacheThemeId.dark ? Brand.forest : k.surface,
     onSecondaryContainer: k.text,
     tertiary: k.accent,
-    onTertiary: onAccent,
+    onTertiary: k.background,
     error: k.emergency,
-    onError: onAccent,
+    onError: k.background,
     surface: k.background,
     onSurface: k.text,
     onSurfaceVariant: k.secondary,
@@ -164,7 +198,7 @@ ThemeData buildTheme(CacheThemeId id) {
     scrim: Colors.black,
     inverseSurface: k.text,
     onInverseSurface: k.background,
-    inversePrimary: k.accent,
+    inversePrimary: k.primary,
   );
 
   final base = ThemeData(brightness: brightness, useMaterial3: true);
@@ -201,7 +235,7 @@ ThemeData buildTheme(CacheThemeId id) {
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: k.surface,
       surfaceTintColor: Colors.transparent,
-      indicatorColor: k.accent.withValues(alpha: 0.25),
+      indicatorColor: k.primary.withValues(alpha: 0.28),
       height: 72,
       iconTheme: WidgetStateProperty.resolveWith((s) =>
           IconThemeData(size: 26, color: s.contains(WidgetState.selected) ? k.accent : k.secondary)),
@@ -229,14 +263,14 @@ ThemeData buildTheme(CacheThemeId id) {
       behavior: SnackBarBehavior.floating,
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: k.accent,
+      color: k.primary,
       linearTrackColor: k.surface,
       circularTrackColor: k.surface,
     ),
     textSelectionTheme: TextSelectionThemeData(
-      cursorColor: k.accent,
-      selectionColor: k.accent.withValues(alpha: 0.35),
-      selectionHandleColor: k.accent,
+      cursorColor: k.primary,
+      selectionColor: k.primary.withValues(alpha: 0.35),
+      selectionHandleColor: k.primary,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
@@ -246,12 +280,12 @@ ThemeData buildTheme(CacheThemeId id) {
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
       enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
       focusedBorder:
-          OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide(color: k.accent)),
+          OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide(color: k.primary, width: 1.5)),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: k.accent,
-        foregroundColor: onAccent,
+        backgroundColor: k.primary,
+        foregroundColor: k.onPrimary,
         minimumSize: const Size(48, 52),
         textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
       ),
@@ -267,7 +301,7 @@ ThemeData buildTheme(CacheThemeId id) {
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(foregroundColor: k.accent, minimumSize: const Size(48, 48)),
     ),
-    radioTheme: RadioThemeData(fillColor: WidgetStatePropertyAll(k.accent)),
+    radioTheme: RadioThemeData(fillColor: WidgetStatePropertyAll(k.primary)),
     listTileTheme: ListTileThemeData(
       iconColor: k.secondary,
       textColor: k.text,

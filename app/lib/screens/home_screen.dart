@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../brand.dart';
 import '../chat/chat_controller.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
@@ -52,7 +53,7 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
-        title: const Text('CACHE', style: TextStyle(letterSpacing: 2)),
+        title: const BrandWordmark(height: 30),
         actions: [
           PopupMenuButton<String>(
             tooltip: 'Menu',
@@ -99,7 +100,7 @@ class HomeScreen extends StatelessWidget {
                 _QuickAction(icon: Icons.local_hospital_outlined, label: 'Hospital', color: k.emergency, onTap: () => _comingSoon(context)),
                 _QuickAction(icon: Icons.healing_outlined, label: 'First aid', color: k.emergency, onTap: () => _comingSoon(context)),
                 _QuickAction(icon: Icons.water_drop_outlined, label: 'Water', color: k.accent, onTap: () => _comingSoon(context)),
-                _QuickAction(icon: Icons.navigation_outlined, label: 'Navigate', color: k.accent, onTap: () => _comingSoon(context)),
+                _QuickAction(tile: BrandTile.routes, icon: Icons.navigation_outlined, label: 'Navigate', color: k.accent, onTap: () => _comingSoon(context)),
               ],
             ),
             const SizedBox(height: 28),
@@ -136,6 +137,7 @@ class HomeScreen extends StatelessWidget {
       ),
       _StatusCard(
         icon: Icons.menu_book_outlined,
+        tile: BrandTile.library,
         title: 'Reading',
         value: sources.summary,
         onTap: () {
@@ -143,8 +145,8 @@ class HomeScreen extends StatelessWidget {
           Navigator.of(context).push(MaterialPageRoute(builder: (_) => SourcesScreen(sources: sources)));
         },
       ),
-      const _StatusCard(icon: Icons.map_outlined, title: 'Maps', value: 'Not set up yet'),
-      const _StatusCard(icon: Icons.cloud_outlined, title: 'Weather', value: 'Not set up yet'),
+      const _StatusCard(icon: Icons.map_outlined, tile: BrandTile.maps, title: 'Maps', value: 'Not set up yet'),
+      const _StatusCard(icon: Icons.cloud_outlined, tile: BrandTile.weather, title: 'Weather', value: 'Not set up yet'),
     ];
     return GridView.count(
       crossAxisCount: 2,
@@ -159,8 +161,9 @@ class HomeScreen extends StatelessWidget {
 }
 
 class _QuickAction extends StatelessWidget {
-  const _QuickAction({required this.icon, required this.label, required this.color, required this.onTap});
+  const _QuickAction({this.tile, required this.icon, required this.label, required this.color, required this.onTap});
 
+  final BrandTile? tile;
   final IconData icon;
   final String label;
   final Color color;
@@ -183,7 +186,7 @@ class _QuickAction extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: 28, color: color),
+                  tile != null ? BrandTileImage(tile!, size: 30) : Icon(icon, size: 28, color: color),
                   const SizedBox(height: 6),
                   Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text)),
                 ],
@@ -197,9 +200,10 @@ class _QuickAction extends StatelessWidget {
 }
 
 class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.icon, required this.title, required this.value, this.valueColor, this.onTap});
+  const _StatusCard({required this.icon, this.tile, required this.title, required this.value, this.valueColor, this.onTap});
 
   final IconData icon;
+  final BrandTile? tile;
   final String title;
   final String value;
   final Color? valueColor;
@@ -220,7 +224,7 @@ class _StatusCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(icon, color: k.secondary),
+              tile != null ? Align(alignment: Alignment.centerLeft, child: BrandTileImage(tile!, size: 48)) : Icon(icon, color: k.secondary),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

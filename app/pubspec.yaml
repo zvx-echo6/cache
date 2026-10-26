@@ -65,6 +65,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  # Used only by tool/brand_assets.dart (chroma key, resize, icon sets).
+  image: ^4.5.4
   integration_test:
     sdk: flutter
 
@@ -86,6 +88,9 @@ flutter:
     - assets/map/fonts/NotoSans-Regular/
     - assets/map/fonts/NotoSans-Bold/
     - assets/map/fonts/NotoSans-Italic/
+    # Brand: logo, wordmarks, launch scene and module tiles (made by tool/brand_assets.dart).
+    - assets/brand/
+    - assets/brand/tiles/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -44,6 +44,9 @@ class AppState extends ChangeNotifier {
   ModelEntry? loading;
   String? loadError;
 
+  /// True once the settings and the models folder have been read (a model may still be loading after this).
+  bool started = false;
+
   /// Set when the models folder cannot be read (for example the folder belongs to another user).
   String? modelsError;
   final Set<String> _unsupported = {};
@@ -86,6 +89,7 @@ class AppState extends ChangeNotifier {
       // Reported by refreshModels below.
     }
     await refreshModels();
+    started = true;
     notifyListeners();
 
     final last = _lastModelFile;
