@@ -383,6 +383,27 @@ fn an_exact_name_beats_a_close_fuzzy_one() {
 }
 
 #[test]
+fn a_whole_name_town_slip_beats_a_poi_prefix_match() {
+    let (_d, src) = source("poi1");
+    let (_d2, _ts, path) = setup("poi2");
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let near_shelley = Some((43.37, -112.12));
+    // "Amon" is a prefix of the place "Amonara" (Shelley) and one edit from the town Ammon: the town wins
+    for text in ["amon", "Amon", "AMON"] {
+        assert_eq!(g.forward(text, near_shelley, 3)[0].label, "Ammon, ID", "{text}");
+        assert_eq!(src.geocoder().unwrap().resolve(text, near_shelley).unwrap().0, "Ammon, ID", "{text}");
+    }
+    // a place query that names a place still finds the place
+    assert_eq!(g.forward("Stanley Ranger Station", None, 3)[0].name, "Stanley Ranger Station");
+    assert_eq!(g.forward("Islnd Park", None, 3)[0].label, "Island Park, ID");
+    // a place whose whole name is the text beats the town one edit away
+    assert_eq!(g.forward("Ammin", None, 3)[0].name, "Ammin");
+    assert_eq!(g.forward("Ammin", None, 3)[0].kind, cache_places::HitKind::Place);
+    // the full name of the place is still itself
+    assert_eq!(g.forward("Amonara", None, 3)[0].name, "Amonara");
+}
+
+#[test]
 fn a_state_in_any_letter_case_is_the_same_query() {
     let (_d, ts, path) = setup("case1");
     let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));

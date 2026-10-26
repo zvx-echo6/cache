@@ -234,6 +234,9 @@ fn town_label(l: &LocalityRow) -> String {
 /// typing slip in it then goes first.
 pub(crate) const GOOD_NAME_MATCH: f64 = 40.0;
 
+/// A hit whose whole name is the query (`name_match` 100) or whose alternative name is (90): nothing fuzzy replaces it.
+pub(crate) const EXACT_NAME_MATCH: f64 = 90.0;
+
 impl PackGeocoder {
     /// The index search behind `forward`, without misspelling handling.
     fn forward_names(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
@@ -448,15 +451,22 @@ impl PackGeocoder {
 }
 
 impl Geocoder for PackGeocoder {
-    /// Names, words and prefixes through the index; and when nothing it finds fits the name well, the town whose name is the
-    /// query with a typing slip in it ("Islnd Park", "Bosie") goes first. This is the one resolver `navigate`, `locate` and
-    /// `live_data` all go through, so they treat a misspelling alike; a well-fitting (exact) match is never replaced by a fuzzy one.
+    /// Names, words and prefixes through the index, plus the town whose whole name is the query with a typing slip in it
+    /// ("Islnd Park", "Bosie", "Amon" for Ammon). This is the one resolver `navigate`, `locate` and `live_data` all go
+    /// through, so they treat a misspelling alike. Ranked by how the name matches, then class, then people: an exact
+    /// whole name (a place or a town, `name_match` 90 or more) beats a whole-name slip of at most `slip_allowed` edits, and that
+    /// beats a place whose name only starts with the query or has some of its words (`name_match` under 90). A town that
+    /// starts with the query (a partial name typed) is kept ahead of a slip.
     fn forward(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
         let mut hits = self.forward_names(query, near, limit);
-        if limit > 0 && !hits.iter().any(|h| h.name_match >= GOOD_NAME_MATCH) {
-            if let Some(f) = self.fuzzy_town(query, near) {
-                hits.insert(0, f);
-                hits.truncate(limit);
+        if limit > 0 && !hits.iter().any(|h| h.name_match >= EXACT_NAME_MATCH) {
+            let town_prefix = hits.iter().any(|h| h.kind == HitKind::Locality && h.name_match >= GOOD_NAME_MATCH);
+            if !town_prefix {
+                if let Some(f) = self.fuzzy_town(query, near) {
+                    hits.retain(|h| h.address != f.address);
+                    hits.insert(0, f);
+                    hits.truncate(limit);
+                }
             }
         }
         hits

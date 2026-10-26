@@ -44,6 +44,8 @@ const PLACES: &[P] = &[
     P { name: "Sawtooth Spring", cat: Some("water"), kind: "natural=spring", lat: 44.1700, lon: -114.9200, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
     P { name: "Burley Elementary School", cat: None, kind: "amenity=school", lat: 42.5350, lon: -113.7930, street: Some("200 W 10th St"), locality: "Burley", phone: None, hours: None, alt: "" },
     P { name: "Burley", cat: None, kind: "shop=convenience", lat: 42.5310, lon: -113.8000, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Amonara", cat: None, kind: "shop=gift", lat: 43.3700, lon: -112.1200, street: None, locality: "Shelley", phone: None, hours: None, alt: "" },
+    P { name: "Ammin", cat: None, kind: "shop=convenience", lat: 43.4700, lon: -111.9700, street: None, locality: "Ammon", phone: None, hours: None, alt: "" },
     P { name: "Stanley Lake", cat: None, kind: "natural=water", lat: 44.2400, lon: -115.0000, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
 ];
 
@@ -61,6 +63,7 @@ const LOCALITIES: &[(&str, &str, f64, f64, i64, &str)] = &[
     ("Lowman", "hamlet", 44.0900, -115.6200, 40, "ID"),
     ("Stanley", "town", 46.3000, -97.2000, 80, "ND"),
     ("Island Park", "city", 44.4238, -111.3714, 300, "ID"),
+    ("Ammon", "city", 43.4696, -111.9667, 17000, "ID"),
     // A big town one edit from Boise ("Boyse"): a test that an exact name beats a close fuzzy candidate.
     ("Boyse", "city", 46.0000, -112.5000, 900000, "ID"),
 ];
