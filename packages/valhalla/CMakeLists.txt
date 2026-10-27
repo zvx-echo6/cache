@@ -32,6 +32,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     TARGET_DIRECTORY valhalla-baldr
     APPEND PROPERTY COMPILE_DEFINITIONS "INSTALL=.")
 endif()
+get_source_file_property(cache_tz_definitions
+  "${VALHALLA_SRC}/src/baldr/tz_alt.cpp"
+  TARGET_DIRECTORY valhalla-baldr COMPILE_DEFINITIONS)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  if(NOT "INSTALL=." IN_LIST cache_tz_definitions)
+    message(FATAL_ERROR "iOS embedded timezone preflight: tz_alt.cpp lacks INSTALL=.")
+  endif()
+elseif("INSTALL=." IN_LIST cache_tz_definitions)
+  message(FATAL_ERROR "Embedded timezone preflight: iOS INSTALL=. leaked to another platform")
+endif()
 
 option(CACHE_VALHALLA_STATIC "Build the shim as a static archive" OFF)
 option(CACHE_VALHALLA_BUILD_TEST "Build the C ABI link harness" ON)

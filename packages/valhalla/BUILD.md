@@ -312,3 +312,32 @@ and routing tests. The separate preflight script is maintained by its own worker
 
 CMake scope reference:
 https://cmake.org/cmake/help/v3.21/command/set_property.html
+
+### Enforced post-configure compile-command gate
+
+build-ios.sh explicitly enables CMAKE_EXPORT_COMPILE_COMMANDS and runs an inline
+Python standard-library gate immediately after configure and before cmake --build.
+It reads compile_commands.json, accepts the arguments array or shlex-parses the
+command string, and resolves relative source paths against each entry's directory.
+The gate requires one exact pinned-source tz_alt.cpp entry with one INSTALL=.
+definition and no conflicting undefine. INSTALL on another source fails.
+USE_OS_TZDB must be absent or explicitly 0 throughout. Both date implementation
+commands (tz_alt.cpp and ios.mm) must keep HAS_REMOTE_API=0 and AUTO_DOWNLOAD=0
+without conflicting values/undefines. Malformed or missing command data fails with
+a routing compile preflight diagnostic. The shell exits before the Valhalla
+compile invocation when any invariant fails. Dependency setup performed by CMake
+configure precedes this gate; the gate does not claim to prevent those builds.
+
+Wrapper CMake additionally reads tz_alt.cpp's source COMPILE_DEFINITIONS using
+TARGET_DIRECTORY valhalla-baldr, requires INSTALL=. for iOS and rejects that
+definition on other platforms. The generated-command gate verifies actual compiler
+arguments beyond the source-property assertion. No upstream code is changed.
+
+Validation on the desktop used ten temporary E: fixtures: valid arguments and
+shell command formats; missing INSTALL; leaked INSTALL; OS TZDB enabled; networking
+enabled; missing offline definition; INSTALL undefined; duplicate and missing
+tz_alt.cpp commands. All expected outcomes passed without invoking a compiler.
+Bash syntax and whitespace checks also pass. Actual generated commands still need
+the next coordinated Mac configure. Temporary test files are removed; no native
+Windows build was started. The separate preflight-ios.sh/workflow gates remain
+owned by their assigned worker/lead.

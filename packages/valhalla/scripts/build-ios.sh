@@ -34,7 +34,7 @@ case $(uname -m) in
   *) echo "unsupported host" >&2; exit 1 ;;
 esac
 cmake -S "$here" -B "$work/build" -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DVALHALLA_SRC="$work/src" \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVALHALLA_SRC="$work/src" \
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DVCPKG_TARGET_TRIPLET=arm64-ios-rel -DVCPKG_HOST_TRIPLET="$host" \
   -DVCPKG_OVERLAY_TRIPLETS="$here/triplets" \
@@ -44,6 +44,74 @@ cmake -S "$here" -B "$work/build" -G Ninja \
   -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
   -DCACHE_VALHALLA_STATIC=ON -DCACHE_VALHALLA_BUILD_TEST=ON \
   -DENABLE_STATIC_LIBRARY_MODULES=OFF
+# Verify generated commands, not only CMake property visibility, before compiling.
+python3 - "$work/build/compile_commands.json" "$work/src/src/baldr/tz_alt.cpp" <<'PY'
+import json
+from pathlib import Path
+import shlex
+import sys
+
+def fail(message):
+    raise SystemExit("routing compile preflight: " + message)
+
+try:
+    entries = json.loads(Path(sys.argv[1]).read_text())
+    expected = Path(sys.argv[2]).resolve()
+    if not isinstance(entries, list) or not entries:
+        fail("compile_commands.json is empty or not an array")
+    tz_count = 0
+    for entry in entries:
+        source = Path(entry["file"])
+        if not source.is_absolute():
+            source = Path(entry["directory"]) / source
+        source = source.resolve()
+        args = entry.get("arguments")
+        if args is None:
+            args = shlex.split(entry["command"])
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            fail(f"{source}: malformed compiler arguments")
+        definitions = {}
+        undefines = set()
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg in ("-D", "-U"):
+                index += 1
+                if index == len(args):
+                    fail(f"{source}: trailing {arg}")
+                value = args[index]
+                kind = arg
+            elif arg.startswith(("-D", "-U")):
+                kind, value = arg[:2], arg[2:]
+            else:
+                index += 1
+                continue
+            name, separator, value = value.partition("=")
+            if kind == "-D":
+                definitions.setdefault(name, []).append(value if separator else "1")
+            else:
+                undefines.add(name)
+            index += 1
+        if any(value != "0" for value in definitions.get("USE_OS_TZDB", [])):
+            fail(f"{source}: USE_OS_TZDB must be absent or explicitly 0")
+        if source == expected:
+            tz_count += 1
+            if definitions.get("INSTALL") != ["."] or "INSTALL" in undefines:
+                fail(f"{source}: expected exactly one -DINSTALL=. with no -UINSTALL")
+        elif "INSTALL" in definitions or "INSTALL" in undefines:
+            fail(f"{source}: INSTALL must be scoped only to tz_alt.cpp")
+        # Both date implementation files inherit the offline Valhalla flags.
+        if source == expected or source.name == "ios.mm":
+            for name in ("HAS_REMOTE_API", "AUTO_DOWNLOAD"):
+                values = definitions.get(name, [])
+                if not values or any(value != "0" for value in values) or name in undefines:
+                    fail(f"{source}: require {name}=0 without conflicting definitions/undefines")
+    if tz_count != 1:
+        fail(f"expected one tz_alt.cpp compile command; found {tz_count}")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    fail(f"cannot inspect compile commands: {error}")
+print("routing compile preflight: PASS (scoped INSTALL=.; embedded TZDB; date networking disabled)")
+PY
 # Linking the C harness resolves the shim's complete dependency closure.
 cmake --build "$work/build" --target valhalla_shim_test --parallel 3
 archives=("$work/build/libvalhalla_shim.a" "$work/build/valhalla/src/libvalhalla.a")
