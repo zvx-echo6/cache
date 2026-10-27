@@ -23,6 +23,16 @@ set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 add_subdirectory("${VALHALLA_SRC}" valhalla)
 
+# date's INSTALL preprocessor option supplies a fixed path instead of calling
+# its iOS bundle-scanning helper. Valhalla parses embedded TZ arrays; this path
+# is unused. Scope the existing upstream option to tz_alt.cpp's owning target
+# directory, not the wrapper, other sources, or Android/Windows builds.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  set_property(SOURCE "${VALHALLA_SRC}/src/baldr/tz_alt.cpp"
+    TARGET_DIRECTORY valhalla-baldr
+    APPEND PROPERTY COMPILE_DEFINITIONS "INSTALL=.")
+endif()
+
 option(CACHE_VALHALLA_STATIC "Build the shim as a static archive" OFF)
 option(CACHE_VALHALLA_BUILD_TEST "Build the C ABI link harness" ON)
 if(CACHE_VALHALLA_STATIC)

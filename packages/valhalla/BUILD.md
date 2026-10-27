@@ -274,3 +274,41 @@ definition or explicit app setup is Proposed — not approved.
 Pinned source audit:
 https://github.com/valhalla/valhalla/blob/72f459fc5661fb906ad424be5378c4e32d9a5b3b/src/baldr/tz_alt.cpp
 https://github.com/HowardHinnant/date/blob/b2e917ce6ca8dc11403772f6161b8f69f808c38b/src/ios.mm
+
+### iOS embedded-TZ initialization repair
+
+The follow-up wrapper CMake change selects date's existing INSTALL preprocessor
+option only for src/baldr/tz_alt.cpp on iOS. It uses SOURCE with
+TARGET_DIRECTORY valhalla-baldr after add_subdirectory, so the property is visible
+in the directory that creates that module (supported since CMake 3.18).
+This is a compiler definition, not CMake's install prefix or an install step.
+
+Verified against the pinned source: access_install() uses STRINGIZE(INSTALL)
+plus the delimiter and "tzdata" when INSTALL is defined. INSTALL=. therefore
+produces "./tzdata" without get_download_folder()/expand_path() and without the
+iOS bundle-scan/extraction helper. init_tzdb_strings() assigns install/path but
+does not read them; it still parses the generated continent/backward/etcetera/
+leapsecond arrays. The build also generates the windowsZones XML header (used
+on Windows). USE_OS_TZDB remains 0, HAS_REMOTE_API/AUTO_DOWNLOAD remain 0.
+No upstream source or headers are patched. No timezone archive, fake empty
+archive, extracted files or sandbox directory is required for this embedded path.
+CoreFoundation remains linked for system timezone-name lookup and Abseil.
+This supersedes the unresolved bundle-scan concern above for the configured path;
+actual on-device routing still requires runtime validation.
+
+Cheap preflight checks before another full compile:
+- Assert the pinned tz_alt.cpp access_install() still has the INSTALL conditional
+  and STRINGIZE(INSTALL) branch, and init_tzdb_strings() still parses
+  get_tz_data_file_list(); revisit this choice if upstream behavior changes.
+- After CMake configure, query the property in the owning directory:
+  get_source_file_property(tz_defs "${VALHALLA_SRC}/src/baldr/tz_alt.cpp"
+    TARGET_DIRECTORY valhalla-baldr COMPILE_DEFINITIONS)
+  Require INSTALL=. in tz_defs for iOS, absent on Android/Windows.
+- In compile_commands.json, require -DINSTALL=. on the tz_alt.cpp command only;
+  confirm -DUSE_OS_TZDB=1 is absent and the existing
+  -DHAS_REMOTE_API=0/-DAUTO_DOWNLOAD=0 definitions remain.
+These are configure/source inspections, not a replacement for iPhone initialization
+and routing tests. The separate preflight script is maintained by its own worker.
+
+CMake scope reference:
+https://cmake.org/cmake/help/v3.21/command/set_property.html
