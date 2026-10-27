@@ -68,6 +68,10 @@ jobs:
           env -u IPHONEOS_DEPLOYMENT_TARGET clang -Wall -Wextra -Werror packages/cache_search/ios/Classes/cache_search.c \
             packages/cache_search/ios/tests/free_space_test.c -o "$RUNNER_TEMP/free-space-test"
           "$RUNNER_TEMP/free-space-test" "$RUNNER_TEMP" "$RUNNER_TEMP/missing-$(uuidgen)"
+      - name: Compile the offline reader rules with WebKit
+        run: |
+          env -u IPHONEOS_DEPLOYMENT_TARGET swift packages/cache_search/ios/tests/reader_rules_test.swift \
+            packages/cache_search/ios/tests/offline-reader-rules.json
       - name: Native toolchain identity
         id: toolchain
         run: |
@@ -191,10 +195,13 @@ jobs:
           restore-keys: cocoapods-
       - name: Flutter packages and Pods
         working-directory: app
+        env:
+          CACHE_READER_RULES_FILE: ${{ runner.temp }}/reader-rules.json
         run: |
           flutter --version
           flutter pub get
-          flutter test --no-pub test/core_config_test.dart test/nav_speaker_test.dart test/browse/zim_download_test.dart test/browse/storage_test.dart
+          flutter test --no-pub test/core_config_test.dart test/nav_speaker_test.dart test/browse/zim_download_test.dart test/browse/storage_test.dart test/browse/reader_resources_test.dart test/video_player_screen_test.dart
+          cmp ../packages/cache_search/ios/tests/offline-reader-rules.json "$RUNNER_TEMP/reader-rules.json"
           flutter build ios --config-only --release --build-name=1.0.0 --build-number=${{ github.run_number }}
           cd ios && pod install
       - name: Signing certificate and profile

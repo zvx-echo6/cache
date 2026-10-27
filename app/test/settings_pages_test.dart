@@ -99,7 +99,7 @@ void main() {
     expect(find.byType(SelectableText), findsOneWidget, reason: 'the notice can be selected');
     final link = find.byWidgetPredicate((w) => w is SelectableText && w.textSpan?.toPlainText().contains(kSourceUrl) == true);
     expect(link, findsOneWidget);
-    final span = (tester.widget<SelectableText>(link).textSpan! as TextSpan).children!.whereType<TextSpan>().firstWhere((c) => c.text == kSourceUrl);
+    final span = tester.widget<SelectableText>(link).textSpan!.children!.whereType<TextSpan>().firstWhere((c) => c.text == kSourceUrl);
     (span.recognizer! as TapGestureRecognizer).onTap!();
     expect(opened, [kSourceUrl], reason: 'tapping the address opens it in the browser');
     expect(find.textContaining('AGPL-3.0-or-later'), findsWidgets);
