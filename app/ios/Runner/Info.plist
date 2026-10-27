@@ -20,6 +20,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Cache connects to map, video and other data sources you choose on your local network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
