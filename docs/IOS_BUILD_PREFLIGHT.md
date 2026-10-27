@@ -11,7 +11,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
 
 ## Before expensive native builds
 
-- [ ] Resolve the intended branch to a full 40-character SHA before dispatch. A short hex SHA can be interpreted by actions/checkout as a branch/tag and fail before compilation. Workflow branch-ref handling belongs to the workflow owner; the script's optional argument accepts only a full SHA.
+- [ ] Resolve the intended branch to a full 40-character SHA before dispatch. A short hex SHA can be interpreted by actions/checkout as a branch/tag and fail before compilation. Automated workflow plan gate (lead implementing; CI verification pending): reject 7-39-character all-hex input refs before Mac jobs. Workflow branch-ref handling remains with the workflow owner; the script's optional argument accepts only a full SHA.
 
   ```bash
   git fetch origin ios-routing
@@ -66,7 +66,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
 
 ## Signing readiness (separate gate; no secrets needed by preflight)
 
-- [ ] Before heavy compilation, check required signing/upload secret **presence only**, without printing values. Use the exact variable names declared by the approved workflow; fail on missing/empty values. Keep this separate from the automated compiler preflight; the lead may wire a future phase.
+- [ ] Automated workflow plan gate (lead implementing; CI verification pending): for `stage=all`, require nonempty `IOS_DIST_P12_B64`, `IOS_DIST_P12_PASSWORD` and `IOS_PROFILE_B64`; for `upload=true`, require nonempty `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8_B64`. Report missing names only, never values, before Mac jobs. These workflow gates are separate from the compiler preflight, which requires no signing secrets. Secret presence does not establish validity, expiry or authorization.
 - [ ] Confirm certificate and provisioning profile validity/expiry through the intended release window, distribution type, matching team and bundle identifier, and required entitlements. Verify the **actual installed signing identity name** matches the archive/export configuration rather than assuming a certificate display name. Inspect privately; do not publish certificate/profile contents.
 
   ```bash
@@ -89,7 +89,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
 - [ ] Build using the approved recipe on the pinned source. Verify each device archive contains arm64 device code, not a simulator slice, and retain its build provenance and SHA256. A tiny successful probe does not prove dependency compilation.
 - [ ] Link the C harness against both the native dependency closure and the **actual merged routing archive**, explicitly linking `-lc++ -lz -framework CoreFoundation` at iOS 16.3. Commit `12e65b9` supplies the merged-archive CoreFoundation repair. Do not count a CMake-only harness link as validation of the merged archive.
 - [ ] Inventory app resources explicitly: Metal resources required by the native LLM recipe, embedded timezone configuration, any genuinely required bundle files, and separately installed routing packs. Verify shipped paths/case and data versions against the build recipe; do not include external timezone archives by assumption.
-- [ ] **Pending native recipe integration:** Valhalla embeds timezone strings, but `date::init_tzdb_strings` still reaches unused `get_install`, whose iOS path scans the app bundle for `.tar.gz`. The native worker is adding an iOS-only `INSTALL=.` compile definition scoped to `tz_alt.cpp`, using CMake source properties with `TARGET_DIRECTORY valhalla-baldr`. Coordinate exact definition/source/property strings with the native/workflow owner before making them a static preflight requirement. This branch deliberately does not guess an exact matcher or change CMake. Verify the final compile command scopes the definition only as intended, embedded timezone strings remain enabled, and no external timezone bundle is required by that configuration. **Static configuration is not runtime proof**: confirm device initialization and routing across timezone/date boundaries before checking those behaviors off.
+- [ ] **Native recipe fix pushed as `f072caf`; Mac/device verification remains pending:** Valhalla embeds timezone strings, but `date::init_tzdb_strings` still reaches unused `get_install`, whose iOS path scans the app bundle for `.tar.gz`. The native worker added an iOS-only `INSTALL=.` compile definition scoped to `tz_alt.cpp`, using CMake source properties with `TARGET_DIRECTORY valhalla-baldr`. Coordinate exact definition/source/property strings with the native/workflow owner before making them a static preflight requirement. This branch deliberately does not guess an exact matcher or change CMake. Verify the final compile command scopes the definition only as intended, embedded timezone strings remain enabled, and no external timezone bundle is required by that configuration. **Static configuration is not runtime proof**: confirm device initialization and routing across timezone/date boundaries before checking those behaviors off.
 - [ ] Check static FFI retention in the archived **app executable**, after linking/stripping. Libraries can define symbols which the final app silently discards. Verify force-load/linker roots and at least the existing required exports below. Include all additional Dart-looked-up exports required by the candidate ABI.
 
   ```bash
@@ -108,7 +108,7 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
   /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
   ```
 
-- [ ] Verify minimum OS 16.3, expected bundle/version/build identity, distribution profile and required entitlements in the signed archive. Check usage descriptions, document sharing, background audio and notification configuration. Keep signing material/private identifiers out of public logs/docs. After IPA export, repeat architecture, export-symbol and signature checks on the exported payload; successful archive signing alone does not validate the final exported artifact.
+- [ ] Automated signed-archive gate (lead implementing; CI verification pending): require arm64, `MinimumOSVersion` exactly `16.3`, the expected `application-identifier` (team plus bundle), and successful `codesign --verify`. Require **all three** entitlement values to be true: `com.apple.developer.kernel.increased-memory-limit`, `com.apple.developer.kernel.extended-virtual-addressing`, and `com.apple.developer.usernotifications.time-sensitive`. The earlier alternation grep only proved that any one name appeared and is insufficient. Verify expected bundle/version/build identity and distribution profile as well. Check usage descriptions, document sharing, background audio and notification configuration. Keep signing material/private identifiers out of public logs/docs. After IPA export, repeat architecture, export-symbol and signature checks on the exported payload; successful archive signing alone does not validate the final exported artifact.
 
 ## TestFlight processing
 
