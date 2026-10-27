@@ -39,6 +39,16 @@
           "in": "local"
         }
       },
+      "ends": {
+        "calc": {
+          "op": "add",
+          "args": [
+            { "path": "current.time", "time": { "in": "local", "out": "%s" } },
+            { "const": 10800 }
+          ]
+        },
+        "time": { "in": "unix" }
+      },
       "fields": [
         {
           "label": "Temperature",

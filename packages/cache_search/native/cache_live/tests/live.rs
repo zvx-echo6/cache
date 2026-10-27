@@ -201,7 +201,7 @@ fn refresh_interval_force_and_failure_keeps_last_good() {
     let e = env.weather(json!({"source": "weather", "place": burley(), "now": "2026-10-25T15:00:00-06:00", "force": true})).unwrap_err();
     assert_eq!((e.code, e.message.as_str()), ("fetch_failed", "HTTP 503"));
     let g = env.get(json!({"source": "weather", "place": burley(), "now": "2026-10-25T15:05:00-06:00"})).unwrap();
-    assert_eq!(g["items"].as_array().unwrap().len(), 17);
+    assert_eq!(g["items"].as_array().unwrap().len(), 16);
     assert_eq!(g["fetched_at"], "2026-10-25T14:01:00-06:00");
     assert_eq!(g["last_error"]["code"], "fetch_failed");
     assert_eq!(g["last_error"]["at"], "2026-10-25T15:00:00-06:00");
@@ -213,7 +213,7 @@ fn refresh_interval_force_and_failure_keeps_last_good() {
     *srv.bodies.lock().unwrap() = vec![("/v1/forecast".into(), r#"{"error":true,"reason":"too many"}"#.into())];
     let e = env.weather(json!({"source": "weather", "place": burley(), "now": "2026-10-25T15:11:00-06:00", "force": true})).unwrap_err();
     assert_eq!(e.code, "bad_response");
-    assert!(env.get(json!({"source": "weather", "place": burley()})).unwrap()["items"].as_array().unwrap().len() == 17);
+    assert!(env.get(json!({"source": "weather", "place": burley(), "now": "2026-10-25T15:11:00-06:00"})).unwrap()["items"].as_array().unwrap().len() == 16);
     // a good fetch clears the recorded error
     *srv.bodies.lock().unwrap() = vec![("/v1/forecast".into(), fixture("openmeteo_burley.json"))];
     env.weather(json!({"source": "weather", "place": burley(), "now": "2026-10-25T15:12:00-06:00", "force": true})).unwrap();
@@ -232,7 +232,7 @@ fn expiry_then_the_expired_error() {
     // the app's screens still get the data, flagged expired
     let g = env.get(json!({"source": "weather", "place": "burley", "now": "2026-11-10T00:00:01-07:00"})).unwrap();
     assert_eq!(g["expired"], true);
-    assert_eq!(g["items"].as_array().unwrap().len(), 17);
+    assert_eq!(g["items"].as_array().unwrap().len(), 16);
     // the model gets the error and no data
     let e = env.tool(json!({"source": "weather", "place": "burley"}), None, "2026-11-10T00:00:01-07:00").unwrap_err();
     assert_eq!((e.code.as_str(), e.detail.as_str()), ("expired", "weather data expired 2026-11-10"));
@@ -788,4 +788,57 @@ fn a_definition_using_state_gets_id_for_an_idaho_town() {
     let e = env.live.fetch_with(&bare, &env.places, Some(pack.geo())).unwrap_err();
     assert_eq!(e.code, "fetch_failed");
     assert_eq!(e.message, "this source needs the place's state, which is not known for Somewhere");
+}
+
+#[test]
+fn observation_expires_independently_of_forecast_and_fetch_time() {
+    let (env, _srv) = weather_env("observation-expiry");
+    env.places.save(r#"{"key":"burley","name":"Burley, ID","lat":42.536,"lon":-113.792}"#).unwrap();
+    env.weather(json!({"source":"weather", "place":burley(), "now":T0})).unwrap();
+    // Observation is 10:45; expiry is exactly three hours later, independent of fetch time.
+    let before = env.get(json!({"source":"weather", "place":burley(), "now":"2026-10-25T13:44:59-06:00"})).unwrap();
+    assert_eq!(before["items"].as_array().unwrap().len(), 17);
+    let boundary = env.get(json!({"source":"weather", "place":burley(), "now":"2026-10-25T13:45:00-06:00"})).unwrap();
+    assert_eq!(boundary["items"].as_array().unwrap().len(), 16);
+    let now = "2026-11-02T10:50:00-06:00";
+    let app = env.get(json!({"source":"weather", "place":burley(), "now":now})).unwrap();
+    let tool = env.tool(json!({"source":"weather", "place":"Burley, ID"}), None, now).unwrap();
+    for view in [&app, &tool] {
+        assert_eq!(view["expired"], false);
+        assert_eq!(view["fetched_at"], T0);
+        assert_eq!(view["age"], "8 days old");
+        assert_eq!(view["valid_until"], "2026-11-10T00:00:00-07:00");
+        let items = view["items"].as_array().unwrap();
+        assert!(items.iter().all(|i| i["address"] != "live:weather/burley/now"));
+        assert!(items.iter().any(|i| i["time"] == "2026-11-03"));
+    }
+    assert_eq!(tool["more"], 4);
+    // Even a newly fetched response must not revive an old observation.
+    let late = env.weather(json!({"source":"weather", "place":burley(), "now":now, "force":true})).unwrap();
+    assert_eq!(late["age"], "less than a minute old");
+    assert_eq!(late["items"].as_array().unwrap().len(), 16);
+}
+
+#[test]
+fn calculated_expiry_is_generic_and_remaps_preexisting_cached_rows() {
+    let srv = Server::start(vec![("/data", fixture("openmeteo_burley.json"))]);
+    let mut def = real_source("weather.json");
+    def["id"] = json!("reservoir");
+    def["items"][0]["key"] = json!({"const":"measurement"});
+    def["items"][0]["label"] = json!({"const":"Mesure"});
+    let ends = def["items"][0].as_object_mut().unwrap().remove("ends").unwrap();
+    let env = Env::new("generic-expiry", vec![("reservoir.json", def.clone(), Some((srv.port,"/data")))]);
+    env.weather(json!({"source":"reservoir", "place":burley(), "now":T0})).unwrap();
+    let now = "2026-11-02T10:50:00-06:00";
+    assert_eq!(env.get(json!({"source":"reservoir", "place":burley(), "now":now})).unwrap()["items"].as_array().unwrap().len(), 17);
+    // Update only the definition; Live::view must remap the original raw response.
+    let path = env.dir.join("sources/reservoir.json");
+    let mut installed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    installed["items"][0]["ends"] = ends;
+    std::fs::write(path, serde_json::to_string_pretty(&installed).unwrap()).unwrap();
+    let after = env.get(json!({"source":"reservoir", "place":burley(), "now":now})).unwrap();
+    assert_eq!(after["items"].as_array().unwrap().len(), 16);
+    assert_eq!(after["fetched_at"], T0);
+    assert_eq!(after["expired"], false);
+    assert_eq!(srv.hits(), 1);
 }
