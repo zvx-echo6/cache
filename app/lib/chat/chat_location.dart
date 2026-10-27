@@ -1,0 +1,39 @@
+import '../location/location_service.dart';
+import '../location/position_source.dart';
+
+/// Keeps the chat's location flag behind acknowledged, ordered core updates.
+class ChatLocation {
+  ChatLocation({required this.location, required this.synchronize});
+
+  final LocationService location;
+  final Future<bool> Function(Fix? fix) synchronize;
+  Future<void> _writes = Future.value();
+  int _revision = 0;
+  Fix? _known;
+
+  bool get known => location.enabled && _known != null && identical(location.fix, _known);
+
+  /// Used by LocationService.onFix, including stream updates and location clears.
+  void update(Fix? fix) {
+    final revision = ++_revision;
+    _known = null;
+    _writes = _writes.then((_) async {
+      final synchronized = await synchronize(fix);
+      if (revision == _revision) _known = synchronized ? fix : null;
+    }).catchError((Object _) {
+      _known = null;
+    });
+  }
+
+  Future<void> prepare(bool Function() isCancelled) async {
+    final fix = await location.prepareForChat(isCancelled: isCancelled);
+    if (isCancelled()) return;
+    update(fix);
+    // Include any stream update queued while the earlier core write was pending.
+    Future<void> pending;
+    do {
+      pending = _writes;
+      await pending;
+    } while (!isCancelled() && !identical(pending, _writes));
+  }
+}

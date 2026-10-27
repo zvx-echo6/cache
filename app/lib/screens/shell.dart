@@ -168,7 +168,7 @@ class _ShellState extends State<Shell> {
   }
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, onOpenSource: _openSource, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, onOpenSource: _openSource, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme),
         ModuleId.videos => VideosScreen(video: widget.video),

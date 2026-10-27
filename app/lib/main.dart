@@ -9,6 +9,7 @@ import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
 import 'chat/chat_controller.dart';
+import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/read_tool.dart';
 import 'chat/search_tool.dart';
@@ -62,12 +63,14 @@ class _CacheAppState extends State<CacheApp> {
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy);
   late final LocationService location = LocationService(
-    onFix: (f) => sources.setLocation(
-      f?.lat,
-      f?.lon,
-      accuracyM: f?.accuracyM ?? -1,
-      at: f?.time,
-    ),
+    onFix: (f) => chatLocation.update(f),
+  );
+  late final ChatLocation chatLocation = ChatLocation(
+    location: location,
+    synchronize: (f) async {
+      if (await sources.whenCoreReady() == null) return false;
+      return sources.setLocation(f?.lat, f?.lon, accuracyM: f?.accuracyM ?? -1, at: f?.time);
+    },
   );
   // The layer engine in the core (cs_layers_*): the catalogue, the tile server the map reads from, area downloads.
   late final AppSettings settings = AppSettings();
@@ -124,7 +127,8 @@ class _CacheAppState extends State<CacheApp> {
         ? null
         : CoreToolHost(core: sources.core!, numbering: numbering),
     numberingState: CoreNumberingState(() => sources.core),
-    locationKnown: () => location.fix != null,
+    locationKnown: () => chatLocation.known,
+    prepareTurn: chatLocation.prepare,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.

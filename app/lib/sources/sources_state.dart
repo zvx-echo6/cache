@@ -153,7 +153,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   SearchCore? get core => _core;
 
   /// The phone's GPS fix for the tools that default to "where I am"; null forgets it.
-  Future<void> setLocation(
+  Future<bool> setLocation(
     double? lat,
     double? lon, {
     double accuracyM = -1,
@@ -162,15 +162,15 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     _fix = lat == null || lon == null
         ? null
         : (lat, lon, accuracyM, at ?? DateTime.now());
-    await _applyFix();
+    return _applyFix();
   }
 
   (double, double, double, DateTime)? _fix;
 
   /// Sends the latest fix to the core; also done once the core is open, for a fix that came before it.
-  Future<void> _applyFix() async {
+  Future<bool> _applyFix() async {
     final core = _core;
-    if (core == null) return;
+    if (core == null) return false;
     final f = _fix;
     try {
       if (f == null) {
@@ -183,8 +183,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
           fixedAt: isoWithOffset(f.$4),
         );
       }
+      return true;
     } catch (_) {
-      // A bad or late fix is not a reason to stop the app; the tools answer no_location.
+      // Report unsuccessful synchronization without preventing ordinary chat.
+      return false;
     }
   }
 

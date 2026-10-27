@@ -48,6 +48,7 @@ class ChatController extends ChangeNotifier {
     this.newNumbering,
     this.newHost,
     this.locationKnown,
+    this.prepareTurn,
     this.numberingState,
   });
 
@@ -59,6 +60,10 @@ class ChatController extends ChangeNotifier {
 
   /// Whether the phone's location is known right now, for the system prompt.
   final bool Function()? locationKnown;
+
+  /// Optional shared preparation before each inference, including restored chats.
+  /// Cancellation must prevent late preparation from starting model generation.
+  final Future<void> Function(bool Function() isCancelled)? prepareTurn;
 
   /// Makes the numbering of a new chat in the search core; null (or returning null) numbers in Dart.
   final ResultNumbering? Function()? newNumbering;
@@ -77,6 +82,8 @@ class ChatController extends ChangeNotifier {
   String _modelName = '';
   int? _activeId;
   int _epoch = 0;
+  Object? _turn;
+  bool _preparing = false;
   bool busy = false;
   Future<void>? _titleJob;
   bool _titleCancelled = false;
@@ -101,6 +108,8 @@ class ChatController extends ChangeNotifier {
     _backend = backend;
     _modelName = modelName;
     _dropLoop();
+    _turn = null;
+    _preparing = false;
     notifyListeners();
   }
 
@@ -112,12 +121,14 @@ class ChatController extends ChangeNotifier {
     _loop = null;
     if (loop == null) return;
     loop.stop();
-    if (!busy) loop.dispose();
+    if (!busy || _preparing) loop.dispose();
   }
 
   void newChat() {
     _dropLoop();
     _epoch++;
+    _turn = null;
+    _preparing = false;
     messages.clear();
     _activeId = null;
     busy = false;
@@ -137,7 +148,10 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void stop() => _loop?.stop();
+  void stop() {
+    _turn = null;
+    _loop?.stop();
+  }
 
   Future<void> renameConversation(int id, String title) async {
     title = title.trim();
@@ -215,6 +229,8 @@ class ChatController extends ChangeNotifier {
     if (text.isEmpty || backend == null || busy) return;
     busy = true;
     final epoch = _epoch;
+    final turn = _turn = Object();
+    bool cancelled() => epoch != _epoch || !identical(_turn, turn);
     final reply = ChatMessage.assistant();
     messages
       ..add(ChatMessage.user(text))
@@ -228,7 +244,16 @@ class ChatController extends ChangeNotifier {
     TurnUpdate? last;
     try {
       await _cancelTitle(backend);
-      if (epoch != _epoch) return;
+      if (cancelled()) return;
+      _preparing = true;
+      try {
+        await prepareTurn?.call(cancelled);
+      } catch (_) {
+        // Optional device context never blocks an ordinary question.
+      } finally {
+        if (identical(_turn, turn)) _preparing = false;
+      }
+      if (cancelled()) return;
       final store = _store;
       convId = _activeId;
       if (store != null && convId == null) {
@@ -243,7 +268,7 @@ class ChatController extends ChangeNotifier {
       var made = _loop;
       if (made == null) {
         made = await _loopFor(convId, backend);
-        if (epoch != _epoch) {
+        if (cancelled()) {
           await made.dispose();
           return;
         }
@@ -255,7 +280,7 @@ class ChatController extends ChangeNotifier {
           store.addMessage(convId, role: 'user', content: text, message: {'role': 'user', 'content': text}, model: _modelName);
         } catch (_) {}
       }
-      if (epoch != _epoch) return;
+      if (cancelled()) return;
       start = loop.messages.length;
       await for (final u in loop.ask(text)) {
         if (epoch != _epoch) return; // chat was reset meanwhile

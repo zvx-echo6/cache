@@ -7,6 +7,7 @@ import '../chat/tool_loop.dart';
 import '../browse/zim_urls.dart';
 import '../history/share.dart';
 import '../layout/layout_state.dart';
+import '../location/location_service.dart';
 import '../theme.dart';
 import 'history_drawer.dart';
 import 'models_screen.dart';
@@ -19,10 +20,12 @@ class AskScreen extends StatefulWidget {
     this.onOpenSource,
     this.share = shareMarkdown,
     this.layout,
+    this.location,
   });
 
   /// Where a chat's "Add to Home" puts its shortcut.
   final LayoutState? layout;
+  final LocationService? location;
 
   final AppState app;
   final ChatController chat;
@@ -72,6 +75,51 @@ class _AskScreenState extends State<AskScreen> {
       if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
     });
   }
+
+
+  Future<void> _useLocation() async {
+    final location = widget.location;
+    if (location == null) return;
+    var explained = false;
+    if (!location.enabled) {
+      final enable = await _explainLocation();
+      if (!enable || !mounted) return;
+      await location.setEnabled(true);
+      explained = true;
+    }
+    final ok = location.streamHeld
+        ? await location.prepareForChat(isCancelled: () => !mounted) != null
+        : await location.request(explain: explained ? () async => true : _explainLocation);
+    if (!mounted) return;
+    final text = ok ? 'Location ready for your next question.' : switch (location.problem) {
+      LocationProblem.permissionBlocked => "Location is blocked. You can allow it in your phone's settings.",
+      LocationProblem.permissionDenied => 'Cache was not allowed to use your location.',
+      LocationProblem.serviceOff => "Your phone's location is switched off.",
+      LocationProblem.off => 'Location is off.',
+      LocationProblem.noFix => 'Could not get a position yet. You can still chat.',
+      null => 'Location was not changed. You can still chat.',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text),
+      action: switch (location.problem) {
+        LocationProblem.permissionBlocked => SnackBarAction(label: 'Settings', onPressed: location.openAppSettings),
+        LocationProblem.serviceOff => SnackBarAction(label: 'Settings', onPressed: location.openLocationSettings),
+        _ => null,
+      },
+    ));
+  }
+
+  Future<bool> _explainLocation() async => await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Use your location?'),
+      content: const Text('Cache uses your location to find nearby places. You can turn location off in Settings.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Continue')),
+      ],
+    ),
+  ) == true;
 
   void _openModels() => openModels(context, widget.app);
 
@@ -195,6 +243,19 @@ class _AskScreenState extends State<AskScreen> {
                 },
               ),
             ),
+
+            if (widget.location case final location?)
+              ListenableBuilder(
+                listenable: location,
+                builder: (context, _) => Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: location.busy || widget.chat.busy ? null : _useLocation,
+                    icon: const Icon(Icons.my_location, size: 18),
+                    label: Text(location.fix == null ? 'Use my location' : 'Location ready'),
+                  ),
+                ),
+              ),
             _composer(context),
           ],
         ),

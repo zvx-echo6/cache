@@ -207,6 +207,69 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+
+  /// Silent, bounded preparation for chat. Recent fixes are reused; no permission
+  /// prompt or extra stream is started, including while guidance owns location.
+  Future<Fix?> prepareForChat({
+    required bool Function() isCancelled,
+    Duration timeout = const Duration(seconds: 2),
+    Duration maxAge = const Duration(minutes: 2),
+  }) async {
+    if (_disposed || !enabled || !_foreground || isCancelled()) return null;
+    bool recent(Fix? f) {
+      if (f == null || !f.lat.isFinite || !f.lon.isFinite ||
+          f.lat.abs() > 90 || f.lon.abs() > 180 ||
+          !f.accuracyM.isFinite || f.accuracyM < 0) {
+        return false;
+      }
+      final age = DateTime.now().difference(f.time);
+      return !age.isNegative && age <= maxAge;
+    }
+    if (busy) return recent(fix) ? fix : null;
+    final generation = _resumeGeneration;
+    var expired = false;
+    bool valid() => !expired && !isCancelled() && _resumeIsCurrent(generation);
+    Future<Fix?> read() async {
+      final wasUnasked = permission == LocationPermissionState.notAsked && fix == null && problem == null;
+      final access = await _source.permission();
+      if (!valid()) return null;
+      permission = access;
+      if (access != LocationPermissionState.granted) {
+        if (!(wasUnasked && access == LocationPermissionState.notAsked)) {
+          _clearFix(access == LocationPermissionState.deniedForever
+              ? LocationProblem.permissionBlocked : LocationProblem.permissionDenied);
+        }
+        return null;
+      }
+      final serviceOn = await _source.serviceEnabled();
+      if (!valid()) return null;
+      _serviceAvailable = serviceOn;
+      if (!serviceOn) {
+        _clearFix(LocationProblem.serviceOff);
+        return null;
+      }
+      if (recent(fix)) return fix;
+      if (_held) return null;
+      final current = await _source.current();
+      if (!valid() || _held) return null;
+      // A newer stream fix may have arrived during the one-shot request.
+      if (recent(fix) && !fix!.time.isBefore(current.time)) return fix;
+      if (!recent(current)) return null;
+      _publish(current);
+      return current;
+    }
+    try {
+      return await read().timeout(timeout, onTimeout: () {
+        expired = true;
+        return null;
+      });
+    } catch (_) {
+      return null; // Location failure must never prevent an ordinary chat.
+    }
+  }
+
+  bool get streamHeld => _held;
+
   Future<void> openAppSettings() => _source.openAppSettings();
   Future<void> openLocationSettings() => _source.openLocationSettings();
 
