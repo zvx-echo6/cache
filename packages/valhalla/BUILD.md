@@ -237,3 +237,40 @@ is an input to those build tools, never accepted as finished native output.
 Finished-core caches remain exact by source/build inputs (including the changed
 minimum and workflow) and are saved only on success. Syntax and diff checks cover
 this repair; the next lead-dispatched device build must confirm compilation.
+
+Run 40444409902 passed all 169 Valhalla compile/CMake link steps at iOS 16.3,
+archive merging, arm64 verification and all ten shim definition checks. The final
+manual merged-archive link alone failed: all unresolved framework symbols were
+CoreFoundation functions from date ios.mm and Abseil timezone code. That check now
+adds -framework CoreFoundation, matching the existing search pod framework list.
+No other unresolved framework family was reported. Rust was not reached.
+
+Timezone resource audit (source inspection, not an iPhone runtime test):
+Valhalla's src/baldr/CMakeLists.txt converts the pinned IANA continent files,
+backward, etcetera and leapseconds into date_time_*.h arrays. Its tz_alt.cpp uses
+init_tzdb_strings() to parse those arrays. date/tz.h defaults USE_OS_TZDB to 0;
+the routing targets set HAS_REMOTE_API=0 and AUTO_DOWNLOAD=0. There is no separate
+date-tz library enabled here. Thus the timezone rule data itself is embedded,
+rather than read from a bundled tz database or downloaded.
+
+Important remaining initialization risk: init_tzdb_strings() still calls
+get_install(). With INSTALL undefined, iPhone expand_path() invokes
+date::iOSUtils::get_tzdata_path(). The pinned date helper returns immediately if
+the sandbox Library/tzdata path exists; otherwise it scans the main bundle for
+tar.gz resources, assumes the first is timezone data, and attempts extraction.
+It does not guard all CoreFoundation results. Embedded rules therefore do not
+prove safe first-use initialization in a fresh sandbox.
+
+The current helper's resource convention is a flat raw IANA tz-source tar.gz
+(continent files, backward, etcetera, leapseconds) in the native main bundle,
+extracted into Library/tzdata. Flutter assets alone are not that convention.
+However, Valhalla's actual embedded parser does not consume these extracted files,
+so adding a duplicate timezone archive is not established as necessary. No
+resource, sandbox directory or upstream code was changed by this link repair.
+Fresh-install iPhone initialization must be validated before declaring routing
+operational. Avoiding the unused path initialization with a scoped INSTALL
+definition or explicit app setup is Proposed — not approved.
+
+Pinned source audit:
+https://github.com/valhalla/valhalla/blob/72f459fc5661fb906ad424be5378c4e32d9a5b3b/src/baldr/tz_alt.cpp
+https://github.com/HowardHinnant/date/blob/b2e917ce6ca8dc11403772f6161b8f69f808c38b/src/ios.mm

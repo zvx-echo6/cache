@@ -63,7 +63,7 @@ done
 # Relink against the actual merged archive, not just CMake's individual libraries.
 xcrun --sdk iphoneos clang -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
   -miphoneos-version-min=16.3 -I"$here/shim" "$here/test/shim_test.c" \
-  "$out/libcache_valhalla.a" -lc++ -lz -o "$work/bundle-link-check"
+  "$out/libcache_valhalla.a" -lc++ -lz -framework CoreFoundation -o "$work/bundle-link-check"
 {
   echo "Valhalla=$valhalla_rev"
   echo "vcpkg=$vcpkg_rev"
