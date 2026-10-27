@@ -17,7 +17,7 @@ llama.cpp (Metal) and the Cache chat engine behind a small C ABI, called from Da
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'
   s.dependency 'Flutter'
-  s.platform = :ios, '16.0'
+  s.platform = :ios, '16.3'
 
   s.vendored_libraries = 'native/libcache_llama_all.a'
   s.frameworks = 'Metal', 'MetalKit', 'Foundation', 'Accelerate'
