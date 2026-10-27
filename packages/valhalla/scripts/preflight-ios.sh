@@ -12,7 +12,7 @@ if [[ $# == 1 ]]; then
   [[ $1 =~ ^[0-9a-fA-F]{40}$ ]] || fail 'expected a full 40-character commit SHA; shortened hex SHAs are unsafe for checkout. Resolve branch refs in the workflow before invoking this gate.'
 fi
 [[ $(uname -s) == Darwin ]] || fail 'requires macOS with existing Xcode tools; run on Mac CI, not Windows/Linux'
-for tool in git python3 xcrun xcodebuild cmake ninja cargo rustc swift flutter pod mktemp env; do
+for tool in git python3 xcrun xcodebuild cmake ninja cargo rustc swift mktemp env; do
   command -v "$tool" >/dev/null 2>&1 || fail "missing existing tool: $tool (no installation attempted)"
 done
 root=$(cd "$(dirname "$0")/../../.." && pwd -P)
@@ -43,6 +43,10 @@ manifest = json.loads(read('packages/valhalla/vcpkg.json'))
 if manifest.get('builtin-baseline') != baseline or manifest.get('version-string') != '3.7.0':
     fail('Valhalla manifest version/baseline disagrees with pinned build source')
 minimum = '16.3'
+matches('.github/workflows/ios-testflight.yml', r"^\s+IPHONEOS_DEPLOYMENT_TARGET:\s*['\"]?([0-9.]+)", minimum)
+cmake_wrapper = read('packages/valhalla/CMakeLists.txt')
+if 'TARGET_DIRECTORY valhalla-baldr' not in cmake_wrapper or 'COMPILE_DEFINITIONS "INSTALL=."' not in cmake_wrapper:
+    fail('iOS embedded timezone path must be scoped to tz_alt.cpp in valhalla-baldr')
 matches('app/ios/Podfile', r"^platform\s+:ios,\s*'([^']+)'", minimum)
 matches('app/ios/Podfile', r"build_settings\['IPHONEOS_DEPLOYMENT_TARGET'\]\s*=\s*'([^']+)'", minimum)
 matches('app/ios/Runner.xcodeproj/project.pbxproj', r'IPHONEOS_DEPLOYMENT_TARGET\s*=\s*([0-9.]+)', minimum)
