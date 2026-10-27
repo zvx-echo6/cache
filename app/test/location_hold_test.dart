@@ -54,6 +54,7 @@ void main() {
     // Coming back to the app while guidance runs does not start it again.
     location.didChangeAppLifecycleState(AppLifecycleState.paused);
     location.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await Future<void>.delayed(Duration.zero); // Silent permission/service recheck.
     expect(source.streams, hasLength(1));
     location.holdStream(false);
     expect(source.streams, hasLength(2));
