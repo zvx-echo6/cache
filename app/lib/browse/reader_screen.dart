@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../layout/layout_state.dart';
@@ -10,6 +10,7 @@ import '../layout/modules_screen.dart' show addToHome;
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import 'zim_urls.dart';
+import 'reader_resources.dart';
 
 /// Opens a ZIM like a web site: the page is a WebView whose requests are all answered from the ZIM file
 /// (no network), with a main page, back and forward, find in the page, title search and full-text search
@@ -37,6 +38,8 @@ class ZimReaderScreen extends StatefulWidget {
 }
 
 class _ZimReaderScreenState extends State<ZimReaderScreen> {
+  bool get _customScheme => defaultTargetPlatform == TargetPlatform.iOS;
+
   InAppWebViewController? _web;
   late final FindInteractionController _findController =
       FindInteractionController(
@@ -89,7 +92,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     }
     try {
       final address = widget.address ?? await widget.sources.zimMainPage(id);
-      final url = readerUrl(address);
+      final url = readerUrl(address, customScheme: _customScheme);
       if (url == null) throw StateError('Not a ZIM address');
       if (mounted) setState(() => _start = url);
     } on CacheSearchException catch (e) {
@@ -122,7 +125,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   }
 
   void _open(String address) {
-    final u = readerUrl(address);
+    final u = readerUrl(address, customScheme: _customScheme);
     if (u == null) return;
     setState(() {
       _searching = false;
@@ -200,7 +203,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     addToHome(
       context,
       layout,
-      Shortcut.page(address: address, title: _pageTitle.isEmpty ? lib : _pageTitle, library: lib),
+      Shortcut.page(
+        address: address,
+        title: _pageTitle.isEmpty ? lib : _pageTitle,
+        library: lib,
+      ),
     );
   }
 
@@ -279,7 +286,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                   onSelected: (v) {
                     if (v == 'home') _addToHome();
                   },
-                  itemBuilder: (_) => const [PopupMenuItem(value: 'home', height: 52, child: Text('Add to Home'))],
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'home',
+                      height: 52,
+                      child: Text('Add to Home'),
+                    ),
+                  ],
                 ),
             ],
           ],
@@ -353,26 +366,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     if (start == null) return const Center(child: CircularProgressIndicator());
     return InAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(start)),
-      initialSettings: InAppWebViewSettings(
-        useShouldInterceptRequest: true,
-        useShouldOverrideUrlLoading: true,
-        javaScriptEnabled: true,
-        // Everything comes from the ZIM; nothing may reach the network or the phone's files.
-        blockNetworkLoads: true,
-        allowFileAccess: false,
-        allowContentAccess: false,
-        allowFileAccessFromFileURLs: false,
-        allowUniversalAccessFromFileURLs: false,
-        geolocationEnabled: false,
-        supportZoom: true,
-        builtInZoomControls: true,
-        displayZoomControls: false,
-        transparentBackground: false,
-        cacheEnabled: false,
-        incognito: true,
-      ),
+      initialSettings: readerSettings(customScheme: _customScheme),
       findInteractionController: _findController,
       onWebViewCreated: (c) => _web = c,
+      onLoadResourceWithCustomScheme: (controller, request) =>
+          serveCustomZimResource(_server, request.url.uriValue),
       shouldInterceptRequest: (controller, request) async {
         final r = await _server.serve(request.url.uriValue);
         final text =
@@ -395,7 +393,9 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       },
       shouldOverrideUrlLoading: (controller, action) async {
         final u = action.request.url?.uriValue;
-        if (u != null && u.host == zimHost) return NavigationActionPolicy.ALLOW;
+        if (u != null && isReaderUrl(u, customScheme: _customScheme)) {
+          return NavigationActionPolicy.ALLOW;
+        }
         if (mounted) {
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
