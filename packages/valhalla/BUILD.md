@@ -144,7 +144,7 @@ adb -s 39191FDJH008WZ shell rm -rf /data/local/tmp/valhalla    # clean up afterw
 - OSM-derived tiles carry the ODbL; attribution is the app's job.
 - No LGPL or GPL code is linked.
 
-## iPhone device static build (iOS 16+, arm64)
+## iPhone device static build (iOS 16.3+, arm64)
 
 Run on a GitHub macOS runner with Xcode, CMake, Ninja and Rust already available:
 
@@ -159,7 +159,7 @@ The script checks out Valhalla commit `72f459fc5661fb906ad424be5378c4e32d9a5b3b`
 (the manifest baseline). Submodule commits and dependency versions come from those
 pinned trees. It bootstraps vcpkg only inside the runner work directory; no desktop
 packages are installed. `arm64-ios-rel` selects static Release libraries, the
-iphoneos SDK and deployment target 16.0. Host protoc runs on macOS; target protobuf
+iphoneos SDK and deployment target 16.3. Host protoc runs on macOS; target protobuf
 is protobuf-lite. Features and dependencies match Android: no LZ4, HTTP, services,
 tools or tile building. This is device-only; it does not provide a simulator slice.
 
@@ -181,7 +181,7 @@ The core output cache includes Rust sources/manifests, ZIM sources, all Valhalla
 recipe/shim/triplet inputs and the workflow. Toolchain identity covers Xcode,
 iphoneos SDK, Rust, CMake, Ninja and host architecture. Routing source/download/
 dependency/build cache is separate from Kiwix's nested download directory.
-Cache entries are exact by recipe/toolchain; Cargo incremental reuse is also
+Finished core caches match the exact recipe/toolchain; Cargo incremental reuse is also
 partitioned by toolchain. Native caches/artifacts live on ephemeral Actions runners;
 no Windows compilation or C: build outputs are created.
 
@@ -209,7 +209,7 @@ https://learn.microsoft.com/en-us/vcpkg/users/triplets .
 
 Dependency-cache bring-up: restore/save are separate. The save step uses always(),
 so failed native builds preserve downloads and partial dependency/build work.
-Restore is restricted to the exact recipe and toolchain prefix; run/attempt suffixes
+Restore prefers the exact recipe, then the same toolchain across recipes; run/attempt suffixes
 allow later partial progress to supersede earlier snapshots. Finished core-output
 caches and native-core artifacts remain success-only.
 
@@ -217,5 +217,23 @@ First Actions run 40418080382 failed before Rust: host pkgconf's Meson sanity
 executable was compiled for iPhone and killed (-9). Global
 IPHONEOS_DEPLOYMENT_TARGET leaked into host Apple clang. build-ios.sh now unsets
 that variable before vcpkg; target triplet and explicit iOS compiler/CMake flags
-still pin 16.0. The workflow's macOS disk-helper test also unsets it for clang.
-This repair is syntax-checked; confirmation requires the lead's next Actions run.
+still pin the iOS minimum (now 16.3). The workflow's macOS disk-helper test also unsets it for clang.
+Run 40419565770 confirmed this host-tool repair and reached Valhalla compilation.
+
+Run 40419565770 then failed during Valhalla C++ compilation: the selected Xcode
+libc++ floating-point to_chars overload used by std::format/chrono is explicitly
+unavailable before iOS 16.3. The routing script (CMake flags, archive link check and
+provenance), target triplet, Rust core build environment, search podspec and
+workflow now consistently select 16.3. The app and llama minimums are coordinated
+by the lead in separate files. The original 16.0 minimum was an implementation
+choice, not a user compatibility requirement. No availability diagnostic is
+suppressed and no upstream formatter is patched.
+
+Dependency-cache restore can fall back to another recipe only under the same
+Xcode/SDK/compiler toolchain identity. Source commits are still checked out
+explicitly; configure always runs, allowing vcpkg to recompute package ABIs for
+the changed triplet and CMake to regenerate compile/link flags. Cached build work
+is an input to those build tools, never accepted as finished native output.
+Finished-core caches remain exact by source/build inputs (including the changed
+minimum and workflow) and are saved only on success. Syntax and diff checks cover
+this repair; the next lead-dispatched device build must confirm compilation.

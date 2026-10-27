@@ -14,7 +14,7 @@ cp "$slice/merged.a" "$out/libCoreKiwix.a"
 # Keep routing build products outside the checkout, alongside the Kiwix cache.
 bash "$here/../../valhalla/scripts/build-ios.sh" "$1/valhalla" "$out"
 export LIBZIM_DIR=$slice
-export IPHONEOS_DEPLOYMENT_TARGET=16.0
+export IPHONEOS_DEPLOYMENT_TARGET=16.3
 cd "$here/../native"
 # --crate-type staticlib: only the static library (the crate also declares a cdylib, which cannot be linked for iOS without libzim).
 cargo rustc --release --lib --crate-type staticlib --target aarch64-apple-ios -p cache_search

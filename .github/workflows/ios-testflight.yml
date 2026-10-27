@@ -36,7 +36,7 @@ env:
   TEAM_ID: 7G87LQAK4J
   BUNDLE_ID: com.happylittle.cache
   FLUTTER_VERSION: 3.44.8
-  IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+  IPHONEOS_DEPLOYMENT_TARGET: '16.3'
 
 jobs:
   plan:
@@ -107,7 +107,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/libzim/valhalla
           key: valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-
+          # Only dependency work may fall back across recipes. Configure always
+          # reruns: vcpkg recalculates ABIs and CMake regenerates target flags.
+          restore-keys: |
+            valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}-
+            valhalla-ios-v2-${{ steps.toolchain.outputs.id }}-
       - name: Build the Rust core
         if: steps.out.outputs.cache-hit != 'true'
         env:

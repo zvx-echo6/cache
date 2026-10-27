@@ -18,7 +18,7 @@ The Cache search core (ZIMs and libraries, places, live data, navigation) called
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'
   s.dependency 'Flutter'
-  s.platform = :ios, '16.0'
+  s.platform = :ios, '16.3'
 
   s.vendored_libraries = 'native/libcache_search.a', 'native/libCoreKiwix.a', 'native/libcache_valhalla.a'
   s.frameworks = 'Security', 'CoreFoundation', 'SystemConfiguration', 'Foundation'

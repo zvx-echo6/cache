@@ -40,7 +40,7 @@ cmake -S "$here" -B "$work/build" -G Ninja \
   -DVCPKG_OVERLAY_TRIPLETS="$here/triplets" \
   -DVCPKG_INSTALLED_DIR="$work/installed" \
   -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.3 \
   -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
   -DCACHE_VALHALLA_STATIC=ON -DCACHE_VALHALLA_BUILD_TEST=ON \
   -DENABLE_STATIC_LIBRARY_MODULES=OFF
@@ -62,12 +62,12 @@ for symbol in version init route matrix locate trace_attributes string_free dest
 done
 # Relink against the actual merged archive, not just CMake's individual libraries.
 xcrun --sdk iphoneos clang -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
-  -miphoneos-version-min=16.0 -I"$here/shim" "$here/test/shim_test.c" \
+  -miphoneos-version-min=16.3 -I"$here/shim" "$here/test/shim_test.c" \
   "$out/libcache_valhalla.a" -lc++ -lz -o "$work/bundle-link-check"
 {
   echo "Valhalla=$valhalla_rev"
   echo "vcpkg=$vcpkg_rev"
-  echo "target=arm64-apple-ios deployment=16.0"
+  echo "target=arm64-apple-ios deployment=16.3"
   xcodebuild -version
   xcrun --sdk iphoneos --show-sdk-version
   shasum -a 256 "$out/libcache_valhalla.a"
