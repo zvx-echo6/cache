@@ -475,7 +475,15 @@ fn eval_instant(spec: &Spec, ctx: &Ctx) -> Option<i64> {
     if !spec.first_of.is_empty() {
         return spec.first_of.iter().find_map(|s| eval_instant(s, ctx));
     }
-    let v = follow(ctx, spec.path.as_deref()?)?;
+    // Calculated ends use the same value arithmetic as fields. Parse the result as an
+    // instant before output formatting (which can intentionally discard the time).
+    let calculated;
+    let v = if let Some(c) = &spec.calc {
+        calculated = Value::String(calc(c, ctx)?);
+        &calculated
+    } else {
+        follow(ctx, spec.path.as_deref()?)?
+    };
     let default = TimeSpec { input: "rfc3339".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
     parse_time(v, spec.time.as_ref().unwrap_or(&default), ctx.zone).map(|d| d.timestamp())
 }
