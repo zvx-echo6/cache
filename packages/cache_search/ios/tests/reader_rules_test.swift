@@ -11,7 +11,11 @@ guard CommandLine.arguments.count == 2 else {
 let source = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
 let root = FileManager.default.temporaryDirectory.appendingPathComponent("cache-reader-rules-" + UUID().uuidString)
 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-let store = WKContentRuleListStore(url: root)
+guard let store = WKContentRuleListStore(url: root) else {
+  try? FileManager.default.removeItem(at: root)
+  fputs("Could not create the WebKit rule store\n", stderr)
+  exit(1)
+}
 let identifier = "CacheOfflineReader-" + UUID().uuidString
 var finished = false
 var failure: String?
