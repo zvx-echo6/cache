@@ -57,9 +57,10 @@ class _Rig {
     return r;
   }
 
-  /// Lets real file writes and the fake engines' timers finish, and draws the result.
+  /// Lets real file writes and the fake engines' timers finish, and draws the result. Real writes (the regions file) can take
+  /// a few hundred milliseconds on a busy machine, so this waits up to about a second.
   Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < 12; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
       await tester.pump(const Duration(milliseconds: 50));
     }
