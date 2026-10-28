@@ -1,27 +1,32 @@
 import 'package:flutter/material.dart';
 
 import '../../location/location_service.dart';
+import '../../regions/regions_state.dart';
+import '../../regions/ui/regions_screen.dart';
 import '../../theme.dart';
 import '../layers/layer_def.dart';
 import '../maps_state.dart';
 import 'catalogue_screen.dart';
 
 /// The layer button's sheet: every layer on or off, opacity for overlays, and "Get more layers".
-Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location) {
+Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location, {RegionsState? regions}) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
     isScrollControlled: true,
     constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
-    builder: (ctx) => LayerSheet(maps: maps, location: location),
+    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions),
   );
 }
 
 class LayerSheet extends StatelessWidget {
-  const LayerSheet({super.key, required this.maps, required this.location});
+  const LayerSheet({super.key, required this.maps, required this.location, this.regions});
 
   final MapsState maps;
   final LocationService location;
+
+  /// Regions and downloads; the sheet offers "Download a region" when it is there.
+  final RegionsState? regions;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +54,17 @@ class LayerSheet extends StatelessWidget {
                 onChanged: (v) => location.setEnabled(v),
               ),
               const SizedBox(height: 8),
+              if (regions != null) ...[
+                FilledButton.icon(
+                  key: const ValueKey('download-region'),
+                  onPressed: () {
+                    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions!)));
+                  },
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download a region'),
+                ),
+                const SizedBox(height: 8),
+              ],
               OutlinedButton.icon(
                 onPressed: () {
                   Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CatalogueScreen(maps: maps)));

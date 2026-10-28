@@ -211,7 +211,7 @@ class _ShellState extends State<Shell> {
   Widget _moduleScreen(ModuleId m) => switch (m) {
         ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
