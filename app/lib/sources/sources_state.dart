@@ -308,6 +308,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       if (core == null) return;
       await core.setSources(_configs());
       await _readStatus(core);
+      _dropOrphanIndexes();
       for (final z in zims) {
         final s = _status[z.path];
         if (s == null ||
@@ -325,6 +326,34 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     } finally {
       _busyRefresh = false;
       notifyListeners();
+    }
+  }
+
+  /// Deletes the search index of every ZIM that is no longer in the folder (deleted by hand, or by the sync), except one
+  /// a job is still building. Run after the core is given the new list, so it no longer has those indexes open.
+  void _dropOrphanIndexes() {
+    final dir = indexesDir;
+    if (dir == null || !dir.existsSync()) return;
+    String base(String path) => path.split(RegExp(r'[\\/]')).last;
+    final keep = {
+      for (final z in zims) '${z.fileName}.idx',
+      for (final path in _jobs.keys) '${base(path)}.idx',
+      for (final s in _status.values)
+        if (s.building) '${base(s.path)}.idx',
+    };
+    // Tidying only: a folder that cannot be read or removed does not stop the indexing of new ZIMs.
+    try {
+      for (final d in dir.listSync().whereType<Directory>()) {
+        final name = base(d.path);
+        if (!name.endsWith('.idx') || keep.contains(name)) continue;
+        try {
+          d.deleteSync(recursive: true);
+        } catch (e) {
+          debugPrint('Could not remove the index $name: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Could not read the indexes folder: $e');
     }
   }
 
