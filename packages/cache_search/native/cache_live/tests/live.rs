@@ -277,10 +277,10 @@ fn expiry_then_the_expired_error() {
     let ok = env.tool(json!({"source": "weather", "place": "burley"}), None, "2026-11-09T23:59:59-06:00").unwrap();
     assert_eq!(ok["expired"], false);
     assert_eq!(ok["age"], "15 days old");
-    // the app's screens still get the data, flagged expired
+    // the app's screens get the row flagged expired; every forecast day has ended by then, so no items remain
     let g = env.get(json!({"source": "weather", "place": "burley", "now": "2026-11-10T00:00:01-07:00"})).unwrap();
     assert_eq!(g["expired"], true);
-    assert_eq!(g["items"].as_array().unwrap().len(), 16);
+    assert_eq!(g["items"].as_array().unwrap().len(), 0);
     // the model gets the error and no data
     let e = env.tool(json!({"source": "weather", "place": "burley"}), None, "2026-11-10T00:00:01-07:00").unwrap_err();
     assert_eq!((e.code.as_str(), e.detail.as_str()), ("expired", "weather data expired 2026-11-10"));
@@ -838,6 +838,10 @@ fn a_definition_using_state_gets_id_for_an_idaho_town() {
     assert_eq!(e.message, "this source needs the place's state, which is not known for Somewhere");
 }
 
+fn view_len(v: &Value) -> usize {
+    v["items"].as_array().unwrap().len()
+}
+
 #[test]
 fn observation_expires_independently_of_forecast_and_fetch_time() {
     let (env, _srv) = weather_env("observation-expiry");
@@ -860,11 +864,13 @@ fn observation_expires_independently_of_forecast_and_fetch_time() {
         assert!(items.iter().all(|i| i["address"] != "live:weather/burley/now"));
         assert!(items.iter().any(|i| i["time"] == "2026-11-03"));
     }
-    assert_eq!(tool["more"], 4);
+    // the eight days before 2 Nov have ended, leaving 2-9 Nov: eight items, all shown
+    assert_eq!(view_len(&tool), 8);
+    assert!(tool.get("more").is_none());
     // Even a newly fetched response must not revive an old observation.
     let late = env.weather(json!({"source":"weather", "place":burley(), "now":now, "force":true})).unwrap();
     assert_eq!(late["age"], "less than a minute old");
-    assert_eq!(late["items"].as_array().unwrap().len(), 16);
+    assert_eq!(late["items"].as_array().unwrap().len(), 8, "no old observation, and no ended days");
 }
 
 #[test]
@@ -878,14 +884,15 @@ fn calculated_expiry_is_generic_and_remaps_preexisting_cached_rows() {
     let env = Env::new("generic-expiry", vec![("reservoir.json", def.clone(), Some((srv.port,"/data")))]);
     env.weather(json!({"source":"reservoir", "place":burley(), "now":T0})).unwrap();
     let now = "2026-11-02T10:50:00-06:00";
-    assert_eq!(env.get(json!({"source":"reservoir", "place":burley(), "now":now})).unwrap()["items"].as_array().unwrap().len(), 17);
+    // the measurement (no expiry yet) plus the eight days that have not ended
+    assert_eq!(env.get(json!({"source":"reservoir", "place":burley(), "now":now})).unwrap()["items"].as_array().unwrap().len(), 9);
     // Update only the definition; Live::view must remap the original raw response.
     let path = env.dir.join("sources/reservoir.json");
     let mut installed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     installed["items"][0]["ends"] = ends;
     std::fs::write(path, serde_json::to_string_pretty(&installed).unwrap()).unwrap();
     let after = env.get(json!({"source":"reservoir", "place":burley(), "now":now})).unwrap();
-    assert_eq!(after["items"].as_array().unwrap().len(), 16);
+    assert_eq!(after["items"].as_array().unwrap().len(), 8);
     assert_eq!(after["fetched_at"], T0);
     assert_eq!(after["expired"], false);
     assert_eq!(srv.hits(), 1);
