@@ -136,6 +136,16 @@
           "out": "date"
         }
       },
+      "ends": {
+        "calc": {
+          "op": "add",
+          "args": [
+            { "path": "@", "time": { "in": "local", "out": "%s" } },
+            { "const": 86400 }
+          ]
+        },
+        "time": { "in": "unix" }
+      },
       "fields": [
         {
           "label": "High",
