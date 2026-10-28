@@ -125,13 +125,10 @@ fn local_hour(zone: &Zone, d: NaiveDate, h: u32) -> Option<i64> {
 
 /// The period of `w` at `now`: the one in progress, else the next; with the elements of its series that overlap it. `None`
 /// when the hours are not valid or the series has nothing in the period.
-fn window_of<'a>(w: &WindowDef, root: &'a Value, zone: &Zone, now: i64) -> Option<Win<'a>> {
+fn window_of<'a>(w: &WindowDef, list: &'a [Value], zone: &Zone, now: i64) -> Option<Win<'a>> {
     if w.from_hour > 23 || w.to_hour > 23 || w.from_hour == w.to_hour {
         return None;
     }
-    let none = Params::new();
-    let probe = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now, lat: 0.0, lon: 0.0, win: None };
-    let list = follow(&probe, &w.each)?.as_array()?.as_slice();
     let local = DateTime::from_timestamp(now, 0)?.with_timezone(&zone.offset_at(now));
     let (d, h) = (local.date_naive(), local.hour());
     let next = d + Duration::days(1);
@@ -806,7 +803,8 @@ pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f6
         };
         if let Some(w) = &g.window {
             // nothing in the period (a series that does not reach it): no item
-            if let Some(win) = window_of(w, root, &zone, fetched_at) {
+            let list = follow(&at(root), &w.each).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+            if let Some(win) = window_of(w, list, &zone, fetched_at) {
                 push(Ctx { win: Some(&win), ..at(root) }, &mut group);
             }
         } else {
