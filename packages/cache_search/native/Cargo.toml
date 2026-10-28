@@ -21,3 +21,6 @@ opt-level = 3
 # (src/os/darwin/ipv6_addr_flags.rs); drop this when a netdev release builds for iOS.
 [patch.crates-io]
 netdev = { path = "vendor/netdev-0.46.3" }
+
+# libc is held at 0.2.189 in Cargo.lock: 0.2.190 made the net/route.h constants (RTM_*, RTAX_*, RTF_*) macOS-only, and iroh's
+# netwatch uses them on iOS. Do not `cargo update` libc past 0.2.189 until netwatch or libc builds for iOS again.
