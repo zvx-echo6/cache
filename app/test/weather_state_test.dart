@@ -759,7 +759,7 @@ void main() {
       expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);
     });
 
-    test('nothing pops up when nothing was downloaded new, or for earthquakes', () async {
+    test('alerts already in fresh copies pop up too, once; earthquakes do not', () async {
       final n = FakeNotifier();
       h = await withNotifier(n);
       await h.weather.setRowOn(row('Earthquakes'), true);
@@ -771,10 +771,10 @@ void main() {
       h.core.fetchedNew = false;
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
       await h.weather.updateNow();
-      expect(n.shown, isEmpty, reason: 'still-fresh copies were already checked');
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire'], reason: 'earthquakes are not pop-ups');
       h.core.fetchedNew = true;
       await h.weather.updateNow();
-      expect(n.shown.map((a) => a.item.label), ['East Fork fire'], reason: 'earthquakes are not pop-ups');
+      expect(n.shown.length, 1, reason: 'already told');
     });
 
     test('in quiet hours it is silent, and an extreme warning rings through when that is on', () async {

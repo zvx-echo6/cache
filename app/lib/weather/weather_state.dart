@@ -701,7 +701,9 @@ class WeatherState extends ChangeNotifier {
     _lastFailure = failures.isEmpty ? null : failures.first;
     _saveStatus();
     notifyListeners();
-    if (fetched > 0) await checkAlerts();
+    // Every update checks, fresh copies included: an alert that arrived through the assistant or before pop-ups existed is still
+    // news; what was told before is never repeated.
+    await checkAlerts();
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
