@@ -56,6 +56,8 @@ pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
 
 /// A transfer with no new data for this long is dropped and retried in the next round (from its verified chunks).
 const STALL: Duration = Duration::from_secs(60);
+/// A file changed less than this long ago is still being written and waits for a later round.
+const SETTLE: Duration = Duration::from_secs(5);
 /// How long a shown link code stays valid.
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// An index larger than this is refused (about a million files).
@@ -213,6 +215,8 @@ struct Inner {
     reserve: AtomicU64,
     round: tokio::sync::Mutex<()>,
     stop: AtomicBool,
+    /// A rescan left a file that was still being written: the next round comes after [`SETTLE`], not the full interval.
+    settle_again: Arc<AtomicBool>,
 }
 
 pub struct SyncEngine {
@@ -369,11 +373,17 @@ impl Inner {
         })
         .await?;
         let mut changed = false;
+        let mut unsettled = false;
         let mut present = HashSet::new();
         for (rel, full, m) in files {
             present.insert(rel.clone());
             let key = (m.len(), mtime_ms(&m));
             if seen.get(&rel) == Some(&key) && idx.files.get(&rel).map(|e| !e.deleted).unwrap_or(false) {
+                continue;
+            }
+            // Still being written (a copy or a download in progress): left for a later round, so half a file never goes out.
+            if (now_ms() as i64).saturating_sub(key.1) < SETTLE.as_millis() as i64 {
+                unsettled = true;
                 continue;
             }
             let tag = Self::tag_name(&share.id, &rel);
@@ -404,6 +414,10 @@ impl Inner {
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
+        if unsettled {
+            // Look again soon rather than at the next full interval.
+            self.settle_again.store(true, Ordering::Relaxed);
+        }
         Ok(changed)
     }
 
@@ -806,7 +820,8 @@ impl SyncEngine {
                     break;
                 }
                 inner2.round().await;
-                let _ = tokio::time::timeout(every, inner2.wake.notified()).await;
+                let wait = if inner2.settle_again.swap(false, Ordering::Relaxed) { SETTLE + Duration::from_secs(1) } else { every };
+                let _ = tokio::time::timeout(wait, inner2.wake.notified()).await;
             }
         });
         Ok(SyncEngine { rt, inner, router: Some(router) })
@@ -894,6 +909,7 @@ impl SyncEngine {
             reserve: AtomicU64::new(cfg.reserve_bytes.unwrap_or(1024 * 1024 * 1024)),
             round: tokio::sync::Mutex::new(()),
             stop: AtomicBool::new(false),
+            settle_again: Arc::default(),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
