@@ -227,12 +227,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(width: 92, child: Text(i.label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text))),
-                  Expanded(
-                    child: Text(
-                      [for (final e in i.fields.entries) '${e.key} ${e.value}'].join(' · '),
-                      style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary),
-                    ),
-                  ),
+                  Expanded(child: _forecastText(k, i)),
                 ],
               ),
             ),
@@ -243,6 +238,33 @@ class _WeatherScreenState extends State<WeatherScreen> {
         ],
       ),
     );
+  }
+
+  /// A forecast row: the headline values (temperature, high and low, conditions) first, then the rest without the ones that are
+  /// zero ("Snow 0.0 in" on a dry day says nothing).
+  Widget _forecastText(CacheTokens k, LiveItem i) {
+    const lead = ['Temperature', 'High', 'Low', 'Conditions'];
+    final head = [
+      for (final f in lead)
+        if (i.fields[f] != null) (f == 'High' || f == 'Low') ? '$f ${i.fields[f]}' : i.fields[f]!,
+    ];
+    final rest = [
+      for (final e in i.fields.entries)
+        if (!lead.contains(e.key) && !_isZero(e.value)) '${e.key} ${e.value}',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (head.isNotEmpty) Text(head.join(' · '), style: TextStyle(fontSize: 15, color: k.text)),
+        if (rest.isNotEmpty) Text(rest.join(' · '), style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary)),
+      ],
+    );
+  }
+
+  /// A value that starts with a number equal to zero, like "0.0 in over 0 h" or "0%".
+  static bool _isZero(String v) {
+    final m = RegExp(r'^\s*(-?\d+(?:\.\d+)?)').firstMatch(v);
+    return m != null && double.parse(m.group(1)!) == 0;
   }
 
   List<Widget> _alerts(BuildContext context, List<SourceView> views) {

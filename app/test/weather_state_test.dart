@@ -665,7 +665,36 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/2', 'label': 'Forleen fire', 'fields': {'Distance': '52 mi W'}},
         ],
       };
-      expect(await h.weather.homeAlertsLine(), startsWith('2 active: East Fork fire (Where I am)'));
+      expect(await h.weather.homeAlertsLine(), '2 fires nearby');
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['nws-alerts-point'] = {
+        'age': '5 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws-alerts-point/x/1', 'label': 'Red Flag Warning', 'fields': {'Severity': 'severe'}},
+        ],
+      };
+      expect(await h.weather.homeAlertsLine(), '1 warning, 2 fires nearby: Red Flag Warning (Where I am)');
+      // a fire reported by both the incident and the perimeter source counts once
+      await h.weather.setRowOn(row('Weather alerts'), false);
+      h.core.stored['wfigs-perimeters-near'] = {
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-perimeters-near/x/1', 'label': 'East Fork fire perimeter', 'fields': {'Distance to fire edge': '38 mi S'}},
+        ],
+      };
+      expect(await h.weather.homeAlertsLine(), '2 fires nearby');
+      // earthquakes are not counted on Home
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.core.stored['usgs-quakes-near'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:usgs-quakes-near/x/1', 'label': 'M 2.1 near Hyde Park', 'fields': {'Magnitude': '2.1'}},
+        ],
+      };
+      expect(await h.weather.homeAlertsLine(), '2 fires nearby');
     });
 
     test('the view groups forecasts and alerts, and marks a source with nothing downloaded', () async {
