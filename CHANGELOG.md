@@ -6,6 +6,12 @@ release notes).
 
 ## Unreleased
 
+### New
+- Add a library from a file on the device or a download link, in Library > Libraries
+- A newer copy of a library you have is offered as an update and swapped in safely
+- Remove a library, and see its size, entries and whether it is ready
+- Get a blank library template to build your own library
+
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
 ### Fixed

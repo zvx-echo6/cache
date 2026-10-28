@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../screens/libraries_screen.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../layout/layout_state.dart';
@@ -122,7 +123,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
         ],
       ),
       body: ListenableBuilder(
-        listenable: Listenable.merge([b, sources]),
+        listenable: Listenable.merge([b, sources, ?b.libraries]),
         builder: (context, _) {
           _maybeCheck();
           final transfers = b.transfers.values.toList();
@@ -154,6 +155,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
               for (final t in transfers) _transferCard(k, t),
               if (sources.zims.isEmpty && transfers.isEmpty) _empty(k),
               for (final z in sources.zims) _zimCard(context, k, z),
+              if (b.libraries != null) _librariesCard(k),
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: _openCatalogue,
@@ -166,6 +168,41 @@ class _BrowseScreenState extends State<BrowseScreen> {
       ),
     );
   }
+
+  /// The way to the libraries: the collections of passages Cache searches and cites.
+  Widget _librariesCard(CacheTokens k) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Material(
+      color: k.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        key: const ValueKey('open-libraries'),
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: b.libraries!)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              SizedBox(width: 48, height: 48, child: Icon(Icons.library_books_outlined, color: k.secondary)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Libraries', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                    Text(b.libraries!.summary, style: TextStyle(fontSize: 14, color: k.secondary)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: k.secondary),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 
   Widget _empty(CacheTokens k) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 32),
