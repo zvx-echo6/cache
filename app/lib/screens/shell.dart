@@ -248,7 +248,7 @@ class _ShellState extends State<Shell> {
                 onOpenSettings: _openSettings,
                 onOpenShortcut: _openShortcut,
               ),
-              ModulesScreen(layout: layout, onOpen: _goModule),
+              ModulesScreen(layout: layout, app: widget.app, onOpen: _goModule),
               for (final m in ModuleId.values) _built.contains(m) ? _moduleScreen(m) : const SizedBox.shrink(),
             ],
           ),

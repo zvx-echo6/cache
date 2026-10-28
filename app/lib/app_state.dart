@@ -38,6 +38,9 @@ class AppState extends ChangeNotifier {
   final LlamaSession session = LlamaSession();
 
   CacheThemeId theme = CacheThemeId.dark;
+
+  /// The Modules screen's icons: small, three across (false, the default), or large, two across.
+  bool largeModuleIcons = false;
   Directory? modelsDir;
   List<ModelEntry> models = [];
   ModelEntry? active;
@@ -112,6 +115,7 @@ class AppState extends ChangeNotifier {
       _lastModelFile = j['lastModel'] as String?;
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
+      largeModuleIcons = j['moduleIcons'] == 'large';
       _unsupported
         ..clear()
         ..addAll(((j['unsupported'] as List?) ?? const []).cast<String>());
@@ -130,6 +134,7 @@ class AppState extends ChangeNotifier {
       await writeStringAtomic(f, jsonEncode({
         'lastModel': _lastModelFile,
         'theme': theme.name,
+        'moduleIcons': largeModuleIcons ? 'large' : 'small',
         'unsupported': _unsupported.toList(),
         'names': _names,
       }));
@@ -138,6 +143,12 @@ class AppState extends ChangeNotifier {
 
   Future<void> setTheme(CacheThemeId id) async {
     theme = id;
+    notifyListeners();
+    await _writeSettings();
+  }
+
+  Future<void> setLargeModuleIcons(bool large) async {
+    largeModuleIcons = large;
     notifyListeners();
     await _writeSettings();
   }
