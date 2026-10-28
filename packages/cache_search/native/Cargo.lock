@@ -837,6 +837,8 @@ name = "cache_sync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
+ "cache_sync",
  "data-encoding",
  "fs4 1.1.0",
  "iroh",
