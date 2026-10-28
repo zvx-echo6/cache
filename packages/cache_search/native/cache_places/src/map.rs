@@ -10,17 +10,23 @@
 //!  4. Categories: the words are matched against the pack's category ids, titles and descriptions (words that appear in many
 //!     categories count for less). A matching category gives a `category` row and its nearest places.
 //!  5. Meaning: when the pack carries vectors (`places_pack embed`) and a query vector of the same model is given or can be
-//!     made (the host's embedder), the query is compared with the category texts and with the name-and-summary texts of
-//!     places and towns. Without either, this step is skipped and the answer says so (`meaning`: "no_embedder" or "no_vectors").
+//!     made (the host's embedder), the query is compared with the category texts, the kind texts (a merged database) and
+//!     the name-and-summary texts of places and towns. A matching kind gives a `kind:<id>` row and its nearest places.
+//!     Without either, this step is skipped and the answer says so (`meaning`: "no_embedder" or "no_vectors").
+//!
+//! A query that starts with a house number can also give addresses (the geocoder's address search, step 3).
+//! The answer says what places the phone has for the search (`places`, `warning_code`: see `feed::places_state`).
 //!
 //! Ranking: `score = 0.7 * relevance + 0.3 * closeness`, where closeness is `exp(-km / 25)` from the anchor, else the map
 //! centre or GPS fix (0.5 when neither is known). Relevance is the name match (0..1), the category match (0..1, a little
 //! under a name match) or the vector cosine mapped from the model's useful range onto 0..1.
 //!
-//! Every result carries an `id` (`place:<source id>`, `town:<source id>`, `loc:<lat>,<lon>`, `category:<id>`) that the route
-//! call accepts as an end.
+//! Every result carries an `id` (`place:<source id>`, `town:<source id>`, `addr:<uid>/<number>`, `loc:<lat>,<lon>`,
+//! `category:<id>`, `kind:<id>`); the route call accepts all but `category:` as an end.
 
+use crate::address;
 use crate::coord::{self, Parsed};
+use crate::feed::{places_state, PlacesFeed, PrepareAnswer};
 use crate::geo::{bearing_deg, compass8, dms, haversine_km, round_to};
 use crate::geocoder::{GeoHit, Geocoder, HitKind};
 use crate::kind::{humanize, kind_of};
@@ -28,7 +34,7 @@ use crate::nearby::ranked;
 use crate::pack::{Category, LocalityRow, Pack, PackSet, PlaceRow};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Cosine range of bge-m3 for short texts: below LOW is noise, HIGH is a near-paraphrase.
 const COS_LOW: f32 = 0.30;
@@ -36,6 +42,8 @@ const COS_HIGH: f32 = 0.70;
 /// A category is a meaning match when its cosine is at least this and within `COS_MARGIN` of the best category.
 const COS_CATEGORY: f32 = 0.50;
 const COS_MARGIN: f32 = 0.06;
+/// How many kinds the meaning step compares closely (a kind matches like a category: `COS_CATEGORY`, `COS_MARGIN`).
+const KIND_TOP: usize = 8;
 /// A place or town is a meaning match at this cosine.
 const COS_PLACE: f32 = 0.50;
 /// A category matches the words when its keyword strength reaches this (title words count 1, description words 0.5).
@@ -54,11 +62,13 @@ pub struct SearchOpts {
     pub meaning: bool,
     /// The query as the host's embedder made it: the model id and the vector.
     pub vector: Option<(String, Vec<f32>)>,
+    /// What the places feed did around `near` just before the search (None when it was not asked).
+    pub prepared: Option<PrepareAnswer>,
 }
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { near: None, limit: 10, meaning: true, vector: None }
+        SearchOpts { near: None, limit: 10, meaning: true, vector: None, prepared: None }
     }
 }
 
@@ -88,6 +98,8 @@ fn bad(m: impl Into<String>) -> MapError {
 pub struct PlacesCore {
     pub packs: Arc<PackSet>,
     pub geo: Arc<dyn Geocoder>,
+    /// Plugged in by the search host (the regions engine): fetches places tiles before a search.
+    feed: RwLock<Option<Arc<dyn PlacesFeed>>>,
 }
 
 // ---- words -----------------------------------------------------------------------------------------------------------
@@ -145,6 +157,8 @@ struct Cand {
     wikidata_id: Option<String>,
     rel: f64,
     matched: &'static str,
+    /// An address whose number was placed between its neighbours.
+    approximate: bool,
 }
 
 fn cat_title(packs: &[Arc<Pack>], id: &str) -> Option<String> {
@@ -183,6 +197,7 @@ fn cand_place(packs: &[Arc<Pack>], r: &PlaceRow, rel: f64, matched: &'static str
         wikidata_id: r.wikidata_id.clone(),
         rel,
         matched,
+        approximate: false,
     }
 }
 
@@ -210,6 +225,37 @@ fn cand_town(l: &LocalityRow, rel: f64, matched: &'static str) -> Cand {
         wikidata_id: None,
         rel,
         matched,
+        approximate: false,
+    }
+}
+
+/// An address hit as a result: its `street` is the house number and street, so its address reads "350 N State St, Salt
+/// Lake City, UT".
+fn cand_address(h: &GeoHit, rel: f64) -> Cand {
+    Cand {
+        id: h.address.clone(),
+        kind_t: "address",
+        name: h.name.clone(),
+        kind: "Address".into(),
+        kind_id: Some("address".into()),
+        kind_label: Some("Address".into()),
+        unnamed: false,
+        category: None,
+        street: Some(h.name.clone()),
+        locality: h.locality.clone(),
+        county: None,
+        state: h.state.clone(),
+        lat: h.lat,
+        lon: h.lon,
+        phone: None,
+        hours: None,
+        website: None,
+        summary: None,
+        wikipedia_title: None,
+        wikidata_id: None,
+        rel,
+        matched: "name",
+        approximate: h.approximate,
     }
 }
 
@@ -244,6 +290,9 @@ fn cand_json(c: &Cand, near: Option<(f64, f64)>, score: f64) -> Value {
     put(&mut m, "kind_label", &c.kind_label);
     if c.unnamed {
         m.insert("unnamed".into(), json!(true));
+    }
+    if c.approximate {
+        m.insert("approximate".into(), json!(true));
     }
     m.insert("category".into(), json!(c.category));
     m.insert("address".into(), json!(address_of(c)));
@@ -366,7 +415,17 @@ impl PlacesCore {
     pub fn new(cfg: &crate::PlacesCfg) -> PlacesCore {
         let packs = Arc::new(PackSet::new(cfg.packs.iter().map(std::path::PathBuf::from).collect(), cfg.merged_dir.as_ref().map(std::path::PathBuf::from)));
         let geo: Arc<dyn Geocoder> = Arc::new(crate::PackGeocoder::new(packs.clone()));
-        PlacesCore { packs, geo }
+        PlacesCore { packs, geo, feed: RwLock::new(None) }
+    }
+
+    /// Plugs in the feed that fetches places tiles (replacing any before it).
+    pub fn plug_feed(&self, feed: Arc<dyn PlacesFeed>) {
+        *self.feed.write().unwrap_or_else(|e| e.into_inner()) = Some(feed);
+    }
+
+    /// The plugged-in feed, if any.
+    pub fn feed(&self) -> Option<Arc<dyn PlacesFeed>> {
+        self.feed.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The town, city or village whose name is exactly a run of the query's words (the longest run; the bigger kind of place
@@ -450,7 +509,13 @@ impl PlacesCore {
             out.insert("results".into(), json!([coordinates_json(self, p.lat, p.lon, opts.near, Some(&p))]));
             return Ok(Value::Object(out));
         }
-        if packs.is_empty() {
+        let (places, warning_code) = places_state(&packs, opts.near, opts.prepared.as_ref());
+        let installed = places["installed"].as_bool().unwrap_or(false);
+        out.insert("places".into(), places);
+        if let Some(code) = warning_code {
+            out.insert("warning_code".into(), json!(code));
+        }
+        if !installed {
             out.insert("interpreted".into(), json!({"kind": "text"}));
             out.insert("meaning".into(), json!("off"));
             out.insert("results".into(), json!([]));
@@ -468,6 +533,7 @@ impl PlacesCore {
 
         let mut cands: Vec<Cand> = Vec::new();
         let mut cat_rows: Vec<(Category, f64, &'static str)> = Vec::new();
+        let mut kind_rows: Vec<(crate::pack::KindInfo, f64)> = Vec::new();
 
         // 4. categories by keyword
         for c in &cats {
@@ -494,6 +560,7 @@ impl PlacesCore {
                     let mut ran = false;
                     let mut mismatch = false;
                     let mut cat_hits: Vec<(String, f32)> = Vec::new();
+                    let mut kind_hits: Vec<(String, f32)> = Vec::new();
                     for p in &with_vectors {
                         let (pm, dims) = p.embedding().expect("filtered");
                         if pm != model || dims != qv.len() {
@@ -502,6 +569,7 @@ impl PlacesCore {
                         }
                         ran = true;
                         cat_hits.extend(p.vector_scan("category", &qv, 6).unwrap_or_default());
+                        kind_hits.extend(p.vector_scan("kind", &qv, KIND_TOP).unwrap_or_default());
                         for (kind, top) in [("place", 8usize), ("locality", 4usize)] {
                             for (rid, cos) in p.vector_scan(kind, &qv, top).unwrap_or_default() {
                                 if cos < COS_PLACE {
@@ -535,12 +603,31 @@ impl PlacesCore {
                             }
                         }
                     }
+                    kind_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    if let Some(best) = kind_hits.first().map(|h| h.1) {
+                        for (id, cos) in kind_hits {
+                            if cos < COS_CATEGORY || cos < best - COS_MARGIN || kind_rows.iter().any(|(k, _)| k.id == id) {
+                                continue;
+                            }
+                            // only kinds that have places on the phone
+                            let Some(k) = packs.iter().find_map(|p| p.kind(&id).filter(|_| p.kind_place_count(&id) > 0)) else { continue };
+                            kind_rows.push((k.clone(), (((cos - COS_LOW) / (COS_HIGH - COS_LOW)).clamp(0.0, 1.0) as f64) * 0.95));
+                        }
+                    }
                 }
             }
         }
 
         // 3. names (after the category and meaning steps, so a weak name hit can be dropped when they answered)
-        let answered = !cat_rows.is_empty() || !meaning_places.is_empty();
+        // a kind whose category was matched is folded into that category's row
+        kind_rows.retain(|(k, s)| match k.category.as_deref().and_then(|c| cat_rows.iter_mut().find(|r| r.0.id == c)) {
+            Some(r) => {
+                r.1 = r.1.max(*s);
+                false
+            }
+            None => true,
+        });
+        let answered = !cat_rows.is_empty() || !kind_rows.is_empty() || !meaning_places.is_empty();
         let anchor_town = anchor.as_ref().filter(|(_, r)| !r.trim().is_empty()).map(|(l, _)| format!("town:{}", l.source_id));
         let mut name_hits: Vec<GeoHit> = self.geo.forward(q, centre, 12);
         if let Some(r) = rest.as_deref().filter(|r| !r.trim().is_empty()) {
@@ -558,6 +645,7 @@ impl PlacesCore {
             let cand = match h.kind {
                 HitKind::Locality => h.address.strip_prefix("town:").and_then(|sid| packs.iter().find_map(|p| p.locality_by_source_id(sid).ok().flatten())).map(|l| cand_town(&l, rel, "name")),
                 HitKind::Place => h.address.strip_prefix("place:").and_then(|sid| packs.iter().find_map(|p| p.place_by_source_id(sid).ok().flatten())).map(|r| cand_place(&packs, &r, rel, "name")),
+                HitKind::Address => Some(cand_address(h, rel)),
             };
             if let Some(c) = cand {
                 cands.push(c);
@@ -583,6 +671,26 @@ impl PlacesCore {
             if let Some((la, lo)) = centre {
                 for r in ranked(&packs, &c.id, la, lo, limit.min(8)).unwrap_or_default() {
                     cands.push(cand_place(&packs, &r.row, s * 0.95, how));
+                }
+            }
+        }
+
+        // kind rows and their nearest places
+        for (k, s) in &kind_rows {
+            let mut m = Map::new();
+            m.insert("id".into(), json!(format!("kind:{}", k.id)));
+            m.insert("type".into(), json!("category"));
+            m.insert("name".into(), json!(k.label));
+            m.insert("kind".into(), json!("Category"));
+            m.insert("kind_id".into(), json!(k.id));
+            m.insert("category".into(), json!(k.category));
+            m.insert("address".into(), json!(k.description));
+            m.insert("matched".into(), json!("meaning"));
+            m.insert("score".into(), json!(round_to(*s, 3)));
+            rows_json.push((2.0 + s, Value::Object(m)));
+            if let Some((la, lo)) = centre {
+                for (r, _) in nearest_of_kind(&packs, &k.id, la, lo, limit.min(8)) {
+                    cands.push(cand_place(&packs, &r, s * 0.95, "meaning"));
                 }
             }
         }
@@ -648,9 +756,29 @@ impl PlacesCore {
         Ok(Value::Object(out))
     }
 
-    /// A place, town or coordinates by the id a result carried.
+    /// A place, town, address or coordinates by the id a result carried. A `kind:` id needs a centre: see `lookup_near`.
     pub fn lookup(&self, id: &str) -> Option<Endpoint> {
+        self.lookup_near(id, None)
+    }
+
+    /// `lookup`, plus `kind:<id>`: the nearest place of that kind to `near`.
+    pub fn lookup_near(&self, id: &str, near: Option<(f64, f64)>) -> Option<Endpoint> {
         let packs = self.packs.current();
+        if let Some((uid, number)) = address::parse_id(id) {
+            for p in packs.iter().filter(|p| p.has_addresses()) {
+                let Ok(Some(row)) = p.street_by_uid(uid) else { continue };
+                let group = p.street_group(&row).unwrap_or_else(|_| vec![row.clone()]);
+                let f = address::find_number(&group, number)?;
+                return Some(Endpoint { id: Some(id.into()), name: Some(format!("{} {}", f.number, row.street)), lat: f.lat, lon: f.lon, osm_category: None });
+            }
+            return None;
+        }
+        if let Some(kind) = id.strip_prefix("kind:") {
+            let (la, lo) = near?;
+            let (r, _) = nearest_of_kind(&packs, kind, la, lo, 1).into_iter().next()?;
+            let osm = crate::geocoder::osm_category(&r);
+            return Some(Endpoint { id: Some(format!("place:{}", r.source_id)), name: r.name.clone().or_else(|| kind_of(&packs, &r).map(|k| k.1)), lat: r.lat, lon: r.lon, osm_category: osm });
+        }
         if let Some(sid) = id.strip_prefix("place:") {
             let r = packs.iter().find_map(|p| p.place_by_source_id(sid).ok().flatten())?;
             let osm = crate::geocoder::osm_category(&r);
@@ -670,7 +798,7 @@ impl PlacesCore {
     /// Text typed for an end: an id, coordinates in any format, or a name (the geocoder's best match).
     pub fn resolve_text(&self, text: &str, near: Option<(f64, f64)>) -> Option<Endpoint> {
         let t = text.trim();
-        if let Some(e) = self.lookup(t) {
+        if let Some(e) = self.lookup_near(t, near) {
             return Some(e);
         }
         if let Some(p) = coord::parse(t, near) {
@@ -679,6 +807,17 @@ impl PlacesCore {
         let h = self.geo.forward(t, near, 1).into_iter().next()?;
         Some(Endpoint { id: Some(h.address), name: Some(h.name), lat: h.lat, lon: h.lon, osm_category: h.osm_category })
     }
+}
+
+/// The nearest places of one kind across the packs, nearest first, the same place once.
+fn nearest_of_kind(packs: &[Arc<Pack>], kind: &str, lat: f64, lon: f64, limit: usize) -> Vec<(PlaceRow, f64)> {
+    let ids = [kind.to_string()];
+    let mut found: Vec<(PlaceRow, f64)> = packs.iter().flat_map(|p| p.nearby_kind(&ids, lat, lon, crate::nearby::MAX_KM, limit).unwrap_or_default()).collect();
+    found.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut seen: HashSet<String> = HashSet::new();
+    found.retain(|(r, _)| seen.insert(r.source_id.clone()));
+    found.truncate(limit);
+    found
 }
 
 /// The request of `cs_map_search`: `{"query", "near"?: {"lat","lon"}, "limit"?, "meaning"?, "query_vector"?: {"model","vector"}}`.
@@ -713,5 +852,5 @@ pub fn parse_request(v: &Value) -> Result<(String, SearchOpts), MapError> {
             Some((model, vec.ok_or_else(|| bad("query_vector.vector must be an array of numbers"))?))
         }
     };
-    Ok((query, SearchOpts { near, limit, meaning, vector }))
+    Ok((query, SearchOpts { near, limit, meaning, vector, prepared: None }))
 }

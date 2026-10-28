@@ -310,7 +310,7 @@ impl Pack {
         now != Some(self.data_version)
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -357,6 +357,52 @@ impl Pack {
             }
             radius *= 3.0;
         }
+    }
+
+    /// The nearest `limit` places of any of these kinds (`kind_id`) within `max_km`, nearest first, with their distance in
+    /// km; widened in rings like `nearby`.
+    pub fn nearby_kind(&self, kinds: &[String], lat: f64, lon: f64, max_km: f64, limit: usize) -> Result<Vec<(PlaceRow, f64)>> {
+        if kinds.is_empty() || self.format < 2 || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn();
+        let cols = self.place_cols();
+        let marks = (0..kinds.len()).map(|i| format!("?{}", i + 5)).collect::<Vec<_>>().join(", ");
+        let mut st = conn.prepare(&format!(
+            "SELECT {cols} FROM places_rt r JOIN places p ON p.id = r.id \
+             WHERE r.max_lat >= ?1 AND r.min_lat <= ?2 AND r.max_lon >= ?3 AND r.min_lon <= ?4 AND p.kind_id IN ({marks})"
+        ))?;
+        let mut radius = 10.0f64;
+        loop {
+            let radius_now = radius.min(max_km);
+            let (a, b, c, d) = bbox_around(lat, lon, radius_now);
+            let mut args: Vec<rusqlite::types::Value> = vec![a.into(), b.into(), c.into(), d.into()];
+            args.extend(kinds.iter().map(|k| rusqlite::types::Value::from(k.clone())));
+            let rows = st.query_map(rusqlite::params_from_iter(args), place_row)?;
+            let mut hits: Vec<(PlaceRow, f64)> = Vec::new();
+            for r in rows {
+                let r = r?;
+                let km = haversine_km(lat, lon, r.lat, r.lon);
+                if km <= radius_now {
+                    hits.push((r, km));
+                }
+            }
+            if hits.len() >= limit || radius_now >= max_km {
+                hits.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal));
+                hits.truncate(limit);
+                return Ok(hits);
+            }
+            radius *= 3.0;
+        }
+    }
+
+    /// How many places of a kind the pack has (0 for a kind it does not know, or a format 1 pack).
+    pub fn kind_place_count(&self, id: &str) -> i64 {
+        if self.format < 2 {
+            return 0;
+        }
+        let conn = self.conn();
+        conn.query_row("SELECT place_count FROM kinds WHERE id = ?1", params![id], |r| r.get::<_, i64>(0)).optional().ok().flatten().unwrap_or(0)
     }
 
     /// Localities within `radius_km`, unsorted, with their distance.
