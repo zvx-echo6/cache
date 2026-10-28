@@ -108,7 +108,10 @@ impl Index {
 
     /// The tiles of this build an outline needs: every level's tiles it overlaps that have roads, by path.
     pub fn tiles_for(&self, shape: &geo::Shape) -> Vec<TileRef> {
-        let mut out: Vec<TileRef> = (0..3u8).flat_map(|l| shape.tiles(l).into_iter().filter_map(move |id| self.get(l, id).cloned())).collect();
+        let mut out: Vec<TileRef> = Vec::new();
+        for l in 0..3u8 {
+            out.extend(shape.tiles(l).into_iter().filter_map(|id| self.get(l, id).cloned()));
+        }
         out.sort_by(|a, b| a.path.cmp(&b.path));
         out
     }
