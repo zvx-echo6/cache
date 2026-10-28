@@ -156,7 +156,11 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('confirm-run-c1')));
     await tester.tap(find.byKey(const ValueKey('confirm-run-c1')), warnIfMissed: false);
-    await tester.pumpAndSettle();
+    // The card's resolution was made outside the fake clock (runAsync), so let real time run too.
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
 
     expect(h.runs, [
       {'name': 'Elk camp', 'place': {'lat': 44.21, 'lon': -114.93}},
@@ -180,7 +184,11 @@ void main() {
     await tester.pumpWidget(_cards(h.chat));
     await tester.tap(find.byKey(const ValueKey('confirm-cancel-c1')));
     await tester.tap(find.byKey(const ValueKey('confirm-cancel-c1')), warnIfMissed: false);
-    await tester.pumpAndSettle();
+    // The card's resolution was made outside the fake clock (runAsync), so let real time run too.
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
     expect(h.runs, isEmpty);
     expect(find.text('Cancelled'), findsOneWidget);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
@@ -194,7 +202,11 @@ void main() {
     await tester.runAsync(() => h.ask('Save 44.21,-114.93 as Elk camp'));
     await tester.pumpWidget(_cards(h.chat));
     await tester.tap(find.byKey(const ValueKey('confirm-run-c1')));
-    await tester.pumpAndSettle();
+    // The card's resolution was made outside the fake clock (runAsync), so let real time run too.
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
     expect(find.text('Could not do it. No room for more places.'), findsOneWidget);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(jsonDecode(sent.last['content'] as String), {
