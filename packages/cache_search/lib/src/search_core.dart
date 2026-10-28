@@ -149,6 +149,10 @@ class SearchCore {
       })) as Map)
           .cast<String, dynamic>());
 
+  /// Retrieves a retained exact route; never computes a replacement route.
+  Future<MapRoute> mapRouteById(String routeId) async => MapRoute.fromJson(
+      ((await _call('mapRoute', {'request': {'route_id': routeId}})) as Map).cast<String, dynamic>());
+
   /// Where a fix is on a route. Sends [route] too, so the core finds the route again after a restart.
   Future<MapProgress> mapProgress(MapRoute route, {required double lat, required double lon, double? accuracyM, DateTime? now, bool reset = false, double? offRouteM, int? offRouteFixes, bool sendRoute = false}) async =>
       MapProgress.fromJson(((await _call('mapProgress', {

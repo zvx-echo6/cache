@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../chat/answer_markdown.dart';
 import '../chat/chat_controller.dart';
 import '../chat/tool_loop.dart';
+import '../chat/navigation_action.dart';
 import '../browse/zim_urls.dart';
 import '../history/share.dart';
 import '../layout/layout_state.dart';
@@ -18,6 +19,7 @@ class AskScreen extends StatefulWidget {
     required this.app,
     required this.chat,
     this.onOpenSource,
+    this.onOpenNavigation,
     this.share = shareMarkdown,
     this.layout,
     this.location,
@@ -33,6 +35,7 @@ class AskScreen extends StatefulWidget {
 
   /// Opens the article a citation points at (a `zim:` address) in Browse.
   final void Function(String address)? onOpenSource;
+  final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
   State<AskScreen> createState() => _AskScreenState();
@@ -238,6 +241,7 @@ class _AskScreenState extends State<AskScreen> {
                         : _AssistantBlock(
                             msgs[i],
                             onOpenSource: widget.onOpenSource,
+                            onOpenNavigation: widget.onOpenNavigation,
                           ),
                   );
                 },
@@ -343,10 +347,11 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenNavigation});
 
   final ChatMessage msg;
   final void Function(String address)? onOpenSource;
+  final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
   State<_AssistantBlock> createState() => _AssistantBlockState();
@@ -372,6 +377,30 @@ class _AssistantBlockState extends State<_AssistantBlock> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showText && m.text.isNotEmpty) AnswerMarkdown(m.text),
+          for (final action in m.navigationActions)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (m.navigationActions.length > 1)
+                    Text(action.route?.destinationName.isNotEmpty == true
+                        ? 'To ${action.route!.destinationName}'
+                        : 'Route ${m.navigationActions.indexOf(action) + 1}'),
+                  if (action.route == null)
+                    const Text('Navigation unavailable: this route snapshot is no longer available.')
+                  else
+                    Semantics(
+                      label: m.navigationActions.length > 1 ? 'To ${action.route!.destinationName}' : null,
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onOpenNavigation == null ? null : () => widget.onOpenNavigation!(action),
+                        icon: const Icon(Icons.directions_outlined),
+                        label: const Text('Open navigation'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           if (status != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -398,7 +427,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
             _sourcesRow(context, m),
-          if (m.isDone && m.error == null && m.text.isEmpty)
+          if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty)
             Text(
               'No answer was produced.',
               style: TextStyle(fontSize: 15, color: k.secondary),

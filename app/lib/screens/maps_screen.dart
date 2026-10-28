@@ -30,12 +30,16 @@ import '../theme.dart';
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader});
 
   final LocationService location;
   final MapsState maps;
   final NavState nav;
   final CacheThemeId themeId;
+
+  /// Tests can avoid filesystem font setup; production uses the existing shipped fonts.
+  @visibleForTesting
+  final Future<String> Function()? glyphsLoader;
 
   @override
   State<MapsScreen> createState() => _MapsScreenState();
@@ -105,7 +109,7 @@ class _MapsScreenState extends State<MapsScreen> {
   /// Waits for the layer engine and the shipped fonts, then makes the first style.
   Future<void> _prepare() async {
     try {
-      _glyphs = await MapAssets.glyphsUrl();
+      _glyphs = await (widget.glyphsLoader?.call() ?? MapAssets.glyphsUrl());
     } catch (_) {
       _glyphs = null;
     }
@@ -180,6 +184,7 @@ class _MapsScreenState extends State<MapsScreen> {
     await _pushPosition();
     _navSig = null;
     await _pushNav();
+    _onNav(); // A route may have been loaded before this screen/listener existed.
     _afterCameraSettles();
   }
 
@@ -300,7 +305,7 @@ class _MapsScreenState extends State<MapsScreen> {
     _pushNav();
     final r = nav.route;
     // A new set of routes: show all of the chosen one.
-    if (nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
+    if (_controller != null && _styleReady && nav.phase == NavPhase.previewing && r != null && _fitFor != r.routeId) {
       _fitFor = r.routeId;
       _fitRoute(r);
     }
@@ -317,7 +322,8 @@ class _MapsScreenState extends State<MapsScreen> {
 
   Future<void> _fitRoute(MapRoute r) async {
     final c = _controller;
-    if (c == null || r.points.length < 2) return;
+    if (c == null || !_styleReady || r.points.length < 2) return;
+    maps.setFollow(FollowMode.free); // GPS must not pull an exact preview out of view.
     final b = r.bounds;
     final pad = MediaQuery.sizeOf(context);
     try {

@@ -1,3 +1,5 @@
+import 'navigation_action.dart';
+
 /// One thing a tool found.
 class SourceResult {
   const SourceResult({required this.title, required this.snippet, required this.address});
@@ -74,8 +76,9 @@ abstract class ToolHost {
 }
 
 class HostToolResult {
-  const HostToolResult({required this.content, required this.ids});
+  const HostToolResult({required this.content, required this.ids, this.navigationActions = const []});
 
   final String content;
   final List<NumberedAddress> ids;
+  final List<NavigationAction> navigationActions;
 }
