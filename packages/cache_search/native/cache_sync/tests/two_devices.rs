@@ -99,11 +99,23 @@ fn two_devices_link_share_and_stay_the_same() {
         let texts: Vec<String> = names.iter().filter(|n| n.starts_with("new")).filter_map(|n| std::fs::read_to_string(dir.join("maps").join(n)).ok()).collect();
         texts.contains(&"desk version".to_string()) && texts.contains(&"phone version".to_string())
     };
-    wait("both versions on both devices", 90, || {
+    let mut ok = false;
+    for _ in 0..360 {
         call(&a, "sync_now", json!({}));
         call(&b, "sync_now", json!({}));
-        has_both(&fa) && has_both(&fb)
-    });
+        if has_both(&fa) && has_both(&fb) {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    if !ok {
+        let list = |dir: &Path| -> Vec<(String, String)> {
+            std::fs::read_dir(dir.join("maps")).unwrap().flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), std::fs::read_to_string(e.path()).unwrap_or_default().chars().take(30).collect())).collect()
+        };
+        let logs = |e: &SyncEngine| call(e, "status", json!({}))["log"].as_array().unwrap().iter().map(|l| l["text"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+        panic!("both versions did not reach both devices\nA: {:?}\nB: {:?}\nA log: {:#?}\nB log: {:#?}", list(&fa), list(&fb), logs(&a), logs(&b));
+    }
 
     let st = call(&b, "status", json!({}));
     assert_eq!(st["peers"][0]["name"], "Desk");
