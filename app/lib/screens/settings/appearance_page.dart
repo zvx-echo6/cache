@@ -4,7 +4,7 @@ import '../../app_state.dart';
 import '../../theme.dart';
 import 'widgets.dart';
 
-/// Settings > Appearance: the theme.
+/// Settings > Appearance: the theme, and the size of the Modules screen's icons.
 class AppearancePage extends StatelessWidget {
   const AppearancePage({super.key, required this.app});
 
@@ -30,6 +30,23 @@ class AppearancePage extends StatelessWidget {
                     leading: Icon(id == app.theme ? Icons.radio_button_checked : Icons.radio_button_off, color: id == app.theme ? k.accent : k.secondary),
                     chevron: false,
                     onTap: () => app.setTheme(id),
+                  ),
+              ],
+            ),
+            SettingsGroup(
+              label: 'Module icons',
+              rows: [
+                for (final (large, title, hint) in const [(false, 'Small', 'Three across'), (true, 'Large', 'Bigger, easier to tap')])
+                  SettingsRow(
+                    key: ValueKey('module-icons-${large ? 'large' : 'small'}'),
+                    title: title,
+                    status: [Part(hint)],
+                    leading: Icon(
+                      large == app.largeModuleIcons ? Icons.radio_button_checked : Icons.radio_button_off,
+                      color: large == app.largeModuleIcons ? k.accent : k.secondary,
+                    ),
+                    chevron: false,
+                    onTap: () => app.setLargeModuleIcons(large),
                   ),
               ],
             ),

@@ -161,6 +161,37 @@ void main() {
     await r.stop(tester);
   });
 
+  testWidgets('Modules shows app icons: the bar\'s line icons, a dot for the ones on the bar, options on tap and hold', (tester) async {
+    final r = Rig();
+    await r.start(tester);
+    await openModules(tester);
+    expect(find.text('Tap and hold an icon for its options'), findsOneWidget);
+    expect(find.byTooltip('More for Videos'), findsNothing, reason: 'no menu dots');
+    // the same line icon as the bar, not the painted tile
+    expect(find.descendant(of: find.byKey(const ValueKey('module-videos')), matching: find.byIcon(ModuleId.videos.icon)), findsOneWidget);
+    expect(find.bySemanticsLabel('Ask, on the bar'), findsOneWidget);
+    expect(find.bySemanticsLabel('Videos'), findsOneWidget);
+    await openModuleMenu(tester, ModuleId.videos);
+    expect(find.text('Pin to bar'), findsOneWidget);
+    await r.stop(tester);
+  });
+
+  testWidgets('the Modules icons are small (64) by default and large (two across, column-wide) when Settings > Appearance says so', (tester) async {
+    final r = Rig();
+    await r.start(tester);
+    await openModules(tester);
+    expect(tester.getSize(find.byKey(const ValueKey('module-icon-ask'))), const Size(64, 64));
+    await tester.runAsync(() => r.app.setLargeModuleIcons(true));
+    await tester.pump();
+    final big = tester.getSize(find.byKey(const ValueKey('module-icon-ask')));
+    final w = tester.getSize(find.byType(GridView)).width;
+    expect(big.width, closeTo((w - 12) / 2, 0.5), reason: 'as wide as its column');
+    expect(big.height, big.width);
+    expect(find.byKey(const ValueKey('module-videos')), findsOneWidget, reason: 'all six still there');
+    await tester.runAsync(() => r.app.setLargeModuleIcons(false));
+    await r.stop(tester);
+  });
+
   testWidgets('a 4th pin says the bar is full and replacing one keeps Home first and Modules last, at 5 items', (tester) async {
     final r = Rig();
     await r.start(tester);

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../brand.dart';
+import '../app_state.dart';
 import '../theme.dart';
 import 'layout_state.dart';
 import 'modules.dart';
@@ -16,12 +16,15 @@ void addToHome(BuildContext context, LayoutState layout, Shortcut s) {
   _say(context, layout.addShortcut(s) ? 'Added to Home' : 'Already on Home');
 }
 
-/// The Modules screen: a grid of big painted tiles. A tap opens the module; a long press (or the ⋮) offers
-/// Pin to bar / Unpin from bar and Add to Home.
+/// The Modules screen: a grid of app icons, each the module's line icon (the one the bottom bar shows) on a rounded square.
+/// A tap opens the module; tap and hold offers Pin to bar / Unpin from bar and Add to Home. A dot under the name marks the
+/// modules on the bar. Settings > Appearance makes the icons small (64 px, three across) or large (two across, each as wide
+/// as its column, the size the module cards had; the grid scrolls).
 class ModulesScreen extends StatelessWidget {
-  const ModulesScreen({super.key, required this.layout, required this.onOpen});
+  const ModulesScreen({super.key, required this.layout, required this.app, required this.onOpen});
 
   final LayoutState layout;
+  final AppState app;
   final void Function(ModuleId) onOpen;
 
   Future<void> _actions(BuildContext context, ModuleId m) async {
@@ -104,50 +107,66 @@ class ModulesScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Modules')),
       body: ListenableBuilder(
-        listenable: layout,
-        builder: (context, _) => GridView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: 12,
+        listenable: Listenable.merge([layout, app]),
+        builder: (context, _) => LayoutBuilder(builder: (context, c) => _grid(context, k, c.maxWidth)),
+      ),
+    );
+  }
+
+  Widget _grid(BuildContext context, CacheTokens k, double width) {
+    final large = app.largeModuleIcons;
+    // Large: two columns 12 apart inside the 16 side margins, each square as wide as its column.
+    final box = large ? ((width - 32 - 12) / 2).clamp(64.0, 240.0) : 64.0;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+      children: [
+        GridView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: large ? 2 : 3,
+            mainAxisSpacing: 20,
             crossAxisSpacing: 12,
-            mainAxisExtent: 196,
+            mainAxisExtent: box + 48,
           ),
           children: [
             for (final m in ModuleId.values)
-              Material(
-                key: ValueKey('module-${m.name}'),
-                color: k.surface,
-                borderRadius: BorderRadius.circular(20),
+              Semantics(
+                button: true,
+                label: layout.isPinned(m) ? '${m.label}, on the bar' : m.label,
+                onLongPressHint: 'Options',
+                excludeSemantics: true,
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(20),
+                  key: ValueKey('module-${m.name}'),
+                  borderRadius: BorderRadius.circular(16),
                   onTap: () => onOpen(m),
                   onLongPress: () => _actions(context, m),
-                  child: Stack(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            BrandTileImage(m.tile, size: 96),
-                            const SizedBox(height: 8),
-                            Text(m.label, style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: k.text)),
-                            if (layout.isPinned(m))
-                              Padding(
-                                padding: const EdgeInsets.only(top: 2),
-                                child: Text('On the bar', style: TextStyle(fontSize: 13, color: k.secondary)),
-                              ),
-                          ],
-                        ),
+                      const SizedBox(height: 4),
+                      Container(
+                        key: ValueKey('module-icon-${m.name}'),
+                        width: box,
+                        height: box,
+                        decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(large ? 36 : 16)),
+                        child: Icon(m.icon, size: large ? 80 : 32, color: k.secondary),
                       ),
-                      Positioned(
-                        top: 0,
-                        right: 0,
-                        child: IconButton(
-                          key: ValueKey('module-menu-${m.name}'),
-                          tooltip: 'More for ${m.label}',
-                          icon: Icon(Icons.more_vert, color: k.secondary),
-                          onPressed: () => _actions(context, m),
+                      const SizedBox(height: 8),
+                      Text(
+                        m.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: large ? 18 : 15, fontWeight: large ? FontWeight.w600 : FontWeight.w500, color: k.text),
+                      ),
+                      const SizedBox(height: 4),
+                      // On the bar: a small dot in the accent colour, as the bar's selected label is.
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: layout.isPinned(m) ? k.accent : Colors.transparent,
+                          shape: BoxShape.circle,
                         ),
                       ),
                     ],
@@ -156,7 +175,15 @@ class ModulesScreen extends StatelessWidget {
               ),
           ],
         ),
-      ),
+        Padding(
+          padding: const EdgeInsets.only(top: 24),
+          child: Text(
+            'Tap and hold an icon for its options',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 15, color: k.secondary),
+          ),
+        ),
+      ],
     );
   }
 }
