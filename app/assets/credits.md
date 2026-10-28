@@ -506,7 +506,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - js-sys 0.3.106: MIT OR Apache-2.0 (github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys)
 - lazy_static 1.5.1: MIT OR Apache-2.0 (github.com/rust-lang-nursery/lazy-static.rs)
 - levenshtein_automata 0.2.1: MIT (github.com/tantivy-search/levenshtein-automata)
-- libc 0.2.191: MIT OR Apache-2.0 (github.com/rust-lang/libc)
+- libc 0.2.189: MIT OR Apache-2.0 (github.com/rust-lang/libc)
 - libflate 2.3.2: MIT (github.com/sile/libflate)
 - libflate_lz77 2.3.0: MIT (github.com/sile/libflate)
 - libloading 0.8.9: ISC (github.com/nagisa/rust_libloading)
