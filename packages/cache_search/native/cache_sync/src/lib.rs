@@ -54,6 +54,8 @@ pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
 /// The index exchange between linked devices.
 pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
 
+/// A transfer with no new data for this long is dropped and retried in the next round (from its verified chunks).
+const STALL: Duration = Duration::from_secs(60);
 /// How long a shown link code stays valid.
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// An index larger than this is refused (about a million files).
@@ -342,6 +344,11 @@ impl Inner {
         self.saved.lock().unwrap().peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| id[..8.min(id.len())].to_string())
     }
 
+    /// Network use stops the moment the policy says so: before each file and during every transfer, not only between rounds.
+    fn may_use_network(&self) -> bool {
+        self.network.load(Ordering::Relaxed) && !self.stop.load(Ordering::Relaxed)
+    }
+
     fn tag_name(share: &str, path: &str) -> String {
         format!("f/{share}/{path}")
     }
@@ -434,6 +441,9 @@ impl Inner {
         let peers = self.saved.lock().unwrap().peers.clone();
         // First every reachable peer's index, so each file can be fetched from every peer that has it.
         for p in &peers {
+            if !self.may_use_network() {
+                break;
+            }
             let res = self.fetch_index(&p.id).await;
             let mut run = self.run.lock().unwrap();
             let st = run.peers.entry(p.id.clone()).or_default();
@@ -461,7 +471,7 @@ impl Inner {
                     Ok(()) => {}
                     Err(e) => {
                         let msg = format!("{e:#}");
-                        if msg.starts_with("Paused:") {
+                        if msg.starts_with("Paused:") || msg.contains("paused, no network") {
                             paused = Some(msg);
                         } else {
                             self.note(format!("{} from {}: {msg}", sh.name, p.name));
@@ -471,7 +481,7 @@ impl Inner {
             }
         }
         let mut run = self.run.lock().unwrap();
-        run.paused = paused;
+        run.paused = if self.network.load(Ordering::Relaxed) { paused } else { Some("Sync is paused: no network it may use".into()) };
         run.rounds += 1;
         run.last_round = Some(now_ms());
     }
@@ -561,6 +571,9 @@ impl Inner {
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
         let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
         if !have {
+            if !self.may_use_network() {
+                bail!("Paused: no network it may use");
+            }
             let reserve = self.reserve.load(Ordering::Relaxed);
             let need = entry.size;
             if let Some(free) = Self::free_bytes(&self.dir) {
@@ -594,19 +607,31 @@ impl Inner {
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             let mut failed = None;
-            while let Some(item) = stream.next().await {
-                match item {
-                    DownloadProgressItem::Progress(n) => {
-                        if let Some(t) = self.run.lock().unwrap().transfer.as_mut() {
-                            t.done = n;
+            let mut last_progress = Instant::now();
+            loop {
+                // Woken every second even when nothing arrives, so a pause or a stalled path is noticed.
+                match tokio::time::timeout(Duration::from_secs(1), stream.next()).await {
+                    Ok(None) => break,
+                    Ok(Some(item)) => match item {
+                        DownloadProgressItem::Progress(n) => {
+                            last_progress = Instant::now();
+                            if let Some(t) = self.run.lock().unwrap().transfer.as_mut() {
+                                t.done = n;
+                            }
                         }
-                    }
-                    DownloadProgressItem::Error(e) => failed = Some(format!("{e}")),
-                    DownloadProgressItem::DownloadError => failed = Some("the transfer stopped".into()),
-                    _ => {}
+                        DownloadProgressItem::Error(e) => failed = Some(format!("{e}")),
+                        DownloadProgressItem::DownloadError => failed = Some("the transfer stopped".into()),
+                        _ => {}
+                    },
+                    Err(_) => {}
                 }
-                if self.stop.load(Ordering::Relaxed) {
-                    failed = Some("stopped".into());
+                if !self.may_use_network() {
+                    // Dropping the stream ends the transfer; the verified chunks stay in the store for the resume.
+                    failed = Some("paused, no network it may use".into());
+                    break;
+                }
+                if last_progress.elapsed() > STALL {
+                    failed = Some("no data for a minute".into());
                     break;
                 }
             }

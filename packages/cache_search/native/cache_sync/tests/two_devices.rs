@@ -55,8 +55,14 @@ fn two_devices_link_share_and_stay_the_same() {
     let id = call(&a, "share_add", json!({"path": fa, "name": "Family"}))["id"].as_str().unwrap().to_string();
     call(&b, "sync_now", json!({}));
     wait("the offer on B", 30, || call(&b, "status", json!({}))["offers"].as_array().map(|o| !o.is_empty()).unwrap_or(false));
+    // Not allowed to use the network (mobile data without permission): nothing is fetched, and the status says why.
+    call(&b, "set_policy", json!({"network": false}));
     call(&b, "share_join", json!({"id": id, "path": fb}));
     call(&b, "sync_now", json!({}));
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(!fb.join("notes.txt").exists() && !fb.join("maps/region.bin").exists(), "nothing may arrive while paused");
+    assert_eq!(call(&b, "status", json!({}))["paused"], "Sync is paused: no network it may use");
+    call(&b, "set_policy", json!({"network": true}));
     wait("the files on B", 60, || fb.join("maps/region.bin").exists() && fb.join("notes.txt").exists());
     assert_eq!(std::fs::read(fb.join("maps/region.bin")).unwrap(), big);
     assert!(!fb.join(".hidden").exists(), "hidden files are never shared");
