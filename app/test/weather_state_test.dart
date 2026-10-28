@@ -614,4 +614,71 @@ void main() {
     expect(i.lastError, 'HTTP 500');
     expect(i.expired, isFalse);
   });
+
+  group('what the Weather screen and Home show', () {
+    Map<String, dynamic> forecast() => {
+      'fetched_at': '2026-10-26T11:00:00-06:00',
+      'age': '1 hour old',
+      'expired': false,
+      'items': [
+        {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'fields': {'Temperature': '45 °F', 'Conditions': 'clear sky'}},
+        {'address': 'live:openmeteo-forecast/x/2026-10-26', 'label': 'Mon 26 Oct', 'fields': {'High': '52 °F', 'Low': '30 °F'}},
+      ],
+    };
+
+    test('Home: nothing switched on says so', () async {
+      h = await Harness.create();
+      expect(await h.weather.homeWeatherLine(), 'Not set up yet');
+      expect(await h.weather.homeAlertsLine(), 'Not set up yet');
+    });
+
+    test('Home weather: now, today and the place, with the age', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = forecast();
+      expect(await h.weather.homeWeatherLine(), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+    });
+
+    test('Home weather: an expired forecast says it needs a connection', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      h.core.stored['openmeteo-forecast'] = {...forecast(), 'expired': true};
+      expect(await h.weather.homeWeatherLine(), contains('expired'));
+    });
+
+    test('Home alerts: none active, then a count with the first one', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/none', 'label': 'No active fires', 'none_active': true, 'fields': {}},
+        ],
+      };
+      expect(await h.weather.homeAlertsLine(), 'None active · checked 20 minutes old');
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/1', 'label': 'East Fork fire', 'fields': {'Distance': '38 mi S', 'Contained': '5%'}},
+          {'address': 'live:wfigs-incidents-near/x/2', 'label': 'Forleen fire', 'fields': {'Distance': '52 mi W'}},
+        ],
+      };
+      expect(await h.weather.homeAlertsLine(), startsWith('2 active: East Fork fire (Where I am)'));
+    });
+
+    test('the view groups forecasts and alerts, and marks a source with nothing downloaded', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.core.stored['openmeteo-forecast'] = forecast();
+      final p = (await h.weather.watchedPlaces()).single;
+      final v = await h.weather.viewFor(p);
+      final byId = {for (final x in v) x.source.id: x};
+      expect(byId['openmeteo-forecast']!.items.first.fields['Temperature'], '45 °F');
+      expect(byId['usgs-quakes-near']!.missing, isTrue);
+      expect(byId['usgs-quakes-near']!.error, isNull, reason: 'not downloaded yet is not an error');
+    });
+  });
 }

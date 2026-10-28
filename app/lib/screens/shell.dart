@@ -22,8 +22,10 @@ import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'settings/deps.dart';
+import 'settings/weather_page.dart';
 import 'settings_screen.dart';
 import 'videos/videos_screen.dart';
+import 'weather_screen.dart';
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
@@ -136,6 +138,17 @@ class _ShellState extends State<Shell> {
     _goModule(ModuleId.ask);
   }
 
+  /// "Ask about this" on the Weather screen: a new chat that asks the question straight away.
+  void _askAbout(String question) {
+    widget.chat.newChat();
+    _goModule(ModuleId.ask);
+    widget.chat.send(question);
+  }
+
+  void _openWeatherSettings() {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WeatherPage(deps: _settingsDeps)));
+  }
+
   void _say(String text) {
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
@@ -186,6 +199,7 @@ class _ShellState extends State<Shell> {
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme),
         ModuleId.videos => VideosScreen(video: widget.video),
+        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 
@@ -214,6 +228,8 @@ class _ShellState extends State<Shell> {
             children: [
               HomeScreen(
                 layout: layout,
+                weather: widget.hub.weather,
+                onOpenWeather: () => _goModule(ModuleId.weather),
                 onOpenAsk: () => _goModule(ModuleId.ask),
                 onOpenSettings: _openSettings,
                 onOpenShortcut: _openShortcut,

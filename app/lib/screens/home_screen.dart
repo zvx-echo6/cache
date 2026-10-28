@@ -4,6 +4,7 @@ import '../brand.dart';
 import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../theme.dart';
+import '../weather/weather_state.dart';
 
 /// Home: the blocks the person chose, in the order they chose (Ask box, Weather, Alerts, Shortcuts by default), a gear
 /// for Settings at the top right, and "Edit Home" at the bottom.
@@ -14,7 +15,13 @@ class HomeScreen extends StatelessWidget {
     required this.onOpenAsk,
     required this.onOpenSettings,
     required this.onOpenShortcut,
+    this.weather,
+    this.onOpenWeather,
   });
+
+  /// Feeds the Weather and Alerts cards; without it they say "Not set up yet".
+  final WeatherState? weather;
+  final VoidCallback? onOpenWeather;
 
   final LayoutState layout;
   final VoidCallback onOpenAsk;
@@ -49,8 +56,22 @@ class HomeScreen extends StatelessWidget {
             for (final b in layout.visibleBlocks) ...[
               switch (b) {
                 HomeBlock.ask => _askBox(k),
-                HomeBlock.weather => _InfoCard(tile: BrandTile.weather, title: 'Weather', value: 'Not set up yet'),
-                HomeBlock.alerts => _InfoCard(tile: BrandTile.alerts, title: 'Alerts', value: 'Not set up yet'),
+                HomeBlock.weather => _LiveCard(
+                    key: const ValueKey('home-weather'),
+                    tile: BrandTile.weather,
+                    title: 'Weather',
+                    weather: weather,
+                    line: (w) => w.homeWeatherLine(),
+                    onTap: onOpenWeather,
+                  ),
+                HomeBlock.alerts => _LiveCard(
+                    key: const ValueKey('home-alerts'),
+                    tile: BrandTile.alerts,
+                    title: 'Alerts',
+                    weather: weather,
+                    line: (w) => w.homeAlertsLine(),
+                    onTap: onOpenWeather,
+                  ),
                 HomeBlock.shortcuts => _shortcuts(context, k),
               },
               const SizedBox(height: 16),
@@ -213,17 +234,45 @@ class ShortcutCard extends StatelessWidget {
   }
 }
 
+/// A Home card fed by the weather state: its line is worked out again whenever the data changes.
+class _LiveCard extends StatelessWidget {
+  const _LiveCard({super.key, required this.tile, required this.title, required this.weather, required this.line, this.onTap});
+
+  final BrandTile tile;
+  final String title;
+  final WeatherState? weather;
+  final Future<String> Function(WeatherState) line;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final w = weather;
+    if (w == null) return _InfoCard(tile: tile, title: title, value: 'Not set up yet', onTap: onTap);
+    return ListenableBuilder(
+      listenable: w,
+      builder: (context, _) => FutureBuilder<String>(
+        future: line(w),
+        builder: (context, snap) => _InfoCard(tile: tile, title: title, value: snap.data ?? '…', onTap: onTap),
+      ),
+    );
+  }
+}
+
 class _InfoCard extends StatelessWidget {
-  const _InfoCard({required this.tile, required this.title, required this.value});
+  const _InfoCard({required this.tile, required this.title, required this.value, this.onTap});
 
   final BrandTile tile;
   final String title;
   final String value;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Container(
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
       child: Row(
@@ -241,6 +290,7 @@ class _InfoCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

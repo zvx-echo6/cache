@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import '../brand.dart';
 
 /// The big pieces of the app. Each has a screen of its own; the bottom bar pins up to [kMaxPinned] of them.
-/// (Games, Journal, Weather and Alerts join this list when their screens exist.)
+/// (Games and Journal join this list when their screens exist.)
 enum ModuleId {
   ask('Ask', Icons.chat_bubble_outline, Icons.chat_bubble, BrandTile.ask),
   library('Library', Icons.menu_book_outlined, Icons.menu_book, BrandTile.library),
   maps('Maps', Icons.map_outlined, Icons.map, BrandTile.maps),
   videos('Videos', Icons.play_circle_outline, Icons.play_circle, BrandTile.videos),
+  weather('Weather', Icons.cloud_outlined, Icons.cloud, BrandTile.weather),
   settings('Settings', Icons.settings_outlined, Icons.settings, BrandTile.settings);
 
   const ModuleId(this.label, this.icon, this.selectedIcon, this.tile);

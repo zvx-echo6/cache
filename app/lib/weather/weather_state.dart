@@ -16,6 +16,7 @@ import 'connector.dart';
 import 'curated.dart';
 import 'live_core.dart';
 import 'live_folder.dart';
+import 'live_view.dart';
 import 'places.dart';
 import 'words.dart';
 
@@ -775,7 +776,91 @@ class WeatherState extends ChangeNotifier {
     return SourceInfo(age: age, fetchedAt: at, lastError: err, expired: expired);
   }
 
-  // ---------------------------------------------------------------- what is remembered between starts
+  // ---------------------------------------------------------------- what the Weather screen and Home show
+
+  /// What every switched-on source holds for [p], as stored (expired data is included and flagged). Read from the core, so it
+  /// is exactly what the assistant would get.
+  Future<List<SourceView>> viewFor(WatchPlace p) async {
+    final out = <SourceView>[];
+    for (final c in enabledSources) {
+      try {
+        final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
+        final le = g['last_error'];
+        out.add(SourceView(
+          source: c,
+          place: p,
+          items: [for (final i in (g['items'] as List? ?? const [])) if (i is Map) LiveItem.fromJson(i.cast<String, dynamic>())],
+          age: g['age'] as String?,
+          fetchedAt: g['fetched_at'] as String?,
+          expired: g['expired'] == true,
+          error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
+        ));
+      } on CacheSearchException catch (e) {
+        out.add(SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message)));
+      } catch (_) {
+        out.add(SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]));
+      }
+    }
+    return out;
+  }
+
+  /// The place Home talks about: "Where I am" when it is watched and known, else the first watched place.
+  Future<WatchPlace?> homePlace() async {
+    final w = await watchedPlaces();
+    if (w.isEmpty) return null;
+    return w.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => w.first);
+  }
+
+  /// The Weather card on Home: "45 °F, clear sky · High 52 °F, low 30 °F · Stanley · 2 hours old".
+  Future<String> homeWeatherLine() async {
+    final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
+    if (forecast.isEmpty) return 'Not set up yet';
+    final p = await homePlace();
+    if (p == null) return 'Choose a place to watch in Settings';
+    for (final v in await viewFor(p)) {
+      if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
+      if (v.expired) return 'Forecast expired for ${p.name} · needs a connection';
+      final now = v.items.firstWhere((i) => i.address.endsWith('/now'), orElse: () => v.items.first);
+      final day = v.items.firstWhere((i) => !i.address.endsWith('/now'), orElse: () => now);
+      final parts = <String>[
+        [now.fields['Temperature'], now.fields['Conditions']].whereType<String>().join(', '),
+        if (day.fields['High'] != null && day.fields['Low'] != null) 'High ${day.fields['High']}, low ${day.fields['Low']}',
+        p.name,
+        if (v.age != null) v.age!,
+      ].where((x) => x.isNotEmpty).toList();
+      return parts.join(' · ');
+    }
+    return 'No forecast yet for ${p.name} · Update in Weather';
+  }
+
+  /// The Alerts card on Home: the number of things happening near the watched places and the first of them, or "None active".
+  Future<String> homeAlertsLine() async {
+    final alerting = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.alerts) c];
+    if (alerting.isEmpty) return 'Not set up yet';
+    final places = await watchedPlaces();
+    if (places.isEmpty) return 'Choose a place to watch in Settings';
+    final active = <(LiveItem, WatchPlace)>[];
+    String? newest;
+    var any = false, expired = false;
+    for (final p in places) {
+      for (final v in await viewFor(p)) {
+        if (v.group != LiveGroup.alerts || v.missing) continue;
+        any = true;
+        expired = expired || v.expired;
+        newest ??= v.age;
+        for (final i in v.active) {
+          active.add((i, p));
+        }
+      }
+    }
+    if (!any) return 'Nothing downloaded yet · Update in Weather';
+    if (active.isEmpty) return expired ? 'None known · data expired, needs a connection' : 'None active${newest == null ? '' : ' · checked $newest'}';
+    final first = active.first;
+    final more = active.length > 1 ? ' and ${active.length - 1} more' : '';
+    return '${active.length} active: ${first.$1.label} (${first.$2.name})$more';
+  }
+
+$anchor
 
   File? get _statusFile {
     final d = _store?.root;
