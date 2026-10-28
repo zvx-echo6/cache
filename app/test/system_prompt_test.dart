@@ -26,7 +26,8 @@ void main() {
     try {
       final files = Directory('${dir.path}/files')..createSync();
       final support = Directory('${dir.path}/support')..createSync();
-      expect(buildCoreExtras(filesDir: files, supportDir: support).containsKey('routing'), isFalse);
+      // Nothing installed: routing is still configured, on the region engine's folder (an empty tiles).
+      expect(((buildCoreExtras(filesDir: files, supportDir: support)['routing'] as Map)['valhalla'] as Map)['tiles'], '');
       Directory('${files.path}/packs/idaho/valhalla').createSync(recursive: true);
       File('${files.path}/packs/idaho/places.sqlite').writeAsStringSync('');
       File('${files.path}/packs/idaho/valhalla/tiles.tar').writeAsStringSync('');

@@ -317,11 +317,12 @@ List<RegionHit> searchRegions(String query, Iterable<RegionHit> rows, {int limit
   for (final r in rows) {
     if (seen.contains(r.id)) continue;
     var best = -1;
-    for (final n in [r.name, ...r.alt]) {
+    // The region's own name beats one of its other names (the city "Twin Falls" before the metro area also known by it).
+    for (final (i, n) in [r.name, ...r.alt].indexed) {
       final w = _words(n);
       if (!words.every((x) => w.any((y) => y.startsWith(x)))) continue;
       final joined = w.join(' ');
-      final s = joined == q ? 0 : (joined.startsWith(q) ? 1 : 2);
+      final s = (joined == q ? 0 : (joined.startsWith(q) ? 2 : 4)) + (i == 0 ? 0 : 1);
       if (best < 0 || s < best) best = s;
     }
     if (best < 0) continue;
