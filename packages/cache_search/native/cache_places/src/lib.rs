@@ -6,8 +6,10 @@
 //! without reopening the handle, and `nearby` leaves itself out of the tool schemas while no pack is installed.
 
 pub mod addr;
+pub mod address;
 pub mod coord;
 pub mod embedpack;
+pub mod feed;
 pub mod fixture;
 pub mod geo;
 pub mod geocoder;
@@ -20,6 +22,7 @@ pub mod pack;
 pub mod source;
 pub mod schema;
 
+pub use feed::{PlacesFeed, PrepareAnswer};
 pub use geocoder::{GeoHit, Geocoder, HitKind, Nearest, PackGeocoder};
 pub use locate::LocateTool;
 pub use map::PlacesCore;

@@ -197,7 +197,8 @@ fn only_known_formats_open() {
     assert_eq!(p.kind("picnic_shelter").unwrap().label, "Picnic shelter");
     assert_eq!(p.kind("water_body").unwrap().category, None);
     assert!(!p.kind("drinking_water").unwrap().description.is_empty());
-    for bad in ["0", "3"] {
+    // 3 is the merged database (`MERGED_SCHEMA`), which opens too.
+    for bad in ["0", "4"] {
         Connection::open(d.pack()).unwrap().execute("UPDATE meta SET value = ?1 WHERE key = 'format_version'", [bad]).unwrap();
         let e = Pack::open(&d.pack()).err().expect("refused");
         assert!(e.message.contains("not supported"), "{}", e.message);
