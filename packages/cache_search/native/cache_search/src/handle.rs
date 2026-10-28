@@ -42,6 +42,9 @@ struct Config {
     /// The navigate tool: Valhalla tiles and shim, and the off-road pack (see cache_navigate's config.rs).
     #[serde(default)]
     routing: Option<cache_navigate::NavigateCfg>,
+    /// Road tiles by region (cache_regions): the navigate tool routes on its folder and has it fetch a route's tiles first.
+    #[serde(default)]
+    regions: Option<cache_regions::Config>,
     #[serde(default)]
     video: Option<cache_video::VideoCfg>,
     /// Map layers: see ext.rs and DESIGN-LAYERS.md.
@@ -458,7 +461,9 @@ impl Handle {
         if cfg.prewarm {
             self.start_prewarm();
         }
+        self.ext.configure_regions(cfg.regions)?;
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
+        self.ext.plug_regions();
         self.ext.configure_layers(cfg.layers)?;
         Ok(())
     }

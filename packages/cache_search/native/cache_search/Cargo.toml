@@ -32,6 +32,9 @@ cache_navigate = { path = "../cache_navigate" }
 cache_video = { path = "../cache_video" }
 # Sharing and sync between devices (iroh): cs_sync_open, cs_sync_call, cs_sync_close.
 cache_sync = { path = "../cache_sync" }
+# Road tiles by region (downloads, the stream cache for routes planned online, updates): cs_regions_*, and the navigate
+# tool's tile folder and stream from the "regions" section of the config.
+cache_regions = { path = "../cache_regions" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "1"
