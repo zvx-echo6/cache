@@ -1,8 +1,9 @@
-//! Long jobs: `index_zim`, `index_library`, `update_library` and `library_manifest` run on their own threads and
-//! are polled.
+//! Long jobs: `index_zim`, `index_library`, `update_library`, `library_manifest`, the library adding jobs
+//! (`unpack_library`, `check_library`, `library_template`) and the downloads run on their own threads and are polled.
 
 use crate::error::{Error, Result};
 use crate::index::{self, BuildParams, Lock, Outcome};
+use crate::libadd;
 use crate::libindex::{self, LibBuildParams};
 use crate::libreg;
 use crate::libupdate;
@@ -135,6 +136,29 @@ struct LibraryManifestParams {
     hold_ms: u64,
 }
 
+#[derive(Deserialize)]
+struct UnpackLibraryParams {
+    snapshot_path: String,
+    dir: String,
+    #[serde(default)]
+    settings: Option<Value>,
+    /// Not in the header: a test hook that replaces the free space the system reports, in bytes.
+    #[serde(default)]
+    fake_available_bytes: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct CheckLibraryParams {
+    library_path: String,
+    #[serde(default)]
+    settings: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct LibraryTemplateParams {
+    out_path: String,
+}
+
 fn default_lib_checkpoint() -> usize {
     libindex::DEFAULT_CHECKPOINT_DOCS
 }
@@ -155,6 +179,9 @@ impl Job {
             "index_library" => Self::start_index_library(params_json),
             "update_library" => Self::start_update_library(params_json),
             "library_manifest" => Self::start_library_manifest(params_json),
+            "unpack_library" => Self::start_unpack_library(params_json),
+            "check_library" => Self::start_check_library(params_json),
+            "library_template" => Self::start_library_template(params_json),
             "video_download" => Self::start_video_download(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
@@ -304,6 +331,61 @@ impl Job {
                 // cancelling is honoured only before the read-write load; `apply_manifest` asks at the right places
                 &|| sh.cancel.load(Ordering::SeqCst),
             )
+        })
+    }
+
+    /// Start an `unpack_library` job (libadd.rs). Parameter errors, a file that is not a tar archive and too little
+    /// free space are reported here and no job exists.
+    fn start_unpack_library(params_json: &str) -> Result<Job> {
+        let p: UnpackLibraryParams = serde_json::from_str(params_json)?;
+        let req = libadd::prepare_unpack(&p.snapshot_path, &p.dir, p.settings, p.fake_available_bytes)?;
+        Self::spawn("cs-unpack-library", (), req.size, move |sh| {
+            libadd::run_unpack(
+                &req,
+                &|d, t| sh.set_progress(d, t),
+                &|v| {
+                    if let Ok(mut g) = sh.detail.lock() {
+                        *g = Some(v);
+                    }
+                },
+                &|| sh.cancel.load(Ordering::SeqCst),
+            )
+        })
+    }
+
+    /// Start a `check_library` job: open the unpacked library once and report what `unpack_library` reports.
+    fn start_check_library(params_json: &str) -> Result<Job> {
+        let p: CheckLibraryParams = serde_json::from_str(params_json)?;
+        if p.library_path.is_empty() {
+            return Err(Error::bad_json("library_path must not be empty"));
+        }
+        if let Some(s) = &p.settings {
+            LibrarySettings::parse(s)?;
+        }
+        let lib = PathBuf::from(&p.library_path);
+        if !lib.is_dir() {
+            return Err(Error::not_found(format!("library folder {} not found", lib.display())));
+        }
+        let settings = p.settings;
+        Self::spawn("cs-check-library", (), 1, move |sh| {
+            let d = libadd::check_library(&lib, settings.as_ref())?;
+            if let Ok(mut g) = sh.detail.lock() {
+                *g = Some(d);
+            }
+            sh.set_progress(1, 1);
+            Ok(Outcome::Done)
+        })
+    }
+
+    /// Start a `library_template` job: write the blank library template to `out_path`.
+    fn start_library_template(params_json: &str) -> Result<Job> {
+        let p: LibraryTemplateParams = serde_json::from_str(params_json)?;
+        if p.out_path.is_empty() {
+            return Err(Error::bad_json("out_path must not be empty"));
+        }
+        let out = PathBuf::from(&p.out_path);
+        Self::spawn("cs-library-template", (), libadd::TEMPLATE_STEPS, move |sh| {
+            libadd::write_template(&out, &|d, t| sh.set_progress(d, t))
         })
     }
 

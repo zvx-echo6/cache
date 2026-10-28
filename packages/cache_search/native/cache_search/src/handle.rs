@@ -224,7 +224,7 @@ impl OpeningLib {
                 Some(st) if !st.embedding.model.is_empty() => json!(st.embedding.model),
                 _ => Value::Null,
             },
-            "library_id": self.id, "keyword_source": Value::Null,
+            "library_id": self.id, "keyword_source": Value::Null, "whole_library_only": Value::Null,
             "settings": self.settings.as_ref().map(|st| st.to_json()).unwrap_or(Value::Null),
             "error": Value::Null,
         })
@@ -665,6 +665,7 @@ impl Handle {
                         "docs": l.docs,
                         "embedding_model": if l.settings.embedding.model.is_empty() { Value::Null } else { json!(l.settings.embedding.model) },
                         "library_id": l.settings.library_id, "keyword_source": source,
+                        "whole_library_only": l.whole_library_only,
                         "settings": l.settings.to_json(), "error": Value::Null,
                     })
                 }

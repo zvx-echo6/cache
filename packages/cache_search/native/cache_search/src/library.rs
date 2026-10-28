@@ -117,6 +117,9 @@ pub struct Embedding {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LibrarySettings {
     pub library_id: String,
+    /// The builder's label for this copy of the library (optional). Two copies with the same `library_id` are
+    /// versions of one library; the app shows this when one replaces the other.
+    pub version: Option<String>,
     pub title: String,
     pub fields: Fields,
     pub leave_out: Vec<Rule>,
@@ -134,6 +137,7 @@ impl LibrarySettings {
         json!({
             "format": 1,
             "library_id": self.library_id,
+            "version": self.version,
             "title": self.title,
             "fields": {
                 "title": f.title, "title_fallback": f.title_fallback, "text": f.text, "summary": f.summary,
@@ -210,6 +214,14 @@ impl LibrarySettings {
             }
         }
         let library_id = req_str(o, "library_id", "settings")?;
+        // a label, written as a string or a whole number (both kept as text)
+        let version = match o.get("version") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if s.trim().is_empty() => None,
+            Some(Value::String(s)) => Some(s.trim().to_string()),
+            Some(Value::Number(n)) if n.is_u64() => Some(n.to_string()),
+            Some(_) => return Err(Error::bad_json("settings.version must be a string or a whole number")),
+        };
         let title = opt_str(o, "title", "settings")?.unwrap_or_else(|| library_id.clone());
         let fo = match o.get("fields") {
             Some(Value::Object(f)) => f,
@@ -268,7 +280,7 @@ impl LibrarySettings {
             Some(Value::String(s)) if matches!(s.as_str(), "auto" | "on" | "off") => s.clone(),
             Some(_) => return Err(Error::bad_json("keyword_index must be \"auto\", \"on\" or \"off\"")),
         };
-        Ok(LibrarySettings { library_id, title, fields, leave_out, embedding, keyword_index, guessed: false })
+        Ok(LibrarySettings { library_id, version, title, fields, leave_out, embedding, keyword_index, guessed: false })
     }
 }
 
@@ -437,6 +449,8 @@ pub struct LibSlot {
     pub kw: Option<LibOpenIndex>,
     /// The collection has a BM25-scored text index on the mapped text field.
     pub own_scoring: bool,
+    /// The library's points lack `doc_id`/`doc_version` (see [`whole_library_only`]).
+    pub whole_library_only: bool,
 }
 
 /// The library's folder name, used as its id and title when settings are guessed.
@@ -479,6 +493,7 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
     let id = dir_name(path);
     Ok(LibrarySettings {
         library_id: id.clone(),
+        version: None,
         title: id,
         fields: Fields {
             title: first(&["title", "name"]),
@@ -496,6 +511,35 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
         keyword_index: "auto".into(),
         guessed: true,
     })
+}
+
+/// The payload field every point of a Cache library carries: the stable id of its source document (a non-empty
+/// string, the same across versions of the document). See docs/LIBRARY-FORMAT.md.
+pub const DOC_ID_FIELD: &str = "doc_id";
+/// The payload field with the document's version: a whole number, 1 for the first.
+pub const DOC_VERSION_FIELD: &str = "doc_version";
+
+/// Whether a point's payload carries its document's identity (`doc_id` and `doc_version`, fixed names).
+pub fn has_document_identity(p: &Map<String, Value>) -> bool {
+    let id = matches!(p.get(DOC_ID_FIELD), Some(Value::String(s)) if !s.is_empty());
+    let version = p.get(DOC_VERSION_FIELD).and_then(Value::as_u64).is_some_and(|v| v >= 1);
+    id && version
+}
+
+/// True when the library can only be updated as a whole: a sample of its first points (the same sample size as
+/// the settings guess) has one without `doc_id` and `doc_version`. An empty library is not (nothing lacks them).
+/// Any failure to read the sample counts as true.
+pub fn whole_library_only(shard: &Shard) -> bool {
+    let mut sr = ScrollRequest::new();
+    sr.limit = Some(GUESS_SAMPLE);
+    sr.with_payload = Some(match [DOC_ID_FIELD, DOC_VERSION_FIELD].iter().map(|f| f.parse::<JsonPath>()).collect::<std::result::Result<Vec<_>, _>>() {
+        Ok(p) => WithPayloadInterface::Fields(p),
+        Err(_) => WithPayloadInterface::Bool(true),
+    });
+    sr.with_vector = WithVector::Bool(false);
+    let Ok((recs, _)) = EdgeShardRead::scroll(shard, sr) else { return true };
+    let empty = Map::new();
+    !recs.iter().all(|r| has_document_identity(r.payload.as_ref().map(|p| &p.0).unwrap_or(&empty)))
 }
 
 /// Whether the collection has a text index with BM25 scoring on the mapped text field. Any failure to find out
@@ -607,9 +651,13 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     let settings = resolve_settings(&shard, path, settings)?;
     let docs = EdgeShardRead::count(&shard, CountRequest::new()).map_err(|e| op_internal("counting points", e))?;
     let own_scoring = detect_own_scoring(&shard, &settings);
+    let whole = whole_library_only(&shard);
     let shard = Arc::new(ShardCell::new(Arc::new(shard), vector));
     entry.register(&shard);
-    Ok(LibSlot { path: path.to_path_buf(), index_dir, settings, shard, entry, seen_gen, given: None, docs, kw: None, own_scoring })
+    Ok(LibSlot {
+        path: path.to_path_buf(), index_dir, settings, shard, entry, seen_gen, given: None, docs, kw: None, own_scoring,
+        whole_library_only: whole,
+    })
 }
 
 /// A slot for a cell that an update job filled again (see `libreg`): no open, only the numbers that an update
@@ -623,14 +671,17 @@ pub fn slot_from_cell(
     entry: Arc<LibEntry>,
 ) -> Option<LibSlot> {
     let seen_gen = entry.generation();
-    let (settings, docs, own_scoring) = {
+    let (settings, docs, own_scoring, whole) = {
         let g = cell.get().ok()?;
         let settings = resolve_settings(&g, path, given.as_ref()).ok()?;
         let docs = EdgeShardRead::count(&*g, CountRequest::new()).ok()?;
         let own = detect_own_scoring(&g, &settings);
-        (settings, docs, own)
+        (settings, docs, own, whole_library_only(&g))
     };
-    Some(LibSlot { path: path.to_path_buf(), index_dir, settings, shard: cell, entry, seen_gen, given, docs, kw: None, own_scoring })
+    Some(LibSlot {
+        path: path.to_path_buf(), index_dir, settings, shard: cell, entry, seen_gen, given, docs, kw: None, own_scoring,
+        whole_library_only: whole,
+    })
 }
 
 impl LibSlot {
@@ -641,6 +692,7 @@ impl LibSlot {
         let Ok(settings) = resolve_settings(&g, &self.path, self.given.as_ref()) else { return false };
         let Ok(docs) = EdgeShardRead::count(&*g, CountRequest::new()) else { return false };
         self.own_scoring = detect_own_scoring(&g, &settings);
+        self.whole_library_only = whole_library_only(&g);
         drop(g);
         self.settings = settings;
         self.docs = docs;
@@ -1039,15 +1091,50 @@ mod tests {
         assert_eq!(s.embedding.dims, Some(16));
         assert_eq!(s.keyword_index, "off");
         assert!(!s.guessed);
+        assert_eq!(s.version, None, "version is optional");
+        assert!(s.to_json()["version"].is_null());
         for bad in [
             json!({"library_id":"r","fields":{}}),
             json!({"fields":{"text":"c"}}),
             json!({"library_id":"r","fields":{"text":"c"},"keyword_index":"own"}),
             json!({"library_id":"r","fields":{"text":"c"},"leave_out":[{"field":"x"}]}),
             json!({"format":2,"library_id":"r","fields":{"text":"c"}}),
+            json!({"library_id":"r","fields":{"text":"c"},"version":1.5}),
+            json!({"library_id":"r","fields":{"text":"c"},"version":-2}),
+            json!({"library_id":"r","fields":{"text":"c"},"version":["1"]}),
             json!([]),
         ] {
             assert!(LibrarySettings::parse(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn settings_version() {
+        let with = |v: Value| LibrarySettings::parse(&json!({"library_id":"r","fields":{"text":"c"},"version":v})).unwrap();
+        assert_eq!(with(json!("2026-10-28")).version.as_deref(), Some("2026-10-28"));
+        assert_eq!(with(json!(" 3 ")).version.as_deref(), Some("3"));
+        assert_eq!(with(json!(7)).version.as_deref(), Some("7"), "a whole number is kept as text");
+        assert_eq!(with(json!("")).version, None);
+        assert_eq!(with(Value::Null).version, None);
+        assert_eq!(with(json!("v2")).to_json()["version"], "v2");
+    }
+
+    #[test]
+    fn document_identity() {
+        let p = |v: Value| v.as_object().unwrap().clone();
+        assert!(has_document_identity(&p(json!({"doc_id":"manual","doc_version":1}))));
+        assert!(has_document_identity(&p(json!({"doc_id":"manual","doc_version":12,"text":"x"}))));
+        for bad in [
+            json!({"doc_id":"manual"}),
+            json!({"doc_version":1}),
+            json!({"doc_id":"","doc_version":1}),
+            json!({"doc_id":7,"doc_version":1}),
+            json!({"doc_id":"manual","doc_version":0}),
+            json!({"doc_id":"manual","doc_version":1.5}),
+            json!({"doc_id":"manual","doc_version":"1"}),
+            json!({"doc_id":"manual","doc_version":"0123456789abcdef0123456789abcdef"}),
+        ] {
+            assert!(!has_document_identity(&p(bad.clone())), "{bad}");
         }
     }
 

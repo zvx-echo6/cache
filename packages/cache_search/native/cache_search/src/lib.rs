@@ -11,6 +11,7 @@ pub mod handle;
 pub mod html;
 pub mod index;
 pub mod job;
+pub mod libadd;
 pub mod libindex;
 pub mod library;
 pub mod libreg;
