@@ -90,6 +90,48 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
+  test('snapshot opens exact preview without routing or guidance; restart sends full route', () async {
+    final snapshot = MapRoute.fromJson(fakeRouteJson(id: 'saved-exact', mode: 'walk'));
+    expect(nav.previewSnapshot(snapshot), isTrue);
+    expect(nav.phase, NavPhase.previewing);
+    expect(nav.route, same(snapshot));
+    expect(nav.routes, hasLength(1));
+    expect(nav.selected!.name, snapshot.destinationName);
+    expect(nav.mode, 'walk');
+    expect(nav.routeStart!.lat, snapshot.from['lat']);
+    expect(backend.calls, isEmpty);
+    expect(gps.starts, 0);
+    expect(speaker.said, isEmpty);
+    MapRoute? sent;
+    backend.onProgress = (r, lat, lon) async {
+      sent = r;
+      return MapProgress.fromJson(fakeProgressJson(r.raw, 0));
+    };
+    location.publish(fixAt(42.5, -113.8));
+    await nav.start();
+    await settle();
+    expect(sent!.raw, snapshot.raw);
+    expect(backend.calls.first, 'progress:send');
+    expect(nav.guiding, isTrue);
+    final replacement = MapRoute.fromJson(fakeRouteJson(id: 'different'));
+    expect(nav.previewSnapshot(replacement), isFalse);
+    expect(nav.route!.routeId, 'saved-exact');
+    await nav.end();
+  });
+
+  test('snapshot supersedes pending preview without a late recomputation replacing it', () async {
+    final pending = Completer<MapRoute>();
+    backend.onRoute = (_, mode, from) => pending.future;
+    location.publish(fixAt(42.5, -113.8));
+    final fetching = nav.openDirections(place('p', 'Old destination'));
+    final snapshot = MapRoute.fromJson(fakeRouteJson(id: 'saved-exact'));
+    nav.previewSnapshot(snapshot);
+    pending.complete(MapRoute.fromJson(fakeRouteJson(id: 'late-old')));
+    await fetching;
+    expect(nav.route, same(snapshot));
+    expect(nav.routing, isFalse);
+  });
+
   group('search', () {
     test('typing shows the quick answer first and the answer by meaning when typing pauses', () async {
       backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(

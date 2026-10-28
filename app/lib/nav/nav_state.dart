@@ -6,6 +6,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
 import '../location/coords.dart';
+import '../chat/navigation_action.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart';
 import '../maps/maps_state.dart';
@@ -292,6 +293,30 @@ class NavState extends ChangeNotifier {
   void addToHome(MapPlace p) => _events.add(AddToHomeRequested(p));
 
   // ---- directions --------------------------------------------------------------------------------------------
+
+  /// Load the assistant's retained route exactly. Guidance needs a separate Start tap.
+  /// Active guidance is never replaced; the shell explains the conflict.
+  bool previewSnapshot(MapRoute snapshot) {
+    if (guiding || !NavigationAction.usable('nav:${snapshot.routeId}', snapshot)) return false;
+    _routeSeq++;
+    closeSearch();
+    final end = snapshot.destination;
+    selected = MapPlace(id: (snapshot.to['id'] as String?) ?? 'nav:${snapshot.routeId}',
+        type: 'place', name: snapshot.destinationName, kind: '', address: '',
+        lat: end.lat, lon: end.lon, matched: 'route');
+    routes = [snapshot];
+    routeIndex = 0;
+    mode = snapshot.mode;
+    _routeFrom = GeoPoint((snapshot.from['lat'] as num).toDouble(), (snapshot.from['lon'] as num).toDouble());
+    routeError = null;
+    routing = false;
+    progress = null;
+    arrived = false;
+    _sendRoute = true;
+    phase = NavPhase.previewing;
+    notifyListeners();
+    return true;
+  }
 
   /// Directions from the phone's position to [to].
   Future<void> openDirections(MapPlace to) async {

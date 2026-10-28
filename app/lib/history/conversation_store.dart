@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import '../chat/navigation_action.dart';
+
 /// Where a conversation's title came from. A title the user typed is never replaced.
 enum TitleSource { question, generated, user }
 
@@ -70,6 +72,7 @@ class StoredMessage {
     required this.created,
     required this.stats,
     required this.inTranscript,
+    this.navigationActions = const [],
   });
 
   final int id;
@@ -83,6 +86,7 @@ class StoredMessage {
 
   /// False for rows only the screen needs (an error line); true for what the model saw.
   final bool inTranscript;
+  final List<NavigationAction> navigationActions;
 
   /// Whether the Ask screen shows this row: questions and final answers, not tool calls or results.
   bool get shown => !inTranscript || role == 'user' || (role == 'assistant' && message['tool_calls'] == null);
@@ -98,7 +102,7 @@ class SearchHit {
   final String snippet;
 }
 
-const int _schemaVersion = 1;
+const int _schemaVersion = 2;
 
 /// The conversations on this phone, in SQLite (the `sqlite3` package, which brings its own SQLite with FTS5).
 /// Calls are synchronous: rows are small and the database is local.
@@ -127,41 +131,68 @@ class ConversationStore {
     } catch (_) {}
     final v = _db.userVersion;
     if (v >= _schemaVersion) return;
-    _db.execute('''
-      CREATE TABLE conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        title_source INTEGER NOT NULL DEFAULT 0,
-        created INTEGER NOT NULL,
-        updated INTEGER NOT NULL,
-        pinned INTEGER NOT NULL DEFAULT 0,
-        model TEXT NOT NULL DEFAULT '',
-        numbering BLOB,
-        deleted INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        message_json TEXT NOT NULL,
-        citations_json TEXT NOT NULL DEFAULT '[]',
-        error TEXT,
-        created INTEGER NOT NULL,
-        prompt_tokens INTEGER NOT NULL DEFAULT 0,
-        generated_tokens INTEGER NOT NULL DEFAULT 0,
-        duration_ms INTEGER NOT NULL DEFAULT 0,
-        in_transcript INTEGER NOT NULL DEFAULT 1
-      );
-      CREATE INDEX messages_by_conversation ON messages(conversation_id, id);
-      CREATE VIRTUAL TABLE search_fts USING fts5(
-        text,
-        conversation_id UNINDEXED,
-        message_id UNINDEXED,
-        tokenize = 'unicode61 remove_diacritics 2'
-      );
-    ''');
-    _db.userVersion = _schemaVersion;
+    atomic(() {
+      if (v < 1) {
+        _db.execute('''
+        CREATE TABLE conversations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          title_source INTEGER NOT NULL DEFAULT 0,
+          created INTEGER NOT NULL,
+          updated INTEGER NOT NULL,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          model TEXT NOT NULL DEFAULT '',
+          numbering BLOB,
+          deleted INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          message_json TEXT NOT NULL,
+          citations_json TEXT NOT NULL DEFAULT '[]',
+          error TEXT,
+          created INTEGER NOT NULL,
+          prompt_tokens INTEGER NOT NULL DEFAULT 0,
+          generated_tokens INTEGER NOT NULL DEFAULT 0,
+          duration_ms INTEGER NOT NULL DEFAULT 0,
+          in_transcript INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX messages_by_conversation ON messages(conversation_id, id);
+        CREATE VIRTUAL TABLE search_fts USING fts5(
+          text,
+          conversation_id UNINDEXED,
+          message_id UNINDEXED,
+          tokenize = 'unicode61 remove_diacritics 2'
+        );
+      ''');
+      }
+      _db.execute("ALTER TABLE messages ADD COLUMN navigation_actions_json TEXT NOT NULL DEFAULT '[]'");
+      _db.userVersion = _schemaVersion;
+    });
+  }
+
+  /// Keeps a completed turn and removal of its recoverable action draft atomic.
+  void atomic(void Function() write) {
+    _db.execute('SAVEPOINT chat_write');
+    try {
+      write();
+      _db.execute('RELEASE chat_write');
+    } catch (_) {
+      _db.execute('ROLLBACK TO chat_write');
+      _db.execute('RELEASE chat_write');
+      rethrow;
+    }
+  }
+
+  void setNavigationActions(int messageId, List<NavigationAction> actions) =>
+      _db.execute('UPDATE messages SET navigation_actions_json = ? WHERE id = ?',
+          [jsonEncode([for (final a in actions) a.toJson()]), messageId]);
+
+  void removeActionDraft(int messageId) {
+    _db.execute('DELETE FROM search_fts WHERE message_id = ?', [messageId]);
+    _db.execute('DELETE FROM messages WHERE id = ? AND in_transcript = 0', [messageId]);
   }
 
   int _ms(DateTime t) => t.millisecondsSinceEpoch;
@@ -232,6 +263,7 @@ class ConversationStore {
     required String content,
     required Map<String, dynamic> message,
     List<StoredCitation> citations = const [],
+    List<NavigationAction> navigationActions = const [],
     String? error,
     GenerationStats stats = const GenerationStats(),
     bool inTranscript = true,
@@ -239,7 +271,7 @@ class ConversationStore {
   }) {
     _db.execute(
       'INSERT INTO messages (conversation_id, role, content, message_json, citations_json, error, created, '
-      'prompt_tokens, generated_tokens, duration_ms, in_transcript) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'prompt_tokens, generated_tokens, duration_ms, in_transcript, navigation_actions_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         conversationId,
         role,
@@ -252,6 +284,7 @@ class ConversationStore {
         stats.generatedTokens,
         stats.durationMs,
         inTranscript ? 1 : 0,
+        jsonEncode([for (final a in navigationActions) a.toJson()]),
       ],
     );
     final id = _db.lastInsertRowId;
@@ -281,6 +314,7 @@ class ConversationStore {
               durationMs: r['duration_ms'] as int,
             ),
             inTranscript: (r['in_transcript'] as int) != 0,
+            navigationActions: NavigationAction.decode(r['navigation_actions_json'] as String),
           ),
       ];
 

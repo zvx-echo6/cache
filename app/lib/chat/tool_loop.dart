@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'chat_config.dart';
 import 'citations.dart';
 import 'model_backend.dart';
+import 'navigation_action.dart';
 import 'tool.dart';
 
 /// The plain prompt of the loop when no builder is given (tests). The app passes [buildSystemPrompt].
@@ -82,6 +83,9 @@ class ToolLoop {
   /// The core's tools: when set, its schemas are offered and every call goes through cs_tool (which numbers the
   /// sources itself); [tools] and [numbering] are not used.
   final ToolHost? host;
+
+  /// Synchronous app sideband, saved before the next model request.
+  void Function(List<NavigationAction>)? onNavigationActions;
   final List<Map<String, dynamic>> _messages = [];
   final Map<int, NumberedResult> _results = {};
   int _nextId = 1;
@@ -216,6 +220,7 @@ class ToolLoop {
         for (final id in r.ids) {
           _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address)));
         }
+        if (r.navigationActions.isNotEmpty) onNavigationActions?.call(r.navigationActions);
         return r.content;
       } catch (e) {
         return 'Error: the tool failed ($e).';

@@ -5,6 +5,7 @@ import '../history/markdown_export.dart';
 import '../history/titles.dart';
 import '../search/numbering_state.dart';
 import 'model_backend.dart';
+import 'navigation_action.dart';
 import 'system_prompt.dart';
 import 'tool.dart';
 import 'tool_loop.dart';
@@ -25,6 +26,10 @@ class ChatMessage {
         text = m.content,
         phase = TurnPhase.done,
         error = m.error,
+        navigationActions = m.navigationActions.isNotEmpty ? m.navigationActions : [
+          for (final c in m.citations)
+            if (c.address.startsWith('nav:') && c.address.length > 4) NavigationAction(address: c.address),
+        ],
         sources = [
           for (final c in m.citations)
             NumberedResult(c.n, SourceResult(title: c.title, snippet: c.snippet, address: c.address)),
@@ -35,6 +40,7 @@ class ChatMessage {
   TurnPhase phase;
   List<NumberedResult> sources = const [];
   String? error;
+  List<NavigationAction> navigationActions = const [];
   bool get isDone => phase == TurnPhase.done;
   bool get streaming => !isDone;
 }
@@ -239,6 +245,7 @@ class ChatController extends ChangeNotifier {
 
     ToolLoop? loop;
     int? convId;
+    int? actionDraft;
     var start = 0;
     final clock = Stopwatch()..start();
     TurnUpdate? last;
@@ -282,6 +289,26 @@ class ChatController extends ChangeNotifier {
       }
       if (cancelled()) return;
       start = loop.messages.length;
+      final actionConversation = convId;
+      loop.onNavigationActions = (actions) {
+        // Capture the turn, not the currently selected chat, across async calls.
+        reply.navigationActions = [
+          ...reply.navigationActions.where((a) => !actions.any((b) => a.address == b.address)),
+          ...actions,
+        ];
+        if (store != null && actionConversation != null) {
+          try {
+            store.atomic(() {
+              actionDraft ??= store.addMessage(actionConversation, role: 'assistant', content: '',
+                  message: {'role': 'assistant', 'content': ''}, inTranscript: false);
+              store.setNavigationActions(actionDraft!, reply.navigationActions);
+            });
+          } catch (_) {
+            // History failures do not block the ordinary answer.
+          }
+        }
+        if (epoch == _epoch) notifyListeners();
+      };
       await for (final u in loop.ask(text)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
@@ -297,8 +324,9 @@ class ChatController extends ChangeNotifier {
     } finally {
       reply.phase = TurnPhase.done;
       if (loop != null && convId != null) {
-        await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds);
+        await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, actionDraft);
       }
+      if (loop != null) loop.onNavigationActions = null;
       if (loop != null && !identical(_loop, loop)) await loop.dispose();
       if (epoch == _epoch) busy = false;
       notifyListeners();
@@ -309,7 +337,7 @@ class ChatController extends ChangeNotifier {
   }
 
   /// Stores what the turn added to the transcript, with the shown answer, its citations and its stats.
-  Future<void> _saveTurn(int convId, ToolLoop loop, int start, ChatMessage reply, TurnUpdate? last, int ms) async {
+  Future<void> _saveTurn(int convId, ToolLoop loop, int start, ChatMessage reply, TurnUpdate? last, int ms, int? actionDraft) async {
     final store = _store;
     if (store == null) return;
     try {
@@ -319,35 +347,40 @@ class ChatController extends ChangeNotifier {
         generatedTokens: last?.generatedTokens ?? 0,
         durationMs: ms,
       );
-      var answered = false;
-      for (var i = 0; i < added.length; i++) {
-        final m = added[i];
-        final isAnswer = i == added.length - 1 && m['role'] == 'assistant' && m['tool_calls'] == null && reply.error == null;
-        answered = isAnswer;
-        store.addMessage(
-          convId,
-          role: m['role'] as String,
-          content: isAnswer ? reply.text : (m['content'] ?? '').toString(),
-          message: m,
-          citations: isAnswer
-              ? [for (final s in reply.sources) StoredCitation(n: s.id, title: s.result.title, snippet: s.result.snippet, address: s.result.address)]
-              : const [],
-          stats: isAnswer ? stats : const GenerationStats(),
-          model: _modelName,
-        );
-      }
-      if (!answered) {
-        store.addMessage(
-          convId,
-          role: 'assistant',
-          content: reply.text,
-          message: {'role': 'assistant', 'content': reply.text},
-          error: reply.error ?? 'No answer was produced.',
-          stats: stats,
-          inTranscript: false,
-          model: _modelName,
-        );
-      }
+      store.atomic(() {
+        var answered = false;
+        for (var i = 0; i < added.length; i++) {
+          final m = added[i];
+          final isAnswer = i == added.length - 1 && m['role'] == 'assistant' && m['tool_calls'] == null && reply.error == null;
+          answered = isAnswer;
+          store.addMessage(
+            convId,
+            role: m['role'] as String,
+            content: isAnswer ? reply.text : (m['content'] ?? '').toString(),
+            message: m,
+            navigationActions: isAnswer ? reply.navigationActions : const [],
+            citations: isAnswer
+                ? [for (final s in reply.sources) StoredCitation(n: s.id, title: s.result.title, snippet: s.result.snippet, address: s.result.address)]
+                : const [],
+            stats: isAnswer ? stats : const GenerationStats(),
+            model: _modelName,
+          );
+        }
+        if (!answered) {
+          store.addMessage(
+            convId,
+            role: 'assistant',
+            content: reply.text,
+            message: {'role': 'assistant', 'content': reply.text},
+            error: reply.error ?? 'No answer was produced.',
+            navigationActions: reply.navigationActions,
+            stats: stats,
+            inTranscript: false,
+            model: _modelName,
+          );
+        }
+        if (actionDraft != null) store.removeActionDraft(actionDraft);
+      });
       final numbering = loop.numbering;
       if (numbering != null && numberingState != null) {
         final state = await numberingState!.save(numbering);

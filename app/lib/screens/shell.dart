@@ -8,6 +8,7 @@ import '../browse/browse_state.dart';
 import '../browse/reader_screen.dart';
 import '../browse/zim_urls.dart';
 import '../chat/chat_controller.dart';
+import '../chat/navigation_action.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
@@ -93,6 +94,19 @@ class _ShellState extends State<Shell> {
         _built.add(m);
       });
 
+  void _openNavigation(NavigationAction action) {
+    final route = action.route;
+    if (route == null) {
+      _say('Navigation unavailable: this route snapshot is no longer available.');
+      return;
+    }
+    if (widget.nav.guiding) {
+      _say('Finish or end the route first');
+      return;
+    }
+    if (widget.nav.previewSnapshot(route)) _goModule(ModuleId.maps);
+  }
+
   void _openSource(String address) {
     _goModule(ModuleId.library);
     widget.browse.openAddress(address);
@@ -168,7 +182,7 @@ class _ShellState extends State<Shell> {
   }
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, onOpenSource: _openSource, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme),
         ModuleId.videos => VideosScreen(video: widget.video),
