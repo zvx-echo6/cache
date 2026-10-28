@@ -474,20 +474,43 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
             .last
             .replaceFirst(RegExp(r'\.part$'), '');
     final dest = File('${zimsDir!.path}/$name');
-    if (dest.existsSync()) dest.deleteSync();
+    // First next to its place under a hidden name, then renamed over any earlier file of that name: the real name holds
+    // the old file or the whole new one, never part of a copy.
+    final tmp = File('${zimsDir!.path}/.$name.install.part');
     try {
-      finished.renameSync(dest.path);
+      await finished.rename(tmp.path);
     } on FileSystemException {
       // Another file system: copy, then drop the original.
-      await finished.copy(dest.path);
+      try {
+        await finished.copy(tmp.path);
+      } catch (_) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync();
+        } catch (_) {}
+        rethrow;
+      }
       finished.deleteSync();
     }
+    try {
+      await renameOver(tmp, dest.path);
+    } catch (_) {
+      // Back where it was when that is possible, so trying again does not download it again.
+      try {
+        await tmp.rename(finished.path);
+      } catch (_) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync();
+        } catch (_) {}
+      }
+      rethrow;
+    }
     if (entry != null) {
-      await _originFile(
-        dest.path,
-      ).writeAsString(jsonEncode(ZimOrigin.fromEntry(entry).toJson()));
+      await writeStringAtomic(
+        _originFile(dest.path),
+        jsonEncode(ZimOrigin.fromEntry(entry).toJson()),
+      );
       if (icon != null && icon.isNotEmpty) {
-        await _iconFile(dest.path).writeAsBytes(icon);
+        await writeBytesAtomic(_iconFile(dest.path), icon);
       }
     }
     _failed.remove(dest.path);

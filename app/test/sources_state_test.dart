@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:cache/browse/opds.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
@@ -49,6 +51,57 @@ void main() {
       await sources.addZim(File('${tmp.path}/notes.txt')..writeAsStringSync('x'));
       expect(sources.error, contains('not a .zim'));
       expect(names(), isEmpty);
+    });
+  });
+
+  group('installing a download', () {
+    CatalogEntry entry() => CatalogEntry(
+          id: 'e-1',
+          title: 'Wikivoyage - Europe',
+          summary: '',
+          language: 'eng',
+          name: 'wikivoyage_en_europe',
+          flavour: 'nopic',
+          category: 'wikivoyage',
+          tags: const [],
+          updated: '2026-09-14',
+          size: 4,
+          articleCount: 1,
+          downloadUrl: Uri.parse('http://127.0.0.1:1/zim/wikivoyage_en_europe_nopic_2026-09.zim'),
+          iconUrl: null,
+        );
+
+    test('the file, its origin and its icon are put in place with no temp file left in the folder', () async {
+      sources.partialDir.createSync(recursive: true);
+      final part = File('${sources.partialDir.path}/wikivoyage_en_europe_nopic_2026-09.zim.part')..writeAsBytesSync([5, 6, 7, 8]);
+      final z = await sources.installDownloaded(part, entry: entry(), icon: Uint8List.fromList([1, 2, 3]), fileName: 'wikivoyage_en_europe_nopic_2026-09.zim');
+      expect(names(), [
+        'wikivoyage_en_europe_nopic_2026-09.zim',
+        'wikivoyage_en_europe_nopic_2026-09.zim.icon.png',
+        'wikivoyage_en_europe_nopic_2026-09.zim.origin.json',
+      ]);
+      expect(File(z.path).readAsBytesSync(), [5, 6, 7, 8]);
+      expect(sources.originOf(z)!.catalogId, 'e-1');
+      expect(sources.iconOf(z)!.readAsBytesSync(), [1, 2, 3]);
+      expect(partials(), isEmpty);
+    });
+
+    test('a file of the same name is replaced by the new one', () async {
+      File('${zims.path}/wikivoyage_en_europe_nopic_2026-09.zim').writeAsBytesSync([9]);
+      sources.partialDir.createSync(recursive: true);
+      final part = File('${sources.partialDir.path}/wikivoyage_en_europe_nopic_2026-09.zim.part')..writeAsBytesSync([5, 6, 7, 8]);
+      final z = await sources.installDownloaded(part, fileName: 'wikivoyage_en_europe_nopic_2026-09.zim');
+      expect(File(z.path).readAsBytesSync(), [5, 6, 7, 8]);
+      expect(names(), ['wikivoyage_en_europe_nopic_2026-09.zim']);
+      expect(part.existsSync(), isFalse);
+    });
+
+    test('a finished file from another folder is moved in the same way', () async {
+      final elsewhere = File('${tmp.path}/w.zim')..writeAsBytesSync([4, 4]);
+      final z = await sources.installDownloaded(elsewhere);
+      expect(File(z.path).readAsBytesSync(), [4, 4]);
+      expect(names(), ['w.zim']);
+      expect(elsewhere.existsSync(), isFalse);
     });
   });
 }
