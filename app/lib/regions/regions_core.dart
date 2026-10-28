@@ -13,23 +13,18 @@ abstract class RegionsCoreLike {
 
 typedef RegionsOpener = Future<RegionsCoreLike> Function(Map<String, Object?> config);
 
-/// Opens the core's region engine with {"dir","base_url"}.
-///
-/// RegionsCore (packages/cache_search/lib/src/regions_core.dart) is being added to the core with the same shape as SyncCore.
-/// Until it is exported, this says region downloads are not in this build. When it lands, this line becomes:
-///   Future<RegionsCoreLike> openRealRegions(Map<String, Object?> config) async => _RealRegions(await RegionsCore.open(config));
-/// and the class below is uncommented.
-Future<RegionsCoreLike> openRealRegions(Map<String, Object?> config) async =>
-    throw const CacheSearchException('unsupported', 'Road routing downloads are not in this build yet');
+/// Opens the core's region engine with {"dir","base_url"}: the same engine the search core's navigate tool routes on (one per
+/// folder in the process).
+Future<RegionsCoreLike> openRealRegions(Map<String, Object?> config) async => _RealRegions(await RegionsCore.open(config));
 
-// class _RealRegions implements RegionsCoreLike {
-//   _RealRegions(this._c);
-//
-//   final RegionsCore _c;
-//
-//   @override
-//   Future<Map<String, dynamic>> call(String method, [Map<String, dynamic> args = const {}]) => _c.call(method, args);
-//
-//   @override
-//   Future<void> close() => _c.close();
-// }
+class _RealRegions implements RegionsCoreLike {
+  _RealRegions(this._c);
+
+  final RegionsCore _c;
+
+  @override
+  Future<Map<String, dynamic>> call(String method, [Map<String, dynamic> args = const {}]) => _c.call(method, args);
+
+  @override
+  Future<void> close() => _c.close();
+}
