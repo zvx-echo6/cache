@@ -135,7 +135,7 @@ mod tests {
     }
 
     const HEAD: &str = "id,geometry,name,basic_category,confidence,phone,website,socials,brand_name,brand_wikidata,osm_type,osm_id,source_record_id,raw_sources";
-    const ROW: &str = "a1,0101000020E610000026FF93BF7B785CC0DDB1D826151F4540,Walgreens,pharmacy,0.95,2086783050,,,Walgreens,Q1591889,,,,meta";
+    const ROW: &str = "a1,0101000020E610000026FF93BF7B785CC0DDB1D826151F4540,Walgreens,pharmacy_and_drug_store,0.95,2086783050,,,Walgreens,Q1591889,,,,meta";
 
     #[test]
     fn address_columns_are_optional() {
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!((h.places[0].street.as_deref(), h.places[0].city.as_deref()), (None, None));
         assert_eq!(h.places[0].category.as_deref(), Some("pharmacy"));
         // The extract's columns: street and town from the first address; empty ones stay None.
-        let diner = ROW.replace("a1,", "a3,").replace(",pharmacy,0.95,", ",casual_eatery,0.95,").replace("Walgreens", "Ruth's Diner");
+        let diner = ROW.replace("a1,", "a3,").replace(",pharmacy_and_drug_store,0.95,", ",casual_eatery,0.95,").replace("Walgreens", "Ruth's Diner");
         let h = read(&format!(
             "{HEAD},taxonomy_primary,street,locality,postcode,region,tile\n{ROW},pharmacy,1414 Overland Ave,Burley,83318,ID,47586\n{},pharmacy,,,,ID,47586\n{diner},diner,,,,UT,46868\n",
             ROW.replace("a1,", "a2,")

@@ -35,10 +35,12 @@ fn table() -> &'static Pub28 {
 }
 
 /// The written-out word in the case the source wrote the abbreviation in ("ST" -> "STREET", "St" -> "Street",
-/// "st." -> "street").
-fn in_case_of(word: &str, primary: &str) -> String {
+/// "st." -> "street"). A one-letter word ("S") says nothing about case, so the street's does: capitals when the whole
+/// street is in capitals, else a capital first letter.
+fn in_case_of(word: &str, primary: &str, street_in_capitals: bool) -> String {
     let letters: Vec<char> = word.chars().filter(|c| c.is_alphabetic()).collect();
-    if letters.iter().all(|c| c.is_uppercase()) {
+    let capitals = if letters.len() == 1 { street_in_capitals } else { letters.iter().all(|c| c.is_uppercase()) };
+    if capitals {
         primary.to_string()
     } else if letters.first().is_some_and(|c| c.is_uppercase()) {
         let mut c = primary.chars();
@@ -71,8 +73,9 @@ pub fn expand(street: &str) -> Option<String> {
     let first_after = if suffix { last_name } else { last_name + 1 };
     let pre = is_dir(&words[0]) && first_after > 1;
     let mut changed = false;
+    let capitals = street.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
     let mut set = |w: &mut String, primary: &String| {
-        let e = in_case_of(w, primary);
+        let e = in_case_of(w, primary, capitals);
         if e != *w {
             *w = e;
             changed = true;
@@ -118,6 +121,8 @@ mod tests {
         assert_eq!(expand("ST JOHNS RD").as_deref(), Some("ST JOHNS ROAD"));
         // The middle of a name is left alone.
         assert_eq!(expand("S WEST TEMPLE").as_deref(), Some("SOUTH WEST TEMPLE"));
+        assert_eq!(expand("Road N").as_deref(), Some("Road North"));
+        assert_eq!(expand("COUNTY ROAD 3H N").as_deref(), Some("COUNTY ROAD 3H NORTH"));
     }
 
     #[test]
