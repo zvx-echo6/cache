@@ -375,14 +375,35 @@ Schema as the app builds it (example with three installed sources):
 ```json
 {"type": "function", "function": {
   "name": "live_data",
-  "description": "Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: weather = weather forecast, current conditions, hourly and daily; alerts = active emergency alerts and evacuation levels; fuel_prices = fuel prices by area and station.",
+  "description": "Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: weather = weather forecast, current conditions, hourly and daily; alerts = active emergency alerts and evacuation levels; fuel_prices = fuel prices by area and station. Set when to read one period: today, tonight, tomorrow, a weekday name, a date YYYY-MM-DD, or next_days (with days).",
   "parameters": {"type": "object", "properties": {
     "source": {"type": "string", "enum": ["weather", "alerts", "fuel_prices"],
                "description": "Which source to read."},
     "place": {"type": "string", "minLength": 1, "maxLength": 200,
-              "description": "A saved place or town. Omit for the phone's current location."}},
+              "description": "A saved place or town. Omit for the phone's current location."},
+    "when": {"type": "string", "minLength": 1, "maxLength": 20, "description": "Which period. Omit for everything saved."},
+    "days": {"type": "integer", "minimum": 1, "maximum": 16,
+             "description": "With when=next_days: how many days, today included."}},
     "required": ["source"], "additionalProperties": false}}}
 ```
+
+The description ends with one sentence on `when`: "Set when to read one period: today, tonight, tomorrow, a weekday name,
+a date YYYY-MM-DD, or next_days (with days)." The tool does the date arithmetic in the place's own time zone, never the model:
+
+| `when` | Period |
+|---|---|
+| omitted | everything saved (the output is exactly what it was before `when`) |
+| `today` | now to local midnight |
+| `tonight` | 18:00 (or now, if later) to 07:00 tomorrow |
+| `tomorrow`, a weekday name, `YYYY-MM-DD` | that local day; a weekday is the next time it comes, today's own name is today |
+| `next_days` with `days` N | now to the end of day N, today being day 1 (all 16 without `days`) |
+
+Items in effect now (current conditions, an alert already running) are always kept, so "is it raining now, and tomorrow?"
+needs one call. Dated items (forecast days, an alert starting later) are kept when they overlap the period. A period the saved
+forecast does not reach, or a day that is over, is one numbered item saying so, never an empty list:
+`{"n": 11, "label": "No weather forecast for Sat Nov 14 in the saved data", "fields": {"Status": "not in the saved data",
+"Saved data runs to": "2026-11-09"}, "not_covered": true}`. A forecast day's low is the day's minimum, which comes in the early
+morning: its field says "Low (early morning)", so tomorrow's is tonight's low.
 
 The `place` text is a saved place, a town or other place the places pack knows, or latitude and longitude (`"44.42,-111.37"`).
 It may be written any way the pack understands ("Island Park, Idaho", "Island Park ID", "island park") and a town name with one
@@ -400,8 +421,8 @@ Result (one self-describing shape for every source):
  "items": [
   {"n": 10, "label": "Now", "time": "2026-10-25T14:00-06:00",
    "fields": {"Temperature": "54 °F", "Feels like": "51 °F", "Wind": "12 mph NW, gusts 20 mph", "Conditions": "partly cloudy"}},
-  {"n": 11, "label": "Sun 26 Oct", "time": "2026-10-26",
-   "fields": {"High": "58 °F", "Low": "31 °F", "Chance of rain": "10%", "Precipitation": "0.0 in over 0 h", "Snow": "0.0 in", "Wind max": "18 mph"}}],
+  {"n": 11, "label": "Sun Oct 26", "time": "2026-10-26",
+   "fields": {"Daytime high": "58 °F", "Low (early morning)": "31 °F", "Chance of rain": "10%", "Precipitation": "0.0 in over 0 h", "Snow": "0.0 in", "Wind max": "18 mph"}}],
  "not_covered_after": "2026-11-01"}
 ```
 

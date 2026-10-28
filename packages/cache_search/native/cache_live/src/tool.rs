@@ -14,9 +14,15 @@
 //! When there is no fresh data for the place and the host's `LiveFetcher` allows the source, the tool downloads once for the place
 //! asked about (`fetch_for`: the same fetch and quotas as `cs_live_fetch`, never for a source without its key) and answers from the
 //! stored row. Without a fetcher, or when it denies the source, nothing is downloaded.
+//!
+//! `when` narrows the items to one period (`Period`): the tool, not the model, turns "tomorrow" or "friday" into the place's local
+//! dates. Items in effect now (current conditions, an alert already running) always stay; dated items stay when they overlap the
+//! period. A period the saved data does not reach is one numbered item saying so, never an empty list.
 
 use crate::map::{age_words, date_of, minute_of, stamp};
+use crate::tz::Zone;
 use crate::{address, here_key, now_from, Live, LiveCfg, Place};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use cache_tool::places::parse_latlon;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
@@ -138,6 +144,102 @@ struct Asked {
     facts: Option<cache_tool::places::ResolvedPlace>,
 }
 
+/// The most days `when: "next_days"` takes (the forecast holds 16).
+pub const MAX_DAYS: i64 = 16;
+
+/// The period `when` asks about, as instants [`from`, `to`) in the place's zone.
+struct Period {
+    from: i64,
+    to: i64,
+    /// The first local day of the period, for the "no forecast" item.
+    day: NaiveDate,
+    /// The period is over (a date before today).
+    past: bool,
+}
+
+const WHEN_VALUES: &str = "today, tonight, tomorrow, a weekday name, a date YYYY-MM-DD, or next_days";
+
+fn local_midnight(zone: &Zone, d: NaiveDate) -> i64 {
+    local_at(zone, d, 0, 0)
+}
+
+fn local_at(zone: &Zone, d: NaiveDate, h: u32, m: u32) -> i64 {
+    let n = d.and_time(NaiveTime::from_hms_opt(h, m, 0).expect("valid time"));
+    // A wall-clock time skipped by daylight saving falls an hour later.
+    zone.local(&n).or_else(|| zone.local(&(n + Duration::hours(1)))).map(|t| t.timestamp()).unwrap_or_else(|| n.and_utc().timestamp())
+}
+
+/// `when` (and `days`) as a period around `now` in `zone`.
+fn period(when: &str, days: Option<i64>, now: i64, zone: &Zone) -> Result<Period, ToolError> {
+    let today = DateTime::from_timestamp(now, 0).map(|d| d.with_timezone(&zone.offset_at(now)).date_naive()).unwrap_or_default();
+    let day_of = |d: NaiveDate| Period { from: local_midnight(zone, d).max(now), to: local_midnight(zone, d + Duration::days(1)), day: d, past: d < today };
+    let w = when.trim().to_lowercase();
+    if days.is_some() && w != "next_days" {
+        return Err(err(ToolError::BAD_ARGUMENTS, "\"days\" goes with when=\"next_days\""));
+    }
+    Ok(match w.as_str() {
+        "today" => day_of(today),
+        "tomorrow" => day_of(today + Duration::days(1)),
+        // the night ahead: from 18:00 (or now, if later) to 07:00 the next morning
+        "tonight" => Period {
+            from: local_at(zone, today, 18, 0).max(now),
+            to: local_at(zone, today + Duration::days(1), 7, 0),
+            day: today,
+            past: false,
+        },
+        "next_days" => {
+            let n = days.unwrap_or(MAX_DAYS);
+            Period { from: now, to: local_midnight(zone, today + Duration::days(n)), day: today, past: false }
+        }
+        _ => {
+            if let Ok(wd) = w.parse::<Weekday>() {
+                // the next time that day comes; today's own name is today
+                let ahead = (7 + wd.num_days_from_monday() as i64 - today.weekday().num_days_from_monday() as i64) % 7;
+                day_of(today + Duration::days(ahead))
+            } else if let Ok(d) = NaiveDate::parse_from_str(&w, "%Y-%m-%d") {
+                day_of(d)
+            } else {
+                return Err(err(ToolError::BAD_ARGUMENTS, format!("\"when\" must be one of: {WHEN_VALUES}")));
+            }
+        }
+    })
+}
+
+/// When an item starts and ends, and whether it is a dated period (a forecast day) rather than a moment (current conditions,
+/// an alert's onset). `None` when its time cannot be read: such an item is always kept.
+fn item_span(i: &crate::map::Item, zone: &Zone) -> Option<(i64, Option<i64>, bool)> {
+    let t = i.time.as_deref()?.trim();
+    if let Ok(d) = NaiveDate::parse_from_str(t, "%Y-%m-%d") {
+        return Some((local_midnight(zone, d), i.ends, true));
+    }
+    for f in ["%Y-%m-%dT%H:%M:%S%:z", "%Y-%m-%dT%H:%M%:z", "%Y-%m-%dT%H:%M:%S%.f%:z"] {
+        if let Ok(d) = DateTime::parse_from_str(t, f) {
+            return Some((d.timestamp(), i.ends, false));
+        }
+    }
+    for f in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
+        if let Ok(n) = NaiveDateTime::parse_from_str(t, f) {
+            return Some((zone.local(&n)?.timestamp(), i.ends, false));
+        }
+    }
+    None
+}
+
+/// Whether an item belongs in the answer for `p`.
+fn in_period(i: &crate::map::Item, p: &Period, now: i64, zone: &Zone) -> bool {
+    match item_span(i, zone) {
+        None => true,
+        // in effect now: kept whatever the period, as the Now item carries the data's present
+        Some((start, _, false)) if start <= now => true,
+        Some((start, end, _)) => start < p.to && end.unwrap_or(i64::MAX) > p.from,
+    }
+}
+
+/// "Fri Nov 14": a local day as the labels write it.
+fn day_words(d: NaiveDate) -> String {
+    d.format("%a %b %-d").to_string()
+}
+
 /// Whole km for the model (at least 1).
 fn km_words(km: f64) -> i64 {
     (km.round() as i64).max(1)
@@ -184,19 +286,24 @@ impl Tool for LiveDataTool {
         Some(json!({"type": "function", "function": {
             "name": "live_data",
             "description": format!(
-                "Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: {}.",
+                "Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: {}. \
+                 Set when to read one period: {WHEN_VALUES} (with days).",
                 list.join("; ")
             ),
             "parameters": {"type": "object", "properties": {
                 "source": {"type": "string", "enum": ids, "description": "Which source to read."},
                 "place": {"type": "string", "minLength": 1, "maxLength": 200,
-                          "description": "A saved place or town. Omit for the phone's current location."}},
+                          "description": "A saved place or town. Omit for the phone's current location."},
+                "when": {"type": "string", "minLength": 1, "maxLength": 20,
+                         "description": "Which period. Omit for everything saved."},
+                "days": {"type": "integer", "minimum": 1, "maximum": MAX_DAYS,
+                         "description": "With when=next_days: how many days, today included."}},
                 "required": ["source"], "additionalProperties": false}}}))
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<ToolOutput, ToolError> {
         let obj = args.as_object().ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "arguments must be an object"))?;
-        if let Some(k) = obj.keys().find(|k| *k != "source" && *k != "place") {
+        if let Some(k) = obj.keys().find(|k| !matches!(k.as_str(), "source" | "place" | "when" | "days")) {
             return Err(err(ToolError::BAD_ARGUMENTS, format!("unknown argument {k:?}")));
         }
         let source = obj
@@ -209,6 +316,21 @@ impl Tool for LiveDataTool {
             Some(Value::String(s)) if !s.trim().is_empty() && s.chars().count() <= 200 => Some(s.as_str()),
             Some(_) => return Err(err(ToolError::BAD_ARGUMENTS, "\"place\" must be a string of 1 to 200 characters")),
         };
+        let when = match obj.get("when") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if !s.trim().is_empty() && s.chars().count() <= 20 => Some(s.as_str()),
+            Some(_) => return Err(err(ToolError::BAD_ARGUMENTS, format!("\"when\" must be one of: {WHEN_VALUES}"))),
+        };
+        let days = match obj.get("days") {
+            None | Some(Value::Null) => None,
+            Some(v) => match v.as_i64() {
+                Some(n) if (1..=MAX_DAYS).contains(&n) => Some(n),
+                _ => return Err(err(ToolError::BAD_ARGUMENTS, format!("\"days\" must be a whole number from 1 to {MAX_DAYS}"))),
+            },
+        };
+        if days.is_some() && when.is_none() {
+            return Err(err(ToolError::BAD_ARGUMENTS, "\"days\" goes with when=\"next_days\""));
+        }
         let now = now_from(Some(ctx.now)).map_err(|e| err(ToolError::INTERNAL, e.message))?;
 
         let (defs, _) = self.live.defs();
@@ -246,9 +368,13 @@ impl Tool for LiveDataTool {
             }
             return Err(e);
         }
-        let more = v.items.len().saturating_sub(MAX_ITEMS);
-        let items: Vec<Value> = v
-            .items
+        let period = when.map(|w| period(w, days, now, &off)).transpose()?;
+        let chosen: Vec<&crate::map::Item> = match &period {
+            Some(p) => v.items.iter().filter(|i| in_period(i, p, now, &off)).collect(),
+            None => v.items.iter().collect(),
+        };
+        let more = chosen.len().saturating_sub(MAX_ITEMS);
+        let items: Vec<Value> = chosen
             .iter()
             .take(MAX_ITEMS)
             .map(|i| {
@@ -267,6 +393,25 @@ impl Tool for LiveDataTool {
             })
             .collect();
         let mut items = items;
+        // A period the saved data does not cover (a forecast that ends sooner, or a day that is over): said as an item.
+        if let Some(p) = &period {
+            let beyond = v.row.not_covered_after.is_some() && p.from >= v.row.valid_until;
+            if p.past || beyond {
+                let mut f = Map::new();
+                if p.past {
+                    f.insert("Status".into(), json!("that day is over"));
+                } else {
+                    f.insert("Status".into(), json!("not in the saved data"));
+                    f.insert("Saved data runs to".into(), json!(date_of(v.row.valid_until - 1, &off)));
+                }
+                let mut m = Map::new();
+                m.insert("address".into(), json!(address(&l.def.id, &place.key, "none")));
+                m.insert("label".into(), json!(format!("No {} for {} in the saved data", l.def.title.to_lowercase(), day_words(p.day))));
+                m.insert("fields".into(), Value::Object(f));
+                m.insert("not_covered".into(), json!(true));
+                items.push(Value::Object(m));
+            }
+        }
         let none = items.is_empty();
         if none {
             // nothing to report is still something to cite: one numbered entry, in an item's shape, saying so

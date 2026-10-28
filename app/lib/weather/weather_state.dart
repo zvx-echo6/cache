@@ -857,9 +857,12 @@ class WeatherState extends ChangeNotifier {
       if (v.expired) return 'Forecast expired for ${p.name} · needs a connection';
       final now = v.items.firstWhere((i) => i.address.endsWith('/now'), orElse: () => v.items.first);
       final day = v.items.firstWhere((i) => !i.address.endsWith('/now'), orElse: () => now);
+      // the names before "Daytime high" and "Low (early morning)" too, for a definition not updated yet
+      final high = day.fields['Daytime high'] ?? day.fields['High'];
+      final low = day.fields['Low (early morning)'] ?? day.fields['Low'];
       final parts = <String>[
         [now.fields['Temperature'], now.fields['Conditions']].whereType<String>().join(', '),
-        if (day.fields['High'] != null && day.fields['Low'] != null) 'High ${day.fields['High']}, low ${day.fields['Low']}',
+        if (high != null && low != null) 'High $high, low $low',
         p.name,
         if (v.age != null) v.age!,
       ].where((x) => x.isNotEmpty).toList();

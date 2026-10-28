@@ -658,6 +658,19 @@ void main() {
       expect(await h.weather.homeWeatherLine(), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
     });
 
+    test('Home weather: the field names the definition uses now', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      final f = forecast();
+      (f['items'] as List)[1] = {
+        'address': 'live:openmeteo-forecast/x/2026-10-26',
+        'label': 'Mon Oct 26',
+        'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F'},
+      };
+      h.core.stored['openmeteo-forecast'] = f;
+      expect(await h.weather.homeWeatherLine(), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+    });
+
     test('Home weather: an expired forecast says it needs a connection', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);

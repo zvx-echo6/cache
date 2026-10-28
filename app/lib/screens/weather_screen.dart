@@ -268,10 +268,12 @@ class _WeatherScreenState extends State<WeatherScreen> {
   /// A forecast row: the headline values (temperature, high and low, conditions) first, then the rest without the ones that are
   /// zero ("Snow 0.0 in" on a dry day says nothing).
   Widget _forecastText(CacheTokens k, LiveItem i) {
-    const lead = ['Temperature', 'High', 'Low', 'Conditions'];
+    // "High" and "Low" are the names definitions used before "Daytime high" and "Low (early morning)".
+    const lead = ['Temperature', 'Daytime high', 'High', 'Low (early morning)', 'Low', 'Conditions'];
+    const named = {'Daytime high', 'High', 'Low (early morning)', 'Low'};
     final head = [
       for (final f in lead)
-        if (i.fields[f] != null) (f == 'High' || f == 'Low') ? '$f ${i.fields[f]}' : i.fields[f]!,
+        if (i.fields[f] != null) named.contains(f) ? '$f ${i.fields[f]}' : i.fields[f]!,
     ];
     final rest = [
       for (final e in i.fields.entries)
