@@ -78,6 +78,11 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - flutter_inappwebview_web 1.2.0-beta.3: Apache-2.0
 - flutter_inappwebview_windows 0.7.0-beta.3: Apache-2.0
 - flutter_lints 6.0.0: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
+- flutter_local_notifications 22.3.2: BSD-3-Clause (Copyright 2018 Michael Bui. All rights reserved.)
+- flutter_local_notifications_linux 8.0.2: BSD-3-Clause (Copyright 2018 Michael Bui. All rights reserved.)
+- flutter_local_notifications_platform_interface 12.2.0: BSD-3-Clause (Copyright 2020 Michael Bui. All rights reserved.)
+- flutter_local_notifications_web 1.0.0: BSD-3-Clause (Copyright 2020 Michael Bui. All rights reserved.)
+- flutter_local_notifications_windows 3.1.1: BSD-3-Clause (Copyright 2024 Michael Bui. All rights reserved.)
 - flutter_markdown_plus 1.0.12: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - flutter_secure_storage 11.2.0: BSD-3-Clause (Copyright 2017 German Saprykin)
 - flutter_secure_storage_darwin 0.4.3: BSD-3-Clause (Copyright 2025 Julian Steenbakker)
@@ -147,6 +152,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - sync_http 0.3.1: BSD-3-Clause (Copyright 2017, the Dart project authors.)
 - term_glyph 1.2.2: BSD-3-Clause (Copyright 2017, the Dart project authors.)
 - test_api 0.7.11: BSD-3-Clause (Copyright 2018, the Dart project authors.)
+- timezone 0.11.2: BSD-3-Clause (Copyright (c) 2014, timezone project authors. All rights reserved.)
 - typed_data 1.4.0: BSD-3-Clause (Copyright 2015, the Dart project authors.)
 - url_launcher_linux 3.2.3: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - url_launcher_platform_interface 2.3.2: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
@@ -164,6 +170,12 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - webdriver 3.2.0: Apache-2.0
 - win32 6.4.0: BSD-3-Clause (Copyright (c) 2024, Halil Durmus)
 - windows_file_picker 2.0.1: MIT (Copyright (c) 2018 Miguel Ruivo)
+- workmanager 0.10.10: MIT (Copyright (c) 2019 vrtdev, Copyright (c) 2023 Flutter Community)
+- workmanager_android 0.10.9: MIT (Copyright (c) 2019 vrtdev, Copyright (c) 2023 Flutter Community)
+- workmanager_apple 0.9.11: MIT (Copyright (c) 2019 vrtdev, Copyright (c) 2023 Flutter Community)
+- workmanager_linux 0.1.1+1: MIT (Copyright (c) 2024 The Flutter Workmanager Authors)
+- workmanager_platform_interface 0.10.5: MIT (Copyright (c) 2019 vrtdev, Copyright (c) 2023 Flutter Community)
+- workmanager_web 0.2.0: MIT (Copyright (c) 2024 The Flutter Workmanager Authors)
 - xdg_directories 1.1.0: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - xml 7.0.1: MIT (Copyright (c) 2006-2026 Lukas Renggli.)
 - yaml 3.1.4: MIT (Copyright (c) 2014, the Dart project authors.)

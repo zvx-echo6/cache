@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
-import '../weather/alert_watch.dart';
 import '../weather/live_view.dart';
 import '../weather/places.dart';
 import '../weather/weather_state.dart';
