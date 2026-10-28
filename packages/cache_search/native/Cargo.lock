@@ -789,6 +789,7 @@ dependencies = [
 name = "cache_regions"
 version = "0.1.0"
 dependencies = [
+ "cache_places",
  "flate2",
  "fs4 1.1.0",
  "rusqlite",
