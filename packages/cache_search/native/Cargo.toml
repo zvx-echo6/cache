@@ -1,6 +1,8 @@
 [workspace]
 members = ["cache_search", "cache_tool", "cache_user", "cache_live", "cache_layers", "cache_video", "cache_navigate", "cache_places", "places_pack", "cache_embed", "../cli", "cache_offroad", "offroad_pack", "cache_sync"]
 resolver = "2"
+# Third-party crates patched for a target they do not build for (see [patch.crates-io]); not members of this workspace.
+exclude = ["vendor"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -13,3 +15,9 @@ lto = true
 codegen-units = 1
 strip = true
 opt-level = 3
+
+# netdev (iroh's netwatch needs ^0.46.1) uses libc::in6_ifreq on every Apple target, but libc declares it for macOS only,
+# so the iOS build failed. vendor/netdev-0.46.3 is the crates.io release (MIT) with that one function made macOS-only
+# (src/os/darwin/ipv6_addr_flags.rs); drop this when a netdev release builds for iOS.
+[patch.crates-io]
+netdev = { path = "vendor/netdev-0.46.3" }
