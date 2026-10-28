@@ -323,7 +323,7 @@ class ChatController extends ChangeNotifier {
       start = loop.messages.length + 1; // the question is stored already
       final actionConversation = convId;
       loop.onConfirmations = (cards) {
-        reply.confirms = [...reply.confirms, ...cards];
+        _showCards(reply, cards);
         if (epoch == _epoch) notifyListeners();
       };
       loop.onNavigationActions = (actions) {
@@ -375,6 +375,25 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// Shows [cards] with [reply] and asks the core for each one's machine values (cs_act_resolve) now, kept with the card.
+  void _showCards(ChatMessage reply, List<ConfirmCard> cards) {
+    for (final c in cards) {
+      c.resolution = _resolve(c);
+    }
+    reply.confirms = [...reply.confirms, ...cards];
+  }
+
+  Future<Map<String, dynamic>> _resolve(ConfirmCard c) async {
+    try {
+      return await actCore.actResolve(c.action, c.fields);
+    } catch (e) {
+      return {
+        'ok': false,
+        'error': {'type': 'failed', 'detail': e.toString().replaceFirst('Bad state: ', '')},
+      };
+    }
+  }
+
   /// A tap on a confirm card: runs the action ([confirm]) or declines it, once per card, adds the outcome to the conversation and
   /// lets the model write a short follow-up. Only taps decide; nothing typed confirms a card.
   Future<void> resolveConfirm(ConfirmCard card, {required bool confirm}) async {
@@ -393,14 +412,16 @@ class ChatController extends ChangeNotifier {
     if (!confirm) {
       outcome = card.declined();
     } else {
-      try {
-        final fields = await actCore.resolve(card.action, card.fields);
-        final registry = actions;
-        outcome = registry == null
-            ? {'ok': false, 'status': 'failed', 'confirm_id': card.confirmId, 'action': card.action, 'error': const ActionFailure('unknown_action', 'This action is not installed.').toJson()}
-            : await registry.run(card.action, fields, confirmId: card.confirmId);
-      } on ActionFailure catch (f) {
-        outcome = {'ok': false, 'status': 'failed', 'confirm_id': card.confirmId, 'action': card.action, 'error': f.toJson()};
+      final resolved = await (card.resolution ??= _resolve(card));
+      final registry = actions;
+      Map<String, dynamic> failed(Object? error) =>
+          {'ok': false, 'status': 'failed', 'confirm_id': card.confirmId, 'action': card.action, 'error': error};
+      if (resolved['ok'] != true || resolved['fields'] is! Map) {
+        outcome = failed(resolved['error'] ?? const ActionFailure('failed', 'The action could not be prepared.').toJson());
+      } else if (registry == null) {
+        outcome = failed(const ActionFailure('unknown_action', 'This action is not installed.').toJson());
+      } else {
+        outcome = await registry.run(card.action, (resolved['fields'] as Map).cast<String, dynamic>(), confirmId: card.confirmId);
       }
     }
     card.apply(outcome);
@@ -441,7 +462,7 @@ class ChatController extends ChangeNotifier {
       loop = made;
       start = loop.messages.length;
       loop.onConfirmations = (cards) {
-        reply.confirms = [...reply.confirms, ...cards];
+        _showCards(reply, cards);
         if (epoch == _epoch) notifyListeners();
       };
       loop.onNavigationActions = (actions) {

@@ -63,8 +63,28 @@ Map<String, dynamic> _saveDef() => {
       'required': ['name', 'place'],
     };
 
+/// Records cs_act_resolve calls and answers like the core: places become coordinates with a name.
+class RecordingActCore implements ActCore {
+  final calls = <String>[];
+  Map<String, dynamic>? answer;
+
+  @override
+  Future<void> install(List<Map<String, dynamic>> definitions, Future<Map<String, dynamic>> Function(String, Map<String, dynamic>) run) async {}
+
+  @override
+  Future<Map<String, dynamic>> actResolve(String action, Map<String, dynamic> fields) async {
+    calls.add(action);
+    return answer ??
+        {
+          'ok': true,
+          'action': action,
+          'fields': {...fields, 'place': {'lat': 44.21, 'lon': -114.93, 'name': 'Elk camp', 'label': '12 mi NE of Stanley'}},
+        };
+  }
+}
+
 class Harness {
-  Harness({ActOutcomeForm form = kActOutcomeForm, this.fail = false}) {
+  Harness({ActOutcomeForm form = kActOutcomeForm, this.fail = false, ActCore? core}) {
     registry.publish('places', [_saveDef()], {
       'places.save': (f) async {
         runs.add(f);
@@ -75,7 +95,7 @@ class Harness {
     chat = ChatController(
       tools: [FakeAct()],
       actions: registry,
-      actCore: const ActCoreStandIn(placeFields: _placeFields),
+      actCore: core ?? const ActCoreStandIn(placeFields: _placeFields),
       outcomeForm: form,
     )
       ..attachStore(store)
@@ -147,9 +167,10 @@ void main() {
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(sent[sent.length - 2]['role'], 'assistant'); // the model's text reply comes between the call and the outcome
     expect(sent.last['role'], 'system');
-    expect(sent.last.containsKey('tool_call_id'), isFalse);
-    expect(jsonDecode(sent.last['content'] as String),
-        {'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}});
+    expect(sent.last.keys, ['role', 'content']);
+    // The whole content is exactly one JSON object, host_event first.
+    expect(sent.last['content'],
+        '{"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{"name":"Elk camp"}}');
     expect(h.chat.messages.last.text, 'Elk camp is saved.');
   });
 
@@ -163,7 +184,8 @@ void main() {
     expect(h.runs, isEmpty);
     expect(find.text('Cancelled'), findsOneWidget);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
-    expect(jsonDecode(sent.last['content'] as String), {'ok': true, 'status': 'declined', 'confirm_id': 'c1', 'action': 'places.save'});
+    expect(sent.last['role'], 'system');
+    expect(sent.last['content'], '{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}');
     expect(h.backend.requests, hasLength(3));
   });
 
@@ -175,7 +197,46 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Could not do it. No room for more places.'), findsOneWidget);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
-    expect(jsonDecode(sent.last['content'] as String)['status'], 'failed');
+    expect(jsonDecode(sent.last['content'] as String), {
+      'host_event': 'act_outcome',
+      'ok': false,
+      'status': 'failed',
+      'confirm_id': 'c1',
+      'action': 'places.save',
+      'error': {'type': 'full', 'detail': 'No room for more places.'},
+    });
+  });
+
+  test('the card is resolved when it is shown, and the tap runs those values', () async {
+    final core = RecordingActCore();
+    final h = Harness(core: core);
+    await h.ask('Save 44.21,-114.93 as Elk camp');
+    expect(core.calls, ['places.save']);
+    expect(h.runs, isEmpty);
+    core.answer = {'ok': false, 'error': {'type': 'place_not_found', 'detail': 'changed', 'field': 'place'}};
+    await h.chat.resolveConfirm(h.chat.messages[1].confirms.single, confirm: true);
+    expect(core.calls, ['places.save']);
+    expect(h.runs, [
+      {'name': 'Elk camp', 'place': {'lat': 44.21, 'lon': -114.93, 'name': 'Elk camp', 'label': '12 mi NE of Stanley'}},
+    ]);
+  });
+
+  test('a card whose fields no longer resolve fails without running', () async {
+    final core = RecordingActCore()
+      ..answer = {
+        'ok': false,
+        'error': {'type': 'place_not_found', 'detail': 'No place found for "Elk camp".', 'field': 'place', 'query': 'Elk camp'},
+      };
+    final h = Harness(core: core);
+    await h.ask('Save Elk camp');
+    final card = h.chat.messages[1].confirms.single;
+    await h.chat.resolveConfirm(card, confirm: true);
+    expect(h.runs, isEmpty);
+    expect(card.state, ConfirmState.failed);
+    expect(card.error, 'No place found for "Elk camp".');
+    final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
+    expect(jsonDecode(sent.last['content'] as String)['error'],
+        {'type': 'place_not_found', 'detail': 'No place found for "Elk camp".', 'field': 'place', 'query': 'Elk camp'});
   });
 
   test('typed words do not confirm: the card stays open', () async {
@@ -193,7 +254,7 @@ void main() {
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(sent.last['role'], 'tool');
     expect(sent.last['tool_call_id'], 't1');
-    expect(jsonDecode(sent.last['content'] as String)['status'], 'done');
+    expect(jsonDecode(sent.last['content'] as String), {'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}});
     final reopened = ChatController(tools: [FakeAct()], actions: h.registry)
       ..attachStore(h.store)
       ..openConversation(h.chat.activeId!);
@@ -248,7 +309,7 @@ void main() {
       },
       {'role': 'tool', 'tool_call_id': 'a', 'content': '{"ok":true,"status":"needs_confirmation","confirm_id":"c1","action":"places.save","title":"Save a place","summary":{"name":"N"}}'},
       {'role': 'assistant', 'content': 'Tap the card.'},
-      {'role': 'system', 'content': '{"ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}'},
+      {'role': 'system', 'content': '{"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}'},
     ]);
     expect(cards.keys, [2]);
     expect(cards[2]!.state, ConfirmState.declined);

@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-/// How the outcome of a confirm card goes into the conversation: a host event, a `system` message with the outcome JSON (project
-/// decision, 2026-10-28), or a `tool` message for `act` with the original call's tool_call_id. Gemma 4's template renders that
+/// How the outcome of a confirm card goes into the conversation: a host event, a `system` message whose whole content is one JSON
+/// object, `{"host_event":"act_outcome", ...outcome}` (project decision, 2026-10-28), or a `tool` message for `act` with the original call's tool_call_id. Gemma 4's template renders that
 /// tool message as a `<|turn>tool` turn when the model's text reply comes between, not as a tool response; a system turn is a role
 /// the model knows and one the user cannot type. Training captures use the same form.
 enum ActOutcomeForm { toolMessage, hostEvent }
@@ -43,8 +43,11 @@ class ConfirmCard {
   /// The fields as they will be used, in the core's order (places resolved to what the user will recognise).
   final List<MapEntry<String, String>> summary;
 
-  /// The call's fields as the model wrote them, resolved again on the tap.
+  /// The call's fields as the model wrote them.
   final Map<String, dynamic> fields;
+
+  /// cs_act_resolve's answer for [fields], asked for when the card is shown, so the tap runs exactly what the user saw.
+  Future<Map<String, dynamic>>? resolution;
   ConfirmState state;
 
   /// The error detail of a failed run.
@@ -93,7 +96,7 @@ class ConfirmCard {
   /// The message that carries [outcome] into the conversation.
   Map<String, dynamic> outcomeMessage(Map<String, dynamic> outcome, {ActOutcomeForm form = kActOutcomeForm}) => switch (form) {
         ActOutcomeForm.toolMessage => {'role': 'tool', 'tool_call_id': toolCallId, 'content': jsonEncode(outcome)},
-        ActOutcomeForm.hostEvent => {'role': 'system', 'content': jsonEncode(outcome)},
+        ActOutcomeForm.hostEvent => {'role': 'system', 'content': jsonEncode({'host_event': 'act_outcome', ...outcome})},
       };
 }
 
@@ -133,7 +136,7 @@ Map<int, ConfirmCard> cardsInTranscript(List<Map<String, dynamic>> messages) {
         continue;
       }
     }
-    if (m['role'] == 'tool' || m['role'] == 'system') {
+    if (m['role'] == 'tool' || (m['role'] == 'system' && j['host_event'] == 'act_outcome')) {
       final card = byConfirm[j['confirm_id']];
       if (card != null && !card.resolved && j['action'] == card.action) card.apply(j);
     }
