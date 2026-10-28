@@ -105,11 +105,17 @@ impl Video {
     }
 }
 
-/// Write to a sibling temp file, then rename over the target.
+/// Write to a hidden sibling temp file (the sync skips names starting with '.'), then rename over the target.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| Error::io(format!("writing {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, path).map_err(|e| Error::io(format!("renaming to {}: {e}", path.display())))
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.tmp"));
+    let done = std::fs::write(&tmp, bytes)
+        .map_err(|e| Error::io(format!("writing {}: {e}", tmp.display())))
+        .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| Error::io(format!("renaming to {}: {e}", path.display()))));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
 }
 
 pub fn dir_size(p: &Path) -> u64 {
