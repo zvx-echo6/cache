@@ -651,6 +651,14 @@ impl Inner {
             self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
             return Ok(());
         };
+        // A file here that is not what this device last indexed (an edit still settling, or a new file of the same name not
+        // scanned yet) is never written over: the next scan indexes it, and the comparison after that keeps both if they differ.
+        if let Ok(m) = std::fs::metadata(&full) {
+            if self.load_seen(&sh.id).get(path) != Some(&(m.len(), mtime_ms(&m))) {
+                self.settle_again.store(true, Ordering::Relaxed);
+                return Ok(());
+            }
+        }
         let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
         let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
         if !have {
