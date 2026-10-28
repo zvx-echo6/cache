@@ -47,6 +47,8 @@ class _FakeHub {
           {'type': 'file', 'path': 'tiny-Q4_K_M.gguf', 'size': body.length, 'lfs': {'oid': sha, 'size': body.length}},
           {'type': 'file', 'path': 'big-00001-of-00002.gguf', 'size': 5},
           {'type': 'file', 'path': 'mmproj-tiny.gguf', 'size': 5},
+          {'type': 'file', 'path': 'MTP/mtp-tiny-Q4_0.gguf', 'size': 5},
+          {'type': 'file', 'path': 'mtp-tiny.gguf', 'size': 5},
           {'type': 'directory', 'path': 'sub'},
         ]));
       } else if (p == '/acme/tiny-GGUF/resolve/main/tiny-Q4_K_M.gguf') {
@@ -113,7 +115,7 @@ void main() {
 
   test('the file list keeps single-file models, smallest first, with their SHA-256', () async {
     final f = await HfHub(base: fake.base).ggufFiles('acme/tiny-GGUF');
-    expect(f.map((x) => x.path), ['tiny-Q4_K_M.gguf', 'tiny-Q8_0.gguf'], reason: 'no README, split parts, projectors or folders');
+    expect(f.map((x) => x.path), ['tiny-Q4_K_M.gguf', 'tiny-Q8_0.gguf'], reason: 'no README, split parts, projectors, draft heads or folders');
     expect(f.first.sha256, fake.sha);
     expect(f.first.size, fake.body.length);
   });

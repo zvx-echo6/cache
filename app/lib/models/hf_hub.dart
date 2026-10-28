@@ -86,8 +86,8 @@ class HfHub {
     ];
   }
 
-  /// The single-file .gguf models in [repo], smallest first. Split files (…-00001-of-00003.gguf) and the vision
-  /// projectors some repositories add (mmproj…) are left out: the app loads one file.
+  /// The single-file .gguf models in [repo], smallest first. Split files (…-00001-of-00003.gguf), vision projectors
+  /// (mmproj…) and draft heads (mtp…) are left out: the app loads one complete model file.
   Future<List<HfFile>> ggufFiles(String repo) async {
     final u = base.replace(path: '/api/models/$repo/tree/main', queryParameters: {'recursive': 'true'});
     final j = await _getJson(u);
@@ -98,7 +98,14 @@ class HfHub {
       if (f is! Map || f['type'] != 'file') continue;
       final path = '${f['path']}';
       final lower = path.toLowerCase();
-      if (!lower.endsWith('.gguf') || split.hasMatch(lower) || lower.split('/').last.startsWith('mmproj')) continue;
+      // Not models on their own: vision projectors (mmproj…) and multi-token-prediction draft heads (mtp…, often in an MTP/ folder).
+      final segments = lower.split('/');
+      if (!lower.endsWith('.gguf') ||
+          split.hasMatch(lower) ||
+          segments.last.startsWith('mmproj') ||
+          segments.any((seg) => seg == 'mtp' || seg.startsWith('mtp-'))) {
+        continue;
+      }
       final lfs = f['lfs'];
       final size = ((lfs is Map ? lfs['size'] : null) ?? f['size']) as num?;
       if (size == null) continue;
