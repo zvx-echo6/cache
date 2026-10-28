@@ -856,15 +856,19 @@ impl Inner {
             }
             let reserve = self.reserve.load(Ordering::Relaxed);
             let need = entry.size;
-            if let Some(free) = Self::free_bytes(&self.dir) {
-                if free < need.saturating_add(reserve) {
-                    bail!(
-                        "Paused: {} needs {}, {} is free and {} is kept free",
-                        path,
-                        human(need),
-                        human(free),
-                        human(reserve)
-                    );
+            // The store takes it first; where the shared folder is on another file system (a phone's internal and shared
+            // storage) the copy into place needs the room there too.
+            for at in [&self.dir, &full] {
+                if let Some(free) = Self::free_bytes(at) {
+                    if free < need.saturating_add(reserve) {
+                        bail!(
+                            "Paused: {} needs {}, {} is free and {} is kept free",
+                            path,
+                            human(need),
+                            human(free),
+                            human(reserve)
+                        );
+                    }
                 }
             }
             let providers = self.providers(&entry.hash);
