@@ -64,6 +64,8 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
 
   These commands assume existing Flutter packages/toolchains are prepared by the build owner. Preflight does not fetch them.
 
+- [ ] Run plugin tests from `packages/cache_search`, with that package's own `.dart_tool/package_config.json` prepared. Running its tests from `app` breaks relative fixture paths; supplying the app's package config alone does not satisfy Flutter's plugin discovery. With dependencies already cached, use `(cd packages/cache_search && flutter pub get --offline && flutter test --no-pub)`. A setup failure blocks release until corrected; do not weaken assertions or skip fixture tests. Keep generated build outputs on the approved build drive.
+
 ## Signing readiness (separate gate; no secrets needed by preflight)
 
 - [ ] Automated workflow plan gate (verified for the baseline in run `40447614611`; recheck each candidate): for `stage=all`, require nonempty `IOS_DIST_P12_B64`, `IOS_DIST_P12_PASSWORD` and `IOS_PROFILE_B64`; for `upload=true`, require nonempty `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8_B64`. Report missing names only, never values, before Mac jobs. These workflow gates are separate from the compiler preflight, which requires no signing secrets. Secret presence does not establish validity, expiry or authorization.
@@ -99,7 +101,8 @@ Run these gates in order on the **same full source commit**. Stop at a failed pr
   BIN="$APP/Runner"
   xcrun lipo -archs "$BIN"   # Require arm64 device architecture.
   xcrun nm -gU "$BIN" > "$CHECK_DIR/app-symbols.txt"
-  for symbol in _cs_open _cs_version _cl_load _cl_next \
+  for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress \
+    _cs_conversation_export _cs_conversation_import _cl_load _cl_next \
     _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk; do
     grep -Eq " ${symbol}$" "$CHECK_DIR/app-symbols.txt" || exit 1
   done
