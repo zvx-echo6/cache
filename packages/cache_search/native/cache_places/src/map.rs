@@ -364,7 +364,7 @@ fn keyword_strength(q: &[String], c: &Category, v: &CatVocab) -> f64 {
 
 impl PlacesCore {
     pub fn new(cfg: &crate::PlacesCfg) -> PlacesCore {
-        let packs = Arc::new(PackSet::new(cfg.packs.iter().map(std::path::PathBuf::from).collect()));
+        let packs = Arc::new(PackSet::new(cfg.packs.iter().map(std::path::PathBuf::from).collect(), cfg.merged_dir.as_ref().map(std::path::PathBuf::from)));
         let geo: Arc<dyn Geocoder> = Arc::new(crate::PackGeocoder::new(packs.clone()));
         PlacesCore { packs, geo }
     }

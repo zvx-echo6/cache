@@ -26,7 +26,7 @@ impl Drop for Tmp {
 }
 
 fn core(t: &Tmp) -> PlacesCore {
-    PlacesCore::new(&PlacesCfg { packs: vec![t.pack().to_string_lossy().into_owned()] })
+    PlacesCore::new(&PlacesCfg { packs: vec![t.pack().to_string_lossy().into_owned()], merged_dir: None })
 }
 
 fn search(c: &PlacesCore, q: &str, near: Option<(f64, f64)>) -> Value {

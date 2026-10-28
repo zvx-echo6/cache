@@ -27,7 +27,7 @@ fn setup(name: &str) -> (Dir, Vec<Box<dyn Tool>>, String) {
     let pack = d.0.join("places.sqlite");
     write_fixture_pack(&pack);
     let path = pack.to_string_lossy().into_owned();
-    (d, tools(&PlacesCfg { packs: vec![path.clone()] }), path)
+    (d, tools(&PlacesCfg { packs: vec![path.clone()], merged_dir: None }), path)
 }
 
 fn tool<'a>(ts: &'a [Box<dyn Tool>], n: &str) -> &'a dyn Tool {
@@ -154,7 +154,7 @@ fn schema_is_filled_from_the_pack_and_absent_without_one() {
     assert!(d.contains("emergency_room = hospital emergency rooms; for a hospital in an emergency use emergency_room"), "{d}");
     assert!(!d.contains("urgent_care"));
 
-    let none = tools(&PlacesCfg { packs: vec!["/definitely/not/here/places.sqlite".into()] });
+    let none = tools(&PlacesCfg { packs: vec!["/definitely/not/here/places.sqlite".into()], merged_dir: None });
     assert!(tool(&none, "nearby").schema().is_none());
     assert!(tool(&none, "locate").schema().is_some());
     let e = run(tool(&none, "nearby"), Some(&loc(42.5, -113.8)), json!({"category": "fuel"}));
@@ -165,7 +165,7 @@ fn schema_is_filled_from_the_pack_and_absent_without_one() {
 fn a_pack_that_appears_later_is_picked_up() {
     let d = Dir::new("n5");
     let pack = d.0.join("places.sqlite");
-    let ts = tools(&PlacesCfg { packs: vec![pack.to_string_lossy().into_owned()] });
+    let ts = tools(&PlacesCfg { packs: vec![pack.to_string_lossy().into_owned()], merged_dir: None });
     assert!(tool(&ts, "nearby").schema().is_none());
     write_fixture_pack(&pack);
     assert!(tool(&ts, "nearby").schema().is_some());
@@ -203,7 +203,7 @@ fn locate_places_and_current_location() {
 
 #[test]
 fn locate_works_without_a_pack_for_a_gps_fix() {
-    let none = tools(&PlacesCfg { packs: vec![] });
+    let none = tools(&PlacesCfg { packs: vec![], merged_dir: None });
     let v = run(tool(&none, "locate"), Some(&loc(43.615, -116.202)), json!({}));
     assert_eq!(v["lat"], 43.615);
     assert!(v.get("nearest_town").is_none());
@@ -232,7 +232,7 @@ fn saved_places_resolve_before_the_geocoder() {
 #[test]
 fn geocoder_prefers_the_town_over_things_named_after_it() {
     let (_d, _ts, path) = setup("g1");
-    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)], None)));
     let h = g.forward("Burley", None, 5);
     assert_eq!(h[0].label, "Burley, ID");
     assert!(h.iter().any(|x| x.name == "Burley Elementary School"));
@@ -254,7 +254,7 @@ fn geocoder_prefers_the_town_over_things_named_after_it() {
 #[test]
 fn reverse_gives_the_nearest_town() {
     let (_d, _ts, path) = setup("g2");
-    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)], None)));
     let n = g.reverse(42.60, -113.70).unwrap();
     assert_eq!(n.name, "Rupert");
     assert!(n.km < 8.0);
@@ -268,7 +268,7 @@ fn place_source_for_navigate() {
     use cache_tool::places::{GeocodeQuery, NearestQuery};
     let d = Dir::new("ps1");
     let pack = d.0.join("places.sqlite");
-    let none = cache_places::tools_and_source(&PlacesCfg { packs: vec![pack.to_string_lossy().into_owned()] }).1;
+    let none = cache_places::tools_and_source(&PlacesCfg { packs: vec![pack.to_string_lossy().into_owned()], merged_dir: None }).1;
     assert!(none.categories().is_none());
     assert_eq!(none.geocode(&GeocodeQuery { text: "Burley", near: None, bias: None, limit: 3 }).unwrap_err().code, "not_set_up");
     assert_eq!(none.nearest(&NearestQuery { category: "fuel", from: (42.5, -113.8), limit: 3 }).unwrap_err().code, "not_set_up");
@@ -302,7 +302,7 @@ fn place_source_for_navigate() {
 
 fn source(name: &str) -> (Dir, Arc<dyn cache_tool::places::PlaceSource>) {
     let (d, _, path) = setup(name);
-    let (_, source) = cache_places::tools_and_source(&PlacesCfg { packs: vec![path] });
+    let (_, source) = cache_places::tools_and_source(&PlacesCfg { packs: vec![path], merged_dir: None });
     (d, source)
 }
 
@@ -354,7 +354,7 @@ fn a_misspelt_town_in_two_states_goes_to_the_one_asked_for_or_the_nearer_one() {
 fn a_misspelt_town_resolves_the_same_in_navigate_locate_and_live_data() {
     use cache_tool::places::GeocodeQuery;
     let (_d, ts, path) = setup("slip1");
-    let (_, src) = cache_places::tools_and_source(&PlacesCfg { packs: vec![path] });
+    let (_, src) = cache_places::tools_and_source(&PlacesCfg { packs: vec![path], merged_dir: None });
     for text in ["Islnd Park", "Islnd Park, Idaho", "islnd park id", "Ilsand Park"] {
         // navigate: `PlaceSource::geocode`
         let a = src.geocode(&GeocodeQuery { text, near: None, bias: None, limit: 3 }).unwrap();
@@ -372,7 +372,7 @@ fn a_misspelt_town_resolves_the_same_in_navigate_locate_and_live_data() {
 fn an_exact_name_beats_a_close_fuzzy_one() {
     let (_d, src) = source("exact1");
     let (_d2, _ts, path) = setup("exact2");
-    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)], None)));
     // "Boyse" is one edit from "Boise" and has far more people, and the phone is at it: the exact name still wins, both ways round
     let near_boyse = Some((46.0, -112.5));
     for (text, want) in [("Boise", "Boise, ID"), ("boise", "Boise, ID"), ("Boyse", "Boyse, ID")] {
@@ -387,7 +387,7 @@ fn an_exact_name_beats_a_close_fuzzy_one() {
 fn a_whole_name_town_slip_beats_a_poi_prefix_match() {
     let (_d, src) = source("poi1");
     let (_d2, _ts, path) = setup("poi2");
-    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)], None)));
     let near_shelley = Some((43.37, -112.12));
     // "Amon" is a prefix of the place "Amonara" (Shelley) and one edit from the town Ammon: the town wins
     for text in ["amon", "Amon", "AMON"] {
@@ -407,7 +407,7 @@ fn a_whole_name_town_slip_beats_a_poi_prefix_match() {
 #[test]
 fn a_state_in_any_letter_case_is_the_same_query() {
     let (_d, ts, path) = setup("case1");
-    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)], None)));
     let labels = |q: &str| g.forward(q, None, 3).into_iter().map(|h| h.label).collect::<Vec<_>>();
     let want = labels("Rupert ID");
     assert_eq!(want[0], "Rupert, ID");
