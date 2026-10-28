@@ -532,7 +532,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                 onTap: () => _open(h.address),
               ),
             // A library with vectors was searched by keywords only: its model is not on this phone.
-            if (_zimId != null && widget.sources.missingModel(ids: [_zimId!]) case final missing?)
+            if (widget.sources.missingModel(ids: [?_zimId]) case final missing?)
               SearchModelLine(model: missing),
           ] else
             for (final s in _suggestions)

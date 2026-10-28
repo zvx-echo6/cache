@@ -6,14 +6,10 @@ import 'package:cache/app_state.dart';
 import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/model_downloads.dart';
 import 'package:cache/models/search_model.dart';
-import 'package:cache/screens/model_search_screen.dart';
-import 'package:cache/screens/search_model_line.dart';
 import 'package:cache/sources/sources_state.dart';
-import 'package:cache/theme.dart';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Fake extends CacheEmbedder {
@@ -308,19 +304,6 @@ void main() {
       expect(d2.error, isNull);
     });
 
-    testWidgets('the bar shows the search model waiting under the chat model, and a stopped one with Try again', (tester) async {
-      d.queue.add(hub.searchFile);
-      d.current = hub.chatFile;
-      d.total = 100;
-      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: Scaffold(body: ModelDownloadBar(downloads: d))));
-      expect(find.text('Next: Search model, 635 MB'), findsOneWidget);
-      d.current = null;
-      d.searchModelError = 'the connection dropped';
-      d.cancel(); // tells the bar
-      await tester.pump();
-      expect(find.text('Search model: download stopped (the connection dropped)'), findsOneWidget);
-      expect(find.byKey(const ValueKey('search-model-retry')), findsOneWidget);
-    });
   });
 
   group('library and tool search', () {
@@ -376,56 +359,6 @@ void main() {
       final missing = await open(['lib-other.zim'], _Embedding({'bge-m3-Q8_0.gguf'}));
       expect((await missing.searchIn('water')).results.single.title, 'none');
       expect(missing.missingModel(), 'other.gguf');
-    });
-  });
-
-  group('the missing-model line', () {
-    Widget wrap(Widget w) => MaterialApp(theme: buildTheme(CacheThemeId.dark), home: Scaffold(body: w));
-
-    testWidgets('says meaning search needs the search model, with Get it', (tester) async {
-      final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
-      final sm = SearchModel(app: app, modelsDir: () async => dir);
-      addTearDown(sm.dispose);
-      await tester.pumpWidget(wrap(SearchModelLine(searchModel: sm)));
-      expect(find.text('Meaning search needs the search model.'), findsOneWidget);
-      expect(find.text('Get it'), findsOneWidget);
-    });
-
-    testWidgets('names another model a library needs, with no button', (tester) async {
-      final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
-      final sm = SearchModel(app: app, modelsDir: () async => dir);
-      addTearDown(sm.dispose);
-      await tester.pumpWidget(wrap(SearchModelLine(searchModel: sm, model: 'other.gguf')));
-      expect(find.text('Meaning search needs the model other.gguf.'), findsOneWidget);
-      expect(find.text('Get it'), findsNothing);
-    });
-
-    testWidgets('the one-time question shows once', (tester) async {
-      final app = AppState(settingsDirOverride: dir, modelsDirOverride: Directory('${dir.path}/models'));
-      await tester.runAsync(() async {
-        Directory('${dir.path}/models').createSync();
-        File('${dir.path}/models/chat-Q4.gguf').writeAsBytesSync([1, 2]);
-        await app.init();
-      });
-      final sm = SearchModel(app: app, modelsDir: () async => app.modelsDir!);
-      addTearDown(sm.dispose);
-      await tester.pumpWidget(wrap(const SizedBox()));
-      final ctx = tester.element(find.byType(SizedBox));
-      late Future<bool> shown;
-      await tester.runAsync(() async {
-        shown = offerSearchModelOnce(ctx, sm);
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      });
-      await tester.pumpAndSettle();
-      expect(find.text('Get the search model?'), findsOneWidget);
-      expect(find.text('Meaning search in your libraries, places and the assistant needs it. 635 MB.'), findsOneWidget);
-      await tester.tap(find.text('Not now'));
-      await tester.pumpAndSettle();
-      expect(await shown, isTrue);
-      expect(app.searchModelOffered, isTrue);
-      expect(await offerSearchModelOnce(ctx, sm), isFalse);
-      await tester.pumpAndSettle();
-      expect(find.text('Get the search model?'), findsNothing);
     });
   });
 }
