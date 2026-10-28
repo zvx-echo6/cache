@@ -7,7 +7,7 @@ import '../maps/geo.dart';
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
 
 /// Where the public region catalogue is published (cache-packs' regions recipe): index.json, one shard per country
-/// (<iso>.json and <iso>.search.json), search-global.json and polygons/<id>.geojson.
+/// (`<iso>.json` and `<iso>.search.json`), `search-global.json` and `polygons/<id>.geojson`.
 const String kRegionCatalogueBase = 'https://cache.echo6.co/regions/';
 
 /// One region of the catalogue, at any scale: a country, a state, several states, part of a state, a valley, a metro area, a
@@ -41,7 +41,7 @@ class RegionRecord {
   final int? population;
   final String? description;
 
-  /// The polygon's path relative to the catalogue (polygons/<id>.geojson).
+  /// The polygon's path relative to the catalogue (`polygons/<id>.geojson`).
   final String? polygon;
 
   /// The ISO 3166-1 code of the country it is in ("US").
@@ -238,7 +238,9 @@ class RegionCatalogue {
     final known = _global;
     if (known != null) return known;
     final text = await _text('search-global.json');
-    return _global = await Isolate.run(() => RegionHit.parseList(text));
+    final list = await Isolate.run(() => RegionHit.parseList(text));
+    _global = list;
+    return list;
   }
 
   /// One country's full search list (every region it holds).
@@ -271,7 +273,7 @@ class RegionCatalogue {
   }
 
   /// The smallest state-sized or smaller region of the read shards whose box holds the point: what a quiet
-  /// "Download <region>?" on the map would offer. Not shown anywhere yet.
+  /// "Download `<region>`?" on the map would offer. Not shown anywhere yet.
   RegionRecord? regionAt(double lat, double lon, {Set<String> kinds = const {'region', 'sub_state', 'valley', 'county'}}) {
     RegionRecord? best;
     for (final s in _shards.values) {

@@ -35,7 +35,7 @@ void main() {
     expect(v['shim'], '/lib/libvalhalla_shim.so');
   });
 
-  test('linked routing needs tiles but does not need a dynamic library path', () {
+  test('linked routing does not need a dynamic library path, with or without a tiles.tar', () {
     final files = Directory.systemTemp.createTempSync('linked-files_');
     final support = Directory.systemTemp.createTempSync('linked-support_');
     addTearDown(() {
@@ -46,7 +46,9 @@ void main() {
       filesDir: files, supportDir: support, useLinkedRouter: true,
       shim: '/does-not-exist/libvalhalla_shim.so',
     );
-    expect(build().containsKey('routing'), isFalse);
+    // No tiles.tar: still configured, on the region engine's folder.
+    expect(((build()['routing'] as Map)['valhalla'] as Map)['tiles'], '');
+    expect(((build()['routing'] as Map)['valhalla'] as Map)['shim'], 'linked');
     final tiles = File('${files.path}/packs/idaho/valhalla/tiles.tar')
       ..createSync(recursive: true)
       ..writeAsStringSync('fixture');
@@ -54,7 +56,7 @@ void main() {
     expect(valhalla['shim'], 'linked');
     expect(File(valhalla['tiles'] as String).absolute.uri, tiles.absolute.uri);
     tiles.deleteSync();
-    expect(build().containsKey('routing'), isFalse);
+    expect(((build()['routing'] as Map)['valhalla'] as Map)['tiles'], '');
   });
 
   group('what is installed becomes the places, routing and user sections', () {

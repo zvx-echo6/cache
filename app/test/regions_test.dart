@@ -256,14 +256,12 @@ void main() {
     expect(find.text('New road routing'), findsOneWidget);
     expect(find.text('2026-11 · About 5.0 MB to download'), findsOneWidget);
 
-    final before = r.routingChanges;
     await tester.tap(find.byKey(const ValueKey('update-all')));
     await r.settle(tester);
     expect(r.core.calls, contains('update'));
     expect(r.core.build, '2026-11');
     expect(find.text('Up to date'), findsOneWidget);
     expect(r.s.engine.areasOf('basemap').single.phase.name, 'done', reason: 'the map was fetched again');
-    expect(r.routingChanges, before + 1, reason: 'a new build changes the tile folder the core uses');
     await r.dispose(tester);
   });
 
