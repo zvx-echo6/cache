@@ -12,6 +12,7 @@ import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../theme.dart';
 import 'answer_reports_ui.dart';
+import 'confirm_card.dart';
 import 'history_drawer.dart';
 import 'models_screen.dart';
 
@@ -267,6 +268,7 @@ class _AskScreenState extends State<AskScreen> {
                             msgs[i],
                             onOpenSource: widget.onOpenSource,
                             onOpenNavigation: widget.onOpenNavigation,
+                            chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
                   );
@@ -373,9 +375,12 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenNavigation, this.onReport});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenNavigation, this.onReport, this.chat});
 
   final ChatMessage msg;
+
+  /// Where a confirm card's tap goes.
+  final ChatController? chat;
   final VoidCallback? onReport;
   final void Function(String address)? onOpenSource;
   final void Function(NavigationAction action)? onOpenNavigation;
@@ -404,6 +409,12 @@ class _AssistantBlockState extends State<_AssistantBlock> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showText && m.text.isNotEmpty) AnswerMarkdown(m.text),
+          for (final card in m.confirms)
+            ConfirmCardView(
+              card: card,
+              enabled: widget.chat?.canSend ?? false,
+              onDecide: (confirm) => widget.chat?.resolveConfirm(card, confirm: confirm),
+            ),
           for (final action in m.navigationActions)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -464,7 +475,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                 label: Text('Report this answer', style: TextStyle(fontSize: 14, color: k.secondary)),
               ),
             ),
-          if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty)
+          if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty && m.confirms.isEmpty)
             Text(
               'No answer was produced.',
               style: TextStyle(fontSize: 15, color: k.secondary),

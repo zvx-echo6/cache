@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'actions/act_core.dart';
+import 'actions/action_registry.dart';
+import 'actions/app_actions.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
@@ -195,6 +198,35 @@ class _CacheAppState extends State<CacheApp> {
     numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => chatLocation.known,
     prepareTurn: chatLocation.prepare,
+    actions: actionRegistry,
+    actCore: actCore,
+  );
+  // What the assistant can do through the act tool: each module's actions, run by the core for read and open and by a tap on a
+  // confirm card for change. The core's act hook is not in the FFI yet, so nothing is offered to the model until it is.
+  final ActionRegistry actionRegistry = ActionRegistry();
+  final ActCore actCore = const ActCoreStandIn();
+  late final AppActions appActions = AppActions(
+    registry: actionRegistry,
+    places: PlacesDeps(
+      save: ({required name, required lat, required lon, label}) async {
+        final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
+        return core.savePlace(name: name, lat: lat, lon: lon, label: label);
+      },
+      list: () async => (await sources.whenCoreReady() ?? (throw StateError('The search core is not available'))).savedPlaces(),
+    ),
+    watch: WatchDeps(choices: weather.placeChoices, watched: () => settings.watchedPlaces, setWatched: settings.setWatched),
+    sources: SourceDeps(
+      available: (r) => weather.rowSources(r).isNotEmpty,
+      needsKey: (r) => weather.rowSources(r).any((c) => !weather.keyReady(c)),
+      setOn: weather.setRowOn,
+    ),
+    navigation: NavigationDeps(
+      route: (id) async => (sources.core ?? (throw StateError('The search core is not available'))).mapRouteById(id),
+      guiding: () => nav.guiding,
+      preview: nav.previewSnapshot,
+      start: nav.start,
+      show: nav.requestMap,
+    ),
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
@@ -239,6 +271,12 @@ class _CacheAppState extends State<CacheApp> {
       await weather.start();
       weather.addListener(_onWeather);
       _onWeather();
+      actionRegistry.addListener(_installActions);
+      await appActions.publishAll();
+    });
+    // A place saved on the map joins the Places list the watch actions name.
+    nav.events.listen((e) {
+      if (e is PlaceSaved) appActions.publishWatch();
     });
     location.addListener(_rememberPlace);
     settingsRead.then((_) => sharing.init());
@@ -270,6 +308,10 @@ class _CacheAppState extends State<CacheApp> {
       }
     }
     _rememberPlace();
+  }
+
+  void _installActions() {
+    actCore.install(actionRegistry.definitions, actionRegistry.run).catchError((_) {});
   }
 
   /// Keeps the phone's last position and the downloaded regions where a background run can read them.

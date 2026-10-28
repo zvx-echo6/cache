@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### New
+- Assistant: can save places, watch places for weather and start navigation after you confirm on a card
+
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
 ### Fixed

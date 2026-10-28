@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import '../actions/act_core.dart';
+import '../actions/action_registry.dart';
+import '../actions/confirm.dart';
 import '../history/conversation_store.dart';
 import '../history/markdown_export.dart';
 import '../history/titles.dart';
@@ -41,6 +44,9 @@ class ChatMessage {
   List<NumberedResult> sources = const [];
   String? error;
   List<NavigationAction> navigationActions = const [];
+
+  /// The confirm cards this answer asked for, in order.
+  List<ConfirmCard> confirms = const [];
   bool get isDone => phase == TurnPhase.done;
   bool get streaming => !isDone;
 }
@@ -56,7 +62,19 @@ class ChatController extends ChangeNotifier {
     this.locationKnown,
     this.prepareTurn,
     this.numberingState,
+    this.actions,
+    this.actCore = const ActCoreStandIn(),
+    this.outcomeForm = kActOutcomeForm,
   });
+
+  /// The actions a confirm card runs; null: a tapped card fails.
+  final ActionRegistry? actions;
+
+  /// Resolves a change call's fields again for the tap.
+  final ActCore actCore;
+
+  /// How a card's outcome goes into the conversation.
+  final ActOutcomeForm outcomeForm;
 
   final List<Tool> tools;
 
@@ -147,10 +165,24 @@ class ChatController extends ChangeNotifier {
     if (store == null || id == _activeId || store.get(id) == null) return;
     newChat();
     _activeId = id;
-    messages.addAll([
-      for (final m in store.messages(id))
-        if (m.shown) ChatMessage.stored(m),
-    ]);
+    final stored = store.messages(id);
+    final inTranscript = [for (var i = 0; i < stored.length; i++) if (stored[i].inTranscript) i];
+    final cards = cardsInTranscript([for (final i in inTranscript) stored[i].message]);
+    final pending = <ConfirmCard>[];
+    for (var i = 0, t = 0; i < stored.length; i++) {
+      final m = stored[i];
+      if (t < inTranscript.length && inTranscript[t] == i) {
+        final card = cards[t++];
+        if (card != null) pending.add(card);
+      }
+      if (!m.shown) continue;
+      final shown = ChatMessage.stored(m);
+      if (!shown.isUser && pending.isNotEmpty) {
+        shown.confirms = List.of(pending);
+        pending.clear();
+      }
+      messages.add(shown);
+    }
     notifyListeners();
   }
 
@@ -288,8 +320,12 @@ class ChatController extends ChangeNotifier {
         } catch (_) {}
       }
       if (cancelled()) return;
-      start = loop.messages.length;
+      start = loop.messages.length + 1; // the question is stored already
       final actionConversation = convId;
+      loop.onConfirmations = (cards) {
+        reply.confirms = [...reply.confirms, ...cards];
+        if (epoch == _epoch) notifyListeners();
+      };
       loop.onNavigationActions = (actions) {
         // Capture the turn, not the currently selected chat, across async calls.
         reply.navigationActions = [
@@ -326,22 +362,125 @@ class ChatController extends ChangeNotifier {
       if (loop != null && convId != null) {
         await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, actionDraft);
       }
-      if (loop != null) loop.onNavigationActions = null;
+      if (loop != null) {
+        loop.onNavigationActions = null;
+        loop.onConfirmations = null;
+      }
       if (loop != null && !identical(_loop, loop)) await loop.dispose();
       if (epoch == _epoch) busy = false;
       notifyListeners();
     }
-    if (epoch == _epoch && identical(_loop, loop) && start == 0 && loop != null && convId != null && reply.error == null && reply.text.isNotEmpty) {
+    if (epoch == _epoch && identical(_loop, loop) && start == 1 && loop != null && convId != null && reply.error == null && reply.text.isNotEmpty) {
       _titleJob = _writeTitle(convId, loop, backend);
     }
   }
 
-  /// Stores what the turn added to the transcript, with the shown answer, its citations and its stats.
+  /// A tap on a confirm card: runs the action ([confirm]) or declines it, once per card, adds the outcome to the conversation and
+  /// lets the model write a short follow-up. Only taps decide; nothing typed confirms a card.
+  Future<void> resolveConfirm(ConfirmCard card, {required bool confirm}) async {
+    final backend = _backend;
+    if (card.state != ConfirmState.open || busy || backend == null) return;
+    card.state = ConfirmState.running;
+    busy = true;
+    final epoch = _epoch;
+    final turn = _turn = Object();
+    bool cancelled() => epoch != _epoch || !identical(_turn, turn);
+    final convId = _activeId;
+    notifyListeners();
+    await _cancelTitle(backend);
+
+    Map<String, dynamic> outcome;
+    if (!confirm) {
+      outcome = card.declined();
+    } else {
+      try {
+        final fields = await actCore.resolve(card.action, card.fields);
+        final registry = actions;
+        outcome = registry == null
+            ? {'ok': false, 'status': 'failed', 'confirm_id': card.confirmId, 'action': card.action, 'error': const ActionFailure('unknown_action', 'This action is not installed.').toJson()}
+            : await registry.run(card.action, fields, confirmId: card.confirmId);
+      } on ActionFailure catch (f) {
+        outcome = {'ok': false, 'status': 'failed', 'confirm_id': card.confirmId, 'action': card.action, 'error': f.toJson()};
+      }
+    }
+    card.apply(outcome);
+    final message = card.outcomeMessage(outcome, form: outcomeForm);
+    final store = _store;
+    if (store != null && convId != null) {
+      try {
+        store.addMessage(convId, role: message['role'] as String, content: message['content'] as String, message: message, model: _modelName);
+      } catch (_) {}
+    }
+    if (cancelled()) {
+      // The chat was closed meanwhile: the outcome is kept, the follow-up is not written.
+      if (epoch == _epoch) busy = false;
+      notifyListeners();
+      return;
+    }
+
+    final reply = ChatMessage.assistant();
+    messages.add(reply);
+    notifyListeners();
+    ToolLoop? loop;
+    var start = 0;
+    final clock = Stopwatch()..start();
+    TurnUpdate? last;
+    try {
+      var made = _loop;
+      if (made == null) {
+        // A reopened chat: its stored transcript already holds the outcome.
+        made = await _loopFor(convId, backend);
+        if (cancelled()) {
+          await made.dispose();
+          return;
+        }
+        _loop = made;
+      } else {
+        made.addMessage(message);
+      }
+      loop = made;
+      start = loop.messages.length;
+      loop.onConfirmations = (cards) {
+        reply.confirms = [...reply.confirms, ...cards];
+        if (epoch == _epoch) notifyListeners();
+      };
+      loop.onNavigationActions = (actions) {
+        reply.navigationActions = [...reply.navigationActions, ...actions];
+        if (epoch == _epoch) notifyListeners();
+      };
+      await for (final u in loop.resume()) {
+        if (epoch != _epoch) return;
+        last = u;
+        reply
+          ..phase = u.phase
+          ..error = u.error;
+        if (u.phase == TurnPhase.answering || u.phase == TurnPhase.done) reply.text = u.text;
+        if (u.phase == TurnPhase.done) reply.sources = u.cited;
+        notifyListeners();
+      }
+    } catch (e) {
+      reply.error = e.toString().replaceFirst('Bad state: ', '');
+    } finally {
+      reply.phase = TurnPhase.done;
+      if (loop != null && convId != null) {
+        await _saveTurn(convId, loop, start, reply, last, clock.elapsedMilliseconds, null);
+      }
+      if (loop != null) {
+        loop.onNavigationActions = null;
+        loop.onConfirmations = null;
+      }
+      if (loop != null && !identical(_loop, loop)) await loop.dispose();
+      if (epoch == _epoch) busy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Stores what the turn added to the transcript from [start], with the shown answer, its citations and its stats.
   Future<void> _saveTurn(int convId, ToolLoop loop, int start, ChatMessage reply, TurnUpdate? last, int ms, int? actionDraft) async {
     final store = _store;
     if (store == null) return;
     try {
-      final added = loop.messages.skip(start + 1).toList(); // the question was stored when it was sent
+      final added = loop.messages.skip(start).toList();
       final stats = GenerationStats(
         promptTokens: last?.promptTokens ?? 0,
         generatedTokens: last?.generatedTokens ?? 0,

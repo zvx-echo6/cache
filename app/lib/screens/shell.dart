@@ -74,6 +74,7 @@ class _ShellState extends State<Shell> {
     super.initState();
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
+      if (e is MapRequested && mounted) _goModule(ModuleId.maps);
     });
     // An alert pop-up tapped while the app runs, or the one that started it: open the Weather screen on that alert.
     _alertTaps = LocalAlertNotifier.instance.taps.listen(_openAlert);

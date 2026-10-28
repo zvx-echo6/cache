@@ -44,6 +44,11 @@ class PlaceSaved extends NavEvent {
   final MapPlace place;
 }
 
+/// Something outside the map (the assistant's navigation.start) wants the Maps tab on screen.
+class MapRequested extends NavEvent {
+  const MapRequested();
+}
+
 class NavNotice extends NavEvent {
   const NavNotice(this.text);
   final String text;
@@ -291,6 +296,8 @@ class NavState extends ChangeNotifier {
   }
 
   void addToHome(MapPlace p) => _events.add(AddToHomeRequested(p));
+
+  void requestMap() => _events.add(const MapRequested());
 
   // ---- directions --------------------------------------------------------------------------------------------
 
