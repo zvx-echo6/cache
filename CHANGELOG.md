@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+## 1.0.0 (iOS build 21, Android 3) - 2026-10-28
+
 ### New
 - Find and download models from Hugging Face
 - Weather module with forecast, alerts and wildfires for your places
