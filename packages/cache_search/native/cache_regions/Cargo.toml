@@ -1,0 +1,23 @@
+[package]
+name = "cache_regions"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's road routing by region: the Valhalla tiles of downloaded regions and of routes planned online, one build at a time"
+
+[dependencies]
+# Same HTTP stack as cache_layers and cache_live: blocking ureq with rustls and bundled roots (nothing from the platform).
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# regions.sqlite (regions, their tile lists, the stream cache); bundled like the other crates'.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The published tiles and index are gzip files; each tile's SHA-256 is in the index.
+flate2 = "1"
+sha2 = "0.10"
+# Free space before a region starts (the same version as cache_sync's).
+fs4 = "=1.1.0"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The tests' routing server.
+tiny_http = "0.12"

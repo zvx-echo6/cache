@@ -1,6 +1,8 @@
 //! The `routing` section of the `cs_open` config:
 //! `{"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll", "region": "Idaho"},
 //!   "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles", "max_cells": 8000000}}`.
+//! `tiles` may also be a folder of tiles (`<level>/<aaa>/<bbb>/<ccc>.gph`, the downloaded regions), and may be left out when
+//! the regions engine says which folder (the `regions` section of the `cs_open` config); `region` then names what is there.
 //! `region` and `max_cells` are optional. Without `valhalla` (or while its files are missing) the tool is not offered;
 //! without `offroad` (or while either file is missing) road routing works and an off-road request is `not_set_up`.
 
@@ -17,11 +19,14 @@ pub struct NavigateCfg {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ValhallaCfg {
-    /// The Valhalla tile extract (`tiles.tar`) of the installed map region.
+    /// The Valhalla tile extract (`tiles.tar`) of the installed map region, or a folder of tiles. Empty: the folder the
+    /// regions engine gives (see `TileStream::tile_dir`).
+    #[serde(default)]
     pub tiles: String,
     /// The shim library (`valhalla_shim.dll`, `libvalhalla_shim.so`).
     pub shim: String,
-    /// The region's name for `map_region`; default: the folder the tiles belong to ("packs/idaho/valhalla/tiles.tar" is "Idaho").
+    /// The region's name for `map_region`; default: the folder a tiles.tar belongs to ("packs/idaho/valhalla/tiles.tar" is
+    /// "Idaho"), nothing for a folder of tiles.
     #[serde(default)]
     pub region: Option<String>,
 }

@@ -28,6 +28,25 @@ pub struct Ext {
     pub nav: Option<std::sync::Arc<cache_navigate::NavCore>>,
     /// The routes `cs_map_route` made, which `cs_map_progress` follows.
     pub routes: cache_navigate::map::RouteStore,
+    /// The regions engine from the `regions` section: the same one `cs_regions_open` gives for that folder.
+    pub regions: Option<std::sync::Arc<cache_regions::Regions>>,
+}
+
+/// The regions engine as the navigate tool's tile stream: its folder is the one to route on, and a route's tiles are fetched
+/// before it is routed.
+struct RegionStream(std::sync::Arc<cache_regions::Regions>);
+
+impl cache_navigate::TileStream for RegionStream {
+    fn prepare(&self, points: &[(f64, f64)]) {
+        self.0.prepare(points);
+    }
+    fn tile_dir(&self) -> Option<std::path::PathBuf> {
+        self.0.tile_dir()
+    }
+}
+
+pub fn regions_err(e: cache_regions::Error) -> Error {
+    Error::new(ErrorCode::from_str_code(e.code), e.message)
 }
 
 fn user_err(e: cache_user::Error) -> Error {
@@ -104,6 +123,23 @@ impl crate::handle::Handle {
 }
 
 impl Ext {
+    /// Apply the `regions` section; absent keeps what was set before. The engine is the process's one for that folder
+    /// (`cache_regions::Regions::open_shared`), so the app's `cs_regions_open` on the same folder shares it.
+    pub fn configure_regions(&mut self, regions: Option<cache_regions::Config>) -> Result<()> {
+        if let Some(cfg) = regions {
+            self.regions = Some(cache_regions::Regions::open_shared(cfg).map_err(regions_err)?);
+        }
+        Ok(())
+    }
+
+    /// The navigate tool's tile stream is the regions engine, when both are configured.
+    pub fn plug_regions(&self) {
+        if let (Some(nav), Some(r)) = (&self.nav, &self.regions) {
+            let stream: std::sync::Arc<dyn cache_navigate::TileStream> = std::sync::Arc::new(RegionStream(r.clone()));
+            nav.set_stream(Some(stream));
+        }
+    }
+
     /// Apply the `layers` config section; absent keeps what was set before. The same config keeps the running engine
     /// (and its tile server's port); only "online" can change live.
     pub fn configure_layers(&mut self, layers: Option<cache_layers::LayersCfg>) -> Result<()> {

@@ -73,6 +73,13 @@ char *cs_version(void);
  *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack
  *   "routing": {"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll"},   optional: the navigate tool
  *               "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles"}},  (see DESIGN.md)
+ *                                  "tiles" may also be a folder of tiles (<level>/<aaa>/<bbb>/<ccc>.gph), named by
+ *                                  "region" (e.g. "Southern Idaho, Utah"), or left out with a "regions" section; a
+ *                                  tiles.tar that exists is used as before
+ *   "regions": {"dir": ".../regions",                optional: road tiles by region (cs_regions_*, docs/REGIONS.md). The
+ *               "base_url": "https://..."},          navigate tool routes on its folder (when no tiles.tar is given) and has it
+ *                                                    fetch the tiles near a trip's points first; it is the process's one engine
+ *                                                    for that folder, the same one cs_regions_open gives
  *   "layers": {"dir": ".../layers",                  optional: the map layer engine (cs_layers_*, DESIGN-LAYERS.md);
  *              "defs_dirs": [".../layer-defs"],      read-only folders of definition files (the starter ones)
  *              "catalogue_urls": ["https://..."],    optional; JSON lists of definitions fetched by cs_layers_refresh and merged with
@@ -685,6 +692,39 @@ char *cs_sync_call(cs_sync *s, const char *method, const char *args_json);
 
 /* Stops the engine and frees it. */
 void cs_sync_close(cs_sync *s);
+
+/* --- road tiles by region (cache_regions, docs/REGIONS.md) --- */
+
+typedef struct cs_regions cs_regions;
+
+/* Opens the regions engine. config_json: {"dir": "<private folder>", optional "base_url" (default
+ * "https://cache.echo6.co/routing/"), "stream_cap_bytes" (default 2147483648), "user_agent" (default "Cache/<version>"),
+ * "reserve_bytes" (default 1 GiB: downloads pause rather than leave less free)}. One engine per folder in the process: a
+ * second open of the same folder, or a cs_open config whose "regions" section names it, shares it (its own config is not
+ * used). NULL on failure (reason in cs_last_error(NULL)). Downloads run on its own thread and carry on after a restart. */
+cs_regions *cs_regions_open(const char *config_json);
+
+/* One method with JSON args (NULL = {}). Always returns JSON: the answer or {"error": "...", "code": "..."} (codes: bad_json,
+ * not_found, offline, fetch_failed, bad_response, io, busy, internal). Thread-safe.
+ *   status        {"build": null|"<build>", "tile_dir": null|"<folder>",
+ *                  "regions": [{"id","name","state":"downloading"|"ready"|"paused"|"failed","tiles","bytes","done_tiles",
+ *                               "done_bytes","error"}],
+ *                  "stream": {"tiles","bytes","cap"}, "update": null|{"build","download_bytes","downloading"},
+ *                  "paused": null|"<reason>"}
+ *   plan          {"id"?, "name"?, "geometry": <GeoJSON Feature, Polygon or MultiPolygon>}
+ *                 -> {"tiles","bytes","download_bytes","shared_tiles"}; "offline" when the index is not on the device and
+ *                    cannot be fetched
+ *   add           {"id", "name"?, "geometry"} -> {"ok":true,"tiles","bytes","download_bytes"}; the download runs in the
+ *                    background (status). Adding an id again replaces its outline and tries a failed region again
+ *   remove        {"id"} -> {"ok":true,"deleted_tiles"}; tiles another region or the stream cache uses stay
+ *   stream        {"points": [[lat, lon], ...], "timeout_ms": 20000} -> {"fetched","missing","ok"}; never an error
+ *   set_policy    {"network": bool, "reserve_bytes"?} -> {"ok":true}; network false: no request at all
+ *   check_update  -> {"build": "<server's>", "update": null|{"build","download_bytes"}}
+ *   update        -> {"ok":true,"build","download_bytes"}; the device moves to the new build once all of it is here */
+char *cs_regions_call(cs_regions *r, const char *method, const char *args_json);
+
+/* Lets go of the engine; the last holder stops it. */
+void cs_regions_close(cs_regions *r);
 
 /* --- memory --- */
 

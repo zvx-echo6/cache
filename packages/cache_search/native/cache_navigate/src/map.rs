@@ -305,6 +305,7 @@ pub fn route(core: &NavCore, req: &MapRouteReq) -> Result<(Value, Vec<Arc<Active
     let mut stops: Vec<&MapEnd> = vec![&req.from];
     stops.extend(req.via.iter());
     stops.push(&req.to);
+    core.prepare_tiles(&stops.iter().map(|e| (e.lat, e.lon)).collect::<Vec<_>>());
     let mut legs: Vec<Directions> = Vec::new();
     let mut have_offroad = false;
     for pair in stops.windows(2) {

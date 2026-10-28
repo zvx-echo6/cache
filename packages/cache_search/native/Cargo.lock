@@ -786,6 +786,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_regions"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "fs4 1.1.0",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tiny_http",
+ "ureq",
+]
+
+[[package]]
 name = "cache_search"
 version = "0.1.0"
 dependencies = [
@@ -793,6 +807,7 @@ dependencies = [
  "cache_live",
  "cache_navigate",
  "cache_places",
+ "cache_regions",
  "cache_sync",
  "cache_tool",
  "cache_user",
