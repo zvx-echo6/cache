@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../browse/opds.dart';
 import '../chat/system_prompt.dart';
 import '../chat/tool.dart';
+import '../files.dart';
 import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
@@ -394,7 +395,14 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Future<void> pickAndAddZim() async {
     final picked = await FilePicker.pickFile();
     if (picked == null || picked.path == null) return;
-    await addZim(File(picked.path!), name: picked.name);
+    try {
+      await addZim(File(picked.path!), name: picked.name);
+    } finally {
+      // The picker's own copy of the file is not needed any more, whether the copy worked or not.
+      try {
+        await FilePicker.clearTemporaryFiles();
+      } catch (_) {}
+    }
   }
 
   Future<void> addZim(File src, {String? name}) async {
@@ -406,32 +414,39 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
     error = null;
     final dest = File('${zimsDir!.path}/$fileName');
-    final total = await src.length();
+    // Copied under a hidden name and renamed into place once whole: a copy cut off half way is never indexed as the ZIM,
+    // nor sent to the other devices.
+    final tmp = File('${partialDir.path}/.$fileName.import.part');
     copyName = fileName;
     copyProgress = 0;
     notifyListeners();
     try {
-      final sink = dest.openWrite();
-      var done = 0;
-      var lastReport = 0.0;
-      await for (final chunk in src.openRead()) {
-        sink.add(chunk);
-        done += chunk.length;
-        final p = total == 0 ? 1.0 : done / total;
-        if (p - lastReport >= 0.005) {
-          lastReport = p;
-          copyProgress = p;
-          notifyListeners();
-        }
-        // Do not let the sink buffer gigabytes in memory.
-        if (done % (64 * 1024 * 1024) < chunk.length) await sink.flush();
-      }
-      await sink.close();
+      await partialDir.create(recursive: true);
+      final total = await src.length();
+      final raf = await tmp.open(mode: FileMode.write);
       try {
-        await FilePicker.clearTemporaryFiles();
-      } catch (_) {}
+        var done = 0;
+        var lastReport = 0.0;
+        await for (final chunk in src.openRead()) {
+          await raf.writeFrom(chunk);
+          done += chunk.length;
+          final p = total == 0 ? 1.0 : done / total;
+          if (p - lastReport >= 0.005) {
+            lastReport = p;
+            copyProgress = p;
+            notifyListeners();
+          }
+        }
+        // On the disk before the rename, so the real name never holds less than the whole file.
+        await raf.flush();
+      } finally {
+        await raf.close();
+      }
+      await renameOver(tmp, dest.path);
     } catch (e) {
-      if (dest.existsSync()) dest.deleteSync();
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } catch (_) {}
       error = 'Could not copy the file: $e';
       copyProgress = null;
       copyName = null;
