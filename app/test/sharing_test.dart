@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cache/screens/settings/sharing_page.dart';
+import 'package:cache/settings/data_policy.dart';
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +21,18 @@ void main() {
     expect(find.text('Show my link code'), findsOneWidget);
     expect(r.sync.calls, contains('set_policy'), reason: 'the mobile-data rule is applied at start');
     expect(File('${r.dir.path}/sharing.json').existsSync(), isTrue, reason: 'set up is remembered');
+
+    // Mobile data for downloads switched off on mobile data: the engine is told at once.
+    r.probe.kind = ConnectionKind.mobile;
+    r.settings.setMobileForDownloads(true);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    r.sync.calls.clear();
+    r.settings.setMobileForDownloads(false);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    expect(r.sync.policies.last, {'network': false});
+    r.settings.setMobileForDownloads(true);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    expect(r.sync.policies.last, {'network': true});
 
     await tester.runAsync(() => r.sharing.link('CACHE1-TESTCODE'));
     await tester.pump();

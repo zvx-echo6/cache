@@ -55,7 +55,7 @@ pub const PAIR_ALPN: &[u8] = b"cache/pair/1";
 pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
 
 /// A transfer with no new data for this long is dropped and retried in the next round (from its verified chunks).
-const STALL: Duration = Duration::from_secs(60);
+const STALL: Duration = Duration::from_secs(20);
 /// A file changed less than this long ago is still being written and waits for a later round.
 const SETTLE: Duration = Duration::from_secs(5);
 /// How long a shown link code stays valid.
@@ -645,7 +645,7 @@ impl Inner {
                     break;
                 }
                 if last_progress.elapsed() > STALL {
-                    failed = Some("no data for a minute".into());
+                    failed = Some("no data for 20 seconds".into());
                     break;
                 }
             }

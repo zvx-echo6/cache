@@ -83,6 +83,8 @@ class SharingState extends ChangeNotifier {
           await _applyPolicy();
         } catch (_) {}
       });
+      // Switching mobile data for downloads on or off applies at once, mid-transfer too.
+      policy.settings.addListener(_onSettings);
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => refresh());
       await refresh();
     } catch (e) {
@@ -91,6 +93,14 @@ class SharingState extends ChangeNotifier {
       _starting = false;
       notifyListeners();
     }
+  }
+
+  bool? _lastMobile;
+
+  void _onSettings() {
+    if (_lastMobile == policy.settings.mobileForDownloads) return;
+    _lastMobile = policy.settings.mobileForDownloads;
+    _applyPolicy().catchError((_) {});
   }
 
   /// Sync uses the network the way downloads do: Wi-Fi and other connections always, mobile data only when downloads may use it.
@@ -150,6 +160,7 @@ class SharingState extends ChangeNotifier {
   void dispose() {
     _poll?.cancel();
     _net?.cancel();
+    if (_core != null) policy.settings.removeListener(_onSettings);
     _core?.close();
     super.dispose();
   }

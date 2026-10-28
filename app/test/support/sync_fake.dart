@@ -3,6 +3,7 @@ import 'package:cache/sharing/sharing_state.dart';
 /// A sync engine with no network: remembers shares and peers, and answers like the real one.
 class FakeSync implements SyncCoreLike {
   final calls = <String>[];
+  final policies = <Map<String, Object?>>[];
   final shares = <Map<String, Object?>>[];
   final peers = <Map<String, Object?>>[];
   String name = 'Test phone';
@@ -11,6 +12,7 @@ class FakeSync implements SyncCoreLike {
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
     calls.add(method);
+    if (method == 'set_policy') policies.add(Map.of(args));
     switch (method) {
       case 'status':
         return {
