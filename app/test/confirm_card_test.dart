@@ -64,7 +64,7 @@ Map<String, dynamic> _saveDef() => {
     };
 
 class Harness {
-  Harness({ActOutcomeForm form = ActOutcomeForm.toolMessage, this.fail = false}) {
+  Harness({ActOutcomeForm form = kActOutcomeForm, this.fail = false}) {
     registry.publish('places', [_saveDef()], {
       'places.save': (f) async {
         runs.add(f);
@@ -126,7 +126,7 @@ void main() {
     expect(h.runs, isEmpty);
   });
 
-  testWidgets('confirm runs the action once, appends the outcome as the act tool result and gets a follow-up', (tester) async {
+  testWidgets('confirm runs the action once, appends the outcome as a system host event and gets a follow-up', (tester) async {
     final h = Harness();
     await tester.runAsync(() => h.ask('Save 44.21,-114.93 as Elk camp'));
     await tester.pumpWidget(_cards(h.chat));
@@ -146,8 +146,8 @@ void main() {
     expect(h.backend.requests, hasLength(3));
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(sent[sent.length - 2]['role'], 'assistant'); // the model's text reply comes between the call and the outcome
-    expect(sent.last['role'], 'tool');
-    expect(sent.last['tool_call_id'], 't1');
+    expect(sent.last['role'], 'system');
+    expect(sent.last.containsKey('tool_call_id'), isFalse);
     expect(jsonDecode(sent.last['content'] as String),
         {'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}});
     expect(h.chat.messages.last.text, 'Elk camp is saved.');
@@ -186,14 +186,18 @@ void main() {
     expect(h.runs, isEmpty);
   });
 
-  test('the host event form sends the same JSON as a system message', () async {
-    final h = Harness(form: ActOutcomeForm.hostEvent);
+  test('the tool message form sends the same JSON as the act tool result', () async {
+    final h = Harness(form: ActOutcomeForm.toolMessage);
     await h.chat.send('Save 44.21,-114.93 as Elk camp');
     await h.chat.resolveConfirm(h.chat.messages[1].confirms.single, confirm: true);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
-    expect(sent.last['role'], 'system');
-    expect(sent.last.containsKey('tool_call_id'), isFalse);
+    expect(sent.last['role'], 'tool');
+    expect(sent.last['tool_call_id'], 't1');
     expect(jsonDecode(sent.last['content'] as String)['status'], 'done');
+    final reopened = ChatController(tools: [FakeAct()], actions: h.registry)
+      ..attachStore(h.store)
+      ..openConversation(h.chat.activeId!);
+    expect(reopened.messages[1].confirms.single.state, ConfirmState.done);
   });
 
   test('a saved chat keeps the act call and result, and shows a resolved card as its outcome', () async {
@@ -202,7 +206,7 @@ void main() {
     await h.chat.resolveConfirm(h.chat.messages[1].confirms.single, confirm: true);
     final id = h.chat.activeId!;
     final transcript = h.store.transcript(id);
-    expect([for (final m in transcript) m['role']], ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
+    expect([for (final m in transcript) m['role']], ['user', 'assistant', 'tool', 'assistant', 'system', 'assistant']);
     expect(jsonDecode(transcript[2]['content'] as String)['status'], 'needs_confirmation');
     expect(jsonDecode(transcript[4]['content'] as String)['status'], 'done');
 
@@ -232,7 +236,7 @@ void main() {
     expect(h.runs, isEmpty);
   });
 
-  test('cardsInTranscript reads the host event form too', () {
+  test('cardsInTranscript reads a host event outcome', () {
     final cards = cardsInTranscript([
       {'role': 'user', 'content': 'x'},
       {

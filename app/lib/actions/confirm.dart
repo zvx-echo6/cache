@@ -1,12 +1,12 @@
 import 'dart:convert';
 
-/// How the outcome of a confirm card goes into the conversation. The contract's form is a `tool` message for `act` with the
-/// original call's tool_call_id; the other is a host event: a `system` message with the same JSON. Gemma 4's template renders the
-/// first as a `<|turn>tool` turn when a text reply comes between (it is not a tool response there), so the choice is the core
-/// side's, made before captures start.
+/// How the outcome of a confirm card goes into the conversation: a host event, a `system` message with the outcome JSON (project
+/// decision, 2026-10-28), or a `tool` message for `act` with the original call's tool_call_id. Gemma 4's template renders that
+/// tool message as a `<|turn>tool` turn when the model's text reply comes between, not as a tool response; a system turn is a role
+/// the model knows and one the user cannot type. Training captures use the same form.
 enum ActOutcomeForm { toolMessage, hostEvent }
 
-const ActOutcomeForm kActOutcomeForm = ActOutcomeForm.toolMessage;
+const ActOutcomeForm kActOutcomeForm = ActOutcomeForm.hostEvent;
 
 enum ConfirmState {
   /// Waiting for a tap.
