@@ -136,8 +136,9 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
     final defs = Directory('${support.path}/layer-defs');
     await installStarterLayers(defs);
+    // The core reads live source definitions from here; the weather part of the app keeps in it the ones that are switched on.
     try {
-      await installLiveSources(Directory('${files.path}/live-sources'));
+      await Directory('${files.path}/live-defs').create(recursive: true);
     } catch (e) {
       debugPrint('Live sources: $e');
     }

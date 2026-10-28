@@ -13,6 +13,7 @@ import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/storage_page.dart';
 import 'settings/videos_page.dart';
+import 'settings/weather_page.dart';
 import 'settings/widgets.dart';
 
 /// Settings: ten rows in three groups, each saying its current state, each opening one page.
@@ -27,24 +28,12 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   SettingsDeps get d => widget.deps;
-  int? _liveSources;
 
   @override
   void initState() {
     super.initState();
     d.hub.storage.readFree();
     d.hub.storage.measure();
-    _readLive();
-  }
-
-  /// The live data sources (weather, alerts, fires) the search core has definitions for.
-  Future<void> _readLive() async {
-    int? n;
-    try {
-      final core = await d.sources.whenCoreReady();
-      if (core != null) n = ((await core.liveSources())['sources'] as List?)?.length;
-    } catch (_) {}
-    if (mounted) setState(() => _liveSources = n);
   }
 
   Future<void> _open(Widget page) async {
@@ -104,11 +93,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ]);
   }
 
-  List<Part> _weather() {
-    final n = _liveSources;
-    if (n == null || n == 0) return const [Part('Not set up')];
-    return [Part('$n ${n == 1 ? 'source' : 'sources'} set up')];
-  }
+  List<Part> _weather() => [Part(d.hub.weather.settingsLine())];
 
   List<Part> _videos() {
     final v = d.video;
@@ -166,7 +151,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.cloud_outlined,
                   title: 'Weather and alerts',
                   status: _weather(),
-                  onTap: () => say(context, 'Weather and alerts settings are not built yet.'),
+                  onTap: () => _open(WeatherPage(deps: d)),
                 ),
                 SettingsRow(icon: Icons.smart_display_outlined, title: 'Videos', status: _videos(), onTap: () => _open(VideosPage(deps: d))),
               ],

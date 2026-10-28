@@ -104,6 +104,30 @@ class SearchEngine {
   Map<String, dynamic> liveFetch(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'fetch', jsonEncode(request))));
   Map<String, dynamic> liveGet(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'get', jsonEncode(request))));
 
+  CsLiveNative get _liveNative {
+    final n = native is CsLiveNative ? native as CsLiveNative : null;
+    if (n != null && n.hasLivePolicy) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core cannot take a fetch policy or keys yet');
+  }
+
+  /// cs_live_set_fetch_policy: `{"online","allow_metered","metered","enabled_sources":[ids]}`; null clears it (every fetch is denied).
+  void liveSetFetchPolicy(Map<String, dynamic>? policy) {
+    if (_liveNative.liveSetFetchPolicy(_h, policy == null ? null : jsonEncode(policy)) < 0) {
+      throw CacheSearchException.fromJson(native.lastError(_h));
+    }
+  }
+
+  /// cs_live_set_key: one source's key, kept in the core's memory only; null forgets it.
+  void liveSetKey(String sourceId, String? key) {
+    if (_liveNative.liveSetKey(_h, sourceId, key) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// cs_live_preview (needs no handle): checks a connector definition (`check_only`), or downloads once with it.
+  Map<String, dynamic> livePreview(Map<String, dynamic> request) {
+    final r = _liveNative.livePreview(jsonEncode(request));
+    return _object(r ?? (throw CacheSearchException.fromJson(native.lastError(0))));
+  }
+
   /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache.
   Map<String, dynamic> layers(String op, [String? arg]) => _object(_ok(native.layers(_h, op, arg)));
 

@@ -100,6 +100,22 @@ abstract class CsMapNative {
   String? placeDelete(int handle, String key);
 }
 
+/// The live-fetch policy, the keys and the connector checker (cs_live_set_fetch_policy, cs_live_set_key, cs_live_preview). Kept apart
+/// from [CsNative] so the fakes of the older seam do not change. [FfiCsNative] implements it; [hasLivePolicy] is false when the loaded
+/// core is older than these calls (the symbols are looked up when first used, never at load).
+abstract class CsLiveNative {
+  bool get hasLivePolicy;
+
+  /// cs_live_set_fetch_policy: [policyJson] null clears the policy. 0 on success, -1 on error.
+  int liveSetFetchPolicy(int handle, String? policyJson);
+
+  /// cs_live_set_key: [key] null clears it. 0 on success, -1 on error. The key is kept in the core's memory only.
+  int liveSetKey(int handle, String sourceId, String? key);
+
+  /// cs_live_preview (no handle): checks a connector definition, or downloads once with it. Null on error: [CsNative.lastError] with handle 0.
+  String? livePreview(String requestJson);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -140,7 +156,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative {
+class FfiCsNative implements CsNative, CsMapNative, CsLiveNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -471,6 +487,61 @@ class FfiCsNative implements CsNative, CsMapNative {
 
   @override
   String? mapProgress(int handle, String requestJson) => _callHS(_mapProgress, handle, requestJson);
+
+  // ---- live fetch policy, keys and the connector checker: looked up on first use, because an older core must still load ----
+
+  late final int Function(Pointer<Void>, Pointer<Utf8>)? _livePolicy = _lookupSetter('cs_live_set_fetch_policy');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _livePreview = _lookupPreview();
+
+  int Function(Pointer<Void>, Pointer<Utf8>)? _lookupSetter(String name) {
+    try {
+      return _lib.lookupFunction<_SetSourcesC, _SetSources>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  Pointer<Utf8> Function(Pointer<Utf8>)? _lookupPreview() {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Pointer<Utf8>), Pointer<Utf8> Function(Pointer<Utf8>)>('cs_live_preview');
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  late final int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)? _liveKey = _lookupKey();
+
+  int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)? _lookupKey() {
+    try {
+      return _lib.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>), int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)>('cs_live_set_key');
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  @override
+  bool get hasLivePolicy => _livePolicy != null && _liveKey != null && _livePreview != null;
+
+  @override
+  int liveSetFetchPolicy(int handle, String? policyJson) => using((a) {
+        final f = _livePolicy;
+        if (f == null) return -1;
+        return f(_p(handle), policyJson == null ? nullptr : policyJson.toNativeUtf8(allocator: a));
+      });
+
+  @override
+  int liveSetKey(int handle, String sourceId, String? key) => using((a) {
+        final f = _liveKey;
+        if (f == null) return -1;
+        return f(_p(handle), sourceId.toNativeUtf8(allocator: a), key == null ? nullptr : key.toNativeUtf8(allocator: a));
+      });
+
+  @override
+  String? livePreview(String requestJson) => using((a) {
+        final f = _livePreview;
+        if (f == null) return null;
+        return _take(f(requestJson.toNativeUtf8(allocator: a)));
+      });
 
   // The saved-places calls are bound with the rest of the core's calls above (cs_places_list, cs_place_save, cs_place_delete).
   @override

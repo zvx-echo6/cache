@@ -34,7 +34,7 @@ void main() {
       expect(((c['places'] as Map)['packs'] as List).single, endsWith('places.sqlite'));
       expect(((c['routing'] as Map)['valhalla'] as Map)['shim'], 'libvalhalla_shim.so');
       expect((c['routing'] as Map).containsKey('offroad'), isFalse);
-      expect((c['live'] as Map)['sources_dir'], '${files.path}/live-sources');
+      expect((c['live'] as Map)['sources_dir'], '${files.path}/live-defs');
     } finally {
       dir.deleteSync(recursive: true);
     }
