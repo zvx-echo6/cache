@@ -1,0 +1,26 @@
+[package]
+name = "cache_search_cli"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Linux command-line and HTTP wrapper over the cache_search C ABI (headless test runs, training capture)"
+# This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
+workspace = "../native"
+
+[lib]
+name = "cache_search_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cs"
+path = "src/main.rs"
+
+[dependencies]
+cache_search = { path = "../native/cache_search" }
+serde_json = "1"
+libloading = "0.8"
+tiny_http = "0.12"
+sha2 = "0.10"
+
+[dev-dependencies]
+edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }

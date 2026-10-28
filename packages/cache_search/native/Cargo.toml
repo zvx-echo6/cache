@@ -1,0 +1,9 @@
+[workspace]
+members = ["cache_search", "../cli"]
+resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
