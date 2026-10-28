@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../brand.dart';
 import '../theme.dart';
 import 'layout_state.dart';
 import 'modules.dart';
@@ -16,8 +15,9 @@ void addToHome(BuildContext context, LayoutState layout, Shortcut s) {
   _say(context, layout.addShortcut(s) ? 'Added to Home' : 'Already on Home');
 }
 
-/// The Modules screen: a grid of big painted tiles. A tap opens the module; a long press (or the ⋮) offers
-/// Pin to bar / Unpin from bar and Add to Home.
+/// The Modules screen: a grid of app icons, each the module's line icon (the one the bottom bar shows) on a rounded square.
+/// A tap opens the module; tap and hold offers Pin to bar / Unpin from bar and Add to Home. A dot under the name marks the
+/// modules on the bar.
 class ModulesScreen extends StatelessWidget {
   const ModulesScreen({super.key, required this.layout, required this.onOpen});
 
@@ -105,55 +105,71 @@ class ModulesScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('Modules')),
       body: ListenableBuilder(
         listenable: layout,
-        builder: (context, _) => GridView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            mainAxisExtent: 196,
-          ),
+        builder: (context, _) => ListView(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
           children: [
-            for (final m in ModuleId.values)
-              Material(
-                key: ValueKey('module-${m.name}'),
-                color: k.surface,
-                borderRadius: BorderRadius.circular(20),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(20),
-                  onTap: () => onOpen(m),
-                  onLongPress: () => _actions(context, m),
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            BrandTileImage(m.tile, size: 96),
-                            const SizedBox(height: 8),
-                            Text(m.label, style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600, color: k.text)),
-                            if (layout.isPinned(m))
-                              Padding(
-                                padding: const EdgeInsets.only(top: 2),
-                                child: Text('On the bar', style: TextStyle(fontSize: 13, color: k.secondary)),
-                              ),
-                          ],
-                        ),
-                      ),
-                      Positioned(
-                        top: 0,
-                        right: 0,
-                        child: IconButton(
-                          key: ValueKey('module-menu-${m.name}'),
-                          tooltip: 'More for ${m.label}',
-                          icon: Icon(Icons.more_vert, color: k.secondary),
-                          onPressed: () => _actions(context, m),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+            GridView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                mainAxisSpacing: 20,
+                crossAxisSpacing: 12,
+                mainAxisExtent: 112,
               ),
+              children: [
+                for (final m in ModuleId.values)
+                  Semantics(
+                    button: true,
+                    label: layout.isPinned(m) ? '${m.label}, on the bar' : m.label,
+                    onLongPressHint: 'Options',
+                    excludeSemantics: true,
+                    child: InkWell(
+                      key: ValueKey('module-${m.name}'),
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => onOpen(m),
+                      onLongPress: () => _actions(context, m),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(height: 4),
+                          Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+                            child: Icon(m.icon, size: 32, color: k.secondary),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            m.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text),
+                          ),
+                          const SizedBox(height: 4),
+                          // On the bar: a small dot in the accent colour, as the bar's selected label is.
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: layout.isPinned(m) ? k.accent : Colors.transparent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 24),
+              child: Text(
+                'Tap and hold an icon for its options',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, color: k.secondary),
+              ),
+            ),
           ],
         ),
       ),

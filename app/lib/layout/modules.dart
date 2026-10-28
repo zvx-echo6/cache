@@ -20,7 +20,7 @@ enum ModuleId {
   final IconData icon;
   final IconData selectedIcon;
 
-  /// The painted tile used on the Modules screen and on Home shortcuts.
+  /// The painted tile used on Home shortcuts.
   final BrandTile tile;
 
   static ModuleId? byName(String? n) {

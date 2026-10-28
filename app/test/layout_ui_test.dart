@@ -161,6 +161,21 @@ void main() {
     await r.stop(tester);
   });
 
+  testWidgets('Modules shows app icons: the bar\'s line icons, a dot for the ones on the bar, options on tap and hold', (tester) async {
+    final r = Rig();
+    await r.start(tester);
+    await openModules(tester);
+    expect(find.text('Tap and hold an icon for its options'), findsOneWidget);
+    expect(find.byTooltip('More for Videos'), findsNothing, reason: 'no menu dots');
+    // the same line icon as the bar, not the painted tile
+    expect(find.descendant(of: find.byKey(const ValueKey('module-videos')), matching: find.byIcon(ModuleId.videos.icon)), findsOneWidget);
+    expect(find.bySemanticsLabel('Ask, on the bar'), findsOneWidget);
+    expect(find.bySemanticsLabel('Videos'), findsOneWidget);
+    await openModuleMenu(tester, ModuleId.videos);
+    expect(find.text('Pin to bar'), findsOneWidget);
+    await r.stop(tester);
+  });
+
   testWidgets('a 4th pin says the bar is full and replacing one keeps Home first and Modules last, at 5 items', (tester) async {
     final r = Rig();
     await r.start(tester);
