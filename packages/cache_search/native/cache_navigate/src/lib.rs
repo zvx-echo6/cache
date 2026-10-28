@@ -56,6 +56,15 @@ pub trait TileStream: Send + Sync {
     fn tile_dir(&self) -> Option<PathBuf> {
         None
     }
+    /// Whether a route can be tried: tiles are here, or they can be fetched (online). A device that has downloaded nothing
+    /// still routes online; offline with nothing here it does not offer routing.
+    fn routable(&self) -> bool {
+        true
+    }
+    /// The downloaded regions' names, for the answer's "routing covers" line.
+    fn region_name(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The Valhalla config for `tiles`: a folder of tiles (`mjolnir.tile_dir`) or a tiles.tar (`mjolnir.tile_extract`).
@@ -298,13 +307,18 @@ impl NavCore {
         if self.injected {
             return true;
         }
-        match (&self.cfg.valhalla, self.tiles_path()) {
-            (Some(v), Some(t)) => {
-                let t = Path::new(&t);
-                (t.is_file() || t.is_dir()) && (cfg!(target_os = "ios") || Path::new(&v.shim).is_file())
-            }
-            _ => false,
+        let Some(v) = &self.cfg.valhalla else { return false };
+        if !(cfg!(target_os = "ios") || Path::new(&v.shim).is_file()) {
+            return false;
         }
+        if !v.tiles.is_empty() && Path::new(&v.tiles).is_file() {
+            return true;
+        }
+        // A folder that fills as needed: routable when it has tiles or can fetch them, folder or not yet.
+        if let Some(s) = self.stream() {
+            return s.routable();
+        }
+        self.tiles_path().map(|t| Path::new(&t).is_dir()).unwrap_or(false)
     }
 
     fn offroad_installed(&self) -> bool {
@@ -398,7 +412,11 @@ impl NavCore {
         let Some(v) = &self.cfg.valhalla else { return (String::new(), "unknown".into()) };
         let tiles = self.tiles_path().unwrap_or_else(|| v.tiles.clone());
         let folder = Path::new(&tiles).is_dir();
-        let name = v.region.clone().unwrap_or_else(|| if folder { String::new() } else { config::region_from_path(&tiles) });
+        let name = v
+            .region
+            .clone()
+            .or_else(|| if folder { self.stream().and_then(|s| s.region_name()) } else { None })
+            .unwrap_or_else(|| if folder { String::new() } else { config::region_from_path(&tiles) });
         let modified = if folder { self.folder_newest(&tiles) } else { std::fs::metadata(&tiles).and_then(|m| m.modified()).ok() };
         let age = modified
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())

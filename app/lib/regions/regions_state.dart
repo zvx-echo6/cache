@@ -16,7 +16,7 @@ import 'regions_core.dart';
 const String kRoutingBaseUrl = 'https://cache.echo6.co/routing/';
 
 /// The file next to the core's region folder where the app keeps what each region holds (its parts and the map areas it
-/// downloaded) and the routing section the core is opened with (read by buildCoreExtras).
+/// downloaded).
 const String kRegionsAppFile = 'regions-app.json';
 
 /// What downloading the road routing part of a region costs, from the core's plan.
@@ -146,7 +146,6 @@ class RegionsState extends ChangeNotifier {
     required this.catalogue,
     required this.maps,
     RegionsOpener? opener,
-    this.onRoutingChanged,
     this.baseUrl = kRoutingBaseUrl,
   }) : _opener = opener ?? openRealRegions;
 
@@ -156,13 +155,6 @@ class RegionsState extends ChangeNotifier {
   final MapsState maps;
   final RegionsOpener _opener;
   final String baseUrl;
-
-  /// Called when the regions whose road routing is ready change (one finished, one was removed, a new build is in), so the
-  /// search core can be pointed at the tile folder again. Answers true when the change waits for Cache to be opened again.
-  final Future<bool> Function()? onRoutingChanged;
-
-  /// The ready regions changed, and the search core picks the new routing up only when Cache is opened again.
-  bool routingWaitsForRestart = false;
 
   RegionsCoreLike? _core;
   bool _started = false;
@@ -255,16 +247,15 @@ class RegionsState extends ChangeNotifier {
     }
   }
 
-  /// Keeps the routing section the core is opened with in step with the ready regions, and says when it changed.
+  /// Notes the ready regions and their build. The search core routes on the same engine's tile folder, so a region that
+  /// finishes is used by the next route, with nothing to reopen.
   Future<void> _routingCheck() async {
     final ready = [for (final r in _routingRegions) if (r['state'] == 'ready') r]..sort((a, b) => (a['id'] as String).compareTo(b['id'] as String));
     final dir = status['tile_dir'] as String?;
     final key = '${status['build']}|$dir|${ready.map((r) => r['id']).join(',')}';
     if (key == _routingKey) return;
-    final first = _routingKey == null && ready.isEmpty;
     _routingKey = key;
     await _save();
-    if (!first && onRoutingChanged != null) routingWaitsForRestart = await onRoutingChanged!();
   }
 
   List<Map<String, dynamic>> get _routingRegions => [for (final r in (status['regions'] as List? ?? const [])) (r as Map).cast<String, dynamic>()];

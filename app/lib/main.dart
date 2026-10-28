@@ -163,7 +163,6 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: getApplicationSupportDirectory,
     catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
     maps: maps,
-    onRoutingChanged: sources.routingChanged,
   );
   late final SettingsHub hub = SettingsHub(
     settings: settings,

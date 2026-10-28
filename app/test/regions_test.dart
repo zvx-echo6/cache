@@ -27,7 +27,6 @@ class _Rig {
   late RegionCatalogue catalogue;
   late RegionsState regions;
   late RegionShard us;
-  int routingChanges = 0;
 
   RegionRecord get county => us[_county]!;
 
@@ -44,10 +43,6 @@ class _Rig {
       catalogue: r.catalogue,
       maps: r.s.maps,
       opener: (_) async => r.core,
-      onRoutingChanged: () async {
-        r.routingChanges++;
-        return false;
-      },
     );
     await tester.runAsync(() async {
       await r.regions.init();
@@ -163,15 +158,16 @@ void main() {
     });
     await tester.pump();
     expect(find.textContaining('Road routing and map'), findsOneWidget);
-    expect(r.routingChanges, 1, reason: 'a region whose routing is ready changes what the search core is opened with');
+    expect(find.textContaining('next time Cache opens'), findsNothing, reason: 'the next route uses it, nothing waits for a restart');
 
     final saved = jsonDecode(File('${r.s.dir.path}/$kRegionsAppFile').readAsStringSync()) as Map;
     expect((saved['routing'] as Map)['tile_dir'], r.core.tileDir);
     expect((saved['routing'] as Map)['regions'], ['Twin Falls County']);
     final files = Directory('${r.s.dir.path}/files')..createSync();
-    final valhalla = (buildCoreExtras(filesDir: files, supportDir: r.s.dir)['routing'] as Map)['valhalla'] as Map;
-    expect(valhalla['tiles'], r.core.tileDir);
-    expect(valhalla['region'], 'Twin Falls County');
+    // The core is always given the router and the region engine; it routes on the engine's folder, so nothing changes here.
+    final extras = buildCoreExtras(filesDir: files, supportDir: r.s.dir);
+    expect(((extras['routing'] as Map)['valhalla'] as Map)['tiles'], '');
+    expect((extras['regions'] as Map)['dir'], '${r.s.dir.path}/regions');
 
     await tester.tap(find.byTooltip('Delete Twin Falls County'));
     await tester.pumpAndSettle();
@@ -182,8 +178,6 @@ void main() {
     expect(r.core.calls, contains('remove'));
     expect(r.s.engine.storageTotal, 0, reason: 'its map area is deleted too');
     expect(find.text('Nothing downloaded yet'), findsOneWidget);
-    expect(r.routingChanges, 2);
-    expect(buildCoreExtras(filesDir: files, supportDir: r.s.dir).containsKey('routing'), isFalse);
     await r.dispose(tester);
   });
 

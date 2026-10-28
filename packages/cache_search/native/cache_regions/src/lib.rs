@@ -1330,6 +1330,23 @@ impl Regions {
         Some(self.inner.build_dir(&b))
     }
 
+    /// Whether a route can be tried: the device's build has tiles here, or the network may be used to fetch them (a device
+    /// that has downloaded nothing routes online on streamed tiles).
+    pub fn routable(&self) -> bool {
+        if self.inner.may_use_network() {
+            return true;
+        }
+        let st = self.inner.st();
+        st.build.as_ref().map(|b| st.present.get(b).map(|p| !p.is_empty()).unwrap_or(false)).unwrap_or(false)
+    }
+
+    /// The downloaded regions' names, in the order they were added ("Southern Idaho, Utah"); None when there are none.
+    pub fn region_names(&self) -> Option<String> {
+        let st = self.inner.st();
+        let names: Vec<&str> = st.regions.iter().map(|r| r.name.as_str()).collect();
+        (!names.is_empty()).then(|| names.join(", "))
+    }
+
     /// Before a route is computed: fetch the tiles near its points ([lat, lon]) that are not here yet, within the default
     /// timeout. Whatever happens, the route goes ahead on the tiles there are.
     pub fn prepare(&self, points: &[(f64, f64)]) {

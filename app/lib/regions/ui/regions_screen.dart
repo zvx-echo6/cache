@@ -446,7 +446,6 @@ class LocalTab extends StatelessWidget {
                 ),
             ],
           ),
-          if (regions.routingWaitsForRestart) const NoteText('Road routing for the new regions starts the next time Cache opens.'),
           if (local.length > 1) const NoteText('Largest first. A part two regions share is kept once.'),
         ]);
       },

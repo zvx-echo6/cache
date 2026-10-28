@@ -43,6 +43,12 @@ impl cache_navigate::TileStream for RegionStream {
     fn tile_dir(&self) -> Option<std::path::PathBuf> {
         self.0.tile_dir()
     }
+    fn routable(&self) -> bool {
+        self.0.routable()
+    }
+    fn region_name(&self) -> Option<String> {
+        self.0.region_names()
+    }
 }
 
 pub fn regions_err(e: cache_regions::Error) -> Error {

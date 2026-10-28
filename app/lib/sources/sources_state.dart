@@ -151,29 +151,6 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     );
   }
 
-  /// True when the routing the core would be opened with now differs from what it was opened with (a region's road routing
-  /// finished or was removed). The core reads its routing section only in cs_open, and nothing reopens it while the app runs
-  /// (the layer engine, the weather part and open conversations hold it), so the change applies the next time Cache starts.
-  bool routingPending = false;
-
-  /// Builds the routing section again from what is on the phone and says whether it waits for a restart ([routingPending]).
-  Future<bool> routingChanged() async {
-    if (coreExtras != null) return routingPending;
-    try {
-      final files = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
-      final support = await getApplicationSupportDirectory();
-      final fresh = buildCoreExtras(
-        filesDir: files,
-        supportDir: support,
-        layerDefsDir: Directory('${support.path}/layer-defs'),
-        shim: shimPath(Platform.isAndroid ? nativeLibraryDir() : null),
-      );
-      routingPending = jsonEncode(fresh['routing']) != jsonEncode(_extra['routing']);
-      notifyListeners();
-    } catch (_) {}
-    return routingPending;
-  }
-
   /// The core, for the tools and the host that feed it (null until it is open).
   SearchCore? get core => _core;
 

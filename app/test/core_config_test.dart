@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/search/core_config.dart';
@@ -88,34 +87,24 @@ void main() {
       expect((c['user'] as Map)['db_path'], endsWith('user.sqlite'));
     });
 
-    test('off-road needs both files, and a core with no tiles has no road routing', () {
+    test('off-road needs both files; with no tiles.tar the router is still configured, on the region engine\'s folder', () {
       touch('packs/idaho/places.sqlite');
       touch('packs/idaho/valhalla/tiles.tar');
       touch('packs/idaho/offroad.sqlite');
       expect((build()['routing'] as Map).containsKey('offroad'), isFalse);
       File('${files.path}/packs/idaho/valhalla/tiles.tar').deleteSync();
-      expect(build().containsKey('routing'), isFalse);
+      final v = (build()['routing'] as Map)['valhalla'] as Map;
+      expect(v['tiles'], '', reason: 'empty: the core routes on the regions folder');
+      expect(v['shim'], '/lib/libvalhalla_shim.so');
       expect(build().containsKey('places'), isTrue);
     });
 
-    test('a downloaded region\'s tile folder is the road routing before any tiles.tar, with the ready regions\' names', () {
+    test('the region engine is always configured, and a tiles.tar still wins when there is one', () {
       touch('packs/idaho/valhalla/tiles.tar');
-      final tileDir = Directory('${support.path}/regions/tiles/2026-10')..createSync(recursive: true);
-      File('${support.path}/regions-app.json').writeAsStringSync(jsonEncode({
-        'regions': {},
-        'routing': {'key': 'k', 'tile_dir': tileDir.path, 'regions': ['Southern Idaho', 'Utah']},
-      }));
       final c = build();
-      final v = (c['routing'] as Map)['valhalla'] as Map;
-      expect(v['tiles'], tileDir.path, reason: 'a folder, not the tar');
-      expect(v['region'], 'Southern Idaho, Utah');
       expect(c['regions'], {'dir': '${support.path}/regions', 'base_url': 'https://cache.echo6.co/routing/'});
-
-      // The folder gone (a new build replaced it and nothing is ready yet): back to the pack's tiles.tar, named by its folder.
-      tileDir.deleteSync(recursive: true);
-      final again = (build()['routing'] as Map)['valhalla'] as Map;
-      expect((again['tiles'] as String).replaceAll('\\', '/'), endsWith('/packs/idaho/valhalla/tiles.tar'));
-      expect(again.containsKey('region'), isFalse);
+      final v = (c['routing'] as Map)['valhalla'] as Map;
+      expect((v['tiles'] as String).replaceAll('\\', '/'), endsWith('/packs/idaho/valhalla/tiles.tar'));
     });
 
     test('several regions give several places packs; no packs folder gives an empty list', () {
