@@ -21,3 +21,6 @@ serde_json.workspace = true
 [dev-dependencies]
 # The tests' routing server.
 tiny_http = "0.12"
+# Cross-checks cache_places' level 1 tile ids (places tiles) against this crate's grid. (The places work makes this a
+# normal dependency; cache_places does not depend on this crate, so there is no cycle.)
+cache_places = { path = "../cache_places" }
