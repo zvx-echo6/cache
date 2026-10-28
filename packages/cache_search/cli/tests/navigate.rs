@@ -270,11 +270,11 @@ fn navigate_is_not_offered_without_the_routing_data() {
 
 /// AIDA's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
 /// two own fields last. The recorded rows are serialised with sorted keys, so order is checked against this list.
-const RESULT_ORDER: [&str; 18] = [
+const RESULT_ORDER: [&str; 19] = [
     "ok", "n", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "nearest_search",
-    "distance_mi", "distance_km", "duration_minutes", "major_roads", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
+    "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
 ];
-const PLACE_ORDER: [&str; 9] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "near", "snap_distance_m"];
+const PLACE_ORDER: [&str; 11] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "near", "snap_distance_m", "lat", "lon"];
 
 fn kind_of(v: &Value) -> &'static str {
     match v {
@@ -335,13 +335,15 @@ fn compare_to_aida(example: &str, cache: &Value) {
         }
     }
     for k in &got {
-        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
+        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
     }
     same_types(cache, aida, example);
     for end in ["from_matched", "to_matched"] {
         in_order(&names(&cache[end]), &PLACE_ORDER, end);
         // AIDA's `_place` fields, `near` and `snap_distance_m`, plus er_tier when the source has one
-        let want: Vec<String> = names(&aida[end]).into_iter().filter(|k| k != "er_tier").collect();
+        // (Cache adds `lat` and `lon` to both ends)
+        let mut want: Vec<String> = names(&aida[end]).into_iter().filter(|k| k != "er_tier").collect();
+        want.extend(["lat".to_string(), "lon".to_string()]);
         let have: Vec<String> = names(&cache[end]).into_iter().filter(|k| k != "er_tier").collect();
         assert_eq!(sorted(have), sorted(want), "{example}.{end}");
         same_types(&cache[end], &aida[end], end);

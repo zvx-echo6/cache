@@ -178,14 +178,14 @@ fn road_route_has_aidas_shape() {
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     assert_eq!(
         keys(&v),
-        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "major_roads", "map_region", "map_region_age"]
+        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "map_region", "map_region_age"]
     );
     assert!(v["address"].as_str().unwrap().starts_with("nav:"));
     assert_eq!(v["address"], format!("nav:{}", v["route_id"].as_str().unwrap()));
     assert_eq!(v["mode"], "drive");
     assert_eq!(v["location_bias"], "sender_node_position");
     let mut want: Vec<&str> = PLACE_KEYS.to_vec();
-    want.extend(["near", "snap_distance_m"]);
+    want.extend(["near", "snap_distance_m", "lat", "lon"]);
     assert_eq!(keys(&v["from_matched"]), want);
     assert_eq!(v["from_matched"]["place_name"], "current location");
     assert_eq!(v["to_matched"]["place_name"], "42.60,-113.70");

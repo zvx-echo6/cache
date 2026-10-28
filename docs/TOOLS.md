@@ -106,11 +106,11 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
 ```json
 {"type": "function", "function": {
   "name": "navigate",
-  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places, distance, travel time and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
   "strict": true,
   "parameters": {"type": "object", "properties": {
     "from": {"type": "string", "maxLength": 300,
-             "description": "Starting place name. Omit it when the person means where they are now."},
+             "description": "Starting place name, or \"lat,lon\" coordinates the person gave. Omit it when the person means where they are now."},
     "to": {"type": "string", "minLength": 1, "maxLength": 300,
            "description": "Destination place name, for a named place. For \"nearest X\" give to_type instead."},
     "to_type": {"type": "string",
@@ -120,7 +120,7 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
     "near": {"type": "string", "minLength": 1, "maxLength": 200,
              "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
     "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
-                    "description": "Off-road legs only: how private or closed land is treated. strict never crosses it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it."}},
+                    "description": "Off-road legs only: how land the map data marks private or closed is treated. strict avoids it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it. This follows the map data's access rules and cannot guarantee access on the ground."}},
     "required": ["mode"], "additionalProperties": false}}}
 ```
 
@@ -156,7 +156,7 @@ and puts `"ok": true` in front (the example shows `ok`; the app's `n` follows it
 AIDA result `offroad-v24-12-t1-h` (`packages/cache_search/cli/tests/fixtures/aida_navigate/`, request: from "Kuna",
 to "Swan Falls Dam", near "Kuna, Idaho", mode drive), with its values as recorded, the fields written in the order the
 tool writes them, `pins` taken out (Cache has no pins), and `map_region` and `map_region_age` added as the tool emits
-them. The recording shows AIDA's geocoder values for `county`, `distance_km` and `near`; see the places-pack note below.
+them, plus `direction_from_start` and the `lat` and `lon` of both matched places (Cache's additions; the coordinates shown are illustrative, not recorded). The recording shows AIDA's geocoder values for `county`, `distance_km` and `near`; see the places-pack note below.
 
 ```json
 {
@@ -181,7 +181,9 @@ them. The recording shows AIDA's geocoder values for `county`, `distance_km` and
       "state": "ID",
       "street": "East Deer Flat Road"
     },
-    "snap_distance_m": 10
+    "snap_distance_m": 10,
+    "lat": 43.49184,
+    "lon": -116.42033
   },
   "to_matched": {
     "place_name": "Swan Falls Storage",
@@ -200,7 +202,9 @@ them. The recording shows AIDA's geocoder values for `county`, `distance_km` and
       "state": "ID",
       "street": "South Swan Falls Road"
     },
-    "snap_distance_m": 21
+    "snap_distance_m": 21,
+    "lat": 43.4629,
+    "lon": -116.418
   },
   "other_destination_candidates": [
     {
@@ -225,6 +229,7 @@ them. The recording shows AIDA's geocoder values for `county`, `distance_km` and
   "distance_mi": 1.99,
   "distance_km": 3.21,
   "duration_minutes": 6.0,
+  "direction_from_start": "south",
   "major_roads": [
     {
       "name": "North Linder Road",
@@ -252,10 +257,11 @@ Fields:
 - `route_id` is the router's id for the route, the same value the tool's `n` address is built from.
 - `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
   (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
-  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence.
+  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence. After `snap_distance_m` come `lat` and `lon`, the matched place's coordinates rounded to 5 decimals.
 - `other_destination_candidates` has up to 2 other matches (the same place fields, no `near`); empty when none. On a
   nearest-place search each entry also has `drive_min` (the travel time in minutes, for every mode; null when it could not be timed).
 - `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (AIDA passes navi's values through: `navi_places/nearby.py` `_rank`.)
+- `direction_from_start` is the compass direction of the straight-line (initial great-circle) bearing from the start to the destination, one lower-case word of eight: `north`, `northeast`, `east`, `southeast`, `south`, `southwest`, `west`, `northwest` (45 degree sectors centred on each point). It follows `duration_minutes`.
 - `major_roads` is a list of `{"name", "distance_km"}`.
 - Every step has `index`, `kind` (`road`, `offroad` or `offroad_follow`), `type`, `street_names`, `distance_mi`,
   `cardinal` and `instruction`. Off-road steps add `travel` (`foot`, `2w`, `4w` or `vehicle`), `grade_class`,

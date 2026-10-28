@@ -310,11 +310,11 @@ impl Tool for NavigateTool {
         }
         Some(json!({"type": "function", "function": {
             "name": "navigate",
-            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places, distance, travel time and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
             "strict": true,
             "parameters": {"type": "object", "properties": {
                 "from": {"type": "string", "maxLength": 300,
-                         "description": "Starting place name. Omit it when the person means where they are now."},
+                         "description": "Starting place name, or \"lat,lon\" coordinates the person gave. Omit it when the person means where they are now."},
                 "to": {"type": "string", "minLength": 1, "maxLength": 300,
                        "description": "Destination place name, for a named place. For \"nearest X\" give to_type instead."},
                 "to_type": {"type": "string", "enum": self.to_types(),
@@ -323,7 +323,7 @@ impl Tool for NavigateTool {
                 "near": {"type": "string", "minLength": 1, "maxLength": 200,
                          "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
                 "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
-                                "description": "Off-road legs only: how private or closed land is treated. strict never crosses it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it."}},
+                                "description": "Off-road legs only: how land the map data marks private or closed is treated. strict avoids it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it. This follows the map data's access rules and cannot guarantee access on the ground."}},
                 "required": ["mode"], "additionalProperties": false}}}))
     }
 
