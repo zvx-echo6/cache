@@ -183,7 +183,7 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
     let km = drive["distance_km"].as_f64().unwrap();
     assert!((200.0..300.0).contains(&km), "{km}");
     assert!(drive.get("offroad_mi").is_none());
-    assert_eq!(drive["steps"].as_array().unwrap().len(), 12.min(drive["step_count"].as_u64().unwrap() as usize));
+    assert!(drive.get("steps").is_none());
     assert_eq!(drive["route_id"].as_str().unwrap().len(), 16);
 
     // 2. walk from a point in the Sawtooths out to the nearest road and on to Stanley (off-road legs come back inside the route)
@@ -192,12 +192,7 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
     assert_eq!(walk["location_bias"], "from_place");
     assert!(walk["offroad_mi"].as_f64().unwrap() > 0.0);
     assert!(walk["offroad_note"].as_str().is_some());
-    assert_eq!(walk["steps"][0]["kind"], "offroad");
-    assert_eq!(walk["steps"].as_array().unwrap().len(), 12);
-    assert!(walk.get("road_steps_omitted").is_some());
-    for k in ["travel", "grade_class", "elev_gain_m", "elev_loss_m", "terrain"] {
-        assert!(walk["steps"][0].get(k).is_some(), "{k}");
-    }
+    assert!(walk.get("steps").is_none());
 
     // 3. a strict land-access foot route from the off-road parity set (R08)
     let strict = d.content("strict-foot-r08", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "walk", "land_access": "strict"}), None);
@@ -275,13 +270,10 @@ fn navigate_is_not_offered_without_the_routing_data() {
 
 /// AIDA's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
 /// two own fields last. The recorded rows are serialised with sorted keys, so order is checked against this list.
-const RESULT_ORDER: [&str; 23] = [
+const RESULT_ORDER: [&str; 18] = [
     "ok", "n", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "nearest_search",
-    "distance_mi", "distance_km", "duration_minutes", "major_roads", "step_count", "steps", "steps_truncated", "road_steps_omitted",
-    "offroad_steps_omitted", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
+    "distance_mi", "distance_km", "duration_minutes", "major_roads", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
 ];
-const STEP_ORDER: [&str; 13] =
-    ["index", "kind", "type", "street_names", "distance_mi", "cardinal", "instruction", "travel", "grade_class", "elev_gain_m", "elev_loss_m", "terrain", "follow"];
 const PLACE_ORDER: [&str; 9] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "near", "snap_distance_m"];
 
 fn kind_of(v: &Value) -> &'static str {
@@ -338,7 +330,7 @@ fn compare_to_aida(example: &str, cache: &Value) {
     // every key of AIDA's result is in Cache's, except the radio's `pins` and the ones that depend on the route
     let conditional = ["pins", "road_steps_omitted", "offroad_steps_omitted", "offroad_mi", "offroad_note", "warnings", "nearest_search"];
     for k in names(aida) {
-        if !conditional.contains(&k.as_str()) {
+        if !conditional.contains(&k.as_str()) && !["steps", "step_count", "steps_truncated"].contains(&k.as_str()) {
             assert!(got.contains(&k), "{example}: AIDA has {k}, Cache does not ({got:?})");
         }
     }
@@ -361,24 +353,7 @@ fn compare_to_aida(example: &str, cache: &Value) {
     for m in cache["major_roads"].as_array().unwrap() {
         assert_eq!(sorted(names(m)), ["distance_km", "name"], "{example}");
     }
-    assert!(cache["steps"].as_array().unwrap().len() <= 12);
-    for st in cache["steps"].as_array().unwrap() {
-        in_order(&names(st), &STEP_ORDER, "step");
-        let kind = st["kind"].as_str().unwrap();
-        // an AIDA step of the same kind, if its shown steps have one: the same keys (terrain depends on the data) and types
-        if let Some(a) = aida["steps"].as_array().unwrap().iter().find(|a| a["kind"] == kind) {
-            let strip = |v: &Value| sorted(names(v)).into_iter().filter(|k| k != "terrain").collect::<Vec<_>>();
-            assert_eq!(strip(st), strip(a), "{example}: step keys of a {kind} step");
-            same_types(st, a, "step");
-            if let Some(f) = st.get("follow") {
-                assert_eq!(names(f), ["name", "trail_kind"]);
-            }
-        }
-        if kind != "road" {
-            assert!(["offroad_leg", "mode_change", "offroad_follow"].contains(&st["type"].as_str().unwrap()), "{st}");
-            assert!(st["instruction"].as_str().unwrap().contains("mi"));
-        }
-    }
+    assert!(cache.get("steps").is_none(), "turn instructions belong to Maps");
     if let Some(w) = cache.get("warnings") {
         assert_eq!(names(&w[0]), ["code", "end", "road_point", "gap_m"]);
         if let Some(aw) = aida.get("warnings") {
@@ -415,9 +390,7 @@ fn results_match_aidas_recorded_navigate_results() {
         // the wire form of the c-abi result itself is `ok:true, n:1` first
         assert_eq!(names(&v)[..2], ["ok", "n"]);
         compare_to_aida(example, &v);
-        for s in v["steps"].as_array().unwrap() {
-            kinds.insert(s["kind"].as_str().unwrap().to_string());
-        }
+        if v["offroad_mi"].as_f64().unwrap_or(0.0) > 0.0 { kinds.insert("offroad".to_string()); }
     }
     // the off-road step fields were compared against AIDA's recorded ones somewhere in these routes
     assert!(kinds.contains("offroad") || kinds.contains("offroad_follow"), "no off-road legs in any golden route: {kinds:?}");
@@ -434,4 +407,41 @@ fn results_match_aidas_recorded_navigate_results() {
     }
     compare_to_aida("warning-v25-offroad-v24-01-t1-r.json", &v);
     assert!(v.get("warnings").is_some(), "{v}");
+}
+
+#[test]
+fn retained_route_lookup_rejects_missing_or_mixed_requests_without_rerouting() {
+    let mut core = Core::open(r#"{"sources":[]}"#).unwrap();
+    let missing = core.map_route(r#"{"route_id":"missing"}"#).unwrap_err().to_json();
+    assert!(missing.contains("not_found"), "{missing}");
+    for request in [r#"{"route_id":12}"#, r#"{"route_id":""}"#, r#"{"route_id":"x","to":"43,-116"}"#] {
+        let error = core.map_route(request).unwrap_err().to_json();
+        assert!(error.contains("bad_json"), "{error}");
+    }
+}
+
+#[test]
+fn tool_route_opens_exact_snapshot_through_http_and_c_abi_without_current_location() {
+    if data().is_none() { eprintln!("skipped: snapshot integration needs Idaho routing data"); return; }
+    let tmp = Tmp::new("tool-snapshot");
+    let mut doors = Doors::new(&tmp, false);
+    let summary = doors.content("snapshot", json!({"to":"42.7319,-114.5173", "mode":"bike", "land_access":"strict"}), Some((42.536,-113.792)));
+    assert!(summary.get("steps").is_none());
+    let request = json!({"route_id":summary["route_id"]}).to_string();
+    let snapshot = doors.core.map_route(&request).unwrap();
+    let http = doors.http.req("POST", "/map/route", &request);
+    assert_eq!(snapshot, http);
+    let full: Value = serde_json::from_str(&snapshot).unwrap();
+    assert_eq!(full["ok"], true);
+    assert_eq!(full["route_id"], summary["route_id"]);
+    assert_eq!(full["mode"], "bike");
+    assert_eq!(full["land_access"], "strict");
+    assert!(full["maneuvers"].as_array().unwrap().len() > 0);
+    assert!(!full["geometry"].as_str().unwrap().is_empty());
+    assert_eq!(full["alternatives"], json!([]));
+    // Opening a preview must register this snapshot for subsequent guidance progress.
+    let progress = doors.core.map_progress(&json!({"route_id":summary["route_id"], "lat":42.536, "lon":-113.792, "now":NOW}).to_string()).unwrap();
+    let progress: Value = serde_json::from_str(&progress).unwrap();
+    assert_ne!(progress["ok"], false, "{progress}");
+    assert_eq!(doors.core.map_route(&request).unwrap(), snapshot);
 }

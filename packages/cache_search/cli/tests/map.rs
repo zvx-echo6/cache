@@ -245,7 +245,10 @@ fn map_route_and_progress_are_identical_through_the_three_doors() {
         serde_json::from_str::<Value>(v["content"].as_str().unwrap()).unwrap()
     };
     assert_eq!(nav["route_id"], drive["route_id"], "the map and the tool route with the same code");
-    assert_eq!(nav["step_count"].as_u64().unwrap() as usize, steps.len(), "every step the tool counted, none dropped");
+    assert!(nav.get("steps").is_none() && nav.get("step_count").is_none());
+    let retained: Value = serde_json::from_str(&d.core.map_route(&json!({"route_id":nav["route_id"]}).to_string()).unwrap()).unwrap();
+    assert_eq!(retained["geometry"], drive["geometry"], "opening tool route must retain exact geometry");
+    assert_eq!(retained["maneuvers"], drive["maneuvers"], "all turns belong to Maps, none dropped");
     assert!((nav["duration_minutes"].as_f64().unwrap() * 60.0 - drive["duration_s"].as_f64().unwrap()).abs() < 4.0, "the tool rounds to 0.1 min");
 
     // 2. walking from a point in the Sawtooths to Stanley: off-road legs, with their own kind in the geometry

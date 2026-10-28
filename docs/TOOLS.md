@@ -101,12 +101,12 @@ Result (text; the same number; up to ~6,000 characters, cut at a paragraph end):
 For a library concept: title, book, author, page, summary and key facts. Unknown number:
 `{"ok": false, "error": {"type": "not_found", "detail": "no result [9] in this conversation"}}`.
 
-### navigate (copied from AIDA's navigate, adapted for offline maps on the phone)
+### navigate (route summary for the assistant; navigation in Maps)
 
 ```json
 {"type": "function", "function": {
   "name": "navigate",
-  "description": "Directions in one call, to a named place (to) or to the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns the places actually matched, so a wrong match can be seen. When an end is away from roads, the route includes off-road legs (straight lines with heading, length and climb).",
+  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places, distance, travel time and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
   "strict": true,
   "parameters": {"type": "object", "properties": {
     "from": {"type": "string", "maxLength": 300,
@@ -130,15 +130,21 @@ argument added to AIDA's, and the last: it defaults to `pragmatic` and only matt
 
 **Off-road.** There is no off-road mode. When the start or the destination is away from the road network and the
 off-road data (pack and elevation file) is installed, the off-road legs come back automatically inside the route:
-a drive uses the vehicle-class modes, a walk goes on foot, a bike uses a two-wheeler. Off-road steps have
-`kind` `offroad` or `offroad_follow` and carry AIDA's fields (below). Without the off-road data the road route is
+a drive uses the vehicle-class modes, a walk goes on foot, a bike uses a two-wheeler. The full Maps snapshot includes
+the off-road maneuvers; the assistant sees the off-road distance, explanation and warnings. Without the off-road data the road route is
 returned and the end that could not be reached gets a `warnings` entry.
 
-**Steps.** `step_count` is the real number of steps. At most 12 are shown (AIDA's cap, to fit the 8k context) and
-`steps_truncated` is true when some were left out. Over the cap, every off-road step is kept (the last 12 if they alone
-exceed the cap), the first road steps fill the rest, and they stay in route order. `road_steps_omitted` gives how many
-road steps were left out and `offroad_steps_omitted` how many off-road steps; both follow `steps_truncated`, and
-`offroad_steps_omitted` is present only when it is above zero.
+**Assistant summary and navigation handoff.** The model receives matched places, distance, travel time,
+major roads, off-road distance and warnings, with the canonical `nav:<route_id>` citation address. Turn instructions,
+geometry and maneuver lists stay outside the model context. The app offers **Open navigation** from the structured
+successful tool result and opens that exact route in Maps; the model must not invent a navigation URL or turns.
+
+The app immediately calls `cs_map_route` with only `{"route_id":"<raw route id>"}` to obtain the retained full map
+snapshot (`ok:true`, geometry, all maneuvers, totals, endpoints and `alternatives:[]`). This performs no routing,
+GPS or place lookup, and registers the snapshot for `cs_map_progress`. The latest eight tool routes are retained
+per core; unknown/evicted IDs return `not_found`, malformed/mixed lookup requests return `bad_json`. Persist the
+snapshot as UI metadata outside model context for chat history/restart. Opening it previews the route and does
+not start guidance automatically.
 
 Differences from AIDA: no Meshtastic waypoint or `pins`/`bridge` fields; the start defaults to the phone's GPS
 position instead of the sender's node (`location_bias` is then `sender_node_position`, AIDA's value, for the phone's
@@ -153,31 +159,91 @@ tool writes them, `pins` taken out (Cache has no pins), and `map_region` and `ma
 them. The recording shows AIDA's geocoder values for `county`, `distance_km` and `near`; see the places-pack note below.
 
 ```json
-{"ok": true, "mode": "drive", "location_bias": "near:Kuna, Ada, Idaho, United States", "route_id": "a7650ad16e34abd2",
- "from_matched": {"place_name": "Kuna High School", "kind": "poi", "street": "East Deer Flat Road", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 1.4, "near": {"county": "Ada", "distance_m": 0, "housenumber": "637", "locality": "Kuna", "name": "Kuna High School", "state": "ID", "street": "East Deer Flat Road"}, "snap_distance_m": 10},
- "to_matched": {"place_name": "Swan Falls Storage", "kind": "poi", "street": "South Swan Falls Road", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 0.7, "near": {"county": "Ada", "distance_m": 0, "housenumber": "387", "locality": "Kuna", "name": "Swan Falls Storage", "state": "ID", "street": "South Swan Falls Road"}, "snap_distance_m": 21},
- "other_destination_candidates": [
-   {"place_name": "Swan Falls Assisted Living", "kind": "poi", "street": "West White Way", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 1.2},
-   {"place_name": "Swan Falls Family Dentistry", "kind": "poi", "street": "North Linder Road", "locality": "Kuna", "county": "Ada", "state": "ID", "distance_km": 1.5}],
- "distance_mi": 1.99, "distance_km": 3.21, "duration_minutes": 6.0,
- "major_roads": [{"name": "North Linder Road", "distance_km": 1.38}, {"name": "East Deer Flat Road", "distance_km": 0.54}, {"name": "South Swan Falls Road", "distance_km": 0.39}],
- "step_count": 12,
- "steps": [
-   {"index": 0, "kind": "offroad", "type": "offroad_leg", "street_names": [], "distance_mi": 0.11, "cardinal": "N", "instruction": "By dirt bike or mountain bike: Off-road N 0.11 mi, flat, built up (-1 m)", "travel": "2w", "grade_class": "flat", "elev_gain_m": 0, "elev_loss_m": 1, "terrain": "built up"},
-   {"index": 1, "kind": "road", "type": "start_right", "street_names": [], "distance_mi": 0.12, "cardinal": "NE", "instruction": "Drive east."},
-   {"index": 2, "kind": "road", "type": "right", "street_names": [], "distance_mi": 0.04, "cardinal": "NE", "instruction": "Turn right."},
-   {"index": 3, "kind": "road", "type": "left", "street_names": ["East Deer Flat Road"], "distance_mi": 0.34, "cardinal": "W", "instruction": "Turn left onto East Deer Flat Road."},
-   {"index": 4, "kind": "road", "type": "left", "street_names": ["North Linder Road"], "distance_mi": 0.86, "cardinal": "S", "instruction": "Turn left onto North Linder Road."},
-   {"index": 5, "kind": "road", "type": "roundabout_enter", "street_names": [], "distance_mi": 0.02, "cardinal": "SW", "instruction": "Enter the roundabout and take the 2nd exit onto North Linder Avenue."},
-   {"index": 6, "kind": "road", "type": "roundabout_exit", "street_names": ["North Linder Avenue"], "distance_mi": 0.02, "cardinal": "S", "instruction": "Exit the roundabout onto North Linder Avenue."},
-   {"index": 7, "kind": "road", "type": "right", "street_names": ["North Linder Avenue"], "distance_mi": 0.1, "cardinal": "S", "instruction": "Turn right to stay on North Linder Avenue."},
-   {"index": 8, "kind": "road", "type": "right", "street_names": ["South Swan Falls Road"], "distance_mi": 0.24, "cardinal": "SW", "instruction": "Turn right onto South Swan Falls Road."},
-   {"index": 9, "kind": "road", "type": "right", "street_names": [], "distance_mi": 0.03, "cardinal": "W", "instruction": "Turn right."},
-   {"index": 10, "kind": "road", "type": "right", "street_names": [], "distance_mi": 0.11, "cardinal": "N", "instruction": "Turn right."},
-   {"index": 11, "kind": "road", "type": "destination_left", "street_names": [], "distance_mi": 0.0, "cardinal": "NW", "instruction": "Your destination is on the left."}],
- "steps_truncated": false,
- "offroad_mi": 0.11, "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
- "map_region": "Idaho", "map_region_age": "12 days old"}
+{
+  "ok": true,
+  "mode": "drive",
+  "location_bias": "near:Kuna, Ada, Idaho, United States",
+  "route_id": "a7650ad16e34abd2",
+  "from_matched": {
+    "place_name": "Kuna High School",
+    "kind": "poi",
+    "street": "East Deer Flat Road",
+    "locality": "Kuna",
+    "county": "Ada",
+    "state": "ID",
+    "distance_km": 1.4,
+    "near": {
+      "county": "Ada",
+      "distance_m": 0,
+      "housenumber": "637",
+      "locality": "Kuna",
+      "name": "Kuna High School",
+      "state": "ID",
+      "street": "East Deer Flat Road"
+    },
+    "snap_distance_m": 10
+  },
+  "to_matched": {
+    "place_name": "Swan Falls Storage",
+    "kind": "poi",
+    "street": "South Swan Falls Road",
+    "locality": "Kuna",
+    "county": "Ada",
+    "state": "ID",
+    "distance_km": 0.7,
+    "near": {
+      "county": "Ada",
+      "distance_m": 0,
+      "housenumber": "387",
+      "locality": "Kuna",
+      "name": "Swan Falls Storage",
+      "state": "ID",
+      "street": "South Swan Falls Road"
+    },
+    "snap_distance_m": 21
+  },
+  "other_destination_candidates": [
+    {
+      "place_name": "Swan Falls Assisted Living",
+      "kind": "poi",
+      "street": "West White Way",
+      "locality": "Kuna",
+      "county": "Ada",
+      "state": "ID",
+      "distance_km": 1.2
+    },
+    {
+      "place_name": "Swan Falls Family Dentistry",
+      "kind": "poi",
+      "street": "North Linder Road",
+      "locality": "Kuna",
+      "county": "Ada",
+      "state": "ID",
+      "distance_km": 1.5
+    }
+  ],
+  "distance_mi": 1.99,
+  "distance_km": 3.21,
+  "duration_minutes": 6.0,
+  "major_roads": [
+    {
+      "name": "North Linder Road",
+      "distance_km": 1.38
+    },
+    {
+      "name": "East Deer Flat Road",
+      "distance_km": 0.54
+    },
+    {
+      "name": "South Swan Falls Road",
+      "distance_km": 0.39
+    }
+  ],
+  "offroad_mi": 0.11,
+  "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
+  "map_region": "Idaho",
+  "map_region_age": "12 days old"
+}
 ```
 
 Fields:
@@ -186,7 +252,7 @@ Fields:
 - `route_id` is the router's id for the route, the same value the tool's `n` address is built from.
 - `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
   (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
-  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one.
+  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence.
 - `other_destination_candidates` has up to 2 other matches (the same place fields, no `near`); empty when none. On a
   nearest-place search each entry also has `drive_min` (the travel time in minutes, for every mode; null when it could not be timed).
 - `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (AIDA passes navi's values through: `navi_places/nearby.py` `_rank`.)

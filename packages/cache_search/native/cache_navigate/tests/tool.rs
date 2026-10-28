@@ -178,7 +178,7 @@ fn road_route_has_aidas_shape() {
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     assert_eq!(
         keys(&v),
-        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "major_roads", "step_count", "steps", "steps_truncated", "map_region", "map_region_age"]
+        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "major_roads", "map_region", "map_region_age"]
     );
     assert!(v["address"].as_str().unwrap().starts_with("nav:"));
     assert_eq!(v["address"], format!("nav:{}", v["route_id"].as_str().unwrap()));
@@ -191,33 +191,26 @@ fn road_route_has_aidas_shape() {
     assert_eq!(v["to_matched"]["place_name"], "42.60,-113.70");
     assert_eq!(v["from_matched"]["snap_distance_m"], 0);
     assert_eq!(v["other_destination_candidates"], json!([]));
-    assert_eq!(v["step_count"], 5);
-    assert_eq!(v["steps_truncated"], false);
     assert_eq!(v["distance_km"], 7.5);
     assert_eq!(v["duration_minutes"], 7.5);
     assert_eq!(v["major_roads"][0], json!({"name": "Road 0", "distance_km": 3.0}));
     assert_eq!(v["map_region"], "Idaho");
     assert_eq!(v["map_region_age"], "unknown");
-    let s0 = &v["steps"][0];
-    assert_eq!(keys(s0), ["index", "kind", "type", "street_names", "distance_mi", "cardinal", "instruction"]);
-    assert_eq!((s0["kind"].clone(), s0["type"].clone()), (json!("road"), json!("start")));
-    assert_eq!(s0["instruction"], "Continue on Road 0");
-    assert_eq!(s0["distance_mi"], 0.93);
+    assert!(v.get("steps").is_none());
+    let snapshot = t.core().tool_route(v["route_id"].as_str().unwrap()).unwrap();
+    assert_eq!(snapshot["maneuvers"].as_array().unwrap().len(), 5);
 }
 
 #[test]
-fn steps_are_capped_at_12_with_aidas_omitted_counts() {
+fn assistant_gets_summary_and_navigation_page_gets_all_steps() {
     let t = tool(Fake { maneuvers: 20, ..fake() }, None);
-    let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
-    assert_eq!(v["step_count"], 20);
-    assert_eq!(v["steps"].as_array().unwrap().len(), 12);
-    assert_eq!(v["steps_truncated"], true);
-    assert_eq!(v["road_steps_omitted"], 8);
-    assert!(v.get("offroad_steps_omitted").is_none());
-    assert!(v.get("steps_omitted").is_none());
-    let k = keys(&v);
-    let (a, b) = (k.iter().position(|x| *x == "steps_truncated").unwrap(), k.iter().position(|x| *x == "road_steps_omitted").unwrap());
-    assert_eq!(b, a + 1);
+    let v = run(&t, Some(&here()), json!({"to":"42.60,-113.70", "mode":"drive"})).unwrap();
+    for k in ["steps", "step_count", "steps_truncated", "road_steps_omitted", "offroad_steps_omitted", "geometry", "maneuvers"] {
+        assert!(v.get(k).is_none(), "model context must not carry {k}");
+    }
+    let snapshot = t.core().tool_route(v["route_id"].as_str().unwrap()).unwrap();
+    assert_eq!(snapshot["maneuvers"].as_array().unwrap().len(), 20);
+    assert!(v["distance_km"].as_f64().unwrap() > 0.0);
 }
 
 #[test]
@@ -375,4 +368,26 @@ fn an_end_off_the_road_network_without_off_road_data_is_a_warning() {
     assert_eq!(keys(&w[0]["road_point"]), ["lat", "lon"]);
     let k = keys(&v);
     assert_eq!(k[k.len() - 3..], ["warnings", "map_region", "map_region_age"]);
+}
+
+#[test]
+fn navigation_page_gets_the_exact_complete_tool_route_and_cache_is_bounded() {
+    let t = tool(Fake { maneuvers: 27, ..fake() }, None);
+    let first = run(&t, Some(&here()), json!({"to":"42.60,-113.70", "mode":"bike", "land_access":"strict"})).unwrap();
+    let id = first["route_id"].as_str().unwrap();
+    let snapshot = t.core().tool_route(id).unwrap();
+    assert_eq!(snapshot["ok"], true);
+    assert_eq!(snapshot["route_id"], id);
+    assert_eq!(snapshot["mode"], "bike");
+    assert_eq!(snapshot["land_access"], "strict");
+    assert_eq!(snapshot["maneuvers"].as_array().unwrap().len(), 27);
+    assert!(!snapshot["geometry"].as_str().unwrap().is_empty());
+    assert_eq!(snapshot["to"]["lat"], 42.6);
+    assert_eq!(snapshot["alternatives"], json!([]));
+    assert_eq!(t.core().tool_route(id).unwrap(), snapshot);
+    assert!(t.core().tool_route("missing").is_none());
+    for i in 0..8 {
+        run(&t, Some(&here()), json!({"to":format!("{},-113.70", 42.61 + i as f64 * 0.01), "mode":"walk"})).unwrap();
+    }
+    assert!(t.core().tool_route(id).is_none(), "oldest of nine distinct routes is evicted");
 }

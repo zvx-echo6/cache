@@ -58,6 +58,7 @@ pub struct NavCore {
     offroad: Mutex<Option<Arc<OffroadData>>>,
     /// Tests inject a Valhalla and skip the file checks.
     injected: bool,
+    tool_routes: Mutex<std::collections::VecDeque<Value>>,
 }
 
 pub struct NavigateTool {
@@ -170,13 +171,25 @@ impl NavigateTool {
 }
 
 impl NavCore {
+    /// Exact tool-created routes, outside model context. No routing or location lookup on retrieval.
+    pub fn tool_route(&self, id: &str) -> Option<Value> {
+        lock(&self.tool_routes).iter().find(|v| v["route_id"].as_str() == Some(id)).cloned()
+    }
+
+    fn retain_tool_route(&self, route: Value) {
+        let mut routes = lock(&self.tool_routes);
+        routes.retain(|r| r["route_id"] != route["route_id"]);
+        routes.push_back(route);
+        while routes.len() > 8 { routes.pop_front(); }
+    }
+
     pub fn new(cfg: NavigateCfg, places: PlaceSlot) -> NavCore {
-        NavCore { cfg, places, valhalla: Mutex::new(None), offroad: Mutex::new(None), injected: false }
+        NavCore { cfg, places, valhalla: Mutex::new(None), offroad: Mutex::new(None), injected: false, tool_routes: Mutex::new(Default::default()) }
     }
 
     /// For tests: a Valhalla supplied by the caller; the file checks are skipped.
     pub fn with_valhalla(cfg: NavigateCfg, places: PlaceSlot, valhalla: Arc<dyn Valhalla>) -> NavCore {
-        NavCore { cfg, places, valhalla: Mutex::new(Some(valhalla)), offroad: Mutex::new(None), injected: true }
+        NavCore { cfg, places, valhalla: Mutex::new(Some(valhalla)), offroad: Mutex::new(None), injected: true, tool_routes: Mutex::new(Default::default()) }
     }
 
     pub(crate) fn place_source(&self) -> Option<Arc<dyn PlaceSource>> {
@@ -297,7 +310,7 @@ impl Tool for NavigateTool {
         }
         Some(json!({"type": "function", "function": {
             "name": "navigate",
-            "description": "Directions in one call, to a named place (to) or to the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns the places actually matched, so a wrong match can be seen. When an end is away from roads, the route includes off-road legs (straight lines with heading, length and climb).",
+            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places, distance, travel time and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
             "strict": true,
             "parameters": {"type": "object", "properties": {
                 "from": {"type": "string", "maxLength": 300,
@@ -388,6 +401,10 @@ impl Tool for NavigateTool {
             synth_warnings: !have_offroad,
             snap_m: DEFAULT_OFFROAD_SNAP_M,
         };
+        let end = |r: &resolve::Resolved| map::MapEnd {
+            id: None, name: Some(r.name.clone()), lat: r.lat, lon: r.lon, osm_category: r.osm.clone(),
+        };
+        self.core.retain_tool_route(map::tool_snapshot(&d, end(&from), end(&to), a.mode.travel(), a.land_access, have_offroad));
         Ok(ToolOutput::Json(build::result(&d, &from, &to, a.mode.name(), x)))
     }
 }

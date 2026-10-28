@@ -1,7 +1,7 @@
 //! The map's routing (`cs_map_route`, `cs_map_progress`): the complete route for drawing and guiding, built on the same
 //! [`NavCore`](crate::NavCore) the `navigate` tool uses.
 //!
-//! The tool shortens a route for a language model (12 steps, text only). The map needs all of it: the full geometry as a
+//! The tool gives the language model a route summary. The map needs all of it: the full geometry as a
 //! polyline with the kind of each stretch (road, off-road, or following a trail), every maneuver with its position, the
 //! totals, the warnings, and the alternatives Valhalla gives. `cs_map_progress` then tells where a GPS fix is on that route.
 //!
@@ -629,4 +629,12 @@ impl RouteStore {
     pub fn get(&self, id: &str) -> Option<Arc<ActiveRoute>> {
         self.routes.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|r| r.id == id).cloned()
     }
+}
+
+/// The full already-computed tool route for the navigation page, never sent to the language model.
+pub(crate) fn tool_snapshot(d: &Directions, from: MapEnd, to: MapEnd, mode: TravelMode, land: Boundary, have_offroad: bool) -> Value {
+    let mut route = route_object(std::slice::from_ref(d), &[&from, &to], mode, land, have_offroad);
+    route.as_object_mut().expect("route object").insert("ok".into(), json!(true));
+    route.as_object_mut().expect("route object").insert("alternatives".into(), json!([]));
+    route
 }

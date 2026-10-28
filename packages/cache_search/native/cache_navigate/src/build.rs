@@ -1,14 +1,11 @@
-//! The tool's result and error shapes: AIDA's navigate contract (nav_runtime.py `navigate()`), field for field, plus
-//! `address` (numbering) and `map_region` / `map_region_age` (Cache's own; AIDA's `pins` and `bridge` do not apply).
+//! Route summaries for the assistant, with canonical citation addresses and matched-place evidence.
+//! Full geometry and maneuvers stay in the retained Maps snapshot, outside the model context.
 
 use crate::resolve::Resolved;
 use cache_offroad::directions::Directions;
 use cache_offroad::offroad_legs::{round_py, Step};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
-
-/// Steps shown to the model: AIDA's NAVIGATE_MAX_DIRECTIONS.
-pub const MAX_STEPS: usize = 12;
 
 /// AIDA's OFFROAD_NOTE, verbatim.
 const OFFROAD_NOTE: &str = "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.";
@@ -98,49 +95,6 @@ pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
     }
 }
 
-/// AIDA's `_model_steps`: over the cap, every off-road step is kept (the last MAX_STEPS of them if they alone exceed it)
-/// and the first road steps fill the rest, in route order. Returns the kept indices and the omitted counts.
-fn model_steps(steps: &[Step]) -> (Vec<usize>, Vec<(&'static str, usize)>) {
-    if steps.len() <= MAX_STEPS {
-        return ((0..steps.len()).collect(), vec![]);
-    }
-    let off: Vec<usize> = (0..steps.len()).filter(|&i| is_offroad(&steps[i])).collect();
-    let mut keep: Vec<usize> = off[off.len().saturating_sub(MAX_STEPS)..].to_vec();
-    let room = MAX_STEPS - keep.len();
-    keep.extend((0..steps.len()).filter(|&i| !is_offroad(&steps[i])).take(room));
-    keep.sort();
-    let kept_off = keep.iter().filter(|&&i| is_offroad(&steps[i])).count();
-    let mut omitted = vec![("road_steps_omitted", (steps.len() - off.len()) - (keep.len() - kept_off))];
-    if off.len() > kept_off {
-        omitted.push(("offroad_steps_omitted", off.len() - kept_off));
-    }
-    (keep, omitted)
-}
-
-fn step_json(s: &Step, trip_mode: &str) -> Value {
-    let mut m = Map::new();
-    m.insert("index".into(), json!(s.index));
-    m.insert("kind".into(), json!(s.kind));
-    m.insert("type".into(), json!(s.type_));
-    m.insert("street_names".into(), json!(s.street_names));
-    m.insert("distance_mi".into(), json!(s.distance_mi));
-    m.insert("cardinal".into(), json!(s.cardinal));
-    m.insert("instruction".into(), json!(step_text(s, trip_mode)));
-    if is_offroad(s) {
-        m.insert("travel".into(), json!(s.mode));
-        m.insert("grade_class".into(), json!(s.grade_class));
-        m.insert("elev_gain_m".into(), json!(s.elev_gain_m));
-        m.insert("elev_loss_m".into(), json!(s.elev_loss_m));
-        if let Some(t) = terrain(s) {
-            m.insert("terrain".into(), json!(t));
-        }
-        if let Some(f) = &s.follow {
-            m.insert("follow".into(), json!({"name": f.name, "trail_kind": f.trail_kind}));
-        }
-    }
-    Value::Object(m)
-}
-
 /// AIDA's `_place`: place_name, kind, street, locality, county, state, distance_km, and er_tier when the source has one.
 pub fn place(r: &Resolved) -> Map<String, Value> {
     let mut m = Map::new();
@@ -153,6 +107,10 @@ pub fn place(r: &Resolved) -> Map<String, Value> {
     m.insert("distance_km".into(), json!(r.distance_km));
     if let Some(t) = r.er_tier {
         m.insert("er_tier".into(), json!(t));
+        m.insert("emergency_department_confirmed".into(), json!(t == 1));
+        if t != 1 {
+            m.insert("note".into(), json!("Hospital fallback: an emergency department is not confirmed in the installed data. Do not describe this as a confirmed emergency room."));
+        }
     }
     m
 }
@@ -202,13 +160,6 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("distance_km".into(), json!(d.distance_km));
     o.insert("duration_minutes".into(), json!(round_py(d.duration_s as f64 / 60.0, 1)));
     o.insert("major_roads".into(), Value::Array(d.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k})).collect()));
-    o.insert("step_count".into(), json!(d.steps.len()));
-    let (keep, omitted) = model_steps(&d.steps);
-    o.insert("steps".into(), Value::Array(keep.iter().map(|&i| step_json(&d.steps[i], mode)).collect()));
-    o.insert("steps_truncated".into(), json!(d.steps.len() > MAX_STEPS));
-    for (k, n) in omitted {
-        o.insert(k.into(), json!(n));
-    }
     let offroad_mi: f64 = d.steps.iter().filter(|s| is_offroad(s)).map(|s| s.distance_mi).sum();
     if d.steps.iter().any(is_offroad) {
         o.insert("offroad_mi".into(), json!(round_py(offroad_mi, 2)));
@@ -302,24 +253,6 @@ mod step_tests {
         }
     }
 
-    /// The recorded AIDA result with 30 steps: 4 road and 26 off-road gave 12 shown, road_steps_omitted 4, offroad_steps_omitted 14.
-    #[test]
-    fn omitted_counts_follow_aida() {
-        let mut steps: Vec<Step> = (0..4).map(|i| step(i, "road")).collect();
-        steps.extend((4..30).map(|i| step(i, "offroad")));
-        let (keep, omitted) = model_steps(&steps);
-        assert_eq!(keep, (18..30).collect::<Vec<_>>());
-        assert_eq!(omitted, vec![("road_steps_omitted", 4), ("offroad_steps_omitted", 14)]);
-        // room left: the first road steps fill it, in route order
-        let mut steps: Vec<Step> = (0..10).map(|i| step(i, "road")).collect();
-        steps.extend((10..14).map(|i| step(i, "offroad")));
-        let (keep, omitted) = model_steps(&steps);
-        assert_eq!(keep, vec![0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13]);
-        assert_eq!(omitted, vec![("road_steps_omitted", 2)]);
-        // at or under the cap nothing is omitted
-        assert!(model_steps(&steps[..12]).1.is_empty());
-    }
-
     #[test]
     fn offroad_text_is_aidas() {
         let mut s = step(0, "offroad");
@@ -344,10 +277,24 @@ mod step_tests {
         s.follow = Some(cache_offroad::offroad_legs::Follow { trail_kind: "trail".into(), name: None });
         assert_eq!(step_text(&s, "walk"), "Follow the trail N 0.1 mi, flat (-5 m)");
         assert_eq!(step_text(&s, "drive"), "On foot: Follow the trail N 0.1 mi, flat (-5 m)");
-        let j = step_json(&s, "walk");
-        assert!(j.get("terrain").is_none());
-        assert_eq!(j["follow"], json!({"name": null, "trail_kind": "trail"}));
         s.distance_mi = 5.0;
         assert!(step_text(&s, "walk").contains("5.0 mi"));
+    }
+}
+
+#[cfg(test)]
+mod er_tests {
+    use super::*;
+    #[test]
+    fn hospital_fallback_is_qualified_for_destination_and_alternatives() {
+        let mut m = cache_tool::places::PlaceMatch::new("Hospital", 43.0, -116.0);
+        m.er_tier = Some(3);
+        let r = Resolved::from_match(m.clone());
+        assert_eq!(end_json(&r, None)["emergency_department_confirmed"], false);
+        assert!(candidate(&r, Some(Some(2.0)))["note"].as_str().unwrap().contains("not confirmed"));
+        m.er_tier = Some(1);
+        let r = Resolved::from_match(m);
+        assert_eq!(candidate(&r, None)["emergency_department_confirmed"], true);
+        assert!(candidate(&r, None).get("note").is_none());
     }
 }

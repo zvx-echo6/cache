@@ -356,6 +356,16 @@ impl crate::handle::Handle {
     pub fn map_route(&self, request_json: &str) -> Result<String> {
         let v = parse_json(request_json, "request")?;
         let o = v.as_object().ok_or_else(|| Error::bad_json("the request must be a JSON object"))?;
+        if let Some(id) = o.get("route_id") {
+            if o.len() != 1 {
+                return Err(Error::bad_json("route_id lookup cannot be combined with routing arguments"));
+            }
+            let id = id.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| Error::bad_json("route_id must be a non-empty string"))?;
+            let snapshot = self.ext.nav.as_ref().and_then(|n| n.tool_route(id)).ok_or_else(|| Error::not_found(format!("route {id:?} is no longer available; use a saved route snapshot or plan a new route")))?;
+            let active = std::sync::Arc::new(cache_navigate::map::ActiveRoute::from_json(&snapshot).map_err(Error::bad_json)?);
+            self.ext.routes.add(std::slice::from_ref(&active));
+            return Ok(snapshot.to_string());
+        }
         for k in o.keys() {
             if !["from", "to", "via", "mode", "land_access", "alternatives"].contains(&k.as_str()) {
                 return Err(Error::bad_json(format!("{k}: not allowed")));
