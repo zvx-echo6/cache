@@ -1,4 +1,5 @@
-# Builds Cache for iPhone, signs it and (only when `upload` is ticked) sends it to TestFlight.
+# Builds Cache for iPhone, signs it and (only when `upload` is ticked) sends it to TestFlight, then hands it to the public
+# testers (the "Public" group: export compliance, "What to test", the group, and beta review when one is needed).
 # Manual trigger only: macOS runner minutes cost about 10x Linux on a private repo.
 #
 # Signing: a distribution certificate and an App Store provisioning profile made with the App Store Connect API (the account has no
@@ -27,6 +28,10 @@ on:
         type: choice
         options: [all, core, llama]
         default: all
+      whats_new:
+        description: '"What to test" for the testers (empty = the built commit''s subject line)'
+        type: string
+        default: ''
 
 concurrency:
   group: ios-testflight-${{ github.run_id }}
@@ -337,3 +342,26 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
           rm -rf "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/private_keys"
+
+  # Every uploaded build goes to the public testers. Waiting for Apple to process the upload runs on Linux, not the Mac.
+  public:
+    needs: [plan, app]
+    if: needs.plan.outputs.upload == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 1
+      - name: Give the build to the public testers
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
+          WHATS_NEW_INPUT: ${{ inputs.whats_new }}
+        run: |
+          WHATS_NEW="$WHATS_NEW_INPUT"
+          [[ -n "$WHATS_NEW" ]] || WHATS_NEW="$(git log -1 --format=%s)"
+          export WHATS_NEW
+          python3 -I packages/cache_search/ios/testflight_public.py "${{ github.run_number }}" Public
