@@ -860,7 +860,7 @@ class WeatherState extends ChangeNotifier {
     return '${active.length} active: ${first.$1.label} (${first.$2.name})$more';
   }
 
-$anchor
+  // ---------------------------------------------------------------- what is remembered between starts
 
   File? get _statusFile {
     final d = _store?.root;
