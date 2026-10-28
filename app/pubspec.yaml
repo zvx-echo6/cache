@@ -54,6 +54,10 @@ dependencies:
   share_plus: ^13.3.1
   # Spoken turn prompts: the phone's own text-to-speech (Android TextToSpeech, iOS AVSpeechSynthesizer), on the device.
   flutter_tts: ^4.2.3
+  # Background updates of weather, alerts and fires (Android WorkManager, iOS BGTaskScheduler). Pinned to versions at least two weeks old.
+  workmanager: 0.10.10
+  # Alert pop-ups: local notifications on the phone (nothing goes through a server).
+  flutter_local_notifications: 22.3.2
 
 dev_dependencies:
   flutter_test:

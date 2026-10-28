@@ -16,6 +16,8 @@ import 'connector.dart';
 import 'curated.dart';
 import 'live_core.dart';
 import 'live_folder.dart';
+import 'alert_notifier.dart';
+import 'alert_watch.dart';
 import 'live_view.dart';
 import 'places.dart';
 import 'words.dart';
@@ -92,6 +94,8 @@ class WeatherState extends ChangeNotifier {
     required this.builtIns,
     this.position,
     this.regions,
+    this.notifier,
+    this.told,
     FetchBytes? fetch,
     DateTime Function()? clock,
   }) : _fetch = fetch ?? fetchBytes,
@@ -115,9 +119,17 @@ class WeatherState extends ChangeNotifier {
   final FetchBytes _fetch;
   final DateTime Function() _now;
 
-  /// Updates run only when asked (Update now) and when the assistant needs data. The status line says so until a later part adds
-  /// scheduled updates.
-  static const bool backgroundUpdates = false;
+  /// Shows alert pop-ups; null where there are none (tests, or before the app sets it up).
+  final AlertNotifier? notifier;
+
+  /// What has been told about already, so a pop-up is never repeated; null with [notifier].
+  final ToldStore? told;
+
+  /// True once background updates are scheduled (the status line says how updates happen).
+  bool backgroundUpdates = false;
+
+  /// Set when an alert pop-up is tapped: the Weather screen shows that place and opens that item.
+  final ValueNotifier<AlertFocus?> focus = ValueNotifier<AlertFocus?>(null);
 
   /// Where a key is kept in secure storage (by the name the definition gives it; several sources can share one).
   static String secretName(String alias) => 'live.key.$alias';
@@ -689,6 +701,7 @@ class WeatherState extends ChangeNotifier {
     _lastFailure = failures.isEmpty ? null : failures.first;
     _saveStatus();
     notifyListeners();
+    if (fetched > 0) await checkAlerts();
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
@@ -802,6 +815,26 @@ class WeatherState extends ChangeNotifier {
       }
     }
     return out;
+  }
+
+  /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's settings say: nothing when
+  /// pop-ups are off, silent in quiet hours unless it is extreme and ringing through is on. Everything checked is remembered as told,
+  /// shown or not, so turning pop-ups on later does not bring back old alerts. Returns how many were shown.
+  Future<int> checkAlerts() async {
+    final n = notifier, t = told;
+    if (n == null || t == null) return 0;
+    final byPlace = <WatchPlace, List<SourceView>>{};
+    for (final p in await watchedPlaces()) {
+      byPlace[p] = await viewFor(p);
+    }
+    final fresh = pickNewAlerts(byPlace, await t.read());
+    if (fresh.isEmpty) return 0;
+    var shown = 0;
+    for (final a in fresh) {
+      if (await n.show(a, settings.deliveryFor(extreme: a.extreme, now: _now()))) shown++;
+    }
+    await t.add([for (final a in fresh) a.item.address]);
+    return shown;
   }
 
   /// The place Home talks about: "Where I am" when it is watched and known, else the first watched place.

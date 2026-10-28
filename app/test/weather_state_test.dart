@@ -6,6 +6,8 @@ import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/video/token_store.dart';
+import 'package:cache/weather/alert_notifier.dart';
+import 'package:cache/weather/alert_watch.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_state.dart';
@@ -31,8 +33,9 @@ class Harness {
 
   Directory get liveDir => Directory('${dir.path}/live-sources');
 
-  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock}) async {
+  static Future<Harness> create({ConnectionKind connection = ConnectionKind.wifi, bool serve = true, bool start = true, Harness? again, DateTime? clock, AlertNotifier? notifier}) async {
     final h = Harness();
+    h.notifier = notifier;
     if (clock != null) h.clock = clock;
     h.dir = again?.dir ?? Directory.systemTemp.createTempSync('weather-state');
     h.settings = AppSettings(settingsDirOverride: h.dir);
@@ -53,7 +56,11 @@ class Harness {
     return h;
   }
 
+  AlertNotifier? notifier;
+
   WeatherState build() => WeatherState(
+    notifier: notifier,
+    told: notifier == null ? null : ToldStore(File('${dir.path}/told.json')),
     settings: settings,
     policy: policy,
     core: core,
@@ -86,6 +93,18 @@ class Harness {
     try {
       dir.deleteSync(recursive: true);
     } catch (_) {}
+  }
+}
+
+class FakeNotifier implements AlertNotifier {
+  final shown = <NewAlert>[];
+  final deliveries = <AlertDelivery>[];
+  @override
+  Future<bool> show(NewAlert a, AlertDelivery delivery) async {
+    if (delivery == AlertDelivery.none) return false;
+    shown.add(a);
+    deliveries.add(delivery);
+    return true;
   }
 }
 
@@ -708,6 +727,94 @@ void main() {
       expect(byId['openmeteo-forecast']!.items.first.fields['Temperature'], '45 °F');
       expect(byId['usgs-quakes-near']!.missing, isTrue);
       expect(byId['usgs-quakes-near']!.error, isNull, reason: 'not downloaded yet is not an error');
+    });
+  });
+
+  group('alert pop-ups', () {
+    Map<String, dynamic> fires(List<String> labels) => {
+      'age': '5 minutes old',
+      'expired': false,
+      'items': [
+        for (final l in labels) {'address': 'live:wfigs-incidents-near/x/$l', 'label': l, 'fields': {'Distance': '10 mi N'}},
+      ],
+    };
+
+    Future<Harness> withNotifier(FakeNotifier n) async {
+      final hh = await Harness.create(notifier: n);
+      await hh.weather.setRowOn(row('Wildfires'), true);
+      return hh;
+    }
+
+    test('a new fire pops up once; the next update does not repeat it', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.title), ['East Fork fire near Where I am']);
+      expect(n.deliveries.single, AlertDelivery.normal);
+      await h.weather.updateNow();
+      expect(n.shown.length, 1, reason: 'already told');
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire', 'Forleen fire']);
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire', 'Forleen fire']);
+    });
+
+    test('nothing pops up when nothing was downloaded new, or for earthquakes', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      await h.weather.setRowOn(row('Earthquakes'), true);
+      h.core.stored['usgs-quakes-near'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [{'address': 'live:usgs-quakes-near/x/1', 'label': 'M 2.1', 'fields': {}}],
+      };
+      h.core.fetchedNew = false;
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await h.weather.updateNow();
+      expect(n.shown, isEmpty, reason: 'still-fresh copies were already checked');
+      h.core.fetchedNew = true;
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['East Fork fire'], reason: 'earthquakes are not pop-ups');
+    });
+
+    test('in quiet hours it is silent, and an extreme warning rings through when that is on', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.settings.setQuiet(const QuietHours(on: true, from: 0, to: 23 * 60 + 59));
+      h.core.stored['nws-alerts-point'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws/x/1', 'label': 'Flash Flood Warning', 'fields': {'Severity': 'extreme'}},
+          {'address': 'live:nws/x/2', 'label': 'Wind Advisory', 'fields': {'Severity': 'moderate'}},
+        ],
+      };
+      await h.weather.updateNow();
+      final by = {for (var i = 0; i < n.shown.length; i++) n.shown[i].item.label: n.deliveries[i]};
+      expect(by['Flash Flood Warning'], AlertDelivery.normal);
+      expect(by['Wind Advisory'], AlertDelivery.silent);
+      expect(n.shown.firstWhere((a) => a.item.label == 'Flash Flood Warning').extreme, isTrue);
+    });
+
+    test('with pop-ups off nothing shows, and turning them on later does not bring back old alerts', () async {
+      final n = FakeNotifier();
+      h = await withNotifier(n);
+      h.settings.setAlertPopups(false);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      await h.weather.updateNow();
+      expect(n.shown, isEmpty);
+      h.settings.setAlertPopups(true);
+      await h.weather.updateNow();
+      expect(n.shown, isEmpty);
+    });
+
+    test('a tapped pop-up names its place and item', () {
+      const a = '{"place":"place:cabin","address":"live:nws/x/1"}';
+      final f = AlertFocus.fromPayload(a);
+      expect(f?.placeId, 'place:cabin');
+      expect(f?.address, 'live:nws/x/1');
+      expect(AlertFocus.fromPayload('not json'), isNull);
     });
   });
 }

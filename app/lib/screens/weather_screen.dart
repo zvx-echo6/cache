@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import '../weather/alert_watch.dart';
 import '../weather/live_view.dart';
 import '../weather/places.dart';
 import '../weather/weather_state.dart';
@@ -34,13 +35,37 @@ class _WeatherScreenState extends State<WeatherScreen> {
   void initState() {
     super.initState();
     w.addListener(_changed);
-    _load();
+    w.focus.addListener(_onFocus);
+    _load().then((_) => _onFocus());
   }
 
   @override
   void dispose() {
     w.removeListener(_changed);
+    w.focus.removeListener(_onFocus);
     super.dispose();
+  }
+
+  /// A tapped pop-up: show its place, then open its item when the data is there.
+  Future<void> _onFocus() async {
+    final f = w.focus.value;
+    if (f == null || !mounted) return;
+    w.focus.value = null;
+    setState(() => _placeId = f.placeId);
+    await _load();
+    final views = await _view;
+    if (!mounted || views == null) return;
+    for (final v in views) {
+      for (final i in v.items) {
+        if (i.address == f.address) {
+          _openItem(context, v, i);
+          return;
+        }
+      }
+    }
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(const SnackBar(content: Text('That alert has ended or is no longer in the data.')));
   }
 
   int get _revision => Object.hash(w.lastOkAt, w.enabledSources.length, w.updating);
@@ -50,6 +75,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
   }
 
   Future<void> _load() async {
+    // (A focus from a pop-up may name a place first; keep it if it is watched.)
     _seenRevision = _revision;
     final places = await w.watchedPlaces();
     if (!mounted) return;

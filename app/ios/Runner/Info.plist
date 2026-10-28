@@ -28,6 +28,10 @@
 	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Cache uses your location to show where you are on the map, give directions, and keep weather and alerts for where you are, even in the background.</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.happylittle.cache.live-update</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
@@ -35,6 +36,11 @@ import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
 import 'video/token_store.dart';
+import 'package:workmanager/workmanager.dart';
+
+import 'weather/alert_notifier.dart';
+import 'weather/alert_watch.dart';
+import 'weather/background.dart';
 import 'weather/live_core.dart';
 import 'weather/places.dart';
 import 'weather/weather_state.dart';
@@ -53,6 +59,8 @@ void main() {
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
   });
+  // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
+  if (Platform.isAndroid || Platform.isIOS) Workmanager().initialize(cacheBackgroundDispatcher);
   runApp(const CacheApp());
 }
 
@@ -127,7 +135,11 @@ class _CacheAppState extends State<CacheApp> {
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
     regions: () => regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+    notifier: LocalAlertNotifier.instance,
+    told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
   );
+  /// The app's support folder, read at start (the alert memory and the last place live there).
+  String? _supportPath;
   late final SettingsHub hub = SettingsHub(
     settings: settings,
     policy: policy,
@@ -191,10 +203,17 @@ class _CacheAppState extends State<CacheApp> {
     app.init();
     final settingsRead = settings.init();
     settingsRead.then((_) => webSearch.init());
-    // The weather part starts once the settings are read and the core is open.
-    settingsRead.then((_) => sources.whenCoreReady()).then((core) {
-      if (core != null) weather.start();
+    // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
+    // switched on, and the place the background runs use is kept up to date.
+    final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
+    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreReady()).then((core) async {
+      if (core == null) return;
+      await LocalAlertNotifier.instance.init();
+      await weather.start();
+      weather.addListener(_onWeather);
+      _onWeather();
     });
+    location.addListener(_rememberPlace);
     layout.init();
     sources.init();
     browse.init();
@@ -206,6 +225,38 @@ class _CacheAppState extends State<CacheApp> {
 
   ConversationStore? _store;
   int? _backendGeneration;
+  bool? _scheduledFor;
+  bool _askedNotifications = false;
+  String? _lastPlaceSaved;
+
+  /// Background updates run while something is switched on; the first time, notification permission is asked for (alert pop-ups).
+  Future<void> _onWeather() async {
+    final on = weather.enabledSources.isNotEmpty;
+    if (_scheduledFor != on) {
+      _scheduledFor = on;
+      weather.backgroundUpdates = await scheduleBackgroundUpdates(anythingOn: on);
+      if (on && !_askedNotifications) {
+        _askedNotifications = true;
+        await PlatformNotificationAccess().request();
+      }
+    }
+    _rememberPlace();
+  }
+
+  /// Keeps the phone's last position and the downloaded regions where a background run can read them.
+  void _rememberPlace() {
+    final support = _supportPath;
+    if (support == null) return;
+    final f = location.fix;
+    final last = LastPlace(
+      here: f == null ? null : (lat: double.parse(f.lat.toStringAsFixed(3)), lon: double.parse(f.lon.toStringAsFixed(3))),
+      regions: regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+    );
+    final key = jsonEncode(last.toJson());
+    if (key == _lastPlaceSaved) return;
+    _lastPlaceSaved = key;
+    last.write(LastPlace.fileIn(Directory(support)));
+  }
 
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
@@ -237,6 +288,8 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     app.removeListener(_onApp);
+    weather.removeListener(_onWeather);
+    location.removeListener(_rememberPlace);
     app.session.dispose();
     browse.dispose();
     nav.dispose();

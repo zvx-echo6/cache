@@ -18,6 +18,8 @@ import '../nav/nav_state.dart';
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
+import '../weather/alert_notifier.dart';
+import '../weather/alert_watch.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
@@ -65,6 +67,7 @@ class _ShellState extends State<Shell> {
   bool _onModules = false;
   final Set<ModuleId> _built = {};
   StreamSubscription<NavEvent>? _navEvents;
+  StreamSubscription<AlertFocus>? _alertTaps;
 
   @override
   void initState() {
@@ -72,11 +75,22 @@ class _ShellState extends State<Shell> {
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
     });
+    // An alert pop-up tapped while the app runs, or the one that started it: open the Weather screen on that alert.
+    _alertTaps = LocalAlertNotifier.instance.taps.listen(_openAlert);
+    LocalAlertNotifier.instance.launchFocus().then((f) {
+      if (f != null && mounted) _openAlert(f);
+    }).catchError((_) {});
+  }
+
+  void _openAlert(AlertFocus f) {
+    widget.hub.weather.focus.value = f;
+    _goModule(ModuleId.weather);
   }
 
   @override
   void dispose() {
     _navEvents?.cancel();
+    _alertTaps?.cancel();
     super.dispose();
   }
 
