@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -42,9 +43,9 @@ enum ModelFit {
 
 /// One model download at a time into the models folder: resumable (a ".part" file in models/.partial that continues where it stopped),
 /// checked against Hugging Face's SHA-256, asking the mobile-data switch first. When it finishes the file appears in the
-/// model list.
+/// model list. When a chat model is downloaded and the search model is missing, the search model is queued to follow it.
 class ModelDownloads extends ChangeNotifier {
-  ModelDownloads({required this.app, this.policy, HfHub? hub, ZimDownloader? downloader})
+  ModelDownloads({required this.app, this.policy, HfHub? hub, ZimDownloader? downloader, this.searchModel})
     : hub = hub ?? HfHub(),
       _downloader = downloader ?? ZimDownloader();
 
@@ -70,9 +71,26 @@ class ModelDownloads extends ChangeNotifier {
   /// The last file that finished, so the screen can offer "Use this model".
   ModelEntry? finished;
 
+  /// The search model's file, which follows the first chat model; null leaves it out (tests of chat downloads alone).
+  final HfFile? searchModel;
+
+  /// Downloads waiting for the one running (today only the search model).
+  final List<HfFile> queue = [];
+
+  /// Why the search model's last download stopped, or null. Kept apart from [error], which is about the chat model.
+  String? searchModelError;
+
   CancelToken? _cancel;
 
   bool get busy => current != null;
+
+  bool isSearchModel(HfFile f) => searchModel != null && f.fileName == searchModel!.fileName;
+
+  /// The search model is downloading now or waiting its turn.
+  bool get searchModelQueued => queue.any(isSearchModel) || (current != null && isSearchModel(current!));
+
+  /// The name a download is shown under.
+  String labelOf(HfFile f) => isSearchModel(f) ? 'Search model' : f.fileName;
 
   /// Where an unfinished download of [f] waits: a hidden folder in the models folder, so the sync leaves it alone and
   /// finishing is a rename on the same file system.
@@ -106,20 +124,55 @@ class ModelDownloads extends ChangeNotifier {
   }
 
   /// True when the file is already in the models folder.
-  bool isInstalled(HfFile f) => app.models.any((m) => m.fileName == f.fileName && m.size == f.size);
+  bool isInstalled(HfFile f) =>
+      app.models.any((m) => m.fileName == f.fileName && m.size == f.size) ||
+      (app.searchModel?.fileName == f.fileName && app.searchModel?.size == f.size);
 
+  /// Downloads [f]. While another download runs, only the search model is taken, into the queue; anything else is ignored.
+  /// A chat model brings the search model after it when that is missing; it starts once the chat model has finished.
   Future<void> start(HfFile f, {bool anyway = false}) async {
-    if (busy || app.modelsDir == null) return;
-    error = null;
-    blocked = null;
-    finished = null;
+    if (app.modelsDir == null) return;
+    final search = isSearchModel(f);
+    if (busy) {
+      if (search && !searchModelQueued) {
+        queue.add(f);
+        notifyListeners();
+      }
+      return;
+    }
+    if (search) {
+      searchModelError = null;
+    } else {
+      error = null;
+      blocked = null;
+      finished = null;
+    }
     try {
       await policy?.checkDownload(anyway: anyway);
     } on MobileDataBlocked catch (b) {
-      blocked = b;
+      // The search model may start on its own, with no screen to ask "Download anyway": the reason is shown as its stop.
+      if (search) {
+        searchModelError = b.message;
+      } else {
+        blocked = b;
+      }
       notifyListeners();
       return;
     }
+    final sm = searchModel;
+    if (!search && sm != null && app.searchModel == null && !searchModelQueued) queue.add(sm);
+    final ok = await _run(f, search: search);
+    // A stopped or failed download takes what waits after it along; the search model is offered again with the next chat
+    // model, and from the line where meaning search needs it.
+    final next = ok && queue.isNotEmpty ? queue.removeAt(0) : null;
+    if (!ok) queue.clear();
+    notifyListeners();
+    if (next != null) unawaited(start(next, anyway: anyway));
+  }
+
+  /// Runs one download; true when the file is in place.
+  Future<bool> _run(HfFile f, {required bool search}) async {
+    var ok = false;
     current = f;
     await _moveOldPart(f);
     done = partBytes(f);
@@ -148,26 +201,44 @@ class ModelDownloads extends ChangeNotifier {
       final dest = File('${app.modelsDir!.path}${Platform.pathSeparator}${f.fileName}');
       await renameOver(part, dest.path);
       await app.refreshModels();
-      for (final m in app.models) {
-        if (m.path == dest.path) finished = m;
+      if (!search) {
+        for (final m in app.models) {
+          if (m.path == dest.path) finished = m;
+        }
       }
+      ok = true;
     } on DownloadException catch (e) {
       if (e.code != 'cancelled') {
-        error = e.code == 'failed' && e.message.contains('401')
+        final why = e.code == 'failed' && e.message.contains('401')
             ? 'This model needs a Hugging Face account to download. Get it in a browser, then use "Choose a file".'
             : e.message;
+        if (search) {
+          searchModelError = why;
+        } else {
+          error = why;
+        }
       }
     } catch (e) {
-      error = 'The download stopped: $e';
+      if (search) {
+        searchModelError = '$e';
+      } else {
+        error = 'The download stopped: $e';
+      }
     } finally {
       current = null;
       verifying = false;
       _cancel = null;
       notifyListeners();
     }
+    return ok;
   }
 
-  void cancel() => _cancel?.cancel();
+  /// Stops the download that runs; what waits after it is dropped too.
+  void cancel() {
+    queue.clear();
+    _cancel?.cancel();
+    notifyListeners();
+  }
 
   /// Throws away the partly downloaded file of [f].
   void discardPart(HfFile f) {

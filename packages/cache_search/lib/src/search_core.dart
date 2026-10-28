@@ -379,6 +379,7 @@ void _workerMain(List<dynamic> init) {
                 'updating': s.updating,
                 'docs': s.docs,
                 'keyword_source': s.keywordSource,
+                'embedding_model': s.embeddingModel,
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];

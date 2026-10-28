@@ -9,6 +9,7 @@ release notes).
 ### New
 - Regions include places and addresses for map search
 - Map search says when places for the area are missing or on their way, and offers the region
+- The search model (635 MB) now comes with your first chat model and gives meaning search to maps, the library and the assistant
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes
