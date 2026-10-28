@@ -14,6 +14,7 @@ import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
+import '../models/search_model.dart';
 import '../nav/nav_state.dart';
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
@@ -23,6 +24,7 @@ import '../weather/alert_watch.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
+import 'search_model_line.dart';
 import 'settings/deps.dart';
 import 'settings/weather_page.dart';
 import 'settings_screen.dart';
@@ -80,6 +82,21 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
+    // Once the models folder has been read: an install with a chat model and no search model is asked once to get it.
+    widget.app.addListener(_offerSearchModel);
+    _offerSearchModel();
+  }
+
+  bool _searchModelAsked = false;
+
+  void _offerSearchModel() {
+    final sm = SearchModel.shared;
+    if (_searchModelAsked || sm == null || !sm.shouldOffer) return;
+    _searchModelAsked = true;
+    widget.app.removeListener(_offerSearchModel);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) offerSearchModelOnce(context, sm);
+    });
   }
 
   void _openAlert(AlertFocus f) {
@@ -89,6 +106,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    widget.app.removeListener(_offerSearchModel);
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();

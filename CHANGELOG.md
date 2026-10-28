@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+- The search model (635 MB) now comes with your first chat model and gives meaning search to maps, the library and the assistant
+
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
 ### Fixed

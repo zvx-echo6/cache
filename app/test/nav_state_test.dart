@@ -184,6 +184,12 @@ void main() {
       backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'no_embedder', results: [place('place:1', 'X')]);
       await nav.submitSearch();
       expect(nav.searchError, isNull);
+      // no query vector came: the search model is missing, which has its own line
+      expect(nav.searchNeedsModel, isTrue);
+      expect(nav.searchNote, isNull);
+      backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'no_vectors', results: [place('place:1', 'X')]);
+      await nav.submitSearch();
+      expect(nav.searchNeedsModel, isFalse);
       expect(nav.searchNote, contains('Matching words only'));
       // coordinates never get the note
       backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'coordinates', meaning: 'off', results: const []);

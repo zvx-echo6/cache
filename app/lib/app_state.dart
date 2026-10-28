@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'chat/model_name.dart';
 import 'files.dart';
+import 'models/search_model.dart' show isSearchModelFile;
 import 'theme.dart';
 
 /// One model file in the models folder.
@@ -42,7 +43,14 @@ class AppState extends ChangeNotifier {
   /// The Modules screen's icons: small, three across (false, the default), or large, two across.
   bool largeModuleIcons = false;
   Directory? modelsDir;
+  /// The chat models in the models folder (a search model's file is not one: see [searchModel]).
   List<ModelEntry> models = [];
+
+  /// The search model's file, when it is in the models folder.
+  ModelEntry? searchModel;
+
+  /// The one-time question about the search model was asked (kept in the settings file).
+  bool searchModelOffered = false;
   ModelEntry? active;
   ModelInfo? activeInfo;
   ModelEntry? loading;
@@ -116,6 +124,7 @@ class AppState extends ChangeNotifier {
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
       largeModuleIcons = j['moduleIcons'] == 'large';
+      searchModelOffered = j['searchModelOffered'] == true;
       _unsupported
         ..clear()
         ..addAll(((j['unsupported'] as List?) ?? const []).cast<String>());
@@ -137,6 +146,7 @@ class AppState extends ChangeNotifier {
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
         'unsupported': _unsupported.toList(),
         'names': _names,
+        'searchModelOffered': searchModelOffered,
       }));
     } catch (_) {}
   }
@@ -153,21 +163,36 @@ class AppState extends ChangeNotifier {
     await _writeSettings();
   }
 
+  Future<void> setSearchModelOffered() async {
+    searchModelOffered = true;
+    notifyListeners();
+    await _writeSettings();
+  }
+
   Future<void> refreshModels() async {
     final found = <ModelEntry>[];
+    ModelEntry? search;
     try {
       for (final f in modelsDir!.listSync().whereType<File>()) {
         if (f.path.toLowerCase().endsWith('.gguf')) {
-          found.add(ModelEntry(path: f.path, size: f.lengthSync()));
+          final e = ModelEntry(path: f.path, size: f.lengthSync());
+          // The search model is not a chat model: it is never listed or loaded as one.
+          if (isSearchModelFile(e.fileName)) {
+            search = e;
+          } else {
+            found.add(e);
+          }
         }
       }
       modelsError = null;
     } on FileSystemException {
       found.clear();
+      search = null;
       modelsError = "Can't read the models folder";
     }
     found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     models = found;
+    searchModel = search;
     notifyListeners();
   }
 

@@ -4,6 +4,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/map_widgets.dart';
+import '../../screens/search_model_line.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
 import '../units.dart';
@@ -135,6 +136,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
           child: Text('Nothing found for "${nav.query.trim()}"', style: TextStyle(fontSize: 16, color: k.secondary)),
         ),
       for (final p in rows) _ResultRow(place: p, nav: nav, fmt: widget.fmt),
+      if (nav.searchNeedsModel) const SearchModelLine(),
       if (nav.searchNote != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),

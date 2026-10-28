@@ -31,6 +31,19 @@ class ZimFile {
   ZimOrigin? get nameOrigin => ZimOrigin.fromFileName(fileName);
 }
 
+/// Embeds search queries for the libraries that have vectors (the app's search model, and any other model a library's
+/// settings name). The core uses a query vector only on a library whose settings name that model.
+abstract interface class LibraryEmbedding {
+  /// The model id of the app's search model.
+  String get defaultModel;
+
+  /// True when [model] is on this phone.
+  bool has(String model);
+
+  /// The query vector of [text] made with [model], or null when that model is not here.
+  Future<QueryVector?> vectorFor(String model, String text);
+}
+
 /// Where a ZIM stands: its index is made on the phone, slowly, in the background.
 enum ZimPhase { waiting, indexing, ready, failed }
 
@@ -51,6 +64,9 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   /// Test hook: the cs_open sections besides the sources. By default they are built from the app's folders ([buildCoreExtras]).
   final Map<String, dynamic>? coreExtras;
+
+  /// Embeds the query for libraries searched by meaning (set at start to the app's search model); null searches by keywords.
+  LibraryEmbedding? embedding;
 
   Directory? zimsDir;
   Directory? indexesDir;
@@ -573,15 +589,59 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet')))
           .suggest(prefix, k: k, sources: zimIds);
 
-  /// Full-text search, optionally limited to some ZIMs.
+  /// Full-text search, optionally limited to some ZIMs. Libraries with vectors are also searched by meaning when their
+  /// model is on the phone.
   Future<SearchResponse> searchIn(
     String query, {
     List<String>? zimIds,
     int k = 20,
     int offset = 0,
-  }) async =>
-      (_core ?? (throw StateError(unavailable ?? 'Search is not ready yet')))
-          .search(query, k: k, offset: offset, sources: zimIds);
+  }) async {
+    final core = _core ?? (throw StateError(unavailable ?? 'Search is not ready yet'));
+    return core.search(query, k: k, offset: offset, sources: zimIds, queryVector: await _queryVector(query, zimIds));
+  }
+
+  /// The embedding models the searchable sources in [ids] (every source when null) name, the search model first.
+  List<String> _modelsIn(List<String>? ids) {
+    final want = ids?.map((i) => i.toLowerCase()).toSet();
+    final out = <String>[];
+    for (final s in _status.values) {
+      final m = s.embeddingModel;
+      if (m == null || m.isEmpty || !s.searchable || out.contains(m)) continue;
+      if (want != null && !want.contains(s.id!.toLowerCase())) continue;
+      out.add(m);
+    }
+    final first = embedding?.defaultModel;
+    if (first != null && out.remove(first)) out.insert(0, first);
+    return out;
+  }
+
+  /// The query vector for a search of [ids]: made with the first model those libraries name that is on the phone (the
+  /// search model first). One search carries one vector, so a library naming yet another model is searched by keywords.
+  /// Null when no library there has vectors or no model is here; an embedding that fails also leaves keywords.
+  Future<QueryVector?> _queryVector(String query, List<String>? ids) async {
+    final e = embedding;
+    if (e == null) return null;
+    for (final m in _modelsIn(ids)) {
+      if (!e.has(m)) continue;
+      try {
+        return await e.vectorFor(m, query);
+      } catch (err) {
+        debugPrint('Query embedding with $m: $err');
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /// The model a library in [ids] (every source when null) needs for meaning search and that is not on this phone, or
+  /// null when nothing is missing. The search model is named first.
+  String? missingModel({List<String>? ids}) {
+    for (final m in _modelsIn(ids)) {
+      if (embedding == null || !embedding!.has(m)) return m;
+    }
+    return null;
+  }
 
   /// Removes a ZIM and its index from the phone.
   Future<void> remove(ZimFile z) async {
@@ -632,7 +692,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
             : 'The sources are still being indexed',
       );
     }
-    final r = await core.search(query, k: k);
+    final r = await core.search(query, k: k, queryVector: await _queryVector(query, null));
     return [
       for (final h in r.results)
         SourceResult(title: h.title, snippet: h.snippet, address: h.address),
