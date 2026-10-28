@@ -353,6 +353,64 @@ impl Inner {
         self.network.load(Ordering::Relaxed) && !self.stop.load(Ordering::Relaxed)
     }
 
+    /// Every file on this device (in any shared folder) whose current content is `hash`, by its index.
+    fn live_paths(&self, hash: &str) -> Vec<PathBuf> {
+        let shares = self.saved.lock().unwrap().shares.clone();
+        let mut out = Vec::new();
+        for sh in shares {
+            for (rel, e) in self.load_index(&sh.id).files {
+                if !e.deleted && e.hash == hash {
+                    if let Some(p) = safe_join(&sh.path, &rel) {
+                        if p.is_file() {
+                            out.push(p);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The store keeps files in place and reads a hash from the first path it was given. When that file moved, changed or
+    /// became a conflict copy while the same content still lives at another path, the store would read the wrong place and
+    /// every device asking for it would get data that fails verification. So the content is taken into the store once (owned
+    /// data replaces every outside path) and handed back to the live path, which the store then references alone. The file
+    /// is briefly stored twice; nothing is lost if a step fails (the original is renamed aside first and put back).
+    async fn repoint(&self, hash: &str, except: Option<&Path>) {
+        let Some(target) = self.live_paths(hash).into_iter().find(|p| Some(p.as_path()) != except) else { return };
+        if let Err(e) = self.relocate(hash, &target).await {
+            self.note(format!("could not refresh {}: {e:#}", target.display()));
+        }
+    }
+
+    async fn relocate(&self, hash: &str, target: &Path) -> Result<()> {
+        let h: Hash = hash.parse().map_err(|_| anyhow!("bad hash"))?;
+        let added = self
+            .store
+            .add_path_with_opts(AddPathOptions { path: target.to_path_buf(), format: BlobFormat::Raw, mode: ImportMode::Copy })
+            .temp_tag()
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        if added.hash() != h {
+            bail!("{} changed meanwhile", target.display());
+        }
+        let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let aside = target.with_file_name(format!(".{name}.cache-sync-old"));
+        std::fs::rename(target, &aside)?;
+        match self.store.export_with_opts(ExportOptions { hash: h, mode: ExportMode::TryReference, target: target.to_path_buf() }).finish().await {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&aside);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(target);
+                std::fs::rename(&aside, target)?;
+                bail!("{e}");
+            }
+        }
+        drop(added);
+        Ok(())
+    }
+
     fn tag_name(share: &str, path: &str) -> String {
         format!("f/{share}/{path}")
     }
@@ -374,6 +432,8 @@ impl Inner {
         .await?;
         let mut changed = false;
         let mut unsettled = false;
+        // Content whose file here moved, changed or went: if it lives on at another path, the store must read it from there.
+        let mut stale: Vec<String> = Vec::new();
         let mut present = HashSet::new();
         for (rel, full, m) in files {
             present.insert(rel.clone());
@@ -396,7 +456,12 @@ impl Inner {
             let hash = added.hash.to_hex().to_string();
             let entry = match idx.files.get(&rel) {
                 Some(old) if !old.deleted && old.hash == hash => None,
-                Some(old) => Some(old.next(&self.me, now_ms(), hash, m.len(), false)),
+                Some(old) => {
+                    if !old.deleted {
+                        stale.push(old.hash.clone());
+                    }
+                    Some(old.next(&self.me, now_ms(), hash, m.len(), false))
+                }
                 None => Some(Entry { hash, size: m.len(), deleted: false, ver: Ver { at: now_ms(), by: self.me.clone() }, hist: vec![] }),
             };
             if let Some(e) = entry {
@@ -408,12 +473,16 @@ impl Inner {
         let gone: Vec<String> = idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p)).map(|(p, _)| p.clone()).collect();
         for p in gone {
             let old = idx.files[&p].clone();
+            stale.push(old.hash.clone());
             idx.files.insert(p.clone(), old.next(&self.me, now_ms(), old.hash.clone(), old.size, true));
             seen.remove(&p);
             let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
+        for h in stale {
+            self.repoint(&h, None).await;
+        }
         if unsettled {
             // Look again soon rather than at the next full interval.
             self.settle_again.store(true, Ordering::Relaxed);
@@ -659,15 +728,16 @@ impl Inner {
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut idx = self.load_index(&sh.id);
-        let mut seen = self.load_seen(&sh.id);
+        let old_hash = self.load_index(&sh.id).files.get(path).filter(|e| !e.deleted).map(|e| e.hash.clone());
+        let mut conflict_copy = None;
         if conflict && full.exists() {
             let stamp = chrono_stamp();
             let copy = index::conflict_name(path, &self.saved.lock().unwrap().name, &stamp);
             if let Some(cfull) = safe_join(&sh.path, &copy) {
                 std::fs::rename(&full, &cfull)?;
                 self.note(format!("{}: {path} was changed here and on {}; kept ours as {copy}", sh.name, self.peer_name(from)));
-                // The copy is picked up as a new file by the next rescan; its old tag moves with it then.
+                // Picked up as a new file by the next scan; the store is pointed at it below.
+                conflict_copy = Some(cfull);
             }
         }
         if full.exists() {
@@ -680,11 +750,24 @@ impl Inner {
             .map_err(|e| anyhow!("could not write {path}: {e}"))?;
         self.store.tags().set(Self::tag_name(&sh.id, path).as_bytes(), HashAndFormat::raw(hash)).await.map_err(|e| anyhow!("{e}"))?;
         self.wanted.lock().unwrap().remove(&hash);
+        let mut idx = self.load_index(&sh.id);
+        let mut seen = self.load_seen(&sh.id);
         let m = std::fs::metadata(&full)?;
+        let entry_hash = entry.hash.clone();
         seen.insert(path.to_string(), (m.len(), mtime_ms(&m)));
         idx.files.insert(path.to_string(), entry);
         self.store_index(&sh.id, &idx, &seen)?;
         self.note(format!("{}: got {path} ({})", sh.name, human(m.len())));
+        // The content that was here: kept as a conflict copy, or still in use at another path.
+        if let Some(c) = conflict_copy {
+            if let Some(h) = &old_hash {
+                if let Err(e) = self.relocate(h, &c).await {
+                    self.note(format!("could not refresh {}: {e:#}", c.display()));
+                }
+            }
+        } else if let Some(h) = old_hash.filter(|h| *h != entry_hash) {
+            self.repoint(&h, Some(&full)).await;
+        }
         Ok(())
     }
 }
