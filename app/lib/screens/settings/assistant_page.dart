@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../../chat/answer_reports.dart';
 import '../../theme.dart';
 import '../../video/format.dart';
+import '../answer_reports_ui.dart';
 import '../history_drawer.dart';
 import '../models_screen.dart';
 import 'deps.dart';
@@ -10,9 +12,10 @@ import 'widgets.dart';
 
 /// Settings > Assistant: the model, the web search service and its switch, and the saved conversations.
 class AssistantPage extends StatelessWidget {
-  const AssistantPage({super.key, required this.deps});
+  AssistantPage({super.key, required this.deps, AnswerReports? reports}) : reports = reports ?? AnswerReports.shared;
 
   final SettingsDeps deps;
+  final AnswerReports reports;
 
   Future<void> _deleteAll(BuildContext context) async {
     final ok = await showDialog<bool>(
@@ -114,7 +117,7 @@ class AssistantPage extends StatelessWidget {
     final app = deps.app;
     final web = deps.hub.webSearch;
     return ListenableBuilder(
-      listenable: Listenable.merge([app, web, deps.chat.historyRevision]),
+      listenable: Listenable.merge([app, web, deps.chat.historyRevision, reports]),
       builder: (context, _) {
         final m = app.active;
         final List<Part> modelStatus = app.loading != null
@@ -173,6 +176,17 @@ class AssistantPage extends StatelessWidget {
                   title: 'Saved conversations',
                   status: [Part('$count on this phone')],
                   onTap: () => _openConversations(context),
+                ),
+                FutureBuilder<int>(
+                  future: reports.count(),
+                  builder: (context, snap) => SettingsRow(
+                    key: const ValueKey('reported-answers'),
+                    title: 'Reported answers',
+                    status: [Part(snap.hasData ? (snap.data == 0 ? 'None' : '${snap.data} on this phone') : '…')],
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => ReportedAnswersPage(reports: reports)),
+                    ),
+                  ),
                 ),
                 SettingsRow(
                   title: 'Delete all conversations',

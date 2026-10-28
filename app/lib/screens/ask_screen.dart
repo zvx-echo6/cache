@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../chat/answer_markdown.dart';
+import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
 import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
@@ -10,6 +11,7 @@ import '../history/share.dart';
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../theme.dart';
+import 'answer_reports_ui.dart';
 import 'history_drawer.dart';
 import 'models_screen.dart';
 
@@ -23,7 +25,11 @@ class AskScreen extends StatefulWidget {
     this.share = shareMarkdown,
     this.layout,
     this.location,
-  });
+    AnswerReports? reports,
+  }) : reports = reports ?? AnswerReports.shared;
+
+  /// Where "Report this answer" keeps its reports (on this phone).
+  final AnswerReports reports;
 
   /// Where a chat's "Add to Home" puts its shortcut.
   final LayoutState? layout;
@@ -49,6 +55,25 @@ class _AskScreenState extends State<AskScreen> {
   void initState() {
     super.initState();
     widget.chat.addListener(_scrollDown);
+  }
+
+  Future<void> _report(ChatMessage m, String question) async {
+    final r = await showReportSheet(context);
+    if (r == null || !mounted) return;
+    final active = widget.app.active;
+    await widget.reports.add(AnswerReport(
+      at: DateTime.now(),
+      question: question,
+      answer: m.text,
+      model: active == null ? 'unknown model' : widget.app.displayName(active),
+      reason: r.reason,
+      note: r.note,
+      sources: [for (final s in m.sources) s.result.title],
+    ));
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(const SnackBar(content: Text('Report saved on this phone. Find it in Settings > Assistant.')));
   }
 
   @override
@@ -242,6 +267,7 @@ class _AskScreenState extends State<AskScreen> {
                             msgs[i],
                             onOpenSource: widget.onOpenSource,
                             onOpenNavigation: widget.onOpenNavigation,
+                            onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
                   );
                 },
@@ -347,9 +373,10 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenNavigation});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenNavigation, this.onReport});
 
   final ChatMessage msg;
+  final VoidCallback? onReport;
   final void Function(String address)? onOpenSource;
   final void Function(NavigationAction action)? onOpenNavigation;
 
@@ -427,6 +454,16 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
             _sourcesRow(context, m),
+          if (m.isDone && m.error == null && m.text.isNotEmpty && widget.onReport != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const ValueKey('report-answer'),
+                onPressed: widget.onReport,
+                icon: Icon(Icons.flag_outlined, size: 18, color: k.secondary),
+                label: Text('Report this answer', style: TextStyle(fontSize: 14, color: k.secondary)),
+              ),
+            ),
           if (m.isDone && m.error == null && m.text.isEmpty && m.navigationActions.isEmpty)
             Text(
               'No answer was produced.',
