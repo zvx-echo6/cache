@@ -3,9 +3,10 @@
 //! category rules; everything after that (merge, geography, writing) is the same for every source.
 
 use crate::rules::Rules;
+use serde::{Deserialize, Serialize};
 
 /// Wikimedia identifiers a source carries for a place (OSM tags). Only IDs the data itself states.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Wiki {
     pub wikidata: Option<String>,
     /// English Wikipedia article title (from `wikipedia=en:Title`).
@@ -13,9 +14,18 @@ pub struct Wiki {
     pub wikivoyage: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+/// The source names a `Raw` carries.
+const SOURCES: [&str; 4] = ["osm", "overture", "osm+overture", "overture+osm"];
+
+/// A source name as the `&'static str` a `Raw` keeps (`harvest.sqlite` stores it in its own column).
+pub fn source_name(s: &str) -> Option<&'static str> {
+    SOURCES.iter().find(|x| **x == s).copied()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Raw {
-    /// "osm" or "overture".
+    /// "osm" or "overture". Not in the JSON form: `harvest.sqlite` has it as a column.
+    #[serde(skip)]
     pub source: &'static str,
     /// "osm:n123", "osm:w456" or "overture:<uuid>".
     pub source_id: String,
@@ -46,7 +56,7 @@ pub struct Raw {
     pub matched: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawLocality {
     pub source_id: String,
     pub name: String,
@@ -59,10 +69,71 @@ pub struct RawLocality {
     pub wiki: Wiki,
 }
 
+/// Where a harvest's rows go once enough have gathered (`places_pack harvest` writes them to `harvest.sqlite`).
+pub type Sink = Box<dyn FnMut(Vec<Raw>, Vec<RawLocality>) -> Result<(), String>>;
+
+/// What the sources read. Without a sink every row stays in memory (one region's `build`); with one, rows are handed on
+/// in batches, so a continent's harvest never sits in memory at once.
 #[derive(Default)]
 pub struct Harvest {
     pub places: Vec<Raw>,
     pub localities: Vec<RawLocality>,
+    sink: Option<Sink>,
+    /// The first error of the sink (a source's reader callback cannot return one).
+    error: Option<String>,
+    /// Rows handed to the sink so far.
+    pub flushed: (usize, usize),
+}
+
+/// Rows gathered before they are handed to the sink.
+const BATCH: usize = 50_000;
+
+impl Harvest {
+    pub fn with_sink(sink: Sink) -> Harvest {
+        Harvest { sink: Some(sink), ..Default::default() }
+    }
+
+    pub fn place(&mut self, r: Raw) {
+        self.places.push(r);
+        if self.sink.is_some() && self.places.len() >= BATCH {
+            self.flush();
+        }
+    }
+
+    pub fn locality(&mut self, l: RawLocality) {
+        self.localities.push(l);
+        if self.sink.is_some() && self.localities.len() >= BATCH {
+            self.flush();
+        }
+    }
+
+    /// Hands what has gathered to the sink (nothing without one).
+    pub fn flush(&mut self) {
+        let Some(sink) = self.sink.as_mut() else { return };
+        let (p, l) = (std::mem::take(&mut self.places), std::mem::take(&mut self.localities));
+        self.flushed.0 += p.len();
+        self.flushed.1 += l.len();
+        if self.error.is_none() {
+            if let Err(e) = sink(p, l) {
+                self.error = Some(e);
+            }
+        }
+    }
+
+    /// Flushes the rest and returns the sink's first error, if any.
+    pub fn finish(&mut self) -> Result<(), String> {
+        self.flush();
+        self.error.take().map_or(Ok(()), Err)
+    }
+
+    /// Places read so far, flushed or not.
+    pub fn n_places(&self) -> usize {
+        self.flushed.0 + self.places.len()
+    }
+
+    pub fn n_localities(&self) -> usize {
+        self.flushed.1 + self.localities.len()
+    }
 }
 
 pub trait PlaceSource {

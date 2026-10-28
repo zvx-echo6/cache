@@ -24,3 +24,5 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 flate2 = "1"
 bzip2 = "0.5"
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# Street row uids and the tile index's checksums (the same sha2 cache_regions checks them with).
+sha2 = "0.10"
