@@ -6,6 +6,8 @@ release notes).
 
 ## Unreleased
 
+## 1.0.0 (iOS build 22) - 2026-10-28
+
 ### Fixed
 - iPhone: Cache no longer closes as soon as it opens
 
