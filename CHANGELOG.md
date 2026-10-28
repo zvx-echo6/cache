@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### Fixed
+- iPhone: Cache no longer closes as soon as it opens
+
 ## 1.0.0 (iOS build 21, Android 3) - 2026-10-28
 
 ### New

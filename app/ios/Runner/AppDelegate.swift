@@ -12,6 +12,14 @@ import workmanager_apple
   ) -> Bool {
     // Background updates (weather, alerts, fires): re-register the BGTaskScheduler handlers before launch finishes, and give the
     // background engine the app's plugins.
+    // The weather update's identifier is registered by name here, before any is scheduled: registerLaunchHandlers() only
+    // re-registers tasks iOS already holds, and BGTaskScheduler aborts the app when a task is submitted with no handler
+    // (the first launch with weather on did exactly that). Same name as kBackgroundTask (lib/weather/background.dart) and
+    // BGTaskSchedulerPermittedIdentifiers (Info.plist).
+    WorkmanagerPlugin.registerPeriodicTask(
+      withIdentifier: "com.happylittle.cache.live-update",
+      earliestBeginInSeconds: NSNumber(value: 30 * 60)
+    )
     WorkmanagerPlugin.registerLaunchHandlers()
     WorkmanagerPlugin.setPluginRegistrantCallback { registry in
       GeneratedPluginRegistrant.register(with: registry)
