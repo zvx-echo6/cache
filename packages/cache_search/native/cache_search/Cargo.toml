@@ -30,6 +30,8 @@ cache_places = { path = "../cache_places" }
 cache_navigate = { path = "../cache_navigate" }
 # Video sources (PeerTube): instances, browse, offline downloads, citation links; wired in ext.rs and job.rs.
 cache_video = { path = "../cache_video" }
+# Sharing and sync between devices (iroh): cs_sync_open, cs_sync_call, cs_sync_close.
+cache_sync = { path = "../cache_sync" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "1"

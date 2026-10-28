@@ -670,6 +670,22 @@ int32_t cs_job_cancel(cs_job *j);
 /* Free a job that is done, cancelled or failed (cancel first if running). */
 void cs_job_free(cs_job *j);
 
+/* --- sharing and sync (cache_sync) --- */
+
+typedef struct cs_sync cs_sync;
+
+/* Starts the sync engine. config_json: {"dir": "<private folder>", "name": "<device name>", optional "mdns", "dht", "lookup",
+ * "relay" (bools, default true), "lookup_url", "relay_urls", "reserve_bytes", "interval_secs", "port"}.
+ * NULL on failure (reason in cs_last_error(NULL)). Independent of any cs_handle; runs on its own threads. */
+cs_sync *cs_sync_open(const char *config_json);
+
+/* One method with JSON args (NULL = {}): status, set_name, link_code, link, unlink, share_add, share_join, share_remove,
+ * sync_now, set_policy, network_changed. Always returns JSON: the answer or {"error": "..."}. Thread-safe. */
+char *cs_sync_call(cs_sync *s, const char *method, const char *args_json);
+
+/* Stops the engine and frees it. */
+void cs_sync_close(cs_sync *s);
+
 /* --- memory --- */
 
 void cs_free_string(char *s);

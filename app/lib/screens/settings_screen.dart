@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../maps/layers/layer_def.dart';
+import '../sharing/sharing_state.dart';
 import '../version.dart';
 import '../theme.dart';
 import '../video/format.dart';
@@ -11,6 +12,7 @@ import 'settings/deps.dart';
 import 'settings/library_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
+import 'settings/sharing_page.dart';
 import 'settings/storage_page.dart';
 import 'settings/videos_page.dart';
 import 'settings/weather_page.dart';
@@ -117,6 +119,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ]);
   }
 
+  List<Part> _sharing(SharingState s) {
+    if (!s.enabled) return const [Part('Off', Tone.quiet)];
+    if (!s.running) return [Part(s.error ?? 'Starting…', s.error == null ? Tone.normal : Tone.warn)];
+    final n = s.peers.length;
+    final shared = s.shares.length;
+    return [Part(n == 1 ? '1 linked device' : '$n linked devices'), Part(' · $shared shared')];
+  }
+
   List<Part> _storage() {
     final u = d.hub.storage;
     final s = d.hub.settings;
@@ -161,12 +171,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               rows: [
                 SettingsRow(icon: Icons.notifications_none, title: 'Notifications and location', status: _notifications(), onTap: () => _open(NotificationsPage(deps: d))),
                 SettingsRow(icon: Icons.sd_storage_outlined, title: 'Storage and data', status: _storage(), onTap: () => _open(StoragePage(deps: d))),
-                SettingsRow(
-                  icon: Icons.share_outlined,
-                  title: 'Share this setup',
-                  status: [Part('Not built yet', Tone.quiet)],
-                  dim: true,
-                ),
+                if (d.hub.sharing != null)
+                  ListenableBuilder(
+                    listenable: d.hub.sharing!,
+                    builder: (context, _) => SettingsRow(
+                      icon: Icons.share_outlined,
+                      title: 'Sharing and sync',
+                      status: _sharing(d.hub.sharing!),
+                      onTap: () => _open(SharingPage(sharing: d.hub.sharing!)),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 14),

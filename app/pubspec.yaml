@@ -58,6 +58,8 @@ dependencies:
   workmanager: 0.10.10
   # Alert pop-ups: local notifications on the phone (nothing goes through a server).
   flutter_local_notifications: 22.3.2
+  # The link code shown as a QR code on the Sharing page.
+  qr_flutter: 4.1.0
 
 dev_dependencies:
   flutter_test:

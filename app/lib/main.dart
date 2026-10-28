@@ -35,6 +35,7 @@ import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
 import 'settings/web_search_setup.dart';
+import 'sharing/sharing_state.dart';
 import 'video/token_store.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -140,11 +141,25 @@ class _CacheAppState extends State<CacheApp> {
   );
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
+  // Sharing and sync: Cache's own folders, each with a fixed id so the same kind of thing on linked devices is one shared folder.
+  late final SharingState sharing = SharingState(
+    policy: policy,
+    supportDir: getApplicationSupportDirectory,
+    deviceName: Platform.isAndroid ? 'Android phone' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
+    kinds: [
+      ShareKind('library', 'Library', () => sources.zimsDir),
+      ShareKind('maps', 'Maps', () => sources.zimsDir == null ? null : Directory('${sources.zimsDir!.parent.path}/packs')),
+      ShareKind('models', 'Models', () => app.modelsDir),
+      ShareKind('videos', 'Videos', () => video.dir),
+      ShareKind('shared', 'Shared folder', () => sources.zimsDir == null ? null : Directory('${sources.zimsDir!.parent.path}/Shared')),
+    ],
+  );
   late final SettingsHub hub = SettingsHub(
     settings: settings,
     policy: policy,
     webSearch: webSearch,
     weather: weather,
+    sharing: sharing,
     storage: StorageUsage(
       library: () => [sources.zimsDir, sources.indexesDir],
       maps: () => [
@@ -214,6 +229,7 @@ class _CacheAppState extends State<CacheApp> {
       _onWeather();
     });
     location.addListener(_rememberPlace);
+    settingsRead.then((_) => sharing.init());
     layout.init();
     sources.init();
     browse.init();
@@ -301,6 +317,7 @@ class _CacheAppState extends State<CacheApp> {
     maps.dispose();
     webSearch.dispose();
     weather.dispose();
+    sharing.dispose();
     settings.dispose();
     _store?.close();
     super.dispose();

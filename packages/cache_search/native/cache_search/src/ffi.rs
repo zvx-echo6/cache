@@ -756,6 +756,65 @@ pub unsafe extern "C" fn cs_layers_tile(h: *mut Handle, layer: *const c_char, z:
     })
 }
 
+/// Sharing and sync (cache_sync): `config_json` is its `Config` (`{"dir": ..., "name": ...}`). NULL on failure, with the reason in
+/// `cs_last_error(NULL)`. The engine runs on its own threads until `cs_sync_close`; it is independent of any search handle.
+///
+/// # Safety
+/// `config_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_sync_open(config_json: *const c_char) -> *mut cache_sync::SyncEngine {
+    match guarded(|| {
+        let cfg: cache_sync::Config = serde_json::from_str(arg_str(config_json, "config_json")?).map_err(|e| Error::bad_json(format!("sync config: {e}")))?;
+        cache_sync::SyncEngine::open(cfg).map_err(|e| Error::internal(format!("{e:#}")))
+    }) {
+        Ok(e) => Box::into_raw(Box::new(e)),
+        Err(e) => {
+            set_thread_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// One sync method (status, link_code, link, share_add, share_join, ...) with JSON args. Always a JSON string: the answer, or
+/// `{"error": "..."}`. Safe to call from several threads at once.
+///
+/// # Safety
+/// `s` NULL or from `cs_sync_open` and not closed; `method` and `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_sync_call(s: *mut cache_sync::SyncEngine, method: *const c_char, args_json: *const c_char) -> *mut c_char {
+    let out = guarded(|| {
+        if s.is_null() {
+            return Err(Error::bad_json("null sync handle"));
+        }
+        let m = arg_str(method, "method")?;
+        let args: serde_json::Value = if args_json.is_null() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(arg_str(args_json, "args_json")?).map_err(|e| Error::bad_json(format!("args: {e}")))?
+        };
+        // SAFETY: caller promises a live engine; its methods take &self and lock internally.
+        let e = unsafe { &*s };
+        Ok(match e.call(m, &args) {
+            Ok(v) => v,
+            Err(err) => serde_json::json!({"error": format!("{err:#}")}),
+        })
+    });
+    let v = out.unwrap_or_else(|e| serde_json::json!({"error": e.message}));
+    out_string(v.to_string()).unwrap_or(ptr::null_mut())
+}
+
+/// Stops the engine and frees it.
+///
+/// # Safety
+/// `s` NULL or from `cs_sync_open`, not used again after this call.
+#[no_mangle]
+pub unsafe extern "C" fn cs_sync_close(s: *mut cache_sync::SyncEngine) {
+    if s.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| Box::from_raw(s).close()));
+}
+
 /// # Safety
 /// `s` must be NULL or a string returned by this library, not freed before.
 #[no_mangle]

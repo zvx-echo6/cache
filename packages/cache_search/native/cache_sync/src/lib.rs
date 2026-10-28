@@ -58,9 +58,6 @@ pub const SYNC_ALPN: &[u8] = b"cache/sync/1";
 const LINK_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// An index larger than this is refused (about a million files).
 const MAX_INDEX: usize = 256 * 1024 * 1024;
-/// Files and folders never shared from inside a shared folder: the engine's own folder, hidden files, partial downloads of
-/// other apps.
-const SYNC_FOLDER: &str = ".cache-sync";
 
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)

@@ -7,5 +7,6 @@ export 'src/map_models.dart';
 export 'src/models.dart';
 export 'src/native.dart' show CsNative, CsMapNative, CsLiveNative, FfiCsNative, ZimBytes;
 export 'src/search_core.dart' show SearchCore, CoreConversation, CoreJobHandle, CsNativeFactory;
+export 'src/sync_core.dart' show SyncCore;
 export 'src/video_core.dart' show VideoCore, VideoJob;
 export 'src/video_models.dart';
