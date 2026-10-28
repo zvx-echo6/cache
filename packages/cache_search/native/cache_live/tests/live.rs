@@ -652,12 +652,12 @@ impl Pack {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("places.sqlite");
         cache_places::fixture::write_fixture_pack(&path);
-        let (_, source) = cache_places::tools_and_source(&cache_places::PlacesCfg { packs: vec![path.to_string_lossy().into()] });
+        let (_, source) = cache_places::tools_and_source(&cache_places::PlacesCfg { packs: vec![path.to_string_lossy().into()], merged_dir: None });
         Pack { source, _dir: Some(dir) }
     }
     /// A real pack, read only.
     fn real(path: &str) -> Pack {
-        let (_, source) = cache_places::tools_and_source(&cache_places::PlacesCfg { packs: vec![path.into()] });
+        let (_, source) = cache_places::tools_and_source(&cache_places::PlacesCfg { packs: vec![path.into()], merged_dir: None });
         Pack { source, _dir: None }
     }
     fn geo(&self) -> &dyn Geocoder {

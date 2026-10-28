@@ -6,7 +6,7 @@ passes the region outlines in and shows the progress. The C ABI is `cs_regions_*
 
 ## What the server publishes
 
-Under `https://cache.echo6.co/routing/`:
+Under `https://data.cached.info/routing/` (the default; `https://cache.echo6.co/routing/` serves the same files):
 
 - `current.json`: the build in use, for example
   `{"format": 1, "build": "na-2026-10-18", "valhalla": "3.7.0", "source": "...", "tiles": 30720, "bytes": ..., "gz_bytes": ..., "index": "na-2026-10-18/index.tsv.gz", "index_sha256": "<hex>"}`.

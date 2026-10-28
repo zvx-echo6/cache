@@ -698,7 +698,7 @@ void cs_sync_close(cs_sync *s);
 typedef struct cs_regions cs_regions;
 
 /* Opens the regions engine. config_json: {"dir": "<private folder>", optional "base_url" (default
- * "https://cache.echo6.co/routing/"), "stream_cap_bytes" (default 2147483648), "user_agent" (default "Cache/<version>"),
+ * "https://data.cached.info/routing/"), "stream_cap_bytes" (default 2147483648), "user_agent" (default "Cache/<version>"),
  * "reserve_bytes" (default 1 GiB: downloads pause rather than leave less free)}. One engine per folder in the process: a
  * second open of the same folder, or a cs_open config whose "regions" section names it, shares it (its own config is not
  * used). NULL on failure (reason in cs_last_error(NULL)). Downloads run on its own thread and carry on after a restart. */

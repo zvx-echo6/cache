@@ -158,7 +158,7 @@ impl Tool for NearbyTool {
         };
 
         let center = resolve_center(ctx, &self.packs, &*self.geo, near)?;
-        let covering = packs.iter().filter(|p| p.meta.contains(center.lat, center.lon)).min_by(|a, b| {
+        let covering = packs.iter().filter(|p| p.covers(center.lat, center.lon)).min_by(|a, b| {
             a.meta.area().partial_cmp(&b.meta.area()).unwrap_or(std::cmp::Ordering::Equal)
         });
         let Some(region) = covering else {

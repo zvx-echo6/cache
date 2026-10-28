@@ -2,7 +2,7 @@
 //! (`geocoder`), the coordinate formats (`coord`) and the two tools built on them: `nearby` and `locate`.
 //!
 //! The host registers both tools with `tools(&PlacesCfg)` when its config has a `places` section:
-//! `{"packs": ["/path/places.sqlite", ...]}`. Packs are opened on demand, so a pack downloaded later is picked up
+//! `{"packs": ["/path/places.sqlite", ...], "merged_dir": ".../regions/places"}`. Packs are opened on demand, so a pack downloaded later is picked up
 //! without reopening the handle, and `nearby` leaves itself out of the tool schemas while no pack is installed.
 
 pub mod addr;
@@ -35,7 +35,11 @@ use std::sync::Arc;
 /// The `places` section of the `cs_open` config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlacesCfg {
+    /// Single-region packs (format 1 or 2), searched after the merged database.
     pub packs: Vec<String>,
+    /// The folder of the phone's merged database (`regions/places`, which holds `CURRENT`); None for none.
+    #[serde(default)]
+    pub merged_dir: Option<String>,
 }
 
 /// `nearby` and `locate`, sharing one set of packs and one geocoder.
