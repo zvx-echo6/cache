@@ -28,6 +28,21 @@ enum NavPhase {
   guiding,
 }
 
+/// What places data the last map search had (cs_map_search's `warning_code`).
+enum PlacesState {
+  /// Nothing to say.
+  ok,
+
+  /// No places are on the phone, and none could be fetched.
+  none,
+
+  /// Places are on the phone, but not for the area searched.
+  notHere,
+
+  /// Places for the area searched are on their way; the search runs again when they land.
+  fetching,
+}
+
 /// Something the rest of the app may want to hear about.
 sealed class NavEvent {
   const NavEvent();
@@ -94,6 +109,9 @@ class NavState extends ChangeNotifier {
   /// Why the answer is what it is: "Searching by keywords only" when meaning search could not run, or null.
   String? searchNote;
   String? searchError;
+
+  /// What places data the last search had.
+  PlacesState placesState = PlacesState.ok;
   bool searchOpen = false;
   int _searchSeq = 0;
   Timer? _searchTimer;
@@ -168,6 +186,7 @@ class NavState extends ChangeNotifier {
       results = const [];
       searchNote = null;
       searchError = null;
+      placesState = PlacesState.ok;
     }
     notifyListeners();
   }
@@ -185,6 +204,7 @@ class NavState extends ChangeNotifier {
       searching = false;
       searchNote = null;
       searchError = null;
+      placesState = PlacesState.ok;
       notifyListeners();
       return;
     }
@@ -213,15 +233,29 @@ class NavState extends ChangeNotifier {
       searchNote = meaning && (r.meaning == 'no_embedder' || r.meaning == 'no_vectors' || r.meaning == 'model_mismatch') && r.kind == 'text'
           ? 'Matching words only: the meaning search is not available'
           : null;
-      if (r.warning != null) searchNote = r.warning;
+      placesState = switch (r.warningCode) {
+        'no_places' => PlacesState.none,
+        'not_here' => PlacesState.notHere,
+        'fetching' => PlacesState.fetching,
+        _ => PlacesState.ok,
+      };
+      // The places states have their own lines; the free-text warning is for a core older than them.
+      if (r.warning != null && r.warningCode == null) searchNote = r.warning;
     } catch (e) {
       if (seq != _searchSeq) return;
       searchError = e is CacheSearchException ? e.message : 'Search failed';
       results = const [];
+      placesState = PlacesState.ok;
     } finally {
       if (seq == _searchSeq) searching = false;
       notifyListeners();
     }
+  }
+
+  /// The places on the phone changed (a region's tiles were merged or removed): the open search runs again.
+  Future<void> placesChanged() async {
+    if (!searchOpen || query.trim().isEmpty) return;
+    await _runSearch(query, meaning: true);
   }
 
   // ---- the selected place ------------------------------------------------------------------------------------

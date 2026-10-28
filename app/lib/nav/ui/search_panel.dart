@@ -4,17 +4,23 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/map_widgets.dart';
+import '../../regions/regions_state.dart';
+import '../../regions/ui/region_sheet.dart';
+import '../../regions/ui/regions_screen.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
 import '../units.dart';
 
 /// The Maps tab's one search bar. It takes a place name, a kind of place, coordinates in any format, or a few words about what
-/// is needed, and lists answers as you type.
+/// is needed, and lists answers as you type. When the phone has no places for the search, it says so and offers the region.
 class NavSearchBar extends StatefulWidget {
-  const NavSearchBar({super.key, required this.nav, required this.fmt});
+  const NavSearchBar({super.key, required this.nav, required this.fmt, this.regions});
 
   final NavState nav;
   final Fmt fmt;
+
+  /// Regions and downloads, for "Get a region"; null hides the buttons (tests that do not need them).
+  final RegionsState? regions;
 
   @override
   State<NavSearchBar> createState() => _NavSearchBarState();
@@ -122,19 +128,79 @@ class _NavSearchBarState extends State<NavSearchBar> {
     );
   }
 
+  /// The Downloads tab of the regions screen. The field gives up the focus first, so the keyboard does not come back with it.
+  void _getRegion() {
+    final regions = widget.regions;
+    if (regions == null) return;
+    _focus.unfocus();
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
+  }
+
+  /// The region where the map is looking, when the catalogue already knows it; else the Downloads tab.
+  void _getThisArea() {
+    final regions = widget.regions;
+    if (regions == null) return;
+    final c = nav.mapCentre ?? nav.here;
+    final rec = c == null ? null : regions.catalogue.regionAt(c.lat, c.lon);
+    if (rec == null) {
+      _getRegion();
+      return;
+    }
+    _focus.unfocus();
+    showRegionSheet(context, regions, rec);
+  }
+
   Widget _results(BuildContext context) {
     final k = context.t;
     final rows = nav.results;
+    final places = nav.placesState;
+    final quiet = !nav.searching && nav.searchError == null;
     final children = <Widget>[
       if (nav.searching) LinearProgressIndicator(minHeight: 2, color: k.accent, backgroundColor: Colors.transparent),
       if (nav.searchError != null)
         Padding(padding: const EdgeInsets.all(16), child: Text(nav.searchError!, style: TextStyle(fontSize: 16, color: k.emergency))),
-      if (rows.isEmpty && !nav.searching && nav.searchError == null)
+      if (rows.isEmpty && quiet && places == PlacesState.none)
+        Padding(
+          key: const ValueKey('no-places'),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('No places on this phone.', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
+              const SizedBox(height: 4),
+              Text('Download a region to search places and addresses.', style: TextStyle(fontSize: 16, color: k.secondary)),
+              if (widget.regions != null) ...[
+                const SizedBox(height: 12),
+                FilledButton(key: const ValueKey('get-region'), onPressed: _getRegion, child: const Text('Get a region')),
+              ],
+            ],
+          ),
+        )
+      else if (rows.isEmpty && quiet && places != PlacesState.fetching)
         Padding(
           padding: const EdgeInsets.all(16),
           child: Text('Nothing found for "${nav.query.trim()}"', style: TextStyle(fontSize: 16, color: k.secondary)),
         ),
       for (final p in rows) _ResultRow(place: p, nav: nav, fmt: widget.fmt),
+      if (rows.isNotEmpty && places == PlacesState.none)
+        _placesLine(context, 'No places on this phone.', 'Get a region', _getRegion, const ValueKey('get-region')),
+      if (places == PlacesState.notHere)
+        _placesLine(context, 'No places downloaded here.', 'Get this area', _getThisArea, const ValueKey('get-this-area')),
+      if (places == PlacesState.fetching)
+        Padding(
+          key: const ValueKey('fetching-places'),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Getting places for this area…', style: TextStyle(fontSize: 15, color: k.secondary)),
+              const SizedBox(height: 8),
+              LinearProgressIndicator(minHeight: 2, color: k.accent, backgroundColor: Colors.transparent),
+            ],
+          ),
+        ),
       if (nav.searchNote != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
@@ -142,6 +208,20 @@ class _NavSearchBarState extends State<NavSearchBar> {
         ),
     ];
     return ListView(shrinkWrap: true, padding: EdgeInsets.zero, children: children);
+  }
+
+  /// One 15 px line under the results about the places data, with its button when the regions are at hand.
+  Widget _placesLine(BuildContext context, String text, String action, VoidCallback onPressed, Key key) {
+    final k = context.t;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+      child: Row(
+        children: [
+          Expanded(child: Text(text, style: TextStyle(fontSize: 15, color: k.secondary))),
+          if (widget.regions != null) TextButton(key: key, onPressed: onPressed, child: Text(action)),
+        ],
+      ),
+    );
   }
 }
 

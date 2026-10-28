@@ -7,8 +7,11 @@ import '../region_catalogue.dart';
 import '../regions_state.dart';
 
 /// What downloading a region costs, part by part, shown before anything is downloaded. The parts are ticked by default; a part
-/// already on the phone, or one that cannot be downloaded here, is not. Sizes count only what is not on the phone yet.
+/// already on the phone, or one that cannot be downloaded here, is not. A region downloaded before places were part of regions
+/// shows places unticked, to add on their own. Sizes count only what is not on the phone yet.
 Future<void> showRegionSheet(BuildContext context, RegionsState regions, RegionRecord region) {
+  // The search field the sheet was opened from would get the focus back when the sheet closes, and the keyboard with it.
+  FocusManager.instance.primaryFocus?.unfocus();
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -31,6 +34,7 @@ class _RegionSheetState extends State<RegionSheet> {
   RegionPlan? _plan;
   bool _routing = true;
   bool _map = true;
+  bool _places = true;
   bool _starting = false;
   bool _blockedByMobile = false;
   String? _error;
@@ -40,6 +44,7 @@ class _RegionSheetState extends State<RegionSheet> {
   @override
   void initState() {
     super.initState();
+    _places = !(_routingHere || _mapHere);
     r.plan(widget.region).then((p) {
       if (mounted) setState(() => _plan = p);
     }).catchError((Object e) {
@@ -50,13 +55,19 @@ class _RegionSheetState extends State<RegionSheet> {
   LocalRegion? get _here => r.regionOf(widget.region.id);
   bool get _routingHere => _here?.hasRouting ?? false;
   bool get _mapHere => _here?.hasMap ?? false;
+  bool get _placesHere => _here?.hasPlaces ?? false;
   bool get _canRouting => !_routingHere && _plan?.routing != null;
   bool get _canMap => !_mapHere && (_plan?.mapAllowed.isNotEmpty ?? false);
+  bool get _canPlaces => !_placesHere && _plan?.places != null;
+  bool get _canAny => _canRouting || _canMap || _canPlaces;
+  bool get _picked => (_routing && _canRouting) || (_map && _canMap) || (_places && _canPlaces);
 
   int get _total {
     final p = _plan;
     if (p == null) return 0;
-    return (_routing && _canRouting ? p.routing!.downloadBytes : 0) + (_map && _canMap ? p.mapBytes : 0);
+    return (_routing && _canRouting ? p.routing!.downloadBytes : 0) +
+        (_map && _canMap ? p.mapBytes : 0) +
+        (_places && _canPlaces ? p.places!.downloadBytes : 0);
   }
 
   Future<void> _start({bool anyway = false}) async {
@@ -66,7 +77,13 @@ class _RegionSheetState extends State<RegionSheet> {
       _error = null;
     });
     try {
-      await r.download(widget.region, routing: _routing && _canRouting, map: _map && _canMap, anyway: anyway);
+      await r.download(
+        widget.region,
+        routing: _routing && _canRouting,
+        map: _map && _canMap,
+        places: _places && _canPlaces,
+        anyway: anyway,
+      );
       if (mounted) Navigator.pop(context);
     } on MobileDataBlocked catch (e) {
       if (mounted) {
@@ -86,13 +103,12 @@ class _RegionSheetState extends State<RegionSheet> {
     }
   }
 
-  String _routingLine(RegionPlan p) {
-    if (_routingHere) return 'On this phone';
-    final rp = p.routing;
-    if (rp == null) return p.routingProblem ?? 'Not available';
-    final already = rp.bytes - rp.downloadBytes;
+  String _partLine(bool here, PartPlan? pp, String? problem) {
+    if (here) return 'On this phone';
+    if (pp == null) return problem ?? 'Not available';
+    final already = pp.bytes - pp.downloadBytes;
     return [
-      'About ${formatBytes(rp.downloadBytes)}',
+      'About ${formatBytes(pp.downloadBytes)}',
       if (already > 0) '${formatBytes(already)} already on this phone',
     ].join(' · ');
   }
@@ -136,7 +152,7 @@ class _RegionSheetState extends State<RegionSheet> {
                   contentPadding: EdgeInsets.zero,
                   controlAffinity: ListTileControlAffinity.leading,
                   title: const Text('Road routing'),
-                  subtitle: Text(_routingLine(p)),
+                  subtitle: Text(_partLine(_routingHere, p.routing, p.routingProblem)),
                   value: _routingHere || (_routing && _canRouting),
                   onChanged: _canRouting && !_starting ? (v) => setState(() => _routing = v ?? false) : null,
                 ),
@@ -149,14 +165,23 @@ class _RegionSheetState extends State<RegionSheet> {
                   value: _mapHere || (_map && _canMap),
                   onChanged: _canMap && !_starting ? (v) => setState(() => _map = v ?? false) : null,
                 ),
+                CheckboxListTile(
+                  key: const ValueKey('part-places'),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Places and addresses'),
+                  subtitle: Text(_partLine(_placesHere, p.places, p.placesProblem)),
+                  value: _placesHere || (_places && _canPlaces),
+                  onChanged: _canPlaces && !_starting ? (v) => setState(() => _places = v ?? false) : null,
+                ),
                 const SizedBox(height: 8),
-                if (_canRouting || _canMap)
+                if (_canAny)
                   Text('About ${formatBytes(_total)} to download', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text))
-                else if (_routingHere || _mapHere)
+                else if (_routingHere || _mapHere || _placesHere)
                   Text('${region.name} is on this phone.', style: TextStyle(fontSize: 16, color: k.secondary))
                 else
                   Text('Nothing of ${region.name} can be downloaded here.', style: TextStyle(fontSize: 16, color: k.warning)),
-                if (!r.maps.engine.online && (_canRouting || _canMap)) ...[
+                if (!r.maps.engine.online && _canAny) ...[
                   const SizedBox(height: 8),
                   Text('Downloading needs a connection.', style: TextStyle(fontSize: 15, color: k.warning)),
                 ],
@@ -179,7 +204,7 @@ class _RegionSheetState extends State<RegionSheet> {
                           )
                         : FilledButton(
                             key: const ValueKey('region-download'),
-                            onPressed: p != null && !_starting && ((_routing && _canRouting) || (_map && _canMap)) ? () => _start() : null,
+                            onPressed: p != null && !_starting && _picked ? () => _start() : null,
                             child: const Text('Download'),
                           ),
                   ),

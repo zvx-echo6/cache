@@ -116,6 +116,17 @@ abstract class CsLiveNative {
   String? livePreview(String requestJson);
 }
 
+/// cs_places_refresh: the core reads the places again (the merged database of the downloaded regions and the single-region
+/// packs). Kept apart from [CsNative] so the fakes of the older seam do not change. [FfiCsNative] implements it;
+/// [hasPlacesRefresh] is false when the loaded core is older than the call (the symbol is looked up when first used, never at
+/// load).
+abstract class CsPlacesNative {
+  bool get hasPlacesRefresh;
+
+  /// [argsJson] is `{"packs"?: [...]}`; the answer `{"ok","packs","merged"}`, or null on error.
+  String? placesRefresh(int handle, String argsJson);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -156,7 +167,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative {
+class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -487,6 +498,14 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative {
 
   @override
   String? mapProgress(int handle, String requestJson) => _callHS(_mapProgress, handle, requestJson);
+
+  late final _HStrStr? _placesRefresh = _lookupHS('cs_places_refresh');
+
+  @override
+  bool get hasPlacesRefresh => _placesRefresh != null;
+
+  @override
+  String? placesRefresh(int handle, String argsJson) => _callHS(_placesRefresh, handle, argsJson);
 
   // ---- live fetch policy, keys and the connector checker: looked up on first use, because an older core must still load ----
 

@@ -53,6 +53,23 @@ class MapFake extends FakeNative implements CsMapNative {
   }
 }
 
+/// The map seam plus cs_places_refresh.
+class PlacesFake extends MapFake implements CsPlacesNative {
+  final List<String> refreshCalls = [];
+
+  @override
+  bool get hasPlacesRefresh => true;
+
+  @override
+  String? placesRefresh(int handle, String argsJson) {
+    refreshCalls.add(argsJson);
+    final packs = (jsonDecode(argsJson) as Map)['packs'] as List?;
+    return jsonEncode({'ok': true, 'packs': packs?.length ?? 0, 'merged': true});
+  }
+}
+
+CsNative _placesWorkerFake() => PlacesFake();
+
 // Runs inside the worker isolate, so it builds its own fake.
 CsNative _workerFake() => MapFake()
   ..mapReplies['search'] = fixture('search-pharmacy.json')
@@ -219,6 +236,39 @@ void main() {
       expect(() => SearchEngine.open(n, const []).mapRoute({'to': {}}), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'unsupported')));
       final m = MapFake()..saved = false;
       expect(() => SearchEngine.open(m, const []).savedPlaces(), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'unsupported')));
+    });
+
+    test('cs_places_refresh: the packs when given, nothing else when not; an older core says so', () async {
+      final n = PlacesFake();
+      final e = SearchEngine.open(n, const []);
+      expect(e.placesRefresh(packs: ['/p/idaho/places.sqlite']), {'ok': true, 'packs': 1, 'merged': true});
+      expect(jsonDecode(n.refreshCalls.last), {'packs': ['/p/idaho/places.sqlite']});
+      e.placesRefresh();
+      expect(jsonDecode(n.refreshCalls.last), <String, dynamic>{});
+      expect(() => SearchEngine.open(MapFake(), const []).placesRefresh(), throwsA(isA<CacheSearchException>().having((x) => x.code, 'code', 'unsupported')));
+
+      final core = await SearchCore.open(const [], native: _placesWorkerFake);
+      expect((await core.refreshPlaces(packs: ['/a', '/b']))['packs'], 2);
+      expect((await core.refreshPlaces())['merged'], true);
+      await core.close();
+    });
+
+    test('a search answer carries the places state', () {
+      final r = MapSearchResponse.fromJson({
+        'query': 'pharmacy',
+        'meaning': 'used',
+        'results': <Object>[],
+        'warning': 'no places data is installed',
+        'places': {'installed': true, 'covers': false, 'pending': 1},
+        'warning_code': 'fetching',
+      });
+      expect(r.warningCode, 'fetching');
+      expect(r.places!.installed, isTrue);
+      expect(r.places!.covers, isFalse);
+      expect(r.places!.pending, 1);
+      final old = MapSearchResponse.fromJson({'query': 'x', 'results': <Object>[]});
+      expect(old.warningCode, isNull);
+      expect(old.places, isNull);
     });
 
     test('saved places: list, save, delete', () {

@@ -6,6 +6,13 @@ release notes).
 
 ## Unreleased
 
+### New
+- Regions include places and addresses for map search
+- Map search says when places for the area are missing or on their way, and offers the region
+
+### Fixed
+- Regions: the keyboard no longer pops up after the download sheet closes
+
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
 ### Fixed

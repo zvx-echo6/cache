@@ -4,11 +4,12 @@ import 'dart:isolate';
 
 import '../files.dart';
 import '../maps/geo.dart';
+import '../search/core_config.dart' show kDataBaseUrl;
 import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchBytes;
 
 /// Where the public region catalogue is published (cache-packs' regions recipe): index.json, one shard per country
 /// (`<iso>.json` and `<iso>.search.json`), `search-global.json` and `polygons/<id>.geojson`.
-const String kRegionCatalogueBase = 'https://cache.echo6.co/regions/';
+const String kRegionCatalogueBase = '$kDataBaseUrl/regions/';
 
 /// One region of the catalogue, at any scale: a country, a state, several states, part of a state, a valley, a metro area, a
 /// county or a city. Regions overlap freely; [parents] are every region it sits in.

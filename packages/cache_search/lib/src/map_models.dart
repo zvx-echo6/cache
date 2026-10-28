@@ -168,6 +168,23 @@ class MapPlace {
   Map<String, dynamic> toEnd() => {if (!isCategory) 'id': id, 'lat': lat, 'lon': lon, 'name': name};
 }
 
+/// What places data the phone has for a map search (cs_map_search's `places`).
+class PlacesCoverage {
+  const PlacesCoverage({required this.installed, required this.covers, this.pending = 0});
+
+  factory PlacesCoverage.fromJson(Map<String, dynamic> j) =>
+      PlacesCoverage(installed: j['installed'] == true, covers: j['covers'] == true, pending: _i(j['pending']) ?? 0);
+
+  /// Any places data is on the phone.
+  final bool installed;
+
+  /// A tile (or pack) on the phone holds the search centre.
+  final bool covers;
+
+  /// Tiles for this search still on their way.
+  final int pending;
+}
+
 class MapSearchResponse {
   const MapSearchResponse({
     required this.query,
@@ -177,6 +194,8 @@ class MapSearchResponse {
     required this.meaning,
     required this.results,
     this.warning,
+    this.warningCode,
+    this.places,
   });
 
   factory MapSearchResponse.fromJson(Map<String, dynamic> j) {
@@ -189,6 +208,8 @@ class MapSearchResponse {
       meaning: (j['meaning'] ?? 'off') as String,
       results: [for (final r in _l(j['results'])) MapPlace.fromJson(_m(r))],
       warning: _s(j['warning']),
+      warningCode: _s(j['warning_code']),
+      places: j['places'] is Map ? PlacesCoverage.fromJson(_m(j['places'])) : null,
     );
   }
 
@@ -205,6 +226,12 @@ class MapSearchResponse {
   final String meaning;
   final List<MapPlace> results;
   final String? warning;
+
+  /// "no_places", "not_here" or "fetching", or null when there is nothing to say about the places data.
+  final String? warningCode;
+
+  /// What places data the phone has here; null from a core older than the places tiles.
+  final PlacesCoverage? places;
 }
 
 /// A stretch of the route drawn one way: "road" (Valhalla), "offroad" (straight legs over the grid) or "follow"

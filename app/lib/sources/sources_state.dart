@@ -298,6 +298,18 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return ready == 1 ? '1 source' : '$ready sources';
   }
 
+  /// The core reads the places again, with the single-region packs found now (a pack copied in with adb is searched without a
+  /// restart). The packs folder sits next to the ZIMs folder.
+  Future<void> _refreshPlaces(SearchCore core) async {
+    final zims = zimsDir;
+    if (_extra['places'] is! Map || zims == null) return;
+    try {
+      await core.refreshPlaces(packs: legacyPlacesPacks(zims.parent));
+    } catch (_) {
+      // A core older than cs_places_refresh keeps the packs it opened with.
+    }
+  }
+
   /// Scans the folder again, hands the list to the core and starts the index job of every ZIM that has none.
   Future<void> refresh() async {
     if (_busyRefresh) return;
@@ -307,6 +319,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       final core = _core;
       if (core == null) return;
       await core.setSources(_configs());
+      await _refreshPlaces(core);
       await _readStatus(core);
       _dropOrphanIndexes();
       for (final z in zims) {

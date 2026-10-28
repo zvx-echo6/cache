@@ -610,7 +610,7 @@ class _MapsScreenState extends State<MapsScreen> {
         ? GuidanceBanner(nav: nav, fmt: nav.fmt)
         : previewing
             ? DirectionsHeader(nav: nav)
-            : NavSearchBar(nav: nav, fmt: nav.fmt);
+            : NavSearchBar(nav: nav, fmt: nav.fmt, regions: widget.regions);
     final searching = nav.searchOpen && nav.phase == NavPhase.browsing && nav.query.trim().isNotEmpty;
     return SafeArea(
       child: Padding(
