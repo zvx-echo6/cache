@@ -394,7 +394,7 @@ a date YYYY-MM-DD, or next_days (with days)." The tool does the date arithmetic 
 |---|---|
 | omitted | everything saved (the output is exactly what it was before `when`) |
 | `today` | now to local midnight |
-| `tonight` | 18:00 (or now, if later) to 07:00 tomorrow |
+| `tonight` | 18:00 (or now, if later) to 07:00 tomorrow; before 07:00, the rest of the night in progress |
 | `tomorrow`, a weekday name, `YYYY-MM-DD` | that local day; a weekday is the next time it comes, today's own name is today |
 | `next_days` with `days` N | now to the end of day N, today being day 1 (all 16 without `days`) |
 
@@ -403,7 +403,11 @@ needs one call. Dated items (forecast days, an alert starting later) are kept wh
 forecast does not reach, or a day that is over, is one numbered item saying so, never an empty list:
 `{"n": 11, "label": "No weather forecast for Sat Nov 14 in the saved data", "fields": {"Status": "not in the saved data",
 "Saved data runs to": "2026-11-09"}, "not_covered": true}`. A forecast day's low is the day's minimum, which comes in the early
-morning: its field says "Low (early morning)", so tomorrow's is tonight's low.
+morning: its field says "Low (early morning)". For the night ahead the weather source has its own item from the next 36 hours
+of hourly data (`"label": "Tonight (Wed Oct 28)"`, fields "Overnight low", "Chance of rain", "Wind max", "Worst conditions",
+taken over 18:00 to 07:00 only); `when: "tonight"` answers with it and the Now item, not the two days it falls across. A
+definition makes such an item with `window` (a part of the day ahead over a time series) and `agg` values (min, max, sum, first,
+last over the series inside it).
 
 The `place` text is a saved place, a town or other place the places pack knows, or latitude and longitude (`"44.42,-111.37"`).
 It may be written any way the pack understands ("Island Park, Idaho", "Island Park ID", "island park") and a town name with one

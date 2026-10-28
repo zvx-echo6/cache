@@ -259,6 +259,70 @@ fn when_narrows_to_one_period() {
     }
 }
 
+/// The night ahead from the hourly series: the overnight low and the rest are taken over 18:00 to 07:00 only, the item is
+/// labelled with its date, and `when: "tonight"` answers with it instead of the two days it falls across.
+#[test]
+fn tonight_from_the_hourly_series() {
+    let mut body: Value = serde_json::from_str(&fixture("openmeteo_burley.json")).unwrap();
+    // 36 hours from 10:00 on Sunday 25 Oct; outside 18:00-07:00 the values are ones the night must not pick up
+    let mut time = vec![];
+    let (mut temp, mut code, mut rain, mut wind) = (vec![], vec![], vec![], vec![]);
+    for h in 0..36 {
+        let (day, hour) = (25 + (10 + h) / 24, (10 + h) % 24);
+        time.push(json!(format!("2026-10-{day}T{hour:02}:00")));
+        let night = (day == 25 && hour >= 18) || (day == 26 && hour < 7);
+        temp.push(json!(if night { 40 - (hour + 24 - 18) % 24 } else { 20 }));
+        code.push(json!(if day == 26 && hour == 3 { 71 } else if night { 1 } else { 95 }));
+        rain.push(json!(if night { 30 } else { 90 }));
+        wind.push(json!(if night { 12 } else { 40 }));
+    }
+    body["hourly"] = json!({"time": time, "temperature_2m": temp, "weather_code": code, "precipitation_probability": rain, "wind_speed_10m": wind});
+    let srv = Server::start(vec![("/v1/forecast", body.to_string())]);
+    let env = Env::new("tonight", vec![("weather.json", real_source("weather.json"), Some((srv.port, "/v1/forecast")))]);
+    env.weather(json!({"source": "weather", "place": burley(), "now": T0})).unwrap();
+    let url = srv.last_url.lock().unwrap().clone();
+    assert!(url.contains("&hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m&forecast_hours=36"), "{url}");
+    env.places.save(r#"{"key":"burley","name":"Burley, ID","lat":42.536,"lon":-113.792}"#).unwrap();
+
+    let all = env.tool(json!({"source": "weather", "place": "burley"}), None, T0).unwrap();
+    let night = &all["items"][1];
+    assert_eq!(night["address"], "live:weather/burley/tonight");
+    assert_eq!(night["label"], "Tonight (Sun Oct 25)");
+    assert_eq!(night["time"], "2026-10-25T18:00-06:00");
+    // 18:00 is 40, falling an hour at a time to 28 at 06:00; the 20 at 07:00 is morning
+    assert_eq!(
+        night["fields"],
+        json!({"Overnight low": "28 \u{b0}F", "Chance of rain": "30%", "Wind max": "12 mph", "Worst conditions": "light snow"})
+    );
+    assert_eq!(all["items"][2]["address"], "live:weather/burley/2026-10-25");
+
+    let t = env.tool(json!({"source": "weather", "place": "burley", "when": "tonight"}), None, T0).unwrap();
+    let addrs: Vec<&str> = t["items"].as_array().unwrap().iter().map(|i| i["address"].as_str().unwrap()).collect();
+    assert_eq!(addrs, ["live:weather/burley/now", "live:weather/burley/tonight"]);
+    // tomorrow is still the day, with the night that runs into it
+    let t = env.tool(json!({"source": "weather", "place": "burley", "when": "tomorrow"}), None, T0).unwrap();
+    let addrs: Vec<&str> = t["items"].as_array().unwrap().iter().map(|i| i["address"].as_str().unwrap()).collect();
+    assert_eq!(addrs, ["live:weather/burley/now", "live:weather/burley/tonight", "live:weather/burley/2026-10-26"]);
+    // after 07:00 the night is over and drops out
+    let t = env.tool(json!({"source": "weather", "place": "burley"}), None, "2026-10-26T07:00:00-06:00").unwrap();
+    assert!(t["items"].as_array().unwrap().iter().all(|i| i["address"] != "live:weather/burley/tonight"));
+}
+
+/// `agg` and `window` values need an item with a window, and a window's hours must make a period.
+#[test]
+fn window_values_are_checked() {
+    let mut d = real_source("weather.json");
+    d["items"][0]["fields"][0] = json!({"label": "Low", "agg": {"op": "min", "value": {"path": "x"}}});
+    let errs = cache_live::def::SourceDef::check(&d.to_string()).unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("agg and window values need the item to have a window")), "{errs:?}");
+    let mut d = real_source("weather.json");
+    d["items"][1]["window"]["to_hour"] = json!(18);
+    d["items"][1]["fields"][0]["agg"]["op"] = json!("mean");
+    let errs = cache_live::def::SourceDef::check(&d.to_string()).unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("from_hour and to_hour are different hours")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("agg.op: min, max, sum, first or last")), "{errs:?}");
+}
+
 /// A forecast day that has ended (its local midnight has passed) is left out, as an expired "Now" is: two days after the fetch,
 /// the first item is today, not a day that is already over.
 #[test]

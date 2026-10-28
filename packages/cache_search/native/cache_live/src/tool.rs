@@ -22,7 +22,7 @@
 use crate::map::{age_words, date_of, minute_of, stamp};
 use crate::tz::Zone;
 use crate::{address, here_key, now_from, Live, LiveCfg, Place};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
 use cache_tool::places::parse_latlon;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
@@ -171,7 +171,8 @@ fn local_at(zone: &Zone, d: NaiveDate, h: u32, m: u32) -> i64 {
 
 /// `when` (and `days`) as a period around `now` in `zone`.
 fn period(when: &str, days: Option<i64>, now: i64, zone: &Zone) -> Result<Period, ToolError> {
-    let today = DateTime::from_timestamp(now, 0).map(|d| d.with_timezone(&zone.offset_at(now)).date_naive()).unwrap_or_default();
+    let local = DateTime::from_timestamp(now, 0).map(|d| d.with_timezone(&zone.offset_at(now)).naive_local()).unwrap_or_default();
+    let today = local.date();
     let day_of = |d: NaiveDate| Period { from: local_midnight(zone, d).max(now), to: local_midnight(zone, d + Duration::days(1)), day: d, past: d < today };
     let w = when.trim().to_lowercase();
     if days.is_some() && w != "next_days" {
@@ -180,7 +181,8 @@ fn period(when: &str, days: Option<i64>, now: i64, zone: &Zone) -> Result<Period
     Ok(match w.as_str() {
         "today" => day_of(today),
         "tomorrow" => day_of(today + Duration::days(1)),
-        // the night ahead: from 18:00 (or now, if later) to 07:00 the next morning
+        // the night ahead, 18:00 (or now, if later) to 07:00; before 07:00, the rest of the night in progress
+        "tonight" if local.hour() < 7 => Period { from: now, to: local_at(zone, today, 7, 0), day: today, past: false },
         "tonight" => Period {
             from: local_at(zone, today, 18, 0).max(now),
             to: local_at(zone, today + Duration::days(1), 7, 0),
@@ -233,6 +235,11 @@ fn in_period(i: &crate::map::Item, p: &Period, now: i64, zone: &Zone) -> bool {
         Some((start, _, false)) if start <= now => true,
         Some((start, end, _)) => start < p.to && end.unwrap_or(i64::MAX) > p.from,
     }
+}
+
+/// Whether a timed item (not a whole day) covers all of `p`.
+fn spans(i: &crate::map::Item, p: &Period, zone: &Zone) -> bool {
+    matches!(item_span(i, zone), Some((start, Some(end), false)) if start <= p.from && end >= p.to)
 }
 
 /// "Fri Nov 14": a local day as the labels write it.
@@ -370,7 +377,14 @@ impl Tool for LiveDataTool {
         }
         let period = when.map(|w| period(w, days, now, &off)).transpose()?;
         let chosen: Vec<&crate::map::Item> = match &period {
-            Some(p) => v.items.iter().filter(|i| in_period(i, p, now, &off)).collect(),
+            Some(p) => {
+                let mut c: Vec<_> = v.items.iter().filter(|i| in_period(i, p, now, &off)).collect();
+                // An item made for the period itself (the night ahead) answers it: whole days that only overlap it go.
+                if c.iter().any(|i| spans(i, p, &off)) {
+                    c.retain(|i| !matches!(item_span(i, &off), Some((_, _, true))));
+                }
+                c
+            }
             None => v.items.iter().collect(),
         };
         let more = chosen.len().saturating_sub(MAX_ITEMS);

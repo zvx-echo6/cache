@@ -11,14 +11,17 @@
 //! Formatting steps of a value, in this order: time conversion or (scale, offset, round, compass) or plain text;
 //! `lookup` (replaces the result, keyed by the raw value); `omit_if`; `case`; `max_chars`; `prefix`/`suffix`.
 //!
+//! An item group with a `window` is one item for a part of the day ahead (the night): its `agg` values are taken over the
+//! elements of a time series inside that part, so "the overnight low" is the lowest hourly temperature from 18:00 to 07:00.
+//!
 //! An item group is mapped, then `where` drops items, `near` drops items too far from the place, `sort` orders them and
 //! `limit` keeps the first few.
 
-use crate::def::{CalcSpec, Cond, DistanceSpec, ItemDef, Num, SourceDef, Spec, TimeSpec};
+use crate::def::{AggSpec, CalcSpec, Cond, DistanceSpec, ItemDef, Num, SourceDef, Spec, TimeSpec, WindowDef};
 use crate::geo::{self, Near};
 use crate::tz::Zone;
 use crate::{Error, Result};
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -102,6 +105,83 @@ struct Ctx<'a> {
     /// The place the data is for (distances are measured from it).
     lat: f64,
     lon: f64,
+    /// The item group's `window`, when it has one.
+    win: Option<&'a Win<'a>>,
+}
+
+/// A `window` worked out for one response: the period, the series' elements and which of them fall in it.
+struct Win<'a> {
+    from: i64,
+    to: i64,
+    list: &'a [Value],
+    idxs: Vec<usize>,
+}
+
+/// A wall-clock hour on a local day as an instant (a skipped hour falls an hour later).
+fn local_hour(zone: &Zone, d: NaiveDate, h: u32) -> Option<i64> {
+    let n = d.and_time(NaiveTime::from_hms_opt(h, 0, 0)?);
+    zone.local(&n).or_else(|| zone.local(&(n + Duration::hours(1)))).map(|t| t.timestamp())
+}
+
+/// The period of `w` at `now`: the one in progress, else the next; with the elements of its series that overlap it. `None`
+/// when the hours are not valid or the series has nothing in the period.
+fn window_of<'a>(w: &WindowDef, root: &'a Value, zone: &Zone, now: i64) -> Option<Win<'a>> {
+    if w.from_hour > 23 || w.to_hour > 23 || w.from_hour == w.to_hour {
+        return None;
+    }
+    let none = Params::new();
+    let probe = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now, lat: 0.0, lon: 0.0, win: None };
+    let list = follow(&probe, &w.each)?.as_array()?.as_slice();
+    let local = DateTime::from_timestamp(now, 0)?.with_timezone(&zone.offset_at(now));
+    let (d, h) = (local.date_naive(), local.hour());
+    let next = d + Duration::days(1);
+    let (from, to) = if w.from_hour > w.to_hour {
+        if h < w.to_hour {
+            (now, local_hour(zone, d, w.to_hour)?)
+        } else {
+            (now.max(local_hour(zone, d, w.from_hour)?), local_hour(zone, next, w.to_hour)?)
+        }
+    } else if h < w.to_hour {
+        (now.max(local_hour(zone, d, w.from_hour)?), local_hour(zone, d, w.to_hour)?)
+    } else {
+        (local_hour(zone, next, w.from_hour)?, local_hour(zone, next, w.to_hour)?)
+    };
+    let step = i64::from(w.step_minutes.unwrap_or(60).max(1)) * 60;
+    let idxs: Vec<usize> = list
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| {
+            let t = parse_time(v, &w.time, zone)?.timestamp();
+            (t < to && t + step > from).then_some(i)
+        })
+        .collect();
+    if idxs.is_empty() {
+        return None;
+    }
+    Some(Win { from, to, list, idxs })
+}
+
+/// `value` at each element of the window, combined.
+fn agg(a: &AggSpec, ctx: &Ctx) -> Option<String> {
+    let win = ctx.win?;
+    let vals: Vec<f64> = win
+        .idxs
+        .iter()
+        .filter_map(|&i| {
+            let c = Ctx { cur: &win.list[i], idx: i, ..*ctx };
+            lead_num(&eval(&a.value, &c)?)
+        })
+        .collect();
+    let first = *vals.first()?;
+    let r = match a.op.as_str() {
+        "min" => vals.iter().copied().fold(first, f64::min),
+        "max" => vals.iter().copied().fold(first, f64::max),
+        "sum" => vals.iter().sum(),
+        "first" => first,
+        "last" => *vals.last()?,
+        _ => return None,
+    };
+    Some(fmt_num(r, None))
 }
 
 /// Follow a path (see the module doc).
@@ -146,7 +226,7 @@ fn follow<'a>(ctx: &Ctx<'a>, path: &str) -> Option<&'a Value> {
 pub fn lookup<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
     static Z: Zone = Zone::UTC;
     static P: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
-    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone: &Z, params: P.get_or_init(Params::new), now: 0, lat: 0.0, lon: 0.0 };
+    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone: &Z, params: P.get_or_init(Params::new), now: 0, lat: 0.0, lon: 0.0, win: None };
     follow(&ctx, path)
 }
 
@@ -299,6 +379,15 @@ fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
         (None, Some(distance_text(d, ctx)?))
     } else if let Some(c) = &spec.calc {
         (None, Some(calc(c, ctx)?))
+    } else if let Some(a) = &spec.agg {
+        (None, Some(agg(a, ctx)?))
+    } else if let Some(w) = &spec.window {
+        let win = ctx.win?;
+        (Some(Value::from(match w.as_str() {
+            "from" => win.from,
+            "to" => win.to,
+            _ => return None,
+        })), None)
     } else if let Some(p) = &spec.param {
         (Some(ctx.params.get(p)?.clone()), None)
     } else if let Some(t) = &spec.template {
@@ -527,8 +616,12 @@ fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
     Some(Item {
         key,
         label,
-        time: def.time.as_ref().and_then(|t| eval(t, ctx)),
-        ends: def.ends.as_ref().and_then(|e| eval_instant(e, ctx)),
+        // a window's item starts and ends with its period unless the definition says otherwise
+        time: def.time.as_ref().and_then(|t| eval(t, ctx)).or_else(|| {
+            let w = ctx.win?;
+            Some(DateTime::from_timestamp(w.from, 0)?.with_timezone(&ctx.zone.offset_at(w.from)).format("%Y-%m-%dT%H:%M%:z").to_string())
+        }),
+        ends: def.ends.as_ref().and_then(|e| eval_instant(e, ctx)).or_else(|| ctx.win.map(|w| w.to)),
         fields: Fields(fields),
         point,
         area: def.area.as_ref().and_then(|p| follow(ctx, p)).filter(|v| v.is_object()).cloned(),
@@ -633,7 +726,7 @@ fn bad(m: String) -> Error {
 pub fn zone_for(def: &SourceDef, root: &Value, lat: f64, lon: f64) -> Result<Zone> {
     let utc = Zone::UTC;
     let none = Params::new();
-    let probe = Ctx { root, cur: root, idx: 0, key: None, zone: &utc, params: &none, now: 0, lat, lon };
+    let probe = Ctx { root, cur: root, idx: 0, key: None, zone: &utc, params: &none, now: 0, lat, lon, win: None };
     if let Some(p) = &def.timezone_path {
         if let Some(z) = follow(&probe, p).and_then(Value::as_str).and_then(Zone::from_name) {
             return Ok(z);
@@ -686,7 +779,7 @@ pub fn map_response(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lo
 /// `map_response` with the user's parameters (`{"param": "name"}` in the definition reads them).
 pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lon: f64, params: &Params) -> Result<Mapped> {
     let zone = zone_for(def, root, lat, lon)?;
-    let at = |cur| Ctx { root, cur, idx: 0, key: None, zone: &zone, params, now: fetched_at, lat, lon };
+    let at = |cur| Ctx { root, cur, idx: 0, key: None, zone: &zone, params, now: fetched_at, lat, lon, win: None };
     for p in &def.require {
         if follow(&at(root), p).is_none() {
             return Err(bad(format!("the response has no {p:?}")));
@@ -711,24 +804,31 @@ pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f6
             }
             group.push((sort_keys(g, &ctx), it));
         };
+        if let Some(w) = &g.window {
+            // nothing in the period (a series that does not reach it): no item
+            if let Some(win) = window_of(w, root, &zone, fetched_at) {
+                push(Ctx { win: Some(&win), ..at(root) }, &mut group);
+            }
+        } else {
         match &g.each {
             Some(p) => {
                 let target = follow(&at(root), p).ok_or_else(|| bad(format!("no list at {p:?}")))?;
                 match target {
                     Value::Array(arr) => {
                         for (i, el) in arr.iter().enumerate() {
-                            push(Ctx { root, cur: el, idx: i, key: None, zone: &zone, params, now: fetched_at, lat, lon }, &mut group);
+                            push(Ctx { root, cur: el, idx: i, key: None, zone: &zone, params, now: fetched_at, lat, lon, win: None }, &mut group);
                         }
                     }
                     Value::Object(obj) => {
                         for (i, (k, el)) in obj.iter().enumerate() {
-                            push(Ctx { root, cur: el, idx: i, key: Some(k.as_str()), zone: &zone, params, now: fetched_at, lat, lon }, &mut group);
+                            push(Ctx { root, cur: el, idx: i, key: Some(k.as_str()), zone: &zone, params, now: fetched_at, lat, lon, win: None }, &mut group);
                         }
                     }
                     _ => return Err(bad(format!("no list at {p:?}"))),
                 }
             }
             None => push(at(root), &mut group),
+        }
         }
         if !g.sort.is_empty() {
             group.sort_by(|a, b| {
@@ -767,7 +867,7 @@ fn validity(def: &SourceDef, root: &Value, zone: &Zone, fetched_at: i64, lat: f6
     }
     let path = v.end_path.as_deref().unwrap_or("");
     let none = Params::new();
-    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now: fetched_at, lat, lon };
+    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now: fetched_at, lat, lon, win: None };
     let val = follow(&ctx, path).ok_or_else(|| bad(format!("no end time at {path:?}")))?;
     let local = TimeSpec { input: "local".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
     let rfc = TimeSpec { input: "rfc3339".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
@@ -825,7 +925,7 @@ mod tests {
     static Z: Zone = Zone::Fixed(-21600);
     static NO_PARAMS: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
     fn ctx<'a>(root: &'a Value, cur: &'a Value, idx: usize) -> Ctx<'a> {
-        Ctx { root, cur, idx, key: None, zone: &Z, params: NO_PARAMS.get_or_init(Params::new), now: 1_792_000_000, lat: 42.536, lon: -113.792 }
+        Ctx { root, cur, idx, key: None, zone: &Z, params: NO_PARAMS.get_or_init(Params::new), now: 1_792_000_000, lat: 42.536, lon: -113.792, win: None }
     }
 
     #[test]
