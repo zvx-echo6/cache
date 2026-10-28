@@ -214,6 +214,21 @@ fn weather_fetch_get_and_tool_shape() {
     }
 }
 
+/// A forecast day that has ended (its local midnight has passed) is left out, as an expired "Now" is: two days after the fetch,
+/// the first item is today, not a day that is already over.
+#[test]
+fn past_forecast_days_drop_out() {
+    let (env, _srv) = weather_env("past-days");
+    env.weather(json!({"source": "weather", "place": burley(), "now": T0})).unwrap();
+    let g = env.get(json!({"source": "weather", "place": burley(), "now": "2026-10-27T09:00:00-06:00"})).unwrap();
+    let items = g["items"].as_array().unwrap();
+    assert_eq!(items[0]["address"], "live:weather/burley/2026-10-27", "the 25th and 26th are over, and so is the old Now");
+    assert_eq!(items.len(), 14);
+    // the last minute of a day still shows it
+    let g = env.get(json!({"source": "weather", "place": burley(), "now": "2026-10-26T23:59:00-06:00"})).unwrap();
+    assert_eq!(g["items"][0]["address"], "live:weather/burley/2026-10-26");
+}
+
 #[test]
 fn refresh_interval_force_and_failure_keeps_last_good() {
     let (env, srv) = weather_env("refresh");
