@@ -1,0 +1,46 @@
+name: Identity guard
+
+# Fails any push or pull request that would publish personal identity: every new commit must be authored and committed
+# by the project's no-reply identity, and no commit may add a line carrying a personal name, handle or email. The
+# pattern lives in the IDENTITY_PATTERN repository secret so this public file does not repeat what it guards.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check new commits
+        env:
+          PAT: ${{ secrets.IDENTITY_PATTERN }}
+          OK_EMAIL: 242306573+zvx-echo6@users.noreply.github.com
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -z "$PAT" ]; then echo "IDENTITY_PATTERN is not available (fork pull request); checking identities only."; fi
+          if [ -n "$BASE" ]; then range="$BASE..$HEAD"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            others=$(git for-each-ref --format='%(objectname)' refs/remotes/origin | grep -v "$AFTER" || true)
+            range="$AFTER"; [ -n "$others" ] && range="$AFTER --not $others"
+          else range="$BEFORE..$AFTER"; fi
+          fail=0
+          for c in $(git rev-list $range); do
+            ids=$(git log -1 --format='%ae %ce' "$c")
+            if [ "$ids" != "$OK_EMAIL $OK_EMAIL" ]; then echo "::error::$c is not by the no-reply identity"; fail=1; fi
+            if [ -n "$PAT" ]; then
+              n=$( { git log -1 --format=%B "$c"; git diff-tree -p --no-commit-id --unified=0 --root -r --text "$c" | grep '^+[^+]'; } \
+                | grep -c -i -E "$PAT" || true)
+              if [ "$n" != "0" ]; then echo "::error::$c adds $n line(s) with personal identity"; fail=1; fi
+            fi
+          done
+          exit $fail
