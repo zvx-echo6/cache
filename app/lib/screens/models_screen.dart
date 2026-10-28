@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../models/model_downloads.dart';
 import '../theme.dart';
+import 'model_search_screen.dart';
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -36,7 +38,7 @@ class ModelsScreen extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(24),
                           child: Text(
-                            app.modelsError ?? 'No models yet. Choose a .gguf file to add one.',
+                            app.modelsError ?? 'No models yet. Find one on Hugging Face, or choose a .gguf file.',
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 18, color: k.secondary),
                           ),
@@ -72,7 +74,19 @@ class ModelsScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      FilledButton.icon(
+                      if (ModelDownloads.shared case final downloads?) ...[
+                        ModelDownloadBar(downloads: downloads),
+                        FilledButton.icon(
+                          key: const ValueKey('find-model'),
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(builder: (_) => ModelSearchScreen(downloads: downloads)),
+                          ),
+                          icon: const Icon(Icons.search),
+                          label: const Text('Find a model on Hugging Face'),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      OutlinedButton.icon(
                         onPressed: app.copyProgress != null ? null : () => app.pickAndCopy(),
                         icon: const Icon(Icons.folder_open),
                         label: const Text('Choose a file…'),

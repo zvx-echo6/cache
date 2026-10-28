@@ -125,7 +125,7 @@ class DownloadResult {
   final File file;
   final int bytes;
 
-  /// True when the file matched a checksum Kiwix publishes.
+  /// True when the file matched a published checksum (Kiwix's, or one given by the caller).
   final bool verified;
   final String? checksumKind;
 }
@@ -153,6 +153,7 @@ class ZimDownloader {
     required File part,
     Uri? sha256Url,
     Uri? md5Url,
+    String? expectedSha256,
     void Function(int done, int total)? onProgress,
     void Function()? onVerifying,
     CancelToken? cancel,
@@ -176,7 +177,9 @@ class ZimDownloader {
       }
 
       // 3. The published checksum, from Kiwix's own host (not the mirror that serves the file).
-      final expected = await _fetchChecksum(client, sha256Url, md5Url, cancel);
+      final expected = expectedSha256 != null
+          ? _Checksum('sha256', expectedSha256.toLowerCase())
+          : await _fetchChecksum(client, sha256Url, md5Url, cancel);
 
       // 4. The file.
       await _fetchBody(client, head, part, startAt, total, onProgress, cancel);

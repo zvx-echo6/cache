@@ -29,6 +29,7 @@ import 'nav/speaker.dart';
 import 'nav/units.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
+import 'models/model_downloads.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
@@ -80,6 +81,7 @@ class _CacheAppState extends State<CacheApp> {
   late final AppSettings settings = AppSettings();
   // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
   late final DataPolicy policy = DataPolicy(settings: settings);
+  late final ModelDownloads modelDownloads = ModelDownloads(app: app, policy: policy);
   late final MapsState maps = MapsState(
     engine: CoreLayerEngine(
       openCore: sources.whenCoreReady,
@@ -180,6 +182,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void initState() {
     super.initState();
+    ModelDownloads.shared = modelDownloads;
     app.addListener(_onApp);
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
