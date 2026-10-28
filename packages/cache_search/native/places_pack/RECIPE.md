@@ -84,13 +84,27 @@ container on the build host; nothing is installed on the host itself.
 5. `places_pack addresses --csv in/overture_addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite`:
    the street rows, one street at a time; `street_expanded` writes out USPS Publication 28 suffixes and directionals
    (`usps-pub28.tsv`), in the data only.
-6. (`wiki` and `embed` on the blocks, later.)
-7. `places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build na-places-YYYY-MM-DD --out out --jobs N`:
-   `out/<build>/1/aaa/bbb.sqlite.gz` and `out/<build>/index.tsv`.
-8. `places_pack common --blocks work/blocks --build <build> --out out/<build>/common.sqlite --taxonomy in/overture_taxonomy.tsv
+6. `places_pack wiki --packs work/blocks --cache wiki-cache.sqlite` plus the dump flags of the wiki step above: the dumps are
+   read once for every block. The cache keeps what each article's stream gave (summary, redirect, or nothing) by (dump
+   date, title), so a later build on the same dump fetches only articles it has not seen. Keep it next to the dumps.
+7. `places_pack common --blocks work/blocks --build <build> --out out/<build>/common.sqlite --taxonomy in/overture_taxonomy.tsv
    --kinds-described kinds-described.tsv --overture-release <release> --osm-source "<file and date>"`.
+8. `places_pack embed --packs work/blocks --common out/<build>/common.sqlite --embed-cache embed-cache.sqlite
+   --embed-lib libcache_llama.so --embed-model bge-m3-Q8_0.gguf --embed-threads 8`: vectors for the blocks' notable places
+   and towns (those with a summary, `"{name}. {summary}"`) and for every category and kind in the common file
+   (`"{label}: {description}"`). Only the pinned model is accepted (Hugging Face `lm-kit/bge-m3-gguf`, `bge-m3-Q8_0.gguf`
+   at revision `9379ce497e8814b200f2dc0d18eb4045426dcb8c`, 634,553,856 bytes, sha256
+   `c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb`), through cache_embed with the phone's settings, so the
+   phone's query vectors compare with these (`embed_model` is the file name, as the phone's query carries it). The cache
+   keeps every vector by sha256(model sha256, text), so a monthly rebuild embeds only new or changed texts.
+   `libcache_llama.so` is built from `packages/cache_llama/src` (CMake, `-DCACHE_LLAMA_X86_AVX2=ON`) in a throwaway
+   container. `src/parity_tests.rs` and `app/test/query_embedder_parity_test.dart` check builder and phone against
+   `packages/cache_llama/test/fixtures/bge-m3-golden.json`.
+9. `places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build na-places-YYYY-MM-DD --out out --jobs N`:
+   `out/<build>/1/aaa/bbb.sqlite.gz` and `out/<build>/index.tsv`, with the blocks' vectors.
 
 Kind descriptions: `scripts/describe_kinds.py --common out/<build>/common.sqlite --tsv kinds-described.tsv` asks
 claude-haiku-5-5 (Message Batches API, about 50 kinds per request) for one plain line per kind that is not in the file yet,
 and appends it with the model and date. The file is reviewed and kept here; run `common` again afterwards. A kind the
-rules define keeps the rules' description; a kind with no line uses its Overture taxonomy path or OSM tag key.
+rules define keeps the rules' description; a kind with no line uses its Overture taxonomy path or OSM tag key. Run `embed`
+again after `common` changes (the cache makes that quick).

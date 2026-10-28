@@ -5,10 +5,14 @@ use crate::addresses::{addresses, street_uid, AddressesCfg};
 use crate::blocks::{block_of_tile, blocks, BlocksCfg};
 use crate::common::{common, CommonCfg};
 use crate::cut::{cut, CutCfg};
+use crate::embed::{embed, label_text, Cached};
 use crate::harvest::{write, HARVEST_SQL};
 use crate::model::{Raw, RawLocality, Wiki};
 use crate::rules::Rules;
 use cache_places::addr;
+use cache_places::fixture::{fake_embed, FAKE_MODEL};
+use cache_places::schema::pack_vector;
+use std::cell::RefCell;
 use cache_places::schema::{tile_id_l1, tile_path_l1};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -137,6 +141,27 @@ fn a_tiled_build_across_a_block_edge() {
     assert_eq!(e.query_row("SELECT COUNT(*) FROM localities", [], |r| r.get::<_, i64>(0)).unwrap(), 1, "only Tiny is east of the edge");
     drop(e);
 
+    // The wiki step's summaries on a place and a town, then the vectors of the notable ones (a stand-in embedder),
+    // through the embed cache.
+    let block_file = |tile: u32| blocks_dir.join(format!("{}.sqlite", block_of_tile(tile)));
+    Connection::open(block_file(east)).unwrap().execute("UPDATE places SET summary = 'A cafe at the block edge.' WHERE name = 'Edge Cafe'", []).unwrap();
+    Connection::open(block_file(west)).unwrap().execute("UPDATE localities SET summary = 'A town west of the edge.' WHERE name = 'Edgeville'", []).unwrap();
+    let ecache = dir.join("embed-cache.sqlite");
+    let block_paths = crate::wiki::packs_in(&blocks_dir).unwrap();
+    let asked = RefCell::new(Vec::<String>::new());
+    let mut f = |t: &str| {
+        asked.borrow_mut().push(t.to_string());
+        Ok(fake_embed(t))
+    };
+    {
+        let mut ce = Cached::new(Some(&ecache), "model-a", &mut f).unwrap();
+        let er = embed(&block_paths, None, FAKE_MODEL, "model-a", &mut ce, &mut |_| {}).unwrap();
+        assert_eq!((er.blocks, er.places, er.localities, ce.embedded, ce.hits), (3, 1, 1, 2, 0));
+    }
+    let mut seen = asked.borrow().clone();
+    seen.sort();
+    assert_eq!(seen, ["Edge Cafe. A cafe at the block edge.", "Edgeville. A town west of the edge."]);
+
     // Addresses: a street with a repeated number (two units) and no postal city, a street whose postal city is the town
     // in capitals, and one in Nevada, in the order the extract sorts them.
     let csv = dir.join("addresses.csv");
@@ -192,6 +217,10 @@ fn a_tiled_build_across_a_block_edge() {
     let w = open_tile(west);
     assert_eq!(n(&w, "SELECT COUNT(*) FROM localities_ctx"), 0);
     assert_eq!(n(&w, "SELECT COUNT(*) FROM localities"), 1);
+    // The notable place's and town's vectors are in their tiles, under the tiles' own ids.
+    let cafe_vec: Vec<u8> = c.query_row("SELECT v.vec FROM vectors v JOIN places p ON p.id = v.ref WHERE v.kind = 'place' AND p.name = 'Edge Cafe'", [], |r| r.get(0)).unwrap();
+    assert_eq!(cafe_vec, pack_vector(&fake_embed("Edge Cafe. A cafe at the block edge.")));
+    assert_eq!((n(&c, "SELECT COUNT(*) FROM vectors"), n(&w, "SELECT COUNT(*) FROM vectors WHERE kind = 'locality' AND ref = 1")), (1, 1));
     let meta = |c: &Connection, k: &str| c.query_row("SELECT value FROM meta WHERE key = ?1", [k], |r| r.get::<_, String>(0)).unwrap();
     assert_eq!(meta(&c, "tile"), east.to_string());
     assert_eq!(meta(&c, "tile_schema"), "1");
@@ -243,6 +272,37 @@ fn a_tiled_build_across_a_block_edge() {
     assert_eq!(meta(&m, "tile_schema"), "1");
     assert_eq!(meta(&m, "levels"), "[1]");
     assert_eq!(n(&m, "SELECT COUNT(*) FROM categories"), rules.categories.len() as i64);
+
+    // The common file's vectors: every category and every kind, from the text `common` wrote.
+    let (cats, kinds) = (n(&m, "SELECT COUNT(*) FROM categories") as usize, n(&m, "SELECT COUNT(*) FROM kinds") as usize);
+    drop(m);
+    asked.borrow_mut().clear();
+    {
+        let mut ce = Cached::new(Some(&ecache), "model-a", &mut f).unwrap();
+        let er = embed(&block_paths, Some(&cp), FAKE_MODEL, "model-a", &mut ce, &mut |_| {}).unwrap();
+        assert_eq!((er.categories, er.kinds), (cats, kinds));
+        assert_eq!(ce.hits, 2 + (cats + kinds - ce.embedded), "the blocks' texts come from the cache");
+    }
+    assert!(!asked.borrow().iter().any(|t| t.starts_with("Edge Cafe")), "a cached text is not embedded again");
+    let m = Connection::open(&cp).unwrap();
+    assert_eq!(n(&m, "SELECT COUNT(*) FROM vectors WHERE kind = 'category'") as usize, cats);
+    assert_eq!(n(&m, "SELECT COUNT(*) FROM vectors WHERE kind = 'kind'") as usize, kinds);
+    let diner: Vec<u8> = m.query_row("SELECT vec FROM vectors WHERE kind = 'kind' AND ref = 'diner'", [], |r| r.get(0)).unwrap();
+    let diner_text = label_text(&rules.kind_label("diner"), "A casual restaurant serving breakfast, lunch and dinner.");
+    assert_eq!(diner, pack_vector(&fake_embed(&diner_text)));
+    assert_eq!((meta(&m, "embed_model"), meta(&m, "embed_dims"), meta(&m, "embed_model_sha256")), (FAKE_MODEL.to_string(), "64".to_string(), "model-a".to_string()));
+    // A second run embeds nothing; another model file embeds everything again.
+    asked.borrow_mut().clear();
+    {
+        let mut ce = Cached::new(Some(&ecache), "model-a", &mut f).unwrap();
+        embed(&block_paths, Some(&cp), FAKE_MODEL, "model-a", &mut ce, &mut |_| {}).unwrap();
+        assert_eq!((ce.embedded, ce.hits), (0, 2 + cats + kinds));
+        let mut g = |t: &str| Ok(fake_embed(t));
+        let mut other = Cached::new(Some(&ecache), "model-b", &mut g).unwrap();
+        embed(&block_paths, None, FAKE_MODEL, "model-b", &mut other, &mut |_| {}).unwrap();
+        assert_eq!((other.embedded, other.hits), (2, 0));
+    }
+    assert!(asked.borrow().is_empty());
     drop((c, w, m));
     let _ = std::fs::remove_dir_all(&dir);
 }

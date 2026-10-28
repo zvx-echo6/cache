@@ -2,7 +2,7 @@
 //!
 //!   places_pack build --id idaho --name Idaho --admin-state Idaho --admins admins.sqlite --out places.sqlite \
 //!       [--overture-csv places.csv] [--osm-pbf region.osm.pbf] [--rules categories.json] [--no-general]
-//!   places_pack wiki --pack places.sqlite --geo-tags F --page-props F --items-per-site F --index F --xml-url URL [--no-summaries]
+//!   places_pack wiki --pack places.sqlite --geo-tags F --page-props F --items-per-site F --index F --xml-url URL [--no-summaries] [--cache wiki-cache.sqlite]
 //!   places_pack embed --pack places.sqlite --embed-lib cache_llama.dll --embed-model bge-m3-Q8_0.gguf [--embed-model-id ID] [--embed-threads 4]
 //!   places_pack inspect places.sqlite
 //!
@@ -13,6 +13,9 @@
 //!   places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build NAME --out out [--bbox W,S,E,N] [--jobs 4]
 //!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
 //!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--rules categories.json]
+//!   places_pack wiki --packs work/blocks (the wiki flags above) --cache wiki-cache.sqlite
+//!   places_pack embed --packs work/blocks [--common out/NAME/common.sqlite] --embed-cache embed-cache.sqlite --embed-lib libcache_llama.so
+//!       --embed-model bge-m3-Q8_0.gguf [--embed-sha256 HEX] [--embed-threads 4]
 
 mod addresses;
 mod admins;
@@ -20,11 +23,14 @@ mod blocks;
 mod build;
 mod common;
 mod cut;
+mod embed;
 mod harvest;
 mod lead;
 mod model;
 mod osm;
 mod overture;
+#[cfg(test)]
+mod parity_tests;
 mod rules;
 mod sqldump;
 #[cfg(test)]
@@ -221,8 +227,13 @@ fn run() -> Result<(), String> {
         Some("wiki") => {
             let a = parse_args(&argv[1..])?;
             let need = |k: &str| a.get(k).map(PathBuf::from).ok_or_else(|| format!("--{k} is required"));
+            let packs = match (a.get("packs"), a.get("pack")) {
+                (Some(d), _) => wiki::packs_in(&PathBuf::from(d))?,
+                (None, Some(p)) => vec![PathBuf::from(p)],
+                (None, None) => return Err("--pack or --packs is required".into()),
+            };
             let o = wiki::Opts {
-                pack: need("pack")?,
+                packs,
                 geo_tags: need("geo-tags")?,
                 page_props: need("page-props")?,
                 items_per_site: need("items-per-site")?,
@@ -230,11 +241,13 @@ fn run() -> Result<(), String> {
                 xml_url: a.get("xml-url").cloned().ok_or("--xml-url is required")?,
                 user_agent: a.get("user-agent").cloned().unwrap_or_else(|| "cache-places-pack/1.0 (noreply@users.noreply.github.com)".into()),
                 summaries: !a.contains_key("no-summaries"),
+                cache: a.get("cache").map(PathBuf::from),
             };
             for l in wiki::run(&o)?.lines {
                 println!("{l}");
             }
-            println!("size {} bytes", std::fs::metadata(&o.pack).map(|m| m.len()).unwrap_or(0));
+            let size: u64 = o.packs.iter().map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)).sum();
+            println!("size {size} bytes in {} pack(s), in {}", o.packs.len(), took());
             Ok(())
         }
         Some("embed") => {
@@ -243,6 +256,22 @@ fn run() -> Result<(), String> {
             let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
             let threads: i32 = a.get("embed-threads").map(|t| t.parse().map_err(|_| "--embed-threads must be a number".to_string())).transpose()?.unwrap_or(4);
             let model = need("embed-model")?;
+            if let Some(dir) = a.get("packs") {
+                // The tiled build: the pinned model only (the phone's), every block and the common file, through the cache.
+                let want = a.get("embed-sha256").map(String::as_str).unwrap_or(cache_embed::DECIDED_MODEL_SHA256);
+                let e = cache_embed::Embedder::load(&need("embed-lib")?, &model, a.get("embed-model-id").map(String::as_str), Some(want), threads).map_err(|e| e.to_string())?;
+                let blocks = wiki::packs_in(&PathBuf::from(dir))?;
+                let common = a.get("common").map(PathBuf::from);
+                let cache = a.get("embed-cache").map(PathBuf::from);
+                let mut f = |t: &str| e.embed(t).map_err(|x| x.to_string());
+                let mut cached = embed::Cached::new(cache.as_deref(), want, &mut f)?;
+                let r = embed::embed(&blocks, common.as_deref(), &e.model_id, want, &mut cached, &mut |l| eprintln!("{l}"))?;
+                println!(
+                    "embedded {} blocks: {} places, {} towns; common: {} categories, {} kinds; {} texts embedded, {} from the cache ({} values each, model {}) in {}",
+                    r.blocks, r.places, r.localities, r.categories, r.kinds, cached.embedded, cached.hits, cached.dims, e.model_id, took()
+                );
+                return Ok(());
+            }
             let e = cache_embed::Embedder::load(&need("embed-lib")?, &model, a.get("embed-model-id").map(String::as_str), a.get("embed-sha256").map(String::as_str), threads).map_err(|e| e.to_string())?;
             let sha = cache_embed::sha256_file(&model).map_err(|e| e.to_string())?;
             let pack = PathBuf::from(need("pack")?);
