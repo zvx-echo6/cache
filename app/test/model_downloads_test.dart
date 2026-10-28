@@ -170,6 +170,22 @@ void main() {
     expect(d.error, contains('Hugging Face account'));
   });
 
+  test('a chosen file is copied in whole under its name, with no temp file left', () async {
+    final src = File('${dir.path}/mine.gguf')..writeAsBytesSync(fake.body);
+    final m = await app.copyIn(src);
+    expect(m?.fileName, 'mine.gguf');
+    expect(app.copyProgress, isNull);
+    expect(File('${app.modelsDir!.path}/mine.gguf').readAsBytesSync(), fake.body);
+    expect(app.modelsDir!.listSync().map((e) => e.path.split(RegExp(r'[\\/]')).last), ['mine.gguf']);
+  });
+
+  test('a copy that fails leaves nothing in the models folder', () async {
+    final m = await app.copyIn(File('${dir.path}/missing.gguf'));
+    expect(m, isNull);
+    expect(app.loadError, contains('Could not copy'));
+    expect(app.modelsDir!.listSync(), isEmpty);
+  });
+
   test('fit: a model takes its file size plus working room out of the phone memory', () {
     const gb = 1 << 30;
     expect(ModelFit.of(3 * gb + gb ~/ 2, 8 * gb), ModelFit.fits);
