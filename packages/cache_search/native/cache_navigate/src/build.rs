@@ -3,7 +3,7 @@
 
 use crate::resolve::Resolved;
 use cache_offroad::directions::Directions;
-use cache_offroad::offroad_legs::{round_py, Step};
+use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
 
@@ -130,7 +130,23 @@ fn end_json(r: &Resolved, snap_m: Option<i64>) -> Value {
     let mut m = place(r);
     m.insert("near".into(), Value::Null);
     m.insert("snap_distance_m".into(), json!(snap_m));
+    m.insert("lat".into(), json!(round_py(r.lat, 5)));
+    m.insert("lon".into(), json!(round_py(r.lon, 5)));
     Value::Object(m)
+}
+
+/// The 8-point compass direction of a bearing in degrees, as one lower-case word (45 degree sectors centred on each point).
+fn direction_word(bearing: f64) -> &'static str {
+    match cardinal(bearing) {
+        "N" => "north",
+        "NE" => "northeast",
+        "E" => "east",
+        "SE" => "southeast",
+        "S" => "south",
+        "SW" => "southwest",
+        "W" => "west",
+        _ => "northwest",
+    }
 }
 
 pub struct Extras {
@@ -159,6 +175,7 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("distance_mi".into(), json!(d.distance_mi));
     o.insert("distance_km".into(), json!(d.distance_km));
     o.insert("duration_minutes".into(), json!(round_py(d.duration_s as f64 / 60.0, 1)));
+    o.insert("direction_from_start".into(), json!(direction_word(bearing_deg((from.lat, from.lon), (to.lat, to.lon)))));
     o.insert("major_roads".into(), Value::Array(d.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k})).collect()));
     let offroad_mi: f64 = d.steps.iter().filter(|s| is_offroad(s)).map(|s| s.distance_mi).sum();
     if d.steps.iter().any(is_offroad) {
@@ -279,6 +296,73 @@ mod step_tests {
         assert_eq!(step_text(&s, "drive"), "On foot: Follow the trail N 0.1 mi, flat (-5 m)");
         s.distance_mi = 5.0;
         assert!(step_text(&s, "walk").contains("5.0 mi"));
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+    use cache_offroad::directions::{EndInfo, TravelMode};
+
+    #[test]
+    fn bearing_words_and_sector_boundaries() {
+        for (deg, word) in [
+            (0.0, "north"),
+            (45.0, "northeast"),
+            (90.0, "east"),
+            (135.0, "southeast"),
+            (180.0, "south"),
+            (225.0, "southwest"),
+            (270.0, "west"),
+            (315.0, "northwest"),
+            (22.4, "north"),
+            (22.6, "northeast"),
+            (67.4, "northeast"),
+            (67.6, "east"),
+            (337.4, "northwest"),
+            (337.6, "north"),
+            (359.9, "north"),
+        ] {
+            assert_eq!(direction_word(deg), word, "{deg}");
+        }
+    }
+
+    #[test]
+    fn boise_to_nampa_is_west() {
+        assert_eq!(direction_word(bearing_deg((43.6150, -116.2023), (43.5407, -116.5635))), "west");
+    }
+
+    #[test]
+    fn result_carries_direction_and_end_coordinates() {
+        let d = Directions {
+            ok: true,
+            route_id: "r1".into(),
+            mode: TravelMode::Drive,
+            from: Some(EndInfo { lat: 43.615, lon: -116.2023, snap_distance_m: 3 }),
+            to: Some(EndInfo { lat: 43.5407, lon: -116.5635, snap_distance_m: 4 }),
+            distance_km: 30.0,
+            distance_mi: 18.6,
+            duration_s: 1500,
+            major_roads: vec![],
+            steps: vec![],
+            shape: String::new(),
+            routing: "road".into(),
+            leg_params: (0.0, 0.0, 0.0),
+            warnings: vec![],
+            errors: vec![],
+        };
+        let from = Resolved::point("Boise".into(), 43.6150, -116.2023);
+        let to = Resolved::point("Nampa".into(), 43.5407, -116.5635);
+        let x = Extras { location_bias: None, others: vec![], nearest_search: None, region: ("idaho".into(), "1 day old".into()), synth_warnings: false, snap_m: 100.0 };
+        let r = result(&d, &from, &to, "drive", x);
+        assert_eq!(r["direction_from_start"], "west");
+        assert_eq!(r["from_matched"]["lat"], 43.615);
+        assert_eq!(r["from_matched"]["lon"], -116.2023);
+        assert_eq!(r["to_matched"]["lat"], 43.5407);
+        assert_eq!(r["to_matched"]["lon"], -116.5635);
+        // place() and candidate() stay without coordinates
+        assert!(place(&to).get("lat").is_none());
+        assert!(candidate(&to, None).get("lon").is_none());
     }
 }
 
