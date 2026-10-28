@@ -3,7 +3,7 @@ name = "cache_regions"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "Cache's road routing by region: the Valhalla tiles of downloaded regions and of routes planned online, one build at a time"
+description = "Cache's regions: the Valhalla tiles and the places of downloaded regions, and of routes and searches online, one build at a time"
 
 [dependencies]
 # Same HTTP stack as cache_layers and cache_live: blocking ureq with rustls and bundled roots (nothing from the platform).
@@ -17,10 +17,10 @@ sha2 = "0.10"
 fs4 = "=1.1.0"
 serde.workspace = true
 serde_json.workspace = true
+# The places part: the merged places database is written through cache_places::merged (cache_places does not depend on
+# this crate, so there is no cycle).
+cache_places = { path = "../cache_places" }
 
 [dev-dependencies]
 # The tests' routing server.
 tiny_http = "0.12"
-# Cross-checks cache_places' level 1 tile ids (places tiles) against this crate's grid. (The places work makes this a
-# normal dependency; cache_places does not depend on this crate, so there is no cycle.)
-cache_places = { path = "../cache_places" }

@@ -90,8 +90,9 @@ In the regions folder (`dir`):
   Its `tiles` table says which tiles the phone has; it changes in the same transaction as the data.
 - `places/<build>/common.sqlite`: the build's common file, kept (it is small) to create the database again.
 - `places/index/<build>.tsv`: the build's index.
-- `places/.incoming/<path>.sqlite`: a tile between its download and its merge; deleted after, and any left over is deleted
-  when the engine opens.
+- `places/.incoming/<build>/<path>.sqlite`: a tile between its download and its merge (by build, as an update fetches the
+  new build's tiles while searches still stream the old one's); deleted after, and any left over is deleted when the engine
+  opens.
 
 In the merged database every place, town, context town and street id is `(tile << 24) | local id`, so a tile is one id
 range and removing it is a range delete; full-text rowids, R-tree ids and vector refs use the same ids. Category and kind

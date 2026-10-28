@@ -13,11 +13,19 @@
 //! a cache with a size cap that never touches a downloaded region's tiles. An update downloads every region's tiles of the
 //! new build into a folder of its own and switches over only when all of them are there; builds are never mixed.
 //!
+//! A region can also have places (`places.rs`, docs/PLACES-TILES.md): places, towns and addresses published the same way on
+//! their own address, merged on the phone into one database that every search reads. Each part has its own build, index,
+//! update and stream cache; neither waits for the other.
+//!
 //! [`Regions::call`] is the whole interface (JSON in, JSON out), the same one the C ABI (`cs_regions_*` in cache_search) uses.
 
 pub mod geo;
 pub mod http;
 pub mod index;
+mod places;
+
+pub use places::{StreamAnswer, DEFAULT_PLACES_STREAM_TIMEOUT_MS, PLACES_STREAM_DEG};
+use places::{PState, PlacesPart};
 
 use index::{Current, Index, TileRef};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -31,7 +39,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const DEFAULT_BASE_URL: &str = "https://cache.echo6.co/routing/";
+pub const DEFAULT_BASE_URL: &str = "https://data.cached.info/routing/";
+/// Where places are published (the app passes it as `places_base_url`; without it a region has no places part).
+pub const DEFAULT_PLACES_BASE_URL: &str = "https://data.cached.info/places/";
+/// The places stream cache's default cap: 512 MiB of places tiles that belong to no downloaded region.
+pub const DEFAULT_PLACES_STREAM_CAP: u64 = 512 * 1024 * 1024;
+/// The parts a region can have.
+pub const ROUTING: &str = "routing";
+pub const PLACES: &str = "places";
 /// The stream cache's default cap: 2 GiB of tiles that belong to no downloaded region.
 pub const DEFAULT_STREAM_CAP: u64 = 2 * 1024 * 1024 * 1024;
 /// How long `stream` waits by default.
@@ -112,6 +127,10 @@ fn default_cap() -> u64 {
     DEFAULT_STREAM_CAP
 }
 
+fn default_places_cap() -> u64 {
+    DEFAULT_PLACES_STREAM_CAP
+}
+
 /// The `cs_regions_open` config (and the `regions` section of the `cs_open` config).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -129,17 +148,35 @@ pub struct Config {
     /// Never fill the disk past this many free bytes; downloads pause with the reason instead (default 1 GiB).
     #[serde(default)]
     pub reserve_bytes: Option<u64>,
+    /// The places server ([`DEFAULT_PLACES_BASE_URL`]). Without it, regions have no places part (as before places).
+    #[serde(default)]
+    pub places_base_url: Option<String>,
+    /// Cap of the places tiles fetched for searches that belong to no downloaded region.
+    #[serde(default = "default_places_cap")]
+    pub places_stream_cap_bytes: u64,
 }
 
-/// A downloaded region: its outline and, per build, the tiles it needs (one build, or two while an update downloads).
+/// A downloaded region: its outline, its parts and, per build, the tiles it needs (one build, or two while an update
+/// downloads): `lists` routing's, `places` the places part's.
 #[derive(Debug, Clone)]
 struct Region {
     id: String,
     name: String,
     geometry: String,
     added: u64,
+    /// Why routing failed.
     error: Option<String>,
     lists: BTreeMap<String, BTreeMap<String, TileRef>>,
+    /// "routing", "places", in that order.
+    parts: Vec<String>,
+    places: BTreeMap<String, BTreeMap<String, TileRef>>,
+    places_error: Option<String>,
+}
+
+impl Region {
+    fn has(&self, part: &str) -> bool {
+        self.parts.iter().any(|p| p == part)
+    }
 }
 
 #[derive(Default)]
@@ -157,6 +194,8 @@ struct State {
     /// The build `update` is downloading.
     updating: Option<String>,
     paused: Option<String>,
+    /// The places part.
+    p: PState,
 }
 
 impl State {
@@ -167,6 +206,11 @@ impl State {
 
     fn has(&self, build: &str, path: &str) -> bool {
         self.present.get(build).map(|p| p.contains(path)).unwrap_or(false)
+    }
+
+    /// Whether any region has routing (a region can be places only).
+    fn any_routing(&self) -> bool {
+        self.regions.iter().any(|r| r.has(ROUTING))
     }
 }
 
@@ -186,6 +230,10 @@ struct Batch {
 
 enum Next {
     Batch(Batch),
+    /// Places tiles of one region.
+    Places(Batch),
+    /// Set up the places build, or a region's places tile list.
+    PlacesInit,
     Wait(Duration),
     Again,
 }
@@ -205,6 +253,8 @@ struct Inner {
     /// Last stream-cache use stamp handed out (milliseconds, made unique).
     tick: AtomicU64,
     seq: AtomicU64,
+    /// The places part, when the config has `places_base_url`.
+    places: Option<PlacesPart>,
 }
 
 pub struct Regions {
@@ -443,7 +493,7 @@ impl Inner {
     fn fetch_current(&self, timeout: Duration) -> Result<Current> {
         let body = self.get(&format!("{}current.json", self.base), timeout)?;
         let c: Current = serde_json::from_slice(&body).map_err(|e| Error::new("bad_response", format!("current.json is not valid: {e}")))?;
-        c.check().map_err(|m| Error::new("bad_response", m))?;
+        c.check_routing().map_err(|m| Error::new("bad_response", m))?;
         let text = serde_json::to_string(&c).unwrap_or_default();
         let mut st = self.st();
         if st.current.as_ref() != Some(&c) {
@@ -499,7 +549,7 @@ impl Inner {
     fn build_for_new_region(&self) -> Result<(String, Arc<Index>)> {
         let (dev, has_regions) = {
             let st = self.st();
-            (st.build.clone(), !st.regions.is_empty())
+            (st.build.clone(), st.any_routing())
         };
         if let (Some(b), true) = (&dev, has_regions) {
             return Ok((b.clone(), self.index_of(b, REQUEST_TIMEOUT)?));
@@ -530,8 +580,8 @@ impl Inner {
             let tx = db.transaction()?;
             tx.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('build', ?1)", params![new])?;
             tx.execute("DELETE FROM meta WHERE key IN ('updating', 'update')", [])?;
-            tx.execute("DELETE FROM region_tiles WHERE build <> ?1", params![new])?;
-            tx.execute("DELETE FROM stream", [])?;
+            tx.execute("DELETE FROM region_tiles2 WHERE component = 'routing' AND build <> ?1", params![new])?;
+            tx.execute("DELETE FROM stream2 WHERE component = 'routing'", [])?;
             tx.commit()?;
         }
         std::fs::create_dir_all(self.build_dir(new))?;
@@ -560,7 +610,7 @@ impl Inner {
     fn delete_unused<'a>(&self, st: &mut State, build: &str, paths: impl Iterator<Item = &'a String>) -> usize {
         let streamed: HashSet<String> = {
             let db = self.db();
-            let mut q = match db.prepare("SELECT path FROM stream WHERE build = ?1") {
+            let mut q = match db.prepare("SELECT path FROM stream2 WHERE component = 'routing' AND build = ?1") {
                 Ok(q) => q,
                 Err(_) => return 0,
             };
@@ -659,29 +709,49 @@ impl Inner {
 
     // ---- the worker ----
 
-    /// What the worker does next: the missing tiles of the first region (in the order they were added) of the build being
-    /// filled (the update's while one downloads, else the device's), or the switch to an update that is complete, or a wait.
+    /// What the worker does next: the missing tiles of the first region (in the order they were added), places first (they
+    /// are small, so search works soon) then routing, of the build each part is filling (an update's while one downloads,
+    /// else the device's); or the switch to an update that is complete, or a wait.
     fn next(&self) -> Next {
+        if self.p_needs_init() {
+            return Next::PlacesInit;
+        }
         let mut st = self.st();
-        let Some(target) = st.updating.clone().or_else(|| st.build.clone()) else {
-            st.paused = None;
-            return Next::Wait(IDLE);
-        };
+        let target = st.updating.clone().or_else(|| st.build.clone());
         let empty = HashSet::new();
-        let present = st.present.get(&target).unwrap_or(&empty);
+        let present = target.as_ref().and_then(|t| st.present.get(t)).unwrap_or(&empty);
         let mut batch = None;
-        for r in st.regions.iter().filter(|r| r.error.is_none()) {
-            let Some(list) = r.lists.get(&target) else { continue };
+        for r in &st.regions {
+            if let Some(b) = self.p_batch(&st, r) {
+                batch = Some(Next::Places(b));
+                break;
+            }
+            let (Some(target), None) = (&target, &r.error) else { continue };
+            let Some(list) = r.lists.get(target) else { continue };
             let missing: Vec<TileRef> = list.values().filter(|t| !present.contains(&t.path)).cloned().collect();
             if !missing.is_empty() {
-                batch = Some(Batch { build: target.clone(), name: r.name.clone(), tiles: missing });
+                batch = Some(Next::Batch(Batch { build: target.clone(), name: r.name.clone(), tiles: missing }));
                 break;
             }
         }
-        let Some(b) = batch else {
-            if st.updating.is_some() {
+        let Some(next) = batch else {
+            if let Some(u) = self.p_ready_to_switch(&st) {
+                return match self.p_switch(&mut st, &u) {
+                    Ok(()) => Next::Again,
+                    Err(e) => {
+                        st.paused = Some(format!("Paused: could not move places to {u}: {e}"));
+                        Next::Wait(RETRY_LATER)
+                    }
+                };
+            }
+            if let (Some(target), true) = (target, st.updating.is_some()) {
                 // Every region has its whole list of the new build (a failed one included): the device moves to it.
-                let complete = st.regions.iter().all(|r| r.lists.get(&target).map(|l| l.keys().all(|p| present.contains(p))).unwrap_or(false));
+                let present = st.present.get(&target).unwrap_or(&empty);
+                let complete = st
+                    .regions
+                    .iter()
+                    .filter(|r| r.has(ROUTING))
+                    .all(|r| r.lists.get(&target).map(|l| l.keys().all(|p| present.contains(p))).unwrap_or(false));
                 if complete {
                     match self.switch(&mut st, &target) {
                         Ok(trash) => {
@@ -705,16 +775,19 @@ impl Inner {
             st.paused = Some(NO_NETWORK.into());
             return Next::Wait(IDLE);
         }
-        let need: u64 = b.tiles.iter().map(|t| t.bytes).sum();
+        let (need, name) = match &next {
+            Next::Batch(b) | Next::Places(b) => (b.tiles.iter().map(|t| t.bytes).sum::<u64>(), b.name.clone()),
+            _ => (0, String::new()),
+        };
         let reserve = self.reserve.load(Ordering::Relaxed);
         if let Some(free) = free_bytes(&self.dir) {
             if free < need.saturating_add(reserve) {
-                st.paused = Some(format!("Paused: {} needs {}, {} is free and {} is kept free", b.name, human(need), human(free), human(reserve)));
+                st.paused = Some(format!("Paused: {name} needs {}, {} is free and {} is kept free", human(need), human(free), human(reserve)));
                 return Next::Wait(RETRY_LATER);
             }
         }
         st.paused = None;
-        Next::Batch(b)
+        next
     }
 
     fn run_batch(&self, b: Batch) {
@@ -758,6 +831,8 @@ impl Inner {
         while !self.stopped() {
             match self.next() {
                 Next::Batch(b) => self.run_batch(b),
+                Next::Places(b) => self.p_run_batch(b),
+                Next::PlacesInit => self.p_init(),
                 Next::Wait(d) => self.sleep(d),
                 Next::Again => {}
             }
@@ -794,10 +869,26 @@ impl Inner {
                 } else {
                     "downloading"
                 };
-                json!({
+                let mut v = json!({
                     "id": r.id, "name": r.name, "state": state, "tiles": tiles, "bytes": bytes,
                     "done_tiles": done, "done_bytes": done_bytes, "error": r.error,
-                })
+                });
+                // With places on, each part says how it is, and the region's state is the parts' together: failed, else
+                // paused, else downloading, else ready.
+                if self.places.is_some() {
+                    let mut parts = serde_json::Map::new();
+                    if r.has(ROUTING) {
+                        parts.insert(ROUTING.into(), json!({"state": state, "tiles": tiles, "bytes": bytes, "done_tiles": done, "done_bytes": done_bytes, "error": r.error}));
+                    }
+                    if r.has(PLACES) {
+                        parts.insert(PLACES.into(), self.p_region_status(&st, r));
+                    }
+                    let states: Vec<&str> = parts.values().filter_map(|p| p["state"].as_str()).collect();
+                    let all = ["failed", "paused", "downloading"].into_iter().find(|s| states.contains(s)).unwrap_or("ready");
+                    v["state"] = json!(all);
+                    v["parts"] = Value::Object(parts);
+                }
+                v
             })
             .collect();
         let (mut s_tiles, mut s_bytes) = (0u64, 0u64);
@@ -814,14 +905,20 @@ impl Inner {
             let left = if downloading { Self::left_to_fetch(&st, b) } else { *bytes };
             json!({"build": b, "download_bytes": left, "downloading": downloading})
         });
-        json!({
+        let mut out = json!({
             "build": build,
             "tile_dir": build.as_ref().map(|b| self.build_dir(b).to_string_lossy().into_owned()),
             "regions": regions,
             "stream": {"tiles": s_tiles, "bytes": s_bytes, "cap": self.cap},
             "update": update,
             "paused": st.paused,
-        })
+        });
+        if self.places.is_some() {
+            let (places, p_update) = self.p_status(&st);
+            out["places"] = places;
+            out["updates"] = json!({"routing": out["update"].clone(), "places": p_update});
+        }
+        out
     }
 
     /// The gzip bytes still to fetch of every region's tiles of `build` (each tile once).
@@ -838,7 +935,7 @@ impl Inner {
 
     fn stream_rows(&self, build: &str) -> Vec<(String, u64)> {
         let db = self.db();
-        let Ok(mut q) = db.prepare("SELECT path, bytes FROM stream WHERE build = ?1 ORDER BY last_used") else { return Vec::new() };
+        let Ok(mut q) = db.prepare("SELECT path, bytes FROM stream2 WHERE component = 'routing' AND build = ?1 ORDER BY last_used") else { return Vec::new() };
         let rows: Vec<(String, u64)> = match q.query_map(params![build], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))) {
             Ok(rows) => rows.flatten().collect(),
             Err(_) => Vec::new(),
@@ -846,10 +943,64 @@ impl Inner {
         rows
     }
 
+    /// The parts this engine has: routing, and places when they are on.
+    fn enabled_parts(&self) -> Vec<String> {
+        let mut v = vec![ROUTING.to_string()];
+        if self.places.is_some() {
+            v.push(PLACES.to_string());
+        }
+        v
+    }
+
+    /// The `parts` argument: every enabled part when it is left out.
+    fn parts_arg(&self, args: &Value) -> Result<Vec<String>> {
+        let enabled = self.enabled_parts();
+        let Some(v) = args.get("parts").filter(|v| !v.is_null()) else { return Ok(enabled) };
+        let asked: Vec<&str> = v.as_array().ok_or_else(|| Error::bad_args("parts must be a list"))?.iter().map(|p| p.as_str().unwrap_or("")).collect();
+        if let Some(bad) = asked.iter().find(|p| !enabled.iter().any(|e| e == *p)) {
+            return Err(Error::bad_args(format!("unknown part {bad:?} (this engine has {})", enabled.join(", "))));
+        }
+        if asked.is_empty() {
+            return Err(Error::bad_args("parts is empty"));
+        }
+        Ok(enabled.into_iter().filter(|e| asked.contains(&e.as_str())).collect())
+    }
+
+    /// An error as a part's entry in an answer.
+    fn part_error(e: &Error) -> Value {
+        json!({"error": e.message, "code": e.code})
+    }
+
     fn plan(&self, args: &Value) -> Result<Value> {
         let (shape, _) = shape_arg(args)?;
+        let parts = self.parts_arg(args)?;
+        let routing = parts.iter().any(|p| p == ROUTING).then(|| self.plan_routing(&shape));
+        if self.places.is_none() {
+            return routing.unwrap_or_else(|| Err(Error::bad_args("no part to plan")));
+        }
+        let places = parts.iter().any(|p| p == PLACES).then(|| self.p_plan(&shape));
+        // One part that cannot be planned does not fail the other; only a plan with nothing planned is an error.
+        let first_err = [&routing, &places].into_iter().flatten().find_map(|r| r.as_ref().err().cloned());
+        if [&routing, &places].into_iter().flatten().all(|r| r.is_err()) {
+            return Err(first_err.unwrap_or_else(|| Error::bad_args("no part to plan")));
+        }
+        let mut out = match &routing {
+            Some(Ok(v)) => v.clone(),
+            _ => json!({"tiles": 0, "bytes": 0, "download_bytes": 0, "shared_tiles": 0}),
+        };
+        let mut obj = serde_json::Map::new();
+        for (name, r) in [(ROUTING, routing), (PLACES, places)] {
+            if let Some(r) = r {
+                obj.insert(name.into(), r.unwrap_or_else(|e| Self::part_error(&e)));
+            }
+        }
+        out["parts"] = Value::Object(obj);
+        Ok(out)
+    }
+
+    fn plan_routing(&self, shape: &geo::Shape) -> Result<Value> {
         let (build, idx) = self.build_for_new_region()?;
-        let tiles = idx.tiles_for(&shape);
+        let tiles = idx.tiles_for(shape);
         let st = self.st();
         let (mut bytes, mut download, mut shared) = (0u64, 0u64, 0u64);
         for t in &tiles {
@@ -865,36 +1016,51 @@ impl Inner {
 
     fn add(&self, args: &Value) -> Result<Value> {
         let (id, name, shape, geometry) = region_args(args)?;
-        let (build, idx) = self.build_for_new_region()?;
-        let tiles = idx.tiles_for(&shape);
+        let asked = self.parts_arg(args)?;
+        // Added again: the parts it had stay, and the ones asked for now are added.
+        let had: Vec<String> = self.st().regions.iter().find(|r| r.id == id).map(|r| r.parts.clone()).unwrap_or_default();
+        let parts: Vec<String> = self.enabled_parts().into_iter().filter(|p| asked.contains(p) || had.contains(p)).collect();
+        let routing = parts.iter().any(|p| p == ROUTING);
+        let (build, tiles) = if routing {
+            let (b, idx) = self.build_for_new_region()?;
+            let tiles = idx.tiles_for(&shape);
+            (Some(b), tiles)
+        } else {
+            (None, Vec::new())
+        };
         let mut st = self.st();
         let mut trash = None;
-        if st.build.as_deref() != Some(build.as_str()) {
-            if !st.regions.is_empty() {
-                return Err(Error::new("busy", "another region was added meanwhile; try again"));
-            }
-            trash = self.switch(&mut st, &build)?;
-        }
         let mut lists: BTreeMap<String, BTreeMap<String, TileRef>> = BTreeMap::new();
-        lists.insert(build.clone(), tiles.iter().map(|t| (t.path.clone(), t.clone())).collect());
-        // An update downloading: the new region is part of it.
-        if let Some(u) = st.updating.clone() {
-            let ui = self.cached_index(&u).ok_or_else(|| Error::new("io", format!("the index of {u} is missing")))?;
-            lists.insert(u, ui.tiles_for(&shape).into_iter().map(|t| (t.path.clone(), t)).collect());
+        if let Some(build) = &build {
+            if st.build.as_deref() != Some(build.as_str()) {
+                if st.any_routing() {
+                    return Err(Error::new("busy", "another region was added meanwhile; try again"));
+                }
+                trash = self.switch(&mut st, build)?;
+            }
+            lists.insert(build.clone(), tiles.iter().map(|t| (t.path.clone(), t.clone())).collect());
+            // An update downloading: the new region is part of it.
+            if let Some(u) = st.updating.clone() {
+                let ui = self.cached_index(&u).ok_or_else(|| Error::new("io", format!("the index of {u} is missing")))?;
+                lists.insert(u, ui.tiles_for(&shape).into_iter().map(|t| (t.path.clone(), t)).collect());
+            }
         }
         let pos = st.regions.iter().position(|r| r.id == id);
         let added = pos.map(|i| st.regions[i].added).unwrap_or_else(now_ms);
-        let region = Region { id: id.clone(), name, geometry, added, error: None, lists };
+        // The places lists stay until the places part has worked out the new ones (so no tile goes in between).
+        let places = pos.map(|i| st.regions[i].places.clone()).unwrap_or_default();
+        let places_error = pos.and_then(|i| st.regions[i].places_error.clone());
+        let region = Region { id: id.clone(), name, geometry, added, error: None, lists, parts: parts.clone(), places, places_error };
         {
             let mut db = self.db();
             let tx = db.transaction()?;
             tx.execute(
-                "INSERT OR REPLACE INTO regions(id, name, geometry, added, error) VALUES (?1, ?2, ?3, ?4, NULL)",
-                params![region.id, region.name, region.geometry, region.added as i64],
+                "INSERT OR REPLACE INTO regions(id, name, geometry, added, error, parts, places_error) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+                params![region.id, region.name, region.geometry, region.added as i64, json!(region.parts).to_string(), region.places_error],
             )?;
-            tx.execute("DELETE FROM region_tiles WHERE region = ?1", params![id])?;
+            tx.execute("DELETE FROM region_tiles2 WHERE region = ?1 AND component = 'routing'", params![id])?;
             {
-                let mut ins = tx.prepare("INSERT INTO region_tiles(region, build, path, bytes, sha256, gz) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+                let mut ins = tx.prepare("INSERT INTO region_tiles2(region, component, build, path, bytes, sha256, gz) VALUES (?1, 'routing', ?2, ?3, ?4, ?5, ?6)")?;
                 for (b, l) in &region.lists {
                     for t in l.values() {
                         ins.execute(params![id, b, t.path, t.bytes as i64, t.sha256, t.gz as i64])?;
@@ -919,7 +1085,7 @@ impl Inner {
         let (mut bytes, mut download) = (0u64, 0u64);
         for t in &tiles {
             bytes += t.bytes;
-            if !st.has(&build, &t.path) {
+            if !build.as_ref().is_some_and(|b| st.has(b, &t.path)) {
                 download += t.gz;
             }
         }
@@ -927,8 +1093,19 @@ impl Inner {
         if let Some(t) = trash {
             let _ = std::fs::remove_dir_all(t);
         }
+        let mut out = json!({"ok": true, "tiles": tiles.len(), "bytes": bytes, "download_bytes": download});
+        if self.places.is_some() {
+            let mut obj = serde_json::Map::new();
+            if routing {
+                obj.insert(ROUTING.into(), json!({"tiles": tiles.len(), "bytes": bytes, "download_bytes": download}));
+            }
+            if parts.iter().any(|p| p == PLACES) {
+                obj.insert(PLACES.into(), self.p_add(&id));
+            }
+            out["parts"] = Value::Object(obj);
+        }
         self.poke();
-        Ok(json!({"ok": true, "tiles": tiles.len(), "bytes": bytes, "download_bytes": download}))
+        Ok(out)
     }
 
     fn remove(&self, args: &Value) -> Result<Value> {
@@ -939,7 +1116,7 @@ impl Inner {
             let mut db = self.db();
             let tx = db.transaction()?;
             tx.execute("DELETE FROM regions WHERE id = ?1", params![id])?;
-            tx.execute("DELETE FROM region_tiles WHERE region = ?1", params![id])?;
+            tx.execute("DELETE FROM region_tiles2 WHERE region = ?1", params![id])?;
             tx.commit()?;
         }
         let r = st.regions.remove(pos);
@@ -947,9 +1124,18 @@ impl Inner {
         for (b, l) in &r.lists {
             deleted += self.delete_unused(&mut st, b, l.keys());
         }
+        let mut out = json!({"ok": true, "deleted_tiles": deleted});
+        if self.places.is_some() {
+            let mut gone = 0;
+            for (b, l) in &r.places {
+                gone += self.p_delete_unused(&mut st, b, l.keys());
+            }
+            self.p_set_names(&st);
+            out = json!({"ok": true, "deleted_tiles": deleted + gone, "parts": {"routing": {"deleted_tiles": deleted}, "places": {"deleted_tiles": gone}}});
+        }
         drop(st);
         self.poke();
-        Ok(json!({"ok": true, "deleted_tiles": deleted}))
+        Ok(out)
     }
 
     /// Fetches what a route through `points` is likely to need, within the timeout. Never an error: whatever goes wrong is
@@ -1030,8 +1216,8 @@ impl Inner {
             for t in &need {
                 if st.has(&build, &t.path) && !st.wants(&build, &t.path) {
                     let _ = db.execute(
-                        "INSERT INTO stream(build, path, bytes, last_used) VALUES (?1, ?2, ?3, ?4)
-                         ON CONFLICT(build, path) DO UPDATE SET last_used = excluded.last_used",
+                        "INSERT INTO stream2(component, build, path, bytes, last_used) VALUES ('routing', ?1, ?2, ?3, ?4)
+                         ON CONFLICT(component, build, path) DO UPDATE SET last_used = excluded.last_used",
                         params![build, t.path, t.bytes as i64, stamp],
                     );
                 }
@@ -1060,7 +1246,7 @@ impl Inner {
             if keep.contains(&p) {
                 continue;
             }
-            let _ = self.db().execute("DELETE FROM stream WHERE build = ?1 AND path = ?2", params![build, p]);
+            let _ = self.db().execute("DELETE FROM stream2 WHERE component = 'routing' AND build = ?1 AND path = ?2", params![build, p]);
             let f = self.tile_file(build, &p);
             if std::fs::remove_file(&f).is_ok() {
                 prune_empty(&root, &f);
@@ -1076,13 +1262,13 @@ impl Inner {
         let c = self.fetch_current(REQUEST_TIMEOUT)?;
         let (dev, no_regions) = {
             let st = self.st();
-            (st.build.clone(), st.regions.is_empty())
+            (st.build.clone(), !st.any_routing())
         };
         // Nothing downloaded: the device simply moves to the newest build, there is nothing to update.
         if dev.as_deref() == Some(c.build.as_str()) || no_regions {
             let mut st = self.st();
             let mut trash = None;
-            if st.regions.is_empty() && st.build.as_deref() != Some(c.build.as_str()) {
+            if !st.any_routing() && st.build.as_deref() != Some(c.build.as_str()) {
                 trash = self.switch(&mut st, &c.build)?;
             }
             st.update = None;
@@ -1101,7 +1287,7 @@ impl Inner {
         let mut st = self.st();
         let mut seen = HashSet::new();
         let mut bytes = 0u64;
-        for r in &st.regions {
+        for r in st.regions.iter().filter(|r| r.has(ROUTING)) {
             let Ok(shape) = geo::Shape::parse(&Value::String(r.geometry.clone())) else { continue };
             for t in idx.tiles_for(&shape) {
                 if !st.has(&c.build, &t.path) && seen.insert(t.path.clone()) {
@@ -1141,16 +1327,16 @@ impl Inner {
         }
         // Each region's tiles of the new build, worked out while the state is held so that no region is left without them.
         let mut lists = Vec::new();
-        for r in &st.regions {
+        for r in st.regions.iter().filter(|r| r.has(ROUTING)) {
             let shape = geo::Shape::parse(&Value::String(r.geometry.clone())).map_err(|m| Error::new("internal", format!("{}: {m}", r.id)))?;
             lists.push((r.id.clone(), idx.tiles_for(&shape)));
         }
         {
             let mut db = self.db();
             let tx = db.transaction()?;
-            tx.execute("DELETE FROM region_tiles WHERE build = ?1", params![target])?;
+            tx.execute("DELETE FROM region_tiles2 WHERE component = 'routing' AND build = ?1", params![target])?;
             {
-                let mut ins = tx.prepare("INSERT INTO region_tiles(region, build, path, bytes, sha256, gz) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+                let mut ins = tx.prepare("INSERT INTO region_tiles2(region, component, build, path, bytes, sha256, gz) VALUES (?1, 'routing', ?2, ?3, ?4, ?5, ?6)")?;
                 for (id, tiles) in &lists {
                     for t in tiles {
                         ins.execute(params![id, target, t.path, t.bytes as i64, t.sha256, t.gz as i64])?;
@@ -1182,6 +1368,46 @@ impl Inner {
     }
 }
 
+/// Brings an older regions.sqlite to this layout: regions get their parts (an old region is routing only) and their places
+/// error; the tile lists and the stream cache get a component (old rows are routing's).
+fn migrate(db: &mut Connection) -> Result<()> {
+    let tx = db.transaction()?;
+    let cols: Vec<String> = {
+        let mut q = tx.prepare("PRAGMA table_info(regions)")?;
+        let rows = q.query_map([], |r| r.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    if !cols.iter().any(|c| c == "parts") {
+        tx.execute_batch("ALTER TABLE regions ADD COLUMN parts TEXT NOT NULL DEFAULT '[\"routing\"]';")?;
+    }
+    if !cols.iter().any(|c| c == "places_error") {
+        tx.execute_batch("ALTER TABLE regions ADD COLUMN places_error TEXT;")?;
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS region_tiles2(region TEXT NOT NULL, component TEXT NOT NULL, build TEXT NOT NULL, path TEXT NOT NULL,
+                                                  bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, gz INTEGER NOT NULL,
+                                                  PRIMARY KEY(region, component, build, path));
+         CREATE TABLE IF NOT EXISTS stream2(component TEXT NOT NULL, build TEXT NOT NULL, path TEXT NOT NULL, bytes INTEGER NOT NULL,
+                                            last_used INTEGER NOT NULL, PRIMARY KEY(component, build, path));",
+    )?;
+    let has = |t: &str| -> Result<bool> { Ok(tx.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", params![t], |r| r.get::<_, i64>(0))? > 0) };
+    if has("region_tiles")? {
+        tx.execute_batch(
+            "INSERT OR IGNORE INTO region_tiles2(region, component, build, path, bytes, sha256, gz)
+               SELECT region, 'routing', build, path, bytes, sha256, gz FROM region_tiles;
+             DROP TABLE region_tiles;",
+        )?;
+    }
+    if has("stream")? {
+        tx.execute_batch(
+            "INSERT OR IGNORE INTO stream2(component, build, path, bytes, last_used) SELECT 'routing', build, path, bytes, last_used FROM stream;
+             DROP TABLE stream;",
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// One engine per folder in the process: the app's Regions screen and the navigate tool's streaming share it.
 fn registry() -> &'static Mutex<HashMap<PathBuf, Weak<Regions>>> {
     static R: OnceLock<Mutex<HashMap<PathBuf, Weak<Regions>>>> = OnceLock::new();
@@ -1194,19 +1420,15 @@ impl Regions {
     pub fn open(cfg: Config) -> Result<Regions> {
         std::fs::create_dir_all(cfg.dir.join("tiles"))?;
         std::fs::create_dir_all(cfg.dir.join("index"))?;
-        let db = Connection::open(cfg.dir.join("regions.sqlite"))?;
+        let mut db = Connection::open(cfg.dir.join("regions.sqlite"))?;
         db.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS regions(id TEXT PRIMARY KEY, name TEXT NOT NULL, geometry TEXT NOT NULL,
-                                                added INTEGER NOT NULL, error TEXT);
-             CREATE TABLE IF NOT EXISTS region_tiles(region TEXT NOT NULL, build TEXT NOT NULL, path TEXT NOT NULL,
-                                                     bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, gz INTEGER NOT NULL,
-                                                     PRIMARY KEY(region, build, path));
-             CREATE TABLE IF NOT EXISTS stream(build TEXT NOT NULL, path TEXT NOT NULL, bytes INTEGER NOT NULL,
-                                               last_used INTEGER NOT NULL, PRIMARY KEY(build, path));",
+                                                added INTEGER NOT NULL, error TEXT);",
         )?;
+        migrate(&mut db)?;
         let meta = |k: &str| -> Result<Option<String>> { Ok(db.query_row("SELECT value FROM meta WHERE key = ?1", params![k], |r| r.get(0)).optional()?) };
         let mut st = State {
             build: meta("build")?.filter(|b| index::safe_build(b)),
@@ -1216,30 +1438,56 @@ impl Regions {
             ..State::default()
         };
         {
-            let mut q = db.prepare("SELECT id, name, geometry, added, error FROM regions ORDER BY added, id")?;
+            let mut q = db.prepare("SELECT id, name, geometry, added, error, parts, places_error FROM regions ORDER BY added, id")?;
             let rows = q.query_map([], |r| {
-                Ok(Region { id: r.get(0)?, name: r.get(1)?, geometry: r.get(2)?, added: r.get::<_, i64>(3)? as u64, error: r.get(4)?, lists: BTreeMap::new() })
+                let parts: String = r.get(5)?;
+                let parts: Vec<String> = serde_json::from_str(&parts).unwrap_or_else(|_| vec![ROUTING.to_string()]);
+                Ok(Region {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    geometry: r.get(2)?,
+                    added: r.get::<_, i64>(3)? as u64,
+                    error: r.get(4)?,
+                    lists: BTreeMap::new(),
+                    parts,
+                    places: BTreeMap::new(),
+                    places_error: r.get(6)?,
+                })
             })?;
             for r in rows {
                 st.regions.push(r?);
             }
-            let mut q = db.prepare("SELECT region, build, path, bytes, sha256, gz FROM region_tiles")?;
+            // A config without places_base_url: a region keeps its places part on record, and nothing works on it.
+            let mut q = db.prepare("SELECT region, component, build, path, bytes, sha256, gz FROM region_tiles2")?;
             let rows = q.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    TileRef { path: r.get(2)?, bytes: r.get::<_, i64>(3)? as u64, sha256: r.get(4)?, gz: r.get::<_, i64>(5)? as u64 },
+                    r.get::<_, String>(2)?,
+                    TileRef { path: r.get(3)?, bytes: r.get::<_, i64>(4)? as u64, sha256: r.get(5)?, gz: r.get::<_, i64>(6)? as u64 },
                 ))
             })?;
             let by_id: HashMap<String, usize> = st.regions.iter().enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
             for row in rows {
-                let (region, build, t) = row?;
+                let (region, component, build, t) = row?;
                 if let Some(&i) = by_id.get(&region) {
-                    st.regions[i].lists.entry(build).or_default().insert(t.path.clone(), t);
+                    let r = &mut st.regions[i];
+                    let lists = if component == PLACES { &mut r.places } else { &mut r.lists };
+                    lists.entry(build).or_default().insert(t.path.clone(), t);
                 }
             }
         }
-        let tick: Option<i64> = db.query_row("SELECT MAX(last_used) FROM stream", [], |r| r.get(0))?;
+        let tick: Option<i64> = db.query_row("SELECT MAX(last_used) FROM stream2", [], |r| r.get(0))?;
+        let places = cfg.places_base_url.as_deref().map(str::trim).filter(|u| !u.is_empty()).map(|u| {
+            let mut base = u.to_string();
+            if !base.ends_with('/') {
+                base.push('/');
+            }
+            PlacesPart::new(&cfg.dir, base, cfg.places_stream_cap_bytes)
+        });
+        if let Some(p) = &places {
+            p.open(&db, &mut st)?;
+        }
         // The tile folders: the device's build and the one an update is filling are kept (and what is whole in them is
         // counted); any other (a build switched away from before its folder was deleted) goes.
         let keep: Vec<String> = [st.build.clone(), st.updating.clone()].into_iter().flatten().collect();
@@ -1277,6 +1525,7 @@ impl Regions {
             wake: (Mutex::new(false), Condvar::new()),
             tick: AtomicU64::new(tick.unwrap_or(0).max(0) as u64),
             seq: AtomicU64::new(0),
+            places,
         });
         let w = inner.clone();
         let worker = std::thread::Builder::new().name("cache-regions".into()).spawn(move || w.work()).map_err(|e| Error::new("internal", format!("could not start the download thread: {e}")))?;
@@ -1299,14 +1548,23 @@ impl Regions {
     }
 
     /// The whole interface: `method` with JSON `args`, a JSON answer. Methods: status, plan, add, remove, stream, set_policy,
-    /// check_update, update (docs/REGIONS.md).
+    /// check_update, update (docs/REGIONS.md, and docs/PLACES-TILES.md for the places part).
     pub fn call(&self, method: &str, args: &Value) -> Result<Value> {
         let inner = &self.inner;
+        let component = args.get("component").and_then(|v| v.as_str());
+        if let Some(c) = component.filter(|c| *c != ROUTING && *c != PLACES) {
+            return Err(Error::bad_args(format!("unknown component {c:?}")));
+        }
         match method {
             "status" => Ok(inner.status()),
             "plan" => inner.plan(args),
             "add" => inner.add(args),
             "remove" => inner.remove(args),
+            "stream" if component == Some(PLACES) => {
+                let points = points_of(args.get("points"));
+                let ms = args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(DEFAULT_PLACES_STREAM_TIMEOUT_MS);
+                Ok(inner.p_stream(&points, Duration::from_millis(ms)).to_json())
+            }
             "stream" => Ok(inner.stream(args)),
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
@@ -1318,10 +1576,47 @@ impl Regions {
                 inner.poke();
                 Ok(json!({"ok": true}))
             }
-            "check_update" => inner.check_update(),
-            "update" => inner.update(),
+            "check_update" | "update" => {
+                let routing = |m: &str| if m == "update" { inner.update() } else { inner.check_update() };
+                let places = |m: &str| if m == "update" { inner.p_update() } else { inner.p_check_update() };
+                match component {
+                    Some(PLACES) => places(method),
+                    Some(_) => routing(method),
+                    // Both: routing's answer as before, with the places part's beside it.
+                    None => {
+                        let mut v = routing(method)?;
+                        if inner.places.is_some() {
+                            v["places"] = places(method).unwrap_or_else(|e| Inner::part_error(&e));
+                        }
+                        Ok(v)
+                    }
+                }
+            }
             _ => Err(Error::bad_args(format!("unknown method {method}"))),
         }
+    }
+
+    /// The merged places database every search reads (`CURRENT`'s); None until the device has a places build.
+    pub fn places_db(&self) -> Option<PathBuf> {
+        let p = self.inner.places.as_ref()?;
+        let b = self.inner.st().p.build.clone()?;
+        Some(p.db_file(&b))
+    }
+
+    /// The folder of `CURRENT` and the merged databases (what `cache_places` reads as `merged_dir`); None with places off.
+    pub fn places_dir(&self) -> Option<PathBuf> {
+        self.inner.places.as_ref().map(|p| p.dir.clone())
+    }
+
+    /// Goes up by one on every places merge, removal and build switch.
+    pub fn places_generation(&self) -> u64 {
+        self.inner.places.as_ref().map(|p| p.generation()).unwrap_or(0)
+    }
+
+    /// Before a search at a point: fetch and merge the places tiles around it that are not here yet (the places `stream`),
+    /// waiting at most `wait`.
+    pub fn prepare_places(&self, lat: f64, lon: f64, wait: Duration) -> StreamAnswer {
+        self.inner.p_stream(&[(lat, lon)], wait)
     }
 
     /// The folder Valhalla routes on (`mjolnir.tile_dir`): the device's build. None until the device has one.
