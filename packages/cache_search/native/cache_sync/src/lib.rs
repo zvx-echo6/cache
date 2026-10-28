@@ -132,6 +132,15 @@ struct Saved {
 /// Local-only facts about a file in a shared folder: the size and modification time it had when it was last hashed.
 type Seen = BTreeMap<String, (u64, i64)>;
 
+/// Files this device is writing into a shared folder, by path, recorded before the first byte goes in. Copying a finished file
+/// into place is not instant (on a phone the store and the shared folders are on different file systems, so a big file takes
+/// seconds), and if Cache is stopped meanwhile the next start finds a half-written file here: it is replaced, never taken for an
+/// edit and sent to the other devices. While a path is listed, its file being missing is not a delete either.
+type Writes = BTreeMap<String, Entry>;
+
+/// What [`Inner::relocate`] calls the original while the store hands the same content back.
+const ASIDE_SUFFIX: &str = ".cache-sync-old";
+
 /// One shared folder as a peer describes it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RemoteShare {
@@ -217,6 +226,8 @@ struct Inner {
     stop: AtomicBool,
     /// A rescan left a file that was still being written: the next round comes after [`SETTLE`], not the full interval.
     settle_again: Arc<AtomicBool>,
+    /// The first round has put right what an interrupted write left (see [`Writes`]).
+    recovered: AtomicBool,
 }
 
 pub struct SyncEngine {
@@ -294,6 +305,39 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf, std::fs::Metada
     }
 }
 
+/// The originals [`Inner::relocate`] left renamed aside under `dir` (hidden files, which [`walk`] skips).
+fn find_asides(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+        let name = e.file_name().to_string_lossy().into_owned();
+        if m.is_dir() && !name.starts_with('.') {
+            find_asides(&p, out);
+        } else if m.is_file() && name.starts_with('.') && name.ends_with(ASIDE_SUFFIX) {
+            out.push(p);
+        }
+    }
+}
+
+/// Folders a delete left empty go too, up to (not including) the shared folder itself.
+fn prune_empty(root: &Path, removed: &Path) {
+    let mut d = removed.parent();
+    while let Some(dir) = d {
+        if dir == root || !dir.starts_with(root) || std::fs::remove_dir(dir).is_err() {
+            break;
+        }
+        d = dir.parent();
+    }
+}
+
+/// The BLAKE3 hash of a file's content, as the store names it.
+fn hash_file(p: &Path) -> std::io::Result<String> {
+    let mut h = blake3::Hasher::new();
+    h.update_reader(std::fs::File::open(p)?)?;
+    Ok(Hash::from(h.finalize()).to_hex().to_string())
+}
+
 fn human(n: u64) -> String {
     const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;
@@ -338,6 +382,135 @@ impl Inner {
     fn store_index(&self, share: &str, idx: &Index, seen: &Seen) -> Result<()> {
         write_json(&self.index_path(share), idx)?;
         write_json(&self.seen_path(share), seen)
+    }
+
+    fn writes_path(&self, share: &str) -> PathBuf {
+        self.dir.join("index").join(format!("{share}.writing.json"))
+    }
+
+    fn load_writes(&self, share: &str) -> Writes {
+        read_json(&self.writes_path(share)).unwrap_or_default()
+    }
+
+    fn store_writes(&self, share: &str, w: &Writes) -> Result<()> {
+        if w.is_empty() {
+            let _ = std::fs::remove_file(self.writes_path(share));
+            return Ok(());
+        }
+        write_json(&self.writes_path(share), w)
+    }
+
+    fn mark_writing(&self, share: &str, path: &str, entry: &Entry) -> Result<()> {
+        let mut w = self.load_writes(share);
+        w.insert(path.to_string(), entry.clone());
+        self.store_writes(share, &w)
+    }
+
+    fn unmark_writing(&self, share: &str, path: &str) -> Result<()> {
+        let mut w = self.load_writes(share);
+        if w.remove(path).is_some() {
+            self.store_writes(share, &w)?;
+        }
+        Ok(())
+    }
+
+    /// A file now whole at `full`: the store keeps it under its name, the index takes `entry`, and it is no longer being written.
+    async fn written(&self, sh: &Share, path: &str, full: &Path, entry: Entry) -> Result<()> {
+        let hash: Hash = entry.hash.parse().map_err(|_| anyhow!("bad hash for {path}"))?;
+        self.store.tags().set(Self::tag_name(&sh.id, path).as_bytes(), HashAndFormat::raw(hash)).await.map_err(|e| anyhow!("{e}"))?;
+        let mut idx = self.load_index(&sh.id);
+        let mut seen = self.load_seen(&sh.id);
+        let m = std::fs::metadata(full)?;
+        seen.insert(path.to_string(), (m.len(), mtime_ms(&m)));
+        idx.files.insert(path.to_string(), entry);
+        self.store_index(&sh.id, &idx, &seen)?;
+        self.unmark_writing(&sh.id, path)
+    }
+
+    /// After a start, before anything scans a shared folder: puts right what a write that was cut off left there.
+    async fn recover(&self, sh: &Share) {
+        if !sh.path.is_dir() {
+            return;
+        }
+        // An original renamed aside by `relocate`: it goes back, over whatever part of the copy got written.
+        let root = sh.path.clone();
+        let asides = tokio::task::spawn_blocking(move || {
+            let mut v = Vec::new();
+            find_asides(&root, &mut v);
+            v
+        })
+        .await
+        .unwrap_or_default();
+        let mut again = Vec::new();
+        for aside in asides {
+            let Some(name) = aside.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix('.')).and_then(|n| n.strip_suffix(ASIDE_SUFFIX)) else {
+                continue;
+            };
+            let target = aside.with_file_name(name);
+            let _ = std::fs::remove_file(&target);
+            match std::fs::rename(&aside, &target) {
+                Ok(()) => {
+                    if let Some(rel) = rel_path(&sh.path, &target) {
+                        if let Some(e) = self.load_index(&sh.id).files.get(&rel).filter(|e| !e.deleted) {
+                            again.push(e.hash.clone());
+                        }
+                    }
+                }
+                Err(e) => self.note(format!("{}: could not put back {}: {e}", sh.name, target.display())),
+            }
+        }
+        // The store may still hold a copy of what was put back: handing it over again drops that copy.
+        for h in again {
+            self.repoint(&h, None).await;
+        }
+        // A file being fetched: kept if it is whole, else replaced from the store, or left for the next fetch.
+        for (path, entry) in self.load_writes(&sh.id) {
+            let Some(full) = safe_join(&sh.path, &path) else {
+                let _ = self.unmark_writing(&sh.id, &path);
+                continue;
+            };
+            let f2 = full.clone();
+            let want = entry.hash.clone();
+            let size = entry.size;
+            let whole = tokio::task::spawn_blocking(move || {
+                std::fs::metadata(&f2).map(|m| m.len() == size).unwrap_or(false) && hash_file(&f2).map(|h| h == want).unwrap_or(false)
+            })
+            .await
+            .unwrap_or(false);
+            if whole {
+                if let Err(e) = self.written(sh, &path, &full, entry.clone()).await {
+                    self.note(format!("{}: {path}: {e:#}", sh.name));
+                }
+                self.repoint(&entry.hash, None).await;
+                continue;
+            }
+            if full.exists() {
+                if let Err(e) = std::fs::remove_file(&full) {
+                    self.note(format!("{}: could not remove the half-written {path}: {e}", sh.name));
+                    continue;
+                }
+            }
+            let Ok(hash) = entry.hash.parse::<Hash>() else { continue };
+            let have = self.store.blobs().status(hash).await.map(|s| matches!(s, iroh_blobs::api::proto::BlobStatus::Complete { .. })).unwrap_or(false);
+            let put = have
+                && self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await.is_ok();
+            if put {
+                let _ = self.written(sh, &path, &full, entry).await;
+                self.note(format!("{}: {path} was cut off while being written; written again", sh.name));
+            } else {
+                let _ = std::fs::remove_file(&full);
+                // If the index already names this content as here, it would never be asked for again: forget it, so the next
+                // comparison with a device that has it fetches it.
+                let mut idx = self.load_index(&sh.id);
+                if idx.files.get(&path) == Some(&entry) {
+                    let mut seen = self.load_seen(&sh.id);
+                    idx.files.remove(&path);
+                    seen.remove(&path);
+                    let _ = self.store_index(&sh.id, &idx, &seen);
+                }
+                self.note(format!("{}: {path} was cut off while being written; it comes again with the next sync", sh.name));
+            }
+        }
     }
 
     fn note(&self, msg: impl Into<String>) {
@@ -395,7 +568,7 @@ impl Inner {
             bail!("{} changed meanwhile", target.display());
         }
         let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let aside = target.with_file_name(format!(".{name}.cache-sync-old"));
+        let aside = target.with_file_name(format!(".{name}{ASIDE_SUFFIX}"));
         std::fs::rename(target, &aside)?;
         match self.store.export_with_opts(ExportOptions { hash: h, mode: ExportMode::TryReference, target: target.to_path_buf() }).finish().await {
             Ok(_) => {
@@ -432,11 +605,15 @@ impl Inner {
         .await?;
         let mut changed = false;
         let mut unsettled = false;
+        let mut writes = self.load_writes(&share.id);
+        let writes_before = writes.len();
         // Content whose file here moved, changed or went: if it lives on at another path, the store must read it from there.
         let mut stale: Vec<String> = Vec::new();
         let mut present = HashSet::new();
         for (rel, full, m) in files {
             present.insert(rel.clone());
+            // After the start-up recovery a file at a path still waiting to be written is a new one put there by someone.
+            writes.remove(&rel);
             let key = (m.len(), mtime_ms(&m));
             if seen.get(&rel) == Some(&key) && idx.files.get(&rel).map(|e| !e.deleted).unwrap_or(false) {
                 continue;
@@ -470,7 +647,9 @@ impl Inner {
             }
             seen.insert(rel, key);
         }
-        let gone: Vec<String> = idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p)).map(|(p, _)| p.clone()).collect();
+        // A file still waiting to be written (cut off, to come again) has not gone.
+        let gone: Vec<String> =
+            idx.files.iter().filter(|(p, e)| !e.deleted && !present.contains(*p) && !writes.contains_key(*p)).map(|(p, _)| p.clone()).collect();
         for p in gone {
             let old = idx.files[&p].clone();
             stale.push(old.hash.clone());
@@ -480,6 +659,9 @@ impl Inner {
             changed = true;
         }
         self.store_index(&share.id, &idx, &seen)?;
+        if writes.len() != writes_before {
+            self.store_writes(&share.id, &writes)?;
+        }
         for h in stale {
             self.repoint(&h, None).await;
         }
@@ -512,6 +694,11 @@ impl Inner {
     async fn round(self: &Arc<Self>) {
         let _one = self.round.lock().await;
         let shares = self.saved.lock().unwrap().shares.clone();
+        if !self.recovered.swap(true, Ordering::Relaxed) {
+            for sh in &shares {
+                self.recover(sh).await;
+            }
+        }
         for sh in &shares {
             if let Err(e) = self.rescan(sh).await {
                 self.note(format!("{}: {e}", sh.name));
@@ -633,11 +820,13 @@ impl Inner {
                             continue;
                         }
                         std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
+                        prune_empty(&sh.path, &full);
                     }
                     let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
                     seen.remove(&path);
                     idx.files.insert(path.clone(), entry);
                     self.store_index(&sh.id, &idx, &seen)?;
+                    self.unmark_writing(&sh.id, &path)?;
                     self.note(format!("{}: {} deleted {path}", sh.name, self.peer_name(from)));
                 }
                 Action::Fetch { path, entry, conflict } => self.fetch(sh, &path, entry, conflict, from).await?,
@@ -737,6 +926,7 @@ impl Inner {
             std::fs::create_dir_all(parent)?;
         }
         let old_hash = self.load_index(&sh.id).files.get(path).filter(|e| !e.deleted).map(|e| e.hash.clone());
+        self.mark_writing(&sh.id, path, &entry)?;
         let mut conflict_copy = None;
         if conflict && full.exists() {
             let stamp = chrono_stamp();
@@ -751,21 +941,27 @@ impl Inner {
         if full.exists() {
             std::fs::remove_file(&full).with_context(|| format!("could not replace {path}"))?;
         }
-        self.store
-            .export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() })
-            .finish()
-            .await
-            .map_err(|e| anyhow!("could not write {path}: {e}"))?;
-        self.store.tags().set(Self::tag_name(&sh.id, path).as_bytes(), HashAndFormat::raw(hash)).await.map_err(|e| anyhow!("{e}"))?;
+        #[cfg(feature = "test-hooks")]
+        if std::env::var("CACHE_SYNC_CUT_WRITE").map(|v| v == path).unwrap_or(false) {
+            // As if Cache were stopped half way through writing this file: half of it at the real path, nothing cleaned up.
+            let bytes = self.store.blobs().get_bytes(hash).await.map_err(|e| anyhow!("{e}"))?;
+            std::fs::write(&full, &bytes[..bytes.len() / 2])?;
+            self.stop.store(true, Ordering::Relaxed);
+            bail!("test: cut off writing {path}");
+        }
+        if let Err(e) = self.store.export_with_opts(ExportOptions { hash, mode: ExportMode::TryReference, target: full.clone() }).finish().await {
+            // Whatever part got written goes; the content stays in the store and the next round writes it again.
+            if std::fs::remove_file(&full).is_err() && full.exists() {
+                // Left for the recovery a start does, before the next scan could take it for an edit.
+                self.recovered.store(false, Ordering::Relaxed);
+            }
+            bail!("could not write {path}: {e}");
+        }
         self.wanted.lock().unwrap().remove(&hash);
-        let mut idx = self.load_index(&sh.id);
-        let mut seen = self.load_seen(&sh.id);
-        let m = std::fs::metadata(&full)?;
         let entry_hash = entry.hash.clone();
-        seen.insert(path.to_string(), (m.len(), mtime_ms(&m)));
-        idx.files.insert(path.to_string(), entry);
-        self.store_index(&sh.id, &idx, &seen)?;
-        self.note(format!("{}: got {path} ({})", sh.name, human(m.len())));
+        let size = entry.size;
+        self.written(sh, path, &full, entry).await?;
+        self.note(format!("{}: got {path} ({})", sh.name, human(size)));
         // The content that was here: kept as a conflict copy, or still in use at another path.
         if let Some(c) = conflict_copy {
             if let Some(h) = &old_hash {
@@ -1001,6 +1197,7 @@ impl SyncEngine {
             round: tokio::sync::Mutex::new(()),
             stop: AtomicBool::new(false),
             settle_again: Arc::default(),
+            recovered: AtomicBool::new(false),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);

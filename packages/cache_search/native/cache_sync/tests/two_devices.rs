@@ -83,6 +83,45 @@ fn two_devices_link_share_and_stay_the_same() {
     call(&b, "sync_now", json!({}));
     wait("the new file and the delete on B", 60, || fb.join("maps/new.txt").exists() && !fb.join("maps/region.bin").exists());
 
+    // A delete that empties folders takes the folders too.
+    std::fs::create_dir_all(fa.join("deep/er")).unwrap();
+    std::fs::write(fa.join("deep/er/leaf.txt"), "leaf").unwrap();
+    call(&a, "sync_now", json!({}));
+    std::thread::sleep(Duration::from_secs(1));
+    call(&b, "sync_now", json!({}));
+    wait("the nested file on B", 60, || fb.join("deep/er/leaf.txt").exists());
+    std::fs::remove_dir_all(fa.join("deep")).unwrap();
+    call(&a, "sync_now", json!({}));
+    std::thread::sleep(Duration::from_secs(1));
+    call(&b, "sync_now", json!({}));
+    wait("the emptied folders gone on B", 60, || !fb.join("deep").exists());
+
+    // B is stopped half way through writing a file (as when the app is killed): on the next start the half file is replaced
+    // from what B already has, and never taken for an edit that would go back to A.
+    let whole: Vec<u8> = (0..2_000_000u32).map(|i| (i * 13 % 241) as u8).collect();
+    std::env::set_var("CACHE_SYNC_CUT_WRITE", "maps/cut.bin");
+    std::fs::write(fa.join("maps/cut.bin"), &whole).unwrap();
+    call(&a, "sync_now", json!({}));
+    std::thread::sleep(Duration::from_secs(1));
+    call(&b, "sync_now", json!({}));
+    let writing = db.join("index").join(format!("{id}.writing.json"));
+    wait("the cut-off write on B", 60, || fb.join("maps/cut.bin").exists() && writing.exists());
+    std::env::remove_var("CACHE_SYNC_CUT_WRITE");
+    b.close();
+    assert!(std::fs::metadata(fb.join("maps/cut.bin")).unwrap().len() < whole.len() as u64, "the write was cut off");
+    let b = engine(&db, "Phone");
+    call(&b, "sync_now", json!({}));
+    wait("the whole file on B after the restart", 60, || std::fs::read(fb.join("maps/cut.bin")).map(|d| d == whole).unwrap_or(false));
+    assert!(!writing.exists(), "nothing is left waiting to be written");
+    std::thread::sleep(Duration::from_secs(7));
+    call(&b, "sync_now", json!({}));
+    std::thread::sleep(Duration::from_secs(1));
+    call(&a, "sync_now", json!({}));
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(std::fs::read(fa.join("maps/cut.bin")).unwrap(), whole, "A's copy is untouched");
+    let log = call(&b, "status", json!({}))["log"].to_string();
+    assert!(log.contains("cut off while being written"), "{log}");
+
     // Both edit the same file before syncing: neither edit is lost.
     call(&a, "set_policy", json!({"network": false}));
     call(&b, "set_policy", json!({"network": false}));

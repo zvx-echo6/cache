@@ -23,8 +23,14 @@ serde_json.workspace = true
 anyhow = "1"
 data-encoding = "2.11"
 fs4 = "=1.1.0"
+blake3 = "1.8"
 rand = "0.9"
 url = "2"
 
+[features]
+# Lets the tests cut a write off half way, as if the app were stopped.
+test-hooks = []
+
 [dev-dependencies]
 tempfile = "3"
+cache_sync = { path = ".", features = ["test-hooks"] }
