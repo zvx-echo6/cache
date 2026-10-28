@@ -411,6 +411,8 @@ class ChatController extends ChangeNotifier {
         store.addMessage(convId, role: message['role'] as String, content: message['content'] as String, message: message, model: _modelName);
       } catch (_) {}
     }
+    // The open chat's loop gets it now; a loop made later reads it from the stored transcript.
+    if (epoch == _epoch) _loop?.addMessage(message);
     if (cancelled()) {
       // The chat was closed meanwhile: the outcome is kept, the follow-up is not written.
       if (epoch == _epoch) busy = false;
@@ -435,8 +437,6 @@ class ChatController extends ChangeNotifier {
           return;
         }
         _loop = made;
-      } else {
-        made.addMessage(message);
       }
       loop = made;
       start = loop.messages.length;
