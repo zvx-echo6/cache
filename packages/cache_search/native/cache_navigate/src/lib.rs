@@ -1,6 +1,7 @@
 //! The `navigate` tool (docs/TOOLS.md, "navigate"): directions in one call over the offline maps on the phone.
 //!
-//! Road routing is Valhalla (the C shim, tiles from the installed map region); off-road legs are the off-road
+//! Road routing is Valhalla (the C shim, tiles from the installed map region: one tiles.tar, or a folder of tiles such as the
+//! downloaded regions', see [`TileStream`]); off-road legs are the off-road
 //! router (`cache_offroad`, the pack and the elevation file). `schema()` is built from what is installed:
 //! nothing without the Valhalla tiles and the shim library; the `to_type` enum from the places pack's categories
 //! (TOOLS.md's list while no places pack is installed). The result is AIDA's navigate contract (build.rs). Off-road
@@ -22,14 +23,15 @@ use cache_offroad::directions::{Directions, DEFAULT_OFFROAD_SNAP_M, TravelMode};
 use cache_offroad::navigate::{NavigateRequest, Navigator};
 use cache_offroad::pack::PackSource;
 use cache_offroad::router::{Boundary, RouteOptions};
-use cache_offroad::shim::{config_for_tiles, ShimValhalla};
+use cache_offroad::shim::{config_for_tile_dir, config_for_tiles, ShimValhalla};
 use cache_offroad::valhalla::Valhalla;
 use cache_offroad::{ElevationSource, PmtilesElevation, SqlitePack};
 use cache_tool::places::PlaceSource;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Where a places pack plugs into the tool (shared with the handle, so it can be set after the tool is registered).
 pub type PlaceSlot = Arc<RwLock<Option<Arc<dyn PlaceSource>>>>;
@@ -43,6 +45,58 @@ const NEAREST_CANDIDATES: usize = 5;
 /// Two places closer than this are the same place.
 const SAME_PLACE_M: f64 = 30.0;
 
+/// Where the road tiles come from when they are a folder that fills as needed (cache_regions: the downloaded regions, and the
+/// tiles fetched for routes planned online). Not used while the tiles are a tiles.tar, which holds all of its region.
+pub trait TileStream: Send + Sync {
+    /// Called with a trip's start, end and via points ([lat, lon]) right before it is routed: fetch what the route is likely
+    /// to need. It may take a while (it has its own timeout); whatever happens, the route then uses the tiles there are.
+    fn prepare(&self, points: &[(f64, f64)]);
+    /// The folder to route on, when the stream decides it (it moves when an update switches builds). None: the configured
+    /// `tiles`.
+    fn tile_dir(&self) -> Option<PathBuf> {
+        None
+    }
+    /// Whether a route can be tried: tiles are here, or they can be fetched (online). A device that has downloaded nothing
+    /// still routes online; offline with nothing here it does not offer routing.
+    fn routable(&self) -> bool {
+        true
+    }
+    /// The downloaded regions' names, for the answer's "routing covers" line.
+    fn region_name(&self) -> Option<String> {
+        None
+    }
+}
+
+/// The Valhalla config for `tiles`: a folder of tiles (`mjolnir.tile_dir`) or a tiles.tar (`mjolnir.tile_extract`).
+pub fn valhalla_config(tiles: &Path) -> String {
+    if tiles.is_dir() {
+        config_for_tile_dir(tiles)
+    } else {
+        config_for_tiles(tiles)
+    }
+}
+
+/// The newest modification time of any file under `dir`.
+fn newest_file(dir: &Path) -> Option<SystemTime> {
+    let mut newest: Option<SystemTime> = None;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_dir() {
+                todo.push(e.path());
+            } else if let Ok(t) = m.modified() {
+                newest = Some(newest.map_or(t, |n| n.max(t)));
+            }
+        }
+    }
+    newest
+}
+
+/// A folder's newest file is looked for at most this often (a continent's folder is tens of thousands of files).
+const AGE_RECHECK: Duration = Duration::from_secs(60);
+
 pub(crate) struct OffroadData {
     pack: SqlitePack,
     elevation: PmtilesElevation,
@@ -54,11 +108,15 @@ pub(crate) struct OffroadData {
 pub struct NavCore {
     cfg: NavigateCfg,
     places: PlaceSlot,
-    valhalla: Mutex<Option<Arc<dyn Valhalla>>>,
+    /// The router, and the tiles it was started on (it starts again when they move).
+    valhalla: Mutex<Option<(Arc<dyn Valhalla>, String)>>,
     offroad: Mutex<Option<Arc<OffroadData>>>,
     /// Tests inject a Valhalla and skip the file checks.
     injected: bool,
     tool_routes: Mutex<std::collections::VecDeque<Value>>,
+    stream: RwLock<Option<Arc<dyn TileStream>>>,
+    /// A tile folder's newest file, and when that was looked up.
+    folder_age: Mutex<Option<(String, Instant, Option<SystemTime>)>>,
 }
 
 pub struct NavigateTool {
@@ -184,12 +242,61 @@ impl NavCore {
     }
 
     pub fn new(cfg: NavigateCfg, places: PlaceSlot) -> NavCore {
-        NavCore { cfg, places, valhalla: Mutex::new(None), offroad: Mutex::new(None), injected: false, tool_routes: Mutex::new(Default::default()) }
+        NavCore {
+            cfg,
+            places,
+            valhalla: Mutex::new(None),
+            offroad: Mutex::new(None),
+            injected: false,
+            tool_routes: Mutex::new(Default::default()),
+            stream: RwLock::new(None),
+            folder_age: Mutex::new(None),
+        }
     }
 
     /// For tests: a Valhalla supplied by the caller; the file checks are skipped.
     pub fn with_valhalla(cfg: NavigateCfg, places: PlaceSlot, valhalla: Arc<dyn Valhalla>) -> NavCore {
-        NavCore { cfg, places, valhalla: Mutex::new(Some(valhalla)), offroad: Mutex::new(None), injected: true, tool_routes: Mutex::new(Default::default()) }
+        NavCore {
+            cfg,
+            places,
+            valhalla: Mutex::new(Some((valhalla, String::new()))),
+            offroad: Mutex::new(None),
+            injected: true,
+            tool_routes: Mutex::new(Default::default()),
+            stream: RwLock::new(None),
+            folder_age: Mutex::new(None),
+        }
+    }
+
+    /// Plug in (or take out) where a folder of tiles is filled from; see [`TileStream`].
+    pub fn set_stream(&self, stream: Option<Arc<dyn TileStream>>) {
+        *self.stream.write().unwrap_or_else(|e| e.into_inner()) = stream;
+    }
+
+    fn stream(&self) -> Option<Arc<dyn TileStream>> {
+        self.stream.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The tiles to route on: a configured tiles.tar that is there; otherwise the stream's folder, or the configured folder.
+    pub fn tiles_path(&self) -> Option<String> {
+        let v = self.cfg.valhalla.as_ref()?;
+        if !v.tiles.is_empty() && Path::new(&v.tiles).is_file() {
+            return Some(v.tiles.clone());
+        }
+        if let Some(d) = self.stream().and_then(|s| s.tile_dir()) {
+            return Some(d.to_string_lossy().into_owned());
+        }
+        (!v.tiles.is_empty()).then(|| v.tiles.clone())
+    }
+
+    /// Before a trip is routed: the stream (if any) fetches the tiles near its points. Skipped when the tiles are a tiles.tar.
+    /// Nothing that happens here fails the route.
+    pub fn prepare_tiles(&self, points: &[(f64, f64)]) {
+        let Some(s) = self.stream() else { return };
+        if self.tiles_path().map(|t| Path::new(&t).is_file()).unwrap_or(false) {
+            return;
+        }
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.prepare(points)));
     }
 
     pub(crate) fn place_source(&self) -> Option<Arc<dyn PlaceSource>> {
@@ -200,10 +307,18 @@ impl NavCore {
         if self.injected {
             return true;
         }
-        match &self.cfg.valhalla {
-            Some(v) => Path::new(&v.tiles).is_file() && (cfg!(target_os = "ios") || Path::new(&v.shim).is_file()),
-            None => false,
+        let Some(v) = &self.cfg.valhalla else { return false };
+        if !(cfg!(target_os = "ios") || Path::new(&v.shim).is_file()) {
+            return false;
         }
+        if !v.tiles.is_empty() && Path::new(&v.tiles).is_file() {
+            return true;
+        }
+        // A folder that fills as needed: routable when it has tiles or can fetch them, folder or not yet.
+        if let Some(s) = self.stream() {
+            return s.routable();
+        }
+        self.tiles_path().map(|t| Path::new(&t).is_dir()).unwrap_or(false)
     }
 
     fn offroad_installed(&self) -> bool {
@@ -215,14 +330,24 @@ impl NavCore {
 
     pub(crate) fn valhalla(&self) -> Result<Arc<dyn Valhalla>, ToolError> {
         let mut g = lock(&self.valhalla);
-        if let Some(v) = &*g {
-            return Ok(v.clone());
+        if self.injected {
+            if let Some((v, _)) = &*g {
+                return Ok(v.clone());
+            }
         }
         let Some(v) = &self.cfg.valhalla else { return Err(err(ToolError::NOT_SET_UP, "no map region is installed")) };
-        let config = config_for_tiles(Path::new(&v.tiles));
+        let tiles = self.tiles_path().ok_or_else(|| err(ToolError::NOT_SET_UP, "no map region is installed"))?;
+        // The same tiles: the router already running. Moved (an update switched the regions' build): a new one on the new
+        // folder; a route still running on the old one keeps it until it ends.
+        if let Some((r, on)) = &*g {
+            if *on == tiles {
+                return Ok(r.clone());
+            }
+        }
+        let config = valhalla_config(Path::new(&tiles));
         let shim = ShimValhalla::load(Path::new(&v.shim), &config).map_err(|e| err(ToolError::NOT_SET_UP, format!("the road router could not start: {e}")))?;
         let shim: Arc<dyn Valhalla> = Arc::new(shim);
-        *g = Some(shim.clone());
+        *g = Some((shim.clone(), tiles));
         Ok(shim)
     }
 
@@ -281,13 +406,19 @@ impl NavCore {
         nav.alternatives(req, count).map_err(|e| err(ToolError::BAD_ARGUMENTS, e.to_string()))
     }
 
-    /// Name and age of the installed map region (the tiles file).
+    /// Name and age of the installed map region: of the tiles file, or of a tile folder (the name from `region`, the age
+    /// from the newest file in it).
     pub fn region_info(&self, now: &str) -> (String, String) {
         let Some(v) = &self.cfg.valhalla else { return (String::new(), "unknown".into()) };
-        let name = v.region.clone().unwrap_or_else(|| config::region_from_path(&v.tiles));
-        let age = std::fs::metadata(&v.tiles)
-            .and_then(|m| m.modified())
-            .ok()
+        let tiles = self.tiles_path().unwrap_or_else(|| v.tiles.clone());
+        let folder = Path::new(&tiles).is_dir();
+        let name = v
+            .region
+            .clone()
+            .or_else(|| if folder { self.stream().and_then(|s| s.region_name()) } else { None })
+            .unwrap_or_else(|| if folder { String::new() } else { config::region_from_path(&tiles) });
+        let modified = if folder { self.folder_newest(&tiles) } else { std::fs::metadata(&tiles).and_then(|m| m.modified()).ok() };
+        let age = modified
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .and_then(|t| {
                 let now = chrono::DateTime::parse_from_rfc3339(now.trim()).ok()?.timestamp();
@@ -295,6 +426,18 @@ impl NavCore {
             })
             .unwrap_or_else(|| "unknown".into());
         (name, age)
+    }
+
+    fn folder_newest(&self, dir: &str) -> Option<SystemTime> {
+        let mut g = lock(&self.folder_age);
+        if let Some((d, at, t)) = &*g {
+            if d == dir && at.elapsed() < AGE_RECHECK {
+                return *t;
+            }
+        }
+        let t = newest_file(Path::new(dir));
+        *g = Some((dir.to_string(), Instant::now(), t));
+        t
     }
 }
 
@@ -386,6 +529,7 @@ impl Tool for NavigateTool {
         }
 
         let req = NavigateRequest::new(from.waypoint(), to.waypoint(), a.mode.travel(), a.land_access);
+        self.core.prepare_tiles(&[(from.lat, from.lon), (to.lat, to.lon)]);
         let (d, have_offroad) = self.core.navigate(req)?;
         if !d.ok {
             return Err(build::route_error(&d, &from, &to));
@@ -427,6 +571,9 @@ impl NavigateTool {
             return Err(build::with_ends(err("nearby_empty", "").with("to_type", cat).with("warnings", Value::Array(Vec::new())), from, None));
         }
         let costing = a.mode.travel().costing();
+        let mut points = vec![origin];
+        points.extend(ans.matches.iter().map(|m| (m.lat, m.lon)));
+        self.core.prepare_tiles(&points);
         let mut ranked: Vec<(Option<f64>, cache_tool::places::PlaceMatch)> = ans
             .matches
             .into_iter()

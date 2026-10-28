@@ -3,6 +3,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'app_settings.dart';
 import 'data_policy.dart';
+import '../regions/regions_state.dart';
 import '../sharing/sharing_state.dart';
 import '../weather/weather_state.dart';
 import 'location_access.dart';
@@ -24,6 +25,7 @@ class SettingsHub {
     required this.storage,
     required this.weather,
     this.sharing,
+    this.regions,
     LocationAccessProbe? locationAccess,
     this.openUrl = openInSystemBrowser,
   }) : locationAccess = locationAccess ?? GeolocatorAccessProbe();
@@ -36,6 +38,9 @@ class SettingsHub {
 
   /// Sharing and sync between linked devices; null where the app has none (tests).
   final SharingState? sharing;
+
+  /// Regions and downloads (road routing and map by region); null where the app has none (tests).
+  final RegionsState? regions;
   final LocationAccessProbe locationAccess;
   final UrlOpener openUrl;
 

@@ -10,12 +10,18 @@ import 'dart:io';
 ///   packs/REGION/offroad.sqlite, elevation.pmtiles   off-road routing
 ///   live-defs/*.json                        definitions of the live data sources that are switched on (the app keeps them)
 /// The databases the app writes (saved places, downloaded live data) are in [supportDir].
+///
+/// Road routing from downloaded regions: the core's region engine (the `regions` section) keeps its tiles in
+/// `SUPPORT/regions/tiles/BUILD` and fetches a route's tiles when online; the navigate tool routes on that folder whenever no
+/// packs/*/valhalla/tiles.tar is there, so routing is always configured (with the shim) and a region that finishes downloading
+/// is used by the next route.
 Map<String, dynamic> buildCoreExtras({
   required Directory filesDir,
   required Directory supportDir,
   String shim = 'libvalhalla_shim.so',
   Directory? layerDefsDir,
   bool? useLinkedRouter,
+  String regionsBaseUrl = 'https://cache.echo6.co/routing/',
 }) {
   final packsDir = Directory('${filesDir.path}/packs');
   final places = <String>[];
@@ -45,11 +51,13 @@ Map<String, dynamic> buildCoreExtras({
       'dir': '${supportDir.path}/layers',
       'defs_dirs': [(layerDefsDir ?? Directory('${supportDir.path}/layer-defs')).path],
     },
-    if (tiles != null || offroadPack != null)
-      'routing': {
-        if (tiles != null) 'valhalla': {'tiles': tiles, 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
-        if (offroadPack != null) 'offroad': {'pack': offroadPack, 'elevation': elevation},
-      },
+    'routing': {
+      // No tiles.tar: the region engine's folder (an empty `tiles`).
+      'valhalla': {'tiles': tiles ?? '', 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
+      if (offroadPack != null) 'offroad': {'pack': offroadPack, 'elevation': elevation},
+    },
+    // The region engine (cs_open's regions section): where it keeps its tiles and where it fetches them from.
+    'regions': {'dir': '${supportDir.path}/regions', 'base_url': regionsBaseUrl},
   };
 }
 

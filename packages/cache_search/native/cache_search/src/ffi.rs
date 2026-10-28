@@ -815,6 +815,69 @@ pub unsafe extern "C" fn cs_sync_close(s: *mut cache_sync::SyncEngine) {
     let _ = catch_unwind(AssertUnwindSafe(|| Box::from_raw(s).close()));
 }
 
+/// Road tiles by region (cache_regions): `config_json` is its `Config` (`{"dir": ..., "base_url": ...}`). NULL on failure, with
+/// the reason in `cs_last_error(NULL)`. The engine is the process's one for that folder: a second open of the same folder, or
+/// a cs_open config whose "regions" section names it, gets the same engine. It runs its downloads on its own thread until the
+/// last of them is closed.
+///
+/// # Safety
+/// `config_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_regions_open(config_json: *const c_char) -> *mut std::sync::Arc<cache_regions::Regions> {
+    match guarded(|| {
+        let cfg: cache_regions::Config =
+            serde_json::from_str(arg_str(config_json, "config_json")?).map_err(|e| Error::bad_json(format!("regions config: {e}")))?;
+        cache_regions::Regions::open_shared(cfg).map_err(crate::ext::regions_err)
+    }) {
+        Ok(e) => Box::into_raw(Box::new(e)),
+        Err(e) => {
+            set_thread_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// One regions method (status, plan, add, remove, stream, set_policy, check_update, update) with JSON args. Always a JSON
+/// string: the answer, or `{"error": "...", "code": "..."}`. Safe to call from several threads at once.
+///
+/// # Safety
+/// `r` NULL or from `cs_regions_open` and not closed; `method` and `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_regions_call(r: *mut std::sync::Arc<cache_regions::Regions>, method: *const c_char, args_json: *const c_char) -> *mut c_char {
+    let out = guarded(|| {
+        if r.is_null() {
+            return Err(Error::bad_json("null regions handle"));
+        }
+        let m = arg_str(method, "method")?;
+        let args: serde_json::Value = if args_json.is_null() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(arg_str(args_json, "args_json")?).map_err(|e| Error::bad_json(format!("args: {e}")))?
+        };
+        // SAFETY: caller promises a live engine; its methods take &self and lock internally.
+        let e = unsafe { &*r };
+        Ok(match e.call(m, &args) {
+            Ok(v) => v,
+            Err(err) => serde_json::json!({"error": err.message, "code": err.code}),
+        })
+    });
+    let v = out.unwrap_or_else(|e| serde_json::json!({"error": e.message, "code": e.code.as_str()}));
+    out_string(v.to_string()).unwrap_or(ptr::null_mut())
+}
+
+/// Lets go of the engine; the last holder of it (this handle, another `cs_regions_open` of the folder, a cs_handle with a
+/// "regions" section) stops it.
+///
+/// # Safety
+/// `r` NULL or from `cs_regions_open`, not used again after this call.
+#[no_mangle]
+pub unsafe extern "C" fn cs_regions_close(r: *mut std::sync::Arc<cache_regions::Regions>) {
+    if r.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(r))));
+}
+
 /// # Safety
 /// `s` must be NULL or a string returned by this library, not freed before.
 #[no_mangle]

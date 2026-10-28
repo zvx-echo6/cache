@@ -40,6 +40,18 @@ pub fn config_for_tiles(tile_extract: &Path) -> String {
     c.to_string()
 }
 
+/// Valhalla config for a folder of tiles laid out `<level>/<aaa>/<bbb>/<ccc>.gph` (`mjolnir.tile_dir`): the downloaded
+/// regions. There is no tile_extract, so Valhalla reads each tile from the folder when a route first needs it, and a tile
+/// that arrives later can be read by a later route.
+pub fn config_for_tile_dir(tile_dir: &Path) -> String {
+    let mut c: Value = serde_json::from_str(include_str!("valhalla_config.json")).expect("config template");
+    if let Some(m) = c["mjolnir"].as_object_mut() {
+        m.remove("tile_extract");
+    }
+    c["mjolnir"]["tile_dir"] = Value::String(tile_dir.to_string_lossy().into_owned());
+    c.to_string()
+}
+
 impl ShimValhalla {
     /// `lib_path`: the shim library; `config`: a Valhalla config (JSON text or a file path).
     #[cfg(not(target_os = "ios"))]

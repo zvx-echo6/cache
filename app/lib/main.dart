@@ -28,6 +28,8 @@ import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
+import 'regions/region_catalogue.dart';
+import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
@@ -154,17 +156,27 @@ class _CacheAppState extends State<CacheApp> {
       ShareKind('shared', 'Shared folder', () => sources.zimsDir == null ? null : Directory('${sources.zimsDir!.parent.path}/Shared')),
     ],
   );
+  // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
+  // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
+  late final RegionsState regions = RegionsState(
+    policy: policy,
+    supportDir: getApplicationSupportDirectory,
+    catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    maps: maps,
+  );
   late final SettingsHub hub = SettingsHub(
     settings: settings,
     policy: policy,
     webSearch: webSearch,
     weather: weather,
     sharing: sharing,
+    regions: regions,
     storage: StorageUsage(
       library: () => [sources.zimsDir, sources.indexesDir],
       maps: () => [
         if (sources.layersSection['dir'] is String) Directory(sources.layersSection['dir'] as String),
         if (sources.zimsDir != null) Directory('${sources.zimsDir!.parent.path}/packs'),
+        if (_supportPath != null) Directory('$_supportPath/regions'),
       ],
       models: () => [app.modelsDir],
       videos: () => [video.dir],
@@ -230,6 +242,7 @@ class _CacheAppState extends State<CacheApp> {
     });
     location.addListener(_rememberPlace);
     settingsRead.then((_) => sharing.init());
+    settingsRead.then((_) => regions.init());
     layout.init();
     sources.init();
     browse.init();
@@ -314,6 +327,7 @@ class _CacheAppState extends State<CacheApp> {
     video.dispose();
     layout.dispose();
     location.dispose();
+    regions.dispose();
     maps.dispose();
     webSearch.dispose();
     weather.dispose();

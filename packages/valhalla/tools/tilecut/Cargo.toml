@@ -2,7 +2,7 @@
 name = "tilecut"
 version = "0.1.0"
 edition = "2021"
-description = "Cut a bounding-box subset out of a Valhalla tile_extract tar (std only, no dependencies)"
+description = "Cut a bounding-box subset out of a Valhalla tile_extract tar, or explode it into one file per tile (std only, no dependencies)"
 
 [dependencies]
 
