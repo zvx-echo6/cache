@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../files.dart';
+
 /// The folder the core reads live source definitions from (`live.sources_dir`). The app keeps in it exactly the definitions of the
 /// sources that are switched on (the core lists every definition it finds to the assistant, so a source that is off is not there).
 /// The app notes which files are its own (`.managed`), so a definition someone put there by hand is never touched.
@@ -28,7 +30,8 @@ class LiveFolder {
     for (final e in desired.entries) {
       try {
         final f = File('${dir.path}/${e.key}.json');
-        if (!f.existsSync() || f.readAsStringSync() != e.value) f.writeAsStringSync(e.value);
+        // Whole or not at all: the core reads every definition it finds here.
+        if (!f.existsSync() || f.readAsStringSync() != e.value) writeStringAtomicSync(f, e.value);
         kept.add(e.key);
       } on FileSystemException catch (x) {
         debugPrint('Live source ${e.key}: ${x.message}');
@@ -44,7 +47,7 @@ class LiveFolder {
       }
     }
     try {
-      _manifest.writeAsStringSync(jsonEncode(kept.toList()..sort()));
+      writeStringAtomicSync(_manifest, jsonEncode(kept.toList()..sort()));
     } on FileSystemException catch (x) {
       debugPrint('Live sources manifest: ${x.message}');
     }

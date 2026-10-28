@@ -5,6 +5,7 @@ import 'package:cache_search/cache_search.dart' show MapPlace;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../files.dart';
 import 'modules.dart';
 
 /// The blocks Home can show.
@@ -194,7 +195,9 @@ class LayoutState extends ChangeNotifier {
   void _save() {
     notifyListeners();
     try {
-      _file?.writeAsStringSync(jsonEncode({
+      final f = _file;
+      if (f == null) return;
+      writeStringAtomicSync(f, jsonEncode({
         'pinned': [for (final m in _pinned) m.name],
         'blocks': [for (final b in _order) b.name],
         'off': [for (final b in _off) b.name],

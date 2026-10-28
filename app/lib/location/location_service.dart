@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../files.dart';
 import 'position_source.dart';
 
 /// Why there is no position right now, for the one line shown under the coordinates.
@@ -203,7 +204,8 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     }
     notifyListeners();
     try {
-      await _file?.writeAsString(jsonEncode({'enabled': enabled}));
+      final f = _file;
+      if (f != null) await writeStringAtomic(f, jsonEncode({'enabled': enabled}));
     } catch (_) {}
   }
 

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../files.dart';
 import 'geo.dart';
 import 'layers/layer_def.dart';
 import 'layers/layer_engine.dart';
@@ -352,7 +353,9 @@ class MapsState extends ChangeNotifier {
 
   Future<void> _write() async {
     try {
-      await _file?.writeAsString(jsonEncode({
+      final f = _file;
+      if (f == null) return;
+      await writeStringAtomic(f, jsonEncode({
         'enabled': _enabled.toList(),
         'opacity': _opacity,
         'definitions': _definitions,

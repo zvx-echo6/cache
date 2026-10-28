@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../files.dart';
 import '../settings/data_policy.dart';
 
 /// One thing this device can share: a folder of Cache's own with a fixed id, so the same kind of thing on two linked devices is
@@ -64,7 +65,7 @@ class SharingState extends ChangeNotifier {
     _enabled = true;
     final f = await _flag();
     await f.parent.create(recursive: true);
-    await f.writeAsString(jsonEncode({'enabled': true}));
+    await writeStringAtomic(f, jsonEncode({'enabled': true}));
     await _start();
   }
 

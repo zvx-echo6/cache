@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../files.dart';
 import '../settings/data_policy.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
@@ -120,7 +121,10 @@ class BrowseState extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      await _file?.writeAsString(
+      final f = _file;
+      if (f == null) return;
+      await writeStringAtomic(
+        f,
         jsonEncode({
           'language': language,
           'replacements': _replacements,

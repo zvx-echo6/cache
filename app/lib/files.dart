@@ -1,8 +1,8 @@
 import 'dart:io';
 
-/// Small helpers for putting a file in place whole. A file is written under a hidden name next to its real one and renamed
-/// over it once complete, so nothing reads half of it, and the sync (which skips names that start with '.') never sends half
-/// of it to the other devices.
+// Small helpers for putting a file in place whole. A file is written under a hidden name next to its real one and renamed
+// over it once complete, so nothing reads half of it, and the sync (which skips names that start with '.') never sends half
+// of it to the other devices.
 
 /// Renames [from] over the file at [to]. Windows can refuse to rename over a file that exists; then that file is deleted
 /// right before the rename is tried again. [from] must be in the same folder (or file system) as [to].
@@ -14,6 +14,18 @@ Future<File> renameOver(File from, String to) async {
     if (!Platform.isWindows || !await old.exists()) rethrow;
     await old.delete();
     return from.rename(to);
+  }
+}
+
+/// [renameOver], synchronously.
+File renameOverSync(File from, String to) {
+  try {
+    return from.renameSync(to);
+  } on FileSystemException {
+    final old = File(to);
+    if (!Platform.isWindows || !old.existsSync()) rethrow;
+    old.deleteSync();
+    return from.renameSync(to);
   }
 }
 
@@ -49,6 +61,20 @@ Future<void> writeStringAtomic(File file, String text) async {
   } catch (_) {
     try {
       if (await tmp.exists()) await tmp.delete();
+    } catch (_) {}
+    rethrow;
+  }
+}
+
+/// [writeStringAtomic], synchronously.
+void writeStringAtomicSync(File file, String text) {
+  final tmp = hiddenTempFor(file);
+  try {
+    tmp.writeAsStringSync(text, flush: true);
+    renameOverSync(tmp, file.path);
+  } catch (_) {
+    try {
+      if (tmp.existsSync()) tmp.deleteSync();
     } catch (_) {}
     rethrow;
   }

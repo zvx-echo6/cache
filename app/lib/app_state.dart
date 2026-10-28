@@ -125,7 +125,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> _writeSettings() async {
     try {
-      await _settingsFile?.writeAsString(jsonEncode({
+      final f = _settingsFile;
+      if (f == null) return;
+      await writeStringAtomic(f, jsonEncode({
         'lastModel': _lastModelFile,
         'theme': theme.name,
         'unsupported': _unsupported.toList(),
