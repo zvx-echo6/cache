@@ -91,16 +91,17 @@ class AnswerReport {
 /// Reported answers, kept on this phone only (one JSON file). Nothing is sent anywhere; the person can share reports
 /// themselves from Settings > Assistant > Reported answers.
 class AnswerReports extends ChangeNotifier {
-  AnswerReports({Directory? dirOverride}) : _dirOverride = dirOverride;
+  AnswerReports({this.dirOverride});
 
   /// The app's store.
   static final AnswerReports shared = AnswerReports();
 
-  final Directory? _dirOverride;
+  /// Where the file is kept (tests); the app's support folder when null.
+  final Directory? dirOverride;
   List<AnswerReport>? _items;
 
   Future<File> _file() async {
-    final dir = _dirOverride ?? await getApplicationSupportDirectory();
+    final dir = dirOverride ?? await getApplicationSupportDirectory();
     return File('${dir.path}${Platform.pathSeparator}reported_answers.json');
   }
 

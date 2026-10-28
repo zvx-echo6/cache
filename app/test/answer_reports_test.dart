@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:cache/chat/answer_reports.dart';
 import 'package:cache/screens/answer_reports_ui.dart';
+import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -60,6 +61,7 @@ void main() {
     testWidgets('the report sheet needs a reason before it saves, and returns the note', (tester) async {
       ReportChoice? got;
       await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
         home: Builder(
           builder: (ctx) => Scaffold(
             body: TextButton(onPressed: () async => got = await showReportSheet(ctx), child: const Text('open')),
@@ -83,7 +85,7 @@ void main() {
       final a = AnswerReports(dirOverride: dir);
       String? shared;
       await tester.runAsync(() => a.add(_report('How do I treat a burn?')));
-      await tester.pumpWidget(MaterialApp(home: ReportedAnswersPage(reports: a, share: (t, md) async => shared = md)));
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ReportedAnswersPage(reports: a, share: (t, md) async => shared = md)));
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
       await tester.pumpAndSettle();
       expect(find.text('How do I treat a burn?'), findsOneWidget);

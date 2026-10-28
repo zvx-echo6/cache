@@ -25,11 +25,11 @@ class AskScreen extends StatefulWidget {
     this.share = shareMarkdown,
     this.layout,
     this.location,
-    AnswerReports? reports,
-  }) : reports = reports ?? AnswerReports.shared;
+    this.reports,
+  });
 
-  /// Where "Report this answer" keeps its reports (on this phone).
-  final AnswerReports reports;
+  /// Where "Report this answer" keeps its reports (on this phone); the app's store when null.
+  final AnswerReports? reports;
 
   /// Where a chat's "Add to Home" puts its shortcut.
   final LayoutState? layout;
@@ -61,7 +61,7 @@ class _AskScreenState extends State<AskScreen> {
     final r = await showReportSheet(context);
     if (r == null || !mounted) return;
     final active = widget.app.active;
-    await widget.reports.add(AnswerReport(
+    await (widget.reports ?? AnswerReports.shared).add(AnswerReport(
       at: DateTime.now(),
       question: question,
       answer: m.text,
