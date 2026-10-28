@@ -41,7 +41,7 @@ void main() {
           agree += built[i] * v.vector[i];
         }
         // ignore: avoid_print
-        print('phone vs builder ${agree.toStringAsFixed(7)}  $text');
+        print('phone vs builder ${agree.toStringAsFixed(7)}  ${text.length > 40 ? text.substring(0, 40) : text}');
         expect(agree, greaterThan(same), reason: 'phone vs builder: $text');
         final stored = Uint8List.fromList(_unhex(item['stored'] as String));
         final scale = ByteData.sublistView(stored, 0, 4).getFloat32(0, Endian.little);
