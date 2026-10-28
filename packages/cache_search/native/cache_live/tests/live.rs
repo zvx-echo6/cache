@@ -239,8 +239,8 @@ fn when_narrows_to_one_period() {
     assert_eq!(days(&ask(json!({"when": "tonight"}), T0).unwrap()), ["now", "2026-10-25", "2026-10-26"]);
     assert_eq!(days(&ask(json!({"when": "Saturday"}), T0).unwrap()), ["now", "2026-10-31"]);
     assert_eq!(days(&ask(json!({"when": "sunday"}), T0).unwrap()), ["now", "2026-10-25"], "today's own name is today");
-    // a weekday that wraps into next week: on Tuesday 27 Oct, Monday is 2 Nov
-    assert_eq!(days(&ask(json!({"when": "monday"}), "2026-10-27T08:00:00-06:00").unwrap())[1..], ["2026-11-02"]);
+    // a weekday that wraps into next week: on Tuesday 27 Oct, Monday is 2 Nov (the Now of two days ago has ended)
+    assert_eq!(days(&ask(json!({"when": "monday"}), "2026-10-27T08:00:00-06:00").unwrap()), ["2026-11-02"]);
     assert_eq!(days(&ask(json!({"when": "2026-10-28"}), T0).unwrap()), ["now", "2026-10-28"]);
     assert_eq!(days(&ask(json!({"when": "next_days", "days": 3}), T0).unwrap()), ["now", "2026-10-25", "2026-10-26", "2026-10-27"]);
 
