@@ -14,6 +14,11 @@ release notes).
 - Sharing and sync between your devices
 - Weather answers for today, tonight, tomorrow or any day
 - Tonight's low from the hourly forecast
+- Download regions for offline road routing and maps
+- Regions at every size, from part of a state to a country
+- Routes online without downloading anything first
+- Modules screen shows app icons; tap and hold for options
+- Small or large module icons in Settings > Appearance
 
 ### Fixed
 - Interrupted downloads no longer leave broken files
