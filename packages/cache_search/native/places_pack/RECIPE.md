@@ -22,6 +22,9 @@ cargo run --release -p places_pack -- build \
   polygon and no counties, so `--country` (default US) fills the country and `county` stays empty.
 - `--rules` (default: `categories.json`, compiled in): the category rules. They are data and are copied into the
   pack's `categories.rules` and `meta.builder_rules`.
+- `kinds` in the rules (`categories.json`): what kind of place each record is (`drinking_water`, `picnic_shelter`, ...), from its OSM
+  tags or Overture category, first match wins; copied into the pack's `kinds` table with a label and a description, and into each
+  place's `kind_id`. A place no kind rule covers takes its raw type's value as its kind. `places_pack inspect` lists the kinds.
 - `--no-general`: only the starter categories (about 2 MB for Idaho) instead of every named place (about 29 MB).
 
 ## Later (GitHub Actions, per region)

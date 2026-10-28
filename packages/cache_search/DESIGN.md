@@ -1404,13 +1404,31 @@ core has no callbacks into the host, so the host pushes its state in:
   serialisation and no accessor except `key_for`; the key is in no error, status, log or result (tests search every string
   the core returns for a sentinel key). A null (or empty) key clears it; `cs_close` clears the policy and every key, and the
   key strings are overwritten before they are freed.
-- The fetch itself (the on-demand fetch in `live_data`, the row keys and pruning) is built on top of this plumbing and is not
-  part of it: `live_data`'s behaviour is unchanged.
+- The on-demand fetch is built on top of this plumbing (next section).
 - CLI: `--live-policy <json>` (`cs tool`, `cs tool-schemas`, `cs serve`) and `CACHE_LIVE_KEY_<SOURCE>` environment variables
   (source id in capitals, any other character `_`: `nws-alerts` is `CACHE_LIVE_KEY_NWS_ALERTS`; read at start for each
   installed source). `cs serve`: `POST /live/policy` (the body is the policy), `DELETE /live/policy`,
   `POST /live/key {"source_id","key"}` (a null key clears it), `DELETE /live/key/{source_id}`; each answers `{"ok":true}` and
   never echoes a key.
+
+### On-demand fetch in live_data
+
+When `live_data` finds no fresh stored data for the place asked about, and `ToolCtx.live_fetcher` allows the source
+(`can_fetch(source)`), it downloads once for that place and then answers from the stored row. Everything else is the existing
+path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors), the same stored row and the same expiry.
+
+- "No fresh data" means no row for the place, or for another place within `live_radius_km`, that has not expired. Data a nearby
+  place already holds is shared, as before, and nothing is downloaded.
+- The row is stored under the place's key: a saved place's own key; the phone's position or a geocoded town as
+  `at:<lat>,<lon>` rounded to 0.01 degrees (about 1 km), so nearby asks share a row. Position rows are pruned like the phone's
+  other positions (`prune_here`); saved places never are. A geocoded town carries its state, county and country (the places
+  pack's facts) into the request.
+- A source whose definition requires a key is never requested without it: no key from `key_for` is `key_missing` before any
+  request is made. The key goes to `Live::fetch` for that call only; no result, error or stored row holds it.
+- With no fetcher (no policy pushed), or a policy that does not allow the source (offline, metered without permission, not
+  enabled), `live_data` behaves exactly as before. A failed download answers with its own error (`fetch_failed`, `quota`,
+  `key_missing`, `bad_response`) when there is nothing stored; when the stored copy has expired the `expired` error carries
+  `refresh_failed: <code>`.
 
 ### Nothing to report is a numbered entry
 
@@ -1447,7 +1465,9 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 ## Places, geocoder, nearby and locate (crates `cache_places` and `places_pack`)
 
-**Pack (`places.sqlite`, one per region).** Tables: `places` (id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence), `places_rt` (R*Tree), `places_fts` (FTS5 over name and alternative names), `localities` (+ `_rt`, `_fts`: city, town, village, hamlet with OSM population), `categories` (id, title, one-line description for the model, rules JSON, place_count), `states`, `meta` (region, build time, bounding box). `category` is NULL for named places that are only there for the geocoder (`kind` says what they are). The schema is `cache_places/src/schema.rs`; the builder and the reader both use it.
+**Pack (`places.sqlite`, one per region).** Tables: `places` (id, name, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence), `places_rt` (R*Tree), `places_fts` (FTS5 over name and alternative names), `localities` (+ `_rt`, `_fts`: city, town, village, hamlet with OSM population), `categories` (id, title, one-line description for the model, rules JSON, place_count), `kinds` (id, label, one-line description, category, rules JSON, place_count), `states`, `meta` (region, build time, bounding box). `category` is NULL for named places that are only there for the geocoder (`kind` is the source's raw type, "amenity=school"). The schema is `cache_places/src/schema.rs`; the builder and the reader both use it.
+
+**Kinds (format 2, 2026-10-26).** Every place has a `kind_id`: a stable machine id (`drinking_water`, `spring`, `water_well`, `emergency_shelter`, `picnic_shelter`, `hospital`, `pharmacy`, ...) with a label ("Drinking water tap") and a one-line description in the `kinds` table. The kinds are a data table (`kinds` in `categories.json`, copied into the pack): each has OSM tag conditions and/or Overture basic categories, tried in file order, first match wins, and a kind belongs to one category or to none (the geocoder's named places). A place no kind rule covers takes the value of its raw type as its id ("amenity=school" -> `school`, "mountain_pass=yes" -> `mountain_pass`) with the label read from the id. Names are never read. `nearby` and `locate` output `kind` and `kind_label`; a place with no name is called by its kind label and carries `"unnamed": true`. The map search keeps `kind` as the card's display text (now the kind label) and adds `kind_id`, `kind_label` and `unnamed`. `FORMAT_VERSION` is 2 and `Pack` still reads format 1 (no `kinds` table, no `kind_id` column: kind absent). A format 2 pack needs a core that reads format 2; an older core refuses it ("pack format 2 is not supported").
 
 **Builder (`places_pack`).** Inputs are `PlaceSource`s (Overture CSV and an OSM PBF today; Overture GeoParquet and Geofabrik on GitHub Actions later, see `places_pack/RECIPE.md`). The category rules are data (`categories.json`, stored in the pack): hospital, urgent_care, water and shelter come from OSM tags only; emergency_room from Overture `emergency_department`, and only where an OSM hospital (amenity=hospital or healthcare=hospital) is within 250 m: the row takes that hospital's name, address, phone and wiki ids and remembers it (`matched_source_id`); emergency-department records with no hospital there (air ambulances, ambulance services, clinics) are dropped; the rest merge Overture and OSM (same place: within 40 m, or within 200 m with similar names). State and country come from navi's admins.sqlite.
 

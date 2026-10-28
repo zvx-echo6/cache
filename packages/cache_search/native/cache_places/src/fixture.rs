@@ -16,6 +16,8 @@ struct P {
     name: &'static str,
     cat: Option<&'static str>,
     kind: &'static str,
+    /// The kind id the format 2 pack holds.
+    kid: &'static str,
     lat: f64,
     lon: f64,
     street: Option<&'static str>,
@@ -27,24 +29,55 @@ struct P {
 
 #[rustfmt::skip]
 const PLACES: &[P] = &[
-    P { name: "Walgreens", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.5390, lon: -113.7870, street: Some("1414 Overland Ave"), locality: "Burley", phone: Some("+1 208 678 3050"), hours: Some("Mo-Su 08:00-22:00"), alt: "" },
-    P { name: "Smith's Pharmacy", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.5420, lon: -113.8080, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
-    P { name: "Rupert Drug", cat: Some("pharmacy"), kind: "amenity=pharmacy", lat: 42.6180, lon: -113.6740, street: Some("500 6th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
-    P { name: "Cassia Regional Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5290, lon: -113.7850, street: Some("1501 Hiland Ave"), locality: "Burley", phone: Some("+1 208 678 4444"), hours: None, alt: "Cassia Regional Medical Center" },
-    P { name: "Minidoka Memorial Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.6140, lon: -113.6720, street: Some("1224 8th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
-    P { name: "St. Luke's Boise Medical Center", cat: Some("hospital"), kind: "amenity=hospital", lat: 43.6126, lon: -116.1901, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: None, alt: "" },
-    P { name: "Saint Alphonsus Regional Medical Center", cat: Some("hospital"), kind: "amenity=hospital", lat: 43.6191, lon: -116.2791, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: None, alt: "" },
-    P { name: "Saint Alphonsus Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 43.6190, lon: -116.2790, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: Some("24/7"), alt: "" },
-    P { name: "St. Luke's Boise Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 43.6125, lon: -116.1900, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: Some("24/7"), alt: "St Lukes Boise" },
-    P { name: "St. Luke's Magic Valley Regional Medical Center", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5530, lon: -114.4690, street: Some("801 Pole Line Rd W"), locality: "Twin Falls", phone: Some("+1 208 814 1000"), hours: None, alt: "" },
-    P { name: "St. Luke's Magic Valley Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", lat: 42.5531, lon: -114.4691, street: Some("801 Pole Line Rd W"), locality: "Twin Falls", phone: Some("+1 208 814 1000"), hours: Some("24/7"), alt: "" },
-    P { name: "Heyburn Hospital", cat: Some("hospital"), kind: "amenity=hospital", lat: 42.5585, lon: -113.7691, street: None, locality: "Heyburn", phone: None, hours: None, alt: "" },
-    P { name: "Chevron", cat: Some("fuel"), kind: "amenity=fuel", lat: 42.5400, lon: -113.7900, street: Some("1020 Overland Ave"), locality: "Burley", phone: None, hours: Some("24/7"), alt: "" },
-    P { name: "Stanley Ranger Station", cat: Some("police"), kind: "amenity=police", lat: 44.2160, lon: -114.9310, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
-    P { name: "Sawtooth Spring", cat: Some("water"), kind: "natural=spring", lat: 44.1700, lon: -114.9200, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
-    P { name: "Burley Elementary School", cat: None, kind: "amenity=school", lat: 42.5350, lon: -113.7930, street: Some("200 W 10th St"), locality: "Burley", phone: None, hours: None, alt: "" },
-    P { name: "Burley", cat: None, kind: "shop=convenience", lat: 42.5310, lon: -113.8000, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
-    P { name: "Stanley Lake", cat: None, kind: "natural=water", lat: 44.2400, lon: -115.0000, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Walgreens", cat: Some("pharmacy"), kind: "amenity=pharmacy", kid: "pharmacy", lat: 42.5390, lon: -113.7870, street: Some("1414 Overland Ave"), locality: "Burley", phone: Some("+1 208 678 3050"), hours: Some("Mo-Su 08:00-22:00"), alt: "" },
+    P { name: "Smith's Pharmacy", cat: Some("pharmacy"), kind: "amenity=pharmacy", kid: "pharmacy", lat: 42.5420, lon: -113.8080, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Rupert Drug", cat: Some("pharmacy"), kind: "amenity=pharmacy", kid: "pharmacy", lat: 42.6180, lon: -113.6740, street: Some("500 6th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
+    P { name: "Cassia Regional Hospital", cat: Some("hospital"), kind: "amenity=hospital", kid: "hospital", lat: 42.5290, lon: -113.7850, street: Some("1501 Hiland Ave"), locality: "Burley", phone: Some("+1 208 678 4444"), hours: None, alt: "Cassia Regional Medical Center" },
+    P { name: "Minidoka Memorial Hospital", cat: Some("hospital"), kind: "amenity=hospital", kid: "hospital", lat: 42.6140, lon: -113.6720, street: Some("1224 8th St"), locality: "Rupert", phone: None, hours: None, alt: "" },
+    P { name: "St. Luke's Boise Medical Center", cat: Some("hospital"), kind: "amenity=hospital", kid: "hospital", lat: 43.6126, lon: -116.1901, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: None, alt: "" },
+    P { name: "Saint Alphonsus Regional Medical Center", cat: Some("hospital"), kind: "amenity=hospital", kid: "hospital", lat: 43.6191, lon: -116.2791, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: None, alt: "" },
+    P { name: "Saint Alphonsus Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", kid: "emergency_room", lat: 43.6190, lon: -116.2790, street: Some("1055 N Curtis Rd"), locality: "Boise", phone: Some("+1 208 367 2121"), hours: Some("24/7"), alt: "" },
+    P { name: "St. Luke's Boise Medical Center", cat: Some("emergency_room"), kind: "emergency_department", kid: "emergency_room", lat: 43.6125, lon: -116.1900, street: Some("190 E Bannock St"), locality: "Boise", phone: Some("+1 208 381 2222"), hours: Some("24/7"), alt: "St Lukes Boise" },
+    P { name: "St. Luke's Magic Valley Regional Medical Center", cat: Some("hospital"), kind: "amenity=hospital", kid: "hospital", lat: 42.5530, lon: -114.4690, street: Some("801 Pole Line Rd W"), locality: "Twin Falls", phone: Some("+1 208 814 1000"), hours: None, alt: "" },
+    P { name: "St. Luke's Magic Valley Regional Medical Center", cat: Some("emergency_room"), kind: "emergency_department", kid: "emergency_room", lat: 42.5531, lon: -114.4691, street: Some("801 Pole Line Rd W"), locality: "Twin Falls", phone: Some("+1 208 814 1000"), hours: Some("24/7"), alt: "" },
+    P { name: "Heyburn Hospital", cat: Some("hospital"), kind: "amenity=hospital", kid: "hospital", lat: 42.5585, lon: -113.7691, street: None, locality: "Heyburn", phone: None, hours: None, alt: "" },
+    P { name: "Chevron", cat: Some("fuel"), kind: "amenity=fuel", kid: "fuel", lat: 42.5400, lon: -113.7900, street: Some("1020 Overland Ave"), locality: "Burley", phone: None, hours: Some("24/7"), alt: "" },
+    P { name: "Stanley Ranger Station", cat: Some("police"), kind: "amenity=police", kid: "police", lat: 44.2160, lon: -114.9310, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Sawtooth Spring", cat: Some("water"), kind: "natural=spring", kid: "spring", lat: 44.1700, lon: -114.9200, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Burley Elementary School", cat: None, kind: "amenity=school", kid: "school", lat: 42.5350, lon: -113.7930, street: Some("200 W 10th St"), locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Burley", cat: None, kind: "shop=convenience", kid: "convenience", lat: 42.5310, lon: -113.8000, street: None, locality: "Burley", phone: None, hours: None, alt: "" },
+    P { name: "Amonara", cat: None, kind: "shop=gift", kid: "gift_shop", lat: 43.3700, lon: -112.1200, street: None, locality: "Shelley", phone: None, hours: None, alt: "" },
+    P { name: "Ammin", cat: None, kind: "shop=convenience", kid: "convenience", lat: 43.4700, lon: -111.9700, street: None, locality: "Ammon", phone: None, hours: None, alt: "" },
+    P { name: "Stanley Lake", cat: None, kind: "natural=water", kid: "water_body", lat: 44.2400, lon: -115.0000, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    // Unnamed places (OSM has many): the tools must call them by their kind, never by a bare "Water" or "Shelter".
+    P { name: "", cat: Some("water"), kind: "amenity=drinking_water", kid: "drinking_water", lat: 44.2190, lon: -114.9340, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "", cat: Some("water"), kind: "natural=spring", kid: "spring", lat: 44.2300, lon: -114.9500, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "", cat: Some("water"), kind: "man_made=water_well", kid: "water_well", lat: 44.2250, lon: -114.9400, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "", cat: Some("shelter"), kind: "amenity=shelter", kid: "picnic_shelter", lat: 44.2200, lon: -114.9330, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Redfish Lake Emergency Shelter", cat: Some("shelter"), kind: "amenity=shelter", kid: "emergency_shelter", lat: 44.1400, lon: -114.9000, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    P { name: "Marsh Creek Cabin", cat: Some("shelter"), kind: "tourism=wilderness_hut", kid: "wilderness_hut", lat: 44.3000, lon: -114.8000, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+    // A lake named for water: a drinking water search must not return it.
+    P { name: "Water Hole Lake", cat: None, kind: "natural=water", kid: "water_body", lat: 44.2205, lon: -114.9345, street: None, locality: "Stanley", phone: None, hours: None, alt: "" },
+];
+
+// (id, label, description, category)
+#[rustfmt::skip]
+const KINDS: &[(&str, &str, &str, Option<&str>)] = &[
+    ("emergency_room", "Emergency room", "a hospital emergency room or emergency department", Some("emergency_room")),
+    ("hospital", "Hospital", "a hospital", Some("hospital")),
+    ("pharmacy", "Pharmacy", "a pharmacy or drug store", Some("pharmacy")),
+    ("fuel", "Gas station", "a gas station selling vehicle fuel", Some("fuel")),
+    ("police", "Police station", "a police station", Some("police")),
+    ("drinking_water", "Drinking water tap", "a tap, fountain or pump that the map data marks as drinking water", Some("water")),
+    ("spring", "Spring", "a natural spring, untreated unless the map data says it is drinking water", Some("water")),
+    ("water_well", "Water well", "a well that the map data marks as drinking water", Some("water")),
+    ("emergency_shelter", "Emergency shelter", "a shelter built for emergencies, such as a storm or bomb shelter", Some("shelter")),
+    ("picnic_shelter", "Picnic shelter", "a roofed, open-sided shelter over picnic tables in a park or campground, not a place to stay overnight", Some("shelter")),
+    ("wilderness_hut", "Backcountry hut", "a wilderness or alpine hut or cabin for travellers", Some("shelter")),
+    ("water_body", "Lake or other water body", "a lake, pond, reservoir or river; not a drinking water source", None),
+    ("school", "School", "", None),
+    ("convenience", "Convenience", "", None),
+    ("gift_shop", "Gift shop", "", None),
 ];
 
 // (name, kind, lat, lon, population, state)
@@ -61,6 +94,7 @@ const LOCALITIES: &[(&str, &str, f64, f64, i64, &str)] = &[
     ("Lowman", "hamlet", 44.0900, -115.6200, 40, "ID"),
     ("Stanley", "town", 46.3000, -97.2000, 80, "ND"),
     ("Island Park", "city", 44.4238, -111.3714, 300, "ID"),
+    ("Ammon", "city", 43.4696, -111.9667, 17000, "ID"),
     // A big town one edit from Boise ("Boyse"): a test that an exact name beats a close fuzzy candidate.
     ("Boyse", "city", 46.0000, -112.5000, 900000, "ID"),
 ];
@@ -89,7 +123,8 @@ pub fn write_fixture_pack(path: &Path) {
         ("pharmacy", "Pharmacy", "pharmacies and drug stores"),
         ("fuel", "Fuel", "gas stations"),
         ("police", "Police", "police stations"),
-        ("water", "Water", "drinking water, water points and springs"),
+        ("water", "Water", "drinking water, water points, wells and springs; a result's kind says which"),
+        ("shelter", "Shelter", "public shelters, huts and cabins open to travellers; a result's kind says what it is"),
     ]
     .iter()
     .enumerate()
@@ -101,17 +136,27 @@ pub fn write_fixture_pack(path: &Path) {
         )
         .unwrap();
     }
+    for (i, (id, label, desc, cat)) in KINDS.iter().enumerate() {
+        let n = PLACES.iter().filter(|p| p.kid == *id).count();
+        c.execute(
+            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, '[]', ?5, ?6)",
+            params![id, label, desc, cat, n as i64, i as i64],
+        )
+        .unwrap();
+    }
     c.execute("INSERT INTO states(code, name, country) VALUES ('ID', 'Idaho', 'US'), ('ND', 'North Dakota', 'US')", []).unwrap();
     for (i, p) in PLACES.iter().enumerate() {
         let id = i as i64 + 1;
         c.execute(
-            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, state, country, phone, hours, source, source_id, confidence) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'ID', 'US', ?9, ?10, 'osm', ?11, 0.9)",
-            params![id, p.name, p.cat, p.kind, p.lat, p.lon, p.street, p.locality, p.phone, p.hours, format!("osm:n{id}")],
+            "INSERT INTO places(id, name, category, kind, kind_id, lat, lon, street, locality, state, country, phone, hours, source, source_id, confidence) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'ID', 'US', ?10, ?11, 'osm', ?12, 0.9)",
+            params![id, (!p.name.is_empty()).then_some(p.name), p.cat, p.kind, p.kid, p.lat, p.lon, p.street, p.locality, p.phone, p.hours, format!("osm:n{id}")],
         )
         .unwrap();
         c.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, p.lat, p.lon]).unwrap();
-        c.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, p.name, p.alt]).unwrap();
+        if !p.name.is_empty() {
+            c.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, p.name, p.alt]).unwrap();
+        }
     }
     // Each emergency room row names the hospital row it stands for (same name).
     for (i, p) in PLACES.iter().enumerate().filter(|(_, p)| p.cat == Some("emergency_room")) {
@@ -128,6 +173,14 @@ pub fn write_fixture_pack(path: &Path) {
         c.execute("INSERT INTO localities_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, lat, lon]).unwrap();
         c.execute("INSERT INTO localities_fts(rowid, name, alt_names) VALUES (?1, ?2, '')", params![id, name]).unwrap();
     }
+}
+
+/// The same fixture as a format 1 pack, the layout before places had kinds: no `kinds` table, no `kind_id` column. A reader
+/// must still open it, with every place's kind unknown.
+pub fn write_fixture_pack_v1(path: &Path) {
+    write_fixture_pack(path);
+    let c = Connection::open(path).expect("open fixture pack");
+    c.execute_batch("DROP TABLE kinds; ALTER TABLE places DROP COLUMN kind_id; UPDATE meta SET value = '1' WHERE key = 'format_version';").expect("downgrade to format 1");
 }
 
 /// A stand-in embedder for tests: a hashed bag of (singular) words, 64 values, so two texts that share words are close.

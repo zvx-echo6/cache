@@ -3,7 +3,7 @@
 //! learn which node positions are needed for their centres), then nodes. Relations are not read.
 
 use crate::model::{format_phone, is_qid, Harvest, PlaceSource, Raw, RawLocality, Wiki};
-use crate::rules::Rules;
+use crate::rules::{generic_kind_id, Rules};
 use osmpbf::{Element, ElementReader};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -75,6 +75,7 @@ fn classify(rules: &Rules, tags: &[(&str, &str)], id: String, lat: f64, lon: f64
         .iter()
         .find_map(|k| tag(tags, k).map(|v| format!("{k}={v}")))
         .unwrap_or_else(|| "unknown".to_string());
+    let kind_id = rules.osm_kind(category.as_deref(), tags).map(|k| k.id.clone()).unwrap_or_else(|| generic_kind_id(&kind));
     let street = tag(tags, "addr:street").map(|s| match tag(tags, "addr:housenumber") {
         Some(h) => format!("{} {}", h.trim(), s.trim()),
         None => s.trim().to_string(),
@@ -88,6 +89,7 @@ fn classify(rules: &Rules, tags: &[(&str, &str)], id: String, lat: f64, lon: f64
             name,
             category,
             kind,
+            kind_id: Some(kind_id),
             lat,
             lon,
             street,
@@ -215,5 +217,22 @@ mod tests {
         assert!(classify(&rules(), &[("amenity", "school")], "osm:n3".into(), 1.0, 1.0).place.is_none());
         assert!(classify(&rules(), &[("amenity", "school"), ("name", "Burley High")], "osm:n3".into(), 1.0, 1.0).place.unwrap().category.is_none());
         assert_eq!(classify(&rules(), &[("amenity", "drinking_water")], "osm:n4".into(), 1.0, 1.0).place.unwrap().category.as_deref(), Some("water"));
+    }
+
+    #[test]
+    fn every_place_gets_a_kind() {
+        let kind = |tags: &[(&str, &str)]| classify(&rules(), tags, "osm:n5".into(), 1.0, 1.0).place.unwrap().kind_id.unwrap();
+        // The category places: the kind rules say more than the raw type does.
+        assert_eq!(kind(&[("amenity", "drinking_water")]), "drinking_water");
+        assert_eq!(kind(&[("natural", "spring")]), "spring");
+        assert_eq!(kind(&[("amenity", "shelter"), ("shelter_type", "picnic_shelter")]), "picnic_shelter");
+        assert_eq!(kind(&[("amenity", "shelter"), ("shelter_type", "bomb_shelter"), ("name", "Vault 7")]), "emergency_shelter");
+        assert_eq!(kind(&[("amenity", "pharmacy"), ("name", "Walgreens")]), "pharmacy");
+        // A named place of no category takes the value of its raw type.
+        assert_eq!(kind(&[("amenity", "school"), ("name", "Burley High")]), "school");
+        assert_eq!(kind(&[("natural", "peak"), ("name", "Mount Borah")]), "peak");
+        assert_eq!(kind(&[("mountain_pass", "yes"), ("name", "Galena Summit")]), "mountain_pass");
+        // A spring that is not for drinking is not a water place, and is only here when named.
+        assert_eq!(kind(&[("natural", "spring"), ("drinking_water", "no"), ("name", "Salt Spring")]), "spring");
     }
 }

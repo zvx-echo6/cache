@@ -6,6 +6,7 @@
 //! implemented over it by `PackPlaceSource`.
 
 use crate::geo::{bearing_deg, haversine_km};
+use crate::kind::humanize;
 use crate::pack::{LocalityRow, PackSet, PlaceRow};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -37,6 +38,10 @@ pub struct GeoHit {
     pub country: Option<String>,
     /// OSM "key:value" ("highway:trailhead") when the place comes from OSM.
     pub osm_category: Option<String>,
+    /// What kind of place it is: the pack's kind id and label (`drinking_water`, "Drinking water tap"); for a town its
+    /// size (`town`, "Town"). None for a place of a format 1 pack.
+    pub kind_id: Option<String>,
+    pub kind_label: Option<String>,
     /// How well the name fits the query alone, 0 to 100 (100 exact, 90 an exact alternative name), before the town boost,
     /// the text score and the distance bias.
     pub name_match: f64,
@@ -234,6 +239,9 @@ fn town_label(l: &LocalityRow) -> String {
 /// typing slip in it then goes first.
 pub(crate) const GOOD_NAME_MATCH: f64 = 40.0;
 
+/// A hit whose whole name is the query (`name_match` 100) or whose alternative name is (90): nothing fuzzy replaces it.
+pub(crate) const EXACT_NAME_MATCH: f64 = 90.0;
+
 impl PackGeocoder {
     /// The index search behind `forward`, without misspelling handling.
     fn forward_names(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
@@ -315,6 +323,8 @@ impl PackGeocoder {
                         county: l.county.clone(),
                         country: l.country.clone(),
                         osm_category: None,
+                        kind_id: Some(l.kind.clone()),
+                        kind_label: Some(humanize(&l.kind)),
                         name_match: ns,
                         score,
                     });
@@ -347,6 +357,8 @@ impl PackGeocoder {
                         county: r.county.clone(),
                         country: r.country.clone(),
                         osm_category: osm_category(&r),
+                        kind_id: r.kind_id.clone(),
+                        kind_label: r.kind_id.as_deref().map(|k| p.kind(k).map(|i| i.label.clone()).unwrap_or_else(|| humanize(k))),
                         name_match: nm,
                         score,
                     });
@@ -441,6 +453,8 @@ impl PackGeocoder {
             county: l.county.clone(),
             country: l.country.clone(),
             osm_category: None,
+            kind_id: Some(l.kind.clone()),
+            kind_label: Some(humanize(&l.kind)),
             name_match: 100.0 - 10.0 * e as f64,
             score: 0.0,
         })
@@ -448,15 +462,22 @@ impl PackGeocoder {
 }
 
 impl Geocoder for PackGeocoder {
-    /// Names, words and prefixes through the index; and when nothing it finds fits the name well, the town whose name is the
-    /// query with a typing slip in it ("Islnd Park", "Bosie") goes first. This is the one resolver `navigate`, `locate` and
-    /// `live_data` all go through, so they treat a misspelling alike; a well-fitting (exact) match is never replaced by a fuzzy one.
+    /// Names, words and prefixes through the index, plus the town whose whole name is the query with a typing slip in it
+    /// ("Islnd Park", "Bosie", "Amon" for Ammon). This is the one resolver `navigate`, `locate` and `live_data` all go
+    /// through, so they treat a misspelling alike. Ranked by how the name matches, then class, then people: an exact
+    /// whole name (a place or a town, `name_match` 90 or more) beats a whole-name slip of at most `slip_allowed` edits, and that
+    /// beats a place whose name only starts with the query or has some of its words (`name_match` under 90). A town that
+    /// starts with the query (a partial name typed) is kept ahead of a slip.
     fn forward(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
         let mut hits = self.forward_names(query, near, limit);
-        if limit > 0 && !hits.iter().any(|h| h.name_match >= GOOD_NAME_MATCH) {
-            if let Some(f) = self.fuzzy_town(query, near) {
-                hits.insert(0, f);
-                hits.truncate(limit);
+        if limit > 0 && !hits.iter().any(|h| h.name_match >= EXACT_NAME_MATCH) {
+            let town_prefix = hits.iter().any(|h| h.kind == HitKind::Locality && h.name_match >= GOOD_NAME_MATCH);
+            if !town_prefix {
+                if let Some(f) = self.fuzzy_town(query, near) {
+                    hits.retain(|h| h.address != f.address);
+                    hits.insert(0, f);
+                    hits.truncate(limit);
+                }
             }
         }
         hits

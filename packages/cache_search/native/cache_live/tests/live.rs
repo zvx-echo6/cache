@@ -119,6 +119,39 @@ fn weather_env(name: &str) -> (Env, Server) {
     (env, srv)
 }
 
+/// The daily items carry the precipitation amount and hours and the snowfall; a response stored before the definition asked for
+/// them (the Burley fixture, tested above) maps to the same five fields as before.
+#[test]
+fn weather_daily_has_precipitation_and_snow_when_the_response_has_them() {
+    let srv = Server::start(vec![("/v1/forecast", fixture("openmeteo_driggs.json"))]);
+    let env = Env::new("snow", vec![("weather.json", real_source("weather.json"), Some((srv.port, "/v1/forecast")))]);
+    let driggs = json!({"key": "driggs", "name": "Driggs, ID", "lat": 43.7235, "lon": -111.1111});
+    let now = "2026-10-26T16:35:00-06:00";
+    env.weather(json!({"source": "weather", "place": driggs, "now": now})).unwrap();
+    // the request asks for the amounts, in inches
+    let url = srv.last_url.lock().unwrap().clone();
+    assert!(url.contains("precipitation_sum,snowfall_sum,precipitation_hours,wind_speed_10m_max"), "{url}");
+    assert!(url.contains("precipitation_unit=inch"), "{url}");
+    let g = env.get(json!({"source": "weather", "place": driggs, "now": now})).unwrap();
+    let items = g["items"].as_array().unwrap();
+    assert_eq!(items.len(), 17);
+    let keys = |i: usize| -> Vec<String> { items[i]["fields"].as_object().unwrap().keys().cloned().collect() };
+    // the current conditions are unchanged
+    assert_eq!(keys(0), ["Temperature", "Feels like", "Wind", "Conditions"]);
+    // the days: the old fields in their old order, the new ones after "Chance of rain"
+    assert_eq!(keys(2), ["High", "Low", "Chance of rain", "Precipitation", "Snow", "Wind max", "Conditions"]);
+    let snowy = &items[2]["fields"];
+    assert_eq!(items[2]["time"], "2026-10-27");
+    assert_eq!(
+        (snowy["High"].as_str(), snowy["Low"].as_str(), snowy["Chance of rain"].as_str(), snowy["Wind max"].as_str(), snowy["Conditions"].as_str()),
+        (Some("41 \u{b0}F"), Some("32 \u{b0}F"), Some("43%"), Some("14 mph"), Some("snow"))
+    );
+    assert_eq!((snowy["Precipitation"].as_str(), snowy["Snow"].as_str()), (Some("0.1 in over 2 h"), Some("0.1 in")));
+    // a day with no snow says 0, not nothing
+    let dry = &items[3]["fields"];
+    assert_eq!((dry["Precipitation"].as_str(), dry["Snow"].as_str()), (Some("0.0 in over 0 h"), Some("0.0 in")));
+}
+
 #[test]
 fn the_shipped_definitions_are_valid() {
     for f in ["weather.json", "alerts.json"] {

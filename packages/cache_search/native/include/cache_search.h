@@ -377,7 +377,9 @@ char *cs_live_preview(const char *request_json);
  *     "meaning":"used"|"off"|"no_embedder"|"no_vectors"|"model_mismatch","results":[...]}. A result is
  *     {"id","type":"place"|"town"|"category"|"coordinates","name","kind","category","address","lat","lon","distance_m",
  *      "direction","bearing_deg","matched":"name"|"category"|"meaning"|"coordinates","score", and when known "phone","hours",
- *      "website","summary","wikipedia_title","wikidata_id"}; a coordinates result also has "formats" (decimal, dms, usng,
+ *      "website","summary","wikipedia_title","wikidata_id"}; "kind" is the text for the card ("Drinking water tap"), "kind_id"
+ *      and "kind_label" (after "kind", when the pack has kinds) are the stable id (drinking_water, picnic_shelter, town) and the
+ *      label, and "unnamed":true marks a place that has no name (its "name" is then its kind label); a coordinates result also has "formats" (decimal, dms, usng,
  *      plus_code), "format" and "precision_m"; a category result has no position (its nearest places follow it). "id" is what
  *      cs_map_route takes as an end: "place:<id>", "town:<id>", "loc:<lat>,<lon>".
  *

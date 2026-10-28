@@ -1,7 +1,13 @@
 //! The places.sqlite pack format. The builder (`places_pack`) writes it and `Pack` reads it; both use this one schema.
 
-/// Bumped when the layout changes in a way an older reader cannot read.
-pub const FORMAT_VERSION: u32 = 1;
+/// Bumped when the layout changes in a way an older reader cannot read. What the builder writes.
+///
+/// 1: first layout. 2: every place carries a `kind_id` (what kind of place it is: `drinking_water`, `picnic_shelter`,
+/// `pharmacy`, ...) and the pack has a `kinds` table (label and one-line description per kind).
+pub const FORMAT_VERSION: u32 = 2;
+
+/// The oldest format `Pack` still reads. A format 1 pack has no kinds: its places read with `kind_id` None.
+pub const MIN_FORMAT_VERSION: u32 = 1;
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -17,16 +23,32 @@ CREATE TABLE categories (
   sort INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
 
+-- What kinds of place the pack's places are (format 2). id is the stable machine id a place's kind_id holds; label is how a
+-- person says it ("Drinking water tap"); description is one line. category is the starter category the kind belongs to
+-- (NULL for kinds of places that are only here for the geocoder). rules is the JSON the builder used (data, not code; "[]"
+-- for a kind the builder derived from a source tag without a rule). place_count is the number of places of the kind.
+CREATE TABLE kinds (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  description TEXT NOT NULL,
+  category TEXT,
+  rules TEXT NOT NULL,
+  place_count INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+
 -- wikidata_id, wikipedia_title (English Wikipedia), wikivoyage_title and summary (the article's first paragraph, under
 -- 500 characters) are filled by the `places_pack wiki` step, only from IDs: OSM wikidata/wikipedia/wikivoyage tags, or an
 -- enwiki article whose coordinates and exact title agree. brand_wikidata is the brand's item, not the place's.
 -- category is NULL for places that belong to no starter category (they are here for the geocoder); kind is the raw
--- type ("amenity=school", "pharmacy_and_drug_store").
+-- type ("amenity=school", "pharmacy_and_drug_store"); kind_id is the stable kind (see `kinds`), derived from the source's
+-- tags by the kind rules, or from the raw type when no rule says more.
 CREATE TABLE places (
   id INTEGER PRIMARY KEY,
   name TEXT,
   category TEXT,
   kind TEXT,
+  kind_id TEXT,
   lat REAL NOT NULL,
   lon REAL NOT NULL,
   street TEXT,

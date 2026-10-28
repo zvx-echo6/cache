@@ -73,7 +73,8 @@ fn nearby_pharmacy_around_burley() {
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["category", "center", "ranked_by", "places", "map_region", "map_region_age"]);
     let pk: Vec<&String> = p.as_object().unwrap().keys().collect();
-    assert_eq!(pk, ["address", "name", "street", "locality", "state", "distance_mi", "direction", "phone", "hours"]);
+    assert_eq!(pk, ["address", "name", "kind", "kind_label", "street", "locality", "state", "distance_mi", "direction", "phone", "hours"]);
+    assert_eq!((p["kind"].as_str(), p["kind_label"].as_str()), (Some("pharmacy"), Some("Pharmacy")));
 }
 
 #[test]
@@ -148,7 +149,7 @@ fn schema_is_filled_from_the_pack_and_absent_without_one() {
     let sc = tool(&ts, "nearby").schema().unwrap();
     let cat = &sc["function"]["parameters"]["properties"]["category"];
     // Only categories with places in the pack; urgent_care has none.
-    assert_eq!(cat["enum"], json!(["emergency_room", "hospital", "pharmacy", "fuel", "police", "water"]));
+    assert_eq!(cat["enum"], json!(["emergency_room", "hospital", "pharmacy", "fuel", "police", "water", "shelter"]));
     let d = cat["description"].as_str().unwrap();
     assert!(d.contains("emergency_room = hospital emergency rooms; for a hospital in an emergency use emergency_room"), "{d}");
     assert!(!d.contains("urgent_care"));
@@ -274,7 +275,7 @@ fn place_source_for_navigate() {
 
     write_fixture_pack(&pack);
     let src = none; // the same source sees the pack that appeared
-    assert_eq!(src.categories().unwrap(), ["emergency_room", "hospital", "pharmacy", "fuel", "police", "water"]);
+    assert_eq!(src.categories().unwrap(), ["emergency_room", "hospital", "pharmacy", "fuel", "police", "water", "shelter"]);
 
     let a = src.geocode(&GeocodeQuery { text: "Walgreens", near: Some("Burley, Idaho"), bias: Some((42.5357, -113.7928)), limit: 3 }).unwrap();
     let m = &a.matches[0];
@@ -380,6 +381,27 @@ fn an_exact_name_beats_a_close_fuzzy_one() {
     }
     // and the slip is still taken when there is no exact name: "Boisse" is one edit from both, the nearer town wins the tie
     assert_eq!(src.geocoder().unwrap().resolve("Boisse", Some((43.6, -116.2))).unwrap().0, "Boise, ID");
+}
+
+#[test]
+fn a_whole_name_town_slip_beats_a_poi_prefix_match() {
+    let (_d, src) = source("poi1");
+    let (_d2, _ts, path) = setup("poi2");
+    let g = PackGeocoder::new(Arc::new(PackSet::new(vec![PathBuf::from(path)])));
+    let near_shelley = Some((43.37, -112.12));
+    // "Amon" is a prefix of the place "Amonara" (Shelley) and one edit from the town Ammon: the town wins
+    for text in ["amon", "Amon", "AMON"] {
+        assert_eq!(g.forward(text, near_shelley, 3)[0].label, "Ammon, ID", "{text}");
+        assert_eq!(src.geocoder().unwrap().resolve(text, near_shelley).unwrap().0, "Ammon, ID", "{text}");
+    }
+    // a place query that names a place still finds the place
+    assert_eq!(g.forward("Stanley Ranger Station", None, 3)[0].name, "Stanley Ranger Station");
+    assert_eq!(g.forward("Islnd Park", None, 3)[0].label, "Island Park, ID");
+    // a place whose whole name is the text beats the town one edit away
+    assert_eq!(g.forward("Ammin", None, 3)[0].name, "Ammin");
+    assert_eq!(g.forward("Ammin", None, 3)[0].kind, cache_places::HitKind::Place);
+    // the full name of the place is still itself
+    assert_eq!(g.forward("Amonara", None, 3)[0].name, "Amonara");
 }
 
 #[test]
