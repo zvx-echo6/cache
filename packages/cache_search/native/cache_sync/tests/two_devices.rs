@@ -6,9 +6,14 @@ use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
 fn engine(dir: &Path, name: &str) -> SyncEngine {
+    engine_on(dir, name, None)
+}
+
+/// With no way to look a device up, a restarted device is found again only at the port it had when linked.
+fn engine_on(dir: &Path, name: &str, port: Option<u16>) -> SyncEngine {
     let cfg: Config = serde_json::from_value(json!({
         "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false,
-        "interval_secs": 5, "reserve_bytes": 0,
+        "interval_secs": 5, "reserve_bytes": 0, "port": port,
     }))
     .unwrap();
     SyncEngine::open(cfg).unwrap()
@@ -40,7 +45,8 @@ fn two_devices_link_share_and_stay_the_same() {
     std::fs::write(fa.join(".hidden"), "never shared").unwrap();
 
     let a = engine(&da, "Desk");
-    let b = engine(&db, "Phone");
+    let b_port = std::net::UdpSocket::bind("0.0.0.0:0").unwrap().local_addr().unwrap().port();
+    let b = engine_on(&db, "Phone", Some(b_port));
 
     // A stranger's key is refused: B tries to read A's file list before linking.
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
@@ -109,7 +115,7 @@ fn two_devices_link_share_and_stay_the_same() {
     std::env::remove_var("CACHE_SYNC_CUT_WRITE");
     b.close();
     assert!(std::fs::metadata(fb.join("maps/cut.bin")).unwrap().len() < whole.len() as u64, "the write was cut off");
-    let b = engine(&db, "Phone");
+    let b = engine_on(&db, "Phone", Some(b_port));
     call(&b, "sync_now", json!({}));
     wait("the whole file on B after the restart", 60, || std::fs::read(fb.join("maps/cut.bin")).map(|d| d == whole).unwrap_or(false));
     assert!(!writing.exists(), "nothing is left waiting to be written");
