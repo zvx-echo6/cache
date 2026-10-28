@@ -2,7 +2,6 @@
 
 use crate::geo::{bbox_around, haversine_km};
 use crate::schema::{FORMAT_VERSION, MERGED_FORMAT_VERSION, MIN_FORMAT_VERSION};
-use crate::schema::tile_id_l1;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -295,7 +294,7 @@ impl Pack {
     /// level 1 tile there is merged in.
     pub fn covers(&self, lat: f64, lon: f64) -> bool {
         match &self.tiles {
-            Some(t) => t.contains(&tile_id_l1(lat, lon)),
+            Some(t) => t.contains(&crate::schema::tile_id_l1(lat, lon)),
             None => self.meta.contains(lat, lon),
         }
     }
@@ -403,7 +402,7 @@ impl Pack {
             })?;
             for r in rows {
                 let r = r?;
-                if tiles.contains(&tile_id_l1(r.lat, r.lon)) || !seen.insert(r.source_id.clone()) {
+                if tiles.contains(&crate::schema::tile_id_l1(r.lat, r.lon)) || !seen.insert(r.source_id.clone()) {
                     continue;
                 }
                 let km = haversine_km(lat, lon, r.lat, r.lon);
