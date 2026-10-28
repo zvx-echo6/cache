@@ -1,5 +1,12 @@
 //! Overture Maps places from the CSV export (14 columns, geometry as hex EWKB). Overture GeoParquet will be a second
 //! `PlaceSource` that produces the same `Raw` records; nothing after this file knows which one was used.
+//!
+//! `scripts/overture_extract.py` adds optional columns. `street` (the freeform line, "1414 Overland Ave"), `locality`,
+//! `postcode` and `region` are the place's first address: `street` and `locality` fill the place's street and town (the
+//! town otherwise comes from the nearest locality). `taxonomy_primary` is the place's most specific category in
+//! Overture's taxonomy (`diner`, `breakfast_and_brunch_restaurant`, where basic_category says `casual_eatery` and
+//! `restaurant`): a place no kind rule covers takes its kind from it. Category and kind rules still match
+//! basic_category. An older export without these columns reads as before.
 
 use crate::model::{format_phone, Harvest, PlaceSource, Raw, Wiki};
 use crate::rules::{generic_kind_id, Rules};
@@ -48,6 +55,8 @@ impl PlaceSource for OvertureCsv {
         let (c_id, c_geom, c_name, c_cat, c_conf) = (col("id")?, col("geometry")?, col("name")?, col("basic_category")?, col("confidence")?);
         let (c_phone, c_web, c_brand) = (col("phone")?, col("website")?, col("brand_name")?);
         let c_brand_wd = col("brand_wikidata")?;
+        let opt = |n: &str| head.iter().position(|h| h == n);
+        let (c_street, c_locality, c_primary) = (opt("street"), opt("locality"), opt("taxonomy_primary"));
         for rec in rdr.records() {
             let rec = rec.map_err(|e| e.to_string())?;
             let basic = rec.get(c_cat).unwrap_or("").trim();
@@ -72,18 +81,21 @@ impl PlaceSource for OvertureCsv {
                     alt.push(b);
                 }
             }
-            out.places.push(Raw {
+            out.place(Raw {
                 source: "overture",
                 source_id: format!("overture:{}", rec.get(c_id).unwrap_or("").trim()),
                 name,
                 alt,
-                kind_id: Some(rules.overture_kind(category.as_deref(), basic).map(|k| k.id.clone()).unwrap_or_else(|| generic_kind_id(basic))),
+                kind_id: Some(rules.overture_kind(category.as_deref(), basic).map(|k| k.id.clone()).unwrap_or_else(|| {
+                    let primary = c_primary.and_then(|c| rec.get(c)).map(str::trim).filter(|p| !p.is_empty());
+                    generic_kind_id(primary.unwrap_or(basic))
+                })),
                 category,
                 kind: basic.to_string(),
                 lat,
                 lon,
-                street: None,
-                city: None,
+                street: c_street.and_then(|c| nonempty(rec.get(c))),
+                city: c_locality.and_then(|c| nonempty(rec.get(c))),
                 phone: rec.get(c_phone).and_then(format_phone),
                 hours: None,
                 website: nonempty(rec.get(c_web)),
@@ -110,5 +122,40 @@ mod tests {
         assert!((lat - 42.242833).abs() < 1e-5 && (lon + 113.882553).abs() < 1e-5, "{lat} {lon}");
         assert!(point_from_ewkb_hex("zz").is_none());
         assert!(point_from_ewkb_hex("0103000020E6100000").is_none());
+    }
+
+    fn read(csv: &str) -> Harvest {
+        let p = std::env::temp_dir().join(format!("places_pack_overture_{}_{}.csv", std::process::id(), csv.len()));
+        std::fs::write(&p, csv).unwrap();
+        let rules = Rules::parse(include_str!("../categories.json")).unwrap();
+        let mut h = Harvest::default();
+        OvertureCsv { path: p.clone() }.read(&rules, &mut h).unwrap();
+        let _ = std::fs::remove_file(&p);
+        h
+    }
+
+    const HEAD: &str = "id,geometry,name,basic_category,confidence,phone,website,socials,brand_name,brand_wikidata,osm_type,osm_id,source_record_id,raw_sources";
+    const ROW: &str = "a1,0101000020E610000026FF93BF7B785CC0DDB1D826151F4540,Walgreens,pharmacy,0.95,2086783050,,,Walgreens,Q1591889,,,,meta";
+
+    #[test]
+    fn address_columns_are_optional() {
+        // The 14-column export: no street, no town.
+        let h = read(&format!("{HEAD}\n{ROW}\n"));
+        assert_eq!(h.places.len(), 1);
+        assert_eq!((h.places[0].street.as_deref(), h.places[0].city.as_deref()), (None, None));
+        assert_eq!(h.places[0].category.as_deref(), Some("pharmacy"));
+        // The extract's columns: street and town from the first address; empty ones stay None.
+        let diner = ROW.replace("a1,", "a3,").replace(",pharmacy,0.95,", ",casual_eatery,0.95,").replace("Walgreens", "Ruth's Diner");
+        let h = read(&format!(
+            "{HEAD},taxonomy_primary,street,locality,postcode,region,tile\n{ROW},pharmacy,1414 Overland Ave,Burley,83318,ID,47586\n{},pharmacy,,,,ID,47586\n{diner},diner,,,,UT,46868\n",
+            ROW.replace("a1,", "a2,")
+        ));
+        assert_eq!(h.places.len(), 3);
+        assert_eq!((h.places[0].street.as_deref(), h.places[0].city.as_deref()), (Some("1414 Overland Ave"), Some("Burley")));
+        assert_eq!((h.places[1].street.as_deref(), h.places[1].city.as_deref()), (None, None));
+        // The kind rule (on basic_category) still names the pharmacy; the diner's kind is its taxonomy category, its raw
+        // type still the basic one.
+        assert_eq!(h.places[0].kind_id.as_deref(), Some("pharmacy"));
+        assert_eq!((h.places[2].kind.as_str(), h.places[2].kind_id.as_deref(), h.places[2].category.as_deref()), ("casual_eatery", Some("diner"), None));
     }
 }

@@ -66,3 +66,31 @@ English Wikipedia article whose primary coordinate is within 6 km (towns) or 150
 ", State" or " (kind)", is the place's own name. The article's Wikidata item comes from `page_props.wikibase_item`, and its
 enwiki and enwikivoyage titles from Wikidata's `wb_items_per_site`. The summary is the article's first paragraph with the
 wikitext markup removed, cut to 500 characters at a sentence end.
+
+## Places in regions: the tiled build (build host)
+
+The places that regions download are cut on Valhalla's level 1 grid (docs/PLACES-TILES.md). Every step runs in a
+container on the build host; nothing is installed on the host itself.
+
+1. Overture extract (`python:3.12-slim` with `duckdb==1.1.3`, pip-installed in the container):
+   `python scripts/overture_extract.py --release <release> --bbox=W,S,E,N --out in/` writes `overture_places.csv` (the 14
+   columns above plus `taxonomy_primary`, `street`, `locality`, `postcode`, `region`, `tile`), `overture_addresses.csv`
+   (sorted by tile, street, postcode, postal city, id) and `overture_taxonomy.tsv` (the release's category paths).
+2. OSM: the Geofabrik extract for the area (a box can be cut from a larger one with `osmium extract -b`).
+3. `places_pack harvest --osm-pbf area.osm.pbf --overture-csv in/overture_places.csv --out work/harvest.sqlite`: the rules
+   applied once, every place and town written by level 1 tile.
+4. `places_pack blocks --harvest work/harvest.sqlite --admins admins.sqlite --out work/blocks [--bbox=W,S,E,N] --jobs N`:
+   one format 2 pack per level 0 cell (4 degrees), built with a 0.25 degree halo that is dropped afterwards.
+5. `places_pack addresses --csv in/overture_addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite`:
+   the street rows, one street at a time; `street_expanded` writes out USPS Publication 28 suffixes and directionals
+   (`usps-pub28.tsv`), in the data only.
+6. (`wiki` and `embed` on the blocks, later.)
+7. `places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build na-places-YYYY-MM-DD --out out --jobs N`:
+   `out/<build>/1/aaa/bbb.sqlite.gz` and `out/<build>/index.tsv`.
+8. `places_pack common --blocks work/blocks --build <build> --out out/<build>/common.sqlite --taxonomy in/overture_taxonomy.tsv
+   --kinds-described kinds-described.tsv --overture-release <release> --osm-source "<file and date>"`.
+
+Kind descriptions: `scripts/describe_kinds.py --common out/<build>/common.sqlite --tsv kinds-described.tsv` asks
+claude-haiku-5-5 (Message Batches API, about 50 kinds per request) for one plain line per kind that is not in the file yet,
+and appends it with the model and date. The file is reviewed and kept here; run `common` again afterwards. A kind the
+rules define keeps the rules' description; a kind with no line uses its Overture taxonomy path or OSM tag key.

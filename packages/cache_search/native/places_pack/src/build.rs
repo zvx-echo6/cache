@@ -290,6 +290,258 @@ pub struct Report {
     pub notes: Vec<String>,
 }
 
+/// Where a place or town is: its state code and country, and for a place the town it is in (addr:city when the source
+/// has one, else the nearest city, town or village of the same state within 10 km).
+#[derive(Debug, Clone, Default)]
+pub struct Geo {
+    pub state: Option<String>,
+    pub country: Option<String>,
+    pub locality: Option<String>,
+}
+
+/// The rows of one area after the merge, the emergency-room enrichment, the dedupe and the geography: what a pack (or a
+/// block) is written from.
+pub struct Processed {
+    pub rows: Vec<Raw>,
+    pub geo: Vec<Geo>,
+    pub locs: Vec<RawLocality>,
+    pub loc_geo: Vec<Geo>,
+    /// Every state seen: code -> (name, country).
+    pub states: BTreeMap<String, (String, Option<String>)>,
+    pub merged: usize,
+    pub deduped: usize,
+    pub enriched: usize,
+}
+
+fn retain_with<T, G>(v: &mut Vec<T>, g: &mut Vec<G>, keep: &[bool]) {
+    let mut k = 0;
+    v.retain(|_| {
+        k += 1;
+        keep[k - 1]
+    });
+    let mut k = 0;
+    g.retain(|_| {
+        k += 1;
+        keep[k - 1]
+    });
+}
+
+impl Processed {
+    /// Keeps the places for which `keep` is true.
+    pub fn retain_places(&mut self, keep: impl Fn(&Raw, &Geo) -> bool) {
+        let k: Vec<bool> = self.rows.iter().zip(&self.geo).map(|(r, g)| keep(r, g)).collect();
+        retain_with(&mut self.rows, &mut self.geo, &k);
+    }
+
+    /// Keeps the towns for which `keep` is true.
+    pub fn retain_localities(&mut self, keep: impl Fn(&RawLocality) -> bool) {
+        let k: Vec<bool> = self.locs.iter().map(&keep).collect();
+        retain_with(&mut self.locs, &mut self.loc_geo, &k);
+    }
+}
+
+/// Merge, enrich and dedupe the places, dedupe the towns, and give every row its state, country and (places) town.
+/// `country` fills the country of a row inside a state when the boundaries carry no polygon for the country.
+pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, rules: &Rules, admins: &mut Admins, country: &str, log: bool) -> Processed {
+    let say = |m: String| {
+        if log {
+            eprintln!("{m}");
+        }
+    };
+    let merged = merge(&mut rows, rules);
+    say(format!("merged {merged} Overture records into OSM places"));
+    let (enriched, er_dropped) = enrich(&mut rows);
+    say(format!("{enriched} emergency rooms confirmed by a hospital; dropped {er_dropped} emergency-department records with no hospital"));
+    let deduped = dedupe(&mut rows, rules);
+    say(format!("dropped {deduped} duplicates"));
+    let locs = dedupe_localities(locs);
+    say(format!("{} localities", locs.len()));
+
+    // Geography: state and country for every locality and place, then the nearest town (same state) for places that
+    // carry no addr:city.
+    say("locating states".into());
+    let mut states: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
+    let mut locate = |lat: f64, lon: f64| -> Geo {
+        let (st, c) = admins.locate(lat, lon);
+        if let Some((code, name)) = &st {
+            states.entry(code.clone()).or_insert((name.clone(), c.clone().or_else(|| Some(country.to_string()))));
+        }
+        let c = if st.is_some() && c.is_none() { Some(country.to_string()) } else { c };
+        Geo { state: st.map(|s| s.0), country: c, locality: None }
+    };
+    let loc_geo: Vec<Geo> = locs.iter().map(|l| locate(l.lat, l.lon)).collect();
+    let mut geo: Vec<Geo> = rows.iter().map(|r| locate(r.lat, r.lon)).collect();
+    let mut grid = Grid::new(0.1);
+    for (i, l) in locs.iter().enumerate() {
+        if l.kind != "hamlet" {
+            grid.add(i, l.lat, l.lon);
+        }
+    }
+    for (r, g) in rows.iter().zip(geo.iter_mut()) {
+        g.locality = match &r.city {
+            Some(c) => Some(c.clone()),
+            None => nearest_locality(&grid, &locs, &loc_geo, r.lat, r.lon, &g.state),
+        };
+    }
+    Processed { rows, geo, locs, loc_geo, states, merged, deduped, enriched }
+}
+
+/// The nearest city, town or village of `state` within 10 km (`grid` holds the indices of `locs` that are not hamlets,
+/// in 0.1 degree cells).
+fn nearest_locality(grid: &Grid, locs: &[RawLocality], loc_geo: &[Geo], lat: f64, lon: f64, state: &Option<String>) -> Option<String> {
+    state.as_ref()?;
+    grid.around(lat, lon, 2)
+        .into_iter()
+        .filter(|&j| loc_geo[j].state == *state)
+        .map(|j| (haversine_km(lat, lon, locs[j].lat, locs[j].lon), j))
+        .filter(|(d, _)| *d <= 10.0)
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, j)| locs[j].name.clone())
+}
+
+/// The towns of `locs` (with their states) for "nearest town" lookups outside `process` (the addresses step).
+pub struct Towns {
+    grid: Grid,
+    locs: Vec<RawLocality>,
+    geo: Vec<Geo>,
+}
+
+impl Towns {
+    pub fn new(locs: Vec<RawLocality>, geo: Vec<Geo>) -> Towns {
+        let mut grid = Grid::new(0.1);
+        for (i, l) in locs.iter().enumerate() {
+            if l.kind != "hamlet" {
+                grid.add(i, l.lat, l.lon);
+            }
+        }
+        Towns { grid, locs, geo }
+    }
+
+    /// The nearest city, town or village of `state` within 10 km.
+    pub fn nearest(&self, lat: f64, lon: f64, state: &Option<String>) -> Option<String> {
+        nearest_locality(&self.grid, &self.locs, &self.geo, lat, lon, state)
+    }
+
+    /// A town within 30 km whose name is `name` apart from case ("WEST VALLEY CITY" in the address data is the town
+    /// "West Valley City"), as the town writes it. (A postal city covers more than the town: Salt Lake City's addresses
+    /// reach well past 10 km from its centre.)
+    pub fn named_near(&self, name: &str, lat: f64, lon: f64) -> Option<String> {
+        self.grid
+            .around(lat, lon, 4)
+            .into_iter()
+            .filter(|&j| self.locs[j].name.eq_ignore_ascii_case(name) && haversine_km(lat, lon, self.locs[j].lat, self.locs[j].lon) <= 30.0)
+            .map(|j| self.locs[j].name.clone())
+            .next()
+    }
+}
+
+/// Per category, source and kind: how many places a written pack holds.
+#[derive(Default)]
+pub struct Counts {
+    pub per_category: BTreeMap<String, usize>,
+    pub per_source: BTreeMap<String, usize>,
+    pub per_kind: BTreeMap<String, usize>,
+}
+
+/// Writes a format 2 pack (`SCHEMA`) from `p` to `out_path`, replacing any file there. `meta` are the caller's meta keys
+/// (region id and name, the box, sources); format_version, built_at, builder_rules and attribution are added here.
+pub fn write_pack(out_path: &Path, p: &Processed, rules: &Rules, rules_json: &str, meta: &[(&str, String)]) -> Result<Counts, String> {
+    let _ = std::fs::remove_file(out_path);
+    let mut conn = Connection::open(out_path).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;").map_err(|e| e.to_string())?;
+    conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let rows = &p.rows;
+
+    // Order: category order first, so a category's places sit together in the file.
+    let cat_order: HashMap<&str, usize> = rules.categories.iter().enumerate().map(|(i, c)| (c.id.as_str(), i)).collect();
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by(|&a, &b| {
+        let ka = (rows[a].category.as_deref().map(|c| cat_order[c]).unwrap_or(usize::MAX), (rows[a].lat * 100.0) as i64, (rows[a].lon * 100.0) as i64);
+        let kb = (rows[b].category.as_deref().map(|c| cat_order[c]).unwrap_or(usize::MAX), (rows[b].lat * 100.0) as i64, (rows[b].lon * 100.0) as i64);
+        ka.cmp(&kb)
+    });
+
+    let mut n = Counts::default();
+    for (k, &i) in order.iter().enumerate() {
+        let r = &rows[i];
+        let kind_id = r.kind_id.clone().unwrap_or_else(|| generic_kind_id(&r.kind));
+        *n.per_kind.entry(kind_id.clone()).or_default() += 1;
+        let id = k as i64 + 1;
+        let g = &p.geo[i];
+        tx.execute(
+            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id, kind_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, g.locality, g.state, g.country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched, kind_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, r.lat, r.lon]).map_err(|e| e.to_string())?;
+        if let Some(name) = &r.name {
+            tx.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, name, r.alt.join("; ")]).map_err(|e| e.to_string())?;
+        }
+        *n.per_category.entry(r.category.clone().unwrap_or_else(|| "(none)".into())).or_default() += 1;
+        *n.per_source.entry(r.source.to_string()).or_default() += 1;
+    }
+    for (i, l) in p.locs.iter().enumerate() {
+        let id = i as i64 + 1;
+        let g = &p.loc_geo[i];
+        tx.execute(
+            "INSERT INTO localities(id, name, kind, lat, lon, population, county, state, country, source_id, wikidata_id, wikipedia_title, wikivoyage_title) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![id, l.name, l.kind, l.lat, l.lon, l.population, g.state, g.country, l.source_id, l.wiki.wikidata, l.wiki.wikipedia, l.wiki.wikivoyage],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO localities_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, l.lat, l.lon]).map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO localities_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, l.name, l.alt.join("; ")]).map_err(|e| e.to_string())?;
+    }
+    for (code, (name, country)) in &p.states {
+        tx.execute("INSERT INTO states(code, name, country) VALUES (?1, ?2, ?3)", params![code, name, country]).map_err(|e| e.to_string())?;
+    }
+    for (i, c) in rules.categories.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO categories(id, title, description, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![c.id, c.title, c.description, Rules::rules_json(c), *n.per_category.get(&c.id).unwrap_or(&0) as i64, i as i64],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    // The kinds: every kind the rules define (even one no place of this region has), then the kinds the builder derived from a raw
+    // type because no rule covers them, with the label read from the id.
+    let mut sort = 0i64;
+    for k in &rules.kinds {
+        tx.execute(
+            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![k.id, k.label, k.description, k.category, Rules::kind_rules_json(k), *n.per_kind.get(&k.id).unwrap_or(&0) as i64, sort],
+        )
+        .map_err(|e| e.to_string())?;
+        sort += 1;
+    }
+    for (id, c) in n.per_kind.iter().filter(|(id, _)| !rules.kinds.iter().any(|k| &k.id == *id)) {
+        tx.execute(
+            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, '', NULL, '[]', ?3, ?4)",
+            params![id, rules.kind_label(id), *c as i64, sort],
+        )
+        .map_err(|e| e.to_string())?;
+        sort += 1;
+    }
+    let built_at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+    let mut all: Vec<(&str, String)> = vec![("format_version", FORMAT_VERSION.to_string()), ("built_at", built_at)];
+    all.extend(meta.iter().cloned());
+    all.push(("builder_rules", rules_json.to_string()));
+    all.push(("attribution", ATTRIBUTION.to_string()));
+    for (k, v) in all {
+        tx.execute("INSERT INTO meta(key, value) VALUES (?1, ?2)", params![k, v]).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    conn.execute_batch("INSERT INTO places_fts(places_fts) VALUES ('optimize'); INSERT INTO localities_fts(localities_fts) VALUES ('optimize'); ANALYZE;")
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+    let conn = Connection::open(out_path).map_err(|e| e.to_string())?;
+    conn.execute_batch("VACUUM;").map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+pub const ATTRIBUTION: &str =
+    "Contains data from OpenStreetMap (c) OpenStreetMap contributors, ODbL 1.0, and from Overture Maps Foundation places (per-source licences, CDLA-Permissive-2.0 and others).";
+
 pub fn build(
     cfg: &BuildCfg,
     rules: &Rules,
@@ -310,188 +562,50 @@ pub fn build(
     if !cfg.include_general {
         h.places.retain(|p| p.category.is_some());
     }
-    let mut rows = std::mem::take(&mut h.places);
-    let merged = merge(&mut rows, rules);
-    eprintln!("merged {merged} Overture records into OSM places");
-    let (enriched, er_dropped) = enrich(&mut rows);
-    eprintln!("{enriched} emergency rooms confirmed by a hospital; dropped {er_dropped} emergency-department records with no hospital");
-    let deduped = dedupe(&mut rows, rules);
-    eprintln!("dropped {deduped} duplicates");
-    let locs = dedupe_localities(h.localities);
-    eprintln!("{} localities", locs.len());
-
     let mut admins = Admins::load(admins_path)?;
     let (min_lat, min_lon, max_lat, max_lon) = admins.bbox_of_state(&cfg.admin_state).ok_or_else(|| format!("no state called {:?} in the admin boundaries", cfg.admin_state))?;
+    let mut p = process(std::mem::take(&mut h.places), std::mem::take(&mut h.localities), rules, &mut admins, &cfg.country, true);
 
-    // Geography: state and country for every locality and place, then the nearest town (same state) for places that
-    // carry no addr:city.
-    eprintln!("locating states");
-    let mut state_names: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
-    let mut loc_geo: Vec<(Option<String>, Option<String>)> = Vec::new();
-    for l in &locs {
-        let (st, country) = admins.locate(l.lat, l.lon);
-        if let Some((c, n)) = &st {
-            state_names.entry(c.clone()).or_insert((n.clone(), country.clone().or_else(|| Some(cfg.country.clone()))));
-        }
-        loc_geo.push((st.map(|s| s.0), country));
-    }
-    let mut grid = Grid::new(0.1);
-    for (i, l) in locs.iter().enumerate() {
-        if l.kind != "hamlet" {
-            grid.add(i, l.lat, l.lon);
-        }
-    }
-    let mut row_geo: Vec<(Option<String>, Option<String>)> = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let (st, country) = admins.locate(r.lat, r.lon);
-        if let Some((c, n)) = &st {
-            state_names.entry(c.clone()).or_insert((n.clone(), country.clone().or_else(|| Some(cfg.country.clone()))));
-        }
-        row_geo.push((st.map(|s| s.0), country));
-    }
-    for g in row_geo.iter_mut().chain(loc_geo.iter_mut()) {
-        if g.0.is_some() && g.1.is_none() {
-            g.1 = Some(cfg.country.clone());
-        }
-    }
     // A neighbouring state's categories stay (an emergency room across the border can be the nearest); its other
     // named places go: they are another region's geocoder data.
     let region_code = admins.state_code(&cfg.admin_state);
-    let before = rows.len();
-    let keep: Vec<bool> = rows.iter().zip(&row_geo).map(|(r, g)| r.category.is_some() || g.0 == region_code).collect();
-    let mut k = 0;
-    rows.retain(|_| {
-        k += 1;
-        keep[k - 1]
-    });
-    let mut k = 0;
-    row_geo.retain(|_| {
-        k += 1;
-        keep[k - 1]
-    });
-    eprintln!("dropped {} named places outside {}", before - rows.len(), cfg.admin_state);
+    let before = p.rows.len();
+    p.retain_places(|r, g| r.category.is_some() || g.state == region_code);
+    eprintln!("dropped {} named places outside {}", before - p.rows.len(), cfg.admin_state);
     eprintln!("writing {}", out_path.display());
-
-    let _ = std::fs::remove_file(out_path);
-    let mut conn = Connection::open(out_path).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;").map_err(|e| e.to_string())?;
-    conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-    // Order: category order first, so a category's places sit together in the file.
-    let cat_order: HashMap<&str, usize> = rules.categories.iter().enumerate().map(|(i, c)| (c.id.as_str(), i)).collect();
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_by(|&a, &b| {
-        let ka = (rows[a].category.as_deref().map(|c| cat_order[c]).unwrap_or(usize::MAX), (rows[a].lat * 100.0) as i64, (rows[a].lon * 100.0) as i64);
-        let kb = (rows[b].category.as_deref().map(|c| cat_order[c]).unwrap_or(usize::MAX), (rows[b].lat * 100.0) as i64, (rows[b].lon * 100.0) as i64);
-        ka.cmp(&kb)
-    });
-
-    let mut per_category: BTreeMap<String, usize> = BTreeMap::new();
-    let mut per_source: BTreeMap<String, usize> = BTreeMap::new();
-    let mut per_kind: BTreeMap<String, usize> = BTreeMap::new();
-    for (n, &i) in order.iter().enumerate() {
-        let r = &rows[i];
-        let kind_id = r.kind_id.clone().unwrap_or_else(|| generic_kind_id(&r.kind));
-        *per_kind.entry(kind_id.clone()).or_default() += 1;
-        let id = n as i64 + 1;
-        let (state, country) = (&row_geo[i].0, &row_geo[i].1);
-        let locality = match &r.city {
-            Some(c) => Some(c.clone()),
-            None => grid
-                .around(r.lat, r.lon, 2)
-                .into_iter()
-                .filter(|&j| loc_geo[j].0 == *state && state.is_some())
-                .map(|j| (haversine_km(r.lat, r.lon, locs[j].lat, locs[j].lon), j))
-                .filter(|(d, _)| *d <= 10.0)
-                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(_, j)| locs[j].name.clone()),
-        };
-        tx.execute(
-            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id, kind_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
-            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, locality, state, country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched, kind_id],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, r.lat, r.lon]).map_err(|e| e.to_string())?;
-        if let Some(name) = &r.name {
-            tx.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, name, r.alt.join("; ")]).map_err(|e| e.to_string())?;
-        }
-        *per_category.entry(r.category.clone().unwrap_or_else(|| "(none)".into())).or_default() += 1;
-        *per_source.entry(r.source.to_string()).or_default() += 1;
-    }
-    for (i, l) in locs.iter().enumerate() {
-        let id = i as i64 + 1;
-        tx.execute(
-            "INSERT INTO localities(id, name, kind, lat, lon, population, county, state, country, source_id, wikidata_id, wikipedia_title, wikivoyage_title) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![id, l.name, l.kind, l.lat, l.lon, l.population, loc_geo[i].0, loc_geo[i].1, l.source_id, l.wiki.wikidata, l.wiki.wikipedia, l.wiki.wikivoyage],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO localities_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, l.lat, l.lon]).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO localities_fts(rowid, name, alt_names) VALUES (?1, ?2, ?3)", params![id, l.name, l.alt.join("; ")]).map_err(|e| e.to_string())?;
-    }
-    for (code, (name, country)) in &state_names {
-        tx.execute("INSERT INTO states(code, name, country) VALUES (?1, ?2, ?3)", params![code, name, country]).map_err(|e| e.to_string())?;
-    }
-    for (i, c) in rules.categories.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO categories(id, title, description, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![c.id, c.title, c.description, Rules::rules_json(c), *per_category.get(&c.id).unwrap_or(&0) as i64, i as i64],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    // The kinds: every kind the rules define (even one no place of this region has), then the kinds the builder derived from a raw
-    // type because no rule covers them, with the label read from the id.
-    let mut sort = 0i64;
-    for k in &rules.kinds {
-        tx.execute(
-            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![k.id, k.label, k.description, k.category, Rules::kind_rules_json(k), *per_kind.get(&k.id).unwrap_or(&0) as i64, sort],
-        )
-        .map_err(|e| e.to_string())?;
-        sort += 1;
-    }
-    for (id, n) in per_kind.iter().filter(|(id, _)| !rules.kinds.iter().any(|k| &k.id == *id)) {
-        tx.execute(
-            "INSERT INTO kinds(id, label, description, category, rules, place_count, sort) VALUES (?1, ?2, '', NULL, '[]', ?3, ?4)",
-            params![id, rules.kind_label(id), *n as i64, sort],
-        )
-        .map_err(|e| e.to_string())?;
-        sort += 1;
-    }
-    let built_at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
-    for (k, v) in [
-        ("format_version", FORMAT_VERSION.to_string()),
-        ("region_id", cfg.id.clone()),
-        ("region_name", cfg.name.clone()),
-        ("built_at", built_at),
-        ("min_lat", min_lat.to_string()),
-        ("min_lon", min_lon.to_string()),
-        ("max_lat", max_lat.to_string()),
-        ("max_lon", max_lon.to_string()),
-        ("sources", described.join("; ")),
-        ("builder_rules", rules_json.to_string()),
-        (
-            "attribution",
-            "Contains data from OpenStreetMap (c) OpenStreetMap contributors, ODbL 1.0, and from Overture Maps Foundation places (per-source licences, CDLA-Permissive-2.0 and others).".to_string(),
-        ),
-    ] {
-        tx.execute("INSERT INTO meta(key, value) VALUES (?1, ?2)", params![k, v]).map_err(|e| e.to_string())?;
-    }
-    tx.commit().map_err(|e| e.to_string())?;
-    conn.execute_batch("INSERT INTO places_fts(places_fts) VALUES ('optimize'); INSERT INTO localities_fts(localities_fts) VALUES ('optimize'); ANALYZE;")
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-    let conn = Connection::open(out_path).map_err(|e| e.to_string())?;
-    conn.execute_batch("VACUUM;").map_err(|e| e.to_string())?;
+    let n = write_pack(
+        out_path,
+        &p,
+        rules,
+        rules_json,
+        &[
+            ("region_id", cfg.id.clone()),
+            ("region_name", cfg.name.clone()),
+            ("min_lat", min_lat.to_string()),
+            ("min_lon", min_lon.to_string()),
+            ("max_lat", max_lat.to_string()),
+            ("max_lon", max_lon.to_string()),
+            ("sources", described.join("; ")),
+        ],
+    )?;
 
     let mut notes = Vec::new();
     for c in &rules.categories {
-        if !per_category.contains_key(&c.id) {
+        if !n.per_category.contains_key(&c.id) {
             notes.push(format!("category {} has no places", c.id));
         }
     }
-    Ok(Report { places: rows.len(), localities: locs.len(), merged, deduped, enriched, per_category, per_source, per_kind, notes })
+    Ok(Report {
+        places: p.rows.len(),
+        localities: p.locs.len(),
+        merged: p.merged,
+        deduped: p.deduped,
+        enriched: p.enriched,
+        per_category: n.per_category,
+        per_source: n.per_source,
+        per_kind: n.per_kind,
+        notes,
+    })
 }
 
 #[cfg(test)]
