@@ -257,6 +257,9 @@ void main() {
     expect(find.text('New road routing'), findsOneWidget);
     expect(find.text('2026-11 · About 5.0 MB to download'), findsOneWidget);
 
+    // below the fold on the test's screen: scrolled to, as on a phone
+    await tester.ensureVisible(find.byKey(const ValueKey('update-all')));
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('update-all')));
     await r.settle(tester);
     expect(r.core.calls, contains('update'));
@@ -295,7 +298,11 @@ void main() {
     expect(find.text('Downloads'), findsOneWidget);
 
     await r.s.show(tester, Scaffold(body: LayerSheet(maps: r.s.maps, location: r.s.location, regions: r.regions)));
+    // the sheet's list is built as it scrolls: bring its last rows in first
+    await tester.scrollUntilVisible(find.text('Get more layers'), 200, scrollable: find.byType(Scrollable).last);
     expect(find.text('Get more layers'), findsOneWidget, reason: 'the layer catalogue stays for single layers and drawn areas');
+    await tester.ensureVisible(find.byKey(const ValueKey('download-region')));
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('download-region')));
     await tester.pumpAndSettle();
     expect(find.text('Downloads'), findsOneWidget);
