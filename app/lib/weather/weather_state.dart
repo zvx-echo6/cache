@@ -493,7 +493,7 @@ class WeatherState extends ChangeNotifier {
     await _applyAll();
   }
 
-  CatalogueLoader get _loader => CatalogueLoader(fetch: _fetch, check: _checkDefinition);
+  CatalogueLoader get _loader => CatalogueLoader(fetch: _fetch, check: _checkDefinition, now: _now);
 
   Future<void> _checkDefinition(String text) async {
     try {

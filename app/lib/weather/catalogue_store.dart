@@ -74,10 +74,13 @@ class LoadedCatalogue {
 
 /// Downloads a catalogue and its definitions, checking each definition before it is accepted.
 class CatalogueLoader {
-  CatalogueLoader({required this.fetch, required this.check});
+  CatalogueLoader({required this.fetch, required this.check, DateTime Function()? now}) : now = now ?? DateTime.now;
 
   final FetchBytes fetch;
   final DefinitionChecker check;
+
+  /// The clock the download time is taken from (the app's clock, so "more than a day old" is measured on one clock).
+  final DateTime Function() now;
 
   /// A definition that is not valid is left out with its reason; a definition that cannot be downloaded fails the whole load
   /// ([NetworkProblem]), so a bad connection never leaves a half catalogue.
@@ -105,7 +108,7 @@ class CatalogueLoader {
       }
       defs[e.id] = defText;
     }
-    return LoadedCatalogue(url: address.trim(), catalogue: cat, definitions: defs, skipped: skipped);
+    return LoadedCatalogue(url: address.trim(), catalogue: cat, definitions: defs, skipped: skipped, at: now());
   }
 }
 
