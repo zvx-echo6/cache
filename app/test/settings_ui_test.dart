@@ -39,7 +39,7 @@ void main() {
       expect(find.text('No instances · 0 downloaded'), findsOneWidget);
       expect(find.text('Pop-ups on · Quiet 10 PM to 6 AM'), findsOneWidget);
       expect(find.text('41.0 GB free · Updates on any connection'), findsOneWidget);
-      expect(find.text('Not built yet'), findsOneWidget);
+      expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
       expect(find.text('Dark'), findsOneWidget);
       expect(find.text('Version 1.0.0 · AGPL-3.0'), findsOneWidget);
       await r.dispose(tester);
