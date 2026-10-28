@@ -1,0 +1,26 @@
+name: cache_llama
+description: "Cache native LLM layer: llama.cpp and its chat engine behind a small Dart API."
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.12.2
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true

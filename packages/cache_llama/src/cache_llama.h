@@ -1,0 +1,64 @@
+// Cache native LLM layer: a small C ABI over llama.cpp and its chat engine
+// (chat templates, tool-call grammar and output parsing).
+//
+// Typical turn: cl_start -> loop cl_next until -1 -> cl_finish.
+// One handle runs one generation at a time. cl_stop may be called from any thread.
+#ifndef CACHE_LLAMA_H
+#define CACHE_LLAMA_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(_WIN32)
+#define CL_API __declspec(dllexport)
+#else
+#define CL_API __attribute__((visibility("default"))) __attribute__((used))
+#endif
+
+// Load a GGUF model and create a context. n_ctx <= 0 means 8192. n_threads <= 0 means automatic: on
+// Android, the fast CPU cores (the slowest cluster is left out, at most 5 threads) and the threads are
+// pinned to them; elsewhere, or if the cores cannot be read, 4 threads.
+// Returns a handle, or NULL with the reason in err.
+CL_API void * cl_load(const char * model_path, int n_ctx, int n_threads, char * err, int err_len);
+
+// Writes JSON {"description","n_ctx","chat_format","supports_tools"}. Returns the length, or -1 if out is too small.
+CL_API int cl_info(void * h, char * out_json, int len);
+
+// Start a generation. request_json is OpenAI style: {"messages":[...],"tools":[...]} (tools optional) plus an optional top-level "enable_thinking": true|false (default true)
+// and an optional "temperature" (0 = greedy).
+// Builds the prompt with the model's chat template and decodes it. The start of the prompt that is
+// the same as the previous prompt plus its answer is not decoded again (KV cache reuse).
+// Returns 0 or -1 (reason in err).
+CL_API int cl_start(void * h, const char * request_json, char * err, int err_len);
+
+// Generate the next token. Writes its UTF-8 text to buf and returns the byte count (may be 0 while an
+// incomplete multi-byte character is held back). Returns -1 when finished, -2 on error.
+CL_API int cl_next(void * h, char * buf, int buf_len);
+
+// Partial parse of what has been generated so far (call between cl_next calls). Same JSON shape as
+// cl_finish, but content holds only the visible answer text: thinking and tool-call syntax are
+// split out into reasoning_content / tool_calls. Returns the length, or -1 if out is too small.
+CL_API int cl_partial(void * h, char * out_json, int len);
+
+// Parse everything generated so far into an OpenAI style assistant message:
+// {"role","content","tool_calls":[{"id","type":"function","function":{"name","arguments"}}]}.
+// If the output does not parse, content is the raw text and "parse_error" is set.
+// Returns the length, or -1 if out is too small.
+CL_API int cl_finish(void * h, char * out_json, int len);
+
+// Token counts of the current/last generation (prompt tokens, generated tokens).
+CL_API int cl_prompt_tokens(void * h);
+CL_API int cl_generated_tokens(void * h);
+// How many of the prompt tokens of the last cl_start were taken from the KV cache instead of decoded.
+CL_API int cl_reused_tokens(void * h);
+
+// Ask the running generation to end; the next cl_next returns -1. Thread-safe.
+CL_API void cl_stop(void * h);
+
+CL_API void cl_free(void * h);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
