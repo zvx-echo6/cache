@@ -29,7 +29,7 @@ on:
         options: [all, core, llama]
         default: all
       whats_new:
-        description: '"What to test" for the testers (empty = the built commit''s subject line)'
+        description: '"What to test" for the testers (empty = the Unreleased section of CHANGELOG.md)'
         type: string
         default: ''
 
@@ -361,7 +361,5 @@ jobs:
           ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
           WHATS_NEW_INPUT: ${{ inputs.whats_new }}
         run: |
-          WHATS_NEW="$WHATS_NEW_INPUT"
-          [[ -n "$WHATS_NEW" ]] || WHATS_NEW="$(git log -1 --format=%s)"
-          export WHATS_NEW
+          export WHATS_NEW="$WHATS_NEW_INPUT"
           python3 -I packages/cache_search/ios/testflight_public.py "${{ github.run_number }}" Public

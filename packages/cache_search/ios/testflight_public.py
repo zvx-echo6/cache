@@ -3,7 +3,7 @@
 
 Usage: testflight_public.py <build number> [group name, default "Public"]
 Environment: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_B64 (the API key the upload uses), BUNDLE_ID, and optionally WHATS_NEW (the
-"What to test" text).
+"What to test" text). Without WHATS_NEW the text is the "Unreleased" section of CHANGELOG.md, as plain text.
 
 Steps: wait until Apple has processed the build (VALID), answer export compliance where the build has no answer yet (Cache uses
 only the system's encryption), set "What to test", add the build to the group, and submit it for TestFlight beta review when it
@@ -22,6 +22,31 @@ import urllib.error
 import urllib.request
 
 API = "https://api.appstoreconnect.apple.com"
+
+
+def changelog_notes(path: str = "CHANGELOG.md", limit: int = 4000) -> str:
+    """The "## Unreleased" section of the changelog as plain text for testers ("New:", then "- ..." lines)."""
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return ""
+    out, inside = [], False
+    for line in lines:
+        if line.startswith("## "):
+            if inside:
+                break
+            inside = line.strip() == "## Unreleased"
+            continue
+        if not inside:
+            continue
+        if line.startswith("### "):
+            out.append(("" if not out else "\n") + line[4:].strip() + ":")
+        elif line.startswith("- "):
+            out.append("- " + line[2:].replace("**", "").strip())
+        elif line.startswith("  ") and out:
+            out[-1] += " " + line.strip().replace("**", "")
+    text = "\n".join(out).strip()
+    return text if len(text) <= limit else text[: limit - 1].rsplit("\n", 1)[0] + "\n..."
 
 
 def b64url(b: bytes) -> str:
@@ -130,7 +155,7 @@ def main():
         st, _ = asc.call("PATCH", f"/v1/builds/{bid}", {"data": {"type": "builds", "id": bid, "attributes": {"usesNonExemptEncryption": False}}})
         print(f"export compliance: {st}")
 
-    whats_new = os.environ.get("WHATS_NEW", "").strip()
+    whats_new = os.environ.get("WHATS_NEW", "").strip() or changelog_notes()
     if whats_new:
         st, locs = asc.call("GET", f"/v1/builds/{bid}/betaBuildLocalizations")
         en = next((l for l in locs.get("data", []) if l["attributes"]["locale"] == "en-US"), None)
