@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../maps/layers/layer_def.dart';
 import '../../maps/ui/catalogue_screen.dart';
 import '../../maps/ui/format.dart';
+import '../../regions/ui/regions_screen.dart';
 import 'deps.dart';
 import 'widgets.dart';
 
@@ -15,9 +16,13 @@ class MapsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final maps = deps.maps;
+    final regions = deps.hub.regions;
     void openLayers() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CatalogueScreen(maps: maps)));
+    void openRegions() => regions == null
+        ? openLayers()
+        : Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions)));
     return ListenableBuilder(
-      listenable: maps,
+      listenable: Listenable.merge([maps, ?regions]),
       builder: (context, _) {
         final held = <(DownloadedArea, LayerDef)>[];
         for (final l in maps.catalogueLayers) {
@@ -37,7 +42,7 @@ class MapsPage extends StatelessWidget {
                   SettingsRow(
                     title: 'Nothing downloaded',
                     status: const [Part('Download a region or an area so the map works without a connection')],
-                    onTap: openLayers,
+                    onTap: openRegions,
                   ),
                 for (final (a, l) in held)
                   SettingsRow(
@@ -52,6 +57,23 @@ class MapsPage extends StatelessWidget {
                   ),
               ],
             ),
+            if (regions != null)
+              SettingsGroup(
+                label: 'Regions',
+                rows: [
+                  SettingsRow(
+                    key: const ValueKey('regions-row'),
+                    icon: Icons.map_outlined,
+                    title: 'Regions',
+                    status: [
+                      Part(regions.local.isEmpty
+                          ? 'Road routing and map for a region'
+                          : '${regions.local.length} ${regions.local.length == 1 ? 'region' : 'regions'} on this phone'),
+                    ],
+                    onTap: openRegions,
+                  ),
+                ],
+              ),
             SettingsGroup(
               label: 'Layers',
               rows: [

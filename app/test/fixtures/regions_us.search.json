@@ -1,0 +1,159 @@
+[
+ {
+  "id": "us",
+  "name": "United States",
+  "kind": "country",
+  "alt": [
+   "IMelika",
+   "Fereende Stoaten fon Amerikoa",
+   "Vereinigte Schtaate vo Amerika"
+  ],
+  "in": "",
+  "pop": 331449281
+ },
+ {
+  "id": "us-co-idaho-springs",
+  "name": "Idaho Springs",
+  "kind": "locality",
+  "alt": [],
+  "in": "Clear Creek County, Colorado",
+  "pop": 1782
+ },
+ {
+  "id": "us-id",
+  "name": "Idaho",
+  "kind": "region",
+  "alt": [
+   "Aidaho",
+   "Aydaho",
+   "Aighdeachobh"
+  ],
+  "in": "United States",
+  "pop": 2001619
+ },
+ {
+  "id": "us-id-ada-county",
+  "name": "Ada County",
+  "kind": "county",
+  "alt": [
+   "Ada"
+  ],
+  "in": "Idaho, United States",
+  "pop": 434211
+ },
+ {
+  "id": "us-id-boise",
+  "name": "Boise",
+  "kind": "locality",
+  "alt": [
+   "Boise City"
+  ],
+  "in": "Ada County, Idaho",
+  "pop": 235684
+ },
+ {
+  "id": "us-id-jerome-county",
+  "name": "Jerome County",
+  "kind": "county",
+  "alt": [
+   "Jerome"
+  ],
+  "in": "Idaho, United States",
+  "pop": 22814
+ },
+ {
+  "id": "us-id-magic-valley",
+  "name": "Magic Valley",
+  "kind": "valley",
+  "alt": [
+   "South Central Idaho"
+  ],
+  "in": "",
+  "pop": 192835
+ },
+ {
+  "id": "us-id-southern-idaho",
+  "name": "Southern Idaho",
+  "kind": "sub_state",
+  "alt": [
+   "South Idaho",
+   "Snake River Plain"
+  ],
+  "in": "",
+  "pop": 1122538
+ },
+ {
+  "id": "us-id-twin-falls",
+  "name": "Twin Falls",
+  "kind": "locality",
+  "alt": [],
+  "in": "Twin Falls County, Idaho",
+  "pop": 49764
+ },
+ {
+  "id": "us-id-twin-falls-county",
+  "name": "Twin Falls County",
+  "kind": "county",
+  "alt": [
+   "Twin Falls"
+  ],
+  "in": "Idaho, United States",
+  "pop": 82375
+ },
+ {
+  "id": "us-intermountain-west",
+  "name": "Intermountain West",
+  "kind": "multi_state",
+  "alt": [
+   "Intermountain",
+   "Inter-mountain West"
+  ],
+  "in": "",
+  "pop": 16455043
+ },
+ {
+  "id": "us-metro-twin-falls-id",
+  "name": "Twin Falls, ID",
+  "kind": "metro",
+  "alt": [
+   "Twin Falls"
+  ],
+  "in": "",
+  "pop": 122565
+ },
+ {
+  "id": "us-mountain-west",
+  "name": "Mountain West",
+  "kind": "multi_state",
+  "alt": [
+   "Mountain States",
+   "Rocky Mountain States"
+  ],
+  "in": "",
+  "pop": 26167683
+ },
+ {
+  "id": "us-pacific-northwest",
+  "name": "Pacific Northwest",
+  "kind": "multi_state",
+  "alt": [
+   "PNW",
+   "Pacific NW",
+   "Cascadia"
+  ],
+  "in": "",
+  "pop": 14232170
+ },
+ {
+  "id": "us-ut",
+  "name": "Utah",
+  "kind": "region",
+  "alt": [
+   "UT",
+   "Uta",
+   "Utaho"
+  ],
+  "in": "United States",
+  "pop": 3503613
+ }
+]

@@ -24,16 +24,20 @@ import '../nav/ui/guidance_panels.dart';
 import '../nav/ui/place_card.dart';
 import '../nav/ui/route_panel.dart';
 import '../nav/ui/search_panel.dart';
+import '../regions/regions_state.dart';
 import '../theme.dart';
 
 /// The Maps tab: a full-screen map with the phone's position, follow and north-up controls, a scale bar,
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions});
 
   final LocationService location;
   final MapsState maps;
+
+  /// Regions and downloads, offered from the layer sheet; null in tests that do not need it.
+  final RegionsState? regions;
   final NavState nav;
   final CacheThemeId themeId;
 
@@ -641,7 +645,7 @@ class _MapsScreenState extends State<MapsScreen> {
           MapButton(
             icon: Icons.layers_outlined,
             tooltip: 'Layers',
-            onPressed: () => showLayerSheet(context, maps, location),
+            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions),
           ),
         if (!nav.guiding) const SizedBox(height: 12),
         MapButton(
