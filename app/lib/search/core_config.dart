@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 /// The sections of the cs_open config besides the ZIM sources (cache_search.h): saved places (`user`), live data
@@ -10,12 +11,17 @@ import 'dart:io';
 ///   packs/REGION/offroad.sqlite, elevation.pmtiles   off-road routing
 ///   live-defs/*.json                        definitions of the live data sources that are switched on (the app keeps them)
 /// The databases the app writes (saved places, downloaded live data) are in [supportDir].
+///
+/// Road routing from downloaded regions: the core's region engine keeps its tiles in `SUPPORT/regions/tiles/BUILD` (a folder),
+/// and the regions screen writes that folder and the ready regions' names to `SUPPORT/regions-app.json` ([readRegionRouting]).
+/// When the folder exists it is the routing tiles, before any packs/*/valhalla/tiles.tar.
 Map<String, dynamic> buildCoreExtras({
   required Directory filesDir,
   required Directory supportDir,
   String shim = 'libvalhalla_shim.so',
   Directory? layerDefsDir,
   bool? useLinkedRouter,
+  String regionsBaseUrl = 'https://cache.echo6.co/routing/',
 }) {
   final packsDir = Directory('${filesDir.path}/packs');
   final places = <String>[];
@@ -35,6 +41,14 @@ Map<String, dynamic> buildCoreExtras({
       }
     }
   }
+  final regionRouting = readRegionRouting(supportDir);
+  final String? regionNames;
+  if (regionRouting != null) {
+    tiles = regionRouting.tileDir;
+    regionNames = regionRouting.names.join(', ');
+  } else {
+    regionNames = null;
+  }
   return {
     'user': {'db_path': '${supportDir.path}/user.sqlite'},
     'live': {'db_path': '${supportDir.path}/live.sqlite', 'sources_dir': '${filesDir.path}/live-defs'},
@@ -47,10 +61,34 @@ Map<String, dynamic> buildCoreExtras({
     },
     if (tiles != null || offroadPack != null)
       'routing': {
-        if (tiles != null) 'valhalla': {'tiles': tiles, 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
+        if (tiles != null)
+          'valhalla': {
+            'tiles': tiles,
+            'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim,
+            'region': ?regionNames,
+          },
         if (offroadPack != null) 'offroad': {'pack': offroadPack, 'elevation': elevation},
       },
+    // The region engine (cs_open's regions section): where it keeps its tiles and where it fetches them from.
+    'regions': {'dir': '${supportDir.path}/regions', 'base_url': regionsBaseUrl},
   };
+}
+
+/// The road routing the downloaded regions give: the core's tile folder and the names of the regions ready in it. Null when no
+/// region is ready or the folder is gone.
+({String tileDir, List<String> names})? readRegionRouting(Directory supportDir) {
+  try {
+    final f = File('${supportDir.path}/regions-app.json');
+    if (!f.existsSync()) return null;
+    final r = (jsonDecode(f.readAsStringSync()) as Map)['routing'];
+    if (r is! Map) return null;
+    final dir = r['tile_dir'];
+    final names = [for (final n in (r['regions'] as List? ?? const [])) n as String];
+    if (dir is! String || names.isEmpty || !Directory(dir).existsSync()) return null;
+    return (tileDir: dir, names: names);
+  } catch (_) {
+    return null;
+  }
 }
 
 /// The folder Android unpacked this app's native libraries to (where libvalhalla_shim.so is), found from where
