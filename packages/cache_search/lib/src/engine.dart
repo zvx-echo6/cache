@@ -158,6 +158,16 @@ class SearchEngine {
   MapRoute mapRoute(Map<String, dynamic> request) => MapRoute.fromJson(mapRouteRaw(request));
   MapProgress mapProgress(Map<String, dynamic> request) => MapProgress.fromJson(mapProgressRaw(request));
 
+  /// cs_places_refresh: the next search reads the places again (the merged database and every pack file); [packs], when
+  /// given, replaces the list of single-region packs. `{"ok", "packs", "merged"}`.
+  Map<String, dynamic> placesRefresh({List<String>? packs}) {
+    final n = native is CsPlacesNative ? native as CsPlacesNative : null;
+    if (n == null || !n.hasPlacesRefresh) {
+      throw const CacheSearchException('unsupported', 'This build of the core cannot refresh places yet');
+    }
+    return _object(_ok(n.placesRefresh(_h, jsonEncode({'packs': ?packs}))));
+  }
+
   List<SavedPlaceRecord> savedPlaces() => [
         for (final p in (_object(_ok(_saved.placesList(_h)))['places'] as List? ?? const []))
           SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),

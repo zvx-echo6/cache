@@ -3,6 +3,9 @@ import 'dart:io';
 
 import 'package:cache/maps/ui/format.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
+import 'package:cache/nav/nav_state.dart';
+import 'package:cache/nav/ui/search_panel.dart';
+import 'package:cache/nav/units.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
@@ -12,8 +15,10 @@ import 'package:cache/search/core_config.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/hub.dart';
 import 'package:flutter/material.dart';
+import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'nav_fakes.dart';
 import 'support/regions_fake.dart';
 import 'support/settings_rig.dart';
 
@@ -27,13 +32,19 @@ class _Rig {
   late RegionCatalogue catalogue;
   late RegionsState regions;
   late RegionShard us;
+  Map<String, Object?>? config;
 
   RegionRecord get county => us[_county]!;
 
-  static Future<_Rig> boot(WidgetTester tester, {ConnectionKind connection = ConnectionKind.wifi}) async {
+  static Future<_Rig> boot(
+    WidgetTester tester, {
+    ConnectionKind connection = ConnectionKind.wifi,
+    bool places = false,
+    Future<void> Function()? onPlacesChanged,
+  }) async {
     final r = _Rig();
     r.s = await SettingsRig.create(tester, connection: connection);
-    r.core = FakeRegions(tileDir: '${r.s.dir.path}/regions/tiles/2026-10');
+    r.core = FakeRegions(tileDir: '${r.s.dir.path}/regions/tiles/2026-10')..placesEnabled = places;
     Directory(r.core.tileDir).createSync(recursive: true);
     final web = regionWeb();
     r.catalogue = RegionCatalogue(dir: () async => Directory('${r.s.dir.path}/region-catalogue'), fetch: web.fetch);
@@ -42,7 +53,11 @@ class _Rig {
       supportDir: () async => r.s.dir,
       catalogue: r.catalogue,
       maps: r.s.maps,
-      opener: (_) async => r.core,
+      opener: (config) async {
+        r.config = config;
+        return r.core;
+      },
+      onPlacesChanged: onPlacesChanged,
     );
     await tester.runAsync(() async {
       await r.regions.init();
@@ -306,6 +321,195 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('download-region')));
     await tester.pumpAndSettle();
     expect(find.text('Downloads'), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  group('places and addresses', () {
+    testWidgets('the sheet has a third part with its own size, counted in the total; Download asks for every part picked', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      expect(r.config?['places_base_url'], kPlacesBaseUrl, reason: 'the engine is told where places are published');
+      final est = (await tester.runAsync(() => r.s.engine.estimate('basemap', r.county.bounds!)))!;
+      await r.s.show(tester, RegionsScreen(regions: r.regions));
+      await _openCountySheet(tester);
+
+      expect(find.byKey(const ValueKey('part-routing')), findsOneWidget);
+      expect(find.byKey(const ValueKey('part-map')), findsOneWidget);
+      expect(find.byKey(const ValueKey('part-places')), findsOneWidget);
+      expect(find.text('Places and addresses'), findsOneWidget);
+      expect(find.text('About 16 MB · 4.0 MB already on this phone'), findsOneWidget);
+      expect(find.text('About ${formatBytes((80 << 20) + est.bytes + (16 << 20))} to download'), findsOneWidget);
+      final y = [for (final k in ['part-routing', 'part-map', 'part-places']) tester.getTopLeft(find.byKey(ValueKey(k))).dy];
+      expect(y[0] < y[1] && y[1] < y[2], isTrue, reason: 'under the two parts there were');
+
+      await tester.tap(find.byKey(const ValueKey('part-places')));
+      await tester.pump();
+      expect(find.text('About ${formatBytes((80 << 20) + est.bytes)} to download'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('part-places')));
+      await tester.tap(find.byKey(const ValueKey('part-routing')));
+      await tester.pump();
+      expect(find.text('About ${formatBytes(est.bytes + (16 << 20))} to download'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('part-routing')));
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('region-download')));
+      await r.settle(tester);
+      expect(r.core.added.single['parts'], ['places', 'routing']);
+      expect(r.regions.regionOf(_county)!.hasPlaces, isTrue);
+
+      // Places that cannot be planned say why; road routing is still planned.
+      r.core.placesOffline = true;
+      final p = (await tester.runAsync(() => r.regions.plan(r.us['us-ut']!)))!;
+      expect(p.routing, isNotNull);
+      expect(p.places, isNull);
+      expect(p.placesProblem, 'Needs a connection to work out the size.');
+      await r.dispose(tester);
+    });
+
+    testWidgets('Local names the parts; a region from before places offers them, and Update adds only that part', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.us['us-id']!, routing: true, map: false, places: true);
+        await r.regions.download(r.county, routing: true, map: true);
+        r.core.finish('us-id');
+        r.core.finish(_county);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await r.regions.refresh();
+      });
+      await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
+      await tester.pump();
+      expect(find.text('${formatBytes(140 << 20)} · Road routing and places'), findsOneWidget);
+      expect(find.textContaining('Road routing and map · Places not downloaded'), findsOneWidget);
+      expect(r.core.added.last['parts'], ['routing']);
+
+      await tester.tap(find.byTooltip('Update Twin Falls County'));
+      await r.settle(tester);
+      expect(r.core.added.last['id'], _county);
+      expect(r.core.added.last['parts'], ['places'], reason: 'only the missing part');
+      r.core.finish(_county);
+      await tester.runAsync(r.regions.refresh);
+      await tester.pump();
+      expect(find.textContaining('Road routing, map and places'), findsOneWidget);
+      expect(find.textContaining('Places not downloaded'), findsNothing);
+
+      await tester.tap(find.byTooltip('Delete Twin Falls County'));
+      await tester.pumpAndSettle();
+      expect(find.text('Its road routing, map and places are removed from this phone. Parts another region uses stay.'), findsOneWidget);
+      await tester.tap(find.text('Keep'));
+      await tester.pumpAndSettle();
+      await r.dispose(tester);
+    });
+
+    testWidgets('a places part that fails fails the region, with its reason', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.county, routing: true, map: false, places: true);
+        r.core.finish(_county, part: 'routing');
+        final p = (r.core.regions[_county]!['parts'] as Map)['places'] as Map;
+        p
+          ..['state'] = 'failed'
+          ..['error'] = 'A places tile did not match its check';
+        r.core.regions[_county]!['state'] = 'failed';
+        await r.regions.refresh();
+      });
+      expect(r.regions.regionOf(_county)!.phase, RegionPhase.failed);
+      expect(r.regions.regionOf(_county)!.error, 'A places tile did not match its check');
+      await r.dispose(tester);
+    });
+
+    testWidgets('Updates has a Places group: a new build, Update all starts it', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.county, routing: true, map: false, places: true);
+        r.core.finish(_county);
+        await r.regions.refresh();
+      });
+      await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 2));
+      await tester.pump();
+      expect(find.text('PLACES'), findsOneWidget);
+      expect(find.text('Up to date'), findsNWidgets(2));
+
+      r.core.placesUpdate = {'build': 'na-places-2026-12-15', 'download_bytes': 23 << 20, 'downloading': false};
+      await tester.tap(find.text('Check for updates'));
+      await r.settle(tester);
+      expect(find.text('New places'), findsOneWidget);
+      expect(find.text('na-places-2026-12-15 · About 23 MB to download'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const ValueKey('update-all')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('update-all')));
+      await r.settle(tester);
+      expect(r.core.calls.where((c) => c == 'update'), hasLength(1), reason: 'only places had a new build');
+      expect(find.text('Downloading na-places-2026-12-15'), findsOneWidget);
+      await r.dispose(tester);
+    });
+
+    testWidgets('when the places on the phone change, the callback runs once per change', (tester) async {
+      var changed = 0;
+      final r = await _Rig.boot(tester, places: true, onPlacesChanged: () async => changed++);
+      expect(changed, 0, reason: 'the first status only sets where it starts');
+      await tester.runAsync(() async {
+        await r.regions.download(r.county, routing: false, map: false, places: true);
+        await r.regions.refresh();
+      });
+      expect(changed, 0);
+      r.core.finish(_county);
+      await tester.runAsync(r.regions.refresh);
+      expect(changed, 1);
+      await tester.runAsync(r.regions.refresh);
+      expect(changed, 1);
+      await tester.runAsync(() => r.regions.remove(_county));
+      expect(changed, 2);
+      await r.dispose(tester);
+    });
+
+    testWidgets('the map search with no places offers a region, and Get a region opens Downloads', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      final backend = FakeBackend()
+        ..onSearch = (q, {near, meaning}) async => MapSearchResponse(
+              query: q,
+              kind: 'text',
+              meaning: 'off',
+              results: const [],
+              warningCode: 'no_places',
+              places: const PlacesCoverage(installed: false, covers: false),
+            );
+      final nav = NavState(
+        backend: backend,
+        location: r.s.location,
+        speaker: FakeSpeaker(),
+        positionSource: FakeNavPosition(),
+        fmt: const Fmt(UnitSystem.imperial),
+        searchDebounce: const Duration(milliseconds: 1),
+        meaningDebounce: const Duration(milliseconds: 2),
+      );
+      await r.s.show(tester, Scaffold(body: SafeArea(child: NavSearchBar(nav: nav, fmt: nav.fmt, regions: r.regions))));
+      await tester.enterText(find.byKey(const ValueKey('map-search-field')), 'pharmacy');
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.pump();
+      expect(find.text('No places on this phone.'), findsOneWidget);
+      expect(find.text('Download a region to search places and addresses.'), findsOneWidget);
+      expect(find.text('Nothing found for "pharmacy"'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('get-region')));
+      await tester.pumpAndSettle();
+      expect(find.text('Regions'), findsOneWidget);
+      expect(find.byKey(const ValueKey('region-search')), findsOneWidget, reason: 'the Downloads tab');
+      await tester.pumpWidget(const SizedBox());
+      nav.dispose();
+      await r.dispose(tester);
+    });
+  });
+
+  testWidgets('the search field does not take the focus back when the region sheet closes', (tester) async {
+    final r = await _Rig.boot(tester);
+    await r.s.show(tester, RegionsScreen(regions: r.regions));
+    await _openCountySheet(tester);
+    expect(find.text('Download Twin Falls County'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Download Twin Falls County'), findsNothing);
+    final field = tester.widget<EditableText>(find.descendant(of: find.byKey(const ValueKey('region-search')), matching: find.byType(EditableText)));
+    expect(field.focusNode.hasFocus, isFalse);
+    expect(tester.testTextInput.isVisible, isFalse, reason: 'no keyboard');
     await r.dispose(tester);
   });
 }

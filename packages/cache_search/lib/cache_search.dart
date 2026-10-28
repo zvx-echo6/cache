@@ -5,7 +5,7 @@ export 'src/engine.dart' show SearchEngine, ConversationNumbers, CoreJob;
 export 'src/errors.dart' show CacheSearchException;
 export 'src/map_models.dart';
 export 'src/models.dart';
-export 'src/native.dart' show CsNative, CsMapNative, CsLiveNative, FfiCsNative, ZimBytes;
+export 'src/native.dart' show CsNative, CsMapNative, CsLiveNative, CsPlacesNative, FfiCsNative, ZimBytes;
 export 'src/regions_core.dart' show RegionsCore;
 export 'src/search_core.dart' show SearchCore, CoreConversation, CoreJobHandle, CsNativeFactory;
 export 'src/sync_core.dart' show SyncCore;

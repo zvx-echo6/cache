@@ -100,6 +100,18 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
+  test('when the places change, an open search runs again, and a closed one does not', () async {
+    nav.onQueryChanged('pharmacy');
+    await nav.submitSearch();
+    final before = backend.calls.length;
+    await nav.placesChanged();
+    expect(backend.calls.length, before + 1);
+    expect(backend.calls.last, 'search:pharmacy:m');
+    nav.closeSearch();
+    await nav.placesChanged();
+    expect(backend.calls.length, before + 1);
+  });
+
   for (final theme in CacheThemeId.values) {
     group('in the ${theme.label} theme', () {
       testWidgets('search: typing lists names, kinds and distances; tapping a result chooses it', (tester) async {
@@ -141,6 +153,52 @@ void main() {
         await tester.tap(find.byTooltip('Close search'));
         await tester.pump();
         expect(nav.searchOpen, isFalse);
+      });
+
+      Future<void> searchWith(WidgetTester tester, String code, List<MapPlace> rows, {String query = 'pharmacy'}) async {
+        backend.onSearch = (q, {near, meaning}) async =>
+            MapSearchResponse(query: q, kind: 'text', meaning: 'used', results: rows, warning: 'free text for older apps', warningCode: code);
+        await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
+        await tester.enterText(find.byKey(const ValueKey('map-search-field')), query);
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+      }
+
+      testWidgets('search: no places on the phone replaces "Nothing found" with a way to get a region', (tester) async {
+        await searchWith(tester, 'no_places', const []);
+        expect(nav.placesState, PlacesState.none);
+        expect(find.byKey(const ValueKey('no-places')), findsOneWidget);
+        expect(find.text('No places on this phone.'), findsOneWidget);
+        expect(find.text('Download a region to search places and addresses.'), findsOneWidget);
+        expect(find.text('Nothing found for "pharmacy"'), findsNothing);
+        expect(find.text('free text for older apps'), findsNothing, reason: 'the 13 px note is only for words-only search');
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('search: places not downloaded here is one line under the results', (tester) async {
+        await searchWith(tester, 'not_here', [hospital]);
+        expect(nav.placesState, PlacesState.notHere);
+        expect(find.text('Cassia Regional Hospital'), findsOneWidget);
+        expect(find.text('No places downloaded here.'), findsOneWidget);
+        expect(tester.getTopLeft(find.text('No places downloaded here.')).dy, greaterThan(tester.getTopLeft(find.text('Cassia Regional Hospital')).dy));
+        expect(find.text('No places on this phone.'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('search: places on their way say so, with a progress bar, not "Nothing found"', (tester) async {
+        await searchWith(tester, 'fetching', const []);
+        expect(nav.placesState, PlacesState.fetching);
+        expect(find.text('Getting places for this area…'), findsOneWidget);
+        expect(find.descendant(of: find.byKey(const ValueKey('fetching-places')), matching: find.byType(LinearProgressIndicator)), findsOneWidget);
+        expect(find.text('Nothing found for "pharmacy"'), findsNothing);
+        // The tiles land: the core says nothing more, and the line goes.
+        backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'used', results: const [hospital]);
+        await nav.placesChanged();
+        await tester.pump();
+        expect(nav.placesState, PlacesState.ok);
+        expect(find.text('Getting places for this area…'), findsNothing);
+        expect(find.text('Cassia Regional Hospital'), findsOneWidget);
+        expect(tester.takeException(), isNull);
       });
 
       testWidgets('place card: details, copy, and the three actions', (tester) async {

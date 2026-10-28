@@ -170,6 +170,10 @@ class SearchCore {
       })) as Map)
           .cast<String, dynamic>());
 
+  /// Makes the next search read the places again (cs_places_refresh): after a region's places were merged or removed, and
+  /// when the sources are refreshed. [packs], when given, replaces the single-region packs. `{"ok", "packs", "merged"}`.
+  Future<Map<String, dynamic>> refreshPlaces({List<String>? packs}) => _map('placesRefresh', {'packs': packs});
+
   Future<List<SavedPlaceRecord>> savedPlaces() async => [
         for (final p in await _call('savedPlaces') as List) SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),
       ];
@@ -347,6 +351,8 @@ void _workerMain(List<dynamic> init) {
           result = eng().mapRouteRaw((a['request'] as Map).cast<String, dynamic>());
         case 'mapProgress':
           result = eng().mapProgressRaw((a['request'] as Map).cast<String, dynamic>());
+        case 'placesRefresh':
+          result = eng().placesRefresh(packs: (a['packs'] as List?)?.cast<String>());
         case 'savedPlaces':
           result = [
             for (final p in eng().savedPlaces()) {'key': p.key, 'name': p.name, 'lat': p.lat, 'lon': p.lon, 'label': p.label},
