@@ -4,28 +4,35 @@ import 'dart:io';
 // over it once complete, so nothing reads half of it, and the sync (which skips names that start with '.') never sends half
 // of it to the other devices.
 
-/// Renames [from] over the file at [to]. Windows can refuse to rename over a file that exists; then that file is deleted
-/// right before the rename is tried again. [from] must be in the same folder (or file system) as [to].
+/// Renames [from] over the file at [to]. Windows can refuse to rename over a file that exists, or that another write is
+/// renaming at that moment; then the file there is dropped and the rename tried again, a few times, a little later each time.
+/// [from] must be in the same folder (or file system) as [to].
 Future<File> renameOver(File from, String to) async {
-  try {
-    return await from.rename(to);
-  } on FileSystemException {
-    final old = File(to);
-    if (!Platform.isWindows || !await old.exists()) rethrow;
-    await old.delete();
-    return from.rename(to);
+  for (var i = 0;; i++) {
+    try {
+      return await from.rename(to);
+    } on FileSystemException {
+      if (!Platform.isWindows || i >= 20) rethrow;
+      try {
+        await File(to).delete();
+      } on FileSystemException catch (_) {}
+      await Future<void>.delayed(Duration(milliseconds: 5 * (i + 1)));
+    }
   }
 }
 
 /// [renameOver], synchronously.
 File renameOverSync(File from, String to) {
-  try {
-    return from.renameSync(to);
-  } on FileSystemException {
-    final old = File(to);
-    if (!Platform.isWindows || !old.existsSync()) rethrow;
-    old.deleteSync();
-    return from.renameSync(to);
+  for (var i = 0;; i++) {
+    try {
+      return from.renameSync(to);
+    } on FileSystemException {
+      if (!Platform.isWindows || i >= 20) rethrow;
+      try {
+        File(to).deleteSync();
+      } on FileSystemException catch (_) {}
+      sleep(Duration(milliseconds: 5 * (i + 1)));
+    }
   }
 }
 

@@ -276,6 +276,7 @@ class AppState extends ChangeNotifier {
     copyProgress = null;
     copyName = null;
     await refreshModels();
-    return models.firstWhere((m) => m.path == dest.path);
+    // by name: the listing writes the folder's own separator ("\\" on Windows), not the "/" the path was built with
+    return models.firstWhere((m) => m.fileName == fileName);
   }
 }
