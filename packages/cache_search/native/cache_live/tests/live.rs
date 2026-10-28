@@ -139,11 +139,11 @@ fn weather_daily_has_precipitation_and_snow_when_the_response_has_them() {
     // the current conditions are unchanged
     assert_eq!(keys(0), ["Temperature", "Feels like", "Wind", "Conditions"]);
     // the days: the old fields in their old order, the new ones after "Chance of rain"
-    assert_eq!(keys(2), ["High", "Low", "Chance of rain", "Precipitation", "Snow", "Wind max", "Conditions"]);
+    assert_eq!(keys(2), ["Daytime high", "Low (early morning)", "Chance of rain", "Precipitation", "Snow", "Wind max", "Conditions"]);
     let snowy = &items[2]["fields"];
     assert_eq!(items[2]["time"], "2026-10-27");
     assert_eq!(
-        (snowy["High"].as_str(), snowy["Low"].as_str(), snowy["Chance of rain"].as_str(), snowy["Wind max"].as_str(), snowy["Conditions"].as_str()),
+        (snowy["Daytime high"].as_str(), snowy["Low (early morning)"].as_str(), snowy["Chance of rain"].as_str(), snowy["Wind max"].as_str(), snowy["Conditions"].as_str()),
         (Some("41 \u{b0}F"), Some("32 \u{b0}F"), Some("43%"), Some("14 mph"), Some("snow"))
     );
     assert_eq!((snowy["Precipitation"].as_str(), snowy["Snow"].as_str()), (Some("0.1 in over 2 h"), Some("0.1 in")));
@@ -187,10 +187,10 @@ fn weather_fetch_get_and_tool_shape() {
     assert_eq!(items[0]["fields"]["Wind"], "6 mph NE, gusts 8 mph");
     assert_eq!(items[0]["fields"]["Conditions"], "clear sky");
     let day = &items[2];
-    assert_eq!(day["label"], "Mon 26 Oct");
+    assert_eq!(day["label"], "Mon Oct 26");
     assert_eq!(day["time"], "2026-10-26");
     let keys: Vec<_> = day["fields"].as_object().unwrap().keys().cloned().collect();
-    assert_eq!(keys, ["High", "Low", "Chance of rain", "Wind max", "Conditions"]);
+    assert_eq!(keys, ["Daytime high", "Low (early morning)", "Chance of rain", "Wind max", "Conditions"]);
 
     // the model's view: the same data, 12 items, "more" for the rest, "address" where the model will see "n"
     let t = env.tool(json!({"source": "weather", "place": "burley"}), None, T0);
@@ -212,6 +212,115 @@ fn weather_fetch_get_and_tool_shape() {
         assert_eq!(a["address"], b["address"]);
         assert_eq!(a["fields"], b["fields"]);
     }
+}
+
+/// `when` narrows the answer to one period in the place's local time: the Now item always stays, forecast days stay when they
+/// overlap the period, and a period the saved forecast does not reach is one numbered item saying so.
+#[test]
+fn when_narrows_to_one_period() {
+    let (env, _srv) = weather_env("when");
+    env.weather(json!({"source": "weather", "place": burley(), "now": T0})).unwrap();
+    env.places.save(r#"{"key":"burley","name":"Burley, ID","lat":42.536,"lon":-113.792}"#).unwrap();
+    let ask = |extra: Value, now: &str| {
+        let mut a = json!({"source": "weather", "place": "burley"});
+        for (k, v) in extra.as_object().unwrap() {
+            a[k] = v.clone();
+        }
+        env.tool(a, None, now)
+    };
+    let days = |t: &Value| t["items"].as_array().unwrap().iter().map(|i| i["address"].as_str().unwrap().trim_start_matches("live:weather/burley/").to_string()).collect::<Vec<_>>();
+
+    // omitted: exactly the output there was before `when`
+    assert_eq!(ask(json!({}), T0).unwrap(), env.tool(json!({"source": "weather", "place": "burley"}), None, T0).unwrap());
+    // Sunday 25 Oct, 10:50
+    assert_eq!(days(&ask(json!({"when": "today"}), T0).unwrap()), ["now", "2026-10-25"]);
+    assert_eq!(days(&ask(json!({"when": "tomorrow"}), T0).unwrap()), ["now", "2026-10-26"]);
+    // 18:00 tonight to 07:00 tomorrow: both days' items, tomorrow's early-morning low being tonight's
+    assert_eq!(days(&ask(json!({"when": "tonight"}), T0).unwrap()), ["now", "2026-10-25", "2026-10-26"]);
+    assert_eq!(days(&ask(json!({"when": "Saturday"}), T0).unwrap()), ["now", "2026-10-31"]);
+    assert_eq!(days(&ask(json!({"when": "sunday"}), T0).unwrap()), ["now", "2026-10-25"], "today's own name is today");
+    // a weekday that wraps into next week: on Tuesday 27 Oct, Monday is 2 Nov (the Now of two days ago has ended)
+    assert_eq!(days(&ask(json!({"when": "monday"}), "2026-10-27T08:00:00-06:00").unwrap()), ["2026-11-02"]);
+    assert_eq!(days(&ask(json!({"when": "2026-10-28"}), T0).unwrap()), ["now", "2026-10-28"]);
+    assert_eq!(days(&ask(json!({"when": "next_days", "days": 3}), T0).unwrap()), ["now", "2026-10-25", "2026-10-26", "2026-10-27"]);
+
+    // beyond the saved forecast (it runs to 9 Nov): said, not an empty list
+    let t = ask(json!({"when": "2026-11-14"}), T0).unwrap();
+    assert_eq!(days(&t), ["now", "none"]);
+    let last = &t["items"][1];
+    assert_eq!(last["label"], "No weather forecast for Sat Nov 14 in the saved data");
+    assert_eq!(last["fields"], json!({"Status": "not in the saved data", "Saved data runs to": "2026-11-09"}));
+    // a day that is over
+    let t = ask(json!({"when": "2026-10-20"}), T0).unwrap();
+    assert_eq!(t["items"][1]["fields"]["Status"], "that day is over");
+
+    for bad in [json!({"when": "someday"}), json!({"when": "today", "days": 2}), json!({"days": 2}), json!({"when": "next_days", "days": 17}), json!({"when": 3})] {
+        assert_eq!(ask(bad.clone(), T0).unwrap_err().code, "bad_arguments", "{bad}");
+    }
+}
+
+/// The night ahead from the hourly series: the overnight low and the rest are taken over 18:00 to 07:00 only, the item is
+/// labelled with its date, and `when: "tonight"` answers with it instead of the two days it falls across.
+#[test]
+fn tonight_from_the_hourly_series() {
+    let mut body: Value = serde_json::from_str(&fixture("openmeteo_burley.json")).unwrap();
+    // 36 hours from 10:00 on Sunday 25 Oct; outside 18:00-07:00 the values are ones the night must not pick up
+    let mut time = vec![];
+    let (mut temp, mut code, mut rain, mut wind) = (vec![], vec![], vec![], vec![]);
+    for h in 0..36 {
+        let (day, hour) = (25 + (10 + h) / 24, (10 + h) % 24);
+        time.push(json!(format!("2026-10-{day}T{hour:02}:00")));
+        let night = (day == 25 && hour >= 18) || (day == 26 && hour < 7);
+        temp.push(json!(if night { 40 - (hour + 24 - 18) % 24 } else { 20 }));
+        code.push(json!(if day == 26 && hour == 3 { 71 } else if night { 1 } else { 95 }));
+        rain.push(json!(if night { 30 } else { 90 }));
+        wind.push(json!(if night { 12 } else { 40 }));
+    }
+    body["hourly"] = json!({"time": time, "temperature_2m": temp, "weather_code": code, "precipitation_probability": rain, "wind_speed_10m": wind});
+    let srv = Server::start(vec![("/v1/forecast", body.to_string())]);
+    let env = Env::new("tonight", vec![("weather.json", real_source("weather.json"), Some((srv.port, "/v1/forecast")))]);
+    env.weather(json!({"source": "weather", "place": burley(), "now": T0})).unwrap();
+    let url = srv.last_url.lock().unwrap().clone();
+    assert!(url.contains("&hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m&forecast_hours=36"), "{url}");
+    env.places.save(r#"{"key":"burley","name":"Burley, ID","lat":42.536,"lon":-113.792}"#).unwrap();
+
+    let all = env.tool(json!({"source": "weather", "place": "burley"}), None, T0).unwrap();
+    let night = &all["items"][1];
+    assert_eq!(night["address"], "live:weather/burley/tonight");
+    assert_eq!(night["label"], "Tonight (Sun Oct 25)");
+    assert_eq!(night["time"], "2026-10-25T18:00-06:00");
+    // 18:00 is 40, falling an hour at a time to 28 at 06:00; the 20 at 07:00 is morning
+    assert_eq!(
+        night["fields"],
+        json!({"Overnight low": "28 \u{b0}F", "Chance of rain": "30%", "Wind max": "12 mph", "Worst conditions": "light snow"})
+    );
+    assert_eq!(all["items"][2]["address"], "live:weather/burley/2026-10-25");
+
+    let t = env.tool(json!({"source": "weather", "place": "burley", "when": "tonight"}), None, T0).unwrap();
+    let addrs: Vec<&str> = t["items"].as_array().unwrap().iter().map(|i| i["address"].as_str().unwrap()).collect();
+    assert_eq!(addrs, ["live:weather/burley/now", "live:weather/burley/tonight"]);
+    // tomorrow is still the day, with the night that runs into it
+    let t = env.tool(json!({"source": "weather", "place": "burley", "when": "tomorrow"}), None, T0).unwrap();
+    let addrs: Vec<&str> = t["items"].as_array().unwrap().iter().map(|i| i["address"].as_str().unwrap()).collect();
+    assert_eq!(addrs, ["live:weather/burley/now", "live:weather/burley/tonight", "live:weather/burley/2026-10-26"]);
+    // after 07:00 the night is over and drops out
+    let t = env.tool(json!({"source": "weather", "place": "burley"}), None, "2026-10-26T07:00:00-06:00").unwrap();
+    assert!(t["items"].as_array().unwrap().iter().all(|i| i["address"] != "live:weather/burley/tonight"));
+}
+
+/// `agg` and `window` values need an item with a window, and a window's hours must make a period.
+#[test]
+fn window_values_are_checked() {
+    let mut d = real_source("weather.json");
+    d["items"][0]["fields"][0] = json!({"label": "Low", "agg": {"op": "min", "value": {"path": "x"}}});
+    let errs = cache_live::def::SourceDef::check(&d.to_string()).unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("agg and window values need the item to have a window")), "{errs:?}");
+    let mut d = real_source("weather.json");
+    d["items"][1]["window"]["to_hour"] = json!(18);
+    d["items"][1]["fields"][0]["agg"]["op"] = json!("mean");
+    let errs = cache_live::def::SourceDef::check(&d.to_string()).unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("from_hour and to_hour are different hours")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("agg.op: min, max, sum, first or last")), "{errs:?}");
 }
 
 /// A forecast day that has ended (its local midnight has passed) is left out, as an expired "Now" is: two days after the fetch,
@@ -335,6 +444,10 @@ fn schema_is_built_from_the_installed_definitions() {
     let d = f["description"].as_str().unwrap();
     assert!(d.starts_with("Downloaded live data for a place. Data is downloaded while online and expires. Sources on this phone: alerts = active emergency alerts"), "{d}");
     assert!(d.contains("; weather = weather forecast"), "{d}");
+    assert!(d.ends_with(". Set when to read one period: today, tonight, tomorrow, a weekday name, a date YYYY-MM-DD, or next_days (with days)."), "{d}");
+    let p = &f["parameters"]["properties"];
+    assert_eq!(p["when"]["type"], "string");
+    assert_eq!((p["days"]["minimum"].as_i64(), p["days"]["maximum"].as_i64()), (Some(1), Some(16)));
     assert_eq!(f["parameters"]["required"], json!(["source"]));
     assert_eq!(f["parameters"]["additionalProperties"], false);
     // the broken file is reported, not fatal

@@ -287,6 +287,40 @@ pub struct ItemDef {
     /// Path to a GeoJSON geometry for the item's area.
     #[serde(default)]
     pub area: Option<String>,
+    /// One item for a part of the day ahead (the night, the daytime) instead of one per element: values are read over the
+    /// elements of a time series that fall in it, with `agg`. The item's time and end are the period's unless given.
+    #[serde(default)]
+    pub window: Option<WindowDef>,
+}
+
+/// The part of the day ahead an item covers, in the place's local time, from when the data was fetched: the one in progress,
+/// else the next. "18 to 7" is the night ahead (over midnight); "7 to 18" the daytime.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct WindowDef {
+    /// Path to the list of times of the series (`hourly.time`).
+    pub each: String,
+    /// How those times are written.
+    pub time: TimeSpec,
+    /// The local hour (0-23) the period starts.
+    pub from_hour: u32,
+    /// The local hour it ends; smaller than `from_hour` for a period over midnight.
+    pub to_hour: u32,
+    /// How long each element of the series covers, in minutes (default 60): an element counts when it overlaps the period.
+    #[serde(default)]
+    pub step_minutes: Option<u32>,
+}
+
+/// A value over the elements of the item's `window`.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AggSpec {
+    /// "min", "max", "sum", "first" or "last".
+    pub op: String,
+    /// The value at each element (`[#]` is that element's index).
+    pub value: Box<Spec>,
 }
 
 /// A number written in the definition, or found by a value (for example a parameter).
@@ -370,7 +404,7 @@ pub struct PointDef {
 }
 
 /// How one value is found and written. Exactly one of `path`, `const`, `template`, `first_of`, `distance`, `param`,
-/// `calc` gives the value; the rest are formatting steps applied in a fixed order (see `map.rs`).
+/// `calc`, `agg`, `window` gives the value; the rest are formatting steps applied in a fixed order (see `map.rs`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
@@ -392,6 +426,10 @@ pub struct Spec {
     pub param: Option<String>,
     /// Arithmetic on other values.
     pub calc: Option<CalcSpec>,
+    /// A value over the elements of the item's `window` (only in an item with one).
+    pub agg: Option<AggSpec>,
+    /// "from" or "to": when the item's `window` starts or ends, as Unix seconds (write it with `"time": {"in": "unix"}`).
+    pub window: Option<String>,
     pub scale: Option<f64>,
     pub offset: Option<f64>,
     /// Decimals to round to (0 = whole numbers).
@@ -805,6 +843,25 @@ impl ItemDef {
         if self.limit == Some(0) {
             errs.push(format!("source {id:?}: {at}.limit: must be at least 1"));
         }
+        match &self.window {
+            Some(w) => {
+                if self.each.is_some() {
+                    errs.push(format!("source {id:?}: {at}: give each or window, not both"));
+                }
+                if w.from_hour > 23 || w.to_hour > 23 || w.from_hour == w.to_hour {
+                    errs.push(format!("source {id:?}: {at}.window: from_hour and to_hour are different hours, 0 to 23"));
+                }
+                if !["local", "utc", "rfc3339", "rfc2822", "unix", "unix_ms", "pattern"].contains(&w.time.input.as_str()) {
+                    errs.push(format!("source {id:?}: {at}.window.time.in: must be local, utc, rfc3339, rfc2822, unix, unix_ms or pattern"));
+                }
+            }
+            None => {
+                let specs = [Some(&self.key), Some(&self.label), self.time.as_ref(), self.ends.as_ref()];
+                if specs.into_iter().flatten().chain(self.fields.iter()).any(Spec::needs_window) {
+                    errs.push(format!("source {id:?}: {at}: agg and window values need the item to have a window"));
+                }
+            }
+        }
     }
 }
 
@@ -854,6 +911,15 @@ impl Cond {
 }
 
 impl Spec {
+    /// Whether this value, or one inside it, reads the item's window.
+    fn needs_window(&self) -> bool {
+        self.agg.is_some()
+            || self.window.is_some()
+            || self.vars.values().any(Spec::needs_window)
+            || self.first_of.iter().any(Spec::needs_window)
+            || self.calc.as_ref().map(|c| c.args.iter().any(Spec::needs_window)).unwrap_or(false)
+    }
+
     fn validate(&self, at: &str, params: &[ParamDef], errs: &mut Vec<String>, id: &str) {
         let n = [
             self.path.is_some(),
@@ -863,6 +929,8 @@ impl Spec {
             self.distance.is_some(),
             self.param.is_some(),
             self.calc.is_some(),
+            self.agg.is_some(),
+            self.window.is_some(),
         ]
         .iter()
         .filter(|b| **b)
@@ -870,9 +938,18 @@ impl Spec {
         macro_rules! bad { ($m:expr) => { errs.push(format!("source {id:?}: {at}: {}", $m)) }; }
         if n != 1 {
             bad!(format!(
-                "a value ({:?}) needs exactly one of path, const, template, first_of, distance, param, calc",
+                "a value ({:?}) needs exactly one of path, const, template, first_of, distance, param, calc, agg, window",
                 self.label
             ));
+        }
+        if let Some(a) = &self.agg {
+            if !["min", "max", "sum", "first", "last"].contains(&a.op.as_str()) {
+                bad!("agg.op: min, max, sum, first or last");
+            }
+            a.value.validate(&format!("{at}.agg.value"), params, errs, id);
+        }
+        if self.window.as_deref().map(|w| w != "from" && w != "to").unwrap_or(false) {
+            bad!("window: from or to");
         }
         if let Some(t) = &self.time {
             if !["local", "utc", "rfc3339", "rfc2822", "unix", "unix_ms", "pattern"].contains(&t.input.as_str()) {

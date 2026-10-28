@@ -128,6 +128,29 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "AggSpec": {
+      "description": "A value over the elements of the item's `window`.",
+      "type": "object",
+      "required": [
+        "op",
+        "value"
+      ],
+      "properties": {
+        "op": {
+          "description": "\"min\", \"max\", \"sum\", \"first\" or \"last\".",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value at each element (`[#]` is that element's index).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "BasicAuthDef": {
       "type": "object",
       "required": [
@@ -468,6 +491,17 @@
           "items": {
             "$ref": "#/definitions/Cond"
           }
+        },
+        "window": {
+          "description": "One item for a part of the day ahead (the night, the daytime) instead of one per element: values are read over the elements of a time series that fall in it, with `agg`. The item's time and end are the period's unless given.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WindowDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -913,7 +947,7 @@
       "additionalProperties": false
     },
     "Spec": {
-      "description": "How one value is found and written. Exactly one of `path`, `const`, `template`, `first_of`, `distance`, `param`, `calc` gives the value; the rest are formatting steps applied in a fixed order (see `map.rs`).",
+      "description": "How one value is found and written. Exactly one of `path`, `const`, `template`, `first_of`, `distance`, `param`, `calc`, `agg`, `window` gives the value; the rest are formatting steps applied in a fixed order (see `map.rs`).",
       "type": "object",
       "properties": {
         "after_last": {
@@ -922,6 +956,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "agg": {
+          "description": "A value over the elements of the item's `window` (only in an item with one).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AggSpec"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "calc": {
@@ -1098,6 +1143,14 @@
           "additionalProperties": {
             "$ref": "#/definitions/Spec"
           }
+        },
+        "window": {
+          "description": "\"from\" or \"to\": when the item's `window` starts or ends, as Unix seconds (write it with `\"time\": {\"in\": \"unix\"}`).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -1221,6 +1274,53 @@
           "description": "With `end_path`: also report `not_covered_after` (the date of the end).",
           "default": false,
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WindowDef": {
+      "description": "The part of the day ahead an item covers, in the place's local time, from when the data was fetched: the one in progress, else the next. \"18 to 7\" is the night ahead (over midnight); \"7 to 18\" the daytime.",
+      "type": "object",
+      "required": [
+        "each",
+        "from_hour",
+        "time",
+        "to_hour"
+      ],
+      "properties": {
+        "each": {
+          "description": "Path to the list of times of the series (`hourly.time`).",
+          "type": "string"
+        },
+        "from_hour": {
+          "description": "The local hour (0-23) the period starts.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "step_minutes": {
+          "description": "How long each element of the series covers, in minutes (default 60): an element counts when it overlaps the period.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "time": {
+          "description": "How those times are written.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TimeSpec"
+            }
+          ]
+        },
+        "to_hour": {
+          "description": "The local hour it ends; smaller than `from_hour` for a period over midnight.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false
