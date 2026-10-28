@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -219,5 +220,87 @@ void main() {
       expect(sources.removed, isEmpty);
       expect(sources.zims.length, 2);
     });
+  });
+
+  test('a download started again right after a cancel keeps the partial file and finishes it', () async {
+    final bytes = Uint8List.fromList(List.generate(200000, (i) => (i * 7) & 0xff));
+    final firstSent = Completer<void>();
+    final releaseFirst = Completer<void>();
+    final releaseSecond = Completer<void>();
+    final ranges = <String?>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((req) async {
+      final res = req.response;
+      try {
+        if (!req.uri.path.endsWith('.zim')) {
+          res.statusCode = 404;
+        } else if (req.method == 'HEAD') {
+          res.headers.set('accept-ranges', 'bytes');
+          res.headers.contentLength = bytes.length;
+        } else {
+          final range = req.headers.value(HttpHeaders.rangeHeader);
+          ranges.add(range);
+          final from = range == null ? 0 : int.parse(RegExp(r'bytes=(\d+)-').firstMatch(range)!.group(1)!);
+          res.headers.set('accept-ranges', 'bytes');
+          if (from > 0) {
+            res.statusCode = 206;
+            res.headers.set('content-range', 'bytes $from-${bytes.length - 1}/${bytes.length}');
+          }
+          res.headers.contentLength = bytes.length - from;
+          if (ranges.length == 1) {
+            // Half the file, then nothing until the test ends: this download is cancelled while it waits.
+            res.add(bytes.sublist(0, 100000));
+            await res.flush();
+            firstSent.complete();
+            await releaseFirst.future;
+          } else {
+            // The new download is held until the cancel is over, so a cancel that deletes the file late is caught.
+            await releaseSecond.future;
+            res.add(bytes.sublist(from));
+          }
+        }
+        await res.close();
+      } catch (_) {}
+    });
+    try {
+      final b = make(downloader: ZimDownloader(freeSpace: (_) => 1 << 40));
+      await b.init();
+      final e = CatalogEntry(
+        id: 'e-again',
+        title: 'Wikivoyage - Europe',
+        summary: '',
+        language: 'eng',
+        name: 'wikivoyage_en_europe',
+        flavour: 'nopic',
+        category: 'wikivoyage',
+        tags: const [],
+        updated: '2026-09-14',
+        size: bytes.length,
+        articleCount: 1,
+        downloadUrl: Uri.parse('http://127.0.0.1:${server.port}/zim/wikivoyage_en_europe_nopic_2026-09.zim'),
+        iconUrl: null,
+      );
+      final part = File('${sources.partialDir.path}/${e.fileName}.part');
+      final first = b.download(e);
+      await firstSent.future;
+      for (var i = 0; i < 300 && !(part.existsSync() && part.lengthSync() >= 100000); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(part.lengthSync(), 100000);
+      final cancelled = b.cancel(e);
+      final second = b.download(e);
+      await cancelled;
+      await first;
+      releaseSecond.complete();
+      await second;
+      expect(b.transfers, isEmpty);
+      expect(ranges, [null, 'bytes=100000-']);
+      expect(File(sources.zims.single.path).readAsBytesSync(), bytes);
+      expect(sources.partialDir.listSync(), isEmpty);
+    } finally {
+      if (!releaseFirst.isCompleted) releaseFirst.complete();
+      if (!releaseSecond.isCompleted) releaseSecond.complete();
+      await server.close(force: true);
+    }
   });
 }

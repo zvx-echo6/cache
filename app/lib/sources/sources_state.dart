@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../browse/opds.dart';
 import '../chat/system_prompt.dart';
 import '../chat/tool.dart';
+import '../files.dart';
 import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
@@ -307,6 +308,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       if (core == null) return;
       await core.setSources(_configs());
       await _readStatus(core);
+      _dropOrphanIndexes();
       for (final z in zims) {
         final s = _status[z.path];
         if (s == null ||
@@ -324,6 +326,34 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     } finally {
       _busyRefresh = false;
       notifyListeners();
+    }
+  }
+
+  /// Deletes the search index of every ZIM that is no longer in the folder (deleted by hand, or by the sync), except one
+  /// a job is still building. Run after the core is given the new list, so it no longer has those indexes open.
+  void _dropOrphanIndexes() {
+    final dir = indexesDir;
+    if (dir == null || !dir.existsSync()) return;
+    String base(String path) => path.split(RegExp(r'[\\/]')).last;
+    final keep = {
+      for (final z in zims) '${z.fileName}.idx',
+      for (final path in _jobs.keys) '${base(path)}.idx',
+      for (final s in _status.values)
+        if (s.building) '${base(s.path)}.idx',
+    };
+    // Tidying only: a folder that cannot be read or removed does not stop the indexing of new ZIMs.
+    try {
+      for (final d in dir.listSync().whereType<Directory>()) {
+        final name = base(d.path);
+        if (!name.endsWith('.idx') || keep.contains(name)) continue;
+        try {
+          d.deleteSync(recursive: true);
+        } catch (e) {
+          debugPrint('Could not remove the index $name: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Could not read the indexes folder: $e');
     }
   }
 
@@ -394,7 +424,14 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Future<void> pickAndAddZim() async {
     final picked = await FilePicker.pickFile();
     if (picked == null || picked.path == null) return;
-    await addZim(File(picked.path!), name: picked.name);
+    try {
+      await addZim(File(picked.path!), name: picked.name);
+    } finally {
+      // The picker's own copy of the file is not needed any more, whether the copy worked or not.
+      try {
+        await FilePicker.clearTemporaryFiles();
+      } catch (_) {}
+    }
   }
 
   Future<void> addZim(File src, {String? name}) async {
@@ -406,32 +443,39 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     }
     error = null;
     final dest = File('${zimsDir!.path}/$fileName');
-    final total = await src.length();
+    // Copied under a hidden name and renamed into place once whole: a copy cut off half way is never indexed as the ZIM,
+    // nor sent to the other devices.
+    final tmp = File('${partialDir.path}/.$fileName.import.part');
     copyName = fileName;
     copyProgress = 0;
     notifyListeners();
     try {
-      final sink = dest.openWrite();
-      var done = 0;
-      var lastReport = 0.0;
-      await for (final chunk in src.openRead()) {
-        sink.add(chunk);
-        done += chunk.length;
-        final p = total == 0 ? 1.0 : done / total;
-        if (p - lastReport >= 0.005) {
-          lastReport = p;
-          copyProgress = p;
-          notifyListeners();
-        }
-        // Do not let the sink buffer gigabytes in memory.
-        if (done % (64 * 1024 * 1024) < chunk.length) await sink.flush();
-      }
-      await sink.close();
+      await partialDir.create(recursive: true);
+      final total = await src.length();
+      final raf = await tmp.open(mode: FileMode.write);
       try {
-        await FilePicker.clearTemporaryFiles();
-      } catch (_) {}
+        var done = 0;
+        var lastReport = 0.0;
+        await for (final chunk in src.openRead()) {
+          await raf.writeFrom(chunk);
+          done += chunk.length;
+          final p = total == 0 ? 1.0 : done / total;
+          if (p - lastReport >= 0.005) {
+            lastReport = p;
+            copyProgress = p;
+            notifyListeners();
+          }
+        }
+        // On the disk before the rename, so the real name never holds less than the whole file.
+        await raf.flush();
+      } finally {
+        await raf.close();
+      }
+      await renameOver(tmp, dest.path);
     } catch (e) {
-      if (dest.existsSync()) dest.deleteSync();
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } catch (_) {}
       error = 'Could not copy the file: $e';
       copyProgress = null;
       copyName = null;
@@ -459,20 +503,43 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
             .last
             .replaceFirst(RegExp(r'\.part$'), '');
     final dest = File('${zimsDir!.path}/$name');
-    if (dest.existsSync()) dest.deleteSync();
+    // First next to its place under a hidden name, then renamed over any earlier file of that name: the real name holds
+    // the old file or the whole new one, never part of a copy.
+    final tmp = File('${zimsDir!.path}/.$name.install.part');
     try {
-      finished.renameSync(dest.path);
+      await finished.rename(tmp.path);
     } on FileSystemException {
       // Another file system: copy, then drop the original.
-      await finished.copy(dest.path);
+      try {
+        await finished.copy(tmp.path);
+      } catch (_) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync();
+        } catch (_) {}
+        rethrow;
+      }
       finished.deleteSync();
     }
+    try {
+      await renameOver(tmp, dest.path);
+    } catch (_) {
+      // Back where it was when that is possible, so trying again does not download it again.
+      try {
+        await tmp.rename(finished.path);
+      } catch (_) {
+        try {
+          if (tmp.existsSync()) tmp.deleteSync();
+        } catch (_) {}
+      }
+      rethrow;
+    }
     if (entry != null) {
-      await _originFile(
-        dest.path,
-      ).writeAsString(jsonEncode(ZimOrigin.fromEntry(entry).toJson()));
+      await writeStringAtomic(
+        _originFile(dest.path),
+        jsonEncode(ZimOrigin.fromEntry(entry).toJson()),
+      );
       if (icon != null && icon.isNotEmpty) {
-        await _iconFile(dest.path).writeAsBytes(icon);
+        await writeBytesAtomic(_iconFile(dest.path), icon);
       }
     }
     _failed.remove(dest.path);

@@ -6,6 +6,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
 import '../chat/system_prompt.dart' show isoWithOffset;
+import '../files.dart';
 import '../settings/app_settings.dart';
 import '../settings/data_policy.dart';
 import '../settings/web_search_setup.dart' show KeyCheck;
@@ -934,7 +935,7 @@ class WeatherState extends ChangeNotifier {
       final f = _statusFile;
       if (f == null) return;
       f.parent.createSync(recursive: true);
-      f.writeAsStringSync(jsonEncode({
+      writeStringAtomicSync(f, jsonEncode({
         'ok': _lastOkAt?.millisecondsSinceEpoch,
         'run': _lastRunAt?.millisecondsSinceEpoch,
         'online': _lastOnlineAt?.millisecondsSinceEpoch,

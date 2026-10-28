@@ -344,8 +344,16 @@ impl Prepared {
 
         let dest = self.video.video_dir(&self.inst.id, &uuid)?;
         std::fs::create_dir_all(&dest).map_err(|e| Error::io(format!("creating {}: {e}", dest.display())))?;
-        let part = dest.join("video.part");
-        let meta_path = dest.join("video.part.json");
+        // hidden names: the sync skips them, so a half-finished file is never sent to the other devices
+        let part = dest.join(".video.part");
+        let meta_path = dest.join(".video.part.json");
+        // a half-finished file from before the names were hidden is moved, so the download continues from it
+        for (old, new) in [("video.part", &part), ("video.part.json", &meta_path)] {
+            let old = dest.join(old);
+            if old.exists() && !new.exists() {
+                let _ = std::fs::rename(&old, new);
+            }
+        }
         let want_meta = PartMeta { key: o.key.clone(), file: base_name(&o.files[0].url), size: o.size };
         let have_meta: Option<PartMeta> = std::fs::read_to_string(&meta_path).ok().and_then(|t| serde_json::from_str(&t).ok());
         if have_meta.as_ref() != Some(&want_meta) {
@@ -410,7 +418,7 @@ impl Prepared {
         if let Ok(rd) = std::fs::read_dir(&dest) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().into_owned();
-                if (n.starts_with("video.") && n != final_name && n != "video.part" && n != "video.part.json") || n.starts_with("thumb.") || n.starts_with("captions-") || n == "manifest.json" {
+                if (n.starts_with("video.") && n != final_name) || n.starts_with("thumb.") || n.starts_with("captions-") || n == "manifest.json" {
                     let _ = std::fs::remove_file(e.path());
                 }
             }

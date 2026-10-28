@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'chat/model_name.dart';
+import 'files.dart';
 import 'theme.dart';
 
 /// One model file in the models folder.
@@ -124,7 +125,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> _writeSettings() async {
     try {
-      await _settingsFile?.writeAsString(jsonEncode({
+      final f = _settingsFile;
+      if (f == null) return;
+      await writeStringAtomic(f, jsonEncode({
         'lastModel': _lastModelFile,
         'theme': theme.name,
         'unsupported': _unsupported.toList(),
@@ -219,38 +222,51 @@ class AppState extends ChangeNotifier {
     final picked = await FilePicker.pickFile();
     if (picked == null || picked.path == null) return null;
     final src = File(picked.path!);
-    return copyIn(src, name: picked.name);
+    try {
+      return await copyIn(src, name: picked.name);
+    } finally {
+      // The picker's own copy of the file is not needed any more, whether the copy worked or not.
+      try {
+        await FilePicker.clearTemporaryFiles();
+      } catch (_) {}
+    }
   }
 
   Future<ModelEntry?> copyIn(File src, {String? name}) async {
     final fileName = name ?? src.path.split(RegExp(r'[\\/]')).last;
     final dest = File('${modelsDir!.path}/$fileName');
-    final total = await src.length();
+    // Copied under a hidden name and renamed into place once whole: a copy cut off half way is never loaded as the model,
+    // nor sent to the other devices.
+    final tmp = File('${modelsDir!.path}/.$fileName.import.part');
     copyName = fileName;
     copyProgress = 0;
     notifyListeners();
     try {
-      final sink = dest.openWrite();
-      var done = 0;
-      var lastReport = 0.0;
-      await for (final chunk in src.openRead()) {
-        sink.add(chunk);
-        done += chunk.length;
-        final p = total == 0 ? 1.0 : done / total;
-        if (p - lastReport >= 0.005) {
-          lastReport = p;
-          copyProgress = p;
-          notifyListeners();
-        }
-        // Do not let the sink buffer gigabytes in memory.
-        if (done % (64 * 1024 * 1024) < chunk.length) await sink.flush();
-      }
-      await sink.close();
+      final total = await src.length();
+      final raf = await tmp.open(mode: FileMode.write);
       try {
-        await FilePicker.clearTemporaryFiles();
-      } catch (_) {}
+        var done = 0;
+        var lastReport = 0.0;
+        await for (final chunk in src.openRead()) {
+          await raf.writeFrom(chunk);
+          done += chunk.length;
+          final p = total == 0 ? 1.0 : done / total;
+          if (p - lastReport >= 0.005) {
+            lastReport = p;
+            copyProgress = p;
+            notifyListeners();
+          }
+        }
+        // On the disk before the rename, so the real name never holds less than the whole file.
+        await raf.flush();
+      } finally {
+        await raf.close();
+      }
+      await renameOver(tmp, dest.path);
     } catch (e) {
-      if (dest.existsSync()) dest.deleteSync();
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } catch (_) {}
       copyProgress = null;
       copyName = null;
       loadError = 'Could not copy the file: $e';
@@ -260,6 +276,7 @@ class AppState extends ChangeNotifier {
     copyProgress = null;
     copyName = null;
     await refreshModels();
-    return models.firstWhere((m) => m.path == dest.path);
+    // by name: the listing writes the folder's own separator ("\\" on Windows), not the "/" the path was built with
+    return models.firstWhere((m) => m.fileName == fileName);
   }
 }

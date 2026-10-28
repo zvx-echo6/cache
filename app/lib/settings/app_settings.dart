@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../files.dart';
+
 /// Where connectors are published: the catalogue the app starts with (configurable in Advanced).
 const String kDefaultCatalogueUrl = 'https://cache.echo6.co/connectors/catalogue.json';
 
@@ -149,7 +151,9 @@ class AppSettings extends ChangeNotifier {
   void _save() {
     notifyListeners();
     try {
-      _file?.writeAsStringSync(jsonEncode({
+      final f = _file;
+      if (f == null) return;
+      writeStringAtomicSync(f, jsonEncode({
         'alertPopups': _alertPopups,
         'quiet': {'on': _quiet.on, 'from': _quiet.from, 'to': _quiet.to},
         'ringThroughExtreme': _ringThroughExtreme,

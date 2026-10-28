@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../files.dart';
 import '../settings/data_policy.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
@@ -35,6 +36,9 @@ class ZimTransfer {
   int total = 0;
   String? error;
   CancelToken? token;
+
+  /// Ends once the download loop is over and has closed the partial file; null while it has not started.
+  Future<void>? loop;
 
   double? get fraction => total <= 0 ? null : (done / total).clamp(0.0, 1.0);
 }
@@ -117,7 +121,10 @@ class BrowseState extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      await _file?.writeAsString(
+      final f = _file;
+      if (f == null) return;
+      await writeStringAtomic(
+        f,
         jsonEncode({
           'language': language,
           'replacements': _replacements,
@@ -309,6 +316,12 @@ class BrowseState extends ChangeNotifier {
 
   final Map<String, ZimTransfer> transfers = {};
 
+  /// How many downloads of each entry have been started, so a cancel can tell that a new one has taken over the file.
+  final Map<String, int> _starts = {};
+
+  /// The download loop of each entry that last ran.
+  final Map<String, Future<void>> _loops = {};
+
   /// Downloads [entry]. With [replaces] it is an update: the old ZIM goes only after the new one is ready.
   Future<void> download(
     CatalogEntry entry, {
@@ -323,6 +336,7 @@ class BrowseState extends ChangeNotifier {
     }
     final t = ZimTransfer(entry, replaces: replaces)..total = entry.size;
     transfers[entry.id] = t;
+    _starts[entry.id] = (_starts[entry.id] ?? 0) + 1;
     notifyListeners();
     if (!allowMobile && policy != null && await policy!.blocksDownload()) {
       t.phase = TransferPhase.blockedByMobileData;
@@ -331,7 +345,12 @@ class BrowseState extends ChangeNotifier {
     }
     final token = t.token = CancelToken();
     final part = File('${sources.partialDir.path}/${entry.fileName}.part');
+    final previous = _loops[entry.id];
+    final loop = Completer<void>();
+    _loops[entry.id] = t.loop = loop.future;
     try {
+      // A cancelled download of this entry may still be closing the file; this one continues the file after that.
+      if (previous != null) await previous;
       await part.parent.create(recursive: true);
       t.phase = TransferPhase.downloading;
       notifyListeners();
@@ -365,13 +384,14 @@ class BrowseState extends ChangeNotifier {
         icon: icon,
         fileName: entry.fileName,
       );
-      transfers.remove(entry.id);
+      if (transfers[entry.id] == t) transfers.remove(entry.id);
       updates.remove(replaces?.path);
       notifyListeners();
       _onSources();
     } on DownloadException catch (e) {
       if (e.code == 'cancelled') {
-        transfers.remove(entry.id);
+        // Only this transfer: a new download of the entry may already be in its place.
+        if (transfers[entry.id] == t) transfers.remove(entry.id);
       } else {
         t.phase = TransferPhase.failed;
         t.error = e.message;
@@ -381,6 +401,9 @@ class BrowseState extends ChangeNotifier {
       t.phase = TransferPhase.failed;
       t.error = 'Could not finish the download: $e';
       notifyListeners();
+    } finally {
+      loop.complete();
+      if (_loops[entry.id] == loop.future) _loops.remove(entry.id);
     }
   }
 
@@ -391,10 +414,13 @@ class BrowseState extends ChangeNotifier {
     t.token?.cancel();
     transfers.remove(entry.id);
     notifyListeners();
+    final started = _starts[entry.id];
+    // The download loop notices the cancel and closes the file. The file goes once it has, and only if no new download of
+    // this entry was started meanwhile (that one continues the file).
+    await t.loop;
+    if (_starts[entry.id] != started) return;
     try {
       final part = File('${sources.partialDir.path}/${entry.fileName}.part');
-      // The download loop notices the cancel and closes the file; give it a moment, then remove it.
-      await Future<void>.delayed(const Duration(milliseconds: 300));
       if (part.existsSync()) part.deleteSync();
     } catch (_) {}
   }

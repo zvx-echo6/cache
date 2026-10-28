@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../app_state.dart';
 import '../browse/zim_download.dart';
+import '../files.dart';
 import '../settings/data_policy.dart';
 import 'hf_hub.dart';
 
@@ -39,7 +40,7 @@ enum ModelFit {
   }
 }
 
-/// One model download at a time into the models folder: resumable (a ".part" file that continues where it stopped),
+/// One model download at a time into the models folder: resumable (a ".part" file in models/.partial that continues where it stopped),
 /// checked against Hugging Face's SHA-256, asking the mobile-data switch first. When it finishes the file appears in the
 /// model list.
 class ModelDownloads extends ChangeNotifier {
@@ -73,16 +74,35 @@ class ModelDownloads extends ChangeNotifier {
 
   bool get busy => current != null;
 
-  File _partFor(HfFile f) => File('${app.modelsDir!.path}${Platform.pathSeparator}${f.fileName}.part');
+  /// Where an unfinished download of [f] waits: a hidden folder in the models folder, so the sync leaves it alone and
+  /// finishing is a rename on the same file system.
+  File _partFor(HfFile f) {
+    final sep = Platform.pathSeparator;
+    return File('${app.modelsDir!.path}$sep.partial$sep${f.fileName}.part');
+  }
+
+  /// Where earlier versions kept it: next to the models, where the sync sent it to the other devices.
+  File _oldPartFor(HfFile f) => File('${app.modelsDir!.path}${Platform.pathSeparator}${f.fileName}.part');
+
+  /// Moves a partial file of [f] from an earlier version into the hidden folder, so the download continues from it.
+  Future<void> _moveOldPart(HfFile f) async {
+    try {
+      final old = _oldPartFor(f);
+      final part = _partFor(f);
+      if (!old.existsSync() || part.existsSync()) return;
+      await part.parent.create(recursive: true);
+      await old.rename(part.path);
+    } catch (_) {}
+  }
 
   /// Bytes already downloaded for [f] in an earlier, stopped try.
   int partBytes(HfFile f) {
     try {
-      final p = _partFor(f);
-      return p.existsSync() ? p.lengthSync() : 0;
-    } catch (_) {
-      return 0;
-    }
+      for (final p in [_partFor(f), _oldPartFor(f)]) {
+        if (p.existsSync()) return p.lengthSync();
+      }
+    } catch (_) {}
+    return 0;
   }
 
   /// True when the file is already in the models folder.
@@ -101,6 +121,7 @@ class ModelDownloads extends ChangeNotifier {
       return;
     }
     current = f;
+    await _moveOldPart(f);
     done = partBytes(f);
     total = f.size;
     verifying = false;
@@ -108,6 +129,7 @@ class ModelDownloads extends ChangeNotifier {
     notifyListeners();
     final part = _partFor(f);
     try {
+      await part.parent.create(recursive: true);
       await _downloader.download(
         url: hub.downloadUrl(f),
         part: part,
@@ -124,8 +146,7 @@ class ModelDownloads extends ChangeNotifier {
         },
       );
       final dest = File('${app.modelsDir!.path}${Platform.pathSeparator}${f.fileName}');
-      if (dest.existsSync()) dest.deleteSync();
-      await part.rename(dest.path);
+      await renameOver(part, dest.path);
       await app.refreshModels();
       for (final m in app.models) {
         if (m.path == dest.path) finished = m;
@@ -150,10 +171,11 @@ class ModelDownloads extends ChangeNotifier {
 
   /// Throws away the partly downloaded file of [f].
   void discardPart(HfFile f) {
-    try {
-      final p = _partFor(f);
-      if (p.existsSync()) p.deleteSync();
-    } catch (_) {}
+    for (final p in [_partFor(f), _oldPartFor(f)]) {
+      try {
+        if (p.existsSync()) p.deleteSync();
+      } catch (_) {}
+    }
     notifyListeners();
   }
 }

@@ -165,7 +165,12 @@ fn download_list_resolve_delete() {
     let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
     assert_eq!(sha_hex(&std::fs::read(dir.join("video.mp4")).unwrap()), sha_hex(&blob(WEB_SIZE, 7)));
     assert!(dir.join("thumb.jpg").is_file() && dir.join("captions-en.vtt").is_file());
-    assert!(!dir.join("video.part").exists() && !dir.join("video.part.json").exists());
+    assert!(!dir.join(".video.part").exists() && !dir.join(".video.part.json").exists());
+    // no half-finished or temp file is left beside the download
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let n = e.unwrap().file_name().to_string_lossy().into_owned();
+        assert!(!n.starts_with('.') && !n.ends_with(".tmp") && !n.ends_with(".part"), "{n} left behind");
+    }
 
     let dls = j(v.downloads_json());
     assert_eq!(dls["downloads"].as_array().unwrap().len(), 1);
@@ -250,8 +255,9 @@ fn cancelled_download_keeps_its_data_and_a_new_job_resumes() {
     let out = dl::run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
     assert_eq!(out, Outcome::Cancelled);
     let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
-    let part = std::fs::metadata(dir.join("video.part")).unwrap().len();
+    let part = std::fs::metadata(dir.join(".video.part")).unwrap().len();
     assert!(part > 400_000 && part < WEB_SIZE as u64);
+    assert!(!dir.join("video.part").exists() && !dir.join("video.part.json").exists(), "the half-finished files have hidden names");
     assert!(!dir.join("manifest.json").exists(), "an unfinished download is not listed");
     assert_eq!(j(v.downloads_json())["downloads"], json!([]));
     m.knobs.lock().unwrap().slow_ms = 0;
@@ -259,6 +265,29 @@ fn cancelled_download_keeps_its_data_and_a_new_job_resumes() {
     let gets = m.hits_for(WEB_FILE);
     assert_eq!(gets.last().unwrap().header("Range").unwrap(), format!("bytes={part}-"));
     assert_eq!(sha_hex(&std::fs::read(dir.join("video.mp4")).unwrap()), sha_hex(&blob(WEB_SIZE, 7)));
+}
+
+#[test]
+fn a_half_finished_file_from_before_the_hidden_names_is_continued() {
+    let (t, m, v, id) = setup("oldpart");
+    m.knobs.lock().unwrap().slow_ms = 5;
+    let seen = AtomicU64::new(0);
+    let params = json!({"dir": t.s(), "instance": id, "video": WEB_UUID, "choice": "lowest"}).to_string();
+    let out = dl::run_job(&params, &|d, _| seen.store(d, Ordering::SeqCst), &|| seen.load(Ordering::SeqCst) > 400_000).unwrap();
+    assert_eq!(out, Outcome::Cancelled);
+    let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
+    // as earlier versions left it
+    std::fs::rename(dir.join(".video.part"), dir.join("video.part")).unwrap();
+    std::fs::rename(dir.join(".video.part.json"), dir.join("video.part.json")).unwrap();
+    let part = std::fs::metadata(dir.join("video.part")).unwrap().len();
+    m.knobs.lock().unwrap().slow_ms = 0;
+    assert_eq!(job(&v, &t, &id, WEB_UUID, "lowest", json!({})).unwrap(), Outcome::Done);
+    let gets = m.hits_for(WEB_FILE);
+    assert_eq!(gets.last().unwrap().header("Range").unwrap(), format!("bytes={part}-"));
+    assert_eq!(sha_hex(&std::fs::read(dir.join("video.mp4")).unwrap()), sha_hex(&blob(WEB_SIZE, 7)));
+    for n in ["video.part", "video.part.json", ".video.part", ".video.part.json"] {
+        assert!(!dir.join(n).exists(), "{n} is gone");
+    }
 }
 
 #[test]
@@ -310,7 +339,7 @@ fn hls_files_audio_only_and_the_joined_pair() {
     m.knobs.lock().unwrap().bad_sha = true;
     let e = job(&v, &t, &id, HLS_UUID, "audio", json!({})).unwrap_err();
     assert_eq!(e.code, "damaged");
-    assert!(!t.0.join("downloads").join(&id).join(HLS_UUID).join("video.part").exists());
+    assert!(!t.0.join("downloads").join(&id).join(HLS_UUID).join(".video.part").exists());
 }
 
 #[test]

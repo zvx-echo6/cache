@@ -1559,7 +1559,8 @@ search; stream; download for offline use; link resolution for citations. The cra
 
 - **State on disk** (the `video` section of the `cs_open` config, `{"dir"}`): `instances.json` and `downloads/<instance>/<uuid>/`
   holding `video.<ext>`, `thumb.<ext>`, `captions-<lang>.vtt` and `manifest.json` (written last; a folder without it is not a
-  download, and a half-finished file is `video.part` with `video.part.json` saying which file it is).
+  download, and a half-finished file is `.video.part` with `.video.part.json` saying which file it is; hidden names, so the sync
+  never sends them).
 - **Tokens** are never stored by the core. Login (`GET /api/v1/oauth-clients/local`, then `POST /api/v1/users/token`, password
   grant, `x-peertube-otp` header when the account has two-factor login) and refresh (`grant_type=refresh_token`) return the tokens;
   the app keeps them in its secure storage and passes `"token"` per call.

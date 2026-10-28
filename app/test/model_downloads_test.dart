@@ -25,6 +25,9 @@ class _FakeHub {
   int gets = 0;
   final ranges = <String?>[];
 
+  /// When set, a download from the start sends this many bytes at once and the rest slowly.
+  int? slowAfter;
+
   String get sha => sha256.convert(body).toString();
 
   Future<void> start() async {
@@ -66,6 +69,21 @@ class _FakeHub {
             r.headers.set('content-range', 'bytes $from-${body.length - 1}/${body.length}');
           }
           r.contentLength = body.length - from;
+          final slow = slowAfter;
+          if (slow != null && from == 0) {
+            // The rest comes slowly, so a test can look at the download while it runs (or cancel it).
+            try {
+              r.add(body.sublist(0, slow));
+              await r.flush();
+              for (var i = slow; i < body.length; i += 10000) {
+                await Future<void>.delayed(const Duration(milliseconds: 20));
+                r.add(body.sublist(i, i + 10000 < body.length ? i + 10000 : body.length));
+                await r.flush();
+              }
+              await r.close();
+            } catch (_) {}
+            return;
+          }
           r.add(body.sublist(from));
         }
       } else if (p.startsWith('/acme/locked-GGUF/resolve/')) {
@@ -127,18 +145,48 @@ void main() {
     expect(d.error, isNull);
     expect(d.finished?.fileName, 'tiny-Q4_K_M.gguf');
     expect(app.models.map((m) => m.fileName), ['tiny-Q4_K_M.gguf']);
-    expect(File('${app.modelsDir!.path}/tiny-Q4_K_M.gguf.part').existsSync(), isFalse);
+    expect(File('${app.modelsDir!.path}/.partial/tiny-Q4_K_M.gguf.part').existsSync(), isFalse);
+    expect(app.modelsDir!.listSync().whereType<File>().map((e) => e.path.split(RegExp(r'[\\/]')).last), ['tiny-Q4_K_M.gguf']);
     expect(d.isInstalled(f), isTrue);
+  });
+
+  test('while downloading, the partial file is in the hidden folder, not next to the models', () async {
+    fake.slowAfter = 100000;
+    final d = downloads();
+    final f = (await d.hub.ggufFiles('acme/tiny-GGUF')).first;
+    final run = d.start(f);
+    final part = File('${app.modelsDir!.path}/.partial/tiny-Q4_K_M.gguf.part');
+    for (var i = 0; i < 200 && !part.existsSync(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(part.existsSync(), isTrue);
+    expect(File('${app.modelsDir!.path}/tiny-Q4_K_M.gguf.part').existsSync(), isFalse);
+    d.cancel();
+    await run;
+    expect(d.partBytes(f), part.lengthSync());
   });
 
   test('a stopped download continues from where it stopped', () async {
     final d = downloads();
     final f = (await d.hub.ggufFiles('acme/tiny-GGUF')).first;
-    File('${app.modelsDir!.path}/tiny-Q4_K_M.gguf.part').writeAsBytesSync(fake.body.sublist(0, 120000));
+    Directory('${app.modelsDir!.path}/.partial').createSync();
+    File('${app.modelsDir!.path}/.partial/tiny-Q4_K_M.gguf.part').writeAsBytesSync(fake.body.sublist(0, 120000));
     expect(d.partBytes(f), 120000);
     await d.start(f);
     expect(d.error, isNull);
     expect(fake.ranges.last, 'bytes=120000-');
+    expect(sha256.convert(File('${app.modelsDir!.path}/tiny-Q4_K_M.gguf').readAsBytesSync()).toString(), fake.sha);
+  });
+
+  test('a partial file where earlier versions kept it is moved to the hidden folder and continued', () async {
+    final d = downloads();
+    final f = (await d.hub.ggufFiles('acme/tiny-GGUF')).first;
+    final old = File('${app.modelsDir!.path}/tiny-Q4_K_M.gguf.part')..writeAsBytesSync(fake.body.sublist(0, 90000));
+    expect(d.partBytes(f), 90000);
+    await d.start(f);
+    expect(d.error, isNull);
+    expect(fake.ranges.last, 'bytes=90000-');
+    expect(old.existsSync(), isFalse);
     expect(sha256.convert(File('${app.modelsDir!.path}/tiny-Q4_K_M.gguf').readAsBytesSync()).toString(), fake.sha);
   });
 
@@ -168,6 +216,22 @@ void main() {
     final d = downloads();
     await d.start(const HfFile(repo: 'acme/locked-GGUF', path: 'x.gguf', size: 10));
     expect(d.error, contains('Hugging Face account'));
+  });
+
+  test('a chosen file is copied in whole under its name, with no temp file left', () async {
+    final src = File('${dir.path}/mine.gguf')..writeAsBytesSync(fake.body);
+    final m = await app.copyIn(src);
+    expect(m?.fileName, 'mine.gguf');
+    expect(app.copyProgress, isNull);
+    expect(File('${app.modelsDir!.path}/mine.gguf').readAsBytesSync(), fake.body);
+    expect(app.modelsDir!.listSync().map((e) => e.path.split(RegExp(r'[\\/]')).last), ['mine.gguf']);
+  });
+
+  test('a copy that fails leaves nothing in the models folder', () async {
+    final m = await app.copyIn(File('${dir.path}/missing.gguf'));
+    expect(m, isNull);
+    expect(app.loadError, contains('Could not copy'));
+    expect(app.modelsDir!.listSync(), isEmpty);
   });
 
   test('fit: a model takes its file size plus working room out of the phone memory', () {
