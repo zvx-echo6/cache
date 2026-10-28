@@ -349,8 +349,17 @@ class WeatherState extends ChangeNotifier {
     _started = true;
     await _applyAll();
     notifyListeners();
-    if (_catalogueDue) unawaited(refreshCatalogues());
+    if (_catalogueDue) {
+      _startupRefresh = refreshCatalogues();
+      unawaited(_startupRefresh);
+    }
   }
+
+  Future<void>? _startupRefresh;
+
+  /// The catalogue check [start] began in the background, if it began one (so tests can wait for it).
+  @visibleForTesting
+  Future<void>? get startupRefresh => _startupRefresh;
 
   bool get _catalogueDue {
     if (_kind == ConnectionKind.none) return false;

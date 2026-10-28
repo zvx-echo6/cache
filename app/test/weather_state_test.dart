@@ -158,7 +158,8 @@ void main() {
       h = await Harness.create();
       final first = h;
       final later = await Harness.create(again: first, serve: true, clock: first.clock.add(const Duration(days: 2)));
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(later.weather.startupRefresh, isNotNull, reason: 'a catalogue two days old is checked at start');
+      await later.weather.startupRefresh;
       expect(later.web.requested, isNotEmpty);
       first.weather.dispose();
       h = later;
