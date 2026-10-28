@@ -286,3 +286,23 @@ fn the_store_keeps_the_newest_routes() {
     assert!(store.get("r9").is_some());
     assert!(store.get("r0").is_none(), "only the newest are kept");
 }
+
+/// Records what a route asked to have fetched.
+struct Record(std::sync::Mutex<Vec<Vec<(f64, f64)>>>);
+
+impl cache_navigate::TileStream for Record {
+    fn prepare(&self, points: &[(f64, f64)]) {
+        self.0.lock().unwrap().push(points.to_vec());
+    }
+}
+
+#[test]
+fn the_tile_stream_gets_every_stop_once_before_the_route() {
+    let c = core(4, 0);
+    let rec = Arc::new(Record(Default::default()));
+    let s: Arc<dyn cache_navigate::TileStream> = rec.clone();
+    c.set_stream(Some(s));
+    let (r, _) = route(&c, &req(vec![end("V", 42.6, -113.6)], 0)).unwrap();
+    assert_eq!(r["ok"], true);
+    assert_eq!(*rec.0.lock().unwrap(), vec![vec![(42.5, -113.8), (42.6, -113.6), (42.5, -113.5)]]);
+}
