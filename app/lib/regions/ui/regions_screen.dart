@@ -530,19 +530,20 @@ class _UpdatesTabState extends State<UpdatesTab> {
                 ),
             ],
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          // Stacked: side by side they do not fit a phone's width.
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextButton.icon(
-                icon: const Icon(Icons.sync),
-                label: const Text('Check for updates'),
-                onPressed: _busy || !r.routingAvailable ? null : () => _run(r.checkUpdates),
-              ),
-              const SizedBox(width: 8),
               FilledButton(
                 key: const ValueKey('update-all'),
                 onPressed: _busy || !any ? null : () => _run(r.updateAll, anyway: () => r.updateAll(anyway: true)),
                 child: const Text('Update all'),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.sync),
+                label: const Text('Check for updates'),
+                onPressed: _busy || !r.routingAvailable ? null : () => _run(r.checkUpdates),
               ),
             ],
           ),

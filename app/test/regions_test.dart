@@ -297,9 +297,9 @@ void main() {
     expect(find.text('Regions'), findsOneWidget);
     expect(find.text('Downloads'), findsOneWidget);
 
+    // a fresh app: the Regions screen opened above is still on top of the old one's navigator
+    await tester.pumpWidget(const SizedBox());
     await r.s.show(tester, Scaffold(body: LayerSheet(maps: r.s.maps, location: r.s.location, regions: r.regions)));
-    // the sheet's list is built as it scrolls: bring its last rows in first
-    await tester.scrollUntilVisible(find.text('Get more layers'), 200, scrollable: find.byType(Scrollable).last);
     expect(find.text('Get more layers'), findsOneWidget, reason: 'the layer catalogue stays for single layers and drawn areas');
     await tester.ensureVisible(find.byKey(const ValueKey('download-region')));
     await tester.pump();
