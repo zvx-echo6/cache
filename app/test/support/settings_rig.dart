@@ -14,6 +14,7 @@ import 'package:cache/settings/hub.dart';
 import 'package:cache/settings/location_access.dart';
 import 'package:cache/settings/storage_usage.dart';
 import 'package:cache/settings/web_search_setup.dart';
+import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/video/token_store.dart';
 import 'package:cache/video/video_state.dart';
@@ -26,6 +27,7 @@ import '../browse/fakes.dart';
 import '../nav_fakes.dart';
 import '../video_fake.dart';
 import 'weather_fakes.dart';
+import 'sync_fake.dart';
 import 'test_layer_engine.dart';
 
 class FakeAccess implements LocationAccessProbe {
@@ -87,6 +89,8 @@ class SettingsRig {
   late MapsState maps;
   late TestLayerEngine engine;
   late SettingsHub hub;
+  late SharingState sharing;
+  final FakeSync sync = FakeSync();
   late WeatherState weather;
   late FakeLiveCore liveCore;
   late FakeWeb web;
@@ -199,7 +203,14 @@ class SettingsRig {
       fetch: r.web.fetch,
       clock: () => r.clock,
     );
+    r.sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: [ShareKind('shared', 'Shared folder', () => Directory('${r.dir.path}/Shared'))],
+      opener: (_) async => r.sync,
+    );
     r.hub = SettingsHub(
+      sharing: r.sharing,
       settings: r.settings,
       policy: r.policy,
       webSearch: r.webSearch,
@@ -237,6 +248,7 @@ class SettingsRig {
     store.close();
     webSearch.dispose();
     weather.dispose();
+    sharing.dispose();
     await tester.runAsync(() async {
       try {
         await dir.delete(recursive: true);

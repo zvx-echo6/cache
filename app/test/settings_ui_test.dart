@@ -28,7 +28,7 @@ void main() {
       await tester.pump();
       for (final title in [
         'Assistant', 'Library', 'Maps', 'Weather and alerts', 'Videos', 'Notifications and location', 'Storage and data',
-        'Share this setup', 'Appearance', 'About and credits',
+        'Sharing and sync', 'Appearance', 'About and credits',
       ]) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
@@ -76,13 +76,15 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Share this setup cannot be tapped; Weather and alerts opens its page', (tester) async {
+    testWidgets('Sharing and sync is off until set up and opens its page; Weather and alerts opens its page', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SettingsScreen(deps: r.deps));
-      await tester.tap(find.text('Share this setup'));
-      await tester.pump();
-      expect(find.byType(SnackBar), findsNothing);
-      expect(find.text('Share this setup'), findsOneWidget, reason: 'still on Settings');
+      expect(find.text('Off'), findsOneWidget, reason: 'sharing is not set up');
+      await tester.tap(find.text('Sharing and sync'));
+      await tester.pumpAndSettle();
+      expect(find.text('Set up sharing'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Weather and alerts'));
       await tester.pumpAndSettle();
       expect(find.text('Update now'), findsOneWidget, reason: 'the Weather and alerts page');

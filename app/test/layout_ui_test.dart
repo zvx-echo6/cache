@@ -317,7 +317,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Appearance'), findsOneWidget);
-    expect(find.text('Share this setup'), findsOneWidget);
+    expect(find.text('Sharing and sync'), findsOneWidget);
     await r.stop(tester);
   });
 }
