@@ -116,8 +116,8 @@ Unknown number:
 A number whose result is not text to open (a place, route, live-data item or location, shown in full by the tool that
 gave it) is `bad_arguments`:
 `{"ok": false, "error": {"type": "bad_arguments", "detail": "[4] is a place result; everything about it is already shown above"}}`.
-The kind comes from the result's address: `place`, `town`, `addr` and `layer` say "a place", `nav` "a route", `live`
-"a live data", `loc` "a location", `repeater` "a repeater", `app` "a setup"; any other result that is not a library, ZIM
+The kind comes from the result's address: `place`, `town`, `addr`, `layer` and `pack` say "a place", `nav` "a route",
+`live` "a live-data", `loc` "a location", `repeater` "a repeater", `app` "a setup"; any other result that is not a library, ZIM
 or web result (such as an `act` module's) says "an app".
 
 ### navigate (route summary for the assistant; navigation in Maps)

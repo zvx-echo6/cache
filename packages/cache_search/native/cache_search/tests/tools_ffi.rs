@@ -341,8 +341,9 @@ fn read_on_a_result_already_shown_is_bad_arguments() {
         ("town:42", "a place"),
         ("addr:u1/12", "a place"),
         ("layer:l1/p1", "a place"),
+        ("pack:p/3", "a place"),
         ("nav:r1", "a route"),
-        ("live:weather/home/now", "a live data"),
+        ("live:weather/home/now", "a live-data"),
         ("loc:43.6150,-116.2023", "a location"),
         ("repeater:list1/3", "a repeater"),
         ("app:setup/connection", "a setup"),
@@ -357,8 +358,8 @@ fn read_on_a_result_already_shown_is_bad_arguments() {
         assert_eq!(v["content"], want.to_string());
     }
     assert_eq!(
-        f.tool("read", r#"{"n":5}"#)["content"],
-        r#"{"ok":false,"error":{"type":"bad_arguments","detail":"[5] is a route result; everything about it is already shown above"}}"#
+        f.tool("read", r#"{"n":6}"#)["content"],
+        r#"{"ok":false,"error":{"type":"bad_arguments","detail":"[6] is a route result; everything about it is already shown above"}}"#
     );
 }
 

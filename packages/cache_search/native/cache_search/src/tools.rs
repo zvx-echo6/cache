@@ -65,14 +65,14 @@ impl Builtin {
 }
 
 /// What a numbered result that `read` can't open is, from its address ("a place", "an app"): its tool already showed
-/// everything about it. None for the readable ones (library, ZIM, web and pack results).
+/// everything about it. None for the readable ones (library, ZIM and web results).
 fn shown_kind(address: &str) -> Option<&'static str> {
     let prefix = address.split(':').next().unwrap_or("");
     Some(match prefix {
-        "lib" | "zim" | "web" | "pack" => return None,
-        "place" | "town" | "addr" | "layer" => "a place",
+        "lib" | "zim" | "web" => return None,
+        "place" | "town" | "addr" | "layer" | "pack" => "a place",
         "nav" => "a route",
-        "live" => "a live data",
+        "live" => "a live-data",
         "loc" => "a location",
         "repeater" => "a repeater",
         "app" => "a setup",
