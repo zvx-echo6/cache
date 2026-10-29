@@ -5,8 +5,8 @@
 //! - When the nearest edge is a generic service road (airport, campus and private access roads), the end goes to the nearest
 //!   public road (residential or better) within [`PUBLIC_ROAD_M`]. That gap is how people get to the car, not an off-road
 //!   leg: directions add no off-road leg and no `offroad_unavailable` warning for it.
-//! - When another edge is within [`SPLIT_EXTRA_M`] of the nearest one (the other carriageway of a split one-way street, a
-//!   corner), the trip is routed from both and the faster route kept: two route calls, only in that case.
+//! - When the other carriageway of a split one-way street (an edge of the same name) is within [`SPLIT_EXTRA_M`] of the
+//!   nearest one, the trip is routed from both and the faster route kept: two route calls, only in that case.
 //!
 //! Only driving does this; walking and cycling keep Valhalla's own snapping (service roads and paths are where people walk).
 use crate::grid::haversine_m;
@@ -72,7 +72,9 @@ pub fn plan_end(v: &dyn Valhalla, p: (f64, f64), costing: &str, to_public: bool)
         let cands = v.candidates(p.0, p.1, costing, &wide);
         if let Some(best) = cands.first() {
             let other = cands.iter().find(|c| {
-                c.distance_m <= best.distance_m + SPLIT_EXTRA_M && haversine_m(best.lat, best.lon, c.lat, c.lon) > SAME_ROAD_M && !service_road(c)
+                c.distance_m <= best.distance_m + SPLIT_EXTRA_M
+                    && haversine_m(best.lat, best.lon, c.lat, c.lon) > SAME_ROAD_M
+                    && c.names.iter().any(|n| best.names.contains(n))
             });
             if let Some(o) = other {
                 ends.push(RouteEnd { lat: o.lat, lon: o.lon, opts: opts.clone() });
@@ -128,7 +130,11 @@ mod tests {
         times: Vec<(f64, f64)>,
     }
     fn edge(lat: f64, lon: f64, d: f64, cls: &str, use_: &str) -> EdgeCandidate {
-        EdgeCandidate { lat, lon, distance_m: d, road_class: Some(cls.into()), use_: Some(use_.into()) }
+        EdgeCandidate { lat, lon, distance_m: d, road_class: Some(cls.into()), use_: Some(use_.into()), names: vec![] }
+    }
+    fn named(mut e: EdgeCandidate, name: &str) -> EdgeCandidate {
+        e.names = vec![name.into()];
+        e
     }
     impl Valhalla for Roads {
         fn locate(&self, _: f64, _: f64, _: &str) -> Option<LocateSnap> {
@@ -200,11 +206,13 @@ mod tests {
 
     #[test]
     fn the_other_carriageway_is_routed_too_and_the_faster_route_kept() {
-        // South Temple's two one-way carriageways, 109 m and 124 m away; a third road at 160 m is too far to count.
-        let near = edge(40.769417, -111.891896, 109.0, "tertiary", "road");
-        let other = edge(40.769280, -111.891900, 124.0, "tertiary", "road");
-        let far = edge(40.7690, -111.8930, 160.0, "tertiary", "road");
-        let mut v = roads(vec![near.clone(), other.clone(), far], vec![]);
+        // A street's two one-way carriageways, 109 m and 124 m away; a cross street at 115 m is another road, and the same
+        // street at 160 m is too far to count.
+        let near = named(edge(40.769417, -111.891896, 109.0, "tertiary", "road"), "South Temple");
+        let cross = named(edge(40.769500, -111.891500, 115.0, "tertiary", "road"), "State Street");
+        let other = named(edge(40.769280, -111.891900, 124.0, "tertiary", "road"), "South Temple");
+        let far = named(edge(40.7690, -111.8930, 160.0, "tertiary", "road"), "South Temple");
+        let mut v = roads(vec![near.clone(), cross, other.clone(), far], vec![]);
         v.times = vec![(other.lat, 60.0)];
         let from = plan_end(&v, P, "auto", true);
         assert_eq!(from.ends.len(), 2);

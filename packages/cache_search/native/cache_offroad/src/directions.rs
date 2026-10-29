@@ -155,6 +155,9 @@ pub struct EndInfo {
     pub lat: f64,
     pub lon: f64,
     pub snap_distance_m: i64,
+    /// The end was moved past service roads to a public road (`snap`): its snap distance is how people get to the car, not
+    /// a gap to the road network. Not in the response.
+    pub public_road: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -604,6 +607,8 @@ impl Env<'_> {
                 to_end = end_info(req.to, steps.last().unwrap().end);
             }
         }
+        from_end.public_road = public_road.0;
+        to_end.public_road = public_road.1;
         Directions {
             ok: true,
             route_id: rid,
@@ -625,7 +630,7 @@ impl Env<'_> {
 }
 
 fn end_info(p: (f64, f64), snap: (f64, f64)) -> EndInfo {
-    EndInfo { lat: round_py(p.0, 6), lon: round_py(p.1, 6), snap_distance_m: round_i(haversine_m(p.0, p.1, snap.0, snap.1)) }
+    EndInfo { lat: round_py(p.0, 6), lon: round_py(p.1, 6), snap_distance_m: round_i(haversine_m(p.0, p.1, snap.0, snap.1)), public_road: false }
 }
 
 /// Used by tests: decode the response shape.

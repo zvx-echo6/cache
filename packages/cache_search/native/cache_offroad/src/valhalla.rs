@@ -131,6 +131,8 @@ pub struct EdgeCandidate {
     pub road_class: Option<String>,
     /// `edge.classification.use`, e.g. "service_road".
     pub use_: Option<String>,
+    /// `edge_info.names`: the road's names.
+    pub names: Vec<String>,
 }
 
 pub trait Valhalla: Send + Sync {
