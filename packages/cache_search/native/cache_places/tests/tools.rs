@@ -508,6 +508,8 @@ fn open_status_examples_and_no_note_without_hours() {
     let v = nearby_at(&ts, "2026-10-29T23:00:00-06:00");
     assert_eq!(v["places"][0]["open_status"], "Open now (closes at midnight)");
     assert_eq!(v["places"][1]["open_status"], "Closed now (opens Fri 00:00)");
+    let (_d, ts) = pharmacies("pd5", [(Some("Mo-Fr 00:00-24:00"), None), (None, None), (None, None)]);
+    assert_eq!(nearby_at(&ts, THU_1430)["places"][0]["open_status"], "Open now (closes at midnight, Fri night)");
 
     // no row with hours: no hours_note, and every row still says what is known
     let (_d, ts) = pharmacies("pd3", [(None, None), (None, None), (None, None)]);

@@ -376,7 +376,8 @@ below). `hours_note` follows `places` only when at least one row has `hours`.
 - `open_status`, worked out from `hours` at the tool's `now` (the phone's local time; the place is taken to be in the
   phone's time zone). Times are 24-hour; a day other than today (tomorrow included) is named `Mon`..`Sun`:
   `"Open now (closes 18:00)"`, `"Open now (closes Fri 02:00)"`, `"Open now (closes at midnight)"` (closing at 24:00
-  tonight, or 00:00 tomorrow; opening at 00:00 keeps the normal form, "Closed now (opens Fri 00:00)"),
+  tonight, or 00:00 tomorrow), `"Open now (closes at midnight, Fri night)"` (a later midnight, named by the day whose
+  night it is; opening at 00:00 keeps the normal form, "Closed now (opens Fri 00:00)"),
   `"Open now (open 24 hours)"` (`24/7`, or open without
   a break for the next 7 days), `"Closed now (opens 18:00)"`, `"Closed now (opens Fri 08:00)"`, `"Closed now"` (no
   opening in the next 7 days), `"Hours not known"` (no `hours`), `"Hours not understood"` (`hours` outside the rules

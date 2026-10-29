@@ -160,8 +160,11 @@ fn status(week: &Week, today: usize, now: i64) -> String {
         return if end - now >= WEEK_MIN {
             "Open now (open 24 hours)".into()
         } else if end == DAY_MIN {
-            // tonight's 24:00 (00:00 tomorrow); a later midnight keeps its day ("closes Sat 00:00")
+            // tonight's 24:00 (00:00 tomorrow)
             "Open now (closes at midnight)".into()
+        } else if end.rem_euclid(DAY_MIN) == 0 {
+            // a later midnight is named by the day whose night it ends
+            format!("Open now (closes at midnight, {} night)", DAY_NAMES[(today as i64 + end / DAY_MIN - 1).rem_euclid(7) as usize])
         } else {
             format!("Open now (closes {})", at(end))
         };
@@ -245,7 +248,7 @@ mod tests {
         assert_eq!(st("08:00-12:00,12:00-18:00", THU_1430), "Open now (closes 18:00)");
         assert_eq!(st("08:00-12:00,13:00-18:00", "2026-10-29T12:30:00-06:00"), "Closed now (opens 13:00)");
         assert_eq!(st("Mo-Su 00:00-24:00", THU_1430), "Open now (open 24 hours)");
-        assert_eq!(st("Mo-Fr 00:00-24:00", THU_1430), "Open now (closes Sat 00:00)");
+        assert_eq!(st("Mo-Fr 00:00-24:00", THU_1430), "Open now (closes at midnight, Fri night)");
         assert_eq!(st("Mo-Fr 08:00-24:00", THU_2300), "Open now (closes at midnight)");
         assert_eq!(st("Mo-Fr 22:00-02:00", THU_2300), "Open now (closes Fri 02:00)");
     }
@@ -258,6 +261,10 @@ mod tests {
         assert_eq!(st("Mo-Su 18:00-24:00", THU_1430), "Closed now (opens 18:00)");
         assert_eq!(st("Fr 00:00-06:00", THU_1430), "Closed now (opens Fri 00:00)");
         assert_eq!(st("Fr 00:00-06:00", FRI_0100), "Open now (closes 06:00)");
+        // a later midnight names the day whose night it is
+        assert_eq!(st("Mo-Fr 00:00-24:00", THU_1430), "Open now (closes at midnight, Fri night)");
+        assert_eq!(st("Th 20:00-24:00; Fr 00:00-24:00", THU_2300), "Open now (closes at midnight, Fri night)");
+        assert_eq!(st("Mo-Su 00:00-24:00; Mo off", THU_1430), "Open now (closes at midnight, Sun night)");
     }
 
     #[test]
