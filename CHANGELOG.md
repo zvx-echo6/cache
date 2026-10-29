@@ -21,6 +21,7 @@ release notes).
 - Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
 - Assistant: says why live data is not up to date (source switched off, no connection, mobile data updates off, or the refresh failed)
 - Assistant: nearby places and navigation destinations show the website and whether the place is open now
+- Assistant: the calculator works out dates, such as the days between two dates or the date 30 days from today
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes
