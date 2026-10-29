@@ -43,7 +43,9 @@ CREATE TABLE kinds (
 -- enwiki article whose coordinates and exact title agree. brand_wikidata is the brand's item, not the place's.
 -- category is NULL for places that belong to no starter category (they are here for the geocoder); kind is the raw
 -- type ("amenity=school", "pharmacy_and_drug_store"); kind_id is the stable kind (see `kinds`), derived from the source's
--- tags by the kind rules, or from the raw type when no rule says more.
+-- tags by the kind rules, or from the raw type when no rule says more. arrival_lat/arrival_lon is where a route to the place
+-- goes when that is not its own point: an airport's passenger terminal, a building's main entrance, a park's or campus's
+-- parking (NULL: the place's point). They were added after the first layout; a reader checks for them.
 CREATE TABLE places (
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -70,8 +72,6 @@ CREATE TABLE places (
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
   confidence REAL,
-  -- Where a route to the place goes, when that is not its own point: an airport's passenger terminal, a building's main
-  -- entrance, a park's or campus's parking (NULL: the place's point). Added after the first layout; a reader checks for it.
   arrival_lat REAL,
   arrival_lon REAL
 );
@@ -222,6 +222,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 
 -- As format 2's places, plus alt_names ("; "-joined; the FTS column on the phone). street, locality and state were
 -- worked out on the builder with all the data, so they never depend on which neighbouring tiles the phone has.
+-- arrival_lat/arrival_lon as format 2's (absent from tiles cut before them).
 CREATE TABLE places (
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -248,8 +249,6 @@ CREATE TABLE places (
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
   confidence REAL,
-  -- Where a route to the place goes, when that is not its own point: an airport's passenger terminal, a building's main
-  -- entrance, a park's or campus's parking (NULL: the place's point). Added after the first layout; a reader checks for it.
   arrival_lat REAL,
   arrival_lon REAL
 );
@@ -374,8 +373,6 @@ CREATE TABLE places (
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
   confidence REAL,
-  -- Where a route to the place goes, when that is not its own point: an airport's passenger terminal, a building's main
-  -- entrance, a park's or campus's parking (NULL: the place's point). Added after the first layout; a reader checks for it.
   arrival_lat REAL,
   arrival_lon REAL
 );

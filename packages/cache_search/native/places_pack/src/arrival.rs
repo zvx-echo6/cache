@@ -255,7 +255,8 @@ mod tests {
         let mut moved = rows.clone();
         moved[0].lat -= 0.011; // 1.2 km south of the terminal
         assign(&mut moved, &anchors, &cfg());
-        assert_eq!(moved[0].arrival, Some((43.5645, -116.2225)), "no doors: the terminal's centre");
+        let (la, lo) = moved[0].arrival.expect("the terminal");
+        assert!((la - 43.5645).abs() < 1e-9 && (lo + 116.2225).abs() < 1e-9, "no doors: the terminal's centre");
         rows[0].lat = 43.70;
         assert_eq!(assign(&mut rows, &anchors, &cfg()).total(), 0, "nothing within 3 km");
     }
