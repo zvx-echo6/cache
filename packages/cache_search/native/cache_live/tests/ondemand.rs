@@ -360,7 +360,7 @@ fn not_refreshed_is_absent_on_fresh_data_without_a_fetcher_and_after_a_good_down
     let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&["alerts"]))).unwrap();
     assert_eq!(srv.hits(), 2);
     assert!(v.get("not_refreshed").is_none());
-    assert_eq!(v["age"], "0 minutes old");
+    assert_eq!(v["age"], "less than a minute old");
 }
 
 #[test]
@@ -403,14 +403,14 @@ fn not_refreshed_golden_bytes() {
         e.to_json().to_string(),
         r#"{"ok":false,"error":{"type":"expired","detail":"alerts data expired 2026-10-25","refresh_failed":"quota"},"not_refreshed":"refresh failed: daily limit reached"}"#
     );
-    // nothing stored, offline
-    let far = Location { lat: 40.0, lon: -100.0, ..burley_loc() };
-    let e = env.run(json!({"source": "alerts"}), Some(&far), DUE, None, Some(&denied(NotAllowed::Offline))).unwrap_err();
+    // nothing ever downloaded, offline
+    let (empty, _srv2) = alerts("nr-golden-empty");
+    let e = empty.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&denied(NotAllowed::Offline))).unwrap_err();
     assert_eq!(
         e.to_json().to_string(),
         r#"{"ok":false,"error":{"type":"no_data","detail":"no alerts data has been downloaded for current location"},"not_refreshed":"no connection"}"#
     );
     // and without a fetcher, the same errors as before
-    let e = env.run(json!({"source": "alerts"}), Some(&far), DUE, None, None).unwrap_err();
+    let e = empty.run(json!({"source": "alerts"}), Some(&here), DUE, None, None).unwrap_err();
     assert_eq!(e.to_json().to_string(), r#"{"ok":false,"error":{"type":"no_data","detail":"no alerts data has been downloaded for current location"}}"#);
 }
