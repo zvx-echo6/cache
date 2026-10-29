@@ -8,6 +8,7 @@ use crate::kind::shown;
 use crate::feed::{FeedSlot, TOOL_PREPARE_WAIT};
 use crate::pack::{Pack, PackSet, PlaceRow};
 use crate::{age_words, resolve_center, Geocoder};
+use cache_tool::hours::{hours_note, open_status};
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -204,7 +205,13 @@ impl Tool for NearbyTool {
                 }
                 m.insert("distance_mi".into(), json!(round_to(km_to_mi(*km), 1)));
                 m.insert("direction".into(), json!(compass8(bearing_deg(center.lat, center.lon, r.lat, r.lon))));
-                for (k, v) in [("phone", &r.phone), ("hours", &r.hours), ("er_tier", tier), ("note", note)] {
+                for (k, v) in [("phone", &r.phone), ("website", &r.website), ("hours", &r.hours)] {
+                    if let Some(v) = v {
+                        m.insert(k.into(), json!(v));
+                    }
+                }
+                m.insert("open_status".into(), json!(open_status(r.hours.as_deref(), ctx.now)));
+                for (k, v) in [("er_tier", tier), ("note", note)] {
                     if let Some(v) = v {
                         m.insert(k.into(), json!(v));
                     }
@@ -213,13 +220,17 @@ impl Tool for NearbyTool {
             })
             .collect();
 
+        let age = age_words(ctx.now, &region.meta.built_at);
         let mut out = Map::new();
         out.insert("category".into(), json!(category));
         out.insert("center".into(), json!(center.label));
         out.insert("ranked_by".into(), json!("distance"));
         out.insert("places".into(), Value::Array(places));
+        if kept.iter().any(|k| k.row.hours.is_some()) {
+            out.insert("hours_note".into(), json!(hours_note(age.as_deref())));
+        }
         out.insert("map_region".into(), json!(region.meta.region_name));
-        if let Some(age) = age_words(ctx.now, &region.meta.built_at) {
+        if let Some(age) = age {
             out.insert("map_region_age".into(), json!(age));
         }
         Ok(ToolOutput::Json(Value::Object(out)))

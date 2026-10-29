@@ -3,7 +3,7 @@
 
 use cache_navigate::{NavigateCfg, NavigateTool, PlaceSlot, ValhallaCfg};
 use cache_offroad::valhalla::{LocateSnap, Maneuver, Trace, Trip, Valhalla, ValhallaError};
-use cache_tool::places::{GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource};
+use cache_tool::places::{GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceDetails, PlaceMatch, PlaceSource};
 use cache_tool::{Location, SavedPlace, SavedPlaces, Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
@@ -85,8 +85,10 @@ impl PlaceSource for Pack {
         m.street = Some("1501 Hiland Ave".into());
         m.locality = Some("Burley".into());
         m.state = Some("ID".into());
+        m.details = Some(PlaceDetails { phone: Some("+1 208 678 4444".into()), website: None, hours: Some("Mo-Fr 08:00-18:00; Sa 09:00-12:00".into()) });
         let mut other = PlaceMatch::new("Cassia Hospital Annex", 42.6, -113.7);
         other.locality = Some("Declo".into());
+        other.details = Some(PlaceDetails { phone: Some("+1 208 000 0000".into()), website: Some("https://example.org".into()), hours: Some("24/7".into()) });
         let town = PlaceMatch::new("Rupert", 42.617, -113.675);
         Ok(GeocodeAnswer {
             matches: if self.empty {
@@ -103,8 +105,11 @@ impl PlaceSource for Pack {
         if self.empty {
             return Ok(GeocodeAnswer { matches: vec![], searched_within_km: Some(80.0) });
         }
-        let far = PlaceMatch::new("Far Hospital", q.from.0 + 0.5, q.from.1);
-        let near = PlaceMatch::new("Near Hospital", q.from.0 + 0.1, q.from.1);
+        let mut far = PlaceMatch::new("Far Hospital", q.from.0 + 0.5, q.from.1);
+        let mut near = PlaceMatch::new("Near Hospital", q.from.0 + 0.1, q.from.1);
+        // places from the places data, one knowing nothing beyond where it is
+        far.details = Some(PlaceDetails { phone: None, website: None, hours: Some("24/7".into()) });
+        near.details = Some(PlaceDetails::default());
         // the pack lists nearest by straight line; here the "far" one is listed first so the ranking must come from travel time
         Ok(GeocodeAnswer { matches: vec![far, near], searched_within_km: None })
     }
@@ -133,7 +138,11 @@ fn here() -> Location {
 }
 
 fn run(t: &NavigateTool, loc: Option<&Location>, args: Value) -> Result<Value, ToolError> {
-    let ctx = ToolCtx { location: loc, places: &Saved, now: NOW, geocoder: None, live_fetcher: None };
+    run_at(t, loc, args, NOW)
+}
+
+fn run_at(t: &NavigateTool, loc: Option<&Location>, args: Value, now: &str) -> Result<Value, ToolError> {
+    let ctx = ToolCtx { location: loc, places: &Saved, now, geocoder: None, live_fetcher: None };
     match t.run(&ctx, &args)? {
         ToolOutput::Json(v) => Ok(v),
         ToolOutput::Text(_) => panic!("navigate gives JSON"),
@@ -408,4 +417,73 @@ fn offroad_modes_without_the_off_road_data_say_what_is_missing() {
             assert_eq!(keys(&j), ["ok", "error", "from_matched", "to_matched"]);
         }
     }
+}
+
+// ---- place details on to_matched (docs/TOOLS.md, "Place details") ----
+
+const THU_1430: &str = "2026-10-29T14:30:00-06:00";
+
+#[test]
+fn a_place_destination_carries_its_details_and_open_status() {
+    let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
+    let v = run_at(&t, Some(&here()), json!({"to": "Cassia Regional Hospital", "mode": "drive", "near": "Burley, Idaho"}), THU_1430).unwrap();
+    let to = &v["to_matched"];
+    assert_eq!(
+        keys(to),
+        ["place_name", "kind", "street", "locality", "county", "state", "phone", "website", "hours", "open_status", "distance_km", "near", "snap_distance_m", "lat", "lon"]
+    );
+    assert_eq!(
+        (to["phone"].clone(), to["website"].clone(), to["hours"].clone(), to["open_status"].clone()),
+        (json!("+1 208 678 4444"), Value::Null, json!("Mo-Fr 08:00-18:00; Sa 09:00-12:00"), json!("Open now (closes 18:00)"))
+    );
+    // after map_region_age; the fake region's age is unknown, so the sentence has no age in it
+    let k = keys(&v);
+    assert_eq!(&k[k.len() - 3..], ["map_region", "map_region_age", "hours_note"]);
+    assert_eq!(v["hours_note"], "Opening hours come from the map data and can be wrong, especially on holidays.");
+    // not on the start, not on the other candidates
+    assert_eq!(keys(&v["other_destination_candidates"][0]), PLACE_KEYS);
+    assert!(v["from_matched"].get("open_status").is_none());
+    let v = run_at(&t, Some(&here()), json!({"to": "Cassia Regional Hospital", "mode": "drive"}), "2026-10-29T19:00:00-06:00").unwrap();
+    assert_eq!(v["to_matched"]["open_status"], "Closed now (opens Fri 08:00)");
+}
+
+#[test]
+fn a_town_saved_place_or_coordinates_get_no_details() {
+    let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
+    let mut want: Vec<&str> = PLACE_KEYS.to_vec();
+    want.extend(["near", "snap_distance_m", "lat", "lon"]);
+    for to in ["Rupert", "42.60,-113.70"] {
+        let v = run_at(&t, Some(&here()), json!({"to": to, "mode": "drive"}), THU_1430).unwrap();
+        assert_eq!(keys(&v["to_matched"]), want, "{to}");
+        assert!(v.get("hours_note").is_none(), "{to}");
+    }
+    let v = run_at(&t, Some(&loc_far()), json!({"to": "Home", "mode": "drive"}), THU_1430).unwrap();
+    assert_eq!(keys(&v["to_matched"]), want);
+}
+
+fn loc_far() -> Location {
+    Location { lat: 43.6, lon: -116.2, accuracy_m: Some(10.0), fixed_at: NOW.into() }
+}
+
+#[test]
+fn a_place_with_nothing_known_shows_nulls_and_no_note() {
+    let t = tool(Fake { per_deg_s: 6000.0, ..fake() }, Some(Arc::new(Pack { empty: false })));
+    let v = run_at(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"}), THU_1430).unwrap();
+    let to = &v["to_matched"];
+    assert_eq!(to["place_name"], "Near Hospital");
+    assert_eq!((to["phone"].clone(), to["website"].clone(), to["hours"].clone()), (Value::Null, Value::Null, Value::Null));
+    assert_eq!(to["open_status"], "Hours not known");
+    assert!(v.get("hours_note").is_none());
+    assert!(v["other_destination_candidates"][0].get("hours").is_none());
+}
+
+#[test]
+fn errors_with_a_place_destination_carry_its_details_but_no_note() {
+    let t = tool(Fake { fail: Some(442), ..fake() }, Some(Arc::new(Pack { empty: false })));
+    let j = run_at(&t, Some(&here()), json!({"to": "Cassia Regional Hospital", "mode": "drive"}), THU_1430).unwrap_err().to_json();
+    assert_eq!(j["error"]["type"], "no_route");
+    assert_eq!(keys(&j), ["ok", "error", "from_matched", "to_matched"]);
+    assert_eq!(keys(&j["to_matched"]), ["place_name", "kind", "street", "locality", "county", "state", "phone", "website", "hours", "open_status", "distance_km"]);
+    assert_eq!(j["to_matched"]["open_status"], "Open now (closes 18:00)");
+    assert_eq!(keys(&j["from_matched"]), PLACE_KEYS);
 }

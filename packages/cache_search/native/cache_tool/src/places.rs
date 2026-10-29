@@ -22,6 +22,17 @@ pub struct PlaceMatch {
     pub lon: f64,
     /// The place's OSM "key:value" (for example "highway:path"), which seeds the off-road travel modes at that end.
     pub osm_category: Option<String>,
+    /// Phone, website and opening hours: Some only for a place from the places data (a POI), not for a town or an address.
+    pub details: Option<PlaceDetails>,
+}
+
+/// What the places data says about a POI beyond where it is; each None when the data does not have it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaceDetails {
+    pub phone: Option<String>,
+    pub website: Option<String>,
+    /// The raw OSM `opening_hours` string.
+    pub hours: Option<String>,
 }
 
 impl PlaceMatch {
@@ -38,6 +49,7 @@ impl PlaceMatch {
             lat,
             lon,
             osm_category: None,
+            details: None,
         }
     }
 }

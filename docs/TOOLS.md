@@ -211,6 +211,10 @@ them, plus `direction_from_start` and the `lat` and `lon` of both matched places
     "locality": "Kuna",
     "county": "Ada",
     "state": "ID",
+    "phone": "+1 208 555 0100",
+    "website": null,
+    "hours": "Mo-Fr 08:00-18:00; Sa 09:00-12:00",
+    "open_status": "Open now (closes 18:00)",
     "distance_km": 0.7,
     "near": {
       "county": "Ada",
@@ -267,7 +271,8 @@ them, plus `direction_from_start` and the `lat` and `lon` of both matched places
   "offroad_mi": 0.11,
   "offroad_note": "Off-road legs are straight lines between turn points over a ~15 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
   "map_region": "Idaho",
-  "map_region_age": "12 days old"
+  "map_region_age": "12 days old",
+  "hours_note": "Opening hours come from the map data (12 days old) and can be wrong, especially on holidays."
 }
 ```
 
@@ -298,6 +303,10 @@ Fields:
 - `offroad_mi` and `offroad_note` appear only when the route has off-road legs. `offroad_note` is AIDA's text with the grid
   size corrected to "~15 m" (AIDA says ~30 m; the router's grid is the global z12 pixel grid, 13-15 m across the
   continental US); the example above shows Cache's text.
+- When the destination is a place from the places data (not a town, saved place, address or coordinates), `to_matched`
+  has `phone`, `website`, `hours` (null when unknown) and `open_status` after `state`, as in nearby (**Place details**,
+  under nearby). They are not on `from_matched` or `other_destination_candidates`. `hours_note` follows `map_region_age`
+  when the destination has `hours`.
 - `warnings` appears only when there is one. Each entry is `{"code": "offroad_unavailable", "end": "from" | "to",
   "road_point": {"lat", "lon"}, "gap_m": N}`: that end is away from the road network, the route stops at
   `road_point`, and `gap_m` is how many metres short of the requested end it stops. It is how the road route is
@@ -323,7 +332,8 @@ fields below sit at the top level beside `error`, and `detail` is left out when 
 - `bad_arguments`: for example neither or both of `to` and `to_type`.
 
 `from_matched` and `to_matched` (the place fields above, without `near` and `snap_distance_m`) ride at the top
-level beside `error` on `same_place` and on the router's failures; `nearby_empty` carries `from_matched` only. When
+level beside `error` on `same_place` and on the router's failures; `nearby_empty` carries `from_matched` only.
+`to_matched` there carries the place details under the same rule; errors have no `hours_note`. When
 the phone's location is known, `error` also has a `hint` on `geocode_empty` for `from` and on `same_place`, telling the
 model it can omit `from`.
 
@@ -351,12 +361,42 @@ Result:
 ```json
 {"ok": true, "category": "pharmacy", "center": "current location", "ranked_by": "distance",
  "places": [
-  {"n": 7, "name": "Walgreens", "kind": "pharmacy", "kind_label": "Pharmacy", "street": "1414 Overland Ave", "locality": "Burley", "state": "ID", "distance_mi": 0.8, "direction": "SE", "phone": "+1 208 ...", "hours": "Mo-Su 08:00-22:00"},
-  {"n": 8, "name": "Smith's Pharmacy", "kind": "pharmacy", "kind_label": "Pharmacy", "locality": "Burley", "state": "ID", "distance_mi": 1.6, "direction": "S"}],
+  {"n": 7, "name": "Walgreens", "kind": "pharmacy", "kind_label": "Pharmacy", "street": "1414 Overland Ave", "locality": "Burley", "state": "ID", "distance_mi": 0.8, "direction": "SE", "phone": "+1 208 ...", "website": "https://www.walgreens.com", "hours": "Mo-Fr 08:00-18:00; Sa 09:00-12:00", "open_status": "Open now (closes 18:00)"},
+  {"n": 8, "name": "Smith's Pharmacy", "kind": "pharmacy", "kind_label": "Pharmacy", "locality": "Burley", "state": "ID", "distance_mi": 1.6, "direction": "S", "open_status": "Hours not known"}],
+ "hours_note": "Opening hours come from the map data (12 days old) and can be wrong, especially on holidays.",
  "map_region": "Idaho", "map_region_age": "12 days old"}
 ```
 
-`phone` and `hours` only when the map data has them.
+`phone`, `website` and `hours` only when the map data has them; `open_status` on every row (see **Place details**
+below). `hours_note` follows `places` only when at least one row has `hours`.
+
+**Place details.** A place's phone, website and opening hours are shown in `nearby` rows and on navigate's `to_matched`
+(there is no separate read of a place):
+- `phone`, `website`: as the map data has them. `hours`: the raw OSM `opening_hours` string.
+- `open_status`, worked out from `hours` at the tool's `now` (the phone's local time; the place is taken to be in the
+  phone's time zone). Times are 24-hour; a day other than today (tomorrow included) is named `Mon`..`Sun`:
+  `"Open now (closes 18:00)"`, `"Open now (closes Fri 02:00)"`, `"Open now (closes at midnight)"` (closing at 24:00
+  tonight, or 00:00 tomorrow), `"Open now (closes at midnight, Fri night)"` (a later midnight, named by the day whose
+  night it is; opening at 00:00 keeps the normal form, "Closed now (opens Fri 00:00)"),
+  `"Open now (open 24 hours)"` (`24/7`, or open without
+  a break for the next 7 days), `"Closed now (opens 18:00)"`, `"Closed now (opens Fri 08:00)"`, `"Closed now"` (no
+  opening in the next 7 days), `"Hours not known"` (no `hours`), `"Hours not understood"` (`hours` outside the rules
+  below; the raw string is still shown).
+- `hours_note`: `"Opening hours come from the map data (<map_region_age>) and can be wrong, especially on holidays."`,
+  with the same words as `map_region_age`; without the parenthesis when the age is missing or "unknown".
+
+The hours read are a subset of OSM `opening_hours`: `24/7`, or rules separated by `;`, each an optional day selector
+(`Mo Tu We Th Fr Sa Su`, ranges such as `Mo-Fr` or `Sa-Mo`, lists such as `Mo,We,Fr`, mixes such as `Mo-Fr,Su`; none means
+every day) then `off`/`closed` or time spans `HH:MM-HH:MM` separated by `,`. A later rule replaces earlier ones for the
+days it names. An end past midnight (`22:00-02:00`, `24:00`) runs into the next day and belongs to the day it starts on
+(`Mo-Su 17:00-02:00; Fr off` is open Fri 00:00-02:00, closed Fri evening). Touching spans are joined. Whitespace around
+tokens is ignored; day names are case-sensitive. Anything else (`PH`, `SH`, months, weeks, dates, `sunrise`/`sunset`,
+`+`, quoted comments, unknown tokens) is "Hours not understood".
+
+At Thu 2026-10-29 14:30: `Mo-Fr 08:00-18:00; Sa 09:00-12:00` is "Open now (closes 18:00)"; at Thu 19:00 "Closed now
+(opens Fri 08:00)", at Thu 06:00 "Closed now (opens 08:00)", at Sat 13:00 "Closed now (opens Mon 08:00)".
+`Mo-Su 17:00-02:00` at Fri 01:00 is "Open now (closes 02:00)", at Thu 23:00 "Open now (closes Fri 02:00)".
+`Mo-Fr 08:00-17:00; PH off` is "Hours not understood".
 
 **Kinds.** Every place says what it is: `kind` is a stable id from the pack's kind table (`drinking_water`, `spring`, `water_well`,
 `water_point`, `emergency_shelter`, `picnic_shelter`, `trail_shelter`, `wilderness_hut`, `hospital`, `urgent_care`, `pharmacy`, `fuel`, ...)

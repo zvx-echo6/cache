@@ -541,17 +541,17 @@ impl Tool for NavigateTool {
         };
 
         if cache_offroad::grid::haversine_m(from.lat, from.lon, to.lat, to.lon) < SAME_PLACE_M {
-            return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to)));
+            return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to), ctx.now));
         }
 
         let req = NavigateRequest::new(from.waypoint(), to.waypoint(), a.mode.travel(), a.land_access);
         self.core.prepare_tiles(&[(from.lat, from.lon), (to.lat, to.lon)]);
         let (d, have_offroad) = self.core.navigate(req)?;
         if !d.ok {
-            return Err(build::route_error(&d, &from, &to));
+            return Err(build::route_error(&d, &from, &to, ctx.now));
         }
         if d.distance_km < SAME_PLACE_M / 1000.0 {
-            return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to)));
+            return Err(build::with_ends(hint(err("same_place", "start and destination matched the same spot")), &from, Some(&to), ctx.now));
         }
         let x = build::Extras {
             location_bias: bias_source,
@@ -560,6 +560,7 @@ impl Tool for NavigateTool {
             region: self.core.region_info(ctx.now),
             synth_warnings: !have_offroad,
             snap_m: DEFAULT_OFFROAD_SNAP_M,
+            now: ctx.now.into(),
         };
         let end = |r: &resolve::Resolved| map::MapEnd {
             id: None, name: Some(r.name.clone()), lat: r.lat, lon: r.lon, osm_category: r.osm.clone(),
@@ -584,7 +585,7 @@ impl NavigateTool {
         let origin = (from.lat, from.lon);
         let ans = src.nearest(&cache_tool::places::NearestQuery { category: cat, from: origin, limit: NEAREST_CANDIDATES })?;
         if ans.matches.is_empty() {
-            return Err(build::with_ends(err("nearby_empty", "").with("to_type", cat).with("warnings", Value::Array(Vec::new())), from, None));
+            return Err(build::with_ends(err("nearby_empty", "").with("to_type", cat).with("warnings", Value::Array(Vec::new())), from, None, ""));
         }
         let costing = a.mode.travel().costing();
         let mut points = vec![origin];
