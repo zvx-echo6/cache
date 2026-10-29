@@ -150,7 +150,7 @@ fn nearby_and_locate_are_identical_through_cli_serve_and_the_c_abi() {
     assert!(outs.iter().all(|o| *o == outs[0]), "schemas differ");
     let schemas: Value = serde_json::from_str(&outs[0]).unwrap();
     let names: Vec<&str> = schemas.as_array().unwrap().iter().map(|s| s["function"]["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["search", "read", "nearby", "locate"]);
+    assert_eq!(names, ["search", "read", "nearby", "locate", "calculate"]);
 
     let burley = Some((42.536, -113.792));
     let idaho_city = Some((43.828, -115.834));
@@ -200,7 +200,7 @@ fn nearby_and_locate_are_identical_through_cli_serve_and_the_c_abi() {
     let mut core = Core::open(&none).unwrap();
     let s: Value = serde_json::from_str(&core.tool_schemas().unwrap()).unwrap();
     let names: Vec<&str> = s.as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["search", "read", "locate"]);
+    assert_eq!(names, ["search", "read", "locate", "calculate"]);
     let mut conv = Conv::new().unwrap();
     let out = core.tool(&mut conv, "nearby", r#"{"category":"fuel"}"#, FIXTURE_NOW).unwrap();
     assert_eq!(content(&out)["error"]["type"], "not_set_up");

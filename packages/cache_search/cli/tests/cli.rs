@@ -563,7 +563,7 @@ fn tool_command_search_schemas_and_errors() {
     for args in [vec!["tool-schemas", "--config", config.as_str()], vec!["tool-schemas"]] {
         let s = j(&cs_ok(&args));
         let names: Vec<&str> = s.as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search", "read"]);
+        assert_eq!(names, ["search", "read", "calculate"]);
     }
 }
 
@@ -733,15 +733,15 @@ fn web_search_through_the_cli_needs_the_environment() {
     let names = |o: &Out| -> Vec<String> {
         j(o.stdout.trim()).as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap().to_string()).collect()
     };
-    assert_eq!(names(&cs_env(&["tool-schemas"], &[])), ["search", "read"]);
-    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "kagi")])), ["search", "read"]);
-    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_KEY", WEB_KEY)])), ["search", "read"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[])), ["search", "read", "calculate"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "kagi")])), ["search", "read", "calculate"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &[("CACHE_WEB_KEY", WEB_KEY)])), ["search", "read", "calculate"]);
     let o = cs_env(&["tool", "web_search", "--config", &empty_config(), "--args", r#"{"query":"x"}"#, "--json"], &[]);
     assert!(o.ok, "{}", o.stderr);
     assert_eq!(j(o.stdout.trim())["content"], r#"{"ok":false,"error":{"type":"not_set_up","detail":"web_search is not set up"}}"#);
     // both set: offered
     let both = [("CACHE_WEB_PROVIDER", "kagi"), ("CACHE_WEB_KEY", WEB_KEY)];
-    assert_eq!(names(&cs_env(&["tool-schemas"], &both)), ["search", "read", "web_search"]);
+    assert_eq!(names(&cs_env(&["tool-schemas"], &both)), ["search", "read", "calculate", "web_search"]);
     // an unknown provider is refused at start
     let o = cs_env(&["tool-schemas"], &[("CACHE_WEB_PROVIDER", "bing"), ("CACHE_WEB_KEY", WEB_KEY)]);
     assert!(!o.ok && j(o.stderr.trim())["code"] == "bad_json", "{}", o.stderr);
@@ -797,28 +797,28 @@ fn serve_web_endpoints_set_and_clear_search_without_echoing_the_key() {
     let names = |s: &Serve| -> Vec<String> {
         j(&s.req("GET", "/tools", None).1).as_array().unwrap().iter().map(|x| x["function"]["name"].as_str().unwrap().to_string()).collect()
     };
-    assert_eq!(names(&s), ["search", "read"]);
+    assert_eq!(names(&s), ["search", "read", "calculate"]);
 
     // on: provider, key and online
     let (code, body) = s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": true})));
     assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
-    assert_eq!(names(&s), ["search", "read", "web_search"]);
+    assert_eq!(names(&s), ["search", "read", "calculate", "web_search"]);
     // offline: gone; online again: back
     s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": false})));
-    assert_eq!(names(&s), ["search", "read"]);
+    assert_eq!(names(&s), ["search", "read", "calculate"]);
     s.req("POST", "/web", Some(&json!({"provider": "kagi", "key": WEB_KEY, "online": true})));
-    assert_eq!(names(&s), ["search", "read", "web_search"]);
+    assert_eq!(names(&s), ["search", "read", "calculate", "web_search"]);
     // an unknown provider, a missing online, a wrong type: errors that do not echo the key
     for bad in [json!({"provider": "bing", "key": WEB_KEY, "online": true}), json!({"provider": "kagi", "key": WEB_KEY}), json!({"provider": "kagi", "key": 5, "online": true})] {
         let (code, body) = s.req("POST", "/web", Some(&bad));
         assert_eq!(code, 400, "{body}");
         assert!(!body.contains(WEB_KEY), "{body}");
     }
-    assert_eq!(names(&s), ["search", "read", "web_search"], "a refused request changes nothing");
+    assert_eq!(names(&s), ["search", "read", "calculate", "web_search"], "a refused request changes nothing");
     // clear
     let (code, body) = s.req("DELETE", "/web", None);
     assert_eq!((code, body.as_str()), (200, r#"{"ok":true}"#));
-    assert_eq!(names(&s), ["search", "read"]);
+    assert_eq!(names(&s), ["search", "read", "calculate"]);
     let (_, b) = s.req("POST", "/conversations", None);
     let id = j(&b)["id"].as_str().unwrap().to_string();
     let (_, body) = s.req("POST", &format!("/conversations/{id}/tool"), Some(&json!({"name": "web_search", "args": {"query": "x"}, "now": NOW})));

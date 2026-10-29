@@ -456,7 +456,7 @@ in the conversation.
 places with `set_saved_places` (default `NoSavedPlaces`) and the query embedder of `search` with
 `set_query_embedder` (a callback `&str -> Option<(model id, vector)>`; with none, search is keyword-only, as
 `cs_search` is without a `query_vector`). `cs_open` registers the tools of the config's "user", "live" and "routing"
-sections (see Wiring and headless, and navigate below). `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data,
+sections (see Wiring and headless, and navigate below); it also registers `calculate` (cache_calc; it needs no data, so it is always offered) and `web_search`. `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data, calculate,
 web_search (a tool with another name follows, in registration order) and leaves out a tool whose `schema()` is
 None.
 

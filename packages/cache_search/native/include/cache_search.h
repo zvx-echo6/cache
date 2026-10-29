@@ -229,8 +229,8 @@ void cs_conversation_free(cs_conv *c);
 /* --- tools --- */
 
 /* The tools the model can call. search and read are built in; the host registers the others in Rust
- * (Handle::register_tool: navigate, nearby, locate, live_data, ...; web_search is registered by cs_open and switched on
- * with cs_set_web). See docs/TOOLS.md for the
+ * (Handle::register_tool: navigate, nearby, locate, live_data, ...; calculate and web_search are registered by cs_open; calculate is always
+ * available and web_search is switched on with cs_set_web). See docs/TOOLS.md for the
  * schemas and results, and DESIGN.md, Tools, for the dispatch. */
 
 /* The phone's GPS fix, for the tools that default to "where I am". accuracy_m < 0 means unknown. fixed_at is the
@@ -267,7 +267,7 @@ int32_t cs_live_set_fetch_policy(cs_handle *h, const char *policy_json);
 int32_t cs_live_set_key(cs_handle *h, const char *source_id, const char *key_or_null);
 
 /* A JSON array of the function schemas ({"type":"function","function":{...}}) of the tools available now, in this
- * order where present: search, read, navigate, nearby, locate, live_data, web_search (any other registered tool
+ * order where present: search, read, navigate, nearby, locate, live_data, calculate, web_search (any other registered tool
  * after them). A tool that is registered but has nothing installed to work with (its schema is None) is left out. */
 char *cs_tool_schemas(cs_handle *h);
 

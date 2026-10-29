@@ -284,6 +284,7 @@ impl Handle {
             zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(any(target_os = "android", target_os = "ios"))) * budget::MIB)),
             fetcher: Arc::new(cache_tool::fetcher::PolicyFetcher::new()),
         };
+        h.register_tool(Box::new(cache_calc::CalculateTool));
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
         // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
         // live_data tool: set_sources does it (ext.rs), so a later cs_set_sources can add them too.

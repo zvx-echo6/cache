@@ -274,9 +274,9 @@ fn a_registered_tool_gets_the_location_and_now_and_its_result_is_numbered() {
         let v: Value = serde_json::from_str(&take(unsafe { cs_tool_schemas(f.h) }).unwrap()).unwrap();
         v.as_array().unwrap().iter().map(|s| s["function"]["name"].as_str().unwrap().to_string()).collect()
     };
-    assert_eq!(names(&f), ["search", "read"]);
+    assert_eq!(names(&f), ["search", "read", "calculate"]);
     unsafe { (*f.h).register_tool(Box::new(Echo)) };
-    assert_eq!(names(&f), ["search", "read", "locate"]);
+    assert_eq!(names(&f), ["search", "read", "locate", "calculate"]);
 
     assert_eq!(f.tool("locate", "{}")["content"], r#"{"ok":false,"error":{"type":"no_location","detail":"no fix"}}"#);
     assert_eq!(

@@ -168,7 +168,7 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
     assert_eq!(d.http.req("GET", "/tools", ""), schemas);
     assert_eq!(d.core.tool_schemas().unwrap(), schemas);
     let names: Vec<String> = serde_json::from_str::<Value>(&schemas).unwrap().as_array().unwrap().iter().map(|s| s["function"]["name"].as_str().unwrap().to_string()).collect();
-    assert_eq!(names, ["search", "read", "navigate"]);
+    assert_eq!(names, ["search", "read", "navigate", "calculate"]);
 
     // 1. drive, Burley to Boise, from the phone's position
     let burley = (42.536, -113.792);
