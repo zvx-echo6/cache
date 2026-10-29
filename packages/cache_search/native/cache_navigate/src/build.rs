@@ -271,14 +271,15 @@ pub fn offroad_unavailable(end: &str, road_point: (f64, f64), gap_m: i64, gap: O
 }
 
 /// The `offroad_unavailable` warnings of a route: an end away from the road network that got no off-road leg. With off-road
-/// data the router says so itself; without it the gap is read from how far each end snapped to the road.
+/// data the router says so itself; without it the gap is read from how far each end snapped to the road (an end moved past
+/// service roads to a public road has no gap).
 pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
     let mut warnings: Vec<Value> = Vec::new();
     if !have_offroad {
         let pts = cache_offroad::directions::shape_points(d);
         for (end, e, p) in [("from", &d.from, pts.first()), ("to", &d.to, pts.last())] {
             if let (Some(e), Some(p)) = (e, p) {
-                if e.snap_distance_m as f64 > snap_m {
+                if e.snap_distance_m as f64 > snap_m && !e.public_road {
                     warnings.push(offroad_unavailable(end, *p, e.snap_distance_m, OffroadGap::NotDownloaded));
                 }
             }
@@ -499,13 +500,39 @@ mod direction_tests {
     }
 
     #[test]
+    fn an_end_moved_to_a_public_road_is_no_off_road_gap() {
+        let mut d = Directions {
+            ok: true,
+            route_id: "r1".into(),
+            mode: TravelMode::Drive,
+            from: Some(EndInfo { lat: 40.7884, lon: -111.9778, snap_distance_m: 579, public_road: true }),
+            to: Some(EndInfo { lat: 40.7676, lon: -111.9036, snap_distance_m: 400, public_road: false }),
+            distance_km: 13.8,
+            distance_mi: 8.6,
+            duration_s: 785,
+            major_roads: vec![],
+            steps: vec![],
+            shape: cache_offroad::valhalla::encode_polyline6(&[(40.784, -111.9815), (40.7676, -111.9080)]),
+            routing: "road".into(),
+            leg_params: (0.0, 0.0, 0.0),
+            warnings: vec![],
+            errors: vec![],
+        };
+        let w = warnings(&d, false, 150.0);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0]["end"], "to", "the airport's 579 m to the public road is not a gap; a real 400 m gap still is");
+        d.to.as_mut().unwrap().snap_distance_m = 40;
+        assert!(warnings(&d, false, 150.0).is_empty());
+    }
+
+    #[test]
     fn result_carries_direction_and_end_coordinates() {
         let d = Directions {
             ok: true,
             route_id: "r1".into(),
             mode: TravelMode::Drive,
-            from: Some(EndInfo { lat: 43.615, lon: -116.2023, snap_distance_m: 3 }),
-            to: Some(EndInfo { lat: 43.5407, lon: -116.5635, snap_distance_m: 4 }),
+            from: Some(EndInfo { lat: 43.615, lon: -116.2023, snap_distance_m: 3, public_road: false }),
+            to: Some(EndInfo { lat: 43.5407, lon: -116.5635, snap_distance_m: 4, public_road: false }),
             distance_km: 30.0,
             distance_mi: 18.6,
             duration_s: 1500,

@@ -26,6 +26,9 @@ pub struct PlaceMatch {
     pub osm_category: Option<String>,
     /// Phone, website and opening hours: Some only for a place from the places data (a POI), not for a town or an address.
     pub details: Option<PlaceDetails>,
+    /// Where a route to the place goes, when the places data says it is not the place's point (an airport's passenger
+    /// terminal, a main entrance, a park's parking).
+    pub arrival: Option<(f64, f64)>,
 }
 
 /// What the places data says about a POI beyond where it is; each None when the data does not have it.
@@ -53,6 +56,7 @@ impl PlaceMatch {
             lon,
             osm_category: None,
             details: None,
+            arrival: None,
         }
     }
 }

@@ -116,6 +116,9 @@ pub struct PlaceRow {
     pub wikipedia_title: Option<String>,
     /// The article's first paragraph (under 500 characters), when the wiki step matched one by ID.
     pub summary: Option<String>,
+    /// Where a route to the place goes (an airport's passenger terminal, a main entrance, a park's parking), when the
+    /// builder found one; None: the place's own point. A pack built before arrival points has none.
+    pub arrival: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +144,7 @@ pub struct StateRow {
 }
 
 /// The columns of a place row, in `place_row`'s order. `kind_id` is column 4 (a format 1 pack has none: see `Pack::place_cols`).
-const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary";
+const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary, p.arrival_lat, p.arrival_lon";
 const LOC_COLS: &str = "l.id, l.name, l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.source_id, l.wikipedia_title, l.summary";
 
 fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
@@ -167,6 +170,10 @@ fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
         wikidata_id: r.get(18)?,
         wikipedia_title: r.get(19)?,
         summary: r.get(20)?,
+        arrival: match (r.get::<_, Option<f64>>(21)?, r.get::<_, Option<f64>>(22)?) {
+            (Some(la), Some(lo)) => Some((la, lo)),
+            _ => None,
+        },
     })
 }
 
@@ -197,6 +204,8 @@ pub struct Pack {
     pub kinds: Vec<KindInfo>,
     /// The pack's format version.
     pub format: u32,
+    /// The places table has the arrival columns (packs and databases built after they were added).
+    arrival: bool,
     /// Source ids of hospitals that an emergency room row was matched to.
     pub matched: HashSet<String>,
     /// The merged database's level 1 tiles (its `tiles` table); None for a single-region pack.
@@ -262,6 +271,7 @@ impl Pack {
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<HashSet<_>>>()?
         };
+        let arrival = crate::merged::has_column(&conn, "main", "places", "arrival_lat")?;
         let data_version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
         let tiles = if version >= MERGED_FORMAT_VERSION {
             let mut st = conn.prepare("SELECT tile FROM tiles")?;
@@ -277,6 +287,7 @@ impl Pack {
             states,
             kinds,
             format: version,
+            arrival,
             matched,
             tiles,
             conn: Mutex::new(conn),
@@ -323,9 +334,11 @@ impl Pack {
         self.kinds.iter().find(|k| k.id == id)
     }
 
-    /// The place columns for this pack's format: a format 1 pack has no `kind_id`, which then reads as NULL.
+    /// The place columns for this pack's format: a format 1 pack has no `kind_id`, which then reads as NULL, and a pack built
+    /// before arrival points has no arrival columns.
     fn place_cols(&self) -> String {
-        if self.format >= 2 { PLACE_COLS.to_string() } else { PLACE_COLS.replace("p.kind_id", "NULL") }
+        let cols = if self.format >= 2 { PLACE_COLS.to_string() } else { PLACE_COLS.replace("p.kind_id", "NULL") };
+        if self.arrival { cols } else { cols.replace("p.arrival_lat, p.arrival_lon", "NULL, NULL") }
     }
 
     /// The nearest `limit` places of a category within `max_km`, nearest first, with their distance in km. The search

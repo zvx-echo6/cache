@@ -9,6 +9,7 @@ pub mod mvum;
 pub mod pack;
 pub mod pmtiles;
 pub mod router;
+pub mod snap;
 pub mod transitions;
 pub mod valhalla;
 

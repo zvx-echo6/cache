@@ -26,6 +26,8 @@ pub(crate) struct Resolved {
     pub osm: Option<String>,
     /// Phone, website and hours, for a place from the places data only.
     pub details: Option<PlaceDetails>,
+    /// Where a route to the place goes, when the places data says it is not the place's point.
+    pub arrival: Option<(f64, f64)>,
     /// Other matches the places pack found for the same text.
     pub others: Vec<PlaceMatch>,
 }
@@ -46,6 +48,7 @@ impl Resolved {
             er_tier: None,
             osm: None,
             details: None,
+            arrival: None,
             others: vec![],
         }
     }
@@ -68,6 +71,7 @@ impl Resolved {
             er_tier: m.er_tier,
             osm: m.osm_category,
             details: m.details,
+            arrival: m.arrival,
             others: vec![],
         }
     }
@@ -76,6 +80,7 @@ impl Resolved {
             Some(c) => Waypoint::place_with_category(&self.name, self.lat, self.lon, c),
             None => Waypoint::place(&self.name, self.lat, self.lon),
         }
+        .with_arrival(self.arrival)
     }
 }
 

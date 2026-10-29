@@ -3,7 +3,8 @@
 /// Bumped when the layout changes in a way an older reader cannot read. What the builder writes.
 ///
 /// 1: first layout. 2: every place carries a `kind_id` (what kind of place it is: `drinking_water`, `picnic_shelter`,
-/// `pharmacy`, ...) and the pack has a `kinds` table (label and one-line description per kind).
+/// `pharmacy`, ...) and the pack has a `kinds` table (label and one-line description per kind). The places' `arrival_lat`
+/// and `arrival_lon` were added later without a new number: a pack, tile or merged database without them reads as before.
 pub const FORMAT_VERSION: u32 = 2;
 
 /// The oldest format `Pack` still reads. A format 1 pack has no kinds: its places read with `kind_id` None.
@@ -42,7 +43,9 @@ CREATE TABLE kinds (
 -- enwiki article whose coordinates and exact title agree. brand_wikidata is the brand's item, not the place's.
 -- category is NULL for places that belong to no starter category (they are here for the geocoder); kind is the raw
 -- type ("amenity=school", "pharmacy_and_drug_store"); kind_id is the stable kind (see `kinds`), derived from the source's
--- tags by the kind rules, or from the raw type when no rule says more.
+-- tags by the kind rules, or from the raw type when no rule says more. arrival_lat/arrival_lon is where a route to the place
+-- goes when that is not its own point: an airport's passenger terminal, a building's main entrance, a park's or campus's
+-- parking (NULL: the place's point). They were added after the first layout; a reader checks for them.
 CREATE TABLE places (
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -68,7 +71,9 @@ CREATE TABLE places (
   matched_source_id TEXT,
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
-  confidence REAL
+  confidence REAL,
+  arrival_lat REAL,
+  arrival_lon REAL
 );
 CREATE INDEX places_category ON places(category);
 -- A map result's id ("place:<source_id>") is looked up by this.
@@ -217,6 +222,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 
 -- As format 2's places, plus alt_names ("; "-joined; the FTS column on the phone). street, locality and state were
 -- worked out on the builder with all the data, so they never depend on which neighbouring tiles the phone has.
+-- arrival_lat/arrival_lon as format 2's (absent from tiles cut before them).
 CREATE TABLE places (
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -242,7 +248,9 @@ CREATE TABLE places (
   matched_source_id TEXT,
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
-  confidence REAL
+  confidence REAL,
+  arrival_lat REAL,
+  arrival_lon REAL
 );
 
 CREATE TABLE localities (
@@ -364,7 +372,9 @@ CREATE TABLE places (
   matched_source_id TEXT,
   source TEXT NOT NULL,
   source_id TEXT NOT NULL,
-  confidence REAL
+  confidence REAL,
+  arrival_lat REAL,
+  arrival_lon REAL
 );
 CREATE INDEX places_category ON places(category);
 CREATE INDEX places_source_id ON places(source_id);

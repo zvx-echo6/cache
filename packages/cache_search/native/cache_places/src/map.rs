@@ -87,6 +87,8 @@ pub struct Endpoint {
     pub lat: f64,
     pub lon: f64,
     pub osm_category: Option<String>,
+    /// Where a route to it goes, when that is not its point (a place's arrival point).
+    pub arrival: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -776,7 +778,7 @@ impl PlacesCore {
                 let Ok(Some(row)) = p.street_by_uid(uid) else { continue };
                 let group = p.street_group(&row).unwrap_or_else(|_| vec![row.clone()]);
                 let f = address::find_number(&group, number)?;
-                return Some(Endpoint { id: Some(id.into()), name: Some(format!("{} {}", f.number, row.street)), lat: f.lat, lon: f.lon, osm_category: None });
+                return Some(Endpoint { id: Some(id.into()), name: Some(format!("{} {}", f.number, row.street)), lat: f.lat, lon: f.lon, osm_category: None, arrival: None });
             }
             return None;
         }
@@ -784,20 +786,20 @@ impl PlacesCore {
             let (la, lo) = near?;
             let (r, _) = nearest_of_kind(&packs, kind, la, lo, 1).into_iter().next()?;
             let osm = crate::geocoder::osm_category(&r);
-            return Some(Endpoint { id: Some(format!("place:{}", r.source_id)), name: r.name.clone().or_else(|| kind_of(&packs, &r).map(|k| k.1)), lat: r.lat, lon: r.lon, osm_category: osm });
+            return Some(Endpoint { id: Some(format!("place:{}", r.source_id)), name: r.name.clone().or_else(|| kind_of(&packs, &r).map(|k| k.1)), lat: r.lat, lon: r.lon, osm_category: osm, arrival: r.arrival });
         }
         if let Some(sid) = id.strip_prefix("place:") {
             let r = packs.iter().find_map(|p| p.place_by_source_id(sid).ok().flatten())?;
             let osm = crate::geocoder::osm_category(&r);
-            return Some(Endpoint { id: Some(id.into()), name: r.name.clone().or_else(|| kind_of(&packs, &r).map(|k| k.1)).or(r.kind.clone()), lat: r.lat, lon: r.lon, osm_category: osm });
+            return Some(Endpoint { id: Some(id.into()), name: r.name.clone().or_else(|| kind_of(&packs, &r).map(|k| k.1)).or(r.kind.clone()), lat: r.lat, lon: r.lon, osm_category: osm, arrival: r.arrival });
         }
         if let Some(sid) = id.strip_prefix("town:") {
             let l = packs.iter().find_map(|p| p.locality_by_source_id(sid).ok().flatten())?;
-            return Some(Endpoint { id: Some(id.into()), name: Some(l.name.clone()), lat: l.lat, lon: l.lon, osm_category: None });
+            return Some(Endpoint { id: Some(id.into()), name: Some(l.name.clone()), lat: l.lat, lon: l.lon, osm_category: None, arrival: None });
         }
         if let Some(ll) = id.strip_prefix("loc:") {
             let p = coord::parse(ll, None)?;
-            return Some(Endpoint { id: Some(id.into()), name: None, lat: p.lat, lon: p.lon, osm_category: None });
+            return Some(Endpoint { id: Some(id.into()), name: None, lat: p.lat, lon: p.lon, osm_category: None, arrival: None });
         }
         None
     }
@@ -809,10 +811,10 @@ impl PlacesCore {
             return Some(e);
         }
         if let Some(p) = coord::parse(t, near) {
-            return Some(Endpoint { id: None, name: None, lat: p.lat, lon: p.lon, osm_category: None });
+            return Some(Endpoint { id: None, name: None, lat: p.lat, lon: p.lon, osm_category: None, arrival: None });
         }
         let h = self.geo.forward(t, near, 1).into_iter().next()?;
-        Some(Endpoint { id: Some(h.address), name: Some(h.name), lat: h.lat, lon: h.lon, osm_category: h.osm_category })
+        Some(Endpoint { id: Some(h.address), name: Some(h.name), lat: h.lat, lon: h.lon, osm_category: h.osm_category, arrival: h.arrival })
     }
 }
 

@@ -92,17 +92,71 @@ impl NetworkRoute {
     }
 }
 
+/// How a route end snaps to the road network (Valhalla location options).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EndOptions {
+    /// `search_filter.min_road_class`: the lowest road class the end may snap to ("residential" leaves out service roads).
+    pub min_road_class: Option<String>,
+    /// `radius` in metres: every edge within it is a candidate, not only the nearest.
+    pub radius_m: Option<u32>,
+}
+
+/// A route end: the point, and how it snaps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteEnd {
+    pub lat: f64,
+    pub lon: f64,
+    pub opts: EndOptions,
+}
+
+impl RouteEnd {
+    /// The point with Valhalla's own snapping.
+    pub fn at(p: (f64, f64)) -> RouteEnd {
+        RouteEnd { lat: p.0, lon: p.1, opts: EndOptions::default() }
+    }
+    pub fn point(&self) -> (f64, f64) {
+        (self.lat, self.lon)
+    }
+}
+
+/// One edge a route end could snap to (`/locate`, verbose).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeCandidate {
+    /// The point on the edge nearest the asked-for point.
+    pub lat: f64,
+    pub lon: f64,
+    /// Metres from the asked-for point.
+    pub distance_m: f64,
+    /// `edge.classification.classification`, e.g. "service_other".
+    pub road_class: Option<String>,
+    /// `edge.classification.use`, e.g. "service_road".
+    pub use_: Option<String>,
+}
+
 pub trait Valhalla: Send + Sync {
     /// `costing` is "auto", "pedestrian" or "bicycle". None = the call failed (navi: snap distance inf).
     fn locate(&self, lat: f64, lon: f64, costing: &str) -> Option<LocateSnap>;
     /// Two-location `/route` with distances in km.
     fn route(&self, from: (f64, f64), to: (f64, f64), costing: &str) -> Result<Trip, ValhallaError>;
+    /// The edges an end at the point could snap to under `opts`, nearest first; empty when none, or when the router cannot
+    /// say (the ends then snap as `route` snaps them).
+    fn candidates(&self, _lat: f64, _lon: f64, _costing: &str, _opts: &EndOptions) -> Vec<EdgeCandidate> {
+        Vec::new()
+    }
+    /// `route` with snapping options per end. The default ignores the options.
+    fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
+        self.route(from.point(), to.point(), costing)
+    }
     /// `/trace_attributes` of a polyline6 shape with auto costing and the attributes navi filters for.
     fn trace_attributes(&self, encoded_polyline6: &str) -> Result<Trace, ValhallaError>;
     /// Up to `count` alternative routes besides the best one (Valhalla's `alternates`), best first; none when the router gives
     /// none or cannot ask. Only the map's route preview uses this.
     fn alternatives(&self, _from: (f64, f64), _to: (f64, f64), _costing: &str, _count: usize) -> Vec<Trip> {
         Vec::new()
+    }
+    /// `alternatives` with snapping options per end. The default ignores the options.
+    fn alternatives_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize) -> Vec<Trip> {
+        self.alternatives(from.point(), to.point(), costing, count)
     }
 }
 

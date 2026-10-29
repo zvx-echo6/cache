@@ -159,6 +159,26 @@ fn delete_rows(c: &Connection, tile: u32) -> Result<()> {
     Ok(())
 }
 
+/// Whether `schema.table` has the column (`arrival_lat` is newer than the first tiles and databases).
+pub(crate) fn has_column(c: &Connection, schema: &str, table: &str, column: &str) -> Result<bool> {
+    let mut st = c.prepare(&format!("PRAGMA {schema}.table_info({table})"))?;
+    let names = st.query_map([], |r| r.get::<_, String>(1))?;
+    for n in names {
+        if n? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Gives a database made before the places' arrival points their columns (empty), so a newer tile's points merge in.
+fn add_arrival_columns(c: &Connection) -> Result<()> {
+    if !has_column(c, "main", "places", "arrival_lat")? {
+        c.execute_batch("ALTER TABLE main.places ADD COLUMN arrival_lat REAL; ALTER TABLE main.places ADD COLUMN arrival_lon REAL;")?;
+    }
+    Ok(())
+}
+
 fn count(c: &Connection, sql: &str) -> Result<u64> {
     Ok(c.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
 }
@@ -174,11 +194,15 @@ fn insert_rows(tx: &Transaction, tile: u32, rep: &mut MergeReport) -> Result<()>
         }
     }
     let p = mid("id");
+    // A tile cut before the arrival points has none.
+    let arrival = if has_column(tx, "t", "places", "arrival_lat")? { "arrival_lat, arrival_lon" } else { "NULL, NULL" };
     tx.execute_batch(&format!(
         "INSERT INTO main.places(id, name, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website,
-                                 wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence)
+                                 wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence,
+                                 arrival_lat, arrival_lon)
            SELECT {p}, name, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website,
-                  wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence FROM t.places;
+                  wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence,
+                  {arrival} FROM t.places;
          INSERT INTO main.places_rt(id, min_lat, max_lat, min_lon, max_lon) SELECT {p}, lat, lat, lon, lon FROM t.places;
          INSERT INTO main.places_fts(rowid, name, alt_names) SELECT {p}, name, alt_names FROM t.places WHERE name IS NOT NULL AND name <> '';
          INSERT INTO main.localities(id, name, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id)
@@ -234,6 +258,7 @@ pub fn merge_tile(c: &mut Connection, tile: u32, shard: &Path, sha256: &str, byt
         let mut rep = MergeReport { tile, ..Default::default() };
         rep.replaced = tx.query_row("SELECT 1 FROM main.tiles WHERE tile = ?1", params![tile], |_| Ok(())).optional()?.is_some();
         delete_rows(&tx, tile)?;
+        add_arrival_columns(&tx)?;
         insert_rows(&tx, tile, &mut rep)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         tx.execute(
@@ -460,6 +485,34 @@ mod tests {
         assert_eq!(tiles(&c).unwrap(), HashSet::from([burley + 1]));
         // The connection is still usable: nothing is left attached.
         merge_tile(&mut c, burley, &t.shard(burley), "b", 1).unwrap();
+    }
+
+    #[test]
+    fn arrival_points_merge_and_older_tiles_and_databases_still_merge() {
+        let t = Tmp::new("arrival");
+        let mut c = fresh(&t);
+        let (burley, stanley) = (tile_id_l1(BURLEY.0, BURLEY.1), tile_id_l1(STANLEY.0, STANLEY.1));
+        // A tile whose Walgreens has an arrival point (its door).
+        let shard = t.shard(burley);
+        Connection::open(&shard).unwrap().execute("UPDATE places SET arrival_lat = 42.5392, arrival_lon = -113.7868 WHERE name = 'Walgreens'", []).unwrap();
+        merge_tile(&mut c, burley, &shard, "a", 1).unwrap();
+        let got: (f64, f64) = c.query_row("SELECT arrival_lat, arrival_lon FROM places WHERE name = 'Walgreens'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(got, (42.5392, -113.7868));
+        assert_eq!(n(&c, "SELECT COUNT(*) FROM places WHERE arrival_lat IS NOT NULL"), 1);
+        // A tile cut before arrival points existed (no columns): its places merge with none.
+        let old = t.shard(stanley);
+        Connection::open(&old).unwrap().execute_batch("ALTER TABLE places DROP COLUMN arrival_lat; ALTER TABLE places DROP COLUMN arrival_lon;").unwrap();
+        let rep = merge_tile(&mut c, stanley, &old, "o", 1).unwrap();
+        assert!(rep.places > 0);
+        let (lo, hi) = tile_id_range(stanley);
+        assert_eq!(n(&c, &format!("SELECT COUNT(*) FROM places WHERE id BETWEEN {lo} AND {hi} AND arrival_lat IS NULL")) as u64, rep.places);
+        // A database made before them gets the columns on its next merge.
+        c.execute_batch("ALTER TABLE places DROP COLUMN arrival_lat; ALTER TABLE places DROP COLUMN arrival_lon;").unwrap();
+        assert!(!has_column(&c, "main", "places", "arrival_lat").unwrap());
+        let again = t.shard(burley);
+        Connection::open(&again).unwrap().execute("UPDATE places SET arrival_lat = 1.5, arrival_lon = 2.5 WHERE name = 'Walgreens'", []).unwrap();
+        merge_tile(&mut c, burley, &again, "a2", 1).unwrap();
+        assert_eq!(n(&c, "SELECT COUNT(*) FROM places WHERE arrival_lat = 1.5 AND arrival_lon = 2.5"), 1);
     }
 
     #[test]

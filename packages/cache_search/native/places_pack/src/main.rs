@@ -16,6 +16,7 @@
 
 mod addresses;
 mod admins;
+mod arrival;
 mod blocks;
 mod build;
 mod common;
@@ -114,8 +115,8 @@ fn run() -> Result<(), String> {
             let r = blocks::blocks(&cfg, &rules, &rules_json)?;
             let sum = |f: fn(&blocks::BlockReport) -> usize| r.iter().map(f).sum::<usize>();
             println!(
-                "{} blocks, {} tiles: {} places, {} towns ({} merged, {} deduped, {} emergency rooms) in {}",
-                r.len(), sum(|b| b.cells), sum(|b| b.places), sum(|b| b.localities), sum(|b| b.merged), sum(|b| b.deduped), sum(|b| b.enriched), took()
+                "{} blocks, {} tiles: {} places, {} towns ({} merged, {} deduped, {} emergency rooms, {} arrival points) in {}",
+                r.len(), sum(|b| b.cells), sum(|b| b.places), sum(|b| b.localities), sum(|b| b.merged), sum(|b| b.deduped), sum(|b| b.enriched), sum(|b| b.arrivals), took()
             );
             Ok(())
         }

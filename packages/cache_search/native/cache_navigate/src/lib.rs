@@ -571,7 +571,7 @@ impl Tool for NavigateTool {
             now: ctx.now.into(),
         };
         let end = |r: &resolve::Resolved| map::MapEnd {
-            id: None, name: Some(r.name.clone()), lat: r.lat, lon: r.lon, osm_category: r.osm.clone(),
+            id: None, name: Some(r.name.clone()), lat: r.lat, lon: r.lon, osm_category: r.osm.clone(), arrival: r.arrival,
         };
         self.core.retain_tool_route(map::tool_snapshot(&d, end(&from), end(&to), a.mode.travel(), a.land_access, have_offroad));
         Ok(ToolOutput::Json(build::result(&d, &from, &to, a.mode.name(), x)))
@@ -602,7 +602,7 @@ impl NavigateTool {
         let mut ranked: Vec<(Option<f64>, cache_tool::places::PlaceMatch)> = ans
             .matches
             .into_iter()
-            .map(|m| (valhalla.route(origin, (m.lat, m.lon), costing).ok().map(|t| t.time_s / 60.0), m))
+            .map(|m| (valhalla.route(origin, m.arrival.unwrap_or((m.lat, m.lon)), costing).ok().map(|t| t.time_s / 60.0), m))
             .collect();
         let any_time = ranked.iter().any(|(t, _)| t.is_some());
         let mut warnings: Vec<Value> = Vec::new();

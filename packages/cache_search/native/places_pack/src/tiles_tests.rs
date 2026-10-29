@@ -6,7 +6,7 @@ use crate::blocks::{block_of_tile, blocks, BlocksCfg};
 use crate::common::{common, CommonCfg};
 use crate::cut::{cut, CutCfg};
 use crate::harvest::{write, HARVEST_SQL};
-use crate::model::{Raw, RawLocality, Wiki};
+use crate::model::{Anchor, AnchorKind, Raw, RawLocality, Wiki};
 use crate::rules::Rules;
 use cache_places::addr;
 use cache_places::schema::{tile_id_l1, tile_path_l1};
@@ -65,6 +65,8 @@ fn place(source: &'static str, id: &str, name: &str, cat: Option<&str>, kind: &s
         brand_wikidata: None,
         enrich: None,
         matched: None,
+        extent: None,
+        arrival: None,
     }
 }
 
@@ -104,6 +106,7 @@ fn a_tiled_build_across_a_block_edge() {
             &c,
             vec![walgreens_osm, walgreens_ov, cafe, diner, nv],
             vec![town("osm:n10", "Edgeville", "town", 40.5, -112.05), town("osm:n11", "Tiny", "hamlet", 40.52, -111.95), town("osm:n12", "Battle Mountain", "town", 40.64, -116.93)],
+            vec![],
         )
         .unwrap();
         c.execute_batch("CREATE INDEX raw_tile ON raw(tile); INSERT INTO meta VALUES ('sources', 'test');").unwrap();
@@ -248,6 +251,45 @@ fn a_tiled_build_across_a_block_edge() {
 }
 
 #[test]
+fn arrival_points_survive_the_tiled_build() {
+    let dir: PathBuf = std::env::temp_dir().join(format!("places_pack_arrival_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let rules = Rules::parse(RULES).unwrap();
+    let admins = dir.join("admins.sqlite");
+    write_admins(&admins);
+    // An airport (an OSM area) with its terminal near the block edge at 112 W, the terminal's doors in the next block's halo
+    // side of the edge, and a cafe with none.
+    let mut field = place("osm", "osm:w20", "Edge Field", None, "aeroway=aerodrome", "aerodrome", 40.60, -111.98);
+    field.extent = Some([40.58, -112.01, 40.62, -111.95]);
+    let cafe = place("osm", "osm:n21", "Edge Cafe", None, "amenity=cafe", "cafe", 40.61, -111.97);
+    let door = |lon: f64| Anchor { kind: AnchorKind::Entrance, lat: 40.5901, lon, extent: [40.5901, lon, 40.5901, lon] };
+    let anchors = vec![Anchor { kind: AnchorKind::Terminal, lat: 40.5905, lon: -112.0, extent: [40.5900, -112.0020, 40.5910, -111.9980] }, door(-112.0010), door(-112.0003), door(-111.9995)];
+    let harvest = dir.join("harvest.sqlite");
+    {
+        let c = Connection::open(&harvest).unwrap();
+        c.execute_batch(HARVEST_SQL).unwrap();
+        write(&c, vec![field, cafe], vec![], anchors).unwrap();
+        c.execute_batch("CREATE INDEX raw_tile ON raw(tile); INSERT INTO meta VALUES ('sources', 'test');").unwrap();
+    }
+    let blocks_dir = dir.join("blocks");
+    let r = blocks(&BlocksCfg { harvest, admins, out: blocks_dir.clone(), bbox: None, halo: 0.25, jobs: 1, country: "US".into() }, &rules, RULES).unwrap();
+    assert_eq!(r.iter().map(|b| b.arrivals).sum::<usize>(), 1, "anchors alone make no block of their own");
+    let out = dir.join("out");
+    cut(&CutCfg { blocks: blocks_dir, addresses: None, out: out.clone(), build: "na-places-2026-10-29".into(), bbox: None, jobs: 1 }).unwrap();
+    let tile = tile_id_l1(40.60, -111.98);
+    let p = dir.join("t.sqlite");
+    std::fs::write(&p, gunzip(&out.join(format!("na-places-2026-10-29/{}.sqlite.gz", tile_path_l1(tile))))).unwrap();
+    let c = Connection::open(p).unwrap();
+    let got: (Option<f64>, Option<f64>) = c.query_row("SELECT arrival_lat, arrival_lon FROM places WHERE name = 'Edge Field'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(got, (Some(40.5901), Some(-112.0003)), "the terminal's middle door, though it is across the block edge");
+    let none: Option<f64> = c.query_row("SELECT arrival_lat FROM places WHERE name = 'Edge Cafe'", [], |r| r.get(0)).unwrap();
+    assert_eq!(none, None);
+    drop(c);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn harvest_rows_round_trip() {
     let mut p = place("osm", "osm:w9", "Burley High", None, "amenity=school", "school", 42.53, -113.79);
     p.alt = vec!["BHS".into()];
@@ -256,6 +298,11 @@ fn harvest_rows_round_trip() {
     let back: Raw = serde_json::from_str(&j).unwrap();
     assert_eq!((back.lat, back.lon, back.alt.clone(), back.enrich.clone()), (42.53, -113.79, vec!["BHS".to_string()], Some(("hospital".to_string(), 250.0))));
     assert_eq!(back.source, "", "the source is the harvest's column, not the JSON");
+    assert!(!j.contains("arrival") && !j.contains("extent"), "a point with no arrival point writes neither");
+    p.extent = Some([42.52, -113.80, 42.54, -113.78]);
+    p.arrival = Some((42.535, -113.785));
+    let back: Raw = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!((back.extent, back.arrival), (p.extent, p.arrival));
     assert_eq!(crate::model::source_name("osm+overture"), Some("osm+overture"));
     assert_eq!(crate::model::source_name("elsewhere"), None);
 }

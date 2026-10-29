@@ -40,6 +40,7 @@ fn from_row(packs: &[Arc<Pack>], r: &PlaceRow, title: &str, from: Option<(f64, f
     m.distance_km = from.map(|(la, lo)| haversine_km(la, lo, r.lat, r.lon));
     m.osm_category = crate::geocoder::osm_category(r);
     m.details = Some(PlaceDetails { phone: r.phone.clone(), website: r.website.clone(), hours: r.hours.clone() });
+    m.arrival = r.arrival;
     m
 }
 
@@ -135,6 +136,7 @@ impl PlaceSource for PackPlaceSource {
                 m.state = h.state;
                 m.osm_category = h.osm_category;
                 m.details = h.details;
+                m.arrival = h.arrival;
                 m.distance_km = q.bias.map(|(la, lo)| haversine_km(la, lo, h.lat, h.lon));
                 m
             })

@@ -15,6 +15,70 @@ pub struct Rules {
     /// raw type names (`generic_kind_id`).
     #[serde(default)]
     pub kinds: Vec<KindDef>,
+    /// Where a route to a place goes (`arrival`). Optional: rules without it give no place an arrival point.
+    #[serde(default)]
+    pub arrival: ArrivalCfg,
+}
+
+/// Which OSM features are arrival anchors, and how they belong to a place (see `arrival.rs`). Data, like the category rules.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ArrivalCfg {
+    /// Airport terminal buildings.
+    #[serde(default)]
+    pub terminal: Vec<OsmRule>,
+    /// Doors people may use, and the main ones among them.
+    #[serde(default)]
+    pub entrance: Vec<OsmRule>,
+    #[serde(default)]
+    pub main_entrance: Vec<OsmRule>,
+    /// A hospital's emergency entrance.
+    #[serde(default)]
+    pub emergency_entrance: Vec<OsmRule>,
+    /// The categories whose arrival point is the emergency entrance (hospitals, emergency rooms).
+    #[serde(default)]
+    pub emergency_categories: Vec<String>,
+    /// A point hospital's emergency entrance and main door are within this distance of it.
+    #[serde(default)]
+    pub emergency_entrance_m: f64,
+    /// Parking the public may use.
+    #[serde(default)]
+    pub parking: Vec<OsmRule>,
+    /// The kind ids of airports: their arrival point is the passenger terminal.
+    #[serde(default)]
+    pub airport_kinds: Vec<String>,
+    /// A point airport's terminals are within this distance of it (an area airport's are inside its outline).
+    #[serde(default)]
+    pub airport_terminal_m: f64,
+    /// A place whose outline is at least this long across (the box's diagonal) is a large area: a park, a campus, a mall.
+    #[serde(default)]
+    pub large_m: f64,
+    /// An entrance within this distance of a building's outline is one of its doors.
+    #[serde(default)]
+    pub outline_m: f64,
+    /// Parking within this distance of a large area's outline serves it.
+    #[serde(default)]
+    pub adjacent_m: f64,
+}
+
+impl ArrivalCfg {
+    fn any(rules: &[OsmRule], tags: &[(&str, &str)]) -> bool {
+        rules.iter().any(|r| osm_matches(tags, &r.tags, &r.not))
+    }
+    /// What arrival anchor an OSM feature is, if any (a door is a main entrance when the main-entrance rules hold too).
+    pub fn anchor(&self, tags: &[(&str, &str)]) -> Option<crate::model::AnchorKind> {
+        use crate::model::AnchorKind;
+        if Self::any(&self.terminal, tags) {
+            Some(AnchorKind::Terminal)
+        } else if Self::any(&self.emergency_entrance, tags) {
+            Some(AnchorKind::EmergencyEntrance)
+        } else if Self::any(&self.entrance, tags) {
+            Some(if Self::any(&self.main_entrance, tags) { AnchorKind::MainEntrance } else { AnchorKind::Entrance })
+        } else if Self::any(&self.parking, tags) {
+            Some(AnchorKind::Parking)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

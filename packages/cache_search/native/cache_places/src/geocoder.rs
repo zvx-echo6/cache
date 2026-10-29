@@ -57,6 +57,8 @@ pub struct GeoHit {
     pub approximate: bool,
     /// A place's phone, website and opening hours; None for a town or an address.
     pub details: Option<PlaceDetails>,
+    /// Where a route to it goes, when that is not its point (a place's arrival point); None for towns and addresses.
+    pub arrival: Option<(f64, f64)>,
 }
 
 /// The nearest town to a point.
@@ -413,6 +415,7 @@ impl PackGeocoder {
                 county: None,
                 country: r.country.clone(),
                 osm_category: None,
+                arrival: None,
                 kind_id: Some("address".into()),
                 kind_label: Some("Address".into()),
                 name_match,
@@ -525,6 +528,7 @@ impl PackGeocoder {
                         county: l.county.clone(),
                         country: l.country.clone(),
                         osm_category: None,
+                        arrival: None,
                         kind_id: Some(l.kind.clone()),
                         kind_label: Some(humanize(&l.kind)),
                         name_match: ns,
@@ -568,6 +572,7 @@ impl PackGeocoder {
                         county: r.county.clone(),
                         country: r.country.clone(),
                         osm_category: osm_category(&r),
+                        arrival: r.arrival,
                         kind_id: r.kind_id.clone(),
                         kind_label: r.kind_id.as_deref().map(|k| p.kind(k).map(|i| i.label.clone()).unwrap_or_else(|| humanize(k))),
                         name_match: nm,
@@ -659,6 +664,7 @@ impl PackGeocoder {
             county: l.county.clone(),
             country: l.country.clone(),
             osm_category: None,
+            arrival: None,
             kind_id: Some(l.kind.clone()),
             kind_label: Some(humanize(&l.kind)),
             name_match: 100.0 - 10.0 * e as f64,

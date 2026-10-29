@@ -154,19 +154,49 @@ impl Valhalla for ShimValhalla {
     }
 
     fn route(&self, from: (f64, f64), to: (f64, f64), costing: &str) -> Result<Trip, ValhallaError> {
-        let r = self.call(
-            self.route,
-            &json!({"locations": [{"lat": from.0, "lon": from.1}, {"lat": to.0, "lon": to.1}], "costing": costing, "units": "km"}),
-        )?;
+        self.route_ends(&RouteEnd::at(from), &RouteEnd::at(to), costing)
+    }
+
+    fn candidates(&self, lat: f64, lon: f64, costing: &str, opts: &EndOptions) -> Vec<EdgeCandidate> {
+        let Ok(r) = self.call(self.locate, &json!({"locations": [location(&RouteEnd { lat, lon, opts: opts.clone() })], "costing": costing, "verbose": true})) else {
+            return Vec::new();
+        };
+        let mut out: Vec<EdgeCandidate> = r
+            .get(0)
+            .and_then(|l| l.get("edges"))
+            .and_then(|e| e.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| {
+                        let (clat, clon) = (e.get("correlated_lat")?.as_f64()?, e.get("correlated_lon")?.as_f64()?);
+                        let cls = e.get("edge").and_then(|x| x.get("classification"));
+                        Some(EdgeCandidate {
+                            lat: clat,
+                            lon: clon,
+                            distance_m: e.get("distance").and_then(|v| v.as_f64()).unwrap_or_else(|| crate::grid::haversine_m(lat, lon, clat, clon)),
+                            road_class: cls.and_then(|c| c.get("classification")).and_then(s),
+                            use_: cls.and_then(|c| c.get("use")).and_then(s),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort_by(|a, b| a.distance_m.total_cmp(&b.distance_m));
+        out
+    }
+
+    fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
+        let r = self.call(self.route, &json!({"locations": [location(from), location(to)], "costing": costing, "units": "km"}))?;
         let trip = r.get("trip").ok_or_else(|| ValhallaError::msg("no trip in reply"))?;
         parse_trip(trip)
     }
 
     fn alternatives(&self, from: (f64, f64), to: (f64, f64), costing: &str, count: usize) -> Vec<Trip> {
-        let Ok(r) = self.call(
-            self.route,
-            &json!({"locations": [{"lat": from.0, "lon": from.1}, {"lat": to.0, "lon": to.1}], "costing": costing, "units": "km", "alternates": count}),
-        ) else {
+        self.alternatives_ends(&RouteEnd::at(from), &RouteEnd::at(to), costing, count)
+    }
+
+    fn alternatives_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str, count: usize) -> Vec<Trip> {
+        let Ok(r) = self.call(self.route, &json!({"locations": [location(from), location(to)], "costing": costing, "units": "km", "alternates": count})) else {
             return Vec::new();
         };
         r.get("alternates")
@@ -201,6 +231,18 @@ impl Valhalla for ShimValhalla {
             .unwrap_or_default();
         Ok(Trace { edges, shape: r.get("shape").and_then(s) })
     }
+}
+
+/// A Valhalla location: the point and its snapping options.
+fn location(e: &RouteEnd) -> Value {
+    let mut l = json!({"lat": e.lat, "lon": e.lon});
+    if let Some(c) = &e.opts.min_road_class {
+        l["search_filter"] = json!({"min_road_class": c});
+    }
+    if let Some(r) = e.opts.radius_m {
+        l["radius"] = json!(r);
+    }
+    l
 }
 
 /// A Valhalla `trip` object (first leg) as a [`Trip`].
