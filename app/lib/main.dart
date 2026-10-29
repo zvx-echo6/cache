@@ -437,6 +437,7 @@ class _CacheAppState extends State<CacheApp> {
           chat: chat,
           sources: sources,
           location: location,
+          chatLocation: chatLocation,
           maps: maps,
           video: video,
           browse: browse,

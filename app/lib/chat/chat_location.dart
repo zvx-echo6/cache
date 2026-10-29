@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
+
 import '../location/location_service.dart';
 import '../location/position_source.dart';
 
-/// Keeps the chat's location flag behind acknowledged, ordered core updates.
-class ChatLocation {
+/// Keeps the chat's location flag behind acknowledged, ordered core updates; listeners hear when [known] may have changed.
+class ChatLocation extends ChangeNotifier {
   ChatLocation({required this.location, required this.synchronize});
 
   final LocationService location;
@@ -17,11 +19,14 @@ class ChatLocation {
   void update(Fix? fix) {
     final revision = ++_revision;
     _known = null;
+    notifyListeners();
     _writes = _writes.then((_) async {
       final synchronized = await synchronize(fix);
       if (revision == _revision) _known = synchronized ? fix : null;
+      notifyListeners();
     }).catchError((Object _) {
       _known = null;
+      notifyListeners();
     });
   }
 

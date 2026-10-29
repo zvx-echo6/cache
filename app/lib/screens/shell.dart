@@ -9,6 +9,7 @@ import '../browse/browse_state.dart';
 import '../browse/reader_screen.dart';
 import '../browse/zim_urls.dart';
 import '../chat/chat_controller.dart';
+import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
@@ -42,6 +43,7 @@ class Shell extends StatefulWidget {
     required this.chat,
     required this.sources,
     required this.location,
+    this.chatLocation,
     required this.maps,
     required this.video,
     required this.browse,
@@ -54,6 +56,7 @@ class Shell extends StatefulWidget {
   final ChatController chat;
   final SourcesState sources;
   final LocationService location;
+  final ChatLocation? chatLocation;
   final MapsState maps;
   final VideoState video;
   final BrowseState browse;
@@ -243,7 +246,7 @@ class _ShellState extends State<Shell> {
   };
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions),
         ModuleId.videos => VideosScreen(video: widget.video),

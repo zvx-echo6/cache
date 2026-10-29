@@ -10,11 +10,16 @@ void main() {
     expect(lines, hasLength(6));
     expect(lines[0], 'You are Cache, an offline survival and preparedness assistant running on this phone.');
     expect(lines[1], matches(RegExp(r'^Current local date and time: Monday, 2026-10-26 09:05 \(UTC[+-]\d\d:\d\d\)\.$')));
-    expect(lines[2], "The phone's current location is known.");
+    expect(lines[2], "The phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are.");
     expect(buildSystemPrompt(now: DateTime(2026, 10, 25, 23, 59), locationKnown: false).split('\n')[2], "The phone's current location is not known.");
     expect(buildSystemPrompt(now: DateTime(2026, 10, 25, 23, 59), locationKnown: false), contains('Sunday, 2026-10-25 23:59'));
     expect(p.endsWith('give complete, practical answers.'), isTrue);
     expect(lines[4], startsWith('Cite every fact you take from a tool result with its number in square brackets, like [1].'));
+  });
+
+  test('the known-location line tells the model not to ask where the person is', () {
+    expect(buildSystemPrompt(now: DateTime(2026, 10, 26, 9, 5), locationKnown: true).split('\n')[2],
+        "The phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are.");
   });
 
   test('isoWithOffset has the local offset', () {

@@ -49,6 +49,14 @@ void main() {
 
   Fix fresh() => Fix(lat: 42.5, lon: -113.8, accuracyM: 10, time: DateTime.now());
 
+  // The bridge is made inside runAsync, so its core writes finish on the real event loop: give it turns, then rebuild.
+  Future<void> settleCore(WidgetTester tester) async {
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump();
+    }
+  }
+
   Future<(LocationService, ChatLocation)> setup(FakeSource source,
       {Future<bool> Function(Fix?)? sync}) async {
     late ChatLocation bridge;
@@ -76,7 +84,7 @@ void main() {
     });
     final backend = ScriptedBackend([(r) {
       expect(coreFix, same(source.next));
-      expect(prompt(r), contains("current location is known."));
+      expect(prompt(r), contains("current location is known;"));
       return say('Hello');
     }]);
     final chat = controller(bridge, backend);
@@ -252,11 +260,11 @@ void main() {
 
   testWidgets('Ask composer location action explains and requests permission explicitly', (tester) async {
     final source = SettingsSource()..next = fresh();
-    final (location, _) = (await tester.runAsync(() => setup(source)))!;
+    final (location, bridge) = (await tester.runAsync(() => setup(source)))!;
     final app = AppState();
     final chat = ChatController(tools: const []);
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
-        home: AskScreen(app: app, chat: chat, location: location)));
+        home: AskScreen(app: app, chat: chat, location: location, chatLocation: bridge)));
     expect(source.prompts, 0);
     await tester.tap(find.text('Use my location'));
     await tester.pumpAndSettle();
@@ -266,6 +274,28 @@ void main() {
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
     expect(source.prompts, 1);
+    await settleCore(tester);
+    expect(find.text('Location ready'), findsOneWidget);
+  });
+
+  testWidgets('the Location ready chip waits for the core to confirm, like the system prompt', (tester) async {
+    final source = SettingsSource()..next = fresh();
+    final write = Completer<bool>();
+    final (location, bridge) = (await tester.runAsync(() => setup(source, sync: (_) => write.future)))!;
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
+        home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location, chatLocation: bridge)));
+    await tester.tap(find.text('Use my location'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await settleCore(tester);
+    expect(location.fix, isNotNull);
+    expect(bridge.known, isFalse);
+    expect(find.text('Use my location'), findsOneWidget);
+    expect(find.text('Location ready'), findsNothing);
+    write.complete(true);
+    await settleCore(tester);
+    expect(bridge.known, isTrue);
     expect(find.text('Location ready'), findsOneWidget);
   });
 

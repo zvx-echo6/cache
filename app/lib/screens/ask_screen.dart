@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../chat/answer_markdown.dart';
 import '../chat/answer_reports.dart';
 import '../chat/chat_controller.dart';
+import '../chat/chat_location.dart';
 import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
 import '../browse/zim_urls.dart';
@@ -26,6 +27,7 @@ class AskScreen extends StatefulWidget {
     this.share = shareMarkdown,
     this.layout,
     this.location,
+    this.chatLocation,
     this.reports,
   });
 
@@ -35,6 +37,9 @@ class AskScreen extends StatefulWidget {
   /// Where a chat's "Add to Home" puts its shortcut.
   final LayoutState? layout;
   final LocationService? location;
+
+  /// Whether the core has the phone's location, the same flag the system prompt uses; the chip says ready only then.
+  final ChatLocation? chatLocation;
 
   final AppState app;
   final ChatController chat;
@@ -292,13 +297,13 @@ class _AskScreenState extends State<AskScreen> {
 
             if (widget.location case final location?)
               ListenableBuilder(
-                listenable: location,
+                listenable: Listenable.merge([location, widget.chatLocation]),
                 builder: (context, _) => Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                     onPressed: location.busy || widget.chat.busy ? null : _useLocation,
                     icon: const Icon(Icons.my_location, size: 18),
-                    label: Text(location.fix == null ? 'Use my location' : 'Location ready'),
+                    label: Text((widget.chatLocation?.known ?? false) ? 'Location ready' : 'Use my location'),
                   ),
                 ),
               ),
