@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub mod fetcher;
+pub mod hours;
 pub mod places;
 
 /// Start of an address marker in tool text.

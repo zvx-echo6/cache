@@ -1,7 +1,7 @@
 //! Names to coordinates: "lat,lon" text, the user's saved places, then the places pack.
 
 use cache_offroad::navigate::Waypoint;
-use cache_tool::places::{GeocodeQuery, PlaceMatch, PlaceSource};
+use cache_tool::places::{GeocodeQuery, PlaceDetails, PlaceMatch, PlaceSource};
 use cache_tool::{ToolCtx, ToolError};
 use serde_json::Value;
 use std::sync::Arc;
@@ -20,6 +20,8 @@ pub(crate) struct Resolved {
     pub distance_km: Option<f64>,
     pub er_tier: Option<i64>,
     pub osm: Option<String>,
+    /// Phone, website and hours, for a place from the places data only.
+    pub details: Option<PlaceDetails>,
     /// Other matches the places pack found for the same text.
     pub others: Vec<PlaceMatch>,
 }
@@ -38,6 +40,7 @@ impl Resolved {
             distance_km: None,
             er_tier: None,
             osm: None,
+            details: None,
             others: vec![],
         }
     }
@@ -58,6 +61,7 @@ impl Resolved {
             distance_km: m.distance_km,
             er_tier: m.er_tier,
             osm: m.osm_category,
+            details: m.details,
             others: vec![],
         }
     }

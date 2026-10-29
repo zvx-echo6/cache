@@ -71,9 +71,13 @@ fn nearby_pharmacy_around_burley() {
     assert_eq!(v["map_region_age"], "12 days old");
     // Field order is TOOLS.md's.
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["category", "center", "ranked_by", "places", "map_region", "map_region_age"]);
+    assert_eq!(keys, ["category", "center", "ranked_by", "places", "hours_note", "map_region", "map_region_age"]);
+    assert_eq!(v["hours_note"], "Opening hours come from the map data (12 days old) and can be wrong, especially on holidays.");
     let pk: Vec<&String> = p.as_object().unwrap().keys().collect();
-    assert_eq!(pk, ["address", "name", "kind", "kind_label", "street", "locality", "state", "distance_mi", "direction", "phone", "hours"]);
+    assert_eq!(pk, ["address", "name", "kind", "kind_label", "street", "locality", "state", "distance_mi", "direction", "phone", "hours", "open_status"]);
+    // FIXTURE_NOW is a Sunday at 14:20
+    assert_eq!(p["open_status"], "Open now (closes 22:00)");
+    assert_eq!(v["places"][1]["open_status"], "Hours not known");
     assert_eq!((p["kind"].as_str(), p["kind_label"].as_str()), (Some("pharmacy"), Some("Pharmacy")));
 }
 
@@ -432,4 +436,76 @@ fn a_state_in_any_letter_case_is_the_same_query() {
     }
     assert_eq!(run(tool(&ts, "locate"), None, json!({"place": "rupert id"})), run(tool(&ts, "locate"), None, json!({"place": "Rupert ID"})));
     assert_eq!(g.forward("stanley nd", None, 1)[0].state.as_deref(), Some("ND"));
+}
+
+// ---- place details: website, hours and open_status on every row, hours_note at the top (docs/TOOLS.md, "Place details") ----
+
+/// The fixture pack with its three Burley-area pharmacies given these hours and websites.
+fn pharmacies(name: &str, rows: [(Option<&str>, Option<&str>); 3]) -> (Dir, Vec<Box<dyn Tool>>) {
+    let (d, ts, path) = setup(name);
+    let c = rusqlite::Connection::open(&path).unwrap();
+    for (n, (hours, web)) in ["Walgreens", "Smith's Pharmacy", "Rupert Drug"].iter().zip(rows) {
+        c.execute("UPDATE places SET hours = ?1, website = ?2 WHERE name = ?3", rusqlite::params![hours, web, n]).unwrap();
+    }
+    (d, ts)
+}
+
+fn nearby_at(ts: &[Box<dyn Tool>], now: &str) -> Value {
+    let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now, geocoder: None, live_fetcher: None };
+    match tool(ts, "nearby").run(&ctx, &json!({"category": "pharmacy", "near": "Burley, Idaho"})) {
+        Ok(ToolOutput::Json(v)) => v,
+        _ => panic!("nearby"),
+    }
+}
+
+const THU_1430: &str = "2026-10-29T14:30:00-06:00";
+
+#[test]
+fn nearby_rows_carry_website_hours_and_open_status() {
+    let (_d, ts) = pharmacies("pd1", [(Some("Mo-Fr 08:00-18:00; Sa 09:00-12:00"), Some("https://www.walgreens.com")), (None, None), (Some("Mo-Fr 08:00-17:00; PH off"), None)]);
+    let v = nearby_at(&ts, THU_1430);
+    assert_eq!(
+        s(&v),
+        s(&json!({
+            "category": "pharmacy", "center": "Burley, ID", "ranked_by": "distance",
+            "places": [
+                {"address": "place:osm:n1", "name": "Walgreens", "kind": "pharmacy", "kind_label": "Pharmacy", "street": "1414 Overland Ave",
+                 "locality": "Burley", "state": "ID", "distance_mi": v["places"][0]["distance_mi"], "direction": v["places"][0]["direction"],
+                 "phone": "+1 208 678 3050", "website": "https://www.walgreens.com", "hours": "Mo-Fr 08:00-18:00; Sa 09:00-12:00",
+                 "open_status": "Open now (closes 18:00)"},
+                {"address": v["places"][1]["address"], "name": "Smith's Pharmacy", "kind": "pharmacy", "kind_label": "Pharmacy",
+                 "locality": "Burley", "state": "ID", "distance_mi": v["places"][1]["distance_mi"], "direction": v["places"][1]["direction"],
+                 "open_status": "Hours not known"},
+                {"address": v["places"][2]["address"], "name": "Rupert Drug", "kind": "pharmacy", "kind_label": "Pharmacy", "street": "500 6th St",
+                 "locality": "Rupert", "state": "ID", "distance_mi": v["places"][2]["distance_mi"], "direction": v["places"][2]["direction"],
+                 "hours": "Mo-Fr 08:00-17:00; PH off", "open_status": "Hours not understood"}
+            ],
+            "hours_note": "Opening hours come from the map data (16 days old) and can be wrong, especially on holidays.",
+            "map_region": "Idaho", "map_region_age": "16 days old"
+        }))
+    );
+    // the spec's other times for the same hours
+    for (now, want) in [
+        ("2026-10-29T19:00:00-06:00", "Closed now (opens Fri 08:00)"),
+        ("2026-10-29T06:00:00-06:00", "Closed now (opens 08:00)"),
+        ("2026-10-31T13:00:00-06:00", "Closed now (opens Mon 08:00)"),
+    ] {
+        assert_eq!(nearby_at(&ts, now)["places"][0]["open_status"], want, "{now}");
+    }
+}
+
+#[test]
+fn open_status_examples_and_no_note_without_hours() {
+    let (_d, ts) = pharmacies("pd2", [(Some("24/7"), None), (Some("Mo-Su 17:00-02:00"), None), (None, None)]);
+    let v = nearby_at(&ts, THU_1430);
+    assert_eq!(v["places"][0]["open_status"], "Open now (open 24 hours)");
+    assert_eq!(v["places"][1]["open_status"], "Closed now (opens 17:00)");
+    assert_eq!(nearby_at(&ts, "2026-10-30T01:00:00-06:00")["places"][1]["open_status"], "Open now (closes 02:00)");
+    assert_eq!(nearby_at(&ts, "2026-10-29T23:00:00-06:00")["places"][1]["open_status"], "Open now (closes Fri 02:00)");
+
+    // no row with hours: no hours_note, and every row still says what is known
+    let (_d, ts) = pharmacies("pd3", [(None, None), (None, None), (None, None)]);
+    let v = nearby_at(&ts, THU_1430);
+    assert!(v.get("hours_note").is_none());
+    assert!(v["places"].as_array().unwrap().iter().all(|p| p["open_status"] == "Hours not known" && p.get("hours").is_none()));
 }

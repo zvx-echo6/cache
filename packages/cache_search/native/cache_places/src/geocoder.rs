@@ -12,6 +12,7 @@ use crate::address;
 use crate::geo::{bearing_deg, haversine_km};
 use crate::kind::humanize;
 use crate::pack::{LocalityRow, PackSet, PlaceRow};
+use cache_tool::places::PlaceDetails;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -54,6 +55,8 @@ pub struct GeoHit {
     pub score: f64,
     /// An address whose number was placed between its neighbours rather than found.
     pub approximate: bool,
+    /// A place's phone, website and opening hours; None for a town or an address.
+    pub details: Option<PlaceDetails>,
 }
 
 /// The nearest town to a point.
@@ -364,6 +367,7 @@ impl PackGeocoder {
                 name_match,
                 score,
                 approximate: f.approximate,
+                details: None,
             });
         }
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -474,6 +478,7 @@ impl PackGeocoder {
                         name_match: ns,
                         score,
                         approximate: false,
+                        details: None,
                     });
                 }
                 for (id, bm25) in p.fts_places(&expr, 80).unwrap_or_default() {
@@ -509,6 +514,7 @@ impl PackGeocoder {
                         name_match: nm,
                         score,
                         approximate: false,
+                        details: Some(PlaceDetails { phone: r.phone.clone(), website: r.website.clone(), hours: r.hours.clone() }),
                     });
                 }
             }
@@ -599,6 +605,7 @@ impl PackGeocoder {
             name_match: 100.0 - 10.0 * e as f64,
             score: 0.0,
             approximate: false,
+            details: None,
         })
     }
 }

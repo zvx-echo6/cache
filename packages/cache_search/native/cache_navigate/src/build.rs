@@ -4,6 +4,7 @@
 use crate::resolve::Resolved;
 use cache_offroad::directions::Directions;
 use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step, KM_TO_MI};
+use cache_tool::hours::{hours_note, open_status};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
 
@@ -98,6 +99,12 @@ pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
 
 /// AIDA's `_place`: place_name, kind, street, locality, county, state, distance_km, and er_tier when the source has one.
 pub fn place(r: &Resolved) -> Map<String, Value> {
+    place_at(r, None)
+}
+
+/// `place`, and for a destination (`now` given) that is a place from the places data, its phone, website and hours (null
+/// when unknown) and whether it is open at `now`. A town, saved place, address or coordinates get none of the four.
+fn place_at(r: &Resolved, now: Option<&str>) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("place_name".into(), json!(r.name));
     m.insert("kind".into(), json!(r.kind));
@@ -105,6 +112,12 @@ pub fn place(r: &Resolved) -> Map<String, Value> {
     m.insert("locality".into(), json!(r.locality));
     m.insert("county".into(), json!(r.county));
     m.insert("state".into(), json!(r.state));
+    if let (Some(now), Some(p)) = (now, &r.details) {
+        m.insert("phone".into(), json!(p.phone));
+        m.insert("website".into(), json!(p.website));
+        m.insert("hours".into(), json!(p.hours));
+        m.insert("open_status".into(), json!(open_status(p.hours.as_deref(), now)));
+    }
     m.insert("distance_km".into(), json!(r.distance_km));
     if let Some(t) = r.er_tier {
         m.insert("er_tier".into(), json!(t));
@@ -126,9 +139,9 @@ pub fn candidate(r: &Resolved, drive_min: Option<Option<f64>>) -> Value {
 }
 
 /// A place of the result's `from_matched` / `to_matched`: `_place` plus `near` and `snap_distance_m`. Cache has no
-/// reverse geocoder, so `near` (navi's description of the end) is null.
-fn end_json(r: &Resolved, snap_m: Option<i64>) -> Value {
-    let mut m = place(r);
+/// reverse geocoder, so `near` (navi's description of the end) is null. `now` is given for the destination only.
+fn end_json(r: &Resolved, snap_m: Option<i64>, now: Option<&str>) -> Value {
+    let mut m = place_at(r, now);
     m.insert("near".into(), Value::Null);
     m.insert("snap_distance_m".into(), json!(snap_m));
     m.insert("lat".into(), json!(round_py(r.lat, 5)));
@@ -158,6 +171,8 @@ pub struct Extras {
     /// No off-road data: an end away from the road network is only reported as a warning.
     pub synth_warnings: bool,
     pub snap_m: f64,
+    /// The tool's `now`, for the destination's opening hours.
+    pub now: String,
 }
 
 pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Extras) -> Value {
@@ -167,8 +182,8 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("mode".into(), json!(mode));
     o.insert("location_bias".into(), json!(x.location_bias));
     o.insert("route_id".into(), json!(d.route_id));
-    o.insert("from_matched".into(), end_json(from, d.from.as_ref().map(|e| e.snap_distance_m)));
-    o.insert("to_matched".into(), end_json(to, d.to.as_ref().map(|e| e.snap_distance_m)));
+    o.insert("from_matched".into(), end_json(from, d.from.as_ref().map(|e| e.snap_distance_m), None));
+    o.insert("to_matched".into(), end_json(to, d.to.as_ref().map(|e| e.snap_distance_m), Some(&x.now)));
     o.insert("other_destination_candidates".into(), Value::Array(x.others));
     if let Some(n) = x.nearest_search {
         o.insert("nearest_search".into(), n);
@@ -191,6 +206,9 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     }
     o.insert("map_region".into(), json!(x.region.0));
     o.insert("map_region_age".into(), json!(x.region.1));
+    if to.details.as_ref().is_some_and(|p| p.hours.is_some()) {
+        o.insert("hours_note".into(), json!(hours_note(Some(&x.region.1))));
+    }
     Value::Object(o)
 }
 
@@ -235,20 +253,20 @@ pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
     warnings
 }
 
-/// AIDA's `{from_matched, to_matched}` that ride beside an error.
-pub fn with_ends(e: ToolError, from: &Resolved, to: Option<&Resolved>) -> ToolError {
+/// AIDA's `{from_matched, to_matched}` that ride beside an error; the destination with its place details as of `now`.
+pub fn with_ends(e: ToolError, from: &Resolved, to: Option<&Resolved>, now: &str) -> ToolError {
     let e = e.with_top("from_matched", Value::Object(place(from)));
     match to {
-        Some(t) => e.with_top("to_matched", Value::Object(place(t))),
+        Some(t) => e.with_top("to_matched", Value::Object(place_at(t, Some(now)))),
         None => e,
     }
 }
 
 /// A failed route: the router's own code is the error type (no_route, too_far, out_of_coverage, route_too_long,
 /// upstream_timeout, internal), its message the detail, with both matched places beside it.
-pub fn route_error(d: &Directions, from: &Resolved, to: &Resolved) -> ToolError {
+pub fn route_error(d: &Directions, from: &Resolved, to: &Resolved, now: &str) -> ToolError {
     let (code, message) = d.errors.first().map(|e| (e.code.as_str(), e.message.as_str())).unwrap_or(("internal", ""));
-    with_ends(ToolError::new(code, message), from, Some(to))
+    with_ends(ToolError::new(code, message), from, Some(to), now)
 }
 
 #[cfg(test)]
@@ -339,6 +357,8 @@ mod direction_tests {
     use super::*;
     use cache_offroad::directions::{EndInfo, TravelMode};
 
+    const NOW: &str = "2026-10-29T14:30:00-06:00";
+
     #[test]
     fn bearing_words_and_sector_boundaries() {
         for (deg, word) in [
@@ -408,7 +428,7 @@ mod direction_tests {
         let k: Vec<f64> = major_roads(&d).iter().map(|m| m["distance_km"].as_f64().unwrap()).collect();
         assert_eq!(k, [0.51, 0.49, 0.0]);
         let from = Resolved::point("A".into(), 43.6150, -116.2023);
-        let x = Extras { location_bias: None, others: vec![], nearest_search: None, region: ("idaho".into(), "1 day old".into()), synth_warnings: false, snap_m: 100.0 };
+        let x = Extras { location_bias: None, others: vec![], nearest_search: None, region: ("idaho".into(), "1 day old".into()), synth_warnings: false, snap_m: 100.0, now: NOW.into() };
         let mut d = directions(3.02, 1.88, vec![], vec![leg(0), leg(1), leg(2)]);
         d.steps.push(super::step_tests::step(3, "road"));
         assert_eq!(result(&d, &from, &from, "offroad_foot", x)["offroad_mi"], 1.88);
@@ -435,7 +455,7 @@ mod direction_tests {
         };
         let from = Resolved::point("Boise".into(), 43.6150, -116.2023);
         let to = Resolved::point("Nampa".into(), 43.5407, -116.5635);
-        let x = Extras { location_bias: None, others: vec![], nearest_search: None, region: ("idaho".into(), "1 day old".into()), synth_warnings: false, snap_m: 100.0 };
+        let x = Extras { location_bias: None, others: vec![], nearest_search: None, region: ("idaho".into(), "1 day old".into()), synth_warnings: false, snap_m: 100.0, now: NOW.into() };
         let r = result(&d, &from, &to, "drive", x);
         assert_eq!(r["direction_from_start"], "west");
         assert_eq!(r["from_matched"]["lat"], 43.615);
@@ -456,7 +476,7 @@ mod er_tests {
         let mut m = cache_tool::places::PlaceMatch::new("Hospital", 43.0, -116.0);
         m.er_tier = Some(3);
         let r = Resolved::from_match(m.clone());
-        assert_eq!(end_json(&r, None)["emergency_department_confirmed"], false);
+        assert_eq!(end_json(&r, None, None)["emergency_department_confirmed"], false);
         assert!(candidate(&r, Some(Some(2.0)))["note"].as_str().unwrap().contains("not confirmed"));
         m.er_tier = Some(1);
         let r = Resolved::from_match(m);
