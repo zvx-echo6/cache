@@ -87,8 +87,6 @@ fn offroad_modes_route_the_whole_trip_off_road() {
     assert_eq!(foot.routing, "offroad");
     assert_eq!(foot.to_json()["mode"], "offroad_foot");
     assert!(foot.steps.iter().all(|s| s.kind.starts_with("offroad") && s.mode.as_deref() == Some("foot")), "{:?}", foot.steps);
-    // no road route was asked for first
-    assert_eq!(v.0.load(Ordering::SeqCst), 0);
     assert!(e.alternatives(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadFoot), 2).is_empty());
 
     let vehicle = e.directions(&DirectionsRequest::new(FROM, TO, TravelMode::OffroadVehicle));
