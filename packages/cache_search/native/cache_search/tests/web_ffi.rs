@@ -282,23 +282,23 @@ fn search_url(s: &Server) -> String {
 fn web_search_is_offered_only_with_a_key_and_online() {
     let mut c = Core::new();
     // nothing set: not listed, and a call is not_set_up
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
     assert_eq!(c.content("web_search", json!({"query": "x"})), r#"{"ok":false,"error":{"type":"not_set_up","detail":"web_search is not set up"}}"#);
 
     // a key but offline, online but no key, online but no provider: still absent
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 0), 0);
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
     assert_eq!(c.content("web_search", json!({"query": "x"})).contains("not_set_up"), true);
     assert_eq!(c.set_web(Some("kagi"), None, 1), 0);
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
     assert_eq!(c.set_web(None, Some(KEY), 1), 0);
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
 
     // all three: present, with the schema of docs/TOOLS.md
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 1), 0);
-    assert_eq!(c.schema_names(), ["search", "read", "web_search"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate", "web_search"]);
     let schemas: Value = serde_json::from_str(&take(unsafe { cs_tool_schemas(c.h) }).unwrap()).unwrap();
-    let f = &schemas[2]["function"];
+    let f = &schemas[3]["function"];
     assert_eq!(f["name"], "web_search");
     assert_eq!(f["parameters"]["required"], json!(["query"]));
     assert_eq!(f["parameters"]["additionalProperties"], false);
@@ -310,17 +310,17 @@ fn web_search_is_offered_only_with_a_key_and_online() {
     assert_eq!(c.last_error().unwrap()["code"], "bad_json");
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 2), -1);
     assert_eq!(c.last_error().unwrap()["code"], "bad_json");
-    assert_eq!(c.schema_names(), ["search", "read", "web_search"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate", "web_search"]);
 
     // the app goes offline, then clears the key, then switches search off
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 0), 0);
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 1), 0);
     assert_eq!(c.set_web(Some("kagi"), None, 1), 0);
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 1), 0);
     assert_eq!(c.set_web(None, None, 0), 0);
-    assert_eq!(c.schema_names(), ["search", "read"]);
+    assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
 
     // a bad query is bad_arguments even when it is on
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 1), 0);

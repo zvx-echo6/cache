@@ -18,7 +18,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 pub type QueryEmbedder = Box<dyn Fn(&str) -> Option<(String, Vec<f32>)> + Send + Sync>;
 
 /// The order of `cs_tool_schemas`. Registered tools with other names follow, in registration order.
-pub const TOOL_ORDER: [&str; 7] = ["search", "read", "navigate", "nearby", "locate", "live_data", "web_search"];
+pub const TOOL_ORDER: [&str; 8] = ["search", "read", "navigate", "nearby", "locate", "live_data", "calculate", "web_search"];
 
 /// Results of the built-in search.
 const SEARCH_K: usize = 5;
@@ -621,12 +621,12 @@ mod tests {
             let v: Value = serde_json::from_str(&h.tool_schemas_json()).unwrap();
             v.as_array().unwrap().iter().map(|s| s["function"]["name"].as_str().unwrap().to_string()).collect()
         };
-        assert_eq!(names(&h), ["search", "read"]);
+        assert_eq!(names(&h), ["search", "read", "calculate"]);
         for n in ["web_search", "locate", "extra", "nearby"] {
             h.register_tool(dummy(n, Box::new(|_, _| Ok(ToolOutput::Text(String::new())))));
         }
         h.register_tool(Box::new(Dummy { name: "navigate", schema: None, run: Box::new(|_, _| unreachable!()) }));
-        assert_eq!(names(&h), ["search", "read", "nearby", "locate", "web_search", "extra"]);
+        assert_eq!(names(&h), ["search", "read", "nearby", "locate", "calculate", "web_search", "extra"]);
     }
 
     #[test]

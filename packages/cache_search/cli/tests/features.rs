@@ -423,14 +423,14 @@ fn live_data_through_cs_tool_numbers_and_continues_after_search() {
 
     // cs_tool_schemas offers live_data only when definitions are installed
     let with = http.req("GET", "/tools", "");
-    assert_eq!(names(&with), ["search", "read", "live_data"]);
+    assert_eq!(names(&with), ["search", "read", "live_data", "calculate"]);
     assert_eq!(with, core.tool_schemas().unwrap());
     assert_eq!(with, cli(&["tool-schemas", "--config", &cfg3]));
     let (_ta, cfg_nodefs, json_nodefs) = tool_state("e2e-nodefs", port, false, true);
     let (_tb, cfg_nolive, json_nolive) = tool_state("e2e-nolive", port, true, false);
     for (cfg, json_cfg) in [(&cfg_nodefs, &json_nodefs), (&cfg_nolive, &json_nolive)] {
         let abi = Core::open(json_cfg).unwrap().tool_schemas().unwrap();
-        assert_eq!(names(&abi), ["search", "read"], "{json_cfg}");
+        assert_eq!(names(&abi), ["search", "read", "calculate"], "{json_cfg}");
         assert_eq!(abi, cli(&["tool-schemas", "--config", cfg]));
     }
     // without definitions the tool is simply not there: a call is the unknown-tool error, like any unregistered tool

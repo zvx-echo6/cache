@@ -1,0 +1,12 @@
+[package]
+name = "cache_calc"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's calculate tool: exact arithmetic and unit conversion on a formal expression"
+
+[dependencies]
+serde_json.workspace = true
+cache_tool = { path = "../cache_tool" }
+# The calculator (MIT, no dependencies). Pinned exactly: the tool's results are compared byte for byte in tests and in training data.
+fend-core = "=1.5.9"
