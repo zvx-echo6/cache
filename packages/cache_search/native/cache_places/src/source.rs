@@ -70,6 +70,16 @@ impl Geocoder for PackPlaceSource {
             country: hit.country,
         })
     }
+
+    /// "12 mi NE of Stanley": the nearest town (the pack's `reverse`), how far, and the compass point the point lies in from it.
+    /// The same text, built the same way, as the `address` of a coordinates result in the map search.
+    fn describe_point(&self, lat: f64, lon: f64) -> Option<String> {
+        if !(lat.is_finite() && lon.is_finite()) {
+            return None;
+        }
+        let t = self.geo.reverse(lat, lon)?;
+        Some(format!("{} mi {} of {}", crate::geo::round_to(t.km / crate::geo::KM_PER_MI, 1), crate::geo::compass8((t.bearing + 180.0) % 360.0), t.label))
+    }
 }
 
 impl PlaceSource for PackPlaceSource {

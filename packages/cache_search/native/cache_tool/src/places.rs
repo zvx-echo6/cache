@@ -80,6 +80,13 @@ pub trait Geocoder: Send + Sync {
     fn resolve_full(&self, text: &str, near: Option<(f64, f64)>) -> Option<ResolvedPlace> {
         self.resolve(text, near).map(|(name, lat, lon)| ResolvedPlace { name, lat, lon, ..Default::default() })
     }
+
+    /// Where a point is, in words a person recognises: "12 mi NE of Stanley" (the distance in miles to one decimal, the
+    /// compass point the point lies in from the nearest town, and the town as it is shown). `None` when the data does not
+    /// know a town near it; the default knows none.
+    fn describe_point(&self, _lat: f64, _lon: f64) -> Option<String> {
+        None
+    }
 }
 
 /// A place a `Geocoder` resolved: name, position and the optional administrative facts live-data connectors can use in

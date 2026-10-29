@@ -152,6 +152,18 @@ impl ToolError {
     }
 }
 
+/// What the core keeps per conversation for tools that need to count things across calls. It lives in the conversation
+/// (`cs_conv`), is handed to `Tool::run_in`, and is part of a conversation's export only where noted.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConvState {
+    /// Confirm cards the `act` tool has issued (`c1`, `c2`, ...): the number of the last one. Exported when it is above 0.
+    pub confirms: u32,
+    /// Host runs the `act` tool has started (`r1`, `r2`, ...): the number of the last one. Not exported.
+    pub runs: u32,
+    /// Runs handed to the host and not yet finished: `(run_id, action)`. Not exported.
+    pub pending: Vec<(String, String)>,
+}
+
 /// One tool the model can call.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
@@ -159,6 +171,18 @@ pub trait Tool: Send + Sync {
     /// when nothing it needs is installed: then it is left out of the schemas and a call gives not_set_up.
     fn schema(&self) -> Option<Value>;
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<ToolOutput, ToolError>;
+
+    /// `run` for a tool that keeps a count in the conversation. The framework always calls this one; the default ignores
+    /// the state and calls `run`.
+    fn run_in(&self, ctx: &ToolCtx, args: &Value, _state: &mut ConvState) -> Result<ToolOutput, ToolError> {
+        self.run(ctx, args)
+    }
+
+    /// True for a tool that checks its own arguments (and reports them with `field` and `reason`): the framework then
+    /// skips the generic schema check and passes the arguments through as they came.
+    fn checks_own_arguments(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -220,6 +244,19 @@ mod tests {
     fn no_saved_places_resolves_nothing() {
         assert!(NoSavedPlaces.resolve("Home").is_none());
         assert!(NoSavedPlaces.list().is_empty());
+    }
+
+    #[test]
+    fn run_in_defaults_to_run_and_leaves_the_state_alone() {
+        let t: Box<dyn Tool> = Box::new(Dummy);
+        let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: "n", geocoder: None, live_fetcher: None };
+        let mut st = ConvState::default();
+        match t.run_in(&ctx, &Value::Null, &mut st).unwrap() {
+            ToolOutput::Text(s) => assert_eq!(s, "{{addr:a/1}} n"),
+            ToolOutput::Json(_) => panic!("expected text"),
+        }
+        assert_eq!(st, ConvState::default());
+        assert!(!t.checks_own_arguments());
     }
 
     #[test]

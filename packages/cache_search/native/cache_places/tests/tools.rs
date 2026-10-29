@@ -323,6 +323,22 @@ fn resolve_gives_one_point_for_a_name_however_it_is_written() {
 }
 
 #[test]
+fn describe_point_words_a_point_by_its_nearest_town_like_the_map_search() {
+    let (_d, src) = source("describe1");
+    let g = src.geocoder().unwrap();
+    // 0.44 km north of Burley: the nearest town is Burley, the point lies north of it
+    assert_eq!(g.describe_point(42.5397, -113.7928).as_deref(), Some("0.3 mi N of Burley, ID"));
+    // under 0.1 mi the distance is rounded to one decimal and shows as 0, exactly as the map search words it
+    assert_eq!(g.describe_point(42.5362, -113.7928).as_deref(), Some("0 mi N of Burley, ID"));
+    // south and east
+    assert_eq!(g.describe_point(42.5317, -113.7928).as_deref(), Some("0.3 mi S of Burley, ID"));
+    assert!(g.describe_point(42.5357, -113.7878).unwrap().contains(" mi E of Burley, ID"));
+    // no town anywhere near, or not a point
+    assert_eq!(g.describe_point(0.0, 0.0), None);
+    assert_eq!(g.describe_point(f64::NAN, 0.0), None);
+}
+
+#[test]
 fn resolve_takes_a_town_with_a_typing_slip() {
     let (_d, src) = source("resolve2");
     let g = src.geocoder().unwrap();
