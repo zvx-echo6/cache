@@ -104,9 +104,38 @@ void main() {
     test('the region engine is always configured, and a tiles.tar still wins when there is one', () {
       touch('packs/idaho/valhalla/tiles.tar');
       final c = build();
-      expect(c['regions'], {'dir': '${support.path}/regions', 'base_url': 'https://cache.echo6.co/routing/'});
+      expect(c['regions'], {
+        'dir': '${support.path}/regions',
+        'base_url': 'https://data.cached.info/routing/',
+        'places_base_url': 'https://data.cached.info/places/',
+      });
       final v = (c['routing'] as Map)['valhalla'] as Map;
       expect((v['tiles'] as String).replaceAll('\\', '/'), endsWith('/packs/idaho/valhalla/tiles.tar'));
+    });
+
+    test('places: the packs copied in by hand and the merged database of the downloaded regions', () {
+      touch('packs/utah/places.sqlite');
+      touch('packs/idaho/places.sqlite');
+      touch('packs/idaho/valhalla/tiles.tar');
+      final places = build()['places'] as Map;
+      expect(places['merged_dir'], '${support.path}/regions/places');
+      expect([for (final p in places['packs'] as List) (p as String).replaceAll('\\', '/').split('/').reversed.skip(1).first], ['idaho', 'utah']);
+      expect(legacyPlacesPacks(files), places['packs'], reason: 'the same scan, callable again when the sources are refreshed');
+      touch('packs/boise/places.sqlite');
+      expect(legacyPlacesPacks(files), hasLength(3));
+    });
+
+    test('the data host can be another one that serves the same bucket', () {
+      final c = buildCoreExtras(
+        filesDir: files,
+        supportDir: support,
+        regionsBaseUrl: 'https://cache.echo6.co/routing/',
+        placesBaseUrl: 'https://cache.echo6.co/places/',
+      );
+      expect((c['regions'] as Map)['base_url'], 'https://cache.echo6.co/routing/');
+      expect((c['regions'] as Map)['places_base_url'], 'https://cache.echo6.co/places/');
+      expect(kRoutingBaseUrl, '$kDataBaseUrl/routing/');
+      expect(kPlacesBaseUrl, '$kDataBaseUrl/places/');
     });
 
     test('several regions give several places packs; no packs folder gives an empty list', () {

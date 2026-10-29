@@ -152,10 +152,10 @@ impl PlaceSource for OsmPbf {
                 }
                 let f = classify(rules, &tags, format!("osm:n{id}"), lat, lon);
                 if let Some(p) = f.place {
-                    out.places.push(p);
+                    out.place(p);
                 }
                 if let Some(l) = f.locality {
-                    out.localities.push(l);
+                    out.locality(l);
                 }
             })
             .map_err(|e| format!("osm pass 2: {e}"))?;
@@ -167,7 +167,7 @@ impl PlaceSource for OsmPbf {
             }
             p.lat = pts.iter().map(|x| x.0).sum::<f64>() / pts.len() as f64;
             p.lon = pts.iter().map(|x| x.1).sum::<f64>() / pts.len() as f64;
-            out.places.push(p);
+            out.place(p);
         }
         Ok(())
     }

@@ -2,22 +2,27 @@
 //! (`geocoder`), the coordinate formats (`coord`) and the two tools built on them: `nearby` and `locate`.
 //!
 //! The host registers both tools with `tools(&PlacesCfg)` when its config has a `places` section:
-//! `{"packs": ["/path/places.sqlite", ...]}`. Packs are opened on demand, so a pack downloaded later is picked up
+//! `{"packs": ["/path/places.sqlite", ...], "merged_dir": ".../regions/places"}`. Packs are opened on demand, so a pack downloaded later is picked up
 //! without reopening the handle, and `nearby` leaves itself out of the tool schemas while no pack is installed.
 
+pub mod addr;
+pub mod address;
 pub mod coord;
 pub mod embedpack;
+pub mod feed;
 pub mod fixture;
 pub mod geo;
 pub mod geocoder;
 pub mod kind;
 pub mod locate;
 pub mod map;
+pub mod merged;
 pub mod nearby;
 pub mod pack;
 pub mod source;
 pub mod schema;
 
+pub use feed::{FeedSlot, PlacesFeed, PrepareAnswer};
 pub use geocoder::{GeoHit, Geocoder, HitKind, Nearest, PackGeocoder};
 pub use locate::LocateTool;
 pub use map::PlacesCore;
@@ -33,7 +38,11 @@ use std::sync::Arc;
 /// The `places` section of the `cs_open` config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlacesCfg {
+    /// Single-region packs (format 1 or 2), searched after the merged database.
     pub packs: Vec<String>,
+    /// The folder of the phone's merged database (`regions/places`, which holds `CURRENT`); None for none.
+    #[serde(default)]
+    pub merged_dir: Option<String>,
 }
 
 /// `nearby` and `locate`, sharing one set of packs and one geocoder.
@@ -50,9 +59,10 @@ pub fn tools_and_source(cfg: &PlacesCfg) -> (Vec<Box<dyn Tool>>, Arc<dyn cache_t
 /// `tools_and_source` plus the [`PlacesCore`] the map's search box (`cs_map_search`) runs on, over the same packs and geocoder.
 pub fn core_tools_and_source(cfg: &PlacesCfg) -> (Arc<PlacesCore>, Vec<Box<dyn Tool>>, Arc<dyn cache_tool::places::PlaceSource>) {
     let core = Arc::new(PlacesCore::new(cfg));
-    let (packs, geo) = (core.packs.clone(), core.geo.clone());
-    let tools: Vec<Box<dyn Tool>> = vec![Box::new(NearbyTool::new(packs.clone(), geo.clone())), Box::new(LocateTool::new(packs.clone(), geo.clone()))];
-    (core, tools, Arc::new(PackPlaceSource::new(packs, geo)))
+    let (packs, geo, feed) = (core.packs.clone(), core.geo.clone(), core.feed.clone());
+    let tools: Vec<Box<dyn Tool>> =
+        vec![Box::new(NearbyTool::new(packs.clone(), geo.clone()).with_feed(feed.clone())), Box::new(LocateTool::new(packs.clone(), geo.clone()))];
+    (core, tools, Arc::new(PackPlaceSource::new(packs, geo).with_feed(feed)))
 }
 
 /// "12 days old" for a pack built at `built_at`, as of `now` (both ISO 8601 with offset); None when either is unreadable.

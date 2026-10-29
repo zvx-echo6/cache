@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../models/search_model.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
 import '../../video/format.dart';
@@ -97,7 +98,11 @@ class _StoragePageState extends State<StoragePage> {
               rows: [
                 _kind('Library', colors[0], [Part(size(sizes[0])), const Part('\nReading sources and their search indexes')], () => _open(SourcesScreen(sources: d.sources))),
                 _kind('Maps', colors[1], [Part(size(sizes[1])), const Part('\nDownloaded areas, the cache of tiles you viewed, and place and route packs')], () => _open(layers.CatalogueScreen(maps: d.maps))),
-                _kind('Assistant models', colors[2], [Part(size(sizes[2])), Part('\n${_modelList()}')], () => _open(ModelsScreen(app: d.app))),
+                _kind('Assistant models', colors[2], [
+                    Part(size(sizes[2])),
+                    Part('\n${_modelList()}'),
+                    if (d.app.searchModel != null) Part('\nSearch model · ${kSearchModel.sizeLabel}'),
+                  ], () => _open(ModelsScreen(app: d.app))),
                 _kind(
                   'Videos',
                   colors[3],
@@ -130,10 +135,10 @@ class _StoragePageState extends State<StoragePage> {
     );
   }
 
-  /// The files that make up the models figure: the chat model and the model that searches the map by meaning, each with its size.
+  /// The chat models in the models figure, each with its size. The search model has its own line under them.
   String _modelList() {
     final ms = d.app.models;
-    if (ms.isEmpty) return 'No models';
+    if (ms.isEmpty) return d.app.searchModel == null ? 'No models' : 'No chat models';
     return ms.map((m) => '${d.app.displayName(m)} ${formatBytes(m.size)}').join(' · ');
   }
 

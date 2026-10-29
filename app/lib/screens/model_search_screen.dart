@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/hf_hub.dart';
 import '../models/model_downloads.dart';
+import '../models/search_model.dart';
 import '../theme.dart';
 
 String _size(int bytes) {
@@ -15,7 +16,9 @@ String _count(int n) {
   return '$n';
 }
 
-/// The bar at the bottom of the model screens while a model downloads, or after it stopped or finished.
+/// The bar at the bottom of the model screens while a model downloads, or after it stopped or finished. A download waiting
+/// its turn (the search model after the chat model) has its own row under the running one, and so has a stopped search
+/// model download, with Try again.
 class ModelDownloadBar extends StatelessWidget {
   const ModelDownloadBar({super.key, required this.downloads});
 
@@ -28,40 +31,62 @@ class ModelDownloadBar extends StatelessWidget {
       listenable: downloads,
       builder: (context, _) {
         final d = downloads;
+        final rows = <Widget>[];
         if (d.current != null) {
           final f = d.current!;
           final p = d.total == 0 ? null : d.done / d.total;
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        d.verifying
-                            ? 'Checking ${f.fileName}…'
-                            : 'Downloading ${f.fileName}: ${_size(d.done)} of ${_size(d.total)}',
-                        style: TextStyle(fontSize: 15, color: k.secondary),
-                      ),
+          final name = d.labelOf(f);
+          rows.add(Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      d.verifying ? 'Checking $name…' : 'Downloading $name: ${_size(d.done)} of ${_size(d.total)}',
+                      style: TextStyle(fontSize: 15, color: k.secondary),
                     ),
-                    if (!d.verifying)
-                      TextButton(key: const ValueKey('model-download-stop'), onPressed: d.cancel, child: const Text('Stop')),
-                  ],
-                ),
-                LinearProgressIndicator(value: d.verifying ? null : p),
-              ],
-            ),
-          );
+                  ),
+                  if (!d.verifying)
+                    TextButton(key: const ValueKey('model-download-stop'), onPressed: d.cancel, child: const Text('Stop')),
+                ],
+              ),
+              LinearProgressIndicator(value: d.verifying ? null : p),
+            ],
+          ));
+          for (final q in d.queue) {
+            rows.add(Padding(
+              key: ValueKey('model-download-next-${q.fileName}'),
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                d.isSearchModel(q) ? 'Next: Search model, ${kSearchModel.sizeLabel}' : 'Next: ${q.fileName}',
+                style: TextStyle(fontSize: 15, color: k.secondary),
+              ),
+            ));
+          }
+        } else if (d.error != null) {
+          rows.add(Text(d.error!, style: TextStyle(fontSize: 15, color: k.emergency)));
         }
-        if (d.error != null) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: Text(d.error!, style: TextStyle(fontSize: 15, color: k.emergency)),
-          );
+        if (d.current == null && d.searchModelError != null && d.searchModel != null) {
+          rows.add(Row(
+            key: const ValueKey('search-model-stopped'),
+            children: [
+              Expanded(
+                child: Text('Search model: download stopped (${d.searchModelError})', style: TextStyle(fontSize: 15, color: k.emergency)),
+              ),
+              TextButton(
+                key: const ValueKey('search-model-retry'),
+                onPressed: () => d.start(d.searchModel!),
+                child: const Text('Try again'),
+              ),
+            ],
+          ));
         }
-        return const SizedBox.shrink();
+        if (rows.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows),
+        );
       },
     );
   }
@@ -268,9 +293,16 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
                     );
                   }
                   final d = widget.downloads;
+                  final withSearch = d.searchModel != null && d.app.searchModel == null && !d.searchModelQueued;
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                     children: [
+                      if (withSearch)
+                        Padding(
+                          key: const ValueKey('also-downloads-search-model'),
+                          padding: const EdgeInsets.all(8),
+                          child: Text('Also downloads: Search model, ${kSearchModel.sizeLabel}', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        ),
                       if (widget.model.gated)
                         Padding(
                           padding: const EdgeInsets.all(8),

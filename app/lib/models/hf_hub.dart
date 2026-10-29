@@ -22,9 +22,12 @@ class HfModel {
 
 /// One downloadable model file (a single .gguf) in a repository.
 class HfFile {
-  const HfFile({required this.repo, required this.path, required this.size, this.sha256});
+  const HfFile({required this.repo, required this.path, required this.size, this.sha256, this.revision = 'main'});
 
   final String repo;
+
+  /// The branch or commit the file is downloaded from: "main" for a file picked from a listing, a commit for a pinned file.
+  final String revision;
 
   /// The path inside the repository, for example "gemma-4-E2B-it-Q4_K_M.gguf".
   final String path;
@@ -122,7 +125,7 @@ class HfHub {
 
   /// Where [f] downloads from (Hugging Face redirects to its file store).
   Uri downloadUrl(HfFile f) =>
-      base.replace(path: '/${f.repo}/resolve/main/${f.path.split('/').map(Uri.encodeComponent).join('/')}');
+      base.replace(path: '/${f.repo}/resolve/${f.revision}/${f.path.split('/').map(Uri.encodeComponent).join('/')}');
 
   /// The repository's page, for "Open on Hugging Face".
   Uri pageUrl(String repo) => base.replace(path: '/$repo');

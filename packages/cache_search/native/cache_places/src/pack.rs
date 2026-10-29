@@ -1,11 +1,11 @@
 //! Reading a places.sqlite pack: its metadata, category table, nearby queries and the lookups the geocoder uses.
 
 use crate::geo::{bbox_around, haversine_km};
-use crate::schema::{FORMAT_VERSION, MIN_FORMAT_VERSION};
+use crate::schema::{FORMAT_VERSION, MERGED_FORMAT_VERSION, MIN_FORMAT_VERSION};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -199,8 +199,12 @@ pub struct Pack {
     pub format: u32,
     /// Source ids of hospitals that an emergency room row was matched to.
     pub matched: HashSet<String>,
+    /// The merged database's level 1 tiles (its `tiles` table); None for a single-region pack.
+    tiles: Option<HashSet<u32>>,
     conn: Mutex<Connection>,
     stamp: (u64, u64),
+    /// `PRAGMA data_version` when the tables above were read: another connection's commit (a tile merged) changes it.
+    data_version: i64,
 }
 
 fn file_stamp(path: &Path) -> (u64, u64) {
@@ -221,9 +225,9 @@ impl Pack {
         };
         let need = |k: &str| get(k)?.ok_or_else(|| Error { message: format!("{}: meta {k} is missing", path.display()) });
         let version: u32 = need("format_version")?.parse().unwrap_or(0);
-        if !(MIN_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) {
+        if !(MIN_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) && version != MERGED_FORMAT_VERSION {
             return Err(Error {
-                message: format!("{}: pack format {version} is not supported (this reader reads {MIN_FORMAT_VERSION} to {FORMAT_VERSION})", path.display()),
+                message: format!("{}: pack format {version} is not supported (this reader reads {MIN_FORMAT_VERSION} to {MERGED_FORMAT_VERSION})", path.display()),
             });
         }
         let num = |k: &str| -> Result<f64> { need(k)?.parse::<f64>().map_err(|_| Error { message: format!("meta {k} is not a number") }) };
@@ -258,10 +262,55 @@ impl Pack {
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<HashSet<_>>>()?
         };
-        Ok(Pack { path: path.to_path_buf(), meta, categories, states, kinds, format: version, matched, conn: Mutex::new(conn), stamp: file_stamp(path) })
+        let data_version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
+        let tiles = if version >= MERGED_FORMAT_VERSION {
+            let mut st = conn.prepare("SELECT tile FROM tiles")?;
+            let rows = st.query_map([], |r| r.get::<_, i64>(0))?;
+            Some(rows.map(|t| t.map(|t| t as u32)).collect::<rusqlite::Result<HashSet<_>>>()?)
+        } else {
+            None
+        };
+        Ok(Pack {
+            path: path.to_path_buf(),
+            meta,
+            categories,
+            states,
+            kinds,
+            format: version,
+            matched,
+            tiles,
+            conn: Mutex::new(conn),
+            stamp: file_stamp(path),
+            data_version,
+        })
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    /// The phone's merged database (format 3), not a single-region pack.
+    pub fn is_merged(&self) -> bool {
+        self.tiles.is_some()
+    }
+
+    /// Whether the pack has places data at this point: a single-region pack by its box, the merged database by whether the
+    /// level 1 tile there is merged in.
+    pub fn covers(&self, lat: f64, lon: f64) -> bool {
+        match &self.tiles {
+            Some(t) => t.contains(&crate::schema::tile_id_l1(lat, lon)),
+            None => self.meta.contains(lat, lon),
+        }
+    }
+
+    /// The merged database's tiles (empty for a single-region pack).
+    pub fn tiles(&self) -> HashSet<u32> {
+        self.tiles.clone().unwrap_or_default()
+    }
+
+    /// Whether another connection changed the file since this pack read its tables.
+    fn changed(&self) -> bool {
+        let now: Option<i64> = self.conn().query_row("PRAGMA data_version", [], |r| r.get(0)).ok();
+        now != Some(self.data_version)
+    }
+
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -310,6 +359,52 @@ impl Pack {
         }
     }
 
+    /// The nearest `limit` places of any of these kinds (`kind_id`) within `max_km`, nearest first, with their distance in
+    /// km; widened in rings like `nearby`.
+    pub fn nearby_kind(&self, kinds: &[String], lat: f64, lon: f64, max_km: f64, limit: usize) -> Result<Vec<(PlaceRow, f64)>> {
+        if kinds.is_empty() || self.format < 2 || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn();
+        let cols = self.place_cols();
+        let marks = (0..kinds.len()).map(|i| format!("?{}", i + 5)).collect::<Vec<_>>().join(", ");
+        let mut st = conn.prepare(&format!(
+            "SELECT {cols} FROM places_rt r JOIN places p ON p.id = r.id \
+             WHERE r.max_lat >= ?1 AND r.min_lat <= ?2 AND r.max_lon >= ?3 AND r.min_lon <= ?4 AND p.kind_id IN ({marks})"
+        ))?;
+        let mut radius = 10.0f64;
+        loop {
+            let radius_now = radius.min(max_km);
+            let (a, b, c, d) = bbox_around(lat, lon, radius_now);
+            let mut args: Vec<rusqlite::types::Value> = vec![a.into(), b.into(), c.into(), d.into()];
+            args.extend(kinds.iter().map(|k| rusqlite::types::Value::from(k.clone())));
+            let rows = st.query_map(rusqlite::params_from_iter(args), place_row)?;
+            let mut hits: Vec<(PlaceRow, f64)> = Vec::new();
+            for r in rows {
+                let r = r?;
+                let km = haversine_km(lat, lon, r.lat, r.lon);
+                if km <= radius_now {
+                    hits.push((r, km));
+                }
+            }
+            if hits.len() >= limit || radius_now >= max_km {
+                hits.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal));
+                hits.truncate(limit);
+                return Ok(hits);
+            }
+            radius *= 3.0;
+        }
+    }
+
+    /// How many places of a kind the pack has (0 for a kind it does not know, or a format 1 pack).
+    pub fn kind_place_count(&self, id: &str) -> i64 {
+        if self.format < 2 {
+            return 0;
+        }
+        let conn = self.conn();
+        conn.query_row("SELECT place_count FROM kinds WHERE id = ?1", params![id], |r| r.get::<_, i64>(0)).optional().ok().flatten().unwrap_or(0)
+    }
+
     /// Localities within `radius_km`, unsorted, with their distance.
     pub fn localities_near(&self, lat: f64, lon: f64, radius_km: f64) -> Result<Vec<(LocalityRow, f64)>> {
         let conn = self.conn();
@@ -325,6 +420,41 @@ impl Pack {
             let km = haversine_km(lat, lon, r.lat, r.lon);
             if km <= radius_km {
                 out.push((r, km));
+            }
+        }
+        // The merged database: towns just beyond the tiles on the phone, from the tiles that carry them, while the town's own
+        // tile is not here. They have no row of their own, so their ids are negative (the context row's, negated).
+        if let Some(tiles) = &self.tiles {
+            let mut seen: HashSet<String> = out.iter().map(|(l, _)| l.source_id.clone()).collect();
+            let mut st = conn.prepare(
+                "SELECT id, name, kind, lat, lon, population, state, country, source_id FROM localities_ctx \
+                 WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4",
+            )?;
+            let rows = st.query_map(params![a, b, c, d], |r| {
+                Ok(LocalityRow {
+                    id: -r.get::<_, i64>(0)?,
+                    name: r.get(1)?,
+                    kind: r.get(2)?,
+                    lat: r.get(3)?,
+                    lon: r.get(4)?,
+                    population: r.get(5)?,
+                    county: None,
+                    state: r.get(6)?,
+                    country: r.get(7)?,
+                    source_id: r.get(8)?,
+                    wikipedia_title: None,
+                    summary: None,
+                })
+            })?;
+            for r in rows {
+                let r = r?;
+                if tiles.contains(&crate::schema::tile_id_l1(r.lat, r.lon)) || !seen.insert(r.source_id.clone()) {
+                    continue;
+                }
+                let km = haversine_km(lat, lon, r.lat, r.lon);
+                if km <= radius_km {
+                    out.push((r, km));
+                }
             }
         }
         Ok(out)
@@ -418,36 +548,123 @@ impl Pack {
     }
 }
 
-/// The packs named in the config. Files are opened on demand and reopened when they change on disk, so a pack that
-/// finishes downloading after the app started is picked up without reopening the handle.
+/// The phone's merged database (when the config names its folder) and the single-region packs named in the config. Files
+/// are opened on demand and reopened when they change on disk, so a pack that finishes downloading after the app started is
+/// picked up without reopening the handle; a tile merged into the merged database is seen by the next `current()`.
 pub struct PackSet {
+    legacy: Mutex<Legacy>,
+    /// The folder of `CURRENT` and the merged databases (`regions/places`): from the config, else the regions engine's.
+    merged_dir: RwLock<Option<PathBuf>>,
+    merged: Mutex<Merged>,
+}
+
+struct Legacy {
     paths: Vec<PathBuf>,
-    open: Mutex<Vec<Option<Arc<Pack>>>>,
+    open: Vec<Option<Arc<Pack>>>,
+}
+
+#[derive(Default)]
+struct Merged {
+    /// `CURRENT`'s (len, mtime in ns) when it was last read, and the database it named.
+    stamp: Option<(u64, u128)>,
+    db: Option<PathBuf>,
+    pack: Option<Arc<Pack>>,
+}
+
+fn fine_stamp(path: &Path) -> Option<(u64, u128)> {
+    let m = std::fs::metadata(path).ok()?;
+    let t = m.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+    Some((m.len(), t))
 }
 
 impl PackSet {
-    pub fn new(paths: Vec<PathBuf>) -> PackSet {
+    pub fn new(paths: Vec<PathBuf>, merged_dir: Option<PathBuf>) -> PackSet {
         let n = paths.len();
-        PackSet { paths, open: Mutex::new(vec![None; n]) }
+        PackSet { legacy: Mutex::new(Legacy { paths, open: vec![None; n] }), merged_dir: RwLock::new(merged_dir), merged: Mutex::new(Merged::default()) }
     }
 
-    /// The packs that exist and open, in config order.
+    /// Replaces the single-region packs (the app's refresh), and makes the next `current()` check everything again.
+    pub fn set_legacy(&self, paths: Vec<PathBuf>) {
+        let n = paths.len();
+        *self.legacy.lock().unwrap_or_else(|e| e.into_inner()) = Legacy { paths, open: vec![None; n] };
+        self.recheck();
+    }
+
+    /// The next `current()` reads `CURRENT` again and reopens every pack.
+    pub fn recheck(&self) {
+        *self.merged.lock().unwrap_or_else(|e| e.into_inner()) = Merged::default();
+        let mut l = self.legacy.lock().unwrap_or_else(|e| e.into_inner());
+        l.open.iter_mut().for_each(|o| *o = None);
+    }
+
+    /// The single-region packs named, in config order (whether or not they exist).
+    pub fn legacy_paths(&self) -> Vec<PathBuf> {
+        self.legacy.lock().unwrap_or_else(|e| e.into_inner()).paths.clone()
+    }
+
+    pub fn merged_dir(&self) -> Option<PathBuf> {
+        self.merged_dir.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Uses `dir` as the merged database's folder when none was configured (the regions engine's, plugged in by the host).
+    /// Returns whether it was taken.
+    pub fn default_merged_dir(&self, dir: PathBuf) -> bool {
+        let mut d = self.merged_dir.write().unwrap_or_else(|e| e.into_inner());
+        if d.is_some() {
+            return false;
+        }
+        *d = Some(dir);
+        drop(d);
+        self.recheck();
+        true
+    }
+
+    /// The merged database, if there is one: the one `CURRENT` names, reread when another connection changed it.
+    fn merged(&self) -> Option<Arc<Pack>> {
+        let dir = self.merged_dir()?;
+        let mut m = self.merged.lock().unwrap_or_else(|e| e.into_inner());
+        let current = dir.join("CURRENT");
+        let stamp = fine_stamp(&current);
+        if stamp.is_none() {
+            *m = Merged::default();
+            return None;
+        }
+        if stamp != m.stamp {
+            let build = std::fs::read_to_string(&current).ok().map(|s| s.trim().to_string()).filter(|b| safe_name(b));
+            m.stamp = stamp;
+            m.db = build.map(|b| dir.join(format!("{b}.sqlite")));
+        }
+        let db = m.db.clone()?;
+        let fresh = matches!(&m.pack, Some(p) if p.path == db && !p.changed());
+        if !fresh {
+            m.pack = if db.is_file() { Pack::open(&db).ok().map(Arc::new) } else { None };
+        }
+        m.pack.clone()
+    }
+
+    /// The packs that exist and open: the merged database first, then the single-region packs in config order.
     pub fn current(&self) -> Vec<Arc<Pack>> {
-        let mut slots = self.open.lock().unwrap_or_else(|e| e.into_inner());
-        let mut out = Vec::new();
-        for (i, path) in self.paths.iter().enumerate() {
+        let mut out: Vec<Arc<Pack>> = self.merged().into_iter().collect();
+        let mut l = self.legacy.lock().unwrap_or_else(|e| e.into_inner());
+        let Legacy { paths, open } = &mut *l;
+        for (i, path) in paths.iter().enumerate() {
             if !path.is_file() {
-                slots[i] = None;
+                open[i] = None;
                 continue;
             }
-            let fresh = matches!(&slots[i], Some(p) if p.stamp == file_stamp(path));
+            let fresh = matches!(&open[i], Some(p) if p.stamp == file_stamp(path));
             if !fresh {
-                slots[i] = Pack::open(path).ok().map(Arc::new);
+                open[i] = Pack::open(path).ok().map(Arc::new);
             }
-            if let Some(p) = &slots[i] {
+            if let Some(p) = &open[i] {
                 out.push(p.clone());
             }
         }
         out
     }
+}
+
+/// A build name as `CURRENT` holds it: a plain file name, nothing that leaves the folder.
+fn safe_name(b: &str) -> bool {
+    !b.is_empty() && b.len() <= 64 && !b.starts_with('.') && b.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.')
 }

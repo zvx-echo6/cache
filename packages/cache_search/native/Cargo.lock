@@ -789,6 +789,7 @@ dependencies = [
 name = "cache_regions"
 version = "0.1.0"
 dependencies = [
+ "cache_places",
  "flate2",
  "fs4 1.1.0",
  "rusqlite",
@@ -815,6 +816,7 @@ dependencies = [
  "cc",
  "common",
  "edge",
+ "flate2",
  "html-escape",
  "libc",
  "segment",
@@ -4923,6 +4925,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "ureq",
 ]
 

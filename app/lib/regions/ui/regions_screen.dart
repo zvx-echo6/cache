@@ -74,10 +74,12 @@ List<Part> localParts(RegionsState regions, LocalRegion? l) {
   };
 }
 
+/// The parts a region has on the phone, in order: "Road routing, map and places".
 String partsWords(LocalRegion l) {
-  if (l.hasRouting && l.hasMap) return 'Road routing and map';
-  if (l.hasRouting) return 'Road routing';
-  return 'Map';
+  final parts = [if (l.hasRouting) 'road routing', if (l.hasMap) 'map', if (l.hasPlaces) 'places'];
+  if (parts.isEmpty) return '';
+  final words = parts.length == 1 ? parts.single : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
+  return words[0].toUpperCase() + words.substring(1);
 }
 
 // ---- Downloads -------------------------------------------------------------------------------------------
@@ -139,6 +141,8 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
   }
 
   Future<void> _openCountry(RegionCountry c) async {
+    // Coming back here must not give the search field the focus (and the keyboard) again.
+    FocusManager.instance.primaryFocus?.unfocus();
     if (c.count <= 1) {
       await showRegionSheet(context, r, c.record);
       return;
@@ -371,7 +375,7 @@ class LocalTab extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${l.name}?'),
-        content: const Text('Its road routing and map are removed from this phone. Parts another region uses stay.'),
+        content: const Text('Its road routing, map and places are removed from this phone. Parts another region uses stay.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
@@ -419,7 +423,10 @@ class LocalTab extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       statusText(context, switch (l.phase) {
-                        RegionPhase.ready => [Part('${formatBytes(l.bytes)} · ${partsWords(l)}')],
+                        RegionPhase.ready => [
+                          Part('${formatBytes(l.bytes)} · ${partsWords(l)}'),
+                          if (regions.missesPlaces(l)) const Part(' · Places not downloaded', Tone.warn),
+                        ],
                         _ => localParts(regions, l),
                       }),
                       if (l.phase == RegionPhase.downloading || l.phase == RegionPhase.paused) ...[
@@ -491,8 +498,9 @@ class _UpdatesTabState extends State<UpdatesTab> {
       builder: (context, _) {
         final k = context.t;
         final up = r.routingUpdate;
+        final placesUp = r.placesUpdate;
         final maps = r.withMap;
-        final any = up != null || maps.isNotEmpty;
+        final any = up != null || (placesUp != null && placesUp['downloading'] != true) || maps.isNotEmpty;
         return _list([
           SettingsGroup(
             label: 'Road routing',
@@ -509,6 +517,24 @@ class _UpdatesTabState extends State<UpdatesTab> {
                 const SettingsRow(title: 'Road routing', status: [Part('Up to date', Tone.ok)]),
             ],
           ),
+          if (r.placesAvailable)
+            SettingsGroup(
+              label: 'Places',
+              rows: [
+                if (placesUp == null)
+                  const SettingsRow(title: 'Places', status: [Part('Up to date', Tone.ok)])
+                else
+                  SettingsRow(
+                    key: const ValueKey('places-update'),
+                    title: 'New places',
+                    status: [
+                      Part(placesUp['downloading'] == true
+                          ? 'Downloading ${placesUp['build']}'
+                          : '${placesUp['build']} · About ${formatBytes((placesUp['download_bytes'] as num?)?.toInt() ?? 0)} to download'),
+                    ],
+                  ),
+              ],
+            ),
           SettingsGroup(
             label: 'Map',
             rows: [

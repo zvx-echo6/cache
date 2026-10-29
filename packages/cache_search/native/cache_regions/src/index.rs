@@ -1,5 +1,6 @@
-//! What the routing server publishes: `current.json` (which build is current, and where its index is) and the index of a
-//! build, one line per tile that has roads: `<path>\t<bytes>\t<sha256 of the tile>\t<gzip bytes>`.
+//! What the server publishes: `current.json` (which build is current, and where its index is) and the index of a build, one
+//! line per tile: `<path>\t<bytes>\t<sha256 of the tile>\t<gzip bytes>`. Routing (`routing/`) and places (`places/`, with
+//! its common file; docs/PLACES-TILES.md) publish the same way.
 
 use crate::geo;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,42 @@ pub struct Current {
     pub index: String,
     /// SHA-256 of the index file as published (the gzip file).
     pub index_sha256: String,
+    /// "places" for places; absent for routing (whose current.json predates the field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    /// The layout of a places build's tiles and common file (`cache_places::schema::TILE_SCHEMA`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile_schema: Option<u32>,
+    /// The tile levels published (places: [1]; routing, absent: 0 to 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub levels: Option<Vec<u8>>,
+    /// Places: the build's common file, relative to the base address, and its SHA-256 (of the unpacked file) and sizes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_gz_bytes: Option<u64>,
+}
+
+/// A places build's common file, as current.json names it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommonRef {
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
+    pub gz: u64,
+}
+
+fn hex64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A path under the base address: not absolute, no way up, no other host.
+fn safe_rel(p: &str) -> bool {
+    !(p.is_empty() || p.starts_with('/') || p.contains("..") || p.contains('\\') || p.contains("://"))
 }
 
 impl Current {
@@ -36,13 +73,40 @@ impl Current {
         if !safe_build(&self.build) {
             return Err(format!("current.json names a build Cache cannot use: {:?}", self.build));
         }
-        if self.index.is_empty() || self.index.starts_with('/') || self.index.contains("..") || self.index.contains('\\') || self.index.contains("://") {
+        if !safe_rel(&self.index) {
             return Err(format!("current.json names an index Cache cannot use: {:?}", self.index));
         }
-        if self.index_sha256.len() != 64 || !self.index_sha256.bytes().all(|c| c.is_ascii_hexdigit()) {
+        if !hex64(&self.index_sha256) {
             return Err("current.json has no valid index_sha256".into());
         }
         Ok(())
+    }
+
+    /// `check`, for a routing current.json: one that says it is another component's is refused.
+    pub fn check_routing(&self) -> Result<(), String> {
+        self.check()?;
+        match self.component.as_deref() {
+            None | Some("routing") => Ok(()),
+            Some(other) => Err(format!("the routing address publishes {other:?}, not routing")),
+        }
+    }
+
+    /// `check`, for a places current.json: the component, a tile layout this version reads, and the common file. Returns the
+    /// common file.
+    pub fn check_places(&self, tile_schema: u32) -> Result<CommonRef, String> {
+        self.check()?;
+        if self.component.as_deref() != Some("places") {
+            return Err(format!("the places address publishes {:?}, not places", self.component.as_deref().unwrap_or("routing")));
+        }
+        if self.tile_schema != Some(tile_schema) {
+            return Err(format!("update Cache to use this data: the places are in layout {:?}, this version reads {tile_schema}", self.tile_schema));
+        }
+        if self.levels.as_ref().is_some_and(|l| !l.contains(&1)) {
+            return Err(format!("the places build has no level 1 tiles ({:?})", self.levels));
+        }
+        let path = self.common.clone().filter(|p| safe_rel(p)).ok_or_else(|| format!("current.json names a common file Cache cannot use: {:?}", self.common))?;
+        let sha256 = self.common_sha256.clone().map(|s| s.to_ascii_lowercase()).filter(|s| hex64(s)).ok_or("current.json has no valid common_sha256")?;
+        Ok(CommonRef { path, sha256, bytes: self.common_bytes.unwrap_or(0), gz: self.common_gz_bytes.unwrap_or(0) })
     }
 }
 
@@ -116,6 +180,26 @@ impl Index {
         out
     }
 
+    /// The tiles of one level an outline overlaps that are in the index, by path (places: level 1).
+    pub fn tiles_for_level(&self, shape: &geo::Shape, level: u8) -> Vec<TileRef> {
+        let mut out: Vec<TileRef> = shape.tiles(level).into_iter().filter_map(|id| self.get(level, id).cloned()).collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        out
+    }
+
+    /// The tiles of one level within `deg` of any of `points` ([lat, lon]) that are in the index, by path.
+    pub fn tiles_near_level(&self, points: &[(f64, f64)], level: u8, deg: f64) -> Vec<TileRef> {
+        let mut ids: Vec<u64> = Vec::new();
+        for &(lat, lon) in points.iter().filter(|(a, o)| a.is_finite() && o.is_finite()) {
+            ids.extend(geo::tiles_in_box(level, [lon - deg, lat - deg, lon + deg, lat + deg]));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        let mut out: Vec<TileRef> = ids.into_iter().filter_map(|id| self.get(level, id).cloned()).collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        out
+    }
+
     /// The tiles a route through `points` ([lat, lon]) is likely to need: level 0 and 1 over the points' box widened by
     /// `box_deg`, level 2 within `near_deg` of each point.
     pub fn tiles_near(&self, points: &[(f64, f64)], box_deg: f64, near_deg: f64) -> Vec<TileRef> {
@@ -176,8 +260,30 @@ mod tests {
             gz_bytes: 0,
             index: "na-2026-10-18/index.tsv.gz".into(),
             index_sha256: H.into(),
+            component: None,
+            tile_schema: None,
+            levels: None,
+            common: None,
+            common_sha256: None,
+            common_bytes: None,
+            common_gz_bytes: None,
         };
-        assert!(c.check().is_ok());
+        assert!(c.check().is_ok() && c.check_routing().is_ok());
+        assert!(c.check_places(1).is_err(), "a routing current.json is not places");
+        let mut p = c.clone();
+        p.component = Some("places".into());
+        p.tile_schema = Some(1);
+        p.common = Some("na-2026-10-18/common.sqlite.gz".into());
+        p.common_sha256 = Some(H.into());
+        p.common_gz_bytes = Some(7);
+        assert_eq!(p.check_places(1).unwrap(), CommonRef { path: "na-2026-10-18/common.sqlite.gz".into(), sha256: H.into(), bytes: 0, gz: 7 });
+        assert!(p.check_routing().is_err());
+        assert!(p.check_places(2).unwrap_err().starts_with("update Cache"));
+        p.common = Some("../common.sqlite.gz".into());
+        assert!(p.check_places(1).is_err());
+        // Read back without the places fields, a routing current.json is as it was.
+        let text = serde_json::to_string(&c).unwrap();
+        assert!(!text.contains("component") && !text.contains("common"), "{text}");
         c.build = "../x".into();
         assert!(c.check().is_err());
         c.build = "na".into();

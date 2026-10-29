@@ -4,7 +4,11 @@
 //! `Geocoder` is the trait this crate's tools use (forward search with its scores, reverse lookup). The small
 //! `cache_tool::places::Geocoder` ("this text, where is it?") that other crates' tools get through `ToolCtx::geocoder` is
 //! implemented over it by `PackPlaceSource`.
+//!
+//! A query that starts with a house number ("350 N State St, Salt Lake City") is first looked up as an address in the
+//! street rows of a merged database (`address`); when no street matches, it is searched as a name like any other.
 
+use crate::address;
 use crate::geo::{bearing_deg, haversine_km};
 use crate::kind::humanize;
 use crate::pack::{LocalityRow, PackSet, PlaceRow};
@@ -15,13 +19,15 @@ use std::sync::Arc;
 pub enum HitKind {
     Locality,
     Place,
+    /// A house number on a street (merged databases only).
+    Address,
 }
 
 /// One forward-search result.
 #[derive(Debug, Clone)]
 pub struct GeoHit {
     pub kind: HitKind,
-    /// Stable id for numbering: `place:<source id>` or `town:<source id>`.
+    /// Stable id for numbering: `place:<source id>`, `town:<source id>` or `addr:<street uid>/<house number>`.
     pub address: String,
     pub name: String,
     /// How to show it: `Stanley, ID` for a town, the name for a place.
@@ -46,6 +52,8 @@ pub struct GeoHit {
     /// the text score and the distance bias.
     pub name_match: f64,
     pub score: f64,
+    /// An address whose number was placed between its neighbours rather than found.
+    pub approximate: bool,
 }
 
 /// The nearest town to a point.
@@ -183,6 +191,19 @@ fn parse_query(q: &str, states: &[(String, String)]) -> Query {
     Query { head, state, area }
 }
 
+/// (code, name) of every state the packs know, once each.
+fn states_of(packs: &[Arc<crate::pack::Pack>]) -> Vec<(String, String)> {
+    let mut states: Vec<(String, String)> = Vec::new();
+    for p in packs {
+        for s in &p.states {
+            if !states.iter().any(|(c, _)| *c == s.code) {
+                states.push((s.code.clone(), s.name.clone()));
+            }
+        }
+    }
+    states
+}
+
 fn locality_rank(kind: &str) -> f64 {
     match kind {
         "city" => 15.0,
@@ -242,21 +263,146 @@ pub(crate) const GOOD_NAME_MATCH: f64 = 40.0;
 /// A hit whose whole name is the query (`name_match` 100) or whose alternative name is (90): nothing fuzzy replaces it.
 pub(crate) const EXACT_NAME_MATCH: f64 = 90.0;
 
+/// An exact house number, and one placed between its neighbours (`name_match`), and the bonus for a street that matched
+/// every word of the query.
+const ADDRESS_EXACT: f64 = 100.0;
+const ADDRESS_PLACED: f64 = 70.0;
+const ADDRESS_STREET: f64 = 60.0;
+/// A street row outside the town named after the comma still counts when it is this close to that town.
+const ADDRESS_AREA_KM: f64 = 15.0;
+/// Street rows read per query.
+const ADDRESS_ROWS: usize = 40;
+
 impl PackGeocoder {
+    /// Addresses for a query that starts with a house number ("350 N State St, Salt Lake City, UT"): the street words, every
+    /// one as a prefix, against the street rows' source and expanded forms; rows filtered by the state and by the town after
+    /// the comma, or in the last words when they name a town and there is no comma (its name, or within 15 km of it); rows of one street cut by a tile edge joined; then the number found, or
+    /// placed between its neighbours. Empty when the query does not start with a house number or no street matches.
+    fn forward_addresses(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
+        let Some((number, rest)) = address::split_house_number(query) else { return Vec::new() };
+        let all = self.packs.current();
+        let packs: Vec<_> = all.iter().filter(|p| p.has_addresses()).collect();
+        if packs.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let q = parse_query(rest, &states_of(&all));
+        if q.area.is_none() {
+            // "123 Main St Boise": a run of the last words that is a town's name is the town, as after a comma (the longest
+            // run first; the street keeps at least one word). When none gives an address, the whole text is the street.
+            let toks: Vec<&str> = q.head.split_whitespace().collect();
+            for take in (1..=3.min(toks.len().saturating_sub(1))).rev() {
+                let town = toks[toks.len() - take..].join(" ");
+                if !self.is_town(&all, &town, q.state.as_deref()) {
+                    continue;
+                }
+                let split = Query { head: toks[..toks.len() - take].join(" "), state: q.state.clone(), area: Some(town) };
+                let hits = self.addresses_on(&packs, number, &split, near, limit);
+                if !hits.is_empty() {
+                    return hits;
+                }
+            }
+        }
+        let mut hits = self.addresses_on(&packs, number, &q, near, limit);
+        if hits.is_empty() && q.state.is_some() && !rest.contains(',') {
+            // A street whose last word is also a state's code ("Oak Ct", "Main St NE"): the whole text is the street.
+            hits = self.addresses_on(&packs, number, &Query { head: rest.to_string(), state: None, area: None }, near, limit);
+        }
+        hits
+    }
+
+    fn addresses_on(&self, packs: &[&Arc<crate::pack::Pack>], number: &str, q: &Query, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
+        let ws = words(&q.head);
+        if ws.is_empty() {
+            return Vec::new();
+        }
+        let expr = ws.iter().map(|w| format!("\"{}\"*", w.replace('"', ""))).collect::<Vec<_>>().join(" ");
+        let mut rows = Vec::new();
+        for p in packs {
+            rows.extend(p.fts_streets(&expr, ADDRESS_ROWS).unwrap_or_default());
+        }
+        rows.retain(|r| q.state.as_ref().is_none_or(|s| r.state.as_ref().is_none_or(|rs| rs == s)));
+        if let Some(area) = &q.area {
+            let want = norm(area);
+            let mut town: Option<Option<(f64, f64)>> = None;
+            rows.retain(|r| {
+                if [r.locality.as_deref(), r.postal_city.as_deref()].into_iter().flatten().any(|t| norm(t) == want) {
+                    return true;
+                }
+                let at = *town.get_or_insert_with(|| self.area_town(area, q.state.as_deref(), near));
+                at.is_some_and(|(la, lo)| haversine_km(la, lo, r.lat, r.lon) <= ADDRESS_AREA_KM)
+            });
+        }
+        let mut hits: Vec<GeoHit> = Vec::new();
+        for group in address::join(rows) {
+            let Some(f) = address::find_number(&group, number) else { continue };
+            let Some(r) = group.iter().find(|r| r.uid == f.uid) else { continue };
+            let name = format!("{} {}", f.number, r.street);
+            let town = r.town().map(str::to_string);
+            let label = [Some(name.as_str()), town.as_deref(), r.state.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(", ");
+            let name_match = if f.approximate { ADDRESS_PLACED } else { ADDRESS_EXACT };
+            let mut score = name_match + ADDRESS_STREET;
+            if let Some((blat, blon)) = near {
+                score += 25.0 * (-haversine_km(blat, blon, f.lat, f.lon) / 60.0).exp();
+            }
+            hits.push(GeoHit {
+                kind: HitKind::Address,
+                address: format!("addr:{}/{}", f.uid, f.number),
+                name,
+                label,
+                lat: f.lat,
+                lon: f.lon,
+                locality: town,
+                state: r.state.clone(),
+                category: None,
+                what: Some("address".into()),
+                street: Some(r.street.clone()),
+                county: None,
+                country: r.country.clone(),
+                osm_category: None,
+                kind_id: Some("address".into()),
+                kind_label: Some("Address".into()),
+                name_match,
+                score,
+                approximate: f.approximate,
+            });
+        }
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(limit);
+        hits
+    }
+
+    /// Whether `name` is exactly the name of a town in the places data (in `state`, when given).
+    fn is_town(&self, packs: &[Arc<crate::pack::Pack>], name: &str, state: Option<&str>) -> bool {
+        let want = norm(name);
+        let Some(expr) = fts_expr(&words(name), false) else { return false };
+        packs.iter().any(|p| {
+            p.fts_localities(&expr, 12).unwrap_or_default().into_iter().any(|(id, _)| {
+                p.locality(id).ok().flatten().is_some_and(|l| norm(&l.name) == want && state.is_none_or(|s| l.state.as_deref() == Some(s)))
+            })
+        })
+    }
+
+    /// The town an address query names after its comma: the best town the names search finds, else the one with a typing
+    /// slip in it.
+    fn area_town(&self, area: &str, state: Option<&str>, near: Option<(f64, f64)>) -> Option<(f64, f64)> {
+        let q = match state {
+            Some(s) => format!("{area}, {s}"),
+            None => area.to_string(),
+        };
+        self.forward_names(&q, near, 5)
+            .into_iter()
+            .find(|h| h.kind == HitKind::Locality && h.name_match >= GOOD_NAME_MATCH)
+            .or_else(|| self.fuzzy_town(&q, near))
+            .map(|h| (h.lat, h.lon))
+    }
+
     /// The index search behind `forward`, without misspelling handling.
     fn forward_names(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
         let packs = self.packs.current();
         if packs.is_empty() || limit == 0 {
             return Vec::new();
         }
-        let mut states: Vec<(String, String)> = Vec::new();
-        for p in &packs {
-            for s in &p.states {
-                if !states.iter().any(|(c, _)| *c == s.code) {
-                    states.push((s.code.clone(), s.name.clone()));
-                }
-            }
-        }
+        let states = states_of(&packs);
         let q = parse_query(query, &states);
         let q_words = words(&q.head);
         let q_norm = q_words.join(" ");
@@ -327,6 +473,7 @@ impl PackGeocoder {
                         kind_label: Some(humanize(&l.kind)),
                         name_match: ns,
                         score,
+                        approximate: false,
                     });
                 }
                 for (id, bm25) in p.fts_places(&expr, 80).unwrap_or_default() {
@@ -361,6 +508,7 @@ impl PackGeocoder {
                         kind_label: r.kind_id.as_deref().map(|k| p.kind(k).map(|i| i.label.clone()).unwrap_or_else(|| humanize(k))),
                         name_match: nm,
                         score,
+                        approximate: false,
                     });
                 }
             }
@@ -393,14 +541,7 @@ impl PackGeocoder {
         if packs.is_empty() {
             return None;
         }
-        let mut states: Vec<(String, String)> = Vec::new();
-        for p in &packs {
-            for s in &p.states {
-                if !states.iter().any(|(c, _)| *c == s.code) {
-                    states.push((s.code.clone(), s.name.clone()));
-                }
-            }
-        }
+        let states = states_of(&packs);
         let q = parse_query(query, &states);
         let want: Vec<char> = norm(&q.head).chars().collect();
         let allowed = slip_allowed(want.len());
@@ -457,6 +598,7 @@ impl PackGeocoder {
             kind_label: Some(humanize(&l.kind)),
             name_match: 100.0 - 10.0 * e as f64,
             score: 0.0,
+            approximate: false,
         })
     }
 }
@@ -468,7 +610,10 @@ impl Geocoder for PackGeocoder {
     /// whole name (a place or a town, `name_match` 90 or more) beats a whole-name slip of at most `slip_allowed` edits, and that
     /// beats a place whose name only starts with the query or has some of its words (`name_match` under 90). A town that
     /// starts with the query (a partial name typed) is kept ahead of a slip.
+    ///
+    /// A query that starts with a house number and names a street on the phone gives its addresses first, then the rest.
     fn forward(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
+        let addresses = self.forward_addresses(query, near, limit);
         let mut hits = self.forward_names(query, near, limit);
         if limit > 0 && !hits.iter().any(|h| h.name_match >= EXACT_NAME_MATCH) {
             let town_prefix = hits.iter().any(|h| h.kind == HitKind::Locality && h.name_match >= GOOD_NAME_MATCH);
@@ -479,6 +624,12 @@ impl Geocoder for PackGeocoder {
                     hits.truncate(limit);
                 }
             }
+        }
+        if !addresses.is_empty() {
+            let mut out = addresses;
+            out.extend(hits);
+            out.truncate(limit);
+            return out;
         }
         hits
     }

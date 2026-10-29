@@ -51,6 +51,21 @@ impl cache_navigate::TileStream for RegionStream {
     }
 }
 
+/// The regions engine as the places core's feed: before a search it fetches and merges the places tiles around the
+/// centre, and its generation counts the changes to the places on the phone.
+struct RegionsPlacesFeed(std::sync::Arc<cache_regions::Regions>);
+
+impl cache_places::PlacesFeed for RegionsPlacesFeed {
+    fn prepare(&self, lat: f64, lon: f64, wait: std::time::Duration) -> cache_places::PrepareAnswer {
+        let a = self.0.prepare_places(lat, lon, wait);
+        let n = |x: usize| u32::try_from(x).unwrap_or(u32::MAX);
+        cache_places::PrepareAnswer { fetched: n(a.fetched), pending: n(a.pending), missing: n(a.missing), ok: a.ok }
+    }
+    fn generation(&self) -> u64 {
+        self.0.places_generation()
+    }
+}
+
 pub fn regions_err(e: cache_regions::Error) -> Error {
     Error::new(ErrorCode::from_str_code(e.code), e.message)
 }
@@ -138,12 +153,47 @@ impl Ext {
         Ok(())
     }
 
-    /// The navigate tool's tile stream is the regions engine, when both are configured.
+    /// The navigate tool's tile stream is the regions engine, when both are configured. So is the places core's feed (map
+    /// search, `nearby` and the navigate tool's `to_type` fetch the places tiles around them first), and the places core
+    /// reads the regions engine's merged database when the `places` section names no `merged_dir`.
     pub fn plug_regions(&self) {
         if let (Some(nav), Some(r)) = (&self.nav, &self.regions) {
             let stream: std::sync::Arc<dyn cache_navigate::TileStream> = std::sync::Arc::new(RegionStream(r.clone()));
             nav.set_stream(Some(stream));
         }
+        if let (Some(core), Some(r)) = (&self.map_places, &self.regions) {
+            if let Some(dir) = r.places_dir() {
+                core.packs.default_merged_dir(dir);
+                core.plug_feed(std::sync::Arc::new(RegionsPlacesFeed(r.clone())));
+            }
+        }
+    }
+
+    /// `cs_places_refresh`: `{"packs"?: [...]}` replaces the single-region packs when given; the next search checks the
+    /// merged database and every pack again. Answers `{"ok": true, "packs": n, "merged": bool}`.
+    pub fn places_refresh(&self, args_json: Option<&str>) -> Result<String> {
+        let core = self.map_places.as_ref().ok_or_else(|| Error::new(ErrorCode::NotConfigured, "places need \"places\": {\"packs\": [...]} in the cs_open config"))?;
+        let v: serde_json::Value = match args_json.map(str::trim).filter(|a| !a.is_empty()) {
+            Some(a) => parse_json(a, "args")?,
+            None => serde_json::json!({}),
+        };
+        let o = v.as_object().ok_or_else(|| Error::bad_json("args must be a JSON object"))?;
+        for k in o.keys() {
+            if k != "packs" {
+                return Err(Error::bad_json(format!("{k}: not allowed")));
+            }
+        }
+        match o.get("packs") {
+            None | Some(serde_json::Value::Null) => core.packs.recheck(),
+            Some(serde_json::Value::Array(a)) => {
+                let paths = a.iter().map(|p| p.as_str().map(std::path::PathBuf::from)).collect::<Option<Vec<_>>>();
+                core.packs.set_legacy(paths.ok_or_else(|| Error::bad_json("packs must be an array of paths"))?);
+            }
+            Some(_) => return Err(Error::bad_json("packs must be an array of paths")),
+        }
+        let open = core.packs.current();
+        let merged = open.iter().any(|p| p.is_merged());
+        Ok(serde_json::json!({"ok": true, "packs": open.iter().filter(|p| !p.is_merged()).count(), "merged": merged}).to_string())
     }
 
     /// Apply the `layers` config section; absent keeps what was set before. The same config keeps the running engine
@@ -334,7 +384,8 @@ fn parse_json(text: &str, what: &str) -> Result<serde_json::Value> {
 
 impl crate::handle::Handle {
     /// `cs_map_search`: see cache_places::map. Distances are from `near`, else the last GPS fix. The meaning step embeds the
-    /// query with the handle's query embedder, unless the request carries `query_vector`.
+    /// query with the handle's query embedder, unless the request carries `query_vector`. With a places feed plugged in
+    /// (the regions engine), the tiles around the centre are fetched first, waiting up to 3 seconds.
     pub fn map_search(&self, request_json: &str) -> Result<String> {
         let core = self
             .ext
@@ -344,6 +395,11 @@ impl crate::handle::Handle {
         let (query, mut opts) = cache_places::map::parse_request(&parse_json(request_json, "request")?).map_err(map_err)?;
         if opts.near.is_none() {
             opts.near = self.location.as_ref().map(|l| (l.lat, l.lon));
+        }
+        // The places tiles around the centre first (the feed fetches only when the network may be used); coordinates need
+        // no places.
+        if let Some((lat, lon)) = opts.near.filter(|&n| cache_places::coord::parse(&query, Some(n)).is_none()) {
+            opts.prepared = core.feed.prepare(lat, lon, cache_places::feed::SEARCH_PREPARE_WAIT);
         }
         let embed: Option<&dyn Fn(&str) -> Option<(String, Vec<f32>)>> = self.embedder.as_deref().map(|f| f as _);
         let v = core.search(&query, &opts, embed).map_err(map_err)?;
@@ -372,7 +428,9 @@ impl crate::handle::Handle {
             Some(serde_json::Value::Object(o)) => {
                 let num = |k: &str| o.get(k).and_then(serde_json::Value::as_f64);
                 let text = |k: &str| o.get(k).and_then(serde_json::Value::as_str).map(str::to_string);
-                let found = text("id").and_then(|id| places.and_then(|c| c.lookup(&id)));
+                // a kind: id is the nearest place of that kind to the GPS fix, and the end is that place
+                let found = text("id").and_then(|id| places.and_then(|c| c.lookup_near(&id, near)));
+                let of_kind = text("id").is_some_and(|i| i.starts_with("kind:"));
                 let (lat, lon) = match (num("lat"), num("lon"), &found) {
                     (Some(la), Some(lo), _) => (la, lo),
                     (_, _, Some(f)) => (f.lat, f.lon),
@@ -382,9 +440,10 @@ impl crate::handle::Handle {
                     return Err(Error::bad_json(format!("{which}: lat or lon out of range")));
                 }
                 let same_spot = found.as_ref().is_some_and(|f| (f.lat - lat).abs() < 1e-4 && (f.lon - lon).abs() < 1e-4);
+                let (found_id, found_name) = (found.as_ref().and_then(|f| f.id.clone()), found.as_ref().and_then(|f| f.name.clone()));
                 Ok(MapEnd {
-                    id: text("id"),
-                    name: text("name").or_else(|| found.as_ref().and_then(|f| f.name.clone())),
+                    id: if of_kind { found_id } else { text("id") },
+                    name: if of_kind { found_name.or_else(|| text("name")) } else { text("name").or(found_name) },
                     lat,
                     lon,
                     osm_category: text("osm_category").or_else(|| found.as_ref().filter(|_| same_spot).and_then(|f| f.osm_category.clone())),

@@ -5,6 +5,7 @@
 
 use crate::geo::{bearing_deg, compass8, haversine_km, km_to_mi, round_to};
 use crate::kind::shown;
+use crate::feed::{FeedSlot, TOOL_PREPARE_WAIT};
 use crate::pack::{Pack, PackSet, PlaceRow};
 use crate::{age_words, resolve_center, Geocoder};
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
@@ -18,11 +19,18 @@ const DEFAULT_LIMIT: usize = 5;
 pub struct NearbyTool {
     packs: Arc<PackSet>,
     geo: Arc<dyn Geocoder>,
+    feed: FeedSlot,
 }
 
 impl NearbyTool {
     pub fn new(packs: Arc<PackSet>, geo: Arc<dyn Geocoder>) -> NearbyTool {
-        NearbyTool { packs, geo }
+        NearbyTool { packs, geo, feed: FeedSlot::default() }
+    }
+
+    /// The feed that fetches the places tiles around the centre before a search (the places core's).
+    pub fn with_feed(mut self, feed: FeedSlot) -> NearbyTool {
+        self.feed = feed;
+        self
     }
 }
 
@@ -148,6 +156,12 @@ impl Tool for NearbyTool {
             Some(v) => v.as_u64().filter(|n| (1..=10).contains(n)).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "\"limit\" must be 1 to 10"))? as usize,
         };
 
+        // The places tiles around the centre first, when the host plugged in a feed (it fetches only online).
+        if self.feed.get().is_some() {
+            if let Ok(c) = resolve_center(ctx, &self.packs, &*self.geo, near) {
+                self.feed.prepare(c.lat, c.lon, TOOL_PREPARE_WAIT);
+            }
+        }
         let packs = self.packs.current();
         let cats = installed_categories(&packs);
         if cats.is_empty() {
@@ -158,7 +172,7 @@ impl Tool for NearbyTool {
         };
 
         let center = resolve_center(ctx, &self.packs, &*self.geo, near)?;
-        let covering = packs.iter().filter(|p| p.meta.contains(center.lat, center.lon)).min_by(|a, b| {
+        let covering = packs.iter().filter(|p| p.covers(center.lat, center.lon)).min_by(|a, b| {
             a.meta.area().partial_cmp(&b.meta.area()).unwrap_or(std::cmp::Ordering::Equal)
         });
         let Some(region) = covering else {

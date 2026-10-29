@@ -7,6 +7,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
+import '../screens/search_model_line.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import 'zim_urls.dart';
@@ -530,6 +531,9 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                       ),
                 onTap: () => _open(h.address),
               ),
+            // A library with vectors was searched by keywords only: its model is not on this phone.
+            if (widget.sources.missingModel(ids: [?_zimId]) case final missing?)
+              SearchModelLine(model: missing),
           ] else
             for (final s in _suggestions)
               ListTile(

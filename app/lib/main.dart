@@ -22,7 +22,6 @@ import 'maps/layers/core_layer_engine.dart';
 import 'maps/maps_state.dart';
 import 'nav/demo_backend.dart';
 import 'nav/nav_backend.dart';
-import 'nav/query_embedder.dart';
 import 'nav/notification_access.dart';
 import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
@@ -33,6 +32,7 @@ import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
+import 'models/search_model.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
@@ -92,7 +92,14 @@ class _CacheAppState extends State<CacheApp> {
   late final AppSettings settings = AppSettings();
   // The rule for mobile data, asked by every download (map areas, ZIMs, videos).
   late final DataPolicy policy = DataPolicy(settings: settings);
-  late final ModelDownloads modelDownloads = ModelDownloads(app: app, policy: policy);
+  late final ModelDownloads modelDownloads = ModelDownloads(app: app, policy: policy, searchModel: kSearchModel.file);
+  // The search model (bge-m3): one copy embeds the queries of the map search, the library search and the assistant's search.
+  // It comes with the first chat model and sits in the models folder.
+  late final SearchModel searchModel = SearchModel(
+    app: app,
+    downloads: modelDownloads,
+    modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
+  );
   late final MapsState maps = MapsState(
     engine: CoreLayerEngine(
       openCore: sources.whenCoreReady,
@@ -158,11 +165,20 @@ class _CacheAppState extends State<CacheApp> {
   );
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
+  // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
   late final RegionsState regions = RegionsState(
     policy: policy,
     supportDir: getApplicationSupportDirectory,
     catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
     maps: maps,
+    onPlacesChanged: () async {
+      try {
+        await sources.core?.refreshPlaces();
+      } catch (_) {
+        // A core older than cs_places_refresh reads the merged database on its own.
+      }
+      await nav.placesChanged();
+    },
   );
   late final SettingsHub hub = SettingsHub(
     settings: settings,
@@ -191,21 +207,17 @@ class _CacheAppState extends State<CacheApp> {
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
     newHost: (numbering) => sources.core == null || numbering is! CoreNumbering
         ? null
-        : CoreToolHost(core: sources.core!, numbering: numbering),
+        : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector),
     numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => chatLocation.known,
     prepareTurn: chatLocation.prepare,
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
-  // The meaning search of the map: the query is embedded on the phone with the same model the places pack was built with.
-  late final PhoneQueryEmbedder queryEmbedder = PhoneQueryEmbedder(
-    modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
-  );
   late final NavState nav = NavState(
     backend: const String.fromEnvironment('CACHE_NAV_DEMO').isNotEmpty
         ? DemoMapBackend(Directory(const String.fromEnvironment('CACHE_NAV_DEMO')))
-        : CoreMapBackend(() => sources.core!, embedder: queryEmbedder.call, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
+        : CoreMapBackend(() => sources.core!, embedder: searchModel.embedder.call, isAvailable: () => sources.coreReady && sources.openedExtra.containsKey('routing')),
     location: location,
     speaker: FlutterTtsSpeaker(),
     positionSource: GeolocatorNavSource(),
@@ -222,6 +234,9 @@ class _CacheAppState extends State<CacheApp> {
   void initState() {
     super.initState();
     ModelDownloads.shared = modelDownloads;
+    // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
+    SearchModel.shared = searchModel;
+    sources.embedding = searchModel;
     app.addListener(_onApp);
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -241,6 +256,7 @@ class _CacheAppState extends State<CacheApp> {
       _onWeather();
     });
     location.addListener(_rememberPlace);
+    nav.addListener(_onNav);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
@@ -270,6 +286,11 @@ class _CacheAppState extends State<CacheApp> {
       }
     }
     _rememberPlace();
+  }
+
+  /// A map search waiting for its area's places keeps the regions' status read, so it runs again when they land.
+  void _onNav() {
+    if (nav.placesState == PlacesState.fetching) regions.watchPlaces();
   }
 
   /// Keeps the phone's last position and the downloaded regions where a background run can read them.
@@ -319,10 +340,11 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
+    nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
     nav.dispose();
-    queryEmbedder.dispose();
+    searchModel.dispose();
     sources.dispose();
     video.dispose();
     layout.dispose();

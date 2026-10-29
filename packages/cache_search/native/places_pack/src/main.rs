@@ -5,15 +5,31 @@
 //!   places_pack wiki --pack places.sqlite --geo-tags F --page-props F --items-per-site F --index F --xml-url URL [--no-summaries]
 //!   places_pack embed --pack places.sqlite --embed-lib cache_llama.dll --embed-model bge-m3-Q8_0.gguf [--embed-model-id ID] [--embed-threads 4]
 //!   places_pack inspect places.sqlite
+//!
+//! Places in regions (docs/PLACES-TILES.md, RECIPE.md), on the build host:
+//!   places_pack harvest --out harvest.sqlite [--overture-csv places.csv] [--osm-pbf area.osm.pbf] [--rules categories.json] [--no-general]
+//!   places_pack blocks --harvest harvest.sqlite --admins admins.sqlite --out work/blocks [--bbox W,S,E,N] [--halo 0.25] [--jobs 4]
+//!   places_pack addresses --csv addresses.csv --blocks work/blocks --admins admins.sqlite --out work/addresses.sqlite [--bbox W,S,E,N]
+//!   places_pack cut --blocks work/blocks --addresses work/addresses.sqlite --build NAME --out out [--bbox W,S,E,N] [--jobs 4]
+//!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
+//!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--rules categories.json]
 
+mod addresses;
 mod admins;
+mod blocks;
 mod build;
+mod common;
+mod cut;
+mod harvest;
 mod lead;
 mod model;
 mod osm;
 mod overture;
 mod rules;
 mod sqldump;
+#[cfg(test)]
+mod tiles_tests;
+mod usps;
 mod wiki;
 
 use build::{build, BuildCfg};
@@ -29,7 +45,11 @@ fn parse_args(argv: &[String]) -> Result<HashMap<String, String>, String> {
     let mut i = 0;
     while i < argv.len() {
         let k = argv[i].strip_prefix("--").ok_or_else(|| format!("unexpected argument {:?}", argv[i]))?;
-        if k == "no-general" || k == "no-summaries" {
+        // "--bbox=-115,37,-109,42": a value that starts with a minus sign.
+        if let Some((k, v)) = k.split_once('=') {
+            m.insert(k.to_string(), v.to_string());
+            i += 1;
+        } else if k == "no-general" || k == "no-summaries" {
             m.insert(k.to_string(), String::new());
             i += 1;
         } else {
@@ -41,9 +61,126 @@ fn parse_args(argv: &[String]) -> Result<HashMap<String, String>, String> {
     Ok(m)
 }
 
+/// The rules (`--rules`, else the compiled-in categories.json) and their JSON text.
+fn load_rules(a: &HashMap<String, String>) -> Result<(rules::Rules, String), String> {
+    let json = match a.get("rules") {
+        Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
+        None => DEFAULT_RULES.to_string(),
+    };
+    Ok((rules::Rules::parse(&json)?, json))
+}
+
+fn num<T: std::str::FromStr>(a: &HashMap<String, String>, k: &str, default: T) -> Result<T, String> {
+    a.get(k).map(|v| v.parse::<T>().map_err(|_| format!("--{k} must be a number"))).transpose().map(|v| v.unwrap_or(default))
+}
+
 fn run() -> Result<(), String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    let started = std::time::Instant::now();
+    let took = || format!("{:.1} s", started.elapsed().as_secs_f64());
     match argv.first().map(String::as_str) {
+        Some("harvest") => {
+            let a = parse_args(&argv[1..])?;
+            let (rules, rules_json) = load_rules(&a)?;
+            let mut sources: Vec<Box<dyn PlaceSource>> = Vec::new();
+            if let Some(p) = a.get("osm-pbf") {
+                sources.push(Box::new(osm::OsmPbf { path: PathBuf::from(p) }));
+            }
+            if let Some(p) = a.get("overture-csv") {
+                sources.push(Box::new(overture::OvertureCsv { path: PathBuf::from(p) }));
+            }
+            if sources.is_empty() {
+                return Err("give at least one of --overture-csv, --osm-pbf".into());
+            }
+            let out = PathBuf::from(a.get("out").ok_or("--out is required")?);
+            let r = harvest::harvest(&rules, &rules_json, &mut sources, !a.contains_key("no-general"), &out)?;
+            println!("harvested {} places, {} localities from {} in {}", r.places, r.localities, r.sources.join("; "), took());
+            println!("size {} bytes", std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0));
+            Ok(())
+        }
+        Some("blocks") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).map(PathBuf::from).ok_or_else(|| format!("--{k} is required"));
+            let (rules, rules_json) = load_rules(&a)?;
+            let cfg = blocks::BlocksCfg {
+                harvest: need("harvest")?,
+                admins: need("admins")?,
+                out: need("out")?,
+                bbox: a.get("bbox").map(|b| blocks::parse_bbox(b)).transpose()?,
+                halo: num(&a, "halo", 0.25)?,
+                jobs: num(&a, "jobs", 4)?,
+                country: a.get("country").cloned().unwrap_or_else(|| "US".into()),
+            };
+            let r = blocks::blocks(&cfg, &rules, &rules_json)?;
+            let sum = |f: fn(&blocks::BlockReport) -> usize| r.iter().map(f).sum::<usize>();
+            println!(
+                "{} blocks, {} tiles: {} places, {} towns ({} merged, {} deduped, {} emergency rooms) in {}",
+                r.len(), sum(|b| b.cells), sum(|b| b.places), sum(|b| b.localities), sum(|b| b.merged), sum(|b| b.deduped), sum(|b| b.enriched), took()
+            );
+            Ok(())
+        }
+        Some("addresses") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).map(PathBuf::from).ok_or_else(|| format!("--{k} is required"));
+            let cfg = addresses::AddressesCfg {
+                csv: need("csv")?,
+                blocks: need("blocks")?,
+                admins: need("admins")?,
+                out: need("out")?,
+                bbox: a.get("bbox").map(|b| blocks::parse_bbox(b)).transpose()?,
+            };
+            let r = addresses::addresses(&cfg)?;
+            println!(
+                "{} addresses read: {} street rows, {} house numbers ({} repeats dropped, {} skipped); {} rows with a written-out street; {} addresses took the nearest town; numbers {} bytes; in {}",
+                r.read, r.streets, r.numbers, r.repeats, r.skipped, r.expanded, r.nearest_town, r.blob_bytes, took()
+            );
+            println!("size {} bytes", std::fs::metadata(&cfg.out).map(|m| m.len()).unwrap_or(0));
+            Ok(())
+        }
+        Some("cut") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
+            let cfg = cut::CutCfg {
+                blocks: PathBuf::from(need("blocks")?),
+                addresses: a.get("addresses").map(PathBuf::from),
+                out: PathBuf::from(need("out")?),
+                build: need("build")?,
+                bbox: a.get("bbox").map(|b| blocks::parse_bbox(b)).transpose()?,
+                jobs: num(&a, "jobs", 4)?,
+            };
+            let tiles = cut::cut(&cfg)?;
+            println!("path\ttile\tbytes\tgz_bytes\tplaces\tlocalities\tlocalities_ctx\taddr_streets\taddresses");
+            for t in &tiles {
+                println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", t.path, t.tile, t.bytes, t.gz_bytes, t.places, t.localities, t.localities_ctx, t.streets, t.addresses);
+            }
+            let s = |f: fn(&cut::TileOut) -> u64| tiles.iter().map(f).sum::<u64>();
+            println!(
+                "{} tiles, {} bytes, {} gzip bytes; {} places, {} towns, {} street rows, {} house numbers; in {}",
+                tiles.len(), s(|t| t.bytes), s(|t| t.gz_bytes), s(|t| t.places as u64), s(|t| t.localities as u64), s(|t| t.streets as u64), s(|t| t.addresses as u64), took()
+            );
+            Ok(())
+        }
+        Some("common") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
+            let (rules, rules_json) = load_rules(&a)?;
+            let cfg = common::CommonCfg {
+                blocks: PathBuf::from(need("blocks")?),
+                out: PathBuf::from(need("out")?),
+                build: need("build")?,
+                taxonomy: a.get("taxonomy").map(PathBuf::from),
+                described: a.get("kinds-described").map(PathBuf::from),
+                overture_release: a.get("overture-release").cloned().unwrap_or_default(),
+                osm_source: a.get("osm-source").cloned().unwrap_or_default(),
+            };
+            let r = common::common(&cfg, &rules, &rules_json)?;
+            println!(
+                "{} kinds: {} from the rules, {} described, {} from the Overture taxonomy, {} from an OSM tag, {} label only; {} states; in {}",
+                r.kinds, r.rule_kinds, r.described, r.from_taxonomy, r.from_tag, r.label_only, r.states, took()
+            );
+            println!("size {} bytes", std::fs::metadata(&cfg.out).map(|m| m.len()).unwrap_or(0));
+            Ok(())
+        }
         Some("build") => {
             let a = parse_args(&argv[1..])?;
             let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
@@ -143,7 +280,7 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
-        _ => Err("usage: places_pack build ... | wiki ... | embed ... | inspect <places.sqlite>".into()),
+        _ => Err("usage: places_pack build ... | wiki ... | embed ... | inspect <places.sqlite> | harvest ... | blocks ... | addresses ... | cut ... | common ...".into()),
     }
 }
 
