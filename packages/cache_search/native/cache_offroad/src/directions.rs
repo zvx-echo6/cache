@@ -143,6 +143,8 @@ pub struct Warning {
     pub end: String,
     pub road_point: (f64, f64),
     pub gap_m: i64,
+    /// Whether the off-road data covers the end away from the road (when it does, the router itself found no way).
+    pub covered: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -542,6 +544,7 @@ impl Env<'_> {
                         end: end.into(),
                         road_point: road,
                         gap_m: round_i(haversine_m(p.0, p.1, road.0, road.1)),
+                        covered: self.pack.covers(p.0, p.1),
                     }),
                     Ok(got) => {
                         if end == "from" {

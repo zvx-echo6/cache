@@ -308,9 +308,20 @@ Fields:
   under nearby). They are not on `from_matched` or `other_destination_candidates`. `hours_note` follows `map_region_age`
   when the destination has `hours`.
 - `warnings` appears only when there is one. Each entry is `{"code": "offroad_unavailable", "end": "from" | "to",
-  "road_point": {"lat", "lon"}, "gap_m": N}`: that end is away from the road network, the route stops at
-  `road_point`, and `gap_m` is how many metres short of the requested end it stops. It is how the road route is
-  returned when the off-road data is not installed, or does not cover that end.
+  "road_point": {"lat", "lon"}, "gap_m": N, "reason": R, "detail": D}`: that end is away from the road network, the
+  route stops at `road_point`, and `gap_m` is how many metres short of the requested end it stops. `reason` and
+  `detail` say why that end got no off-road leg:
+
+  | `reason` | when | `detail` |
+  |---|---|---|
+  | `not_downloaded` | no off-road data is installed, or the end is outside it | `Off-road data for this area isn't on the phone; it loads when the phone is online.` |
+  | `no_way_found` | the off-road data covers the end, but the off-road router found no way to it (or the area was too large) | `Cache couldn't find an off-road way between the road and this point.` |
+  | `no_data` | no off-road data exists for the area (not produced yet: it needs the tiled off-road data, which knows its empty cells) | `There is no off-road data for this area.` |
+
+  ```json
+  {"code": "offroad_unavailable", "end": "to", "road_point": {"lat": 44.221, "lon": -114.9318}, "gap_m": 1234,
+   "reason": "not_downloaded", "detail": "Off-road data for this area isn't on the phone; it loads when the phone is online."}
+  ```
 - `map_region` and `map_region_age` name the installed map region and how old it is ("12 days old"; "unknown" when
   the age cannot be read).
 

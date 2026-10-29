@@ -232,6 +232,41 @@ fn major_roads(d: &Directions) -> Vec<Value> {
         .collect()
 }
 
+/// Why an end away from the roads got no off-road leg: the `reason` and `detail` of its `offroad_unavailable` warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffroadGap {
+    /// No off-road data on the phone for the end (none installed, or the end is outside it).
+    NotDownloaded,
+    /// No off-road data exists for the area (unreachable until the tiled off-road data, which knows its empty cells).
+    NoData,
+    /// The data covers the end, but the off-road router found no way to it (or the area was too large).
+    NoWayFound,
+}
+
+impl OffroadGap {
+    pub fn reason(self) -> &'static str {
+        match self {
+            OffroadGap::NotDownloaded => "not_downloaded",
+            OffroadGap::NoData => "no_data",
+            OffroadGap::NoWayFound => "no_way_found",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            OffroadGap::NotDownloaded => "Off-road data for this area isn't on the phone; it loads when the phone is online.",
+            OffroadGap::NoData => "There is no off-road data for this area.",
+            OffroadGap::NoWayFound => "Cache couldn't find an off-road way between the road and this point.",
+        }
+    }
+}
+
+/// One `offroad_unavailable` warning: code, end, road_point, gap_m, reason, detail.
+pub fn offroad_unavailable(end: &str, road_point: (f64, f64), gap_m: i64, gap: OffroadGap) -> Value {
+    json!({"code": "offroad_unavailable", "end": end, "road_point": {"lat": round_py(road_point.0, 6), "lon": round_py(road_point.1, 6)},
+           "gap_m": gap_m, "reason": gap.reason(), "detail": gap.detail()})
+}
+
 /// The `offroad_unavailable` warnings of a route: an end away from the road network that got no off-road leg. With off-road
 /// data the router says so itself; without it the gap is read from how far each end snapped to the road.
 pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
@@ -241,13 +276,14 @@ pub fn warnings(d: &Directions, have_offroad: bool, snap_m: f64) -> Vec<Value> {
         for (end, e, p) in [("from", &d.from, pts.first()), ("to", &d.to, pts.last())] {
             if let (Some(e), Some(p)) = (e, p) {
                 if e.snap_distance_m as f64 > snap_m {
-                    warnings.push(json!({"code": "offroad_unavailable", "end": end, "road_point": {"lat": round_py(p.0, 6), "lon": round_py(p.1, 6)}, "gap_m": e.snap_distance_m}));
+                    warnings.push(offroad_unavailable(end, *p, e.snap_distance_m, OffroadGap::NotDownloaded));
                 }
             }
         }
     } else {
         for w in &d.warnings {
-            warnings.push(json!({"code": "offroad_unavailable", "end": w.end, "road_point": {"lat": round_py(w.road_point.0, 6), "lon": round_py(w.road_point.1, 6)}, "gap_m": w.gap_m}));
+            let gap = if w.covered { OffroadGap::NoWayFound } else { OffroadGap::NotDownloaded };
+            warnings.push(offroad_unavailable(&w.end, w.road_point, w.gap_m, gap));
         }
     }
     warnings
@@ -405,6 +441,31 @@ mod direction_tests {
             warnings: vec![],
             errors: vec![],
         }
+    }
+
+    #[test]
+    fn offroad_unavailable_says_why() {
+        let w = |gap| offroad_unavailable("to", (44.2210004, -114.93180049), 1234, gap).to_string();
+        assert_eq!(
+            w(OffroadGap::NotDownloaded),
+            r#"{"code":"offroad_unavailable","end":"to","road_point":{"lat":44.221,"lon":-114.9318},"gap_m":1234,"reason":"not_downloaded","detail":"Off-road data for this area isn't on the phone; it loads when the phone is online."}"#
+        );
+        assert_eq!(
+            w(OffroadGap::NoData),
+            r#"{"code":"offroad_unavailable","end":"to","road_point":{"lat":44.221,"lon":-114.9318},"gap_m":1234,"reason":"no_data","detail":"There is no off-road data for this area."}"#
+        );
+        assert_eq!(
+            w(OffroadGap::NoWayFound),
+            r#"{"code":"offroad_unavailable","end":"to","road_point":{"lat":44.221,"lon":-114.9318},"gap_m":1234,"reason":"no_way_found","detail":"Cache couldn't find an off-road way between the road and this point."}"#
+        );
+        // with off-road data: an end outside it is not downloaded, an end inside it had no way found
+        let mut d = directions(1.0, 0.62, vec![], vec![]);
+        let gap = |end: &str, covered| cache_offroad::directions::Warning {
+            message: "No route".into(), reason: None, end: end.into(), road_point: (44.0, -115.0), gap_m: 900, covered,
+        };
+        d.warnings = vec![gap("from", false), gap("to", true)];
+        let r: Vec<Value> = warnings(&d, true, 100.0).iter().map(|w| w["reason"].clone()).collect();
+        assert_eq!(r, [json!("not_downloaded"), json!("no_way_found")]);
     }
 
     #[test]

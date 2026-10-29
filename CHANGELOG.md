@@ -22,6 +22,7 @@ release notes).
 - Assistant: says why live data is not up to date (source switched off, no connection, mobile data updates off, or the refresh failed)
 - Assistant: nearby places and navigation destinations show the website and whether the place is open now
 - Assistant: the calculator works out dates, such as the days between two dates or the date 30 days from today
+- Assistant: when a route can't reach a point away from the roads, it says whether the off-road data is missing or no off-road way was found
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes

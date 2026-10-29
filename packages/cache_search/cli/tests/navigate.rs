@@ -247,6 +247,7 @@ fn without_the_off_road_data_roads_still_route_and_the_gap_is_a_warning() {
     let w = d.content("roadonly-gap", json!({"from": "44.0543,-115.4237", "to": "44.2210,-114.9318", "mode": "walk"}), None);
     assert_eq!(w["ok"], true, "{w}");
     assert_eq!(w["warnings"][0]["code"], "offroad_unavailable");
+    assert_eq!(w["warnings"][0]["reason"], "not_downloaded");
     assert!(w["warnings"][0]["road_point"]["lat"].is_number());
 }
 

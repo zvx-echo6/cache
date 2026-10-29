@@ -374,7 +374,9 @@ fn an_end_off_the_road_network_without_off_road_data_is_a_warning() {
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     let w = v["warnings"].as_array().unwrap();
     assert_eq!(w.len(), 2);
-    assert_eq!(keys(&w[0]), ["code", "end", "road_point", "gap_m"]);
+    assert_eq!(keys(&w[0]), ["code", "end", "road_point", "gap_m", "reason", "detail"]);
+    assert_eq!((w[0]["reason"].clone(), w[1]["reason"].clone()), (json!("not_downloaded"), json!("not_downloaded")));
+    assert_eq!(w[0]["detail"], "Off-road data for this area isn't on the phone; it loads when the phone is online.");
     assert_eq!((w[0]["code"].clone(), w[0]["end"].clone(), w[1]["end"].clone()), (json!("offroad_unavailable"), json!("from"), json!("to")));
     assert!(w[0]["gap_m"].as_i64().unwrap() > 1000);
     assert_eq!(keys(&w[0]["road_point"]), ["lat", "lon"]);
