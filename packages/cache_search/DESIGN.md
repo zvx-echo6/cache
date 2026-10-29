@@ -1549,7 +1549,7 @@ instruction, length and time and its range of points, the totals (road and off-r
 object again after a restart. A fix is matched to the nearest point of the route within 300 m behind and 3 km ahead of the last match, and only on the whole route
 when that finds nothing on it, so a route that passes itself (an out-and-back) is not mistaken for its other pass. `off_route` is true when the fix has been farther
 than `off_route_m` (50) from the route, or than the GPS accuracy if that is larger, for `off_route_fixes` (3) fixes in a row; an off-road leg is a straight line
-between turn points over a 30 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
+between turn points over a ~15 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
 along the route, the next maneuver and the distance to it, the one after, the time and distance left, the ETA (if `now` is given) and, on an off-road leg, the bearing,
 distance and climb to the next point. `arrived` is true within `arrive_m` (25) of the end.
 

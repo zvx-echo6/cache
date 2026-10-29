@@ -7,8 +7,9 @@ use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
 
-/// AIDA's OFFROAD_NOTE, verbatim.
-const OFFROAD_NOTE: &str = "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.";
+/// AIDA's OFFROAD_NOTE, with the grid size corrected: AIDA says ~30 m, but the router's grid is the global z12 pixel grid
+/// (2^21 pixels around the world: 19 m at the equator, 13-15 m across the continental US).
+const OFFROAD_NOTE: &str = "Off-road legs are straight lines between turn points over a ~15 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.";
 
 /// "25 minutes old", "1 day old": the age in plain words, rounded down.
 pub fn age_words(secs: i64) -> String {
@@ -231,6 +232,16 @@ pub fn route_error(d: &Directions, from: &Resolved, to: &Resolved) -> ToolError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_note_names_the_routers_grid_size() {
+        assert!(OFFROAD_NOTE.contains("~15 m elevation grid"));
+        // the query grid's cell size across the continental US (Gulf coast to the Canadian border)
+        for lat in [26.0, 36.0, 44.0, 48.5] {
+            let m = cache_offroad::grid::GridMeta::from_bbox(lat, lat + 0.05, -114.05, -114.0);
+            assert!((12.0..=17.5).contains(&m.cell_size_m), "{lat}: {}", m.cell_size_m);
+        }
+    }
 
     #[test]
     fn python_floats_and_ages() {

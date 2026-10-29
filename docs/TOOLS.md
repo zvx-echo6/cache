@@ -263,7 +263,7 @@ them, plus `direction_from_start` and the `lat` and `lon` of both matched places
     }
   ],
   "offroad_mi": 0.11,
-  "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
+  "offroad_note": "Off-road legs are straight lines between turn points over a ~15 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
   "map_region": "Idaho",
   "map_region_age": "12 days old"
 }
@@ -286,7 +286,9 @@ Fields:
   `cardinal` and `instruction`. Off-road steps add `travel` (`foot`, `2w`, `4w` or `vehicle`), `grade_class`,
   `elev_gain_m`, `elev_loss_m`, `terrain` (only when known) and, on `offroad_follow`, `follow` (`name` and
   `trail_kind`). The off-road `instruction` is AIDA's text, written by the tool; road steps carry the router's text.
-- `offroad_mi` and `offroad_note` appear only when the route has off-road legs.
+- `offroad_mi` and `offroad_note` appear only when the route has off-road legs. `offroad_note` is AIDA's text with the grid
+  size corrected to "~15 m" (AIDA says ~30 m; the router's grid is the global z12 pixel grid, 13-15 m across the
+  continental US); the example above shows Cache's text.
 - `warnings` appears only when there is one. Each entry is `{"code": "offroad_unavailable", "end": "from" | "to",
   "road_point": {"lat", "lon"}, "gap_m": N}`: that end is away from the road network, the route stops at
   `road_point`, and `gap_m` is how many metres short of the requested end it stops. It is how the road route is

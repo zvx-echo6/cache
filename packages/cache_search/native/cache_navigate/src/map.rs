@@ -26,7 +26,7 @@ const KEEP_ROUTES: usize = 8;
 pub const OFF_ROUTE_M: f64 = 50.0;
 pub const OFF_ROUTE_FIXES: usize = 3;
 pub const ARRIVE_M: f64 = 25.0;
-/// An off-road leg is a straight line between turn points over a 30 m grid: its tolerance is this many times wider.
+/// An off-road leg is a straight line between turn points over a ~15 m grid (the global z12 pixel grid): its tolerance is this many times wider.
 const OFFROAD_TOLERANCE: f64 = 2.0;
 /// The window around the last matched position that a fix is matched in first, so a route that comes back past itself
 /// is not mistaken for the other pass.

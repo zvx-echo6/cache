@@ -411,7 +411,10 @@ fn compare_to_aida(example: &str, cache: &Value) {
         }
     }
     if let Some(n) = cache.get("offroad_note") {
-        assert_eq!(n, &aida["offroad_note"], "{example}: AIDA's note text");
+        // AIDA's note with the grid size corrected (the z12 pixel grid is ~15 m in the US, not 30 m)
+        let want = aida["offroad_note"].as_str().unwrap().replace("~30 m", "~15 m");
+        assert_ne!(want, aida["offroad_note"].as_str().unwrap(), "{example}: AIDA's note no longer says ~30 m");
+        assert_eq!(n.as_str().unwrap(), want, "{example}: AIDA's note text, grid size corrected");
     }
 }
 
