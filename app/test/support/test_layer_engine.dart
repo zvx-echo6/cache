@@ -12,7 +12,17 @@ import 'layer_fixtures.dart';
 /// A layer engine for the screens' tests: definitions in memory (the test catalogue plus any [published] ones and what
 /// the user adds), areas that "download" in a few milliseconds, no network and no core.
 class TestLayerEngine extends LayerEngine {
-  TestLayerEngine({this.published = const [], this.canBind, this.policy});
+  TestLayerEngine({this.published = const [], this.canBind, this.policy, Set<String> held = const {}}) : _held = {...held};
+
+  /// Ids of the test catalogue that are not there until [release] (the published catalogue arriving after start).
+  final Set<String> _held;
+
+  /// The held definitions arrive, as a catalogue refresh brings them.
+  void release() {
+    _held.clear();
+    _rebuild();
+    notifyListeners();
+  }
 
   /// The mobile data rule, as the real engine applies it.
   final DataPolicy? policy;
@@ -50,6 +60,7 @@ class TestLayerEngine extends LayerEngine {
   void _rebuild() {
     final byId = <String, Map<String, dynamic>>{};
     for (final j in [...testCatalogue, ...published, ..._user]) {
+      if (_held.contains(j['id'])) continue;
       byId[j['id'] as String] = j;
     }
     _layers = [for (final j in byId.values) LayerDef.fromJson(Map<String, dynamic>.from(j))];

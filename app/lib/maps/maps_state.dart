@@ -64,6 +64,11 @@ class MapsState extends ChangeNotifier {
   final Set<String> _enabled = {};
   final Map<String, double> _opacity = {};
   bool _hadSettings = false;
+
+  /// Layers whose own default (on or off) has been applied once. A layer the catalogue brings later (the first start
+  /// shows the map before the published catalogue has arrived) gets its default when it arrives; a layer the user
+  /// switched off stays off.
+  final Set<String> _seen = {};
   SavedCamera? savedCamera;
   FollowMode follow = FollowMode.free;
 
@@ -103,6 +108,8 @@ class MapsState extends ChangeNotifier {
         _opacity
           ..clear()
           ..addAll({for (final e in (j['opacity'] as Map).entries) e.key as String: (e.value as num).toDouble()});
+        final seen = j['seen'];
+        if (seen is List) _seen.addAll(seen.cast<String>());
         final defs = j['definitions'];
         if (defs is Map) _definitions..clear()..addAll({for (final e in defs.entries) e.key as String: e.value == true});
         final c = j['camera'];
@@ -123,9 +130,7 @@ class MapsState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (!_hadSettings) {
-      _enabled.addAll([for (final l in activeDefinitions) if (l.defaultOn) l.id]);
-    } else {
+    if (_hadSettings) {
       // A base map that was saved as on but whose definition is now off (the default base map changed): fall back
       // to the default one rather than opening on no map.
       final gone = [for (final id in _enabled) if (engine.layer(id) case final d? when d.isBase && !isDefinitionEnabled(d)) id];
@@ -134,10 +139,29 @@ class MapsState extends ChangeNotifier {
         _enabled.addAll([for (final l in activeDefinitions) if (l.isBase && l.defaultOn) l.id]);
       }
     }
+    _applyDefaults();
     notifyListeners();
   }
 
-  void _onEngine() => notifyListeners();
+  /// Switches on the layers that are on by default the first time each one is in the catalogue (only one base map,
+  /// and none when a base map is already on).
+  void _applyDefaults() {
+    if (!engine.ready) return;
+    var changed = false;
+    for (final l in activeDefinitions) {
+      if (!_seen.add(l.id)) continue;
+      changed = true;
+      if (!l.defaultOn) continue;
+      if (l.isBase && activeDefinitions.any((b) => b.isBase && _enabled.contains(b.id))) continue;
+      _enabled.add(l.id);
+    }
+    if (changed) _save();
+  }
+
+  void _onEngine() {
+    _applyDefaults();
+    notifyListeners();
+  }
 
   /// Called when the app comes back to the screen (for example from the phone's settings).
   Future<void> recheckNetwork() async {
@@ -359,6 +383,7 @@ class MapsState extends ChangeNotifier {
         'enabled': _enabled.toList(),
         'opacity': _opacity,
         'definitions': _definitions,
+        'seen': _seen.toList(),
         if (savedCamera != null)
           'camera': {'lat': savedCamera!.lat, 'lon': savedCamera!.lon, 'zoom': savedCamera!.zoom},
       }));

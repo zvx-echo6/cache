@@ -226,6 +226,43 @@ void main() {
     expect(m.isOn('hillshade'), isTrue, reason: 'other choices are kept');
   });
 
+  group('a base map that arrives after the first start', () {
+    test('is switched on when the catalogue brings it, and stays on after a restart', () async {
+      final e = TestLayerEngine(held: {'basemap'});
+      final m = MapsState(engine: e, settingsDirOverride: dir, network: _Net(allowed: true));
+      await m.init();
+      expect(m.isOn('basemap'), isFalse);
+      m.rememberCamera(42.5, -113.8, 11);
+      await m.flush();
+      e.release();
+      expect(m.isOn('basemap'), isTrue);
+      await m.flush();
+      final again = MapsState(engine: TestLayerEngine(), settingsDirOverride: dir, network: _Net(allowed: true));
+      await again.init();
+      expect(again.isOn('basemap'), isTrue);
+      again.engine.dispose();
+      e.dispose();
+    });
+
+    test('a base map the user switched off stays off', () async {
+      final m = MapsState(engine: engine, settingsDirOverride: dir, network: _Net(allowed: true));
+      await m.init();
+      m.setOn('basemap', false);
+      await m.flush();
+      final again = MapsState(engine: TestLayerEngine(), settingsDirOverride: dir, network: _Net(allowed: true));
+      await again.init();
+      expect(again.isOn('basemap'), isFalse);
+      again.engine.dispose();
+    });
+
+    test('settings saved before the fix with no layer on get the default base map once', () async {
+      File('${dir.path}/maps.json').writeAsStringSync(jsonEncode({'enabled': [], 'opacity': {}}));
+      final m = MapsState(engine: engine, settingsDirOverride: dir, network: _Net(allowed: true));
+      await m.init();
+      expect(m.isOn('basemap'), isTrue);
+    });
+  });
+
   test('credits on the map are short; a long credit is cut after its first sentence', () {
     expect(shortAttribution('© OpenStreetMap contributors · Protomaps'), '© OpenStreetMap contributors · Protomaps');
     expect(

@@ -30,6 +30,7 @@ release notes).
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
+- Maps: the base map is on the first time the map opens, also when the map catalogue arrives after the app starts, so a fresh start no longer shows a blank map
 - Ask: after Use my location, the message says your location is ready only once the assistant has it, like the Location ready button
 - Saved places can be removed: Remove place on the place card and in Settings > Weather and alerts > Places, after a confirm; a removed place is no longer watched
 - About: shows the version and build number of the installed app, and the note about builds names TestFlight only on iPhone and Google Play on Android
