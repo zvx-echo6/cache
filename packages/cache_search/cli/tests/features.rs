@@ -535,9 +535,8 @@ fn serve_live_state_gives_each_not_refreshed_reason_and_leaves_everything_else_a
         let h = Http::start_with(&cfg, &flags);
         let v = ask(&h, home.clone(), due);
         assert_eq!(v["not_refreshed"], words, "{flags:?}");
-        let mut without = v.clone();
-        without.as_object_mut().unwrap().remove("not_refreshed");
-        assert_eq!(without.to_string(), before.to_string(), "{flags:?}: only the new field");
+        let with = before.to_string().replacen(r#""expired":false,"#, &format!(r#""expired":false,"not_refreshed":"{words}","#), 1);
+        assert_eq!(v.to_string(), with, "{flags:?}: only the new field");
         let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys[..8], ["ok", "source", "place", "fetched_at", "valid_until", "age", "expired", "not_refreshed"]);
         assert_eq!(h.req("GET", "/tools", ""), tools, "{flags:?}: the tool list does not follow the live state");
