@@ -99,6 +99,8 @@ flutter:
     - assets/brand/tiles/
     # The credits text (a copy of CREDITS.md at the repository root; a test keeps them equal).
     - assets/credits.md
+    # The recommended models built into the app (a copy of docs/models-recommended.json; a test keeps them equal).
+    - assets/models/recommended.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:

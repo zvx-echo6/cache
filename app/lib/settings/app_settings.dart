@@ -74,6 +74,7 @@ class AppSettings extends ChangeNotifier {
   bool _webSearchOn = false;
   Set<String> _liveOn = {};
   Set<String> _watched = {kWatchHere};
+  Set<String>? _seenPlaces;
   String? _catalogueUrl;
   List<String> _extraCatalogues = [];
   File? _file;
@@ -138,6 +139,7 @@ class AppSettings extends ChangeNotifier {
       _webSearchOn = j['webSearchOn'] == true;
       _liveOn = _strings(j['liveSourcesOn']).toSet();
       if (j['watchedPlaces'] is List) _watched = _strings(j['watchedPlaces']).toSet();
+      if (j['seenSavedPlaces'] is List) _seenPlaces = _strings(j['seenSavedPlaces']).toSet();
       final u = j['catalogueUrl'];
       _catalogueUrl = u is String && u.trim().isNotEmpty ? u.trim() : null;
       _extraCatalogues = _strings(j['extraCatalogues']);
@@ -162,6 +164,7 @@ class AppSettings extends ChangeNotifier {
         'webSearchOn': _webSearchOn,
         'liveSourcesOn': _liveOn.toList()..sort(),
         'watchedPlaces': _watched.toList()..sort(),
+        if (_seenPlaces != null) 'seenSavedPlaces': _seenPlaces!.toList()..sort(),
         'catalogueUrl': _catalogueUrl,
         'extraCatalogues': _extraCatalogues,
       }));
@@ -217,6 +220,17 @@ class AppSettings extends ChangeNotifier {
   void setWatched(String placeId, bool on) {
     if (on == _watched.contains(placeId)) return;
     _watched = on ? {..._watched, placeId} : ({..._watched}..remove(placeId));
+    _save();
+  }
+
+  /// Takes the saved places there are now (by watched-place id). One that was not there last time is new and is watched. The first
+  /// time, the places there already are only remembered: places saved before this was kept stay as the person set them.
+  void noteSavedPlaces(Iterable<String> ids) {
+    final now = ids.toSet();
+    final seen = _seenPlaces;
+    if (seen != null && seen.length == now.length && seen.containsAll(now)) return;
+    if (seen != null) _watched = {..._watched, ...now.difference(seen)};
+    _seenPlaces = now;
     _save();
   }
 

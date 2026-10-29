@@ -5,6 +5,7 @@ import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../theme.dart';
 import '../weather/weather_state.dart';
+import 'weather_turn_on.dart';
 
 /// Home: the blocks the person chose, in the order they chose (Ask box, Weather, Alerts, Shortcuts by default), a gear
 /// for Settings at the top right, and "Edit Home" at the bottom.
@@ -17,7 +18,11 @@ class HomeScreen extends StatelessWidget {
     required this.onOpenShortcut,
     this.weather,
     this.onOpenWeather,
+    this.turnOn,
   });
+
+  /// "Turn on weather" on the Weather card while weather is not set up.
+  final WeatherTurnOn? turnOn;
 
   /// Feeds the Weather and Alerts cards; without it they say "Not set up yet".
   final WeatherState? weather;
@@ -63,6 +68,7 @@ class HomeScreen extends StatelessWidget {
                     weather: weather,
                     line: (w) => w.homeWeatherLine(),
                     onTap: onOpenWeather,
+                    turnOn: turnOn,
                   ),
                 HomeBlock.alerts => _LiveCard(
                     key: const ValueKey('home-alerts'),
@@ -236,7 +242,7 @@ class ShortcutCard extends StatelessWidget {
 
 /// A Home card fed by the weather state: its line is worked out again whenever the data changes.
 class _LiveCard extends StatelessWidget {
-  const _LiveCard({super.key, required this.tile, required this.title, required this.weather, required this.line, this.onTap});
+  const _LiveCard({super.key, required this.tile, required this.title, required this.weather, required this.line, this.onTap, this.turnOn});
 
   final BrandTile tile;
   final String title;
@@ -244,27 +250,43 @@ class _LiveCard extends StatelessWidget {
   final Future<String> Function(WeatherState) line;
   final VoidCallback? onTap;
 
+  /// Shown as "Turn on weather" under the line while weather is not set up.
+  final WeatherTurnOn? turnOn;
+
+  /// The card's line, and whether to offer "Turn on weather".
+  Future<(String, bool)> _read(WeatherState w) async => (await line(w), turnOn != null && await w.needsTurnOn());
+
   @override
   Widget build(BuildContext context) {
     final w = weather;
     if (w == null) return _InfoCard(tile: tile, title: title, value: 'Not set up yet', onTap: onTap);
+    final t = turnOn;
     return ListenableBuilder(
       listenable: w,
-      builder: (context, _) => FutureBuilder<String>(
-        future: line(w),
-        builder: (context, snap) => _InfoCard(tile: tile, title: title, value: snap.data ?? '…', onTap: onTap),
+      builder: (context, _) => FutureBuilder<(String, bool)>(
+        future: _read(w),
+        builder: (context, snap) => _InfoCard(
+          tile: tile,
+          title: title,
+          value: snap.data?.$1 ?? '…',
+          onTap: onTap,
+          action: t != null && snap.data?.$2 == true ? WeatherTurnOnButtons(turnOn: t, secondary: false) : null,
+        ),
       ),
     );
   }
 }
 
 class _InfoCard extends StatelessWidget {
-  const _InfoCard({required this.tile, required this.title, required this.value, this.onTap});
+  const _InfoCard({required this.tile, required this.title, required this.value, this.onTap, this.action});
 
   final BrandTile tile;
   final String title;
   final String value;
   final VoidCallback? onTap;
+
+  /// A button under the card's text.
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -286,6 +308,10 @@ class _InfoCard extends StatelessWidget {
                 Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
                 const SizedBox(height: 2),
                 Text(value, style: TextStyle(fontSize: 15, color: k.secondary)),
+                if (action != null) ...[
+                  const SizedBox(height: 10),
+                  action!,
+                ],
               ],
             ),
           ),

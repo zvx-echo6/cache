@@ -221,7 +221,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       final info = await session.load(entry.path, nCtx: kContextTokens);
-      final pretty = prettyModelName(info.description);
+      final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
         _unsupported.add(entry.key);
@@ -250,6 +250,20 @@ class AppState extends ChangeNotifier {
       loading = null;
       notifyListeners();
     }
+  }
+
+  /// Unloads the active model to free its memory. Nothing is active after it, and the next start loads no model until
+  /// one is chosen again.
+  Future<void> unload() async {
+    if (loading != null || active == null) return;
+    active = null;
+    activeInfo = null;
+    loadError = null;
+    _lastModelFile = null;
+    modelGeneration++;
+    notifyListeners();
+    await session.unload();
+    await _writeSettings();
   }
 
   /// Lets the user pick a file and copies it into the models folder, reporting progress.

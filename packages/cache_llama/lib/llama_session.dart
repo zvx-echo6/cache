@@ -116,6 +116,19 @@ class LlamaSession {
     }
   }
 
+  /// Frees the model's memory; the background isolate stays for the next [load]. A running generation is stopped first.
+  Future<void> unload() async {
+    if (_toWorker == null) return;
+    stop();
+    _handleAddress = 0;
+    for (final c in _gens.values) {
+      c.close();
+    }
+    _gens.clear();
+    // The worker frees the handle once the stopped generation has ended.
+    _toWorker!.send({'type': 'free'});
+  }
+
   /// Frees the model and ends the background isolate.
   Future<void> dispose() async {
     stop();

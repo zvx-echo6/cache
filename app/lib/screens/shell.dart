@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cache_search/cache_search.dart' show GeoPoint;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -30,6 +31,7 @@ import 'settings/weather_page.dart';
 import 'settings_screen.dart';
 import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
+import 'weather_turn_on.dart';
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
@@ -227,12 +229,25 @@ class _ShellState extends State<Shell> {
     }
   }
 
+  /// "Turn on weather": the location, and the map's place search and saved places for "Choose a place instead".
+  WeatherTurnOn get _weatherTurnOn => WeatherTurnOn(
+    weather: widget.hub.weather,
+    location: widget.location,
+    searchPlaces: widget.nav.backend.available ? (q) async => (await widget.nav.backend.search(q, near: _here)).results : null,
+    savePlace: (p) => widget.nav.backend.savePlace(name: p.name, lat: p.lat, lon: p.lon, label: p.address.isEmpty ? null : p.address),
+  );
+
+  GeoPoint? get _here => switch (widget.location.fix) {
+    final f? => GeoPoint(f.lat, f.lon),
+    null => null,
+  };
+
   Widget _moduleScreen(ModuleId m) => switch (m) {
         ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions),
         ModuleId.videos => VideosScreen(video: widget.video),
-        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings),
+        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 
@@ -263,6 +278,7 @@ class _ShellState extends State<Shell> {
                 layout: layout,
                 weather: widget.hub.weather,
                 onOpenWeather: () => _goModule(ModuleId.weather),
+                turnOn: _weatherTurnOn,
                 onOpenAsk: () => _goModule(ModuleId.ask),
                 onOpenSettings: _openSettings,
                 onOpenShortcut: _openShortcut,

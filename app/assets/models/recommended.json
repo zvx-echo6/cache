@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "updated": "2026-10-28",
+  "models": [
+    {
+      "name": "Gemma 4 E2B · Q4_K_M",
+      "repo": "unsloth/gemma-4-E2B-it-GGUF",
+      "file": "gemma-4-E2B-it-Q4_K_M.gguf",
+      "size": 3106738272,
+      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+      "kind": "works_not_tuned",
+      "note": "Small and quick."
+    },
+    {
+      "name": "Gemma 4 E4B · Q4_K_M",
+      "repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "file": "gemma-4-E4B-it-Q4_K_M.gguf",
+      "size": 4977171584,
+      "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+      "kind": "works_not_tuned",
+      "note": "Larger than E2B and slower. Needs more memory."
+    },
+    {
+      "name": "Qwen3 8B · Q4_K_M",
+      "repo": "unsloth/Qwen3-8B-GGUF",
+      "file": "Qwen3-8B-Q4_K_M.gguf",
+      "size": 5027784512,
+      "sha256": "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4",
+      "kind": "works_not_tuned",
+      "note": "The largest here. Needs a phone with plenty of memory."
+    }
+  ]
+}

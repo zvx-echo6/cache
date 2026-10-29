@@ -59,6 +59,7 @@ import 'video/video_state.dart';
 import 'screens/settings/about_pages.dart' show kCreditsAsset;
 import 'screens/shell.dart';
 import 'theme.dart';
+import 'keyboard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -414,6 +415,8 @@ class _CacheAppState extends State<CacheApp> {
         title: 'Cache',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(app.theme),
+        actions: keyboardActions,
+        scrollBehavior: const CacheScrollBehavior(),
         builder: (context, child) => Stack(
           fit: StackFit.expand,
           children: [

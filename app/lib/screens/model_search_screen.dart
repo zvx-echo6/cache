@@ -209,6 +209,35 @@ class _ModelSearchScreenState extends State<ModelSearchScreen> {
   }
 }
 
+/// Downloads [f] from a model screen: asks first when the mobile-data switch stops it, and offers "Use it" when it is ready.
+Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f, {bool anyway = false}) async {
+  await d.start(f, anyway: anyway);
+  if (!context.mounted) return;
+  if (d.blocked != null) {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        content: Text(d.blocked!.message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Wait for Wi-Fi')),
+          TextButton(key: const ValueKey('download-anyway'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Download anyway')),
+        ],
+      ),
+    );
+    if (go == true && context.mounted) await downloadModel(context, d, f, anyway: true);
+    return;
+  }
+  if (d.finished != null) {
+    final finished = d.finished!;
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      content: Text('${finished.fileName} is ready.'),
+      action: SnackBarAction(label: 'Use it', onPressed: () => d.app.activate(finished)),
+    ));
+  }
+}
+
 /// The files of one repository, with size, fit and a download button each.
 class ModelFilesScreen extends StatefulWidget {
   const ModelFilesScreen({super.key, required this.downloads, required this.model, this.memory});
@@ -239,34 +268,7 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
     );
   }
 
-  Future<void> _download(HfFile f, {bool anyway = false}) async {
-    await widget.downloads.start(f, anyway: anyway);
-    if (!mounted) return;
-    final d = widget.downloads;
-    if (d.blocked != null) {
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          content: Text(d.blocked!.message),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Wait for Wi-Fi')),
-            TextButton(key: const ValueKey('download-anyway'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Download anyway')),
-          ],
-        ),
-      );
-      if (go == true) await _download(f, anyway: true);
-      return;
-    }
-    if (d.finished != null) {
-      final finished = d.finished!;
-      final m = ScaffoldMessenger.of(context);
-      m.hideCurrentSnackBar();
-      m.showSnackBar(SnackBar(
-        content: Text('${finished.fileName} is ready.'),
-        action: SnackBarAction(label: 'Use it', onPressed: () => d.app.activate(finished)),
-      ));
-    }
-  }
+  Future<void> _download(HfFile f) => downloadModel(context, widget.downloads, f);
 
   @override
   Widget build(BuildContext context) {

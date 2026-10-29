@@ -15,9 +15,17 @@ release notes).
 - A newer copy of a library you have is offered as an update and swapped in safely
 - Remove a library, and see its size, entries and whether it is ready
 - Get a blank library template to build your own library
+- Weather: turn it on in one tap from the Weather screen or Home
+- A place you save is watched for weather and alerts
+- Models starts with a short list of recommended models, each with its size and whether it fits your phone
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes
+- Unload the model in use from Models to free memory
+- The keyboard closes when you tap outside a text box or scroll
+- With no model, the Ask screen has a button to get or choose one
+- Model names show the right quantisation in more cases
+- iPhone: the Hugging Face file list shows whether each file fits your phone
 
 ## 1.0.0 (iOS build 22) - 2026-10-28
 

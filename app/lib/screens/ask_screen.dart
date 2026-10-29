@@ -241,19 +241,33 @@ class _AskScreenState extends State<AskScreen> {
           children: [
             Expanded(
               child: ListenableBuilder(
-                listenable: widget.chat,
+                listenable: Listenable.merge([widget.chat, widget.app]),
                 builder: (context, _) {
                   final msgs = widget.chat.messages;
                   if (msgs.isEmpty) {
+                    final app = widget.app;
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32),
-                        child: Text(
-                          widget.app.active == null
-                              ? 'Choose a model at the top to start.'
-                              : 'Ask a question. Cache looks in your sources before it answers.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 18, color: k.secondary),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              app.active == null
+                                  ? 'Choose a model at the top to start.'
+                                  : 'Ask a question. Cache looks in your sources before it answers.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 18, color: k.secondary),
+                            ),
+                            if (app.active == null && app.loading == null) ...[
+                              const SizedBox(height: 16),
+                              FilledButton(
+                                key: const ValueKey('ask-open-models'),
+                                onPressed: _openModels,
+                                child: Text(app.models.isEmpty ? 'Get a model' : 'Choose a model'),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     );
