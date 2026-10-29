@@ -46,7 +46,10 @@ void main() {
     expect(_three(r), _threeIds);
     expect(r.settings.watchedPlaces, contains('here'));
     expect(r.location.fix, isNotNull);
-    expect(r.liveCore.fetches, isNotEmpty, reason: 'it updated');
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+    final snack = find.descendant(of: find.byType(SnackBar), matching: find.byType(Text)).evaluate().map((e) => (e.widget as Text).data).join(' | ');
+    expect(r.liveCore.fetches, isNotEmpty, reason: 'it updated (snack: $snack, updating: ${r.weather.updating})');
     expect(find.text('Weather is off.'), findsNothing);
     await r.dispose(tester);
   });
