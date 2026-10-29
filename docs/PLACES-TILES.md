@@ -68,7 +68,8 @@ The exact layouts are in `cache_places/src/schema.rs`: `COMMON_SQL`, `TILE_SQL` 
   28 street suffix and directional abbreviations written out ("MAIN STREET"), or null when that changes nothing; both are
   searched. In `street` and `postal_city`, a word of 3 or more letters the source wrote in capitals is stored with a
   capital first letter only ("North STATE Street" is "North State Street", "HURRICANE" is "Hurricane"). The expansion is
-  applied to the data when it is built, never to what a person types. `uid` is stable across builds of the same data. `numbers` holds every house number of the row with its point (`cache_places::addr`):
+  applied to the data when it is built, never to what a person types. `uid` is stable across builds of the same data.
+  `numbers` holds every house number of the row with its point (`cache_places::addr`):
 
   ```
   numbers := ver:u8 (=1) count:varint entry*count
