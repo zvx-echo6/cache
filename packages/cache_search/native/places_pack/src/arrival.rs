@@ -3,13 +3,14 @@
 //! or campus's centre ends at whatever road is nearest the middle; people go to the terminal's curb, the main door, the
 //! parking. Only the OSM data decides it, through the `arrival` rules of categories.json:
 //!
-//! 1. An airport (a place of one of `airport_kinds`): its passenger terminal, the terminal inside its outline (or within
-//!    `airport_terminal_m` of a point airport) with the most public doors, then the largest. The point is the middle door
-//!    of its main doors (of all its doors when none is marked main), else the terminal's centre. The doors line the curb, so
-//!    the middle one is on the frontage road's side.
-//! 2. A place with an outline and main doors on it: the main door nearest its point.
-//! 3. A large area (outline at least `large_m` across: a park, a campus, a mall, a stadium) with neither: its largest public
-//!    parking, inside the outline or within `adjacent_m` of it.
+//! 1. An airport (a place of one of `airport_kinds`): its passenger terminal, among the terminals inside its outline (or
+//!    within `airport_terminal_m` of a point airport) the one people reach from the car: one with public doors, then the one
+//!    nearest public parking (concourses are airside, far from it), then the most doors, then the largest. The point is the
+//!    middle door of its main doors (of all its doors when none is marked main), else the terminal's centre. The doors line
+//!    the curb, so the middle one is on the frontage road's side.
+//! 2. A large area (outline at least `large_m` across: a park, a campus, a mall, a stadium): the public parking nearest its
+//!    point, inside the outline or within `adjacent_m` of it. (The main doors inside a campus's outline are its buildings'.)
+//! 3. Any other place with an outline and main doors on it: the main door nearest its point.
 //!
 //! Anything else has no arrival point; the router then snaps the place's point itself (cache_offroad's `snap`, which moves
 //! an end off service roads to a public road nearby).
@@ -21,6 +22,8 @@ use std::collections::HashMap;
 const M_PER_DEG: f64 = 111_320.0;
 /// The anchor index's cell, in degrees (about 1.1 km of latitude).
 const CELL: f64 = 0.01;
+/// How far from a terminal its nearest parking is looked for.
+const PARKING_SEARCH_M: f64 = 1000.0;
 
 /// How many places got an arrival point, by rule.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -136,13 +139,22 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
                 None => grow([r.lat, r.lon, r.lat, r.lon], cfg.airport_terminal_m),
             };
             let near = |t: &&Anchor| r.extent.is_some() || metres(here, (t.lat, t.lon)) <= cfg.airport_terminal_m;
+            // The nearest public parking to a terminal, within PARKING_SEARCH_M (farther counts as none).
+            let to_parking = |t: &Anchor| {
+                parking.within(&grow(t.extent, PARKING_SEARCH_M)).iter().map(|p| metres((t.lat, t.lon), (p.lat, p.lon))).fold(PARKING_SEARCH_M * 2.0, f64::min)
+            };
             let best = terminals
                 .within(&region)
                 .into_iter()
                 .filter(near)
-                .map(|t| (t, doors.within(&grow(t.extent, cfg.outline_m))))
-                .max_by(|a, b| (a.1.len(), area(&a.0.extent)).partial_cmp(&(b.1.len(), area(&b.0.extent))).unwrap_or(std::cmp::Ordering::Equal));
-            if let Some((t, ds)) = best {
+                .map(|t| (t, doors.within(&grow(t.extent, cfg.outline_m)), to_parking(t)))
+                .min_by(|a, b| {
+                    (a.1.is_empty(), a.2, std::cmp::Reverse(a.1.len()))
+                        .partial_cmp(&(b.1.is_empty(), b.2, std::cmp::Reverse(b.1.len())))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| area(&b.0.extent).total_cmp(&area(&a.0.extent)))
+                });
+            if let Some((t, ds, _)) = best {
                 let main: Vec<&Anchor> = ds.iter().copied().filter(|d| is_main(d)).collect();
                 let p = middle(if main.is_empty() { &ds } else { &main }).unwrap_or((t.lat, t.lon));
                 got = Some((p, 0));
@@ -150,17 +162,11 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
         }
         if got.is_none() {
             if let Some(e) = r.extent {
-                let main = doors.within(&grow(e, cfg.outline_m)).into_iter().filter(|d| is_main(d));
-                if let Some(d) = main.min_by(|a, b| metres(here, (a.lat, a.lon)).total_cmp(&metres(here, (b.lat, b.lon)))) {
-                    got = Some(((d.lat, d.lon), 1));
-                } else if cfg.large_m > 0.0 && across(&e) >= cfg.large_m {
-                    let lots = parking.within(&grow(e, cfg.adjacent_m));
-                    let best = lots.into_iter().max_by(|a, b| {
-                        area(&a.extent).total_cmp(&area(&b.extent)).then_with(|| metres(here, (b.lat, b.lon)).total_cmp(&metres(here, (a.lat, a.lon))))
-                    });
-                    if let Some(l) = best {
-                        got = Some(((l.lat, l.lon), 2));
-                    }
+                let nearest = |xs: Vec<&Anchor>| xs.into_iter().min_by(|a, b| metres(here, (a.lat, a.lon)).total_cmp(&metres(here, (b.lat, b.lon)))).map(|a| (a.lat, a.lon));
+                if cfg.large_m > 0.0 && across(&e) >= cfg.large_m {
+                    got = nearest(parking.within(&grow(e, cfg.adjacent_m))).map(|p| (p, 2));
+                } else {
+                    got = nearest(doors.within(&grow(e, cfg.outline_m)).into_iter().filter(|d| is_main(d)).collect()).map(|p| (p, 1));
                 }
             }
         }
@@ -224,15 +230,19 @@ mod tests {
     }
 
     /// Salt Lake City's airport, shaped like the OSM data: the aerodrome's outline, the landside terminal with its row of
-    /// public doors along Terminal Drive, two larger concourses with none, and a door on another building.
+    /// public doors along Terminal Drive and the garage across the road, concourse A with no doors, concourse B (larger, far
+    /// from the garage) with as many doors as the terminal, and a main door on another building.
     fn slc() -> (Raw, Vec<Anchor>) {
         let airport = place("aeroway=aerodrome", 40.7880, -111.9780, Some([40.75, -112.02, 40.82, -111.94]));
-        let terminal = area_anchor(AnchorKind::Terminal, [40.7832, -111.9880, 40.7846, -111.9835]);
-        let concourse_a = area_anchor(AnchorKind::Terminal, [40.7850, -112.0050, 40.7870, -111.9890]);
-        let concourse_b = area_anchor(AnchorKind::Terminal, [40.7880, -112.0050, 40.7900, -111.9890]);
-        let mut anchors = vec![terminal, concourse_a, concourse_b];
+        let terminal = area_anchor(AnchorKind::Terminal, [40.7840, -111.9871, 40.7853, -111.9838]);
+        let concourse_a = area_anchor(AnchorKind::Terminal, [40.7850, -111.9922, 40.7863, -111.9789]);
+        let concourse_b = area_anchor(AnchorKind::Terminal, [40.7885, -111.9916, 40.7900, -111.9788]);
+        let mut anchors = vec![terminal, concourse_a, concourse_b, area_anchor(AnchorKind::Parking, [40.7815, -111.9870, 40.7830, -111.9830])];
         for lon in [-111.9858, -111.9854, -111.9849, -111.9844, -111.9840] {
             anchors.push(pt(AnchorKind::Entrance, 40.7841, lon));
+        }
+        for lon in [-111.9875, -111.9868, -111.9860, -111.9849, -111.9842] {
+            anchors.push(pt(AnchorKind::Entrance, 40.7890, lon));
         }
         anchors.push(pt(AnchorKind::MainEntrance, 40.7709, -112.0067));
         (airport, anchors)
@@ -244,7 +254,7 @@ mod tests {
         let mut rows = vec![airport];
         let rep = assign(&mut rows, &anchors, &cfg());
         assert_eq!(rep, ArrivalReport { terminal: 1, entrance: 0, parking: 0 });
-        assert_eq!(rows[0].arrival, Some((40.7841, -111.9849)), "the middle door of the terminal's row, not a concourse");
+        assert_eq!(rows[0].arrival, Some((40.7841, -111.9849)), "the middle door of the terminal's row, not concourse B's");
     }
 
     #[test]
@@ -275,20 +285,23 @@ mod tests {
     }
 
     #[test]
-    fn a_large_area_arrives_at_its_largest_parking_and_a_small_one_at_none() {
-        // A park about 900 m across with two lots and one across town.
+    fn a_large_area_arrives_at_its_nearest_parking_and_a_small_one_at_none() {
+        // A park about 900 m across with two lots (390 m and 450 m from its point), a main door of a building inside it, and a
+        // lot across town.
         let park = place("leisure=park", 40.7230, -111.8480, Some([40.7190, -111.8530, 40.7270, -111.8430]));
         let anchors = vec![
             area_anchor(AnchorKind::Parking, [40.7195, -111.8470, 40.7199, -111.8460]),
             area_anchor(AnchorKind::Parking, [40.7260, -111.8520, 40.7268, -111.8500]),
             area_anchor(AnchorKind::Parking, [40.7400, -111.8700, 40.7420, -111.8600]),
+            pt(AnchorKind::MainEntrance, 40.7231, -111.8481),
         ];
         let small = place("amenity=cafe", 40.7230, -111.8480, Some([40.7229, -111.8481, 40.7231, -111.8479]));
         let mut rows = vec![park, small];
         let rep = assign(&mut rows, &anchors, &cfg());
         assert_eq!(rep.parking, 1);
-        assert_eq!(rows[0].arrival, Some((40.7264, -111.8510)));
-        assert_eq!(rows[1].arrival, None, "a small place with no main door has no arrival point");
+        let (la, lo) = rows[0].arrival.unwrap();
+        assert!((la - 40.7197).abs() < 1e-9 && (lo + 111.8465).abs() < 1e-9, "the nearer lot, not the building's door: {la},{lo}");
+        assert_eq!(rows[1].arrival, Some((40.7231, -111.8481)), "a small place takes a main door on it");
     }
 
     #[test]
