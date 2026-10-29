@@ -264,8 +264,13 @@ fn offroad_modes_route_the_whole_trip_off_road_under_each_land_access() {
         std::fs::write(PathBuf::from(dir).join("navigate-schema.json"), serde_json::to_string_pretty(nav).unwrap()).unwrap();
     }
     assert_eq!(nav["function"]["parameters"]["properties"]["mode"]["enum"], json!(["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"]));
-    // on foot between two points of the off-road parity set (R08), and by vehicle from Redfish Lake Lodge into the backcountry
-    let trips = [("foot-r08", "offroad_foot", "44.18,-114.95", "44.23,-114.9"), ("vehicle-redfish", "offroad_vehicle", "44.1359,-114.9145", "44.1047,-114.9447")];
+    // on foot and by vehicle between two points of the off-road parity set (R08), and by vehicle from the wilderness start of
+    // the directions parity set (D1) to Redfish Lake Lodge
+    let trips = [
+        ("foot-r08", "offroad_foot", "44.18,-114.95", "44.23,-114.9"),
+        ("vehicle-r08", "offroad_vehicle", "44.18,-114.95", "44.23,-114.9"),
+        ("vehicle-d1", "offroad_vehicle", "44.03164,-114.98780", "44.13596,-114.91450"),
+    ];
     for (name, mode, from, to) in trips {
         let mut ids = std::collections::BTreeSet::new();
         for land in ["strict", "pragmatic", "emergency"] {
