@@ -8,7 +8,8 @@ import '../regions_state.dart';
 
 /// What downloading a region costs, part by part, shown before anything is downloaded. The parts are ticked by default; a part
 /// already on the phone, or one that cannot be downloaded here, is not. A region downloaded before places were part of regions
-/// shows places unticked, to add on their own. Sizes count only what is not on the phone yet.
+/// shows places unticked, to add on their own. Sizes count only what is not on the phone yet; the size in all (what Local will
+/// show for the region) is given beside it when some of it is already here.
 Future<void> showRegionSheet(BuildContext context, RegionsState regions, RegionRecord region) {
   // The search field the sheet was opened from would get the focus back when the sheet closes, and the keyboard with it.
   FocusManager.instance.primaryFocus?.unfocus();
@@ -68,6 +69,17 @@ class _RegionSheetState extends State<RegionSheet> {
     return (_routing && _canRouting ? p.routing!.downloadBytes : 0) +
         (_map && _canMap ? p.mapBytes : 0) +
         (_places && _canPlaces ? p.places!.downloadBytes : 0);
+  }
+
+  /// What the picked parts already have on this phone (tiles shared with a region that is here). Local counts them in a
+  /// region's size, so the sheet shows the same total beside what is new.
+  int get _already {
+    final p = _plan;
+    if (p == null) return 0;
+    int part(PartPlan pp) => pp.bytes > pp.downloadBytes ? pp.bytes - pp.downloadBytes : 0;
+    return (_routing && _canRouting ? part(p.routing!) : 0) +
+        (_map && _canMap ? p.mapBytesAlready : 0) +
+        (_places && _canPlaces ? part(p.places!) : 0);
   }
 
   Future<void> _start({bool anyway = false}) async {
@@ -175,9 +187,15 @@ class _RegionSheetState extends State<RegionSheet> {
                   onChanged: _canPlaces && !_starting ? (v) => setState(() => _places = v ?? false) : null,
                 ),
                 const SizedBox(height: 8),
-                if (_canAny)
-                  Text('About ${formatBytes(_total)} to download', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text))
-                else if (_routingHere || _mapHere || _placesHere)
+                if (_canAny) ...[
+                  Text('About ${formatBytes(_total)} to download', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text)),
+                  if (_picked && _already > 0)
+                    Text(
+                      'About ${formatBytes(_total + _already)} on this phone in all, ${formatBytes(_already)} of it already here',
+                      key: const ValueKey('region-size-in-all'),
+                      style: TextStyle(fontSize: 15, color: k.secondary),
+                    ),
+                ] else if (_routingHere || _mapHere || _placesHere)
                   Text('${region.name} is on this phone.', style: TextStyle(fontSize: 16, color: k.secondary))
                 else
                   Text('Nothing of ${region.name} can be downloaded here.', style: TextStyle(fontSize: 16, color: k.warning)),

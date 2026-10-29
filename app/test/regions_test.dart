@@ -134,12 +134,16 @@ void main() {
     expect(find.text('About 80 MB · 40 MB already on this phone'), findsOneWidget, reason: 'only the routing tiles not on the phone are counted');
     expect(find.text('About ${formatBytes(est.bytes)} · Base map · detail down to zoom ${est.maxZoom}'), findsOneWidget);
     expect(find.text('About ${formatBytes((80 << 20) + est.bytes)} to download'), findsOneWidget);
+    // The size in all counts what Local will count: the routing tiles already on the phone too.
+    final already = (40 << 20) + est.bytesAlready;
+    expect(find.text('About ${formatBytes((80 << 20) + est.bytes + already)} on this phone in all, ${formatBytes(already)} of it already here'), findsOneWidget);
     expect(r.core.calls, contains('plan'));
 
     // Untick the map: only road routing is counted and downloaded.
     await tester.tap(find.byKey(const ValueKey('part-map')));
     await tester.pump();
     expect(find.text('About 80 MB to download'), findsOneWidget);
+    expect(find.text('About 120 MB on this phone in all, 40 MB of it already here'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('part-map')));
     await tester.pump();
 

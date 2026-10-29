@@ -164,6 +164,33 @@ fn upstream_missing_tile_is_empty_and_remembered() {
     assert_eq!(host.stats.hits.load(Ordering::SeqCst), 1);
 }
 
+#[test]
+fn size_estimate_samples_every_zoom_and_skips_empty_tiles() {
+    let sc = Scratch::new("estimate");
+    let req = AreaReq::parse(&format!(r#"{{"layer":"half","name":"T",{BOX}}}"#)).unwrap();
+    let cover = req.tiles(0, 10).unwrap();
+    let inner = engine(&sc);
+    // Half the tiles have nothing (404); the others are 1000 bytes. The empty ones must not pull the mean down.
+    let half = fake_host(0, |url, _| match parse_zxy(url) {
+        Some((_, x, y)) if (x + y) % 2 == 0 => (200, vec![7u8; 1000]),
+        _ => (404, vec![]),
+    });
+    inner.save_user_def(&xyz_def("half", half.port, json!({"offline": {"allowed": true, "max_tiles_per_download": 100000}}))).unwrap();
+    let plan = inner.plan(&req).unwrap();
+    assert_eq!(plan["estimated_bytes"], cover.len() as u64 * 1000, "{plan}");
+    assert_eq!(plan["estimate_method"], "sample of 16 tiles");
+    assert_eq!(half.stats.hits.load(Ordering::SeqCst), 16);
+    // Tiles grow with the zoom: every zoom is sampled, so each zoom counts at its own size.
+    let grow = fake_host(0, |url, _| match parse_zxy(url) {
+        Some((z, _, _)) => (200, vec![7u8; 100 * (z as usize + 1)]),
+        None => (404, vec![]),
+    });
+    inner.save_user_def(&xyz_def("grow", grow.port, json!({"offline": {"allowed": true, "max_tiles_per_download": 100000}}))).unwrap();
+    let plan = inner.plan(&AreaReq::parse(&format!(r#"{{"layer":"grow","name":"T",{BOX}}}"#)).unwrap()).unwrap();
+    let want: u64 = cover.iter().map(|t| 100 * (t.1 as u64 + 1)).sum();
+    assert_eq!(plan["estimated_bytes"], want, "{plan}");
+}
+
 fn run(inner: &cache_layers::Inner, req: &str, stop_after: Option<usize>) -> (cache_layers::Result<Done>, Vec<(u64, u64)>) {
     let req = AreaReq::parse(req).unwrap();
     let progress = std::sync::Mutex::new(Vec::new());

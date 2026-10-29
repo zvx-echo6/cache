@@ -43,6 +43,10 @@ pub struct AreaReq {
 
 const MAX_ENUMERATED: u64 = 6_000_000;
 
+/// The most tiles a size estimate fetches at one zoom, and in all (see `sample_estimate`).
+const SAMPLES_PER_ZOOM: usize = 4;
+const SAMPLE_BUDGET: usize = 16;
+
 pub enum Done {
     Finished,
     Cancelled,
@@ -377,16 +381,8 @@ impl Inner {
             }
             (bytes, "directory".to_string(), Some(have))
         } else {
-            let k = p.need.len().min(6);
-            let mut total = 0u64;
-            for i in 0..k {
-                let idx = if k == 1 { 0 } else { i * (p.need.len() - 1) / (k - 1) };
-                let (_, z, x, y) = p.need[idx];
-                if let Some(b) = self.fetch_source(&p.dl, z, x, y)? {
-                    total += b.len() as u64;
-                }
-            }
-            (total / k as u64 * n, format!("sample of {k} tiles"), None)
+            let (est, k) = self.sample_estimate(&p)?;
+            (est, format!("sample of {k} tiles"), None)
         };
         let mut problems: Vec<Value> = Vec::new();
         let o = p.base.offline.as_ref();
@@ -436,6 +432,55 @@ impl Inner {
             "problems": problems,
         });
         Ok((v, p))
+    }
+
+    /// The size of the tiles to fetch from a sample of them, for a source with no directory to read sizes from. Every zoom is
+    /// sampled (one tile each first, then more at the deepest zooms, which hold most of the tiles), evenly spaced along that
+    /// zoom's tiles, at most [SAMPLES_PER_ZOOM] a zoom and [SAMPLE_BUDGET] in all. A zoom's tiles count as the mean of its
+    /// sampled tiles that have data; a tile the source has nothing for (sea, an empty corner) is left out of the mean, so it
+    /// does not pull the estimate down. A zoom with no sampled data uses the mean of all of them. Returns the bytes and the
+    /// number of tiles fetched.
+    fn sample_estimate(&self, p: &Prepared) -> Result<(u64, usize)> {
+        let mut by_zoom: BTreeMap<u8, Vec<(u8, u32, u32)>> = BTreeMap::new();
+        for t in &p.need {
+            by_zoom.entry(t.1).or_default().push((t.1, t.2, t.3));
+        }
+        // How many tiles to sample at each zoom, deepest first.
+        let mut take: BTreeMap<u8, usize> = BTreeMap::new();
+        let mut budget = SAMPLE_BUDGET;
+        for round in 0..SAMPLES_PER_ZOOM {
+            for (z, tiles) in by_zoom.iter().rev() {
+                if budget > 0 && tiles.len() > round {
+                    *take.entry(*z).or_default() += 1;
+                    budget -= 1;
+                }
+            }
+        }
+        let (mut mean, mut all_bytes, mut all_with, mut fetched) = (BTreeMap::new(), 0u64, 0u64, 0usize);
+        for (z, k) in &take {
+            let tiles = &by_zoom[z];
+            let (mut bytes, mut with) = (0u64, 0u64);
+            for i in 0..*k {
+                // Evenly spaced, the middle one when there is one.
+                let idx = if *k == 1 { tiles.len() / 2 } else { i * (tiles.len() - 1) / (k - 1) };
+                let (tz, x, y) = tiles[idx];
+                fetched += 1;
+                if let Some(b) = self.fetch_source(&p.dl, tz, x, y)? {
+                    if !b.is_empty() {
+                        bytes += b.len() as u64;
+                        with += 1;
+                    }
+                }
+            }
+            if with > 0 {
+                mean.insert(*z, bytes / with);
+            }
+            all_bytes += bytes;
+            all_with += with;
+        }
+        let overall = if all_with > 0 { all_bytes / all_with } else { 0 };
+        let est = by_zoom.iter().map(|(z, tiles)| tiles.len() as u64 * mean.get(z).copied().unwrap_or(overall)).sum();
+        Ok((est, fetched))
     }
 
     /// Statistics of what an area covers once downloaded: tiles with data and their bytes (shared tiles included).
