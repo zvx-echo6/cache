@@ -36,6 +36,12 @@ pub fn bbox_around(lat: f64, lon: f64, radius_km: f64) -> (f64, f64, f64, f64) {
     ((lat - dlat).max(-90.0), (lat + dlat).min(90.0), (lon - dlon).max(-180.0), (lon + dlon).min(180.0))
 }
 
+/// What a degree of longitude weighs against a degree of latitude, squared, at `lat`: `dlat² + dlon² * lon_scale(lat)` orders
+/// points by distance (near enough for nearest first, and plain arithmetic for SQL).
+pub fn lon_scale(lat: f64) -> f64 {
+    lat.to_radians().cos().powi(2)
+}
+
 /// `42°32'10"N 113°47'33"W`: whole seconds, rounded.
 pub fn dms(lat: f64, lon: f64) -> String {
     fn one(v: f64, pos: char, neg: char) -> String {

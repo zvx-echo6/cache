@@ -30,6 +30,7 @@ release notes).
 
 ### Fixed
 - Assistant: asking to open a place, route, live data or location result no longer fails with an internal error
+- Map search: chains like Maverik or Subway show the nearest stores, a street address finds the house in the town you name, and short searches like "ER" or "vet" find the kind of place rather than names that start with those letters
 - Regions: the keyboard no longer pops up after the download sheet closes
 - Unload the model in use from Models to free memory
 - The keyboard closes when you tap outside a text box or scroll
