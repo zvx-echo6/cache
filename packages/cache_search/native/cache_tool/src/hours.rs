@@ -157,7 +157,14 @@ fn status(week: &Week, today: usize, now: i64) -> String {
         }
     };
     if let Some(&(_, end)) = joined.iter().find(|(s, e)| *s <= now && now < *e) {
-        return if end - now >= WEEK_MIN { "Open now (open 24 hours)".into() } else { format!("Open now (closes {})", at(end)) };
+        return if end - now >= WEEK_MIN {
+            "Open now (open 24 hours)".into()
+        } else if end == DAY_MIN {
+            // tonight's 24:00 (00:00 tomorrow); a later midnight keeps its day ("closes Sat 00:00")
+            "Open now (closes at midnight)".into()
+        } else {
+            format!("Open now (closes {})", at(end))
+        };
     }
     match joined.iter().find(|(s, _)| *s > now && *s - now <= WEEK_MIN) {
         Some(&(start, _)) => format!("Closed now (opens {})", at(start)),
@@ -239,8 +246,18 @@ mod tests {
         assert_eq!(st("08:00-12:00,13:00-18:00", "2026-10-29T12:30:00-06:00"), "Closed now (opens 13:00)");
         assert_eq!(st("Mo-Su 00:00-24:00", THU_1430), "Open now (open 24 hours)");
         assert_eq!(st("Mo-Fr 00:00-24:00", THU_1430), "Open now (closes Sat 00:00)");
-        assert_eq!(st("Mo-Fr 08:00-24:00", THU_2300), "Open now (closes Fri 00:00)");
+        assert_eq!(st("Mo-Fr 08:00-24:00", THU_2300), "Open now (closes at midnight)");
         assert_eq!(st("Mo-Fr 22:00-02:00", THU_2300), "Open now (closes Fri 02:00)");
+    }
+
+    #[test]
+    fn midnight_closing_and_opening() {
+        // closing at 24:00, or at 00:00 the next day, is "at midnight"; opening at 00:00 on another day keeps the day
+        assert_eq!(st("Mo-Su 18:00-24:00", THU_2300), "Open now (closes at midnight)");
+        assert_eq!(st("Mo-Su 18:00-00:00", THU_2300), "Open now (closes at midnight)");
+        assert_eq!(st("Mo-Su 18:00-24:00", THU_1430), "Closed now (opens 18:00)");
+        assert_eq!(st("Fr 00:00-06:00", THU_1430), "Closed now (opens Fri 00:00)");
+        assert_eq!(st("Fr 00:00-06:00", FRI_0100), "Open now (closes 06:00)");
     }
 
     #[test]
