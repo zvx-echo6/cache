@@ -16,6 +16,13 @@ codegen-units = 1
 strip = true
 opt-level = 3
 
+# Dependencies keep only line tables in dev and test builds (backtraces still have file and line). With full debug info the
+# dependency rlibs reach about 6 GB (segment alone 2 GB), and rustc maps every rlib a test binary links copy-on-write, which
+# Windows charges to the commit limit. Several test targets linking at once ran out of commit; rustc then skips the rlib it
+# could not map and fails with "crate `X` required to be available in rlib format". Release builds (the app) are unaffected.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 # netdev (iroh's netwatch needs ^0.46.1) uses libc::in6_ifreq on every Apple target, but libc declares it for macOS only,
 # so the iOS build failed. vendor/netdev-0.46.3 is the crates.io release (MIT) with that one function made macOS-only
 # (src/os/darwin/ipv6_addr_flags.rs); drop this when a netdev release builds for iOS.
