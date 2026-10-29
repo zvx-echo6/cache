@@ -532,6 +532,50 @@ pub unsafe extern "C" fn cs_act_outcome(c: *mut Conversation, outcome_json: *con
     })
 }
 
+// ---- the user's map layers and repeater lists (logic in cache_user::mapdata; see ext.rs) ----
+
+/// # Safety
+/// `h` NULL or live; `import_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_userlayers_import(h: *mut Handle, import_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayers_import(arg_str(import_json, "import_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live.
+#[no_mangle]
+pub unsafe extern "C" fn cs_userlayers_list(h: *mut Handle) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayers_list()?))
+}
+
+/// # Safety
+/// `h` NULL or live; `id` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_userlayer_get(h: *mut Handle, id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_get(arg_str(id, "id")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `visible_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_userlayer_set_visible(h: *mut Handle, visible_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_set_visible(arg_str(visible_json, "visible_json")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `id` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_userlayer_delete(h: *mut Handle, id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_delete(arg_str(id, "id")?)?))
+}
+
+/// # Safety
+/// `h` NULL or live; `export_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_userlayer_export(h: *mut Handle, export_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_export(arg_str(export_json, "export_json")?)?))
+}
+
 // ---- saved places and live data (logic in cache_user / cache_live; see ext.rs) ----
 
 /// # Safety
@@ -1025,6 +1069,12 @@ mod tests {
             assert!(cs_places_list(ptr::null_mut()).is_null());
             assert!(cs_place_save(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_place_delete(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_userlayers_import(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_userlayers_list(ptr::null_mut()).is_null());
+            assert!(cs_userlayer_get(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_userlayer_set_visible(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_userlayer_delete(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_userlayer_export(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_sources(ptr::null_mut()).is_null());
             assert!(cs_live_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_live_get(ptr::null_mut(), ptr::null()).is_null());

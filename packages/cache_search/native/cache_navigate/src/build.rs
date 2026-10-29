@@ -101,6 +101,9 @@ pub fn place(r: &Resolved) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("place_name".into(), json!(r.name));
     m.insert("kind".into(), json!(r.kind));
+    if let Some(l) = &r.kind_label {
+        m.insert("kind_label".into(), json!(l));
+    }
     m.insert("street".into(), json!(r.street));
     m.insert("locality".into(), json!(r.locality));
     m.insert("county".into(), json!(r.county));

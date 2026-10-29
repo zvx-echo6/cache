@@ -4,6 +4,7 @@
 use crate::coord::{plus_code, usng};
 use crate::geo::{dms, km_to_mi, round_to};
 use crate::{resolve_center, Geocoder, PackSet};
+use cache_tool::user::UserPointsSlot;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -11,11 +12,18 @@ use std::sync::Arc;
 pub struct LocateTool {
     packs: Arc<PackSet>,
     geo: Arc<dyn Geocoder>,
+    user: UserPointsSlot,
 }
 
 impl LocateTool {
     pub fn new(packs: Arc<PackSet>, geo: Arc<dyn Geocoder>) -> LocateTool {
-        LocateTool { packs, geo }
+        LocateTool { packs, geo, user: UserPointsSlot::default() }
+    }
+
+    /// The user's map layers: `place` matches a layer point by its exact name before the places search.
+    pub fn with_user(mut self, user: UserPointsSlot) -> LocateTool {
+        self.user = user;
+        self
     }
 }
 
@@ -59,8 +67,12 @@ impl Tool for LocateTool {
                 (c.lat, c.lon, c.label, format!("loc:{:.4},{:.4}", c.lat, c.lon), true)
             }
             Some(name) => {
+                let layer_point = cache_tool::user::current(&self.user).and_then(|u| u.named(name).into_iter().next());
                 if let Some(p) = ctx.places.resolve(name) {
                     (p.lat, p.lon, p.name, format!("loc:{:.4},{:.4}", p.lat, p.lon), false)
+                } else if let Some(p) = layer_point {
+                    kind = Some((p.kind, p.kind_label));
+                    (p.lat, p.lon, p.name, p.address, false)
                 } else {
                     if self.packs.current().is_empty() {
                         return Err(err(ToolError::NOT_SET_UP, "no places data is installed, so a place name cannot be looked up"));

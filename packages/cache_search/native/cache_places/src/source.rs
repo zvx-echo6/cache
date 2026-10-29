@@ -88,6 +88,13 @@ impl Geocoder for PackPlaceSource {
         let t = self.geo.reverse(lat, lon)?;
         Some(format!("{} mi {} of {}", crate::geo::round_to(t.km / crate::geo::KM_PER_MI, 1), crate::geo::compass8((t.bearing + 180.0) % 360.0), t.label))
     }
+
+    fn nearest_town(&self, lat: f64, lon: f64) -> Option<String> {
+        if !(lat.is_finite() && lon.is_finite()) {
+            return None;
+        }
+        self.geo.reverse(lat, lon).map(|t| t.name)
+    }
 }
 
 impl PlaceSource for PackPlaceSource {

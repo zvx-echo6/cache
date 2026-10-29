@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><metadata><name>Trip</name></metadata>
+<wpt lat="42.50" lon="-113.75"><name>Trailhead</name><desc>Parking for six cars</desc></wpt>
+<trk><name>Loop</name><trkseg><trkpt lat="42.50" lon="-113.75"/><trkpt lat="42.51" lon="-113.74"/></trkseg></trk>
+</gpx>

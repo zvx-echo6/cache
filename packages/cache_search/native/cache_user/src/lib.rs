@@ -1,4 +1,7 @@
-//! Saved places, stored in user.sqlite. Tools and live data resolve a place name against these first.
+//! Saved places, stored in user.sqlite. Tools and live data resolve a place name against these first. The user's map layers
+//! and imported repeater lists live in the same file (`mapdata`).
+
+pub mod mapdata;
 
 use cache_tool::{SavedPlace, SavedPlaces};
 use rusqlite::{params, Connection, OptionalExtension};

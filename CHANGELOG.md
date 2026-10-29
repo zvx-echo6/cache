@@ -19,6 +19,9 @@ release notes).
 - A place you save is watched for weather and alerts
 - Models starts with a short list of recommended models, each with its size and whether it fits your phone
 - Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
+- Import repeater lists (a RepeaterBook KML, a CHIRP CSV, or both from the same export, merged) and export them as KML for Google Earth
+- Import your own map layers from KML, KMZ, GPX or GeoJSON, and export them as KML or GPX
+- Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes

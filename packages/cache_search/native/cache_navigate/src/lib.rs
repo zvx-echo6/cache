@@ -9,7 +9,8 @@
 //! without them the road route is returned with an `offroad_unavailable` warning.
 //!
 //! Names (`to`, `from`, `near`) are resolved by [`resolve`](crate) in this order: "lat,lon" text, the user's saved
-//! places, then the places pack through `cache_tool::places::PlaceSource` (plugged in with [`PlaceSlot`]).
+//! places, a point of the user's map layers by its exact name (`to` and `from` only; plugged in with `with_user`), then the
+//! places pack through `cache_tool::places::PlaceSource` (plugged in with [`PlaceSlot`]).
 
 mod build;
 mod config;
@@ -121,6 +122,7 @@ pub struct NavCore {
 
 pub struct NavigateTool {
     core: Arc<NavCore>,
+    user: cache_tool::user::UserPointsSlot,
 }
 
 fn err(code: &str, detail: impl Into<String>) -> ToolError {
@@ -205,17 +207,23 @@ impl ModeArg {
 
 impl NavigateTool {
     pub fn new(cfg: NavigateCfg, places: PlaceSlot) -> NavigateTool {
-        NavigateTool { core: Arc::new(NavCore::new(cfg, places)) }
+        NavigateTool { core: Arc::new(NavCore::new(cfg, places)), user: Default::default() }
     }
 
     /// For tests: a Valhalla supplied by the caller; the file checks are skipped.
     pub fn with_valhalla(cfg: NavigateCfg, places: PlaceSlot, valhalla: Arc<dyn Valhalla>) -> NavigateTool {
-        NavigateTool { core: Arc::new(NavCore::with_valhalla(cfg, places, valhalla)) }
+        NavigateTool { core: Arc::new(NavCore::with_valhalla(cfg, places, valhalla)), user: Default::default() }
     }
 
     /// The tool over an engine the map shares.
     pub fn from_core(core: Arc<NavCore>) -> NavigateTool {
-        NavigateTool { core }
+        NavigateTool { core, user: Default::default() }
+    }
+
+    /// The user's map layers: `to` and `from` match a layer point by its exact name before the places search.
+    pub fn with_user(mut self, user: cache_tool::user::UserPointsSlot) -> NavigateTool {
+        self.user = user;
+        self
     }
 
     pub fn core(&self) -> Arc<NavCore> {
@@ -492,7 +500,7 @@ impl Tool for NavigateTool {
             return Err(err(ToolError::NOT_SET_UP, "navigate is not set up: no map region is installed"));
         }
         let valhalla = self.valhalla()?;
-        let r = resolve::Resolver { ctx, source: self.place_source() };
+        let r = resolve::Resolver { ctx, source: self.place_source(), user: cache_tool::user::current(&self.user) };
         let start_hint = ctx.location.is_some();
         let hint = |e: ToolError| if start_hint { e.with("hint", "The phone's location is known: omit from to start there.") } else { e };
 

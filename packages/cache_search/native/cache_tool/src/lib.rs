@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 pub mod fetcher;
 pub mod places;
+pub mod user;
 
 /// Start of an address marker in tool text.
 /// A citable line starts with `{{addr:<address>}}`; the framework replaces the marker with `[n]`.

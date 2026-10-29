@@ -279,6 +279,12 @@ Fields:
 - `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
   (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
   network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence. After `snap_distance_m` come `lat` and `lon`, the matched place's coordinates rounded to 5 decimals.
+- **The user's map layers.** `to` and `from` match a point of the user's own map layers by its exact name (ignoring case
+  and extra spaces) after `lat,lon` text and saved places and before the places search. The matched place then has
+  `"kind": "layer_point"` and `kind_label` right after `kind`: the layer's name (`kind_label` appears only on layer points),
+  and `locality` is the nearest town. When points of the same name are in several layers, the one in the most recently used
+  layer is matched and the others go first into `other_destination_candidates`. Hidden and private layers are matched too.
+  Only points: a layer's lines and areas are map-only.
 - `other_destination_candidates` has up to 2 other matches (the same place fields, no `near`); empty when none. On a
   nearest-place search each entry also has `drive_min` (the travel time in minutes, for every mode; null when it could not be timed).
 - `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (AIDA passes navi's values through: `navi_places/nearby.py` `_rank`.)
@@ -367,6 +373,70 @@ the map data gives no name is called by its kind label and has `"unnamed": true`
 "kind_label": "Drinking water tap", "unnamed": true, ...}`): the model says "an unnamed drinking water tap", never a bare "Water" or
 "Shelter". A pack of the older format (1) has no kinds: those fields are absent. Errors: `nearby_empty`, `no_location`, `not_set_up`.
 
+**The user's own points.** After the pack's categories the enum has `repeater` (described "repeater = amateur radio repeaters
+from the user's imported lists") while at least one imported repeater has a position, then one category per map layer with
+points, `layer_<slug of the layer name>` (the Notebook actions' slug, the whole id at most 32 characters, a repeated id
+`_2`, `_3`, ...), described "`<id>` = `<layer name>`: points in the user's own map layer", at most 10 layers, most recently
+used first (used: imported, edited or its visibility changed). Hidden layers and private layers are offered like the rest
+(private means left out of sync and sharing). The tool is offered with only these categories when no pack is installed;
+`near` then takes a saved place only, and `map_region`/`map_region_age` are left out when no installed region covers the
+centre. Both kinds rank by straight-line distance within 300 km.
+
+A repeater row, in this order: `n`, `name` (the callsign), `kind: "repeater"`, `kind_label: "Repeater"`, `locality` (the
+list's town), `distance_mi`, `direction`, then
+
+- `frequency`: `"927.1625 MHz"` (at least three decimals: `"147.360 MHz"`)
+- `offset`: `"-25 MHz"`, `"+600 kHz"`, `"none"` (simplex), `"split: transmit 147.45 MHz"`, `"transmit off"`, or, from a KML alone,
+  `"- (amount not in the imported list)"` and `"split (transmit frequency not in the imported list)"`
+- `tone`: `"151.4 Hz to transmit"` (CHIRP Tone), `"151.4 Hz to transmit and receive"` (TSQL), `"DCS 432"` (DTCS, or a KML
+  `D432`), `"cross tone (see the imported list)"`, `"none"`, or, from a KML alone, `"151.4 Hz (use not stated in the imported list)"`
+- `mode`: CHIRP's Mode as it is (`"FM"`, `"DMR"`, `"DIG"`, `"DV"`); left out when unknown (a KML alone) or `Auto`
+- `on_air`: `"yes"` / `"no"` from the KML; left out when unknown
+- `list`: the list's name (the imported KML's file name unless the user named it), e.g. `"repeaters_2610290107.kml"`
+- `details`: `"full page on RepeaterBook (opens in the browser; needs a connection)"` when the pin had a details link. The
+  link itself stays with the repeater and is opened by the app (map card, the answer's source row); the model never writes it.
+
+The address is `repeater:<list id>/<row>` (`repeater:l1/3`). A result with a repeater row ends with
+`"repeater_note": "From the user's imported repeater list; check the settings before transmitting."`. The model never fills
+in a missing offset or tone from band conventions; it says the list does not state it.
+
+```json
+{"ok": true, "category": "repeater", "center": "Burley, ID", "ranked_by": "distance",
+ "places": [
+  {"n": 3, "name": "TEST1", "kind": "repeater", "kind_label": "Repeater", "locality": "Burley", "distance_mi": 0.5, "direction": "NW",
+   "frequency": "927.1625 MHz", "offset": "-25 MHz", "tone": "151.4 Hz to transmit", "mode": "FM", "on_air": "yes",
+   "list": "repeaters-fixture.kml", "details": "full page on RepeaterBook (opens in the browser; needs a connection)"},
+  {"n": 4, "name": "TEST3", "kind": "repeater", "kind_label": "Repeater", "locality": "Burley", "distance_mi": 1.6, "direction": "SE",
+   "frequency": "147.360 MHz", "offset": "+600 kHz", "tone": "100.0 Hz to transmit and receive", "mode": "FM", "on_air": "no",
+   "list": "repeaters-fixture.kml"}],
+ "map_region": "Idaho", "map_region_age": "12 days old",
+ "repeater_note": "From the user's imported repeater list; check the settings before transmitting."}
+```
+
+Where the settings come from: a RepeaterBook-style KML gives the position, callsign, on-air and the details link, but only
+the sign of the offset and a bare tone; a CHIRP CSV gives the offset amount, the tone type and the mode, but no position.
+When both come from one export they are merged: a pin and a CSV row are the same repeater when they have the same frequency
+and town (the CSV's `Comment` is the town, or the town then ", " and the site), never by guessing. A CSV row no pin pairs
+with has no position and is never shown.
+
+A layer point row: `n`, `name`, `kind: "layer_point"`, `kind_label` (the layer's name), `locality` (the nearest town, when
+known), `distance_mi`, `direction`, `notes` (the point's notes, whitespace collapsed, cut to 200 characters; left out when
+empty). The address is `layer:<layer id>/<point id>` (`layer:y2/1`). Only points reach the model; lines and areas are map-only.
+
+```json
+{"ok": true, "category": "layer_rally_points", "center": "current location", "ranked_by": "distance",
+ "places": [
+  {"n": 5, "name": "Canal bridge", "kind": "layer_point", "kind_label": "Rally Points", "locality": "Burley", "distance_mi": 1.0, "direction": "SW"},
+  {"n": 6, "name": "North gate", "kind": "layer_point", "kind_label": "Rally Points", "locality": "Burley", "distance_mi": 1.0, "direction": "N",
+   "notes": "Meet here at dawn. Bring water and the radio."}],
+ "map_region": "Idaho", "map_region_age": "12 days old"}
+```
+
+Errors for these categories: `repeater` with no list imported is `not_set_up` ("no repeater list is imported"); a
+`layer_...` category that is no longer on the phone is `bad_arguments` ("category: no such layer on this phone: ..."; the
+enum check reports a value that was never offered first); none within 300 km is `nearby_empty` ("no repeaters within 300 km
+of ...", "no points of the layer \"Rally Points\" within ...").
+
 ### locate
 
 ```json
@@ -391,6 +461,11 @@ Result (1.0 gives latitude/longitude; 1.x adds the other formats shown):
 
 `what3words` only when it was fetched online or cached for a saved place. For a named place the result also has `kind` and `kind_label`
 right after `place_name` (`"kind": "pharmacy", "kind_label": "Pharmacy"`; a town is `town` / "Town"); the phone's own position has none. Errors: `geocode_empty`, `no_location`.
+
+`place` also matches a point of the user's own map layers by its exact name (ignoring case and extra spaces), after saved
+places and before the places search, the most recently used layer first (hidden and private layers too). The result then
+has `"kind": "layer_point"`, `"kind_label": "<layer name>"` and the point's address (`layer:<layer id>/<point id>`):
+`{"ok": true, "n": 9, "place_name": "Canal bridge", "kind": "layer_point", "kind_label": "Rally Points", "lat": 42.53, "lon": -113.81, ...}`.
 
 ### live_data (one generic tool for every live source)
 

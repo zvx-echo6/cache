@@ -17,6 +17,10 @@ pub struct UserCfg {
 #[derive(Default)]
 pub struct Ext {
     pub user: Option<UserStore>,
+    /// The user's map layers and imported repeater lists, in the same user.sqlite (`cs_userlayer*`).
+    pub map_data: Option<std::sync::Arc<cache_user::mapdata::MapStore>>,
+    /// The same store as the tools see it: `nearby` (repeater and layer categories), `navigate` and `locate` (layer points).
+    pub user_points: cache_tool::user::UserPointsSlot,
     pub live: Option<Live>,
     /// Where a places pack plugs into the navigate tool (see `Handle::set_place_source`).
     pub places: cache_navigate::PlaceSlot,
@@ -111,13 +115,16 @@ impl crate::handle::Handle {
         if let Some(u) = user {
             self.ext.user = Some(UserStore::new(&u.db_path));
             self.set_saved_places(Box::new(UserStore::new(&u.db_path)));
+            let store = std::sync::Arc::new(cache_user::mapdata::MapStore::new(&u.db_path));
+            *self.ext.user_points.write().unwrap_or_else(|e| e.into_inner()) = Some(store.clone());
+            self.ext.map_data = Some(store);
         }
         if let Some(l) = live {
             self.ext.live = Some(Live::new(l.clone()));
             self.register_tool(Box::new(cache_live::LiveDataTool::new(l)));
         }
         if let Some(p) = places {
-            let (core, tools, source) = cache_places::core_tools_and_source(&p);
+            let (core, tools, source) = cache_places::core_tools_and_source_with(&p, self.ext.user_points.clone());
             for t in tools {
                 self.register_tool(t);
             }
@@ -125,7 +132,7 @@ impl crate::handle::Handle {
             self.ext.map_places = Some(core);
         }
         if let Some(r) = routing {
-            let tool = cache_navigate::NavigateTool::new(r, self.ext.places.clone());
+            let tool = cache_navigate::NavigateTool::new(r, self.ext.places.clone()).with_user(self.ext.user_points.clone());
             self.ext.nav = Some(tool.core());
             self.register_tool(Box::new(tool));
         }
@@ -218,6 +225,34 @@ impl Ext {
 
     fn user(&self) -> Result<&UserStore> {
         self.user.as_ref().ok_or_else(|| Error::new(ErrorCode::NotConfigured, "saved places need \"user\": {\"db_path\"} in the cs_open config"))
+    }
+
+    fn map_data(&self) -> Result<&cache_user::mapdata::MapStore> {
+        self.map_data.as_deref().ok_or_else(|| Error::new(ErrorCode::NotConfigured, "map layers and repeater lists need \"user\": {\"db_path\"} in the cs_open config"))
+    }
+
+    pub fn userlayers_import(&self, json: &str) -> Result<String> {
+        self.map_data()?.import(json).map_err(user_err)
+    }
+
+    pub fn userlayers_list(&self) -> Result<String> {
+        self.map_data()?.list_json().map_err(user_err)
+    }
+
+    pub fn userlayer_get(&self, id: &str) -> Result<String> {
+        self.map_data()?.get(id).map_err(user_err)
+    }
+
+    pub fn userlayer_set_visible(&self, json: &str) -> Result<String> {
+        self.map_data()?.set_visible(json).map_err(user_err)
+    }
+
+    pub fn userlayer_delete(&self, id: &str) -> Result<String> {
+        self.map_data()?.delete(id).map_err(user_err)
+    }
+
+    pub fn userlayer_export(&self, json: &str) -> Result<String> {
+        self.map_data()?.export(json).map_err(user_err)
     }
 
     fn live(&self) -> Result<&Live> {
