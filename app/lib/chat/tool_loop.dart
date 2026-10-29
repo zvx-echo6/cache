@@ -1,6 +1,8 @@
 import 'package:cache_llama/cache_llama.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../actions/confirm.dart';
+
 import 'chat_config.dart';
 import 'citations.dart';
 import 'model_backend.dart';
@@ -86,6 +88,9 @@ class ToolLoop {
 
   /// Synchronous app sideband, saved before the next model request.
   void Function(List<NavigationAction>)? onNavigationActions;
+
+  /// Synchronous app sideband: the confirm cards an `act` call asked for (change actions).
+  void Function(List<ConfirmCard>)? onConfirmations;
   final List<Map<String, dynamic>> _messages = [];
   final Map<int, NumberedResult> _results = {};
   int _nextId = 1;
@@ -141,9 +146,19 @@ class ToolLoop {
 
   String _clean(String s) => checkCitations(s, _results.keys.toSet()).text;
 
-  Stream<TurnUpdate> ask(String userText) async* {
-    _stopped = false;
+  Stream<TurnUpdate> ask(String userText) {
     _messages.add({'role': 'user', 'content': userText});
+    return _turn();
+  }
+
+  /// Adds a message the host writes (the outcome of a confirm card) to the conversation.
+  void addMessage(Map<String, dynamic> message) => _messages.add(message);
+
+  /// Lets the model answer the conversation as it stands (its short follow-up after [addMessage]), as after a question.
+  Stream<TurnUpdate> resume() => _turn();
+
+  Stream<TurnUpdate> _turn() async* {
+    _stopped = false;
     var rounds = 0;
     var promptTokens = 0, generatedTokens = 0;
     final prompt = _lastPrompt = systemPrompt?.call() ?? kSystemPrompt;
@@ -187,7 +202,12 @@ class ToolLoop {
           _messages.add(last.toMessage());
           yield const TurnUpdate(phase: TurnPhase.searching);
           for (final call in last.toolCalls) {
-            _messages.add({'role': 'tool', 'tool_call_id': call.id, 'content': await _runCall(call)});
+            final content = await _runCall(call);
+            _messages.add({'role': 'tool', 'tool_call_id': call.id, 'content': content});
+            if (call.name == 'act') {
+              final card = ConfirmCard.fromResult(call.id, call.argumentsMap, content);
+              if (card != null) onConfirmations?.call([card]);
+            }
           }
           rounds++;
           continue;
