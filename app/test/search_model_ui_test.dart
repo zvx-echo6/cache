@@ -30,12 +30,12 @@ void main() {
     d.total = 100;
     await tester.pumpWidget(wrap(ModelDownloadBar(downloads: d)));
     expect(find.textContaining('Downloading chat-Q4.gguf'), findsOneWidget);
-    expect(find.text('Next: Search model, 635 MB'), findsOneWidget);
+    expect(find.text('Next: Search model, 605 MB'), findsOneWidget);
     d.current = null;
     d.searchModelError = 'the connection dropped';
     d.cancel(); // tells the bar
     await tester.pump();
-    expect(find.text('Next: Search model, 635 MB'), findsNothing);
+    expect(find.text('Next: Search model, 605 MB'), findsNothing);
     expect(find.text('Search model: download stopped (the connection dropped)'), findsOneWidget);
     expect(find.byKey(const ValueKey('search-model-retry')), findsOneWidget);
   });
@@ -70,7 +70,7 @@ void main() {
     final shown = offerSearchModelOnce(ctx, sm);
     await tester.pumpAndSettle();
     expect(find.text('Get the search model?'), findsOneWidget);
-    expect(find.text('Meaning search in your libraries, places and the assistant needs it. 635 MB.'), findsOneWidget);
+    expect(find.text('Meaning search in your libraries, places and the assistant needs it. 605 MB.'), findsOneWidget);
     expect(find.text('Download'), findsOneWidget);
     await tester.tap(find.text('Not now'));
     await tester.pumpAndSettle();

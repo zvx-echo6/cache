@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/maps/ui/format.dart';
 import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/model_downloads.dart';
 import 'package:cache/models/search_model.dart';
@@ -151,6 +152,11 @@ void main() {
   late Directory dir;
   setUp(() => dir = Directory.systemTemp.createTempSync('search-model'));
   tearDown(() => dir.deleteSync(recursive: true));
+
+  test('the size is shown as the download progress counts it', () {
+    expect(kSearchModel.sizeLabel, '605 MB');
+    expect(kSearchModel.sizeLabel, formatBytes(kSearchModel.size));
+  });
 
   group('the embedder', () {
     test('without the model file there is no query vector, so the core searches by keywords', () async {

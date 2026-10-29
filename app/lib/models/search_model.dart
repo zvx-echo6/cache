@@ -5,6 +5,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
 import '../app_state.dart';
+import '../maps/ui/format.dart';
 import '../sources/sources_state.dart' show LibraryEmbedding;
 import 'hf_hub.dart';
 import 'model_downloads.dart';
@@ -18,7 +19,6 @@ class SearchModelSpec {
     required this.repo,
     required this.path,
     required this.revision,
-    required this.sizeLabel,
   });
 
   /// The name in the models folder, which is also the model id a query vector carries.
@@ -33,8 +33,8 @@ class SearchModelSpec {
   /// The commit of [repo] it is downloaded from.
   final String revision;
 
-  /// The size as the app shows it next to the name.
-  final String sizeLabel;
+  /// The size as the app shows it next to the name, counted the way the download progress counts it ("605 MB").
+  String get sizeLabel => formatBytes(size);
 
   HfFile get file => HfFile(repo: repo, path: path, size: size, sha256: sha256, revision: revision);
 }
@@ -49,7 +49,6 @@ const SearchModelSpec kSearchModel = SearchModelSpec(
   repo: 'lm-kit/bge-m3-gguf',
   path: 'bge-m3-Q8_0.gguf',
   revision: '9379ce497e8814b200f2dc0d18eb4045426dcb8c',
-  sizeLabel: '635 MB',
 );
 
 /// The search models the app knows. Their files are kept out of the chat model list.
