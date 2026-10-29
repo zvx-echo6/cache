@@ -179,6 +179,12 @@ cap is about 470 MB. Timing, 107 km route (12.3 M cells), release build on the d
    `min(max_cells, (2^31-1)/4)`. Error messages are navi's own strings.
 10. Parking points with access private/no/permit are dropped at build time (navi drops them when loading the index);
     all point data and MVUM features are clipped to the pack bbox.
+11. Drive ends snap the way Apple Maps does (project decision, 2026-10-29), not as navi's plain Valhalla call (`snap.rs`):
+    an end whose nearest edge is a generic service road (airfields, campuses, private access roads) goes to the nearest
+    public road (residential or better) within 600 m, and that gap gets no off-road leg or `offroad_unavailable` warning;
+    when another edge is within 25 m of the nearest (a split one-way street's other carriageway, a corner), both are routed
+    and the faster kept. A place's arrival point from the places data (an airport's terminal, a main door, a park's parking)
+    is the route end instead of the place's point and keeps its own nearest road. Walk and bike are unchanged.
 
 Where the Rust code could be bit-exact it is: the Gaussian blur (scipy), the Terrarium decode, the heap order, the
 f32/f64 mix of the kernel. These are covered by fixtures recorded from navi's own code (below), not hand-computed.
@@ -340,7 +346,8 @@ trip off-road when Valhalla has no edges; `Never`; `Always`), `merge_bearing_deg
 carries `RouteOptions` (the cell cap: about 8 M on the phone). The result has steps (`kind` road / offroad / offroad_follow, bearing,
 cardinal, distance, duration, elevation gain/loss, grade class, terrain, trail kind), the polyline6 shape, summary and warnings
 (`offroad_unavailable` when one end's last-mile leg failed and the road route was kept). A place's OSM category, when known,
-seeds the travel modes at that end. No C ABI or tool wrapper yet.
+seeds the travel modes at that end; a place's arrival point (`Waypoint::with_arrival`) is where the route starts or ends.
+No C ABI or tool wrapper yet.
 
 ## 8. What is left
 
