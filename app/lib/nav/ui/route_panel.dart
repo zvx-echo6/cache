@@ -136,7 +136,37 @@ class RoutePanel extends StatelessWidget {
                     else if (nav.routeError != null)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
+                            // No off-road data here: the road modes still work.
+                            if (nav.offroadDataMissing) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      key: const ValueKey('offroad-instead-walk'),
+                                      onPressed: () => nav.setMode('walk'),
+                                      icon: const Icon(Icons.directions_walk),
+                                      label: const Text('Walk'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      key: const ValueKey('offroad-instead-drive'),
+                                      onPressed: () => nav.setMode('drive'),
+                                      icon: const Icon(Icons.directions_car),
+                                      label: const Text('Drive'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
                       )
                     else ...[
                       for (var i = 0; i < nav.routes.length; i++)

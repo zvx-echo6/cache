@@ -334,6 +334,12 @@ void main() {
       await nav.setMode('offroad_foot');
       await nav.openDirections(place('place:4', 'Far'));
       expect(nav.routeError, 'Off-road needs off-road data for this area');
+      expect(nav.offroadDataMissing, isTrue);
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(mode: mode));
+      await nav.setMode('walk');
+      expect(nav.offroadDataMissing, isFalse);
+      expect(nav.routeError, isNull);
+      expect(nav.routes, isNotEmpty);
     });
 
     test('no position is said plainly; a route that cannot be made is explained', () async {

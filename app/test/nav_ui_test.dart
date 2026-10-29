@@ -336,6 +336,27 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('directions: off-road with no off-road data offers Walk and Drive, which switch the mode', (tester) async {
+        backend.onRoute = (to, mode, from) async => mode.startsWith('offroad')
+            ? MapRoute.fromJson({'ok': false, 'route_id': 'x', 'mode': mode, 'errors': [{'code': 'not_set_up', 'message': 'no data'}]})
+            : MapRoute.fromJson(fakeRouteJson(mode: mode));
+        await nav.openDirections(hospital);
+        await nav.setMode('offroad_foot');
+        await tester.pumpWidget(host(theme, live(nav, () => RoutePanel(nav: nav, fmt: fmt))));
+        expect(find.text('Off-road needs off-road data for this area'), findsOneWidget);
+        expect(find.byKey(const ValueKey('offroad-instead-walk')), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('offroad-instead-walk')));
+        await tester.pumpAndSettle();
+        expect(nav.mode, 'walk');
+        expect(find.byKey(const ValueKey('offroad-instead-walk')), findsNothing);
+        await nav.setMode('offroad_foot');
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('offroad-instead-drive')));
+        await tester.pumpAndSettle();
+        expect(nav.mode, 'drive');
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('directions: off-road at the largest text size still fits', (tester) async {
         backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(offroad: true, mode: mode));
         await nav.openDirections(hospital);

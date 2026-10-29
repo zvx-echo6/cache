@@ -160,6 +160,9 @@ class NavState extends ChangeNotifier {
   bool routing = false;
   String? routeError;
 
+  /// True when the off-road route failed because the area has no off-road data (the panel offers Walk and Drive).
+  bool offroadDataMissing = false;
+
   /// The best route and its alternatives; [routeIndex] is the one chosen.
   List<MapRoute> routes = const [];
   int routeIndex = 0;
@@ -457,6 +460,7 @@ class NavState extends ChangeNotifier {
     routes = const [];
     routeIndex = 0;
     routeError = null;
+    offroadDataMissing = false;
     if (from == null) {
       routeError = 'Your position is not known yet. Turn on location to get directions from where you are.';
       notifyListeners();
@@ -470,6 +474,7 @@ class NavState extends ChangeNotifier {
       if (seq != _routeSeq) return;
       if (!r.ok) {
         routeError = routeErrorText(r);
+        offroadDataMissing = offroad && r.errors.isNotEmpty && r.errors.first.code == 'not_set_up';
       } else {
         routes = [r, ...r.alternatives];
         if (r.warnings.any((w) => w.code == 'offroad_unavailable')) {
