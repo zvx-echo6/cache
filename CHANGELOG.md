@@ -7,7 +7,6 @@ release notes).
 ## Unreleased
 
 ### New
-- Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search
 - Map search says when places for the area are missing or on their way, and offers the region
