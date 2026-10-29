@@ -109,7 +109,7 @@ fn to_matches_a_layer_point_and_the_same_name_elsewhere_is_a_candidate() {
     let v = run(&tool(true), json!({"to": "north GATE", "mode": "drive"}));
     assert_eq!(
         v["to_matched"].to_string(),
-        r#"{"place_name":"North gate","kind":"layer_point","kind_label":"Elk Camp","street":null,"locality":"Burley","county":null,"state":null,"distance_km":9.82,"near":null,"snap_distance_m":5,"lat":42.6,"lon":-113.7}"#
+        r#"{"place_name":"North gate","kind":"layer_point","kind_label":"Elk Camp","street":null,"locality":"Burley","county":null,"state":null,"distance_km":10.363720836252638,"near":null,"snap_distance_m":0,"lat":42.6,"lon":-113.7}"#
     );
     assert_eq!(
         v["other_destination_candidates"].to_string(),

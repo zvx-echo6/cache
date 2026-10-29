@@ -158,8 +158,8 @@ impl Repeater {
     }
 }
 
-/// A RepeaterBook frequency line: `"927.162500- 151.4"`, `"449.850000- "`, `"146.450000s"`, `"449.200000- D023"`.
-/// (frequency, duplex, tone).
+/// A RepeaterBook frequency line: `"927.162500- 151.4"`, `"449.850000- "`, `"146.450000s"`, `"449.200000- D023"`,
+/// `"442.600000+ CSQ"` (carrier squelch: no tone). (frequency, duplex, tone).
 pub(crate) fn kml_freq_line(line: &str) -> Option<(i64, Duplex, Tone)> {
     let l = line.trim();
     let num_end = l.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(l.len());
@@ -175,7 +175,7 @@ pub(crate) fn kml_freq_line(line: &str) -> Option<(i64, Duplex, Tone)> {
         rest = &rest[1..];
     }
     let t = rest.trim();
-    let tone = if t.is_empty() {
+    let tone = if t.is_empty() || t == "CSQ" {
         Tone::None
     } else if let Some(code) = t.strip_prefix('D').filter(|c| !c.is_empty() && c.chars().all(|x| x.is_ascii_digit())) {
         Tone::StatedDcs(code.to_string())
@@ -316,6 +316,7 @@ mod tests {
         assert_eq!(kml_freq_line("146.450000s"), Some((146_450_000, Duplex::Split, Tone::None)));
         assert_eq!(kml_freq_line("146.520000"), Some((146_520_000, Duplex::Simplex, Tone::None)));
         assert_eq!(kml_freq_line("147.360000+ 100.0"), Some((147_360_000, Duplex::Plus, Tone::Stated(100.0))));
+        assert_eq!(kml_freq_line("442.600000+ CSQ"), Some((442_600_000, Duplex::Plus, Tone::None)));
         for bad in ["Cascade", "On-air: Yes", "927.1625- abc", "927.1625- Dx", ""] {
             assert_eq!(kml_freq_line(bad), None, "{bad}");
         }

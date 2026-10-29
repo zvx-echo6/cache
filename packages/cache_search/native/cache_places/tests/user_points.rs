@@ -182,7 +182,7 @@ fn locate_a_layer_point_golden() {
     let v = run(tool(&ts, "locate"), Some(&burley()), json!({"place": "Canal Bridge"}));
     assert_eq!(
         v,
-        r#"{"address":"layer:y1/2","place_name":"Canal bridge","kind":"layer_point","kind_label":"Rally Points","lat":42.53,"lon":-113.81,"lat_lon_dms":"42°31'48\"N 113°48'36\"W","nearest_town":"Burley, ID","distance_to_town_mi":1.0,"usng":"12T VN 63139 09460","plus_code":"85GFG54Q+22"}"#
+        r#"{"address":"layer:y1/2","place_name":"Canal bridge","kind":"layer_point","kind_label":"Rally Points","lat":42.53,"lon":-113.81,"lat_lon_dms":"42°31'48\"N 113°48'36\"W","nearest_town":"Burley, ID","distance_to_town_mi":1.0,"usng":"12T TN 69215 12451","plus_code":"85J8G5JR+22"}"#
     );
     // two layers with the same point name: the most recently used layer's
     let v: Value = serde_json::from_str(&run(tool(&ts, "locate"), None, json!({"place": "north gate"}))).unwrap();

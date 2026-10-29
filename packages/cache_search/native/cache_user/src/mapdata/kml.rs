@@ -105,7 +105,8 @@ pub fn parse_layer(text: &str) -> crate::Result<ParsedLayer> {
 
 fn extended(p: &El) -> Vec<(String, String)> {
     let Some(x) = p.child("ExtendedData") else { return Vec::new() };
-    x.kids("Data").filter_map(|d| Some((d.attr("name")?.to_string(), d.child("value").map(|v| v.text.trim().to_string()).unwrap_or_default()))).collect()
+    // values as written (a CHIRP Name keeps its trailing space)
+    x.kids("Data").filter_map(|d| Some((d.attr("name")?.to_string(), d.child("value").map(|v| v.text.clone()).unwrap_or_default()))).collect()
 }
 
 /// The repeater pins of a KML, in file order, and how many Placemarks were not repeater pins.
