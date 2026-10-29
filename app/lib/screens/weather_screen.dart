@@ -4,13 +4,17 @@ import '../theme.dart';
 import '../weather/live_view.dart';
 import '../weather/places.dart';
 import '../weather/weather_state.dart';
+import 'weather_turn_on.dart';
 
 /// The Weather module: for each watched place, the forecast day by day and everything that is happening near it (warnings,
 /// fires, earthquakes, rivers, avalanches), each with its age. A thing that is happening opens with "Ask about this".
 class WeatherScreen extends StatefulWidget {
-  const WeatherScreen({super.key, required this.weather, this.onAsk, this.onOpenSettings});
+  const WeatherScreen({super.key, required this.weather, this.onAsk, this.onOpenSettings, this.turnOn});
 
   final WeatherState weather;
+
+  /// "Turn on weather" and "Choose a place instead" in the empty states; without it they only point to Settings.
+  final WeatherTurnOn? turnOn;
 
   /// Starts a new chat with this question (Ask about this).
   final void Function(String question)? onAsk;
@@ -128,11 +132,15 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 _statusBox(context, st),
                 const SizedBox(height: 12),
                 if (w.enabledSources.isEmpty)
-                  _empty(context, 'Nothing is switched on yet.', 'Choose weather, alerts or fires in Settings > Weather and alerts.')
+                  widget.turnOn == null
+                      ? _empty(context, 'Nothing is switched on yet.', 'Choose weather, alerts or fires in Settings > Weather and alerts.')
+                      : _empty(context, 'Weather is off.', 'Get the forecast, weather alerts and wildfires for where you are.')
                 else if (places == null)
                   const SizedBox.shrink()
                 else if (places.isEmpty)
-                  _empty(context, 'No place is being watched.', 'Choose places under Settings > Weather and alerts > Places.')
+                  widget.turnOn == null
+                      ? _empty(context, 'No place is being watched.', 'Choose places under Settings > Weather and alerts > Places.')
+                      : _empty(context, 'No place is being watched.', 'Use where you are, or choose a place.')
                 else ...[
                   if (places.length > 1)
                     Wrap(
@@ -215,9 +223,15 @@ class _WeatherScreenState extends State<WeatherScreen> {
           Text(a, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
           const SizedBox(height: 6),
           Text(b, textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: k.secondary)),
+          if (widget.turnOn case final t?) ...[
+            const SizedBox(height: 16),
+            WeatherTurnOnButtons(turnOn: t),
+          ],
           if (widget.onOpenSettings != null) ...[
             const SizedBox(height: 12),
-            OutlinedButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings')),
+            widget.turnOn == null
+                ? OutlinedButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings'))
+                : TextButton(onPressed: widget.onOpenSettings, child: const Text('Open Weather and alerts settings')),
           ],
         ],
       ),

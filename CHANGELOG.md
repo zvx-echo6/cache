@@ -7,6 +7,8 @@ release notes).
 ## Unreleased
 
 ### New
+- Weather: turn it on in one tap from the Weather screen or Home
+- A place you save is watched for weather and alerts
 - Models starts with a short list of recommended models, each with its size and whether it fits your phone
 
 ### Fixed

@@ -588,7 +588,10 @@ class WeatherState extends ChangeNotifier {
       ),
     ];
     try {
-      for (final s in await core.savedPlaces()) {
+      final saved = await core.savedPlaces();
+      // A newly saved place is watched (see AppSettings.noteSavedPlaces).
+      settings.noteSavedPlaces([for (final s in saved) 'place:${s.key}']);
+      for (final s in saved) {
         out.add(WatchPlace(
           id: 'place:${s.key}',
           kind: PlaceKind.saved,
@@ -632,14 +635,16 @@ class WeatherState extends ChangeNotifier {
 
   /// The watched places that can be fetched for now (a place without a position, like "Where I am" before the first fix, waits).
   Future<List<WatchPlace>> watchedPlaces() async {
+    final all = await placeChoices();
     final w = settings.watchedPlaces;
-    return [for (final p in await placeChoices()) if (w.contains(p.id) && p.located) p];
+    return [for (final p in all) if (w.contains(p.id) && p.located) p];
   }
 
   /// "Where I am, Home, Cabin, +2": the watched places by name.
   Future<String> watchedSummary() async {
+    final all = await placeChoices();
     final w = settings.watchedPlaces;
-    final names = [for (final p in await placeChoices()) if (w.contains(p.id)) p.name];
+    final names = [for (final p in all) if (w.contains(p.id)) p.name];
     if (names.isEmpty) return 'None';
     if (names.length <= 3) return names.join(', ');
     return '${names.take(3).join(', ')}, +${names.length - 3}';
@@ -845,6 +850,13 @@ class WeatherState extends ChangeNotifier {
     final w = await watchedPlaces();
     if (w.isEmpty) return null;
     return w.firstWhere((p) => p.kind == PlaceKind.here, orElse: () => w.first);
+  }
+
+  /// Weather is not set up for anywhere yet: no forecast switched on, or no watched place with a position. Home then offers
+  /// "Turn on weather".
+  Future<bool> needsTurnOn() async {
+    if (!enabledSources.any((c) => groupOf(c) == LiveGroup.forecast)) return true;
+    return await homePlace() == null;
   }
 
   /// The Weather card on Home: "45 °F, clear sky · High 52 °F, low 30 °F · Stanley · 2 hours old".
