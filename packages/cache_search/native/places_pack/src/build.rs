@@ -312,8 +312,6 @@ pub struct Processed {
     pub merged: usize,
     pub deduped: usize,
     pub enriched: usize,
-    /// The places given an arrival point.
-    pub arrivals: ArrivalReport,
 }
 
 fn retain_with<T, G>(v: &mut Vec<T>, g: &mut Vec<G>, keep: &[bool]) {
@@ -358,10 +356,10 @@ pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, anchors: &[Anchor], r
     say(format!("{enriched} emergency rooms confirmed by a hospital; dropped {er_dropped} emergency-department records with no hospital"));
     let deduped = dedupe(&mut rows, rules);
     say(format!("dropped {deduped} duplicates"));
-    let arrivals = arrival::assign(&mut rows, anchors, &rules.arrival);
+    let a: ArrivalReport = arrival::assign(&mut rows, anchors, &rules.arrival);
     say(format!(
-        "arrival points: {} airports at a terminal, {} places at a main door, {} large areas at their parking",
-        arrivals.terminal, arrivals.entrance, arrivals.parking
+        "{} arrival points: {} airports at a terminal, {} places at a main door, {} large areas at their parking",
+        a.total(), a.terminal, a.entrance, a.parking
     ));
     let locs = dedupe_localities(locs);
     say(format!("{} localities", locs.len()));
@@ -392,7 +390,7 @@ pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, anchors: &[Anchor], r
             None => nearest_locality(&grid, &locs, &loc_geo, r.lat, r.lon, &g.state),
         };
     }
-    Processed { rows, geo, locs, loc_geo, states, merged, deduped, enriched, arrivals }
+    Processed { rows, geo, locs, loc_geo, states, merged, deduped, enriched }
 }
 
 /// The nearest city, town or village of `state` within 10 km (`grid` holds the indices of `locs` that are not hamlets,
