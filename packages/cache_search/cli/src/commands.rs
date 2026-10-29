@@ -69,7 +69,8 @@ cs: command line and HTTP wrapper over the cache_search core
                      [--live-state <state> | <source_id>=<state>]...
                      --live-state: the connection a capture stands in, so live_data's not_refreshed can be recorded without a
                      network (docs/TOOLS.md, live_data). <state> is normal (the default: nothing downloaded, no reason), off,
-                     offline, metered or fail:<fetch_failed|quota|key_missing|bad_response> (the download fails, nothing is sent);
+                     offline, metered or fail:<fetch_failed|quota|key_missing|bad_response> (the download of expired or missing
+                     data fails, nothing is sent; valid data past its interval is never downloaded during a call);
                      a bare state is for every source, <source_id>=<state> for one. It decides only whether a download is made;
                      whether the data is due is the stored fetched_at against --now/\"now\": --live-state metered with a now
                      past valid_until gives expired + not_refreshed; --live-state offline for a place with no data gives

@@ -487,23 +487,26 @@ far it is. Without them the data is for the place asked about.
  "items": [{"n": 10, "label": "Now", "time": "2026-10-25T14:00-06:00", "fields": {"Temperature": "41 °F", "Conditions": "overcast"}}]}
 ```
 
-When the data was due for a refresh (none stored, expired, or older than the source's refresh interval) and no download
-succeeded in this call, `not_refreshed` says why, as one string placed right after `expired`; project decision (2026-10-29). The
-data itself is still the stored copy, with its age. The highest-priority reason wins:
+When the data was due for a refresh (none stored, expired, or older than the source's refresh interval) and it was not
+refreshed, `not_refreshed` says why, as one string placed right after `expired`; project decision (2026-10-29). Expired or
+missing data is downloaded during the call when the phone allows it, so a failed download is said too. Data past its refresh
+interval but still valid is never downloaded during the call (the background refresh handles it): it is returned as stored,
+with `not_refreshed` only when something blocks that refresh (the first three reasons), and without it when the phone is online
+and allowed. The highest-priority reason wins:
 
 | `not_refreshed` | When |
 |---|---|
 | `this source is switched off` | the source is not among the ones switched on |
 | `no connection` | the phone is offline |
 | `mobile data updates are off` | the phone is on mobile data and updates on mobile data are off |
-| `refresh failed: couldn't reach the source` | the download failed (`fetch_failed`) |
+| `refresh failed: couldn't reach the source` | expired or missing data only: the download failed (`fetch_failed`) |
 | `refresh failed: daily limit reached` | the source's usage limit is reached (`quota`) |
 | `refresh failed: API key missing` | the source needs a key and none is set (`key_missing`) |
 | `refresh failed: the source sent bad data` | the provider answered with something the tool cannot use (`bad_response`) |
 
-It never holds an address, a status code or error text, and it is absent on fresh data, after a good download, and when the
-host has given no fetch policy (tests and captures without `cs serve --live-state`). A failed refresh with older valid data
-returns that data plus `not_refreshed`, not an error:
+It never holds an address, a status code or error text, and it is absent on fresh data, after a good download, on valid data
+past its interval while online and allowed, and when the host has given no fetch policy (tests and captures without
+`cs serve --live-state`). Valid data past its interval on mobile data with updates off:
 
 ```json
 {"ok": true,
@@ -529,7 +532,7 @@ the `expired` error's earlier `refresh_failed` code); a failed download with not
 
 For captures, `cs serve --live-state` stands in for the phone's connection (repeatable): one state for every source and/or
 `<source_id>=<state>` for one, a state being `normal` (the default: no download, no reason), `off`, `offline`, `metered` or
-`fail:<fetch_failed|quota|key_missing|bad_response>` (the download fails and nothing is sent). The state only decides what
+`fail:<fetch_failed|quota|key_missing|bad_response>` (the download of expired or missing data fails and nothing is sent). The state only decides what
 happens to a refresh; whether the data is due comes from the stored `fetched_at` and `valid_until` against the call's pinned
 `now`. So one serve with `--live-state metered --live-state alerts=offline` gives weather `expired` + `mobile data updates are
 off` for a `now` past its `valid_until`, and alerts `no_data` + `no connection` for a place never downloaded. It never changes the

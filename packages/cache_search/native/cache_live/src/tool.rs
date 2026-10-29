@@ -11,11 +11,12 @@
 //! phone's position when none is given. The data is that of the nearest place it was downloaded for within
 //! `live_radius_km`; the result says which place that was and how far it is from the one asked about.
 //!
-//! When the data for the place is due for a refresh (none stored, expired, or older than the source's refresh interval) and the
-//! host's `LiveFetcher` allows the source, the tool downloads once for the place asked about (`fetch_for`: the same fetch and
-//! quotas as `cs_live_fetch`, never for a source without its key) and answers from the stored row. Without a fetcher, or when it
-//! denies the source, nothing is downloaded. When due data was not refreshed, the result says why in `not_refreshed`
-//! (`not_refreshed_words`): the host's reason for denying the fetch, or the failed download's.
+//! When there is no fresh data for the place (none stored, or expired) and the host's `LiveFetcher` allows the source, the tool
+//! downloads once for the place asked about (`fetch_for`: the same fetch and quotas as `cs_live_fetch`, never for a source without
+//! its key) and answers from the stored row. Without a fetcher, or when it denies the source, nothing is downloaded. Data past its
+//! refresh interval but still valid is never downloaded during the call: the background refresh handles it. When data due for a
+//! refresh was not refreshed, the result says why in `not_refreshed` (`not_refreshed_words`): the host's reason for denying the
+//! fetch, or (expired or missing data only) the failed download's.
 //!
 //! `when` narrows the items to one period (`Period`): the tool, not the model, turns "tomorrow" or "friday" into the place's local
 //! dates. Items in effect now (current conditions, an alert already running) always stay; dated items stay when they overlap the
@@ -370,14 +371,18 @@ impl Tool for LiveDataTool {
         };
         let asked = resolve_asked(ctx, place_arg)?;
         let c = self.live.db().map_err(|e| err(ToolError::INTERNAL, e.message))?;
-        // the stored data for the place; when it is due for a refresh, one on-demand fetch if the host allows it, and when it is
-        // not refreshed, the reason (`not_refreshed`)
+        // the stored data for the place; when there is none that is fresh, one on-demand fetch if the host allows it. Data past
+        // its refresh interval but still valid is left to the background refresh. When due data is not refreshed, the reason
+        // (`not_refreshed`): what blocks the refresh, or for expired or missing data the failed download's.
         let mut picked = self.pick(&c, &l, &asked, now);
         let refresh_secs = l.def.refresh_minutes as i64 * 60;
-        let due = picked.as_ref().map(|p| p.2.expired || now >= p.2.row.fetched_at + refresh_secs).unwrap_or(true);
+        let unusable = picked.as_ref().map(|p| p.2.expired).unwrap_or(true);
+        let due = unusable || picked.as_ref().map(|p| now >= p.2.row.fetched_at + refresh_secs).unwrap_or(true);
         let mut not_refreshed: Option<String> = None;
         if let Some(f) = ctx.live_fetcher.filter(|_| due) {
-            if f.can_fetch(&l.def.id) {
+            if !f.can_fetch(&l.def.id) {
+                not_refreshed = f.not_allowed(&l.def.id).map(|n| not_refreshed_words(Ok(n)));
+            } else if unusable {
                 let got = match f.stand_in_failure(&l.def.id) {
                     Some(code) => Err(err(code, "")),
                     None => self.fetch_for(ctx, f.key_for(&l.def.id), &l, &asked),
@@ -386,8 +391,6 @@ impl Tool for LiveDataTool {
                     not_refreshed = Some(not_refreshed_words(Err(&e.code)));
                 }
                 picked = self.pick(&c, &l, &asked, now);
-            } else {
-                not_refreshed = f.not_allowed(&l.def.id).map(|n| not_refreshed_words(Ok(n)));
             }
         }
         let with_reason = |e: ToolError| match &not_refreshed {

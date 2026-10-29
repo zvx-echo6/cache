@@ -1465,8 +1465,7 @@ core has no callbacks into the host, so the host pushes its state in:
 
 ### On-demand fetch in live_data
 
-When `live_data` finds the stored data for the place asked about due for a refresh (none, expired, or older than the source's
-refresh interval; project decision (2026-10-29): before, only none or expired), and `ToolCtx.live_fetcher` allows the source
+When `live_data` finds no fresh stored data for the place asked about (none, or expired), and `ToolCtx.live_fetcher` allows the source
 (`can_fetch(source)`), it downloads once for that place and then answers from the stored row. Everything else is the existing
 path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors), the same stored row and the same expiry.
 
@@ -1480,9 +1479,11 @@ path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors)
   request is made. The key goes to `Live::fetch` for that call only; no result, error or stored row holds it.
 - With no fetcher (no policy pushed), or a policy that does not allow the source (offline, metered without permission, not
   enabled), nothing is downloaded. When due data was not refreshed, the result carries `not_refreshed` (docs/TOOLS.md,
-  live_data): the fetcher's `not_allowed` reason, or the failed download's code in words. Without a fetcher, or when it gives
-  no reason, the output is exactly as before. A failed download with older valid data answers from that data plus
-  `not_refreshed`; with nothing stored it is `no_data` plus `not_refreshed` (project decision (2026-10-29): before, the
+  live_data): the fetcher's `not_allowed` reason, or the failed download's code in words. Data past its refresh interval but
+  still valid is never downloaded during the call (the background refresh handles it) and carries only a `not_allowed`
+  reason, never a failed refresh; online and allowed, it carries none (project decision (2026-10-29)). Without a fetcher, or
+  when it gives no reason, the output is exactly as before. A failed download with nothing stored is `no_data` plus
+  `not_refreshed` (project decision (2026-10-29): before, the
   download's own error); when the stored copy has expired it is the `expired` error plus `not_refreshed`, which replaced
   the error's `refresh_failed: <code>` (project decision (2026-10-29)).
 

@@ -525,10 +525,6 @@ fn serve_live_state_gives_each_not_refreshed_reason_and_leaves_everything_else_a
         (vec!["--live-state", "off"], "this source is switched off"),
         (vec!["--live-state", "offline"], "no connection"),
         (vec!["--live-state", "metered"], "mobile data updates are off"),
-        (vec!["--live-state", "fail:fetch_failed"], "refresh failed: couldn't reach the source"),
-        (vec!["--live-state", "fail:quota"], "refresh failed: daily limit reached"),
-        (vec!["--live-state", "fail:key_missing"], "refresh failed: API key missing"),
-        (vec!["--live-state", "fail:bad_response"], "refresh failed: the source sent bad data"),
         // one source's own state wins over the one for every source
         (vec!["--live-state", "offline", "--live-state", "weather=metered"], "mobile data updates are off"),
     ] {
@@ -545,6 +541,18 @@ fn serve_live_state_gives_each_not_refreshed_reason_and_leaves_everything_else_a
     let h = Http::start_with(&cfg, &["--live-state", "normal"]);
     assert_eq!(ask(&h, home.clone(), due).to_string(), before.to_string());
     drop(h);
+    // a failed refresh: said on expired data (the call downloads), never on valid data past the interval (it does not)
+    for (state, words) in [
+        ("fail:fetch_failed", "refresh failed: couldn't reach the source"),
+        ("fail:quota", "refresh failed: daily limit reached"),
+        ("fail:key_missing", "refresh failed: API key missing"),
+        ("fail:bad_response", "refresh failed: the source sent bad data"),
+    ] {
+        let h = Http::start_with(&cfg, &["--live-state", state]);
+        let v = ask(&h, home.clone(), expired);
+        assert_eq!((v["error"]["type"].as_str(), v["not_refreshed"].as_str()), (Some("expired"), Some(words)), "{state}: {v}");
+        assert_eq!(ask(&h, home.clone(), due).to_string(), before.to_string(), "{state}: valid data past the interval");
+    }
     // the two combined cases in one serve: weather expired on metered data, and alerts (never downloaded) while offline
     let h = Http::start_with(&cfg, &["--live-state", "metered", "--live-state", "alerts=offline"]);
     let v = ask(&h, home.clone(), expired);

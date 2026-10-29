@@ -320,24 +320,33 @@ fn stand_in(code: &'static str) -> Grant {
 }
 
 #[test]
-fn not_refreshed_for_each_reason_on_due_data() {
+fn not_refreshed_for_each_reason() {
     let (env, srv, here) = alerts_stored("nr-each");
-    let cases: Vec<(Grant, &str)> = vec![
+    // past the refresh interval, still valid: only what blocks the background refresh is said
+    for (g, words) in [
         (denied(NotAllowed::SwitchedOff), "this source is switched off"),
         (denied(NotAllowed::Offline), "no connection"),
         (denied(NotAllowed::MeteredOff), "mobile data updates are off"),
-        (stand_in("fetch_failed"), "refresh failed: couldn't reach the source"),
-        (stand_in("quota"), "refresh failed: daily limit reached"),
-        (stand_in("key_missing"), "refresh failed: API key missing"),
-        (stand_in("bad_response"), "refresh failed: the source sent bad data"),
-    ];
-    for (g, words) in &cases {
-        let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(g)).unwrap();
-        assert_eq!(v["not_refreshed"], *words);
+    ] {
+        let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&g)).unwrap();
+        assert_eq!(v["not_refreshed"], words);
         // right after the dated fields, nothing else changed
         let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(keys, ["source", "place", "fetched_at", "valid_until", "age", "expired", "not_refreshed", "items", "none"]);
         assert_eq!(v["age"], "30 minutes old");
+    }
+    // expired: the on-demand download fails, and the expired error says why
+    for (code, words) in [
+        ("fetch_failed", "refresh failed: couldn't reach the source"),
+        ("quota", "refresh failed: daily limit reached"),
+        ("key_missing", "refresh failed: API key missing"),
+        ("bad_response", "refresh failed: the source sent bad data"),
+    ] {
+        let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&stand_in(code))).unwrap_err();
+        assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("expired", Some(words)));
+        // a refresh failure is never said on valid data: none is attempted during the call
+        let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&stand_in(code))).unwrap();
+        assert!(v.get("not_refreshed").is_none(), "{v}");
     }
     assert_eq!(srv.hits(), 1, "a denied fetch and a stand-in failure send nothing");
 }
@@ -356,22 +365,33 @@ fn not_refreshed_is_absent_on_fresh_data_without_a_fetcher_and_after_a_good_down
     let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&[]))).unwrap();
     assert!(v.get("not_refreshed").is_none());
     assert_eq!(srv.hits(), 1);
-    // due and allowed: downloaded again, and nothing to say
+    // past the refresh interval, online and allowed: not downloaded during the call (the background refresh handles it), and
+    // nothing to say
     let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&["alerts"]))).unwrap();
+    assert_eq!(srv.hits(), 1);
+    assert!(v.get("not_refreshed").is_none());
+    assert_eq!(v["age"], "30 minutes old");
+    // expired and allowed: downloaded again, and nothing to say
+    let v = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&grant(&["alerts"]))).unwrap();
     assert_eq!(srv.hits(), 2);
     assert!(v.get("not_refreshed").is_none());
     assert_eq!(v["age"], "less than a minute old");
 }
 
 #[test]
-fn a_real_failed_refresh_keeps_the_older_data_and_says_why() {
+fn a_real_failed_refresh_of_expired_or_missing_data_says_why() {
     let (env, srv, here) = alerts_stored("nr-real");
     let g = grant(&["alerts"]);
     *srv.status.lock().unwrap() = 500;
+    // past the interval, still valid: nothing is sent, the data is served as it is
     let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&g)).unwrap();
-    assert_eq!(srv.hits(), 2);
-    assert_eq!(v["not_refreshed"], "refresh failed: couldn't reach the source");
+    assert_eq!(srv.hits(), 1);
+    assert!(v.get("not_refreshed").is_none());
     assert_eq!(v["fetched_at"], "2026-10-25T10:50:00-06:00");
+    // expired: the download is tried, fails, and the expired error says why
+    let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&g)).unwrap_err();
+    assert_eq!(srv.hits(), 2);
+    assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("expired", Some("refresh failed: couldn't reach the source")));
     // the provider answers with something that is not its format
     *srv.status.lock().unwrap() = 200;
     let srv2 = Server::start("/alerts/active", "not json".into());
@@ -387,6 +407,13 @@ fn not_refreshed_golden_bytes() {
     let before = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, None).unwrap().to_string();
     let after = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&denied(NotAllowed::MeteredOff))).unwrap().to_string();
     assert_eq!(after, before.replacen(r#""expired":false,"#, r#""expired":false,"not_refreshed":"mobile data updates are off","#, 1));
+    // past the interval, online and allowed: the same bytes as without a fetcher
+    let allowed = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&["alerts"]))).unwrap().to_string();
+    assert_eq!(allowed, before);
+    assert_eq!(
+        allowed,
+        r#"{"source":{"id":"alerts","title":"Emergency alerts","provider":"NWS"},"place":"current location","fetched_at":"2026-10-25T10:50:00-06:00","valid_until":"2026-10-25T16:50:00-06:00","age":"30 minutes old","expired":false,"items":[{"address":"live:alerts/at:42.54,-113.79/none","label":"No active emergency alerts","time":"2026-10-25T10:50:00-06:00","fields":{"Status":"none active","Checked":"2026-10-25 10:50","Age":"30 minutes old"},"none_active":true}],"none":true}"#
+    );
     assert_eq!(
         after,
         r#"{"source":{"id":"alerts","title":"Emergency alerts","provider":"NWS"},"place":"current location","fetched_at":"2026-10-25T10:50:00-06:00","valid_until":"2026-10-25T16:50:00-06:00","age":"30 minutes old","expired":false,"not_refreshed":"mobile data updates are off","items":[{"address":"live:alerts/at:42.54,-113.79/none","label":"No active emergency alerts","time":"2026-10-25T10:50:00-06:00","fields":{"Status":"none active","Checked":"2026-10-25 10:50","Age":"30 minutes old"},"none_active":true}],"none":true}"#
