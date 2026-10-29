@@ -16,9 +16,9 @@ dropped by the app.
 - `search`, `read` and `web_search` return plain text (cheapest in tokens).
 - Every other tool returns one JSON object. Each citable item in it carries `"n"`.
 
-**Fixed and expandable tools.** Five fixed tools (search, read, navigate, nearby, locate) and one generic
+**Fixed and expandable tools.** Six fixed tools (search, read, navigate, nearby, locate, calculate) and one generic
 `live_data` tool whose sources come from what is installed on the phone, so new data sources never need new
-tool definitions or retraining. `web_search` is a sixth fixed tool that exists only while a web-search key is
+tool definitions or retraining. `calculate` needs no installed data, so it is always in the tool list. `web_search` is a seventh fixed tool that exists only while a web-search key is
 configured and the phone is online; without them it is left out of the tool list.
 
 **Errors (every tool).** `{"ok": false, "error": {"type": "<code>", "detail": "<short text>"}}`. Shared codes:
@@ -490,6 +490,49 @@ Sources planned for 1.0: `weather`, `alerts`. Sources for 1.x (installed as sour
 repeaters (from imported lists), earthquakes, river levels, avalanche, space weather, wildfires, road conditions,
 satellite passes, outages. Training uses a deliberately varied mix of sources, including made-up ones, so the
 behaviour generalises to sources added later.
+
+### calculate (always present; needs no installed data)
+
+```json
+{"type": "function", "function": {
+  "name": "calculate",
+  "description": "Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\".",
+  "parameters": {"type": "object", "properties": {
+    "expression": {"type": "string", "minLength": 1, "maxLength": 300,
+                   "description": "Numbers, units, + - * / ^ and parentheses. Optionally end with 'to <unit>'."}},
+    "required": ["expression"], "additionalProperties": false}}}
+```
+
+Result (an exact answer, then an approximate one; there is no `n`, because the result is not a citable source):
+
+```json
+{"ok": true, "expression": "8 drops/gallon * 5 gallons", "result": "40 drops", "exact": true,
+ "assumptions": ["1 drop = 0.05 mL", "US customary units (1 gallon = 3.785 L)"]}
+{"ok": true, "expression": "1/3", "result": "0.333333", "exact": false, "assumptions": []}
+```
+
+`expression` is the input with surrounding spaces removed. `result` is the calculator's answer, to be quoted as given.
+When the calculator marks the answer as approximate, `exact` is false and `result` is rounded to 6 significant digits;
+otherwise `exact` is true and the answer is unchanged. The calculator is fend (fend-core, MIT). A fresh one serves every
+call, so nothing carries over from an earlier call, and it has no exchange rates, random numbers or clock: currency
+(`5 USD to EUR`), dice (`roll d6`) and the date (`today`) fail. A calculation that runs longer than half a second is
+stopped.
+
+`assumptions` has one line for each unit in the expression whose definition varies by country or convention, in order of
+first appearance, each line once; it is empty when there are none. `drop`, `drops` and `gtt` give "1 drop = 0.05 mL".
+`gallon`, `gal`, `quart`, `qt`, `pint`, `pt`, `cup`, `fluid_ounce`, `floz`, `tablespoon`, `tbsp`, `teaspoon` and `tsp`
+(and their plurals) are US customary units and give "US customary units (1 gallon = 3.785 L)". For the imperial
+gallon write `imperial_gallon` (or `ukgal`): 4.54609 L, no assumption line. fend has no plain `ton`; use `short_ton`,
+`tonne` or `t`.
+
+Temperature. `98.6 degF to degC` converts an absolute temperature (`37 °C`; `degF` and `degC` are the same as `°F` and `°C`,
+and `100 °C to °F` gives `212 °F`). In a sum the second temperature is a difference, not an absolute temperature:
+`1°C+1°F` gives `1.55556 °C` (approximate), the same as adding 1 °C and a 1 °F step of 5/9 °C. The tool does nothing special for
+temperatures; this is how fend works.
+
+Errors: `bad_arguments` (no expression, an empty one, not a string, or over 300 characters) and `calc_failed`, whose
+`detail` is the calculator's message (`division by zero`, `exchange rates are not available`, `unknown identifier 'ton'`,
+`cannot convert from drops to unitless: ...`) or `took too long`.
 
 ### web_search (present only with a web-search key configured and the phone online)
 

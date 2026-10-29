@@ -364,6 +364,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - fastdivide 0.4.2: zlib-acknowledgement OR MIT (github.com/fulmicoton/fastdivide)
 - fastrand 2.5.0: Apache-2.0 OR MIT (github.com/smol-rs/fastrand)
 - fdeflate 0.3.7: MIT OR Apache-2.0 (github.com/image-rs/fdeflate)
+- fend-core 1.5.9: MIT (github.com/printfn/fend)
 - fiat-crypto 0.3.0: MIT OR Apache-2.0 OR BSD-1-Clause (github.com/mit-plv/fiat-crypto)
 - filetime 0.2.29: MIT OR Apache-2.0 (github.com/alexcrichton/filetime)
 - find-msvc-tools 0.1.15: MIT OR Apache-2.0 (github.com/rust-lang/cc-rs)
