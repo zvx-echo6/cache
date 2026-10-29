@@ -111,6 +111,7 @@ class SearchEngine {
   }
 
   /// cs_live_set_fetch_policy: `{"online","allow_metered","metered","enabled_sources":[ids]}`; null clears it (every fetch is denied).
+  /// The same state gives live_data's `not_refreshed` (switched off, no connection, mobile data updates off).
   void liveSetFetchPolicy(Map<String, dynamic>? policy) {
     if (_liveNative.liveSetFetchPolicy(_h, policy == null ? null : jsonEncode(policy)) < 0) {
       throw CacheSearchException.fromJson(native.lastError(_h));

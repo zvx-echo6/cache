@@ -1450,6 +1450,12 @@ core has no callbacks into the host, so the host pushes its state in:
   serialisation and no accessor except `key_for`; the key is in no error, status, log or result (tests search every string
   the core returns for a sentinel key). A null (or empty) key clears it; `cs_close` clears the policy and every key, and the
   key strings are overwritten before they are freed.
+- `not_allowed(source_id) -> Option<NotAllowed>` (switched off, offline, metered with updates off, in that priority) is why
+  `can_fetch` is false; live_data says it as `not_refreshed`. The policy may carry `"states": {"<id>" | "*": state}` for
+  captures (`cs serve --live-state`): `normal` (no fetch, no reason), `off`, `offline`, `metered`, or
+  `fail:<fetch_failed|quota|key_missing|bad_response>`, for which `can_fetch` is true and `stand_in_failure(source_id)` gives
+  the code the download fails with, without sending anything. A source's own state wins over `"*"`; a source with no state
+  follows the other fields. Project decision (2026-10-29).
 - The on-demand fetch is built on top of this plumbing (next section).
 - CLI: `--live-policy <json>` (`cs tool`, `cs tool-schemas`, `cs serve`) and `CACHE_LIVE_KEY_<SOURCE>` environment variables
   (source id in capitals, any other character `_`: `nws-alerts` is `CACHE_LIVE_KEY_NWS_ALERTS`; read at start for each
@@ -1459,7 +1465,7 @@ core has no callbacks into the host, so the host pushes its state in:
 
 ### On-demand fetch in live_data
 
-When `live_data` finds no fresh stored data for the place asked about, and `ToolCtx.live_fetcher` allows the source
+When `live_data` finds no fresh stored data for the place asked about (none, or expired), and `ToolCtx.live_fetcher` allows the source
 (`can_fetch(source)`), it downloads once for that place and then answers from the stored row. Everything else is the existing
 path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors), the same stored row and the same expiry.
 
@@ -1472,9 +1478,14 @@ path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors)
 - A source whose definition requires a key is never requested without it: no key from `key_for` is `key_missing` before any
   request is made. The key goes to `Live::fetch` for that call only; no result, error or stored row holds it.
 - With no fetcher (no policy pushed), or a policy that does not allow the source (offline, metered without permission, not
-  enabled), `live_data` behaves exactly as before. A failed download answers with its own error (`fetch_failed`, `quota`,
-  `key_missing`, `bad_response`) when there is nothing stored; when the stored copy has expired the `expired` error carries
-  `refresh_failed: <code>`.
+  enabled), nothing is downloaded. When due data was not refreshed, the result carries `not_refreshed` (docs/TOOLS.md,
+  live_data): the fetcher's `not_allowed` reason, or the failed download's code in words. Data past its refresh interval but
+  still valid is never downloaded during the call (the background refresh handles it) and carries only a `not_allowed`
+  reason, never a failed refresh; online and allowed, it carries none (project decision (2026-10-29)). Without a fetcher, or
+  when it gives no reason, the output is exactly as before. A failed download with nothing stored is `no_data` plus
+  `not_refreshed` (project decision (2026-10-29): before, the
+  download's own error); when the stored copy has expired it is the `expired` error plus `not_refreshed`, which replaced
+  the error's `refresh_failed: <code>` (project decision (2026-10-29)).
 
 ### Nothing to report is a numbered entry
 

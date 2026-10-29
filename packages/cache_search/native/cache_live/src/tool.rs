@@ -11,9 +11,12 @@
 //! phone's position when none is given. The data is that of the nearest place it was downloaded for within
 //! `live_radius_km`; the result says which place that was and how far it is from the one asked about.
 //!
-//! When there is no fresh data for the place and the host's `LiveFetcher` allows the source, the tool downloads once for the place
-//! asked about (`fetch_for`: the same fetch and quotas as `cs_live_fetch`, never for a source without its key) and answers from the
-//! stored row. Without a fetcher, or when it denies the source, nothing is downloaded.
+//! When there is no fresh data for the place (none stored, or expired) and the host's `LiveFetcher` allows the source, the tool
+//! downloads once for the place asked about (`fetch_for`: the same fetch and quotas as `cs_live_fetch`, never for a source without
+//! its key) and answers from the stored row. Without a fetcher, or when it denies the source, nothing is downloaded. Data past its
+//! refresh interval but still valid is never downloaded during the call: the background refresh handles it. When data due for a
+//! refresh was not refreshed, the result says why in `not_refreshed` (`not_refreshed_words`): the host's reason for denying the
+//! fetch, or (expired or missing data only) the failed download's.
 //!
 //! `when` narrows the items to one period (`Period`): the tool, not the model, turns "tomorrow" or "friday" into the place's local
 //! dates. Items in effect now (current conditions, an alert already running) always stay; dated items stay when they overlap the
@@ -24,7 +27,7 @@ use crate::tz::Zone;
 use crate::{address, here_key, now_from, Live, LiveCfg, Place};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
 use cache_tool::places::parse_latlon;
-use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
+use cache_tool::{NotAllowed, Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
 
 /// At most this many items go to the model (the context is 8,192 tokens); `more` says how many were left out.
@@ -128,6 +131,25 @@ impl LiveDataTool {
 
 fn err(code: &str, detail: impl Into<String>) -> ToolError {
     ToolError::new(code, detail)
+}
+
+/// live_data's `not_refreshed`: why data that was due for a refresh was not refreshed. No address, status code or error text.
+fn not_refreshed_words(why: Result<NotAllowed, &str>) -> String {
+    match why {
+        Ok(NotAllowed::SwitchedOff) => "this source is switched off".into(),
+        Ok(NotAllowed::Offline) => "no connection".into(),
+        Ok(NotAllowed::MeteredOff) => "mobile data updates are off".into(),
+        Err(code) => format!(
+            "refresh failed: {}",
+            match code {
+                ToolError::QUOTA => "daily limit reached",
+                ToolError::KEY_MISSING => "API key missing",
+                ToolError::BAD_RESPONSE => "the source sent bad data",
+                // fetch_failed, and any other failure of the download
+                _ => "couldn't reach the source",
+            }
+        ),
+    }
 }
 
 /// Data for a place closer than this to the one asked about is "the same place": nothing extra is said.
@@ -349,31 +371,43 @@ impl Tool for LiveDataTool {
         };
         let asked = resolve_asked(ctx, place_arg)?;
         let c = self.live.db().map_err(|e| err(ToolError::INTERNAL, e.message))?;
-        // the stored data for the place; when there is none that is fresh, one on-demand fetch if the host allows it
+        // the stored data for the place; when there is none that is fresh, one on-demand fetch if the host allows it. Data past
+        // its refresh interval but still valid is left to the background refresh. When due data is not refreshed, the reason
+        // (`not_refreshed`): what blocks the refresh, or for expired or missing data the failed download's.
         let mut picked = self.pick(&c, &l, &asked, now);
-        let mut refresh_failed: Option<ToolError> = None;
-        if picked.as_ref().map(|p| p.2.expired).unwrap_or(true) {
-            if let Some(f) = ctx.live_fetcher.filter(|f| f.can_fetch(&l.def.id)) {
-                if let Err(e) = self.fetch_for(ctx, f.key_for(&l.def.id), &l, &asked) {
-                    refresh_failed = Some(e);
+        let refresh_secs = l.def.refresh_minutes as i64 * 60;
+        let unusable = picked.as_ref().map(|p| p.2.expired).unwrap_or(true);
+        let due = unusable || picked.as_ref().map(|p| now >= p.2.row.fetched_at + refresh_secs).unwrap_or(true);
+        let mut not_refreshed: Option<String> = None;
+        if let Some(f) = ctx.live_fetcher.filter(|_| due) {
+            if !f.can_fetch(&l.def.id) {
+                not_refreshed = f.not_allowed(&l.def.id).map(|n| not_refreshed_words(Ok(n)));
+            } else if unusable {
+                let got = match f.stand_in_failure(&l.def.id) {
+                    Some(code) => Err(err(code, "")),
+                    None => self.fetch_for(ctx, f.key_for(&l.def.id), &l, &asked),
+                };
+                if let Err(e) = got {
+                    not_refreshed = Some(not_refreshed_words(Err(&e.code)));
                 }
                 picked = self.pick(&c, &l, &asked, now);
             }
         }
+        let with_reason = |e: ToolError| match &not_refreshed {
+            Some(r) => e.with_top("not_refreshed", r.as_str()),
+            None => e,
+        };
         let (place, km, v) = match picked {
             Ok(p) => p,
-            // nothing stored and the fetch failed: the fetch's own reason is the more useful one
-            Err(e) => return Err(refresh_failed.unwrap_or(e)),
+            // nothing stored: the no_data error, with the reason it was not refreshed
+            Err(e) => return Err(with_reason(e)),
         };
         let own = asked.key.as_deref() == Some(place.key.as_str());
         let shown = if own { asked.name.clone() } else { place.name.clone() };
         let off = v.zone();
         if v.expired {
-            let mut e = err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off)));
-            if let Some(r) = refresh_failed {
-                e = e.with("refresh_failed", r.code);
-            }
-            return Err(e);
+            // a failed refresh is said by not_refreshed alone (it replaced the error's refresh_failed code)
+            return Err(with_reason(err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off)))));
         }
         let period = when.map(|w| period(w, days, now, &off)).transpose()?;
         let chosen: Vec<&crate::map::Item> = match &period {
@@ -454,6 +488,9 @@ impl Tool for LiveDataTool {
         out.insert("valid_until".into(), json!(stamp(v.row.valid_until, &off)));
         out.insert("age".into(), json!(age_words(v.age_secs())));
         out.insert("expired".into(), json!(false));
+        if let Some(r) = &not_refreshed {
+            out.insert("not_refreshed".into(), json!(r));
+        }
         out.insert("items".into(), Value::Array(items));
         if more > 0 {
             out.insert("more".into(), json!(more));

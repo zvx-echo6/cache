@@ -487,6 +487,57 @@ far it is. Without them the data is for the place asked about.
  "items": [{"n": 10, "label": "Now", "time": "2026-10-25T14:00-06:00", "fields": {"Temperature": "41 °F", "Conditions": "overcast"}}]}
 ```
 
+When the data was due for a refresh (none stored, expired, or older than the source's refresh interval) and it was not
+refreshed, `not_refreshed` says why, as one string placed right after `expired`; project decision (2026-10-29). Expired or
+missing data is downloaded during the call when the phone allows it, so a failed download is said too. Data past its refresh
+interval but still valid is never downloaded during the call (the background refresh handles it): it is returned as stored,
+with `not_refreshed` only when something blocks that refresh (the first three reasons), and without it when the phone is online
+and allowed. The highest-priority reason wins:
+
+| `not_refreshed` | When |
+|---|---|
+| `this source is switched off` | the source is not among the ones switched on |
+| `no connection` | the phone is offline |
+| `mobile data updates are off` | the phone is on mobile data and updates on mobile data are off |
+| `refresh failed: couldn't reach the source` | expired or missing data only: the download failed (`fetch_failed`) |
+| `refresh failed: daily limit reached` | the source's usage limit is reached (`quota`) |
+| `refresh failed: API key missing` | the source needs a key and none is set (`key_missing`) |
+| `refresh failed: the source sent bad data` | the provider answered with something the tool cannot use (`bad_response`) |
+
+It never holds an address, a status code or error text, and it is absent on fresh data, after a good download, on valid data
+past its interval while online and allowed, and when the host has given no fetch policy (tests and captures without
+`cs serve --live-state`). Valid data past its interval on mobile data with updates off:
+
+```json
+{"ok": true,
+ "source": {"id": "alerts", "title": "Emergency alerts", "provider": "NWS"},
+ "place": "current location",
+ "fetched_at": "2026-10-25T10:50:00-06:00", "valid_until": "2026-10-25T16:50:00-06:00", "age": "30 minutes old", "expired": false,
+ "not_refreshed": "mobile data updates are off",
+ "items": [
+  {"n": 1, "label": "No active emergency alerts", "time": "2026-10-25T10:50:00-06:00",
+   "fields": {"Status": "none active", "Checked": "2026-10-25 10:50", "Age": "30 minutes old"}, "none_active": true}],
+ "none": true}
+```
+
+On `expired` and `no_data` it is a top-level field beside `error`, and it is the only place a failed refresh is said (it replaced
+the `expired` error's earlier `refresh_failed` code); a failed download with nothing stored is `no_data`:
+
+```json
+{"ok": false, "error": {"type": "expired", "detail": "alerts data expired 2026-10-25"},
+ "not_refreshed": "refresh failed: daily limit reached"}
+{"ok": false, "error": {"type": "no_data", "detail": "no alerts data has been downloaded for current location"},
+ "not_refreshed": "no connection"}
+```
+
+For captures, `cs serve --live-state` stands in for the phone's connection (repeatable): one state for every source and/or
+`<source_id>=<state>` for one, a state being `normal` (the default: no download, no reason), `off`, `offline`, `metered` or
+`fail:<fetch_failed|quota|key_missing|bad_response>` (the download of expired or missing data fails and nothing is sent). The state only decides what
+happens to a refresh; whether the data is due comes from the stored `fetched_at` and `valid_until` against the call's pinned
+`now`. So one serve with `--live-state metered --live-state alerts=offline` gives weather `expired` + `mobile data updates are
+off` for a `now` past its `valid_until`, and alerts `no_data` + `no connection` for a place never downloaded. It never changes the
+tool list: `web_search` is offered from the web-search configuration only.
+
 Rules:
 - `fields` keys are plain labels and values carry their units, so no source needs special handling by the model.
 - Items are capped (about 12 per result) to fit the 8k context; `"more": N` says how many were left out.

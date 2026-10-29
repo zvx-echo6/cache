@@ -1,9 +1,10 @@
 //! `live_data` fetching for a place that has no fresh data, when the host allows it (ToolCtx::live_fetcher): denied by default,
 //! fetched when allowed, through the same quotas as cs_live_fetch, never for a source without its key, and no key in any output.
+//! When data due for a refresh is not refreshed, `not_refreshed` says why (one test per reason, and the exact bytes).
 
 use cache_live::{LiveCfg, LiveDataTool};
 use cache_tool::places::{Geocoder, ResolvedPlace};
-use cache_tool::{LiveFetcher, Location, Tool, ToolCtx, ToolError, ToolOutput};
+use cache_tool::{LiveFetcher, Location, NotAllowed, Tool, ToolCtx, ToolError, ToolOutput};
 use cache_user::UserStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -52,11 +53,14 @@ impl Server {
     }
 }
 
-/// The host's grant, as a test double: which sources may be fetched and which keys it holds.
+/// The host's grant, as a test double: which sources may be fetched, which keys it holds, why a fetch is denied and a stand-in
+/// failure.
 #[derive(Default)]
 struct Grant {
     allowed: Vec<String>,
     keys: HashMap<String, String>,
+    why: Option<NotAllowed>,
+    fail: Option<&'static str>,
 }
 
 impl LiveFetcher for Grant {
@@ -65,6 +69,12 @@ impl LiveFetcher for Grant {
     }
     fn key_for(&self, source_id: &str) -> Option<String> {
         self.keys.get(source_id).cloned()
+    }
+    fn not_allowed(&self, _source_id: &str) -> Option<NotAllowed> {
+        self.why
+    }
+    fn stand_in_failure(&self, _source_id: &str) -> Option<&'static str> {
+        self.fail
     }
 }
 
@@ -114,7 +124,7 @@ impl Drop for Env {
 }
 
 fn grant(ids: &[&str]) -> Grant {
-    Grant { allowed: ids.iter().map(|s| s.to_string()).collect(), keys: HashMap::new() }
+    Grant { allowed: ids.iter().map(|s| s.to_string()).collect(), ..Default::default() }
 }
 
 fn burley_loc() -> Location {
@@ -207,13 +217,13 @@ fn a_named_place_is_fetched_with_its_facts_and_a_denied_offline_policy_does_not_
 }
 
 #[test]
-fn a_failed_fetch_says_why_and_the_expired_error_names_a_failed_refresh() {
+fn a_failed_fetch_says_why_and_the_expired_error_says_the_refresh_failed() {
     let (env, srv) = alerts("failed");
     let g = grant(&["alerts"]);
     let here = burley_loc();
     *srv.status.lock().unwrap() = 500;
     let e = env.run(json!({"source": "alerts"}), Some(&here), T0, None, Some(&g)).unwrap_err();
-    assert_eq!(e.code, "fetch_failed");
+    assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("no_data", Some("refresh failed: couldn't reach the source")));
     assert_eq!(srv.hits(), 1);
     *srv.status.lock().unwrap() = 200;
     env.run(json!({"source": "alerts"}), Some(&here), "2026-10-25T11:00:00-06:00", None, Some(&g)).unwrap();
@@ -221,7 +231,8 @@ fn a_failed_fetch_says_why_and_the_expired_error_names_a_failed_refresh() {
     *srv.status.lock().unwrap() = 500;
     let e = env.run(json!({"source": "alerts"}), Some(&here), "2026-10-26T11:00:00-06:00", None, Some(&g)).unwrap_err();
     assert_eq!(e.code, "expired");
-    assert_eq!(e.to_json()["error"]["refresh_failed"], "fetch_failed");
+    assert!(e.to_json()["error"].get("refresh_failed").is_none(), "not_refreshed replaced it");
+    assert_eq!(e.to_json()["not_refreshed"], "refresh failed: couldn't reach the source");
 }
 
 #[test]
@@ -236,7 +247,7 @@ fn the_sources_quota_is_respected() {
     env.run(json!({"source": "weather"}), Some(&at(43.0)), "2026-10-25T10:50:10-06:00", None, Some(&g)).unwrap();
     assert_eq!(srv.hits(), 2);
     let e = env.run(json!({"source": "weather"}), Some(&at(44.0)), "2026-10-25T10:50:20-06:00", None, Some(&g)).unwrap_err();
-    assert_eq!(e.code, "quota");
+    assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("no_data", Some("refresh failed: daily limit reached")));
     assert_eq!(srv.hits(), 2, "the limit stopped the request before it was sent");
     // a minute later it goes through
     env.run(json!({"source": "weather"}), Some(&at(44.0)), "2026-10-25T10:52:00-06:00", None, Some(&g)).unwrap();
@@ -253,7 +264,7 @@ fn a_source_that_needs_a_key_is_never_fetched_without_it_and_the_key_never_leaks
     let here = burley_loc();
     let mut g = grant(&["weather"]);
     let e = env.run(json!({"source": "weather"}), Some(&here), T0, None, Some(&g)).unwrap_err();
-    assert_eq!(e.code, "key_missing");
+    assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("no_data", Some("refresh failed: API key missing")));
     assert_eq!(srv.hits(), 0, "nothing was sent without the key");
     g.keys.insert("weather".into(), SENTINEL.into());
     let v = env.run(json!({"source": "weather"}), Some(&here), T0, None, Some(&g)).unwrap();
@@ -284,4 +295,149 @@ fn rows_for_positions_are_pruned_like_the_phones_other_positions() {
     env.run(json!({"source": "alerts"}), Some(&at(43.0)), "2026-10-25T16:00:00-06:00", None, Some(&g)).unwrap();
     // the first row had run out of validity; only the newest stays
     assert_eq!(env.rows(), vec!["at:43.00,-114.00".to_string()]);
+}
+
+// ---- not_refreshed: why data due for a refresh was not refreshed ------------------------------------------------------------
+
+/// Alerts stored at T0 (refresh 15 minutes, valid 6 hours): fresh until 11:05, due after, expired after 16:50.
+fn alerts_stored(name: &str) -> (Env, Server, Location) {
+    let (env, srv) = alerts(name);
+    let here = burley_loc();
+    env.run(json!({"source": "alerts"}), Some(&here), T0, None, Some(&grant(&["alerts"]))).unwrap();
+    assert_eq!(srv.hits(), 1);
+    (env, srv, here)
+}
+
+const DUE: &str = "2026-10-25T11:20:00-06:00";
+const EXPIRED: &str = "2026-10-25T18:00:00-06:00";
+
+fn denied(why: NotAllowed) -> Grant {
+    Grant { why: Some(why), ..Default::default() }
+}
+
+fn stand_in(code: &'static str) -> Grant {
+    Grant { fail: Some(code), ..grant(&["alerts"]) }
+}
+
+#[test]
+fn not_refreshed_for_each_reason() {
+    let (env, srv, here) = alerts_stored("nr-each");
+    // past the refresh interval, still valid: only what blocks the background refresh is said
+    for (g, words) in [
+        (denied(NotAllowed::SwitchedOff), "this source is switched off"),
+        (denied(NotAllowed::Offline), "no connection"),
+        (denied(NotAllowed::MeteredOff), "mobile data updates are off"),
+    ] {
+        let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&g)).unwrap();
+        assert_eq!(v["not_refreshed"], words);
+        // right after the dated fields, nothing else changed
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["source", "place", "fetched_at", "valid_until", "age", "expired", "not_refreshed", "items", "none"]);
+        assert_eq!(v["age"], "30 minutes old");
+    }
+    // expired: the on-demand download fails, and the expired error says why
+    for (code, words) in [
+        ("fetch_failed", "refresh failed: couldn't reach the source"),
+        ("quota", "refresh failed: daily limit reached"),
+        ("key_missing", "refresh failed: API key missing"),
+        ("bad_response", "refresh failed: the source sent bad data"),
+    ] {
+        let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&stand_in(code))).unwrap_err();
+        assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("expired", Some(words)));
+        // a refresh failure is never said on valid data: none is attempted during the call
+        let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&stand_in(code))).unwrap();
+        assert!(v.get("not_refreshed").is_none(), "{v}");
+    }
+    assert_eq!(srv.hits(), 1, "a denied fetch and a stand-in failure send nothing");
+}
+
+#[test]
+fn not_refreshed_is_absent_on_fresh_data_without_a_fetcher_and_after_a_good_download() {
+    let (env, srv, here) = alerts_stored("nr-absent");
+    let fresh = "2026-10-25T11:00:00-06:00";
+    for g in [denied(NotAllowed::Offline), stand_in("quota")] {
+        let v = env.run(json!({"source": "alerts"}), Some(&here), fresh, None, Some(&g)).unwrap();
+        assert!(v.get("not_refreshed").is_none(), "fresh data: {v}");
+    }
+    // no fetcher (captures, tests) or a host that gives no reason: the old output
+    let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, None).unwrap();
+    assert!(v.get("not_refreshed").is_none());
+    let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&[]))).unwrap();
+    assert!(v.get("not_refreshed").is_none());
+    assert_eq!(srv.hits(), 1);
+    // past the refresh interval, online and allowed: not downloaded during the call (the background refresh handles it), and
+    // nothing to say
+    let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&["alerts"]))).unwrap();
+    assert_eq!(srv.hits(), 1);
+    assert!(v.get("not_refreshed").is_none());
+    assert_eq!(v["age"], "30 minutes old");
+    // expired and allowed: downloaded again, and nothing to say
+    let v = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&grant(&["alerts"]))).unwrap();
+    assert_eq!(srv.hits(), 2);
+    assert!(v.get("not_refreshed").is_none());
+    assert_eq!(v["age"], "less than a minute old");
+}
+
+#[test]
+fn a_real_failed_refresh_of_expired_or_missing_data_says_why() {
+    let (env, srv, here) = alerts_stored("nr-real");
+    let g = grant(&["alerts"]);
+    *srv.status.lock().unwrap() = 500;
+    // past the interval, still valid: nothing is sent, the data is served as it is
+    let v = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&g)).unwrap();
+    assert_eq!(srv.hits(), 1);
+    assert!(v.get("not_refreshed").is_none());
+    assert_eq!(v["fetched_at"], "2026-10-25T10:50:00-06:00");
+    // expired: the download is tried, fails, and the expired error says why
+    let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&g)).unwrap_err();
+    assert_eq!(srv.hits(), 2);
+    assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("expired", Some("refresh failed: couldn't reach the source")));
+    // the provider answers with something that is not its format
+    *srv.status.lock().unwrap() = 200;
+    let srv2 = Server::start("/alerts/active", "not json".into());
+    let env2 = Env::new("nr-real-bad", real_source("alerts.json"), &srv2, "/alerts/active");
+    let e = env2.run(json!({"source": "alerts"}), Some(&here), T0, None, Some(&g)).unwrap_err();
+    assert_eq!((e.code.as_str(), e.top["not_refreshed"].as_str()), ("no_data", Some("refresh failed: the source sent bad data")));
+}
+
+/// The exact bytes: the success shape, expired and no_data. Every other byte is what it was before not_refreshed.
+#[test]
+fn not_refreshed_golden_bytes() {
+    let (env, _srv, here) = alerts_stored("nr-golden");
+    let before = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, None).unwrap().to_string();
+    let after = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&denied(NotAllowed::MeteredOff))).unwrap().to_string();
+    assert_eq!(after, before.replacen(r#""expired":false,"#, r#""expired":false,"not_refreshed":"mobile data updates are off","#, 1));
+    // past the interval, online and allowed: the same bytes as without a fetcher
+    let allowed = env.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&grant(&["alerts"]))).unwrap().to_string();
+    assert_eq!(allowed, before);
+    assert_eq!(
+        allowed,
+        r#"{"source":{"id":"alerts","title":"Emergency alerts","provider":"NWS"},"place":"current location","fetched_at":"2026-10-25T10:50:00-06:00","valid_until":"2026-10-25T16:50:00-06:00","age":"30 minutes old","expired":false,"items":[{"address":"live:alerts/at:42.54,-113.79/none","label":"No active emergency alerts","time":"2026-10-25T10:50:00-06:00","fields":{"Status":"none active","Checked":"2026-10-25 10:50","Age":"30 minutes old"},"none_active":true}],"none":true}"#
+    );
+    assert_eq!(
+        after,
+        r#"{"source":{"id":"alerts","title":"Emergency alerts","provider":"NWS"},"place":"current location","fetched_at":"2026-10-25T10:50:00-06:00","valid_until":"2026-10-25T16:50:00-06:00","age":"30 minutes old","expired":false,"not_refreshed":"mobile data updates are off","items":[{"address":"live:alerts/at:42.54,-113.79/none","label":"No active emergency alerts","time":"2026-10-25T10:50:00-06:00","fields":{"Status":"none active","Checked":"2026-10-25 10:50","Age":"30 minutes old"},"none_active":true}],"none":true}"#
+    );
+    // expired, on mobile data with updates off
+    let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&denied(NotAllowed::MeteredOff))).unwrap_err();
+    assert_eq!(
+        e.to_json().to_string(),
+        r#"{"ok":false,"error":{"type":"expired","detail":"alerts data expired 2026-10-25"},"not_refreshed":"mobile data updates are off"}"#
+    );
+    // expired, and the refresh failed
+    let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&stand_in("quota"))).unwrap_err();
+    assert_eq!(
+        e.to_json().to_string(),
+        r#"{"ok":false,"error":{"type":"expired","detail":"alerts data expired 2026-10-25"},"not_refreshed":"refresh failed: daily limit reached"}"#
+    );
+    // nothing ever downloaded, offline
+    let (empty, _srv2) = alerts("nr-golden-empty");
+    let e = empty.run(json!({"source": "alerts"}), Some(&here), DUE, None, Some(&denied(NotAllowed::Offline))).unwrap_err();
+    assert_eq!(
+        e.to_json().to_string(),
+        r#"{"ok":false,"error":{"type":"no_data","detail":"no alerts data has been downloaded for current location"},"not_refreshed":"no connection"}"#
+    );
+    // and without a fetcher, the same errors as before
+    let e = empty.run(json!({"source": "alerts"}), Some(&here), DUE, None, None).unwrap_err();
+    assert_eq!(e.to_json().to_string(), r#"{"ok":false,"error":{"type":"no_data","detail":"no alerts data has been downloaded for current location"}}"#);
 }

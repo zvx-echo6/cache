@@ -66,6 +66,15 @@ cs: command line and HTTP wrapper over the cache_search core
   cs layers tile     --config <sources.json> --layer <id> --z <z> --x <x> --y <y> [--out <file>]
   cs layers serve    --config <sources.json> [--online true|false]       (the tile server, until stopped)
   cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [--live-policy <json>]
+                     [--live-state <state> | <source_id>=<state>]...
+                     --live-state: the connection a capture stands in, so live_data's not_refreshed can be recorded without a
+                     network (docs/TOOLS.md, live_data). <state> is normal (the default: nothing downloaded, no reason), off,
+                     offline, metered or fail:<fetch_failed|quota|key_missing|bad_response> (the download of expired or missing
+                     data fails, nothing is sent; valid data past its interval is never downloaded during a call);
+                     a bare state is for every source, <source_id>=<state> for one. It decides only whether a download is made;
+                     whether the data is due is the stored fetched_at against --now/\"now\": --live-state metered with a now
+                     past valid_until gives expired + not_refreshed; --live-state offline for a place with no data gives
+                     no_data + not_refreshed. It never changes the tool list (web_search follows CACHE_WEB_* only).
                      [--actions <defs.json>] [--action-results <results.json>] [EMBED] [--open-timeout 600]
                      --actions: a JSON array of action definitions (docs/ACTIONS.md) installed at start (cs_act_set_definitions); the
                      report is printed on stderr as one line `actions <json>`.
@@ -688,7 +697,9 @@ pub fn layers(argv: &[String]) -> Result<(), ApiError> {
 }
 
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["config", "listen", "live-policy", "open-timeout", "actions", "action-results"], &["allow-non-loopback"], true)?;
+    let (states, rest) = take_repeated(argv, "live-state")?;
+    let a = parse(&rest, &["config", "listen", "live-policy", "open-timeout", "actions", "action-results"], &["allow-non-loopback"], true)?;
+    let live_states = live_state_policy(&states, a.get("live-policy"))?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
     server::check_listen(&listen, a.flag("allow-non-loopback"))?;
     // read the host script before anything is opened, so a bad file fails fast
@@ -698,12 +709,45 @@ pub fn serve(argv: &[String]) -> Result<(), ApiError> {
         None => server::ActScript::default(),
     };
     let mut e = open_engine(&a)?;
+    if let Some(p) = live_states {
+        e.core.set_live_policy(Some(&p))?;
+    }
     if let Some(d) = defs {
         let report = e.core.act_set_definitions(&d)?;
         let mut err = std::io::stderr().lock();
         let _ = writeln!(err, "actions {report}");
     }
     server::run(e, &listen, script)
+}
+
+/// `cs serve --live-state` (repeatable): `<state>` for every source and/or `<source_id>=<state>` for one, a state being normal,
+/// off, offline, metered or fail:<fetch_failed|quota|key_missing|bad_response>. They become the fetch policy's `states` (the
+/// core checks each state), merged into `--live-policy` when that is given; without it every source not named is "normal"
+/// (nothing is downloaded and no reason is given, as with no policy). `None` when no state is given.
+fn live_state_policy(states: &[String], policy: Option<&str>) -> Result<Option<String>, ApiError> {
+    if states.is_empty() {
+        return Ok(None);
+    }
+    let mut p: Value = match policy {
+        Some(text) => serde_json::from_str(text).map_err(|e| usage_err(format!("--live-policy: {e}")))?,
+        None => json!({"online": false, "enabled_sources": [], "states": {"*": "normal"}}),
+    };
+    let obj = p.as_object_mut().ok_or_else(|| usage_err("--live-policy must be a JSON object"))?;
+    let map = obj.entry("states").or_insert_with(|| json!({})).as_object_mut().ok_or_else(|| usage_err("--live-policy: \"states\" must be an object"))?;
+    let mut global = false;
+    for s in states {
+        let (id, state) = match s.split_once('=') {
+            Some((id, st)) if !id.is_empty() && id != "*" => (id, st),
+            Some(_) => return Err(usage_err(format!("--live-state {s:?}: the source id goes before \"=\""))),
+            None if global => return Err(usage_err("--live-state: one state for every source, at most")),
+            None => {
+                global = true;
+                ("*", s.as_str())
+            }
+        };
+        map.insert(id.to_string(), json!(state));
+    }
+    Ok(Some(p.to_string()))
 }
 
 /// Print an error as one JSON line on stderr. Writes with `writeln!` and ignores a failed write: `eprintln!`
