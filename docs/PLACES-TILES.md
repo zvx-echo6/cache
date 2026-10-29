@@ -64,10 +64,12 @@ The exact layouts are in `cache_places/src/schema.rs`: `COMMON_SQL`, `TILE_SQL` 
   of each category and kind it holds (`tile_counts`). Row ids are local, 1 to 2^24 - 1. A tile has no full-text or
   R-tree index: the phone builds those as it merges.
 - **A street row** is one street within one tile, grouped by the street as the source writes it, the postcode and the
-  postal city or town. `street` is the source's form ("MAIN ST") and `street_expanded` the same with its USPS Publication
-  28 street suffix and directional abbreviations written out ("MAIN STREET"), or null when that changes nothing; both are
+  postal city or town. `street` is the source's form ("Main St") and `street_expanded` the same with its USPS Publication
+  28 street suffix and directional abbreviations written out ("Main Street"), or null when that changes nothing; both are
   searched. In `street` and `postal_city`, a word of 3 or more letters the source wrote in capitals is stored with a
-  capital first letter only ("North STATE Street" is "North State Street", "HURRICANE" is "Hurricane"). The expansion is
+  capital first letter only ("North STATE Street" is "North State Street", "HURRICANE" is "Hurricane"); the street
+  suffix is stored in the table's form with a capital first letter ("W MALBAR ST" is "W Malbar St"), and the written-out
+  words of `street_expanded` have a capital first letter ("West Malbar Street"). The expansion is
   applied to the data when it is built, never to what a person types. `uid` is stable across builds of the same data.
   `numbers` holds every house number of the row with its point (`cache_places::addr`):
 

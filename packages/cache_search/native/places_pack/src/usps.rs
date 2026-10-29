@@ -1,6 +1,6 @@
 //! A street's written-out form for `addr_streets.street_expanded`: the street suffix and directional abbreviations of the
-//! address data expanded with USPS Publication 28 (the table is data, `usps-pub28.tsv`), so "S STATE ST" is also stored
-//! as "SOUTH STATE STREET". This is applied to the source data when the builder writes it, never to what a person types
+//! address data expanded with USPS Publication 28 (the table is data, `usps-pub28.tsv`), so "S State St" is also stored
+//! as "South State Street". The suffix itself is stored in the table's form with a capital first letter ("ST" -> "St"). This is applied to the source data when the builder writes it, never to what a person types
 //! (a project decision, 2026-10-28; docs/PLACES-TILES.md).
 //!
 //! Only the positions Publication 28 defines are touched: the first word as a pre-directional, the last word as a
@@ -34,36 +34,25 @@ fn table() -> &'static Pub28 {
     })
 }
 
-/// The written-out word in the case the source wrote the abbreviation in ("ST" -> "STREET", "St" -> "Street",
-/// "st." -> "street"). A one-letter word ("S") says nothing about case, so the street's does: capitals when the whole
-/// street is in capitals, else a capital first letter.
-fn in_case_of(word: &str, primary: &str, street_in_capitals: bool) -> String {
-    let letters: Vec<char> = word.chars().filter(|c| c.is_alphabetic()).collect();
-    let capitals = if letters.len() == 1 { street_in_capitals } else { letters.iter().all(|c| c.is_uppercase()) };
-    if capitals {
-        primary.to_string()
-    } else if letters.first().is_some_and(|c| c.is_uppercase()) {
-        let mut c = primary.chars();
-        c.next().map(|f| f.to_string() + &c.as_str().to_lowercase()).unwrap_or_default()
-    } else {
-        primary.to_lowercase()
-    }
+/// The word with a capital first letter and the rest in lower case ("ST" -> "St", "NORTHEAST" -> "Northeast").
+fn title(word: &str) -> String {
+    let mut c = word.chars();
+    c.next().map(|f| f.to_uppercase().to_string() + &c.as_str().to_lowercase()).unwrap_or_default()
 }
 
 fn lookup<'a>(map: &'a HashMap<String, String>, word: &str) -> Option<&'a String> {
     map.get(&word.trim_end_matches('.').to_uppercase())
 }
 
-/// The street with its Publication 28 abbreviations written out, or None when that changes nothing.
-pub fn expand(street: &str) -> Option<String> {
+/// Where Publication 28 applies in a street's words: (pre-directional, the suffix's index, post-directional).
+fn positions<S: AsRef<str>>(words: &[S]) -> (bool, Option<usize>, bool) {
     let t = table();
-    let mut words: Vec<String> = street.split_whitespace().map(str::to_string).collect();
     let n = words.len();
     if n < 2 {
-        return None;
+        return (false, None, false);
     }
-    let is_dir = |w: &str| lookup(&t.directional, w).is_some();
-    let is_suffix = |w: &str| lookup(&t.suffix, w).is_some();
+    let is_dir = |w: &S| lookup(&t.directional, w.as_ref()).is_some();
+    let is_suffix = |w: &S| lookup(&t.suffix, w.as_ref()).is_some();
     // Post-directional: the last word, when something other than a pre-directional is before it.
     let post = is_dir(&words[n - 1]) && !(n == 2 && is_dir(&words[0]));
     let last_name = if post { n - 2 } else { n - 1 };
@@ -72,10 +61,36 @@ pub fn expand(street: &str) -> Option<String> {
     // Pre-directional: the first word, when a name word is left between it and the suffix or post-directional.
     let first_after = if suffix { last_name } else { last_name + 1 };
     let pre = is_dir(&words[0]) && first_after > 1;
+    (pre, suffix.then_some(last_name), post)
+}
+
+/// The street with its Publication 28 street suffix in the table's form with a capital first letter ("W Malbar ST" ->
+/// "W Malbar St"), whatever case the source wrote it in. Directionals stay as written. Words are split on single spaces,
+/// so the rest of the street is unchanged byte for byte; a street with other white space is left as it is.
+pub fn suffix_in_title_case(street: &str) -> String {
+    let mut words: Vec<String> = street.split(' ').map(str::to_string).collect();
+    if words.iter().any(|w| w.is_empty() || w.contains(char::is_whitespace)) {
+        return street.to_string();
+    }
+    match positions(&words).1 {
+        Some(i) => {
+            words[i] = title(&words[i]);
+            words.join(" ")
+        }
+        None => street.to_string(),
+    }
+}
+
+/// The street with its Publication 28 abbreviations written out, each with a capital first letter ("W Malbar St" ->
+/// "West Malbar Street"), or None when that changes nothing.
+pub fn expand(street: &str) -> Option<String> {
+    let t = table();
+    let mut words: Vec<String> = street.split_whitespace().map(str::to_string).collect();
+    let (pre, suffix, post) = positions(&words);
+    let n = words.len();
     let mut changed = false;
-    let capitals = street.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
     let mut set = |w: &mut String, primary: &String| {
-        let e = in_case_of(w, primary, capitals);
+        let e = title(primary);
         if e != *w {
             *w = e;
             changed = true;
@@ -85,9 +100,9 @@ pub fn expand(street: &str) -> Option<String> {
         let p = lookup(&t.directional, &words[n - 1]).cloned().unwrap_or_default();
         set(&mut words[n - 1], &p);
     }
-    if suffix {
-        let p = lookup(&t.suffix, &words[last_name]).cloned().unwrap_or_default();
-        set(&mut words[last_name], &p);
+    if let Some(i) = suffix {
+        let p = lookup(&t.suffix, &words[i]).cloned().unwrap_or_default();
+        set(&mut words[i], &p);
     }
     if pre {
         let p = lookup(&t.directional, &words[0]).cloned().unwrap_or_default();
@@ -102,27 +117,44 @@ mod tests {
 
     #[test]
     fn suffixes_and_directionals() {
-        assert_eq!(expand("S STATE ST").as_deref(), Some("SOUTH STATE STREET"));
         assert_eq!(expand("S State St").as_deref(), Some("South State Street"));
+        assert_eq!(expand("W Malbar St").as_deref(), Some("West Malbar Street"));
         assert_eq!(expand("N Medical Dr.").as_deref(), Some("North Medical Drive"));
-        assert_eq!(expand("W 300 S").as_deref(), Some("WEST 300 SOUTH"));
-        assert_eq!(expand("300 W").as_deref(), Some("300 WEST"));
-        assert_eq!(expand("MAIN ST NE").as_deref(), Some("MAIN STREET NORTHEAST"));
+        assert_eq!(expand("W 300 S").as_deref(), Some("West 300 South"));
+        assert_eq!(expand("300 W").as_deref(), Some("300 West"));
+        assert_eq!(expand("Main St NE").as_deref(), Some("Main Street Northeast"));
         assert_eq!(expand("Overland Ave").as_deref(), Some("Overland Avenue"));
-        assert_eq!(expand("UNIVERSITY PKWY").as_deref(), Some("UNIVERSITY PARKWAY"));
+        // The written-out words have a capital first letter whatever case the source used.
+        assert_eq!(expand("UNIVERSITY PKWY").as_deref(), Some("UNIVERSITY Parkway"));
+        assert_eq!(expand("elm st").as_deref(), Some("elm Street"));
+        assert_eq!(expand("Main STREET").as_deref(), Some("Main Street"));
         // A street called N, and nothing to expand.
-        assert_eq!(expand("N ST").as_deref(), Some("N STREET"));
+        assert_eq!(expand("N St").as_deref(), Some("N Street"));
         assert_eq!(expand("N"), None);
         assert_eq!(expand("South 4500 West"), None, "already written out");
         assert_eq!(expand("Main Street"), None);
         assert_eq!(expand("Broadway"), None);
         // Only the suffix position: a leading ST is not a suffix.
-        assert_eq!(expand("ST JOHNS"), None);
-        assert_eq!(expand("ST JOHNS RD").as_deref(), Some("ST JOHNS ROAD"));
+        assert_eq!(expand("ST Johns"), None);
+        assert_eq!(expand("ST Johns Rd").as_deref(), Some("ST Johns Road"));
         // The middle of a name is left alone.
-        assert_eq!(expand("S WEST TEMPLE").as_deref(), Some("SOUTH WEST TEMPLE"));
+        assert_eq!(expand("S West Temple").as_deref(), Some("South West Temple"));
         assert_eq!(expand("Road N").as_deref(), Some("Road North"));
-        assert_eq!(expand("COUNTY ROAD 3H N").as_deref(), Some("COUNTY ROAD 3H NORTH"));
+        assert_eq!(expand("County Road 3H N").as_deref(), Some("County Road 3H North"));
+    }
+
+    #[test]
+    fn the_suffix_in_title_case() {
+        assert_eq!(suffix_in_title_case("W Malbar ST"), "W Malbar St");
+        assert_eq!(suffix_in_title_case("E Rooster CT"), "E Rooster Ct");
+        assert_eq!(suffix_in_title_case("W Sky Wood LN"), "W Sky Wood Ln");
+        assert_eq!(suffix_in_title_case("Main ST NE"), "Main St NE", "directionals stay as written");
+        assert_eq!(suffix_in_title_case("Overland ave"), "Overland Ave");
+        assert_eq!(suffix_in_title_case("N Medical DR."), "N Medical Dr.");
+        assert_eq!(suffix_in_title_case("Main Street"), "Main Street");
+        assert_eq!(suffix_in_title_case("ST Johns"), "ST Johns", "a leading ST is not a suffix");
+        assert_eq!(suffix_in_title_case("Broadway"), "Broadway");
+        assert_eq!(suffix_in_title_case("Main  ST"), "Main  ST", "other white space: left as it is");
     }
 
     #[test]

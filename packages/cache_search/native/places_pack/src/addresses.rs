@@ -8,7 +8,8 @@
 //! nearest city, town or village of the same state within 10 km. Units are dropped; a house number that appears more than
 //! once in a row is kept once, with its first point (the CSV is in id order within a street). `street_expanded` is the
 //! street with its USPS Publication 28 abbreviations written out (`usps`), or NULL when that changes nothing. Words the
-//! source wrote in capitals in a street or postal city are stored with a capital first letter (`title_case_capitals`).
+//! source wrote in capitals in a street or postal city are stored with a capital first letter (`title_case_capitals`), and
+//! so is the street suffix (`usps::suffix_in_title_case`).
 //!
 //! The output (`addresses.sqlite`) is `addr_streets` as the tiles have it, plus the tile, without ids: `cut` numbers the
 //! rows of each tile.
@@ -161,7 +162,7 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
             None => groups.push((town, vec![p])),
         }
     }
-    let street = title_case_capitals(&run.street);
+    let street = crate::usps::suffix_in_title_case(&title_case_capitals(&run.street));
     let expanded = crate::usps::expand(&street);
     for (town, points) in groups {
         let mut seen: HashSet<(u32, String)> = HashSet::new();
@@ -312,12 +313,19 @@ mod tests {
     }
 
     #[test]
-    fn expansion_follows_the_new_case() {
-        let s = title_case_capitals("North STATE Street");
-        assert_eq!(crate::usps::expand(&s), None);
-        let s = title_case_capitals("S STATE ST");
-        assert_eq!(crate::usps::expand(&s).as_deref(), Some("South State STREET"));
-        let s = title_case_capitals("MAIN ST NE");
-        assert_eq!(crate::usps::expand(&s).as_deref(), Some("Main STREET NORTHEAST"));
+    fn street_and_expansion() {
+        let both = |s: &str| {
+            let street = crate::usps::suffix_in_title_case(&title_case_capitals(s));
+            let expanded = crate::usps::expand(&street);
+            (street, expanded)
+        };
+        assert_eq!(both("W MALBAR ST"), ("W Malbar St".into(), Some("West Malbar Street".into())));
+        assert_eq!(both("North STATE Street"), ("North State Street".into(), None));
+        assert_eq!(both("S STATE ST"), ("S State St".into(), Some("South State Street".into())));
+        assert_eq!(both("MAIN ST NE"), ("Main St NE".into(), Some("Main Street Northeast".into())));
+        // Mixed case from the source.
+        assert_eq!(both("E Lochmeadow CT"), ("E Lochmeadow Ct".into(), Some("East Lochmeadow Court".into())));
+        assert_eq!(both("West Glen Ellyn ln"), ("West Glen Ellyn Ln".into(), Some("West Glen Ellyn Lane".into())));
+        assert_eq!(both("US HWY 89 N"), ("US Hwy 89 N".into(), Some("US Hwy 89 North".into())), "HWY is not in the suffix position");
     }
 }
