@@ -61,83 +61,95 @@ class RoutePanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                for (final m in _modes)
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: _ModeButton(
-                        key: ValueKey('mode-${m.$1}'),
-                        icon: m.$2,
-                        label: m.$3,
-                        selected: nav.mode == m.$1,
-                        onTap: () => nav.setMode(m.$1),
-                      ),
-                    ),
-                  ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
-                    child: _ModeButton(
-                      key: const ValueKey('mode-offroad'),
-                      icon: Icons.terrain,
-                      label: 'Off-road',
-                      selected: nav.offroad,
-                      onTap: () => nav.setMode(nav.offroadMode),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (nav.offroad) ...[
-              const SizedBox(height: 8),
-              _Choices(
-                choices: _offroadModes,
-                selected: nav.mode,
-                keyPrefix: 'offroad-mode',
-                onSelected: nav.setMode,
-              ),
-              const SizedBox(height: 6),
-              _Choices(
-                choices: _landAccess,
-                selected: nav.landAccess,
-                keyPrefix: 'land',
-                onSelected: nav.setLandAccess,
-              ),
-              if (nav.landAccess == 'emergency')
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('Ignores land rules: the route may cross private or closed land.',
-                      key: const ValueKey('land-emergency-warning'), style: TextStyle(fontSize: 14, color: k.warning)),
-                ),
-            ],
-            const SizedBox(height: 10),
-            if (nav.routing)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+            // Everything above Start scrolls when it is taller than about half the screen (large text, the off-road choices).
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: k.accent)),
-                    const SizedBox(width: 12),
-                    Text('Finding the way', style: TextStyle(fontSize: 17, color: k.secondary)),
+                    Row(
+                      children: [
+                        for (final m in _modes)
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 3),
+                              child: _ModeButton(
+                                key: ValueKey('mode-${m.$1}'),
+                                icon: m.$2,
+                                label: m.$3,
+                                selected: nav.mode == m.$1,
+                                onTap: () => nav.setMode(m.$1),
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: _ModeButton(
+                              key: const ValueKey('mode-offroad'),
+                              icon: Icons.terrain,
+                              label: 'Off-road',
+                              selected: nav.offroad,
+                              onTap: () => nav.setMode(nav.offroadMode),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (nav.offroad) ...[
+                      const SizedBox(height: 8),
+                      _Choices(
+                        choices: _offroadModes,
+                        selected: nav.mode,
+                        keyPrefix: 'offroad-mode',
+                        onSelected: nav.setMode,
+                      ),
+                      const SizedBox(height: 6),
+                      _Choices(
+                        choices: _landAccess,
+                        selected: nav.landAccess,
+                        keyPrefix: 'land',
+                        onSelected: nav.setLandAccess,
+                      ),
+                      if (nav.landAccess == 'emergency')
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text('Ignores land rules: the route may cross private or closed land.',
+                              key: const ValueKey('land-emergency-warning'), style: TextStyle(fontSize: 14, color: k.warning)),
+                        ),
+                    ],
+                    const SizedBox(height: 10),
+                    if (nav.routing)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: k.accent)),
+                            const SizedBox(width: 12),
+                            Text('Finding the way', style: TextStyle(fontSize: 17, color: k.secondary)),
+                          ],
+                        ),
+                      )
+                    else if (nav.routeError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
+                      )
+                    else ...[
+                      for (var i = 0; i < nav.routes.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
+                        ),
+                      if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
+                    ],
                   ],
                 ),
-              )
-            else if (nav.routeError != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
-              )
-            else ...[
-              for (var i = 0; i < nav.routes.length; i++)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
-                ),
-              if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
-            ],
+              ),
+            ),
             const SizedBox(height: 4),
             FilledButton.icon(
               key: const ValueKey('route-start'),
