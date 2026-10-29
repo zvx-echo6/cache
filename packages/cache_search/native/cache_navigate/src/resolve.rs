@@ -1,7 +1,9 @@
-//! Names to coordinates: "lat,lon" text, the user's saved places, then the places pack.
+//! Names to coordinates: "lat,lon" text, the user's saved places, a point of the user's map layers by its exact name, then the
+//! places pack.
 
 use cache_offroad::navigate::Waypoint;
 use cache_tool::places::{GeocodeQuery, PlaceDetails, PlaceMatch, PlaceSource};
+use cache_tool::user::{UserPoint, UserPoints};
 use cache_tool::{ToolCtx, ToolError};
 use serde_json::Value;
 use std::sync::Arc;
@@ -13,6 +15,8 @@ pub(crate) struct Resolved {
     pub lat: f64,
     pub lon: f64,
     pub kind: Option<String>,
+    /// A layer point's layer name (`kind` "layer_point").
+    pub kind_label: Option<String>,
     pub street: Option<String>,
     pub locality: Option<String>,
     pub county: Option<String>,
@@ -33,6 +37,7 @@ impl Resolved {
             lat,
             lon,
             kind: None,
+            kind_label: None,
             street: None,
             locality: None,
             county: None,
@@ -54,6 +59,7 @@ impl Resolved {
             lat: m.lat,
             lon: m.lon,
             kind: m.kind,
+            kind_label: m.kind_label,
             street: m.street,
             locality: m.locality,
             county: m.county,
@@ -78,9 +84,20 @@ pub use cache_tool::places::parse_latlon;
 pub(crate) struct Resolver<'a, 'c> {
     pub ctx: &'a ToolCtx<'c>,
     pub source: Option<Arc<dyn PlaceSource>>,
+    pub user: Option<Arc<dyn UserPoints>>,
 }
 
 impl Resolver<'_, '_> {
+    /// A layer point as a matched place: its layer as `kind_label`, the nearest town as `locality`.
+    fn layer_match(&self, p: UserPoint, bias: Option<(f64, f64)>) -> PlaceMatch {
+        let mut m = PlaceMatch::new(p.name, p.lat, p.lon);
+        m.kind = Some(p.kind);
+        m.kind_label = Some(p.kind_label);
+        m.locality = p.locality.or_else(|| self.source.as_ref().and_then(|s| s.geocoder()).and_then(|g| g.nearest_town(p.lat, p.lon)));
+        m.distance_km = bias.map(|(la, lo)| cache_offroad::grid::haversine_m(la, lo, p.lat, p.lon) / 1000.0);
+        m
+    }
+
     fn exact(&self, text: &str) -> Option<Resolved> {
         if let Some((lat, lon)) = parse_latlon(text) {
             return Some(Resolved::point(text.trim().to_string(), lat, lon));
@@ -102,6 +119,16 @@ impl Resolver<'_, '_> {
     /// query, searched_within_km; no detail).
     pub fn named(&self, text: &str, which: &str, near: Option<&str>, bias: Option<(f64, f64)>, with_others: bool) -> Result<Resolved, ToolError> {
         if let Some(r) = self.exact(text) {
+            return Ok(r);
+        }
+        // a point of the user's map layers by its exact name; the same name in other layers goes to the other candidates
+        let points = self.user.as_ref().map(|u| u.named(text)).unwrap_or_default();
+        if !points.is_empty() {
+            let mut it = points.into_iter().map(|p| self.layer_match(p, bias));
+            let mut r = Resolved::from_match(it.next().expect("not empty"));
+            if with_others {
+                r.others = it.collect();
+            }
             return Ok(r);
         }
         let mut searched = None;

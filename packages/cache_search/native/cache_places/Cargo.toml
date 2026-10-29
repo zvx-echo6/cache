@@ -17,3 +17,5 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 [dev-dependencies]
 # Test-only cross-check of the UTM series against an independent implementation.
 utm = "0.1"
+# The user store and its fixture files: imported repeaters and map layers in nearby and locate.
+cache_user = { path = "../cache_user" }

@@ -10,6 +10,8 @@ pub struct PlaceMatch {
     pub place_name: String,
     /// What it is, in plain words ("hospital", "town", "trailhead"); none when the pack does not say.
     pub kind: Option<String>,
+    /// How to say the kind, for a point of the user's own map layer (`kind` "layer_point"): the layer's name.
+    pub kind_label: Option<String>,
     pub street: Option<String>,
     pub locality: Option<String>,
     pub county: Option<String>,
@@ -40,6 +42,7 @@ impl PlaceMatch {
         PlaceMatch {
             place_name: place_name.into(),
             kind: None,
+            kind_label: None,
             street: None,
             locality: None,
             county: None,
@@ -97,6 +100,11 @@ pub trait Geocoder: Send + Sync {
     /// compass point the point lies in from the nearest town, and the town as it is shown). `None` when the data does not
     /// know a town near it; the default knows none.
     fn describe_point(&self, _lat: f64, _lon: f64) -> Option<String> {
+        None
+    }
+
+    /// The name of the nearest town to a point ("Burley"), when the data knows one; the default knows none.
+    fn nearest_town(&self, _lat: f64, _lon: f64) -> Option<String> {
         None
     }
 }

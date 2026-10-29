@@ -30,6 +30,7 @@ pub use nearby::NearbyTool;
 pub use pack::{Pack, PackSet};
 pub use source::PackPlaceSource;
 
+use cache_tool::user::UserPointsSlot;
 use cache_tool::{Tool, ToolCtx, ToolError};
 use chrono::DateTime;
 use serde::Deserialize;
@@ -58,10 +59,17 @@ pub fn tools_and_source(cfg: &PlacesCfg) -> (Vec<Box<dyn Tool>>, Arc<dyn cache_t
 
 /// `tools_and_source` plus the [`PlacesCore`] the map's search box (`cs_map_search`) runs on, over the same packs and geocoder.
 pub fn core_tools_and_source(cfg: &PlacesCfg) -> (Arc<PlacesCore>, Vec<Box<dyn Tool>>, Arc<dyn cache_tool::places::PlaceSource>) {
+    core_tools_and_source_with(cfg, UserPointsSlot::default())
+}
+
+/// `core_tools_and_source` with the user's own points (imported repeaters, map layers) plugged into `nearby` and `locate`.
+pub fn core_tools_and_source_with(cfg: &PlacesCfg, user: UserPointsSlot) -> (Arc<PlacesCore>, Vec<Box<dyn Tool>>, Arc<dyn cache_tool::places::PlaceSource>) {
     let core = Arc::new(PlacesCore::new(cfg));
     let (packs, geo, feed) = (core.packs.clone(), core.geo.clone(), core.feed.clone());
-    let tools: Vec<Box<dyn Tool>> =
-        vec![Box::new(NearbyTool::new(packs.clone(), geo.clone()).with_feed(feed.clone())), Box::new(LocateTool::new(packs.clone(), geo.clone()))];
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(NearbyTool::new(packs.clone(), geo.clone()).with_feed(feed.clone()).with_user(user.clone())),
+        Box::new(LocateTool::new(packs.clone(), geo.clone()).with_user(user)),
+    ];
     (core, tools, Arc::new(PackPlaceSource::new(packs, geo).with_feed(feed)))
 }
 

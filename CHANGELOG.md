@@ -24,6 +24,9 @@ release notes).
 - Assistant: the calculator works out dates, such as the days between two dates or the date 30 days from today
 - Assistant: when a route can't reach a point away from the roads, it says whether the off-road data is missing or no off-road way was found
 - Assistant: reading a library entry shows its author and page when known
+- Import repeater lists (a RepeaterBook KML, a CHIRP CSV, or both from the same export, merged) and export them as KML for Google Earth
+- Import your own map layers from KML, KMZ, GPX or GeoJSON, and export them as KML or GPX
+- Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
 - Assistant: asking to open a place, route, live data or location result no longer fails with an internal error

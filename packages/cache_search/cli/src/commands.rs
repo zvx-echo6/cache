@@ -76,6 +76,12 @@ cs: command line and HTTP wrapper over the cache_search core
                      past valid_until gives expired + not_refreshed; --live-state offline for a place with no data gives
                      no_data + not_refreshed. It never changes the tool list (web_search follows CACHE_WEB_* only).
                      [--actions <defs.json>] [--action-results <results.json>] [EMBED] [--open-timeout 600]
+                     [--layers <file>]... [--repeaters <file>]...
+                     --layers: a map layer imported at start (KML, KMZ, GPX, GeoJSON, or a layer JSON: a GeoJSON FeatureCollection
+                     with \"name\" and \"private\": true|false); repeatable, one layer per file. --repeaters: a repeater list file
+                     (RepeaterBook-style KML and/or CHIRP CSV); repeatable, all the files given make one merged list. Both need the
+                     config's \"user\" section, replace what an earlier start imported from the same files, and print one line each
+                     on stderr (`layer <json>`, `repeaters <json>`).
                      --actions: a JSON array of action definitions (docs/ACTIONS.md) installed at start (cs_act_set_definitions); the
                      report is printed on stderr as one line `actions <json>`.
                      --action-results: the scripted host for captures. A JSON object keyed by action id in two tables:
@@ -698,7 +704,9 @@ pub fn layers(argv: &[String]) -> Result<(), ApiError> {
 
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
     let (states, rest) = take_repeated(argv, "live-state")?;
-    let a = parse(&rest, &["config", "listen", "live-policy", "open-timeout", "actions", "action-results"], &["allow-non-loopback"], true)?;
+    let mut valued = vec!["config", "listen", "live-policy", "open-timeout", "actions", "action-results"];
+    valued.extend(EMBED_FLAGS);
+    let a = Args::parse_repeatable(&rest, &valued, &["layers", "repeaters"], &["allow-non-loopback"]).map_err(usage_err)?;
     let live_states = live_state_policy(&states, a.get("live-policy"))?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
     server::check_listen(&listen, a.flag("allow-non-loopback"))?;
@@ -717,6 +725,7 @@ pub fn serve(argv: &[String]) -> Result<(), ApiError> {
         let mut err = std::io::stderr().lock();
         let _ = writeln!(err, "actions {report}");
     }
+    import_user_layers(&mut e.core, a.all("layers"), a.all("repeaters"))?;
     server::run(e, &listen, script)
 }
 
@@ -748,6 +757,21 @@ fn live_state_policy(states: &[String], policy: Option<&str>) -> Result<Option<S
         map.insert(id.to_string(), json!(state));
     }
     Ok(Some(p.to_string()))
+}
+
+/// `cs serve --layers` and `--repeaters`: each layer file is imported as one layer, the repeater files as one merged list,
+/// replacing what an earlier start imported from the same files. One line per import on stderr.
+pub fn import_user_layers(core: &mut Core, layers: &[String], repeaters: &[String]) -> Result<(), ApiError> {
+    let mut err = std::io::stderr().lock();
+    for f in layers {
+        let report = core.userlayers_import(&json!({"kind": "layer", "paths": [f], "replace": true}).to_string())?;
+        let _ = writeln!(err, "layer {report}");
+    }
+    if !repeaters.is_empty() {
+        let report = core.userlayers_import(&json!({"kind": "repeaters", "paths": repeaters, "replace": true}).to_string())?;
+        let _ = writeln!(err, "repeaters {report}");
+    }
+    Ok(())
 }
 
 /// Print an error as one JSON line on stderr. Writes with `writeln!` and ignores a failed write: `eprintln!`

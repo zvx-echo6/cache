@@ -324,6 +324,18 @@ impl Core {
         }
     }
 
+    /// `cs_userlayers_import`.
+    pub fn userlayers_import(&mut self, import_json: &str) -> Result<String, ApiError> {
+        let c = cstring(import_json, "import")?;
+        let p = unsafe { cs_userlayers_import(self.h, c.as_ptr()) };
+        self.result(p)
+    }
+
+    pub fn userlayers_list(&mut self) -> Result<String, ApiError> {
+        let p = unsafe { cs_userlayers_list(self.h) };
+        self.result(p)
+    }
+
     pub fn places_list(&mut self) -> Result<String, ApiError> {
         let p = unsafe { cs_places_list(self.h) };
         self.result(p)

@@ -61,7 +61,8 @@ char *cs_version(void);
  *   ],
  *   "snippet_chars": 400,          optional, default 400
  *   "candidates_per_list": 50,     optional, default 50
- *   "user": {"db_path": ".../user.sqlite"},          optional: where saved places are stored (cs_places_*)
+ *   "user": {"db_path": ".../user.sqlite"},          optional: where saved places (cs_places_*), map layers and repeater
+ *                                                     lists (cs_userlayer*) are stored
  *   "video": {"dir": ".../videos"},                 optional: PeerTube instances, offline downloads (cs_video_*, job
  *                                                   kind video_download); holds instances.json and downloads/
  *   "live": {"db_path": ".../live.sqlite",           optional: the live data engine (cs_live_*); sources_dir holds
@@ -393,6 +394,51 @@ char *cs_place_save(cs_handle *h, const char *place_json);
 
 /* Deletes the saved place and the live data downloaded for it. {"deleted":"<key>"}, or "not_found". */
 char *cs_place_delete(cs_handle *h, const char *key);
+
+/* --- the user's map layers and repeater lists (user.sqlite; logic in cache_user's mapdata) ---
+ *
+ * A map layer (id "y<n>") holds pins, lines and areas with a name and notes, imported from KML, KMZ, GPX, GeoJSON or a layer
+ * JSON (a GeoJSON FeatureCollection with "name" and "private": true|false). A repeater list (id "l<n>") is a RepeaterBook-style
+ * KML and/or a CHIRP CSV of the same export, merged: a pin and a CSV row are one repeater when they have the same frequency
+ * and town (the CSV's Comment is the town, or the town then ", " and the site). Items are numbered from 1 in file order.
+ * Only points reach the assistant: nearby offers "repeater" (repeaters with a position) and one "layer_<slug>" category per
+ * layer with points (at most 10, most recently used first; used = imported, or its visibility changed), and navigate and
+ * locate match a layer point by its exact name. Hidden and private layers reach it too (private = left out of sync and
+ * sharing). All fail with "not_configured" when the cs_open config has no "user" section, "not_found" for an unknown id,
+ * "bad_json" for bad arguments or an unreadable file (the message names the file and, for a CSV, the line), "io" when a file
+ * cannot be read or written. */
+
+/* import_json: {"kind":"layer"|"repeaters","paths":["/path/file",...],"name"?:"...","private"?:bool,"replace"?:bool}.
+ * A layer is one file; its name is "name", else the file's own (KML Document, GPX metadata, layer JSON), else the file name
+ * without its extension; "private" (layers only) is "private", else the layer JSON's, else false. A repeater list is one or
+ * more .kml/.kmz and CHIRP .csv files; its name is "name", else the first KML's file name, else the first CSV's. "replace":
+ * the layers or lists of this kind imported from the same file names are deleted first.
+ * Returns the new layer or list as cs_userlayers_list shows it; a list also has "skipped" (pins that are not repeaters). */
+char *cs_userlayers_import(cs_handle *h, const char *import_json);
+
+/* {"layers":[{"id","kind":"layer","name","files","private","visible","points","lines","areas","category"}],
+ *  "repeater_lists":[{"id","kind":"repeaters","name","files","visible","repeaters","with_position","merged","without_position"}]},
+ * most recently used first. "category" is the layer's nearby category id (null without points). */
+char *cs_userlayers_list(cs_handle *h);
+
+/* What the map draws. A layer: its layer JSON with "id" first (each feature's "id" is its item number, properties "name" and
+ * "notes"?). A list: {"id","name","repeaters":[{"item","address","name","town","lat","lon","frequency","offset","tone",
+ * "mode"?,"on_air"?,"list","details"?,"details_link"}]} (lat/lon null for a CSV row no pin paired with; details_link is the
+ * pin's RepeaterBook page, opened by the app). */
+char *cs_userlayer_get(cs_handle *h, const char *id);
+
+/* visible_json: {"id","visible":bool}. On the map or not (the assistant sees it either way); counts as a use. Returns the
+ * summary as in cs_userlayers_list. */
+char *cs_userlayer_set_visible(cs_handle *h, const char *visible_json);
+
+/* {"deleted":"<id>"}, or "not_found". */
+char *cs_userlayer_delete(cs_handle *h, const char *id);
+
+/* export_json: {"id","format":"kml"|"gpx","path":"/path/out.kml"}. Writes the file and returns {"id","format","path","bytes"}.
+ * A layer as KML or GPX (GPX has no areas: an area is a closed track). A repeater list as KML only: each pin with a position
+ * carries every known setting as readable description lines and as ExtendedData, so Google Earth shows them offline and an
+ * import of the file gives the same list. */
+char *cs_userlayer_export(cs_handle *h, const char *export_json);
 
 /* --- live data (live.sqlite; logic in the cache_live crate) ---
  *

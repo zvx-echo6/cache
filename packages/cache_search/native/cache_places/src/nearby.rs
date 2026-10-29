@@ -1,7 +1,9 @@
 //! The `nearby` tool (docs/TOOLS.md): the nearest places of one kind, ranked by straight-line distance.
 //!
 //! The category enum and the one-line description of each category are filled at run time from the category tables
-//! of the installed packs, so `schema()` is None until a pack with places is installed.
+//! of the installed packs, then the user's own points: `repeater` while an imported repeater list has a repeater with a
+//! position, and one `layer_<slug>` per map layer with points (at most 10, most recently used first). `schema()` is None
+//! while there is none of these.
 
 use crate::geo::{bearing_deg, compass8, haversine_km, km_to_mi, round_to};
 use crate::kind::shown;
@@ -9,6 +11,7 @@ use crate::feed::{FeedSlot, TOOL_PREPARE_WAIT};
 use crate::pack::{Pack, PackSet, PlaceRow};
 use crate::{age_words, resolve_center, Geocoder};
 use cache_tool::hours::{hours_note, open_status};
+use cache_tool::user::{UserCategory, UserPoints, UserPointsSlot};
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -21,11 +24,18 @@ pub struct NearbyTool {
     packs: Arc<PackSet>,
     geo: Arc<dyn Geocoder>,
     feed: FeedSlot,
+    user: UserPointsSlot,
 }
 
 impl NearbyTool {
     pub fn new(packs: Arc<PackSet>, geo: Arc<dyn Geocoder>) -> NearbyTool {
-        NearbyTool { packs, geo, feed: FeedSlot::default() }
+        NearbyTool { packs, geo, feed: FeedSlot::default(), user: UserPointsSlot::default() }
+    }
+
+    /// The user's imported repeaters and map layers (the host's user store).
+    pub fn with_user(mut self, user: UserPointsSlot) -> NearbyTool {
+        self.user = user;
+        self
     }
 
     /// The feed that fetches the places tiles around the centre before a search (the places core's).
@@ -124,7 +134,10 @@ impl Tool for NearbyTool {
     }
 
     fn schema(&self) -> Option<Value> {
-        let cats = installed_categories(&self.packs.current());
+        let mut cats = installed_categories(&self.packs.current());
+        if let Some(u) = cache_tool::user::current(&self.user) {
+            cats.extend(u.categories().into_iter().map(|c| (c.id, String::new(), c.description)));
+        }
         if cats.is_empty() {
             return None;
         }
@@ -156,6 +169,20 @@ impl Tool for NearbyTool {
             None => DEFAULT_LIMIT,
             Some(v) => v.as_u64().filter(|n| (1..=10).contains(n)).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "\"limit\" must be 1 to 10"))? as usize,
         };
+
+        // The user's own points: an imported repeater list or a map layer.
+        let user = cache_tool::user::current(&self.user);
+        if let Some(u) = &user {
+            if let Some(c) = u.categories().into_iter().find(|c| c.id == category) {
+                return self.run_user(ctx, &**u, &c, near, limit);
+            }
+        }
+        if category == "repeater" && !installed_categories(&self.packs.current()).iter().any(|(id, _, _)| id == category) {
+            return Err(err(ToolError::NOT_SET_UP, "no repeater list is imported"));
+        }
+        if category.starts_with("layer_") && !installed_categories(&self.packs.current()).iter().any(|(id, _, _)| id == category) {
+            return Err(err(ToolError::BAD_ARGUMENTS, format!("category: no such layer on this phone: {category:?}")));
+        }
 
         // The places tiles around the centre first, when the host plugged in a feed (it fetches only online).
         if self.feed.get().is_some() {
@@ -232,6 +259,76 @@ impl Tool for NearbyTool {
         out.insert("map_region".into(), json!(region.meta.region_name));
         if let Some(age) = age {
             out.insert("map_region_age".into(), json!(age));
+        }
+        Ok(ToolOutput::Json(Value::Object(out)))
+    }
+}
+
+impl NearbyTool {
+    /// `nearby` over one category of the user's points: the nearest within `MAX_KM`, nearest first (file order on a tie).
+    /// The map region is named when an installed pack covers the centre; no pack is needed otherwise.
+    fn run_user(&self, ctx: &ToolCtx, user: &dyn UserPoints, cat: &UserCategory, near: Option<&str>, limit: usize) -> Result<ToolOutput, ToolError> {
+        let center = resolve_center(ctx, &self.packs, &*self.geo, near)?;
+        let packs = self.packs.current();
+        let region = packs
+            .iter()
+            .filter(|p| p.covers(center.lat, center.lon))
+            .min_by(|a, b| a.meta.area().partial_cmp(&b.meta.area()).unwrap_or(std::cmp::Ordering::Equal));
+        let mut found: Vec<(cache_tool::user::UserPoint, f64)> = user
+            .points(&cat.id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                let km = haversine_km(center.lat, center.lon, p.lat, p.lon);
+                (p, km)
+            })
+            .filter(|(_, km)| *km <= MAX_KM)
+            .collect();
+        found.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        found.truncate(limit);
+        if found.is_empty() {
+            return Err(err("nearby_empty", format!("no {} within {} km of {}", cat.plural, MAX_KM as u32, center.label))
+                .with("category", cat.id.as_str())
+                .with("searched_within_km", MAX_KM as u32));
+        }
+        let mut notes: Vec<(&'static str, &'static str)> = Vec::new();
+        let places: Vec<Value> = found
+            .into_iter()
+            .map(|(p, km)| {
+                let mut m = Map::new();
+                m.insert("address".into(), json!(p.address));
+                m.insert("name".into(), json!(p.name));
+                m.insert("kind".into(), json!(p.kind));
+                m.insert("kind_label".into(), json!(p.kind_label));
+                if let Some(l) = p.locality.clone().or_else(|| self.geo.reverse(p.lat, p.lon).map(|t| t.name)) {
+                    m.insert("locality".into(), json!(l));
+                }
+                m.insert("distance_mi".into(), json!(round_to(km_to_mi(km), 1)));
+                m.insert("direction".into(), json!(compass8(bearing_deg(center.lat, center.lon, p.lat, p.lon))));
+                for (k, v) in p.fields {
+                    m.insert(k, v);
+                }
+                if let Some(n) = user.note(&p.kind) {
+                    if !notes.contains(&n) {
+                        notes.push(n);
+                    }
+                }
+                Value::Object(m)
+            })
+            .collect();
+        let mut out = Map::new();
+        out.insert("category".into(), json!(cat.id));
+        out.insert("center".into(), json!(center.label));
+        out.insert("ranked_by".into(), json!("distance"));
+        out.insert("places".into(), Value::Array(places));
+        if let Some(region) = region {
+            out.insert("map_region".into(), json!(region.meta.region_name));
+            if let Some(age) = age_words(ctx.now, &region.meta.built_at) {
+                out.insert("map_region_age".into(), json!(age));
+            }
+        }
+        for (k, v) in notes {
+            out.insert(k.into(), json!(v));
         }
         Ok(ToolOutput::Json(Value::Object(out)))
     }

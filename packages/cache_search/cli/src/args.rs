@@ -4,13 +4,21 @@ use std::collections::HashMap;
 
 pub struct Args {
     values: HashMap<String, String>,
+    /// Every value of a repeatable flag, in the order given.
+    many: HashMap<String, Vec<String>>,
     flags: Vec<String>,
 }
 
 impl Args {
     /// `valued` flags take a value; `boolean` flags do not. Anything else is an error.
     pub fn parse(argv: &[String], valued: &[&str], boolean: &[&str]) -> Result<Args, String> {
+        Args::parse_repeatable(argv, valued, &[], boolean)
+    }
+
+    /// `parse`, where the `repeatable` flags (which take a value) may be given more than once (see `all`).
+    pub fn parse_repeatable(argv: &[String], valued: &[&str], repeatable: &[&str], boolean: &[&str]) -> Result<Args, String> {
         let mut values = HashMap::new();
+        let mut many: HashMap<String, Vec<String>> = HashMap::new();
         let mut flags = Vec::new();
         let mut i = 0;
         while i < argv.len() {
@@ -27,7 +35,7 @@ impl Args {
                     return Err(format!("--{name} takes no value"));
                 }
                 flags.push(name.to_string());
-            } else if valued.contains(&name) {
+            } else if valued.contains(&name) || repeatable.contains(&name) {
                 let v = match inline {
                     Some(v) => v,
                     None => {
@@ -35,7 +43,9 @@ impl Args {
                         argv.get(i).cloned().ok_or_else(|| format!("--{name} needs a value"))?
                     }
                 };
-                if values.insert(name.to_string(), v).is_some() {
+                if repeatable.contains(&name) {
+                    many.entry(name.to_string()).or_default().push(v);
+                } else if values.insert(name.to_string(), v).is_some() {
                     return Err(format!("--{name} given twice"));
                 }
             } else {
@@ -43,7 +53,12 @@ impl Args {
             }
             i += 1;
         }
-        Ok(Args { values, flags })
+        Ok(Args { values, many, flags })
+    }
+
+    /// Every value of a repeatable flag, in the order given (empty when it was not given).
+    pub fn all(&self, name: &str) -> &[String] {
+        self.many.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
@@ -94,5 +109,14 @@ mod tests {
         assert!(Args::parse(&v(&["--j=1"]), &[], &["j"]).is_err());
         let a = Args::parse(&v(&["--k", "x"]), &["k"], &[]).unwrap();
         assert!(a.num("k", 1usize).is_err());
+    }
+
+    #[test]
+    fn repeatable_flags_keep_every_value() {
+        let a = Args::parse_repeatable(&v(&["--layers", "a.kml", "--k", "1", "--layers=b.gpx"]), &["k"], &["layers", "repeaters"], &[]).unwrap();
+        assert_eq!(a.all("layers"), ["a.kml", "b.gpx"]);
+        assert!(a.all("repeaters").is_empty());
+        assert_eq!(a.get("layers"), None);
+        assert!(Args::parse_repeatable(&v(&["--layers"]), &[], &["layers"], &[]).is_err());
     }
 }
