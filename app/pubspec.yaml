@@ -60,6 +60,9 @@ dependencies:
   flutter_local_notifications: 22.3.2
   # The link code shown as a QR code on the Sharing page.
   qr_flutter: 4.1.0
+  # The installed version and build number on the About page. Pinned to 10.2.2 (published 2026-10-01, at least two weeks old);
+  # it was already in the build through other packages.
+  package_info_plus: 10.2.2
 
 dev_dependencies:
   flutter_test:

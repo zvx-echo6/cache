@@ -95,7 +95,8 @@ void main() {
     await r.show(tester, AboutPage(openUrl: (u) async => opened.add(u)));
     expect(find.text(kAppVersion), findsOneWidget);
     expect(find.textContaining('Copyright (C) 2026 Happy Little LLC', findRichText: true), findsOneWidget);
-    expect(find.textContaining('including builds you receive through TestFlight', findRichText: true), findsOneWidget);
+    expect(find.textContaining('including builds you get from Google Play', findRichText: true), findsOneWidget, reason: 'the tests run as Android');
+    expect(find.textContaining('TestFlight', findRichText: true), findsNothing);
     expect(find.byType(SelectableText), findsOneWidget, reason: 'the notice can be selected');
     final link = find.byWidgetPredicate((w) => w is SelectableText && w.textSpan?.toPlainText().contains(kSourceUrl) == true);
     expect(link, findsOneWidget);
@@ -118,6 +119,21 @@ void main() {
     expect(find.byType(LicensePage), findsOneWidget);
     expect(find.text('Cache'), findsWidgets, reason: 'the licence page names the app');
     await r.dispose(tester);
+  });
+
+  testWidgets('About: the version and build come from the installed app', (tester) async {
+    final r = await SettingsRig.create(tester);
+    await r.show(tester, AboutPage(openUrl: (u) async {}, version: () async => '1.0.0 (build 4)'));
+    await tester.pump();
+    expect(find.text('1.0.0 (build 4)'), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  test('the source notice names where builds come from on each platform', () {
+    expect(sourceNoticeEnd(TargetPlatform.iOS), ', including builds you receive through TestFlight.');
+    expect(sourceNoticeEnd(TargetPlatform.android), ', including builds you get from Google Play.');
+    expect(sourceNoticeEnd(TargetPlatform.macOS), '.');
+    expect(sourceNoticeEnd(TargetPlatform.windows), '.');
   });
 
   testWidgets('the credits page shows the text it is given', (tester) async {

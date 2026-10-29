@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,10 +17,13 @@ const String kCreditsAsset = 'assets/credits.md';
 
 /// Settings > About and credits: the version, the licence, the credits and the open-source licences.
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key, this.openUrl = openInSystemBrowser});
+  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion});
 
   /// How a link is opened (the phone's browser; a test passes its own).
   final UrlOpener openUrl;
+
+  /// The installed version and build (read from the phone; a test passes its own).
+  final Future<String> Function() version;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +32,7 @@ class AboutPage extends StatelessWidget {
       children: [
         SettingsGroup(
           rows: [
-            SettingsRow(title: 'Version', status: const [Part(kAppVersion)]),
+            SettingsRow(title: 'Version', statusWidget: _VersionText(version: version)),
             SettingsRow(
               title: 'Licence',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],
@@ -105,6 +109,34 @@ class CreditsPage extends StatelessWidget {
   }
 }
 
+/// The installed version and build; the version this code was built as until the phone has answered.
+class _VersionText extends StatefulWidget {
+  const _VersionText({required this.version});
+
+  final Future<String> Function() version;
+
+  @override
+  State<_VersionText> createState() => _VersionTextState();
+}
+
+class _VersionTextState extends State<_VersionText> {
+  late final Future<String> _read = widget.version();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+    future: _read,
+    initialData: kAppVersion,
+    builder: (context, snap) => statusText(context, [Part(snap.data ?? kAppVersion)]),
+  );
+}
+
+/// The licence's permission in words for where this build came from: TestFlight on iOS, Google Play on Android.
+String sourceNoticeEnd(TargetPlatform platform) => switch (platform) {
+  TargetPlatform.iOS => ', including builds you receive through TestFlight.',
+  TargetPlatform.android => ', including builds you get from Google Play.',
+  _ => '.',
+};
+
 /// Where the source is and what testers may do with it. The address is tappable (opens the browser) and the text is selectable.
 class _SourceNotice extends StatefulWidget {
   const _SourceNotice({required this.openUrl});
@@ -137,7 +169,7 @@ class _SourceNoticeState extends State<_SourceNotice> {
             recognizer: _tap,
             style: TextStyle(decoration: TextDecoration.underline, color: k.accent),
           ),
-          const TextSpan(text: '. You may copy, share and modify Cache under the AGPL, including builds you receive through TestFlight.'),
+          TextSpan(text: '. You may copy, share and modify Cache under the AGPL${sourceNoticeEnd(defaultTargetPlatform)}'),
         ],
       ),
     );
