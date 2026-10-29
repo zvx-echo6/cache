@@ -329,9 +329,27 @@ void main() {
     test('a file that is not a library says so and leaves nothing', () async {
       await setUpLibs();
       await libs.addFile(libFile('x.txt', 'hello'), confirmUpdate: never, askSettings: noSettings);
-      expect(libs.task?.error, 'That file is not a library.');
+      expect(libs.task?.error, "This file isn't a Cache library.");
       expect(libs.libraries, isEmpty);
       expect(folders(), isEmpty);
+    });
+
+    test('the blank template says it is empty and needs filling, in plain words', () async {
+      await setUpLibs();
+      final f = File('${tmp.path}/cache-library-template.tar')
+        ..writeAsBytesSync(_tar({'README.md': utf8.encode('# Template'), 'cache-library.json': utf8.encode('{}'), 'blank-library.snapshot': List.filled(700, 1)}));
+      expect(tarEntryNames(f), ['README.md', 'cache-library.json', 'blank-library.snapshot']);
+      await libs.addFile(f, confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, 'This is an empty library template. Fill it with your own entries first (see the README inside).');
+      expect(libs.libraries, isEmpty);
+    });
+
+    test('a tar that is not a library, and a core error with internals, say so in plain words', () async {
+      await setUpLibs();
+      final f = File('${tmp.path}/photos.tar')..writeAsBytesSync(_tar({'a.jpg': List.filled(10, 2)}));
+      await libs.addFile(f, confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, "This file isn't a Cache library.");
+      expect(tarEntryNames(File('${tmp.path}/none')), isNull);
     });
 
     test('a download link is fetched into a hidden partial file and added; http is refused', () async {
@@ -493,4 +511,29 @@ void main() {
       expect(find.text('Whole library only'), findsOneWidget);
     });
   });
+}
+
+/// A ustar archive of [files] (name to bytes), as the template's tar.
+List<int> _tar(Map<String, List<int>> files) {
+  final out = <int>[];
+  for (final e in files.entries) {
+    final h = List<int>.filled(512, 0);
+    void put(int at, String v) => h.setRange(at, at + v.length, v.codeUnits);
+    put(0, e.key);
+    put(100, '0000644\x00');
+    put(108, '0000000\x00');
+    put(116, '0000000\x00');
+    put(124, '${e.value.length.toRadixString(8).padLeft(11, '0')}\x00');
+    put(136, '00000000000\x00');
+    h[156] = 0x30;
+    put(257, 'ustar\x0000');
+    h.setRange(148, 156, List.filled(8, 32));
+    final sum = h.fold<int>(0, (a, b) => a + b);
+    put(148, '${sum.toRadixString(8).padLeft(6, '0')}\x00 ');
+    out
+      ..addAll(h)
+      ..addAll(e.value)
+      ..addAll(List.filled((512 - e.value.length % 512) % 512, 0));
+  }
+  return out..addAll(List.filled(1024, 0));
 }

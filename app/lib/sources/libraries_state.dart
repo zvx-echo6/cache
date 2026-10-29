@@ -455,21 +455,37 @@ class LibrariesState extends ChangeNotifier {
     }
   }
 
+  /// Plain words for a core error; the core's own text (paths, library internals) goes to the log only.
   String _words(Object e) {
     if (e is CacheSearchException) {
+      debugPrint('Libraries: ${e.code}: ${e.message}');
       switch (e.code) {
         case 'no_space':
           return 'Not enough free space on this device for the library.';
         case 'io':
-          return e.message.contains('not a tar') ? 'That file is not a library.' : 'Could not read the file: ${e.message}';
+          return 'Could not read or write the file.';
         case 'unsupported':
-          return 'That file is not a library: ${e.message}';
+          return kNotALibrary;
         case 'bad_json':
-          return 'Its settings file could not be read: ${e.message}';
+          return 'Its settings file could not be read.';
+        case 'not_found':
+          return 'The file could not be found.';
       }
-      return e.message;
+      return 'That did not work.';
     }
     return e.toString().replaceFirst('Bad state: ', '');
+  }
+
+  /// Why [archive] could not be unpacked, in plain words: the blank template (which has no entries yet), or a file that is
+  /// not a library (not a tar, or a tar that is not a library snapshot). Running out of space says so.
+  String _unpackWords(File archive, CacheSearchException e) {
+    final names = tarEntryNames(archive);
+    if (names != null && names.contains(kTemplateSnapshotName)) return kEmptyTemplate;
+    if (e.code == 'unsupported' || e.code == 'io') {
+      debugPrint('Libraries: ${e.code}: ${e.message}');
+      return kNotALibrary;
+    }
+    return _words(e);
   }
 
   /// Unpacks [archive] into a hidden new folder, works out its settings (asking only for a settings file the core cannot do
@@ -492,7 +508,14 @@ class LibrariesState extends ChangeNotifier {
         ..step = AddStep.unpacking
         ..fraction = 0;
       notifyListeners();
-      var p = await _job(t, core, 'unpack_library', {'snapshot_path': archive.path, 'dir': shard});
+      JobProgress? p;
+      try {
+        p = await _job(t, core, 'unpack_library', {'snapshot_path': archive.path, 'dir': shard},
+            words: (e) => _unpackWords(archive, e));
+      } on CacheSearchException catch (e) {
+        t.error = _unpackWords(archive, e);
+        return false;
+      }
       if (p == null) return false;
       var detail = p.detail ?? const {};
       var settings = (detail['settings'] as Map?)?.cast<String, dynamic>();
@@ -577,7 +600,8 @@ class LibrariesState extends ChangeNotifier {
   }
 
   /// Runs a core job for [t], showing its progress; null when it was cancelled or failed (then [t] says why).
-  Future<JobProgress?> _job(AddTask t, SearchCore core, String kind, Map<String, dynamic> params) async {
+  Future<JobProgress?> _job(AddTask t, SearchCore core, String kind, Map<String, dynamic> params,
+      {String Function(CacheSearchException e)? words}) async {
     if (t.cancelled) return null;
     final job = t.job = await core.startJob(kind, params);
     final p = await _wait(job, (f) {
@@ -587,7 +611,8 @@ class LibrariesState extends ChangeNotifier {
     t.job = null;
     if (p.state == JobState.done) return p;
     if (p.state == JobState.failed) {
-      t.error = _words(CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? 'It did not work'));
+      final e = CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? 'It did not work');
+      t.error = words == null ? _words(e) : words(e);
     }
     return null;
   }
@@ -712,7 +737,7 @@ class LibrariesState extends ChangeNotifier {
       final out = File('${tmp.path}${Platform.pathSeparator}$kLibraryTemplateName');
       final p = await _wait(await core.startJob('library_template', {'out_path': out.path}), (_) {});
       if (p.state != JobState.done) {
-        error = 'Could not make the template: ${p.errorMessage ?? 'it did not work'}';
+        error = 'Could not make the template: ${_words(CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? ''))}';
         return false;
       }
       return await _saveBytes(kLibraryTemplateName, await out.readAsBytes());
@@ -731,5 +756,49 @@ class LibrariesState extends ChangeNotifier {
     _disposed = true;
     sources.removeListener(_onSources);
     super.dispose();
+  }
+}
+
+/// What adding a file that is not a library says.
+const String kNotALibrary = "This file isn't a Cache library.";
+
+/// What adding the blank template says: it has no entries until it is filled.
+const String kEmptyTemplate = 'This is an empty library template. Fill it with your own entries first (see the README inside).';
+
+/// The snapshot file inside the blank template (TEMPLATE_SNAPSHOT in the core's libadd.rs).
+const String kTemplateSnapshotName = 'blank-library.snapshot';
+
+/// The names of the first entries of a tar file (at most [max]), or null when [f] is not a tar or cannot be read. Reads
+/// only the headers.
+@visibleForTesting
+List<String>? tarEntryNames(File f, {int max = 16}) {
+  RandomAccessFile? r;
+  try {
+    r = f.openSync();
+    final length = r.lengthSync();
+    final names = <String>[];
+    var at = 0;
+    while (names.length < max && at + 512 <= length) {
+      r.setPositionSync(at);
+      final h = r.readSync(512);
+      if (h.length < 512) break;
+      if (h.every((b) => b == 0)) break; // the end of the archive
+      // The header checksum: the sum of the header's bytes with the checksum field read as spaces.
+      var sum = 0;
+      for (var i = 0; i < 512; i++) {
+        sum += (i >= 148 && i < 156) ? 32 : h[i];
+      }
+      final stored = int.tryParse(String.fromCharCodes(h.sublist(148, 156)).replaceAll('\x00', '').trim(), radix: 8);
+      if (stored != sum) return names.isEmpty ? null : names;
+      final end = h.indexOf(0);
+      names.add(String.fromCharCodes(h.sublist(0, end < 0 || end > 100 ? 100 : end)));
+      final size = int.tryParse(String.fromCharCodes(h.sublist(124, 136)).replaceAll('\x00', '').trim(), radix: 8) ?? 0;
+      at += 512 + (size + 511) ~/ 512 * 512;
+    }
+    return names.isEmpty ? null : names;
+  } catch (_) {
+    return null;
+  } finally {
+    r?.closeSync();
   }
 }
