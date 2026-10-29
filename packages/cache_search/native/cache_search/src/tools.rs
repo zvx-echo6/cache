@@ -64,6 +64,22 @@ impl Builtin {
     }
 }
 
+/// What a numbered result that `read` can't open is, from its address ("a place", "an app"): its tool already showed
+/// everything about it. None for the readable ones (library, ZIM, web and pack results).
+fn shown_kind(address: &str) -> Option<&'static str> {
+    let prefix = address.split(':').next().unwrap_or("");
+    Some(match prefix {
+        "lib" | "zim" | "web" | "pack" => return None,
+        "place" | "town" | "addr" | "layer" => "a place",
+        "nav" => "a route",
+        "live" => "a live data",
+        "loc" => "a location",
+        "repeater" => "a repeater",
+        "app" => "a setup",
+        _ => "an app",
+    })
+}
+
 fn bad_arguments(detail: impl Into<String>) -> ToolError {
     ToolError::new(ToolError::BAD_ARGUMENTS, detail)
 }
@@ -412,9 +428,29 @@ impl Handle {
         if let Some(url) = address.strip_prefix("web:") {
             return Ok(self.read_web(conv, n, address, url));
         }
+        if let Some(kind) = shown_kind(address) {
+            return Err(bad_arguments(format!("[{n}] is {kind} result; everything about it is already shown above")));
+        }
         let out = self.read(&address.clone(), READ_MAX_CHARS).map_err(tool_error)?;
         let v: Value = serde_json::from_str(&out).map_err(|e| ToolError::new(ToolError::INTERNAL, e.to_string()))?;
-        let mut text = format!("[{n}] {}\n{}", one_line(v["title"].as_str().unwrap_or("")), v["text"].as_str().unwrap_or(""));
+        let mut text = format!("[{n}] {}\n", one_line(v["title"].as_str().unwrap_or("")));
+        // a library concept: its author and page, each when known, then a blank line before the text
+        let author = v["author"].as_str().map(one_line).filter(|a| !a.is_empty());
+        let page = match &v["page"] {
+            Value::Number(p) => Some(p.to_string()),
+            Value::String(p) => Some(one_line(p)).filter(|p| !p.is_empty()),
+            _ => None,
+        };
+        if author.is_some() || page.is_some() {
+            if let Some(a) = author {
+                text.push_str(&format!("Author: {a}\n"));
+            }
+            if let Some(p) = page {
+                text.push_str(&format!("Page: {p}\n"));
+            }
+            text.push('\n');
+        }
+        text.push_str(v["text"].as_str().unwrap_or(""));
         if v["truncated"] == Value::Bool(true) {
             text.push_str("\n[truncated]");
         }

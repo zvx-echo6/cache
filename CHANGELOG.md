@@ -19,8 +19,10 @@ release notes).
 - A place you save is watched for weather and alerts
 - Models starts with a short list of recommended models, each with its size and whether it fits your phone
 - Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
+- Assistant: reading a library entry shows its author and page when known
 
 ### Fixed
+- Assistant: asking to open a place, route, live data or location result no longer fails with an internal error
 - Regions: the keyboard no longer pops up after the download sheet closes
 - Unload the model in use from Models to free memory
 - The keyboard closes when you tap outside a text box or scroll

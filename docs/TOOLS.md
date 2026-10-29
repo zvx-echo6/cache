@@ -99,8 +99,26 @@ Result (text; the same number; up to ~6,000 characters, cut at a paragraph end):
 [truncated]
 ```
 
-For a library concept: title, book, author, page, summary and key facts. Unknown number:
+For a library concept, the author and the page follow the title line, one line each and only when known, then a blank
+line and the text:
+
+```
+[3] Field First Aid
+Author: A. Writer
+Page: 112
+
+<the concept's text>
+```
+
+Unknown number:
 `{"ok": false, "error": {"type": "not_found", "detail": "no result [9] in this conversation"}}`.
+
+A number whose result is not text to open (a place, route, live-data item or location, shown in full by the tool that
+gave it) is `bad_arguments`:
+`{"ok": false, "error": {"type": "bad_arguments", "detail": "[4] is a place result; everything about it is already shown above"}}`.
+The kind comes from the result's address: `place`, `town`, `addr` and `layer` say "a place", `nav` "a route", `live`
+"a live data", `loc` "a location", `repeater` "a repeater", `app` "a setup"; any other result that is not a library, ZIM
+or web result (such as an `act` module's) says "an app".
 
 ### navigate (route summary for the assistant; navigation in Maps)
 
