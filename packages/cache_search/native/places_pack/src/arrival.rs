@@ -5,7 +5,7 @@
 //!
 //! 0. A hospital or emergency room (a place of one of `emergency_categories`): its emergency entrance (an `emergency_entrance`
 //!    anchor) nearest its point, inside its outline or within `adjacent_m` of it (within `emergency_entrance_m` of a point
-//!    place); else its main door, the same way; else the rules below.
+//!    place, 150 m); else its main door, the same way; else the rules below.
 //! 1. An airport (a place of one of `airport_kinds`): its passenger terminal, among the terminals inside its outline (or
 //!    within `airport_terminal_m` of a point airport) the one people reach from the car: one with public doors, then the one
 //!    nearest public parking (concourses are airside, far from it), then the most doors, then the largest. The point is the
@@ -321,7 +321,13 @@ mod tests {
         let mut er = vec![hospital("emergency_room", 40.7702, -111.8400, None), hospital("emergency_room", 40.7660, -111.8400, None)];
         assign(&mut er, &anchors, &cfg());
         assert_eq!(er[0].arrival, Some((40.7712, -111.8395)));
-        assert_eq!(er[1].arrival, None, "nothing within 300 m");
+        assert_eq!(er[1].arrival, None, "nothing within 150 m");
+        // A point hospital 190 m from its neighbour's emergency entrance takes its own main door instead.
+        let mut own = anchors.clone();
+        own.push(pt(AnchorKind::MainEntrance, 40.7731, -111.8393));
+        let mut next_door = vec![hospital("hospital", 40.7729, -111.8395, None)];
+        let rep = assign(&mut next_door, &own, &cfg());
+        assert_eq!((rep.emergency, next_door[0].arrival), (0, Some((40.7731, -111.8393))));
         // No emergency entrance: the main door, not the parking.
         let mut rows = vec![hospital("hospital", 40.7703, -111.8411, Some(site))];
         let rep = assign(&mut rows, &anchors[1..3], &cfg());

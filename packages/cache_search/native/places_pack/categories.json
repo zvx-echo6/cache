@@ -6,7 +6,7 @@
     "entrance": [{"tags": {"entrance": "*"}, "not": {"entrance": "service|emergency|exit|staff|garage|no", "access": "private|no"}}],
     "main_entrance": [{"tags": {"entrance": "main"}}],
     "emergency_entrance": [{"tags": {"entrance": "emergency"}, "not": {"access": "no"}}, {"tags": {"emergency": "emergency_ward_entrance"}}],
-    "emergency_categories": ["emergency_room", "hospital"], "emergency_entrance_m": 300,
+    "emergency_categories": ["emergency_room", "hospital"], "emergency_entrance_m": 150,
     "parking": [{"tags": {"amenity": "parking"}, "not": {"access": "private|no"}}],
     "airport_kinds": ["aerodrome", "airport"],
     "airport_terminal_m": 3000, "large_m": 250, "outline_m": 20, "adjacent_m": 100
