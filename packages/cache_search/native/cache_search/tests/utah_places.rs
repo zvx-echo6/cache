@@ -8,7 +8,6 @@
 use cache_places::merged;
 use cache_search::ffi::*;
 use cache_search::handle::Handle;
-use cache_tool::places::{Geocoder, PlaceSource};
 use serde_json::{json, Value};
 use std::ffi::{c_char, CStr, CString};
 use std::io::Read;
