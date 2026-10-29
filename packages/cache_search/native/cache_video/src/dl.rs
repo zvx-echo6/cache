@@ -122,7 +122,7 @@ fn with_query(url: &str, k: &str, v: &str) -> String {
 }
 
 /// Bytes available to an unprivileged writer on the file system that holds `path` (unix: `statvfs`).
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "ios")))]
 pub fn available_bytes(path: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::bad_json("path contains a NUL byte"))?;
@@ -133,6 +133,23 @@ pub fn available_bytes(path: &Path) -> Result<u64> {
         return Err(Error::io(format!("reading the free space of {}: {}", path.display(), std::io::Error::last_os_error())));
     }
     Ok((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+}
+
+/// Bytes available on the volume that holds `path` (iPhone: the app's `cache_free_bytes_on_disk`, same binary, which
+/// counts purgeable space as Settings does).
+#[cfg(target_os = "ios")]
+pub fn available_bytes(path: &Path) -> Result<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    extern "C" {
+        fn cache_free_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
+    }
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::bad_json("path contains a NUL byte"))?;
+    // SAFETY: `c` is a valid NUL-terminated path; the helper only reads it.
+    let n = unsafe { cache_free_bytes_on_disk(c.as_ptr()) };
+    if n < 0 {
+        return Err(Error::io(format!("reading the free space of {}: {}", path.display(), std::io::Error::last_os_error())));
+    }
+    Ok(n as u64)
 }
 
 /// Bytes available to the calling user on the volume that holds `path` (Windows: `GetDiskFreeSpaceExW`).

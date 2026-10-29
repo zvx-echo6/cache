@@ -21,6 +21,7 @@ release notes).
 - Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
 
 ### Fixed
+- iPhone: free space matches iPhone Storage in Settings, so downloads (libraries, Wikipedia, models, maps) are no longer refused when there is room
 - Regions: the keyboard no longer pops up after the download sheet closes
 - Unload the model in use from Models to free memory
 - The keyboard closes when you tap outside a text box or scroll
