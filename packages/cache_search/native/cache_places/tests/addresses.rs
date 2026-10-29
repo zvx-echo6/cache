@@ -111,11 +111,11 @@ fn merged(dir: &Path, tiles: Option<&[u32]>) -> PathBuf {
 }
 
 fn geo(db: &Path) -> PackGeocoder {
-    PackGeocoder::new(Arc::new(PackSet::new(vec![db.to_path_buf()])))
+    PackGeocoder::new(Arc::new(PackSet::new(vec![db.to_path_buf()], None)))
 }
 
 fn core(db: &Path) -> PlacesCore {
-    PlacesCore::new(&PlacesCfg { packs: vec![db.to_string_lossy().into_owned()] })
+    PlacesCore::new(&PlacesCfg { packs: vec![db.to_string_lossy().into_owned()], merged_dir: None })
 }
 
 fn search(c: &PlacesCore, q: &str, opts: SearchOpts) -> Value {
@@ -130,7 +130,7 @@ fn near(p: (f64, f64)) -> SearchOpts {
 fn the_merged_fixture_opens_as_a_pack() {
     let t = Tmp::new("open");
     let db = merged(&t.0, None);
-    let set = PackSet::new(vec![db]);
+    let set = PackSet::new(vec![db], None);
     let packs = set.current();
     assert_eq!(packs.len(), 1);
     assert_eq!(packs[0].format, 3);
@@ -183,7 +183,7 @@ fn a_number_between_known_numbers_is_placed_on_its_side_of_the_street() {
 fn a_street_cut_by_a_tile_edge_is_one_street() {
     let t = Tmp::new("edge");
     let db = merged(&t.0, None);
-    let set = PackSet::new(vec![db.clone()]);
+    let set = PackSet::new(vec![db.clone()], None);
     let packs = set.current();
     let p = &packs[0];
     assert_eq!(p.fts_streets("\"baseline\"", 10).unwrap().len(), 2, "two rows, one per tile");
@@ -207,6 +207,26 @@ fn the_town_after_the_comma_filters_the_streets() {
     assert_eq!(g.forward("1414 Overland Ave, Burly", None, 1)[0].kind, HitKind::Address);
     // Another state: nothing.
     assert!(g.forward("1414 Overland Ave, Burley, ND", None, 3).iter().all(|h| h.kind != HitKind::Address));
+}
+
+#[test]
+fn the_town_without_a_comma_is_read_from_the_last_words() {
+    let t = Tmp::new("nocomma");
+    let g = geo(&merged(&t.0, None));
+    let with = &g.forward("1414 Overland Ave, Burley", None, 1)[0];
+    for q in ["1414 Overland Ave Burley", "1414 overland avenue burley", "1414 Overland Ave Burley ID", "1414 Overland Ave Burley, Idaho"] {
+        let h = &g.forward(q, None, 1)[0];
+        assert_eq!((h.kind, h.address.as_str(), h.label.as_str()), (HitKind::Address, with.address.as_str(), with.label.as_str()), "{q}");
+    }
+    // A town close by counts as after a comma; a far one, of one word or two, gives no address.
+    assert_eq!(g.forward("1414 Overland Ave Heyburn", None, 1)[0].kind, HitKind::Address);
+    assert!(g.forward("1414 Overland Ave Stanley", None, 3).iter().all(|h| h.kind != HitKind::Address));
+    assert!(g.forward("1414 Overland Ave Twin Falls", None, 3).iter().all(|h| h.kind != HitKind::Address));
+    // A town in another state is not that town.
+    assert!(g.forward("1414 Overland Ave Burley ND", None, 3).iter().all(|h| h.kind != HitKind::Address));
+    // No town at the end: the whole text is the street, as before.
+    let h = &g.forward("200 W 10th St", Some(BURLEY), 1)[0];
+    assert_eq!((h.kind, h.name.as_str()), (HitKind::Address, "200 W 10TH ST"));
 }
 
 #[test]
@@ -250,7 +270,7 @@ fn address_ids_route_and_locate() {
     assert!(c.lookup("addr:0000000000000000/1").is_none());
     assert!(c.lookup(&format!("{}9", g.forward("1414 Overland Ave, Burley", None, 1)[0].address)).is_none(), "14149 is beyond the street");
 
-    let ts = tools(&PlacesCfg { packs: vec![db.to_string_lossy().into_owned()] });
+    let ts = tools(&PlacesCfg { packs: vec![db.to_string_lossy().into_owned()], merged_dir: None });
     let locate = ts.iter().find(|t| t.name() == "locate").unwrap();
     let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now: FIXTURE_NOW, geocoder: None, live_fetcher: None };
     let Ok(ToolOutput::Json(v)) = locate.run(&ctx, &json!({"place": "1414 Overland Avenue, Burley"})) else { panic!("locate") };
@@ -280,7 +300,7 @@ fn warning_codes() {
     let t = Tmp::new("warn");
     let code = |v: &Value| v.get("warning_code").and_then(Value::as_str).map(str::to_string);
     // Nothing installed at all.
-    let none = PlacesCore::new(&PlacesCfg { packs: vec![t.0.join("missing.sqlite").to_string_lossy().into_owned()] });
+    let none = PlacesCore::new(&PlacesCfg { packs: vec![t.0.join("missing.sqlite").to_string_lossy().into_owned()], merged_dir: None });
     let v = search(&none, "pharmacy", near(BURLEY));
     assert_eq!((code(&v).as_deref(), v["warning"].as_str()), (Some("no_places"), Some("no places data is installed")));
     assert_eq!(v["places"], json!({"installed": false, "covers": false, "pending": 0}));

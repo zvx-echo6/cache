@@ -276,7 +276,7 @@ const ADDRESS_ROWS: usize = 40;
 impl PackGeocoder {
     /// Addresses for a query that starts with a house number ("350 N State St, Salt Lake City, UT"): the street words, every
     /// one as a prefix, against the street rows' source and expanded forms; rows filtered by the state and by the town after
-    /// the comma (its name, or within 15 km of it); rows of one street cut by a tile edge joined; then the number found, or
+    /// the comma, or in the last words when they name a town and there is no comma (its name, or within 15 km of it); rows of one street cut by a tile edge joined; then the number found, or
     /// placed between its neighbours. Empty when the query does not start with a house number or no street matches.
     fn forward_addresses(&self, query: &str, near: Option<(f64, f64)>, limit: usize) -> Vec<GeoHit> {
         let Some((number, rest)) = address::split_house_number(query) else { return Vec::new() };
@@ -286,6 +286,22 @@ impl PackGeocoder {
             return Vec::new();
         }
         let q = parse_query(rest, &states_of(&all));
+        if q.area.is_none() {
+            // "123 Main St Boise": a run of the last words that is a town's name is the town, as after a comma (the longest
+            // run first; the street keeps at least one word). When none gives an address, the whole text is the street.
+            let toks: Vec<&str> = q.head.split_whitespace().collect();
+            for take in (1..=3.min(toks.len().saturating_sub(1))).rev() {
+                let town = toks[toks.len() - take..].join(" ");
+                if !self.is_town(&all, &town, q.state.as_deref()) {
+                    continue;
+                }
+                let split = Query { head: toks[..toks.len() - take].join(" "), state: q.state.clone(), area: Some(town) };
+                let hits = self.addresses_on(&packs, number, &split, near, limit);
+                if !hits.is_empty() {
+                    return hits;
+                }
+            }
+        }
         let mut hits = self.addresses_on(&packs, number, &q, near, limit);
         if hits.is_empty() && q.state.is_some() && !rest.contains(',') {
             // A street whose last word is also a state's code ("Oak Ct", "Main St NE"): the whole text is the street.
@@ -353,6 +369,17 @@ impl PackGeocoder {
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         hits.truncate(limit);
         hits
+    }
+
+    /// Whether `name` is exactly the name of a town in the places data (in `state`, when given).
+    fn is_town(&self, packs: &[Arc<crate::pack::Pack>], name: &str, state: Option<&str>) -> bool {
+        let want = norm(name);
+        let Some(expr) = fts_expr(&words(name), false) else { return false };
+        packs.iter().any(|p| {
+            p.fts_localities(&expr, 12).unwrap_or_default().into_iter().any(|(id, _)| {
+                p.locality(id).ok().flatten().is_some_and(|l| norm(&l.name) == want && state.is_none_or(|s| l.state.as_deref() == Some(s)))
+            })
+        })
     }
 
     /// The town an address query names after its comma: the best town the names search finds, else the one with a typing
