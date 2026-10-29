@@ -501,7 +501,7 @@ impl Env<'_> {
         self.directions_for_trip(req, &rid, trip, (from.public_road, to.public_road))
     }
 
-    /// How the two ends snap to the roads (`snap`: past service roads to a public road, both carriageways of a split street).
+    /// How the two ends snap to the roads (`snap`: past service roads to a public road).
     fn plan_ends(&self, req: &DirectionsRequest) -> (EndPlan, EndPlan) {
         let c = req.mode.costing();
         (plan_end(self.valhalla, req.from, c, !req.from_arrival), plan_end(self.valhalla, req.to, c, !req.to_arrival))
@@ -520,7 +520,7 @@ impl Env<'_> {
         let (from, to) = self.plan_ends(req);
         let public = (from.public_road, to.public_road);
         self.valhalla
-            .alternatives_ends(&from.ends[0], &to.ends[0], req.mode.costing(), count)
+            .alternatives_ends(&from.end, &to.end, req.mode.costing(), count)
             .into_iter()
             .enumerate()
             .map(|(i, t)| self.directions_for_trip(&road_only, &format!("{rid}-{}", i + 1), t, public))

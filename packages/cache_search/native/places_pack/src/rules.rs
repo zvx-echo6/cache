@@ -31,6 +31,15 @@ pub struct ArrivalCfg {
     pub entrance: Vec<OsmRule>,
     #[serde(default)]
     pub main_entrance: Vec<OsmRule>,
+    /// A hospital's emergency entrance.
+    #[serde(default)]
+    pub emergency_entrance: Vec<OsmRule>,
+    /// The categories whose arrival point is the emergency entrance (hospitals, emergency rooms).
+    #[serde(default)]
+    pub emergency_categories: Vec<String>,
+    /// A point hospital's emergency entrance and main door are within this distance of it.
+    #[serde(default)]
+    pub emergency_entrance_m: f64,
     /// Parking the public may use.
     #[serde(default)]
     pub parking: Vec<OsmRule>,
@@ -60,6 +69,8 @@ impl ArrivalCfg {
         use crate::model::AnchorKind;
         if Self::any(&self.terminal, tags) {
             Some(AnchorKind::Terminal)
+        } else if Self::any(&self.emergency_entrance, tags) {
+            Some(AnchorKind::EmergencyEntrance)
         } else if Self::any(&self.entrance, tags) {
             Some(if Self::any(&self.main_entrance, tags) { AnchorKind::MainEntrance } else { AnchorKind::Entrance })
         } else if Self::any(&self.parking, tags) {

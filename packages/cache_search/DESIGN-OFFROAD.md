@@ -181,10 +181,10 @@ cap is about 470 MB. Timing, 107 km route (12.3 M cells), release build on the d
     all point data and MVUM features are clipped to the pack bbox.
 11. Drive ends snap the way Apple Maps does (project decision, 2026-10-29), not as navi's plain Valhalla call (`snap.rs`):
     an end whose nearest edge is a generic service road (airfields, campuses, private access roads) goes to the nearest
-    public road (residential or better) within 600 m, and that gap gets no off-road leg or `offroad_unavailable` warning;
-    when another edge is within 25 m of the nearest (a split one-way street's other carriageway, a corner), both are routed
-    and the faster kept. A place's arrival point from the places data (an airport's terminal, a main door, a park's parking)
-    is the route end instead of the place's point and keeps its own nearest road. Walk and bike are unchanged.
+    public road (residential or better) within 600 m, and that gap gets no off-road leg or `offroad_unavailable` warning.
+    A place's arrival point from the places data (an airport's terminal, a hospital's emergency entrance, a main door, a
+    park's parking) is the route end instead of the place's point and keeps its own nearest road, so it is never moved to a
+    public road. Walk and bike are unchanged.
 
 Where the Rust code could be bit-exact it is: the Gaussian blur (scipy), the Terrarium decode, the heap order, the
 f32/f64 mix of the kernel. These are covered by fixtures recorded from navi's own code (below), not hand-computed.

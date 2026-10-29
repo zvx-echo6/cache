@@ -3,6 +3,9 @@
 //! or campus's centre ends at whatever road is nearest the middle; people go to the terminal's curb, the main door, the
 //! parking. Only the OSM data decides it, through the `arrival` rules of categories.json:
 //!
+//! 0. A hospital or emergency room (a place of one of `emergency_categories`): its emergency entrance (an `emergency_entrance`
+//!    anchor) nearest its point, inside its outline or within `adjacent_m` of it (within `emergency_entrance_m` of a point
+//!    place); else its main door, the same way; else the rules below.
 //! 1. An airport (a place of one of `airport_kinds`): its passenger terminal, among the terminals inside its outline (or
 //!    within `airport_terminal_m` of a point airport) the one people reach from the car: one with public doors, then the one
 //!    nearest public parking (concourses are airside, far from it), then the most doors, then the largest. The point is the
@@ -29,6 +32,7 @@ const PARKING_SEARCH_M: f64 = 1000.0;
 /// How many places got an arrival point, by rule.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ArrivalReport {
+    pub emergency: usize,
     pub terminal: usize,
     pub entrance: usize,
     pub parking: usize,
@@ -36,7 +40,7 @@ pub struct ArrivalReport {
 
 impl ArrivalReport {
     pub fn total(&self) -> usize {
-        self.terminal + self.entrance + self.parking
+        self.emergency + self.terminal + self.entrance + self.parking
     }
 }
 
@@ -114,6 +118,11 @@ fn middle(doors: &[&Anchor]) -> Option<(f64, f64)> {
         .map(|x| x.1)
 }
 
+/// The anchors within `reach` metres of `here`.
+fn within_reach<'a>(xs: Vec<&'a Anchor>, here: (f64, f64), reach: f64) -> Vec<&'a Anchor> {
+    xs.into_iter().filter(|a| metres(here, (a.lat, a.lon)) <= reach).collect()
+}
+
 fn is_main(a: &Anchor) -> bool {
     a.kind == AnchorKind::MainEntrance
 }
@@ -127,6 +136,7 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
     let terminals = Index::new(anchors, |k| k == AnchorKind::Terminal);
     let doors = Index::new(anchors, |k| matches!(k, AnchorKind::Entrance | AnchorKind::MainEntrance));
     let parking = Index::new(anchors, |k| k == AnchorKind::Parking);
+    let emergency = Index::new(anchors, |k| k == AnchorKind::EmergencyEntrance);
     for r in rows.iter_mut() {
         if r.arrival.is_some() {
             continue;
@@ -134,7 +144,20 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
         let here = (r.lat, r.lon);
         let kind = r.kind_id.clone().unwrap_or_else(|| generic_kind_id(&r.kind));
         let mut got: Option<((f64, f64), usize)> = None;
-        if cfg.airport_kinds.iter().any(|k| *k == kind) {
+        let nearest = |xs: Vec<&Anchor>| xs.into_iter().min_by(|a, b| metres(here, (a.lat, a.lon)).total_cmp(&metres(here, (b.lat, b.lon)))).map(|a| (a.lat, a.lon));
+        if r.category.as_ref().is_some_and(|c| cfg.emergency_categories.contains(c)) {
+            // Its own area, or around a point; a point's anchors must be within emergency_entrance_m.
+            let (region, reach) = match r.extent {
+                Some(e) => (grow(e, cfg.adjacent_m), f64::INFINITY),
+                None => (grow([r.lat, r.lon, r.lat, r.lon], cfg.emergency_entrance_m), cfg.emergency_entrance_m),
+            };
+            got = nearest(within_reach(emergency.within(&region), here, reach)).map(|p| (p, 3));
+            if got.is_none() {
+                let main = doors.within(&region).into_iter().filter(|d| is_main(d)).collect();
+                got = nearest(within_reach(main, here, reach)).map(|p| (p, 1));
+            }
+        }
+        if got.is_none() && cfg.airport_kinds.iter().any(|k| *k == kind) {
             let region = match r.extent {
                 Some(e) => grow(e, cfg.adjacent_m),
                 None => grow([r.lat, r.lon, r.lat, r.lon], cfg.airport_terminal_m),
@@ -163,7 +186,6 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
         }
         if got.is_none() {
             if let Some(e) = r.extent {
-                let nearest = |xs: Vec<&Anchor>| xs.into_iter().min_by(|a, b| metres(here, (a.lat, a.lon)).total_cmp(&metres(here, (b.lat, b.lon)))).map(|a| (a.lat, a.lon));
                 if cfg.large_m > 0.0 && across(&e) >= cfg.large_m {
                     got = nearest(parking.within(&grow(e, cfg.adjacent_m))).map(|p| (p, 2));
                 }
@@ -180,6 +202,7 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
             match rule {
                 0 => rep.terminal += 1,
                 1 => rep.entrance += 1,
+                3 => rep.emergency += 1,
                 _ => rep.parking += 1,
             }
         }
@@ -255,7 +278,7 @@ mod tests {
         let (airport, anchors) = slc();
         let mut rows = vec![airport];
         let rep = assign(&mut rows, &anchors, &cfg());
-        assert_eq!(rep, ArrivalReport { terminal: 1, entrance: 0, parking: 0 });
+        assert_eq!(rep, ArrivalReport { emergency: 0, terminal: 1, entrance: 0, parking: 0 });
         assert_eq!(rows[0].arrival, Some((40.7841, -111.9849)), "the middle door of the terminal's row, not concourse B's");
     }
 
@@ -271,6 +294,42 @@ mod tests {
         assert!((la - 43.5645).abs() < 1e-9 && (lo + 116.2225).abs() < 1e-9, "no doors: the terminal's centre");
         rows[0].lat = 43.70;
         assert_eq!(assign(&mut rows, &anchors, &cfg()).total(), 0, "nothing within 3 km");
+    }
+
+    fn hospital(cat: &str, lat: f64, lon: f64, extent: Option<[f64; 4]>) -> Raw {
+        let mut r = place("amenity=hospital", lat, lon, extent);
+        r.category = Some(cat.into());
+        r
+    }
+
+    #[test]
+    fn a_hospital_arrives_at_its_emergency_entrance_then_its_main_door() {
+        // A hospital site about 400 m across (large: it would otherwise take its parking) with an emergency entrance, a
+        // main door and a lot; another hospital's emergency entrance 1 km away.
+        let site = [40.7690, -111.8430, 40.7720, -111.8390];
+        let anchors = vec![
+            pt(AnchorKind::EmergencyEntrance, 40.7712, -111.8395),
+            pt(AnchorKind::MainEntrance, 40.7700, -111.8410),
+            area_anchor(AnchorKind::Parking, [40.7701, -111.8420, 40.7705, -111.8415]),
+            pt(AnchorKind::EmergencyEntrance, 40.7800, -111.8410),
+        ];
+        let mut rows = vec![hospital("hospital", 40.7703, -111.8411, Some(site))];
+        let rep = assign(&mut rows, &anchors, &cfg());
+        assert_eq!(rep.emergency, 1);
+        assert_eq!(rows[0].arrival, Some((40.7712, -111.8395)), "the emergency entrance, not the nearer main door or the parking");
+        // An emergency room listed as a point 120 m from its entrance takes it too; one 600 m away does not.
+        let mut er = vec![hospital("emergency_room", 40.7702, -111.8400, None), hospital("emergency_room", 40.7660, -111.8400, None)];
+        assign(&mut er, &anchors, &cfg());
+        assert_eq!(er[0].arrival, Some((40.7712, -111.8395)));
+        assert_eq!(er[1].arrival, None, "nothing within 300 m");
+        // No emergency entrance: the main door, not the parking.
+        let mut rows = vec![hospital("hospital", 40.7703, -111.8411, Some(site))];
+        let rep = assign(&mut rows, &anchors[1..3], &cfg());
+        assert_eq!((rep.emergency, rep.entrance, rows[0].arrival), (0, 1, Some((40.7700, -111.8410))));
+        // Neither: the existing rules (a large site's parking).
+        let mut rows = vec![hospital("hospital", 40.7703, -111.8411, Some(site))];
+        let rep = assign(&mut rows, &anchors[2..3], &cfg());
+        assert_eq!(rep.parking, 1);
     }
 
     #[test]

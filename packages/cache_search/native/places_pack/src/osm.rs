@@ -277,6 +277,8 @@ mod tests {
         assert_eq!(a(&[("entrance", "main"), ("door", "automatic")]), Some(AnchorKind::MainEntrance));
         assert_eq!(a(&[("entrance", "yes")]), Some(AnchorKind::Entrance));
         assert_eq!(a(&[("entrance", "service")]), None, "staff and service doors are not where people arrive");
+        assert_eq!(a(&[("entrance", "emergency"), ("door", "automatic")]), Some(AnchorKind::EmergencyEntrance));
+        assert_eq!(a(&[("emergency", "emergency_ward_entrance")]), Some(AnchorKind::EmergencyEntrance));
         assert_eq!(a(&[("entrance", "main"), ("access", "private")]), None);
         assert_eq!(a(&[("amenity", "parking"), ("parking", "surface")]), Some(AnchorKind::Parking));
         assert_eq!(a(&[("amenity", "parking"), ("access", "private")]), None);

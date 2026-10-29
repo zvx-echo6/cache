@@ -176,12 +176,6 @@ impl Valhalla for ShimValhalla {
                             distance_m: e.get("distance").and_then(|v| v.as_f64()).unwrap_or_else(|| crate::grid::haversine_m(lat, lon, clat, clon)),
                             road_class: cls.and_then(|c| c.get("classification")).and_then(s),
                             use_: cls.and_then(|c| c.get("use")).and_then(s),
-                            names: e
-                                .get("edge_info")
-                                .and_then(|i| i.get("names"))
-                                .and_then(|n| n.as_array())
-                                .map(|a| a.iter().filter_map(s).collect())
-                                .unwrap_or_default(),
                         })
                     })
                     .collect()

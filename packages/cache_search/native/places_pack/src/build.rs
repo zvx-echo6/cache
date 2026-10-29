@@ -358,8 +358,8 @@ pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, anchors: &[Anchor], r
     say(format!("dropped {deduped} duplicates"));
     let a: ArrivalReport = arrival::assign(&mut rows, anchors, &rules.arrival);
     say(format!(
-        "{} arrival points: {} airports at a terminal, {} places at a main door, {} large areas at their parking",
-        a.total(), a.terminal, a.entrance, a.parking
+        "{} arrival points: {} hospitals at an emergency entrance, {} airports at a terminal, {} places at a main door, {} large areas at their parking",
+        a.total(), a.emergency, a.terminal, a.entrance, a.parking
     ));
     let locs = dedupe_localities(locs);
     say(format!("{} localities", locs.len()));

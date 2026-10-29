@@ -25,7 +25,8 @@ cargo run --release -p places_pack -- build \
 - `kinds` in the rules (`categories.json`): what kind of place each record is (`drinking_water`, `picnic_shelter`, ...), from its OSM
   tags or Overture category, first match wins; copied into the pack's `kinds` table with a label and a description, and into each
   place's `kind_id`. A place no kind rule covers takes its raw type's value as its kind. `places_pack inspect` lists the kinds.
-- `arrival` in the rules: where a route to a place goes when that is not its point (`arrival.rs`): an airport's passenger
+- `arrival` in the rules: where a route to a place goes when that is not its point (`arrival.rs`): a hospital's or
+  emergency room's emergency entrance (else its main door), an airport's passenger
   terminal (its middle door; the terminal with public doors nearest public parking), a large area's nearest public parking
   (an outline at least 250 m across: parks, campuses, malls), or another place's main door. The OSM tags of terminals, doors
   and parking are rules, as data; the points go in each place's `arrival_lat`/`arrival_lon`. Only OSM areas (ways) and

@@ -73,6 +73,8 @@ pub enum AnchorKind {
     Entrance,
     /// The main door.
     MainEntrance,
+    /// A hospital's emergency entrance.
+    EmergencyEntrance,
     /// A parking lot or garage the public may use.
     Parking,
 }
