@@ -66,8 +66,9 @@ The exact layouts are in `cache_places/src/schema.rs`: `COMMON_SQL`, `TILE_SQL` 
 - **A street row** is one street within one tile, grouped by the street as the source writes it, the postcode and the
   postal city or town. `street` is the source's form ("MAIN ST") and `street_expanded` the same with its USPS Publication
   28 street suffix and directional abbreviations written out ("MAIN STREET"), or null when that changes nothing; both are
-  searched. The expansion is applied to the data when it is built, never to what a person types. `uid` is stable across
-  builds of the same data. `numbers` holds every house number of the row with its point (`cache_places::addr`):
+  searched. In `street` and `postal_city`, a word of 3 or more letters the source wrote in capitals is stored with a
+  capital first letter only ("North STATE Street" is "North State Street", "HURRICANE" is "Hurricane"). The expansion is
+  applied to the data when it is built, never to what a person types. `uid` is stable across builds of the same data. `numbers` holds every house number of the row with its point (`cache_places::addr`):
 
   ```
   numbers := ver:u8 (=1) count:varint entry*count

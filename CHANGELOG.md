@@ -13,6 +13,7 @@ release notes).
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes
+- Map search: street and town names in addresses are no longer shown in capitals (North State Street, Hurricane)
 
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
