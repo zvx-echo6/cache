@@ -3,7 +3,7 @@
 
 use crate::resolve::Resolved;
 use cache_offroad::directions::Directions;
-use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step};
+use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step, KM_TO_MI};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
 
@@ -177,13 +177,12 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("distance_km".into(), json!(d.distance_km));
     o.insert("duration_minutes".into(), json!(round_py(d.duration_s as f64 / 60.0, 1)));
     o.insert("direction_from_start".into(), json!(direction_word(bearing_deg((from.lat, from.lon), (to.lat, to.lon)))));
-    o.insert("major_roads".into(), Value::Array(d.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k})).collect()));
+    o.insert("major_roads".into(), Value::Array(major_roads(d)));
     // Traffic on the route: {"delay_min", "as_of", "source", "slow_sections": [{"name", "delay_min"}]}, or null when there is no
     // traffic data (no traffic source wired yet, no key, offline). Always null for now (project decision, 2026-10-29).
     o.insert("traffic".into(), Value::Null);
-    let offroad_mi: f64 = d.steps.iter().filter(|s| is_offroad(s)).map(|s| s.distance_mi).sum();
     if d.steps.iter().any(is_offroad) {
-        o.insert("offroad_mi".into(), json!(round_py(offroad_mi, 2)));
+        o.insert("offroad_mi".into(), json!(offroad_mi(d)));
         o.insert("offroad_note".into(), json!(OFFROAD_NOTE));
     }
     let warnings = warnings(d, !x.synth_warnings, x.snap_m);
@@ -193,6 +192,26 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("map_region".into(), json!(x.region.0));
     o.insert("map_region_age".into(), json!(x.region.1));
     Value::Object(o)
+}
+
+/// The off-road part of the route in miles, rounded once from the legs' metres the way the route's own distance_mi is
+/// (summing each leg's rounded miles drifts), and never more than distance_mi.
+fn offroad_mi(d: &Directions) -> f64 {
+    let m: f64 = d.steps.iter().filter(|s| is_offroad(s)).map(|s| s.distance_m.map_or(s.distance_km * 1000.0, |m| m as f64)).sum();
+    round_py(m / 1000.0 * KM_TO_MI, 2).min(d.distance_mi)
+}
+
+/// The route's longest roads; each is rounded on its own, so they are capped to add up to no more than distance_km.
+fn major_roads(d: &Directions) -> Vec<Value> {
+    let mut left = d.distance_km;
+    d.major_roads
+        .iter()
+        .map(|(n, k)| {
+            let k = k.min(left).max(0.0);
+            left = round_py(left - k, 2);
+            json!({"name": n, "distance_km": k})
+        })
+        .collect()
 }
 
 /// The `offroad_unavailable` warnings of a route: an end away from the road network that got no off-road leg. With off-road
@@ -260,7 +279,7 @@ mod step_tests {
     use super::*;
     use cache_offroad::offroad_legs::Step;
 
-    fn step(i: usize, kind: &str) -> Step {
+    pub(super) fn step(i: usize, kind: &str) -> Step {
         Step {
             index: i,
             kind: kind.into(),
@@ -346,6 +365,53 @@ mod direction_tests {
     #[test]
     fn boise_to_nampa_is_west() {
         assert_eq!(direction_word(bearing_deg((43.6150, -116.2023), (43.5407, -116.5635))), "west");
+    }
+
+    fn directions(distance_km: f64, distance_mi: f64, major_roads: Vec<(String, f64)>, steps: Vec<Step>) -> Directions {
+        Directions {
+            ok: true,
+            route_id: "r1".into(),
+            mode: TravelMode::Drive,
+            from: Some(EndInfo { lat: 43.615, lon: -116.2023, snap_distance_m: 3 }),
+            to: Some(EndInfo { lat: 43.5407, lon: -116.5635, snap_distance_m: 4 }),
+            distance_km,
+            distance_mi,
+            duration_s: 1500,
+            major_roads,
+            steps,
+            shape: String::new(),
+            routing: "offroad".into(),
+            leg_params: (0.0, 0.0, 0.0),
+            warnings: vec![],
+            errors: vec![],
+        }
+    }
+
+    #[test]
+    fn parts_never_round_past_the_total() {
+        // three 1006 m legs: each rounds to 0.63 mi (1.89 summed), while the 3018 m route is 1.88 mi
+        let leg = |i: usize| {
+            let mut s = super::step_tests::step(i, "offroad");
+            s.distance_m = Some(1006);
+            s.distance_km = 1.01;
+            s.distance_mi = 0.63;
+            s
+        };
+        let d = directions(3.02, 1.88, vec![("A".into(), 0.51), ("B".into(), 0.5), ("C".into(), 0.02)], vec![leg(0), leg(1), leg(2)]);
+        assert!(d.steps.iter().map(|s| s.distance_mi).sum::<f64>() > 1.885);
+        assert_eq!(offroad_mi(&d), 1.88);
+        // legs whose whole metres come to a hair over the total are capped at it
+        let d = directions(3.02, 1.87, vec![], d.steps);
+        assert_eq!(offroad_mi(&d), 1.87);
+        // major roads rounded one by one (1.03 km summed) are capped to add up to the 1.0 km route
+        let d = directions(1.0, 0.62, vec![("A".into(), 0.51), ("B".into(), 0.5), ("C".into(), 0.02)], vec![]);
+        let k: Vec<f64> = major_roads(&d).iter().map(|m| m["distance_km"].as_f64().unwrap()).collect();
+        assert_eq!(k, [0.51, 0.49, 0.0]);
+        let from = Resolved::point("A".into(), 43.6150, -116.2023);
+        let x = Extras { location_bias: None, others: vec![], nearest_search: None, region: ("idaho".into(), "1 day old".into()), synth_warnings: false, snap_m: 100.0 };
+        let mut d = directions(3.02, 1.88, vec![], vec![leg(0), leg(1), leg(2)]);
+        d.steps.push(super::step_tests::step(3, "road"));
+        assert_eq!(result(&d, &from, &from, "offroad_foot", x)["offroad_mi"], 1.88);
     }
 
     #[test]
