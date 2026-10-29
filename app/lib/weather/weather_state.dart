@@ -885,42 +885,43 @@ class WeatherState extends ChangeNotifier {
     return 'No forecast yet for ${p.name} · Update in Weather';
   }
 
-  /// The Alerts card on Home: warnings in force and fires near the watched places, or "None active". Earthquakes, rivers and
-  /// the rest are on the Weather screen, not counted here. Several fire sources describe the same fires (incidents and their
+  /// The Alerts card on Home: warnings in force and fires near the place Home talks about ([homePlace], the same place as the
+  /// Weather card), named in the line: "1 warning, 2 fires nearby: Red Flag Warning · Stanley". Other watched places are on the
+  /// Weather screen; so are earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their
   /// perimeters), so fires are the most any one fire source reports, not the sum.
   Future<String> homeAlertsLine() async {
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     if (counted.isEmpty) return 'Not set up yet';
-    final places = await watchedPlaces();
-    if (places.isEmpty) return 'Choose a place to watch in Settings';
+    final p = await homePlace();
+    if (p == null) return 'Choose a place to watch in Settings';
     var warnings = 0, fires = 0;
     String? firstWarning, newest;
     var any = false, expired = false;
-    for (final p in places) {
-      final firesHere = <String, int>{};
-      for (final v in await viewFor(p)) {
-        if (!counted.any((c) => c.id == v.source.id) || v.missing) continue;
-        any = true;
-        expired = expired || v.expired;
-        newest ??= v.age;
-        if (v.source.category == 'fire') {
-          firesHere[v.source.id] = v.active.length;
-        } else {
-          warnings += v.active.length;
-          if (v.active.isNotEmpty) firstWarning ??= '${v.active.first.label} (${p.name})';
-        }
+    for (final v in await viewFor(p)) {
+      if (!counted.any((c) => c.id == v.source.id) || v.missing) continue;
+      any = true;
+      expired = expired || v.expired;
+      newest ??= v.age;
+      if (v.source.category == 'fire') {
+        if (v.active.length > fires) fires = v.active.length;
+      } else {
+        warnings += v.active.length;
+        if (v.active.isNotEmpty) firstWarning ??= v.active.first.label;
       }
-      if (firesHere.isNotEmpty) fires += firesHere.values.reduce((a, b) => a > b ? a : b);
     }
     if (!any) return 'Nothing downloaded yet · Update in Weather';
     if (warnings == 0 && fires == 0) {
-      return expired ? 'None known · data expired, needs a connection' : 'None active${newest == null ? '' : ' · checked $newest'}';
+      return [
+        expired ? 'None known' : 'None active',
+        p.name,
+        if (expired) 'data expired, needs a connection' else if (newest != null) 'checked $newest',
+      ].join(' · ');
     }
     final parts = [
       if (warnings > 0) warnings == 1 ? '1 warning' : '$warnings warnings',
       if (fires > 0) fires == 1 ? '1 fire nearby' : '$fires fires nearby',
     ];
-    return [parts.join(', '), ?firstWarning].join(': ');
+    return '${[parts.join(', '), ?firstWarning].join(': ')} · ${p.name}';
   }
 
   // ---------------------------------------------------------------- what is remembered between starts
