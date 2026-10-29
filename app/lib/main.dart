@@ -153,6 +153,7 @@ class _CacheAppState extends State<CacheApp> {
     },
     regions: () => regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
     notifier: LocalAlertNotifier.instance,
+    onPlacesChanged: () => appActions.publishWatch(),
     told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
   );
   /// The app's support folder, read at start (the alert memory and the last place live there).
@@ -296,6 +297,11 @@ class _CacheAppState extends State<CacheApp> {
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
       if (e is PlaceSaved) appActions.publishWatch();
+      // A place removed from its card is no longer watched.
+      if (e is PlaceRemoved) {
+        settings.forgetWatched(['place:${e.key}']);
+        appActions.publishWatch();
+      }
     });
     location.addListener(_rememberPlace);
     // Home's Weather and Alerts cards and the place lists follow "Where I am" as its position arrives and moves.

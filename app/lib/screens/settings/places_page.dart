@@ -36,6 +36,16 @@ class _PlacesPageState extends State<PlacesPage> {
     if (mounted) setState(() => _places = p);
   }
 
+  Future<void> _remove(WatchPlace p) async {
+    if (!await confirmRemovePlace(context, p.name)) return;
+    try {
+      await widget.deps.hub.weather.removePlace(p);
+    } catch (_) {
+      if (mounted) say(context, 'Could not remove the place');
+    }
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = widget.deps.hub.settings;
@@ -55,7 +65,20 @@ class _PlacesPageState extends State<PlacesPage> {
                     title: p.name,
                     status: [Part(p.subtitle)],
                     onTap: () => s.setWatched(p.id, !s.watchedPlaces.contains(p.id)),
-                    trailing: CheckSquare(label: p.name, checked: s.watchedPlaces.contains(p.id)),
+                    trailing: p.kind == PlaceKind.saved
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                key: ValueKey('remove-${p.id}'),
+                                tooltip: 'Remove place',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => _remove(p),
+                              ),
+                              CheckSquare(label: p.name, checked: s.watchedPlaces.contains(p.id)),
+                            ],
+                          )
+                        : CheckSquare(label: p.name, checked: s.watchedPlaces.contains(p.id)),
                   ),
               ],
             ),
@@ -65,6 +88,19 @@ class _PlacesPageState extends State<PlacesPage> {
     );
   }
 }
+
+/// Asks before a saved place is removed. True when the person said Remove.
+Future<bool> confirmRemovePlace(BuildContext context, String name) async => await showDialog<bool>(
+  context: context,
+  builder: (ctx) => AlertDialog(
+    title: Text('Remove $name?'),
+    content: const Text('It is taken off your saved places, and its weather and alerts are no longer kept.'),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+      TextButton(key: const ValueKey('confirm-remove-place'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+    ],
+  ),
+) == true;
 
 /// The square tick box at the end of a row. The row is what is tapped.
 class CheckSquare extends StatelessWidget {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../maps/ui/map_widgets.dart';
+import '../../screens/settings/places_page.dart' show confirmRemovePlace;
 import '../../theme.dart';
 import '../nav_state.dart';
 import '../units.dart';
@@ -29,6 +30,7 @@ class PlaceCard extends StatelessWidget {
     final k = context.t;
     final dist = distanceLine(nav, fmt, place);
     final isPin = place.matched == 'pin' || place.isCoordinates;
+    final saved = nav.savedFor(place);
     final detail = <Widget>[
       if (place.address.isNotEmpty)
         _line(context, Icons.place_outlined, place.address),
@@ -114,11 +116,19 @@ class PlaceCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       flex: 4,
-                      child: OutlinedButton(
-                        key: const ValueKey('place-save'),
-                        onPressed: () => nav.savePlace(place),
-                        child: const Text('Save place'),
-                      ),
+                      child: saved == null
+                          ? OutlinedButton(
+                              key: const ValueKey('place-save'),
+                              onPressed: () => nav.savePlace(place),
+                              child: const Text('Save place'),
+                            )
+                          : OutlinedButton(
+                              key: const ValueKey('place-remove'),
+                              onPressed: () async {
+                                if (await confirmRemovePlace(context, saved.name)) await nav.removePlace(saved);
+                              },
+                              child: const Text('Remove place'),
+                            ),
                     ),
                   ],
                 ),

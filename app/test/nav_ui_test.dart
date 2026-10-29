@@ -228,6 +228,34 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('place card: a saved place offers Remove place, which asks first', (tester) async {
+        await tester.pumpWidget(host(theme, ListenableBuilder(
+          listenable: nav,
+          builder: (context, child) => PlaceCard(nav: nav, place: hospital, fmt: fmt, onClose: () {}),
+        )));
+        final events = <NavEvent>[];
+        nav.events.listen(events.add);
+        await tester.tap(find.text('Save place'));
+        await tester.pump();
+        await tester.pump();
+        expect(find.text('Remove place'), findsOneWidget);
+        expect(find.text('Save place'), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('place-remove')));
+        await tester.pumpAndSettle();
+        expect(find.text('Remove Cassia Regional Hospital?'), findsOneWidget);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(backend.deleted, isEmpty);
+        await tester.tap(find.byKey(const ValueKey('place-remove')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('confirm-remove-place')));
+        await tester.pumpAndSettle();
+        expect(backend.deleted, ['k0']);
+        expect(events.whereType<PlaceRemoved>().single.key, 'k0');
+        expect(find.text('Save place'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('place card: a dropped pin shows its coordinates in every format and copies one on tap', (tester) async {
         final pin = MapPlace.pin(43.6, -116.2, formats: {'decimal': '43.60000, -116.20000', 'dms': '43°36\'0.0"N 116°12\'0.0"W', 'usng': '11T NK 12345 67890', 'plus_code': '85M9G8VC+MM'});
         String? copied;

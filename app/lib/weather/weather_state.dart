@@ -97,6 +97,7 @@ class WeatherState extends ChangeNotifier {
     this.regions,
     this.notifier,
     this.told,
+    this.onPlacesChanged,
     FetchBytes? fetch,
     DateTime Function()? clock,
   }) : _fetch = fetch ?? fetchBytes,
@@ -106,6 +107,9 @@ class WeatherState extends ChangeNotifier {
   final DataPolicy policy;
   final LiveCore core;
   final TokenStore secrets;
+
+  /// Called after a saved place is removed here (the assistant's list of places to watch is published again).
+  final void Function()? onPlacesChanged;
 
   /// Where downloaded catalogues are kept.
   final Future<Directory> Function() catalogueDir;
@@ -651,6 +655,16 @@ class WeatherState extends ChangeNotifier {
     'lat': p.lat,
     'lon': p.lon,
   };
+
+  /// Removes a saved place: the core forgets it and it is no longer watched. Only saved places can be removed.
+  Future<void> removePlace(WatchPlace p) async {
+    final key = p.key;
+    if (p.kind != PlaceKind.saved || key == null) return;
+    await core.deleteSavedPlace(key);
+    settings.forgetWatched([p.id]);
+    notifyListeners();
+    onPlacesChanged?.call();
+  }
 
   /// The watched places that can be fetched for now (a place without a position, like "Where I am" before the first fix, waits).
   Future<List<WatchPlace>> watchedPlaces() async {

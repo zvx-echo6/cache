@@ -59,6 +59,12 @@ class PlaceSaved extends NavEvent {
   final MapPlace place;
 }
 
+/// A saved place was removed from its place card (the app stops watching it).
+class PlaceRemoved extends NavEvent {
+  const PlaceRemoved(this.key);
+  final String key;
+}
+
 /// Something outside the map (the assistant's navigation.start) wants the Maps tab on screen.
 class MapRequested extends NavEvent {
   const MapRequested();
@@ -296,6 +302,7 @@ class NavState extends ChangeNotifier {
     searchOpen = false;
     query = p.name;
     notifyListeners();
+    refreshSaved();
   }
 
   /// A long press on the map: a pin with its coordinates now, and the rest (grid and Plus Code, the nearest town) as soon as
@@ -347,6 +354,36 @@ class NavState extends ChangeNotifier {
     } catch (e) {
       _events.add(NavNotice(e is CacheSearchException && e.code == 'unsupported' ? 'Saving places is not available yet' : 'Could not save the place'));
     }
+    await refreshSaved();
+  }
+
+  List<SavedPlaceRecord> _saved = const [];
+
+  /// Reads the saved places again, so a place card knows whether its place is saved.
+  Future<void> refreshSaved() async {
+    try {
+      final saved = await backend.savedPlaces();
+      if (_disposed) return;
+      _saved = saved;
+      notifyListeners();
+    } catch (_) {
+      // An old core without saved places: every card offers Save place.
+    }
+  }
+
+  /// The saved place [p] is (the same name at the same position), or null.
+  SavedPlaceRecord? savedFor(MapPlace p) =>
+      _saved.where((s) => s.name == p.name && (s.lat - p.lat).abs() < 1e-6 && (s.lon - p.lon).abs() < 1e-6).firstOrNull;
+
+  /// Removes a saved place; the app stops watching it (see [PlaceRemoved]).
+  Future<void> removePlace(SavedPlaceRecord s) async {
+    try {
+      await backend.deletePlace(s.key);
+      _events.add(PlaceRemoved(s.key));
+    } catch (_) {
+      _events.add(const NavNotice('Could not remove the place'));
+    }
+    await refreshSaved();
   }
 
   void addToHome(MapPlace p) => _events.add(AddToHomeRequested(p));
@@ -630,8 +667,11 @@ class NavState extends ChangeNotifier {
 
   GeoPoint? get routeStart => _routeFrom;
 
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
     _searchTimer?.cancel();
     _meaningTimer?.cancel();
     _fixSub?.cancel();

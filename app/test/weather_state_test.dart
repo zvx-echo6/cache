@@ -450,6 +450,19 @@ void main() {
       expect(await h.weather.watchedSummary(), 'Home\nCabin\nWork');
     });
 
+    test('removing a saved place deletes it in the core and stops watching it; other places cannot be removed', () async {
+      h = await Harness.create();
+      h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43, lon: -114)];
+      h.settings.setWatched('place:cabin', true);
+      final cabin = (await h.weather.placeChoices()).firstWhere((p) => p.id == 'place:cabin');
+      await h.weather.removePlace(cabin);
+      expect(h.core.deleted, ['cabin']);
+      expect(h.settings.watchedPlaces.contains('place:cabin'), isFalse);
+      expect((await h.weather.placeChoices()).map((p) => p.id), isNot(contains('place:cabin')));
+      await h.weather.removePlace((await h.weather.placeChoices()).first);
+      expect(h.core.deleted, ['cabin'], reason: 'Where I am is not a saved place');
+    });
+
     test('regions are the finished map areas by name, at the middle of their areas', () {
       DownloadedArea a(String label, double s, double w, double n, double e, {AreaPhase phase = AreaPhase.done}) => DownloadedArea(
         id: label + s.toString(),

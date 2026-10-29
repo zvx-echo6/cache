@@ -25,6 +25,9 @@ abstract class LiveCore {
 
   /// The saved places.
   Future<List<SavedPlaceRecord>> savedPlaces();
+
+  /// Removes a saved place (cs_place_delete).
+  Future<void> deleteSavedPlace(String key);
 }
 
 /// The real thing: the search core, once it has opened.
@@ -60,4 +63,7 @@ class SearchLiveCore implements LiveCore {
 
   @override
   Future<List<SavedPlaceRecord>> savedPlaces() async => (await _core()).savedPlaces();
+
+  @override
+  Future<void> deleteSavedPlace(String key) async => (await _core()).deleteSavedPlace(key);
 }

@@ -197,6 +197,36 @@ void main() {
     });
   });
 
+  group('Places: remove', () {
+    testWidgets('a saved place can be removed after a confirm, and is no longer watched', (tester) async {
+      final r = await SettingsRig.create(tester);
+      r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9)];
+      r.regionList = const [WatchRegion(name: 'Idaho', lat: 44.4, lon: -114.6)];
+      r.settings.setWatched('place:cabin', true);
+      await r.show(tester, PlacesPage(deps: r.deps));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Remove place'), findsOneWidget, reason: 'only saved places can be removed');
+      await tester.tap(find.byKey(const ValueKey('remove-place:cabin')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove Cabin?'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(r.liveCore.deleted, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('remove-place:cabin')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('confirm-remove-place')));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(r.liveCore.deleted, ['cabin']);
+      expect(r.settings.watchedPlaces.contains('place:cabin'), isFalse);
+      expect(find.text('Cabin'), findsNothing);
+      expect(find.text('Idaho'), findsOneWidget);
+      await r.dispose(tester);
+    });
+  });
+
   group('All data sources', () {
     testWidgets('searchable, grouped On, Free, Needs your own key; Manage keys and Add sources from a link below', (tester) async {
       final r = await SettingsRig.create(tester);

@@ -87,6 +87,12 @@ class DemoMapBackend implements MapBackend {
   @override
   Future<void> savePlace({required String name, required double lat, required double lon, String? label}) async {}
 
+  @override
+  Future<List<SavedPlaceRecord>> savedPlaces() async => const [];
+
+  @override
+  Future<void> deletePlace(String key) async {}
+
   static double _dist(double lat1, double lon1, double lat2, double lon2) {
     final k = math.cos(lat1 * math.pi / 180);
     final dx = (lon2 - lon1) * k * 111320, dy = (lat2 - lat1) * 110574;

@@ -16,6 +16,12 @@ abstract class MapBackend {
 
   /// Saves a place to the user's saved places.
   Future<void> savePlace({required String name, required double lat, required double lon, String? label});
+
+  /// The user's saved places.
+  Future<List<SavedPlaceRecord>> savedPlaces();
+
+  /// Removes a saved place by its key.
+  Future<void> deletePlace(String key);
 }
 
 /// The query as the phone's embedder (bge-m3) makes it, or null when the embedder is not loaded: the core then searches by
@@ -58,4 +64,10 @@ class CoreMapBackend implements MapBackend {
   Future<void> savePlace({required String name, required double lat, required double lon, String? label}) async {
     await _core().savePlace(name: name, lat: lat, lon: lon, label: label);
   }
+
+  @override
+  Future<List<SavedPlaceRecord>> savedPlaces() => _core().savedPlaces();
+
+  @override
+  Future<void> deletePlace(String key) => _core().deleteSavedPlace(key);
 }

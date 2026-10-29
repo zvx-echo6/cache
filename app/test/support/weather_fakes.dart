@@ -138,7 +138,14 @@ class FakeLiveCore implements LiveCore {
   CacheSearchException? previewError;
   Map<String, dynamic> previewResult = {'valid': true, 'item_count': 1};
   List<SavedPlaceRecord> saved = [];
+  final List<String> deleted = [];
   bool fetchedNew = true;
+
+  @override
+  Future<void> deleteSavedPlace(String key) async {
+    deleted.add(key);
+    saved = [for (final p in saved) if (p.key != key) p];
+  }
 
   @override
   Future<Map<String, dynamic>> sources() async {

@@ -161,6 +161,17 @@ class FakeBackend implements MapBackend {
     if (saveFails) throw const CacheSearchException('unsupported', 'no');
     saved.add((name, lat, lon));
   }
+
+  final List<String> deleted = [];
+
+  @override
+  Future<List<SavedPlaceRecord>> savedPlaces() async => [
+        for (final (i, s) in saved.indexed)
+          if (!deleted.contains('k$i')) SavedPlaceRecord(key: 'k$i', name: s.$1, lat: s.$2, lon: s.$3),
+      ];
+
+  @override
+  Future<void> deletePlace(String key) async => deleted.add(key);
 }
 
 class FakeSpeaker implements Speaker {
