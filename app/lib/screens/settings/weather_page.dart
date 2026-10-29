@@ -77,7 +77,7 @@ class _WeatherPageState extends State<WeatherPage> {
   }
 
   Future<void> _update({bool anyway = false}) async {
-    final r = await w.updateNow(anyway: anyway);
+    final r = await w.updateNow(anyway: anyway, force: true);
     if (!mounted) return;
     say(
       context,

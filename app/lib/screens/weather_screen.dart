@@ -93,14 +93,14 @@ class _WeatherScreenState extends State<WeatherScreen> {
   }
 
   Future<void> _update() async {
-    final r = await w.updateNow();
+    final r = await w.updateNow(force: true);
     if (!mounted) return;
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
     if (r.blocked != null) {
       m.showSnackBar(SnackBar(
         content: Text(r.blocked!.message),
-        action: SnackBarAction(label: 'Update anyway', onPressed: () => w.updateNow(anyway: true)),
+        action: SnackBarAction(label: 'Update anyway', onPressed: () => w.updateNow(anyway: true, force: true)),
       ));
     } else {
       m.showSnackBar(SnackBar(content: Text(r.words)));
@@ -142,22 +142,22 @@ class _WeatherScreenState extends State<WeatherScreen> {
                       ? _empty(context, 'No place is being watched.', 'Choose places under Settings > Weather and alerts > Places.')
                       : _empty(context, 'No place is being watched.', 'Use where you are, or choose a place.')
                 else ...[
-                  if (places.length > 1)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final p in places)
-                          ChoiceChip(
-                            label: Text(p.name),
-                            selected: p.id == _placeId,
-                            onSelected: (_) {
-                              setState(() => _placeId = p.id);
-                              _load();
-                            },
-                          ),
-                      ],
-                    ),
+                  // Shown for one place too, so the page says which place the forecast is for.
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final p in places)
+                        ChoiceChip(
+                          label: Text(p.name),
+                          selected: p.id == _placeId,
+                          onSelected: (_) {
+                            setState(() => _placeId = p.id);
+                            _load();
+                          },
+                        ),
+                    ],
+                  ),
                   const SizedBox(height: 12),
                   FutureBuilder<List<SourceView>>(
                     future: _view,

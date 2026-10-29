@@ -523,6 +523,17 @@ void main() {
       expect(r.words, 'Already up to date');
     });
 
+    test("Update now from a person forces a download; the scheduled update keeps the refresh intervals", () async {
+      h = await Harness.create();
+      await setUp3(h);
+      await h.weather.updateNow();
+      expect(h.core.fetches.any((f) => f.containsKey('force')), isFalse);
+      h.core.fetches.clear();
+      await h.weather.updateNow(force: true);
+      expect(h.core.fetches.length, 4);
+      expect(h.core.fetches.every((f) => f['force'] == true), isTrue);
+    });
+
     test('mobile data off for updates: nothing is fetched, and "Update anyway" fetches', () async {
       h = await Harness.create();
       await setUp3(h);

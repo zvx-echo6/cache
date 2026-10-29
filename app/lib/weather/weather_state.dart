@@ -688,8 +688,9 @@ class WeatherState extends ChangeNotifier {
 
   /// Fetches every source that is on, for every watched place, through the core: the same fetch the assistant uses, with the core's
   /// own refresh intervals and quotas, so a copy that is still fresh is not downloaded again. Respects the mobile-data setting;
-  /// [anyway] is the person's "Update anyway".
-  Future<UpdateReport> updateNow({bool anyway = false}) async {
+  /// [anyway] is the person's "Update anyway". [force] is a person's Update now: every source is downloaded again even when
+  /// its copy is younger than its refresh interval (a forecast is kept for 3 hours), still within the core's quotas.
+  Future<UpdateReport> updateNow({bool anyway = false, bool force = false}) async {
     if (_updating) return const UpdateReport(nothingToDo: 'Already updating');
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     if (srcs.isEmpty) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
@@ -720,7 +721,7 @@ class WeatherState extends ChangeNotifier {
       for (final c in srcs) {
         for (final p in places) {
           try {
-            final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
+            final r = await core.fetch({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now()), if (force) 'force': true});
             r['fetched'] == true ? fetched++ : fresh++;
           } on CacheSearchException catch (e) {
             debugPrint('Live update of ${c.id}: ${e.code}: ${e.message}');

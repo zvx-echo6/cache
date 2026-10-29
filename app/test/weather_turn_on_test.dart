@@ -6,6 +6,7 @@ import 'package:cache/screens/home_screen.dart';
 import 'package:cache/screens/weather_screen.dart';
 import 'package:cache/screens/weather_turn_on.dart';
 import 'package:cache/settings/app_settings.dart';
+import 'package:cache/weather/curated.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
@@ -151,6 +152,20 @@ void main() {
     final w = await tester.runAsync(r.weather.watchedPlaces);
     expect(w!.map((p) => p.id), containsAll(['here', 'place:cabin']));
     expect(w.firstWhere((p) => p.id == 'place:cabin').kind, PlaceKind.saved);
+    await r.dispose(tester);
+  });
+
+  testWidgets('Weather page: one watched place still shows its name; Update now downloads again even a fresh copy', (tester) async {
+    final r = await SettingsRig.create(tester);
+    await tester.runAsync(() => r.weather.setRowOn(kCurated.firstWhere((c) => c.title == 'Weather forecast'), true));
+    await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ChoiceChip, 'Where I am'), findsOneWidget, reason: 'the place row is there for a single place');
+    await tester.tap(find.text('Update now'));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+    expect(r.liveCore.fetches, isNotEmpty);
+    expect(r.liveCore.fetches.every((f) => f['force'] == true), isTrue, reason: "a person's Update now skips the refresh interval");
     await r.dispose(tester);
   });
 }
