@@ -154,6 +154,14 @@ a drive uses the vehicle-class modes, a walk goes on foot, a bike uses a two-whe
 the off-road maneuvers; the assistant sees the off-road distance, explanation and warnings. Without the off-road data the road route is
 returned and the end that could not be reached gets a `warnings` entry.
 
+**Route ends.** Where a route starts and ends follows Apple Maps (project decision, 2026-10-29). A destination from the
+places data that has an arrival point is routed to it: an airport's passenger terminal, a hospital's or emergency room's
+emergency entrance (within 150 m of a point place) else its main door, a large area's nearest public parking, another
+building's main door. The arrival points come from the OSM data when the pack is built. `to_matched` keeps the place's own
+`lat` and `lon`. On a drive, an end whose nearest road is a service road (an airfield's or a campus's) is moved to the
+nearest public road within 600 m; that gap is not an off-road leg and gets no `offroad_unavailable` warning. Walks and bike
+rides keep the router's own snapping.
+
 **Off-road modes.** `offroad_foot` and `offroad_vehicle` route the whole trip with the off-road router, with no road
 route first: `offroad_foot` on foot over trails and open ground (the unified search with only foot), `offroad_vehicle`
 with navi's unified Auto search (4x4, ATV and two-wheeler, switching at parking lots, trailheads and road ends, on foot
@@ -329,8 +337,8 @@ Fields:
   under nearby). They are not on `from_matched` or `other_destination_candidates`. `hours_note` follows `map_region_age`
   when the destination has `hours`.
 - `warnings` appears only when there is one. Each entry is `{"code": "offroad_unavailable", "end": "from" | "to",
-  "road_point": {"lat", "lon"}, "gap_m": N, "reason": R, "detail": D}`: that end is away from the road network, the
-  route stops at `road_point`, and `gap_m` is how many metres short of the requested end it stops. `reason` and
+  "road_point": {"lat", "lon"}, "gap_m": N, "reason": R, "detail": D}`: that end is away from the road network
+  (an end moved to a public road, above, is not), the route stops at `road_point`, and `gap_m` is how many metres short of the requested end it stops. `reason` and
   `detail` say why that end got no off-road leg:
 
   | `reason` | when | `detail` |
