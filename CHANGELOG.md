@@ -23,8 +23,10 @@ release notes).
 - Assistant: nearby places and navigation destinations show the website and whether the place is open now
 - Assistant: the calculator works out dates, such as the days between two dates or the date 30 days from today
 - Assistant: when a route can't reach a point away from the roads, it says whether the off-road data is missing or no off-road way was found
+- Assistant: reading a library entry shows its author and page when known
 
 ### Fixed
+- Assistant: asking to open a place, route, live data or location result no longer fails with an internal error
 - Regions: the keyboard no longer pops up after the download sheet closes
 - Unload the model in use from Models to free memory
 - The keyboard closes when you tap outside a text box or scroll

@@ -71,7 +71,16 @@ fn build_shard(dir: &std::path::Path) {
                 5 => "A sesquipedalian tale   with\nodd   spacing".to_string(),
                 _ => format!("Alpha text number {i} here"),
             };
-            PointStruct::new(i, vector(i), json!({"title": format!("Doc {i}"), "content": content})).0
+            let mut payload = json!({"title": format!("Doc {i}"), "content": content});
+            match i {
+                7 => {
+                    payload["author"] = json!("A. Writer");
+                    payload["page"] = json!(12);
+                }
+                8 => payload["page"] = json!("iv"),
+                _ => {}
+            }
+            PointStruct::new(i, vector(i), payload).0
         })
         .collect();
     shard
@@ -93,7 +102,7 @@ impl Fx {
         let tmp = TempDir::new(name);
         let shard = tmp.0.join("shard");
         build_shard(&shard);
-        let settings = json!({"format":1,"library_id":"own","title":"Own","fields":{"title":"title","text":"content"},
+        let settings = json!({"format":1,"library_id":"own","title":"Own","fields":{"title":"title","text":"content","author":"author","page":"page"},
             "embedding":{"vector":"","model":MODEL,"sha256":"x","dims":4},"keyword_index":"auto"});
         let cfg = json!({"sources":[{"kind":"library","path":shard.to_str().unwrap(),"index_dir":"/nonexistent/idx","settings":settings}]});
         let h = unsafe { cs_open(cstr(&cfg.to_string()).as_ptr()) };
@@ -314,6 +323,44 @@ fn bad_locations_are_c_errors() {
         assert_eq!(cs_set_location(ptr::null_mut(), 0.0, 0.0, 5.0, cstr("t").as_ptr()), -1);
         assert_eq!(cs_clear_location(ptr::null_mut()), -1);
     }
+}
+
+#[test]
+fn read_shows_a_concepts_author_and_page() {
+    let f = Fx::new("readmeta");
+    f.format(r#"[{"address":"lib:own/7","title":"Doc 7, p. 12","snippet":"x"},{"address":"lib:own/8","title":"Doc 8, p. iv","snippet":"y"}]"#);
+    assert_eq!(f.tool("read", r#"{"n":1}"#)["content"], "[1] Doc 7\nAuthor: A. Writer\nPage: 12\n\nAlpha text number 7 here");
+    assert_eq!(f.tool("read", r#"{"n":2}"#)["content"], "[2] Doc 8\nPage: iv\n\nAlpha text number 8 here");
+}
+
+#[test]
+fn read_on_a_result_already_shown_is_bad_arguments() {
+    let f = Fx::new("readshown");
+    let shown = [
+        ("place:osm-n1", "a place"),
+        ("town:42", "a place"),
+        ("addr:u1/12", "a place"),
+        ("layer:l1/p1", "a place"),
+        ("pack:p/3", "a place"),
+        ("nav:r1", "a route"),
+        ("live:weather/home/now", "a live-data"),
+        ("loc:43.6150,-116.2023", "a location"),
+        ("repeater:list1/3", "a repeater"),
+        ("app:setup/connection", "a setup"),
+        ("places:home", "an app"),
+    ];
+    let results: Vec<Value> = shown.iter().map(|(a, _)| json!({"address": a, "title": "T", "snippet": "s"})).collect();
+    f.format(&Value::Array(results).to_string());
+    for (i, (_, kind)) in shown.iter().enumerate() {
+        let n = i + 1;
+        let v = f.tool("read", &json!({"n": n}).to_string());
+        let want = json!({"ok": false, "error": {"type": "bad_arguments", "detail": format!("[{n}] is {kind} result; everything about it is already shown above")}});
+        assert_eq!(v["content"], want.to_string());
+    }
+    assert_eq!(
+        f.tool("read", r#"{"n":6}"#)["content"],
+        r#"{"ok":false,"error":{"type":"bad_arguments","detail":"[6] is a route result; everything about it is already shown above"}}"#
+    );
 }
 
 #[test]
