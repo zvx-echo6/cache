@@ -1,4 +1,3 @@
-import 'notification_access.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -85,7 +84,6 @@ class NavState extends ChangeNotifier {
     required this.positionSource,
     required this.fmt,
     this.onFollow,
-    this.notifications,
     DateTime Function()? clock,
     this.searchDebounce = const Duration(milliseconds: 220),
     this.meaningDebounce = const Duration(milliseconds: 700),
@@ -101,9 +99,6 @@ class NavState extends ChangeNotifier {
   final Duration meaningDebounce;
   final Duration rerouteCooldown;
   final DateTime Function() _clock;
-
-  /// Asked for the notification permission when guidance starts (null: not asked), so the ongoing guidance notification shows.
-  final NotificationAccess? notifications;
 
   /// Called to change how the camera follows the phone (guidance turns the map to the heading).
   final void Function(FollowMode mode)? onFollow;
@@ -531,14 +526,8 @@ class NavState extends ChangeNotifier {
     onFollow?.call(FollowMode.headingUp);
     notifyListeners();
     final name = r.destinationName.isEmpty ? 'your destination' : r.destinationName;
-    // Android 13 and later show the guidance notification only once the user has allowed notifications. Asked here, with
-    // the app on screen; a refusal does not stop guidance (the position service still runs).
-    if (notifications != null) {
-      try {
-        await notifications!.request();
-      } catch (_) {}
-      if (phase != NavPhase.guiding) return; // ended while the prompt was up
-    }
+    // Notification permission is not asked here: a system prompt left unanswered held the position back. It is asked when
+    // weather and alerts are switched on; without it guidance still runs (Android 13 and later then hide its notification).
     location.holdStream(true);
     if (phase != NavPhase.guiding) {
       location.holdStream(false);

@@ -5,7 +5,6 @@ import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
 import 'package:cache/nav/nav_state.dart';
-import 'package:cache/nav/notification_access.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,17 +26,6 @@ class _NoSource implements PositionSource {
   Future<void> openAppSettings() async {}
   @override
   Future<void> openLocationSettings() async {}
-}
-
-class _Notifications implements NotificationAccess {
-  _Notifications(this.allowed, this.onAsk);
-  final bool allowed;
-  final void Function() onAsk;
-  @override
-  Future<bool> request() async {
-    onAsk();
-    return allowed;
-  }
 }
 
 MapPlace place(String id, String name, {String type = 'place', double lat = 42.5, double lon = -113.5, String kind = 'Hospital'}) =>
@@ -405,25 +393,14 @@ void main() {
       expect(location.fix!.lon, -113.797);
     });
 
-    test('Start asks for the notification permission before the position service starts; a refusal does not stop guidance', () async {
-      final asked = <String>[];
-      final n = NavState(
-        backend: backend,
-        location: location,
-        speaker: speaker,
-        positionSource: gps,
-        fmt: const Fmt(UnitSystem.imperial),
-        notifications: _Notifications(false, () => asked.add('asked, gps starts so far: ${gps.starts}')),
-        clock: () => now,
-      );
-      addTearDown(n.dispose);
+    test('Start never waits on a permission prompt: the position service starts at once', () async {
       location.publish(fixAt(42.5, -113.8));
       backend.onRoute = (to, mode, from) async => MapRoute.fromJson(routeJson);
-      await n.openDirections(place('place:4', 'Cassia Regional Hospital'));
-      await n.start();
-      expect(asked, ['asked, gps starts so far: 0']);
-      expect(n.phase, NavPhase.guiding);
-      expect(gps.starts, 1);
+      await nav.openDirections(place('place:4', 'Cassia Regional Hospital'));
+      final started = nav.start();
+      expect(gps.starts, 1, reason: 'started before anything is awaited');
+      await started;
+      expect(nav.phase, NavPhase.guiding);
     });
 
     test('each turn is announced as it comes, once per stage', () async {

@@ -30,6 +30,7 @@ release notes).
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
+- Directions: starting navigation no longer asks to allow notifications and waits on the answer before finding your position; notifications are asked for when you turn on weather and alerts
 - Directions: when there is no off-road data for the area, Walk and Drive buttons show under the message and switch to that way of travel
 - Regions: a part that cannot be downloaded says so in plain words, such as "Places for this area aren't available yet.", instead of the server's error and address
 - Library: adding the blank template says it is empty and needs your own entries first, and a file that is not a library says "This file isn't a Cache library." instead of showing internal error text

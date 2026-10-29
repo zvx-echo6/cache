@@ -261,7 +261,6 @@ class _CacheAppState extends State<CacheApp> {
     positionSource: GeolocatorNavSource(),
     fmt: Fmt(unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale)),
     onFollow: (m) => maps.setFollow(m),
-    notifications: PlatformNotificationAccess(),
   );
   CacheThemeId _applied = CacheThemeId.dark;
 
