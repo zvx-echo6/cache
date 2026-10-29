@@ -85,6 +85,9 @@ fn serve_imports_layers_and_repeaters_at_start() {
     }
     core.userlayers_import(&json!({"kind": "repeaters", "paths": [fixture("repeaters-fixture.kml"), fixture("repeaters-fixture.csv")]}).to_string()).unwrap();
     let lists: Value = serde_json::from_str(&core.userlayers_list().unwrap()).unwrap();
+    // two starts of cs serve: the second replaced the first one's imports, so its store also holds 2 layers and 1 list
+    let served_lists: Value = serde_json::from_str(&Core::open(&std::fs::read_to_string(&serve_cfg).unwrap()).unwrap().userlayers_list().unwrap()).unwrap();
+    assert_eq!((served_lists["layers"].as_array().unwrap().len(), served_lists["repeater_lists"].as_array().unwrap().len()), (2, 1));
     assert_eq!((lists["layers"].as_array().unwrap().len(), lists["repeater_lists"].as_array().unwrap().len()), (2, 1));
 
     assert_eq!(http.req("GET", "/tools", ""), core.tool_schemas().unwrap());
@@ -97,8 +100,12 @@ fn serve_imports_layers_and_repeaters_at_start() {
     ] {
         let direct = Conv::new().and_then(|mut c| core.tool(&mut c, name, &a.to_string(), FIXTURE_NOW)).unwrap();
         let served = http.tool(name, a.clone());
-        assert_eq!(served, direct, "{name} {a}");
-        let v: Value = serde_json::from_str(&served).unwrap();
+        // the same answer; only the list and layer ids differ (the served store's second start replaced the first one's)
+        let (sv, dv): (Value, Value) = (serde_json::from_str(&served).unwrap(), serde_json::from_str(&direct).unwrap());
+        assert_eq!(sv["content"], dv["content"], "{name} {a}");
+        let addrs = |v: &Value| v["ids"].as_array().unwrap().iter().map(|i| i["address"].as_str().unwrap().split_once('/').unwrap().1.to_string()).collect::<Vec<_>>();
+        assert_eq!(addrs(&sv), addrs(&dv), "{name} {a}");
+        let v: Value = sv;
         assert!(v["content"].as_str().unwrap().contains("\"ok\":true"), "{v}");
     }
     let v: Value = serde_json::from_str(&http.tool("locate", json!({"place": "North gate"}))).unwrap();
