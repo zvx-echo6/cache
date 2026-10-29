@@ -171,6 +171,35 @@ fn a_name_with_a_town_finds_the_place() {
 }
 
 #[test]
+fn a_name_many_places_share_finds_the_nearest() {
+    let t = Tmp::new("chain");
+    write_fixture_pack(&t.pack());
+    // a chain with more stores than the text search reads (all with the same text score), the one near Burley added last
+    let db = rusqlite::Connection::open(t.pack()).unwrap();
+    for i in 0..121i64 {
+        let (id, lat, lon) = if i < 120 { (1000 + i, 47.0 + i as f64 * 0.01, -116.5) } else { (1000 + i, 42.5370, -113.7900) };
+        db.execute(
+            "INSERT INTO places(id, name, category, kind, kind_id, lat, lon, state, country, source, source_id) \
+             VALUES (?1, 'Maverik', 'fuel', 'amenity=fuel', 'fuel', ?2, ?3, 'ID', 'US', 'osm', ?4)",
+            rusqlite::params![id, lat, lon, format!("osm:n{id}")],
+        )
+        .unwrap();
+        db.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", rusqlite::params![id, lat, lon]).unwrap();
+        db.execute("INSERT INTO places_fts(rowid, name, alt_names) VALUES (?1, 'Maverik', '')", rusqlite::params![id]).unwrap();
+    }
+    drop(db);
+    let c = core(&t);
+    let v = search(&c, "Maverik", Some(BURLEY));
+    let r = &v["results"][0];
+    assert_eq!(r["name"], "Maverik", "{v}");
+    assert!(r["distance_m"].as_i64().unwrap() < 1000, "{v}");
+    // the geocoder behind locate and navigate too
+    let g = cache_places::PackGeocoder::new(std::sync::Arc::new(cache_places::PackSet::new(vec![t.pack()], None)));
+    let h = &cache_places::Geocoder::forward(&g, "Maverik", Some(BURLEY), 3)[0];
+    assert!((h.lat - 42.5370).abs() < 1e-6, "{h:?}");
+}
+
+#[test]
 fn meaning_search_uses_the_pack_vectors_and_says_when_it_cannot() {
     let t = Tmp::new("meaning");
     write_fixture_pack_with_vectors(&t.pack());

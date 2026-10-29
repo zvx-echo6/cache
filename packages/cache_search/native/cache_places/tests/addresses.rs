@@ -164,6 +164,36 @@ fn an_exact_number_with_the_street_in_either_form() {
 }
 
 #[test]
+fn a_street_name_many_towns_share_is_found_in_the_named_town_and_nearby() {
+    let t = Tmp::new("common");
+    let db = merged(&t.0, None);
+    // 60 more Overland Avenues with the same numbers, far from Burley, ahead of Burley's in the index
+    let c = Connection::open(&db).unwrap();
+    for i in 1..=60i64 {
+        let lat_off = 4.0 + i as f64 * 0.01;
+        c.execute(
+            "INSERT INTO addr_streets(id, uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, min_lat, max_lat, \
+             min_lon, max_lon, n, numbers) SELECT ?1, uid || '-far' || ?1, street, street_expanded, 'Faraway', 'Faraway', '99999', state, country, \
+             lat + ?2, lon, min_lat + ?2, max_lat + ?2, min_lon, max_lon, n, numbers FROM addr_streets WHERE street = 'Overland Ave' AND id > 1000 LIMIT 1",
+            params![i, lat_off],
+        )
+        .unwrap();
+        c.execute("INSERT INTO addr_rt SELECT id, min_lat, max_lat, min_lon, max_lon FROM addr_streets WHERE id = ?1", params![i]).unwrap();
+        c.execute("INSERT INTO addr_fts(rowid, street, street_expanded) SELECT id, street, street_expanded FROM addr_streets WHERE id = ?1", params![i]).unwrap();
+    }
+    drop(c);
+    let g = geo(&db);
+    let h = &g.forward("1414 Overland Ave, Burley", None, 1)[0];
+    assert_eq!((h.kind, h.label.as_str()), (HitKind::Address, "1414 Overland Ave, Burley, ID"));
+    let h = &g.forward("1414 Overland Ave", Some(BURLEY), 1)[0];
+    assert_eq!((h.kind, h.label.as_str()), (HitKind::Address, "1414 Overland Ave, Burley, ID"));
+    assert!((h.lat - 42.5390).abs() < 1e-6);
+    // the far ones are still addresses of their own town
+    let h = &g.forward("1414 Overland Ave, Faraway", None, 1)[0];
+    assert_eq!((h.kind, h.label.as_str()), (HitKind::Address, "1414 Overland Ave, Faraway, ID"));
+}
+
+#[test]
 fn a_number_between_known_numbers_is_placed_on_its_side_of_the_street() {
     let t = Tmp::new("interp");
     let g = geo(&merged(&t.0, None));
@@ -362,4 +392,47 @@ fn kinds_matched_by_meaning_give_rows_and_their_places() {
     assert_eq!(e.name.as_deref(), Some("Water Hole Lake"));
     assert!(c.lookup("kind:water_body").is_none(), "no centre, no nearest");
     assert!(c.lookup_near("kind:nope", Some(STANLEY)).is_none());
+}
+
+#[test]
+fn a_kind_a_little_under_the_bar_matches_when_it_stands_clear_of_the_rest() {
+    let t = Tmp::new("clear");
+    let db = merged(&t.0, None);
+    let c = core(&db);
+    // a query vector with a set cosine to the drinking water kind's text and none to the other kind and category texts:
+    // what a short query ("ER", "vet") gives with bge-m3, a cosine under the bar for one kind and much less for the rest
+    let unit = |v: Vec<f32>| {
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.into_iter().map(|x| x / n).collect::<Vec<f32>>()
+    };
+    let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let packs = PackSet::new(vec![db.clone()], None).current();
+    let pack = &packs[0];
+    let k = unit(fake_embed("Drinking water tap: a tap, fountain or pump that the map data marks as drinking water"));
+    let mut basis = vec![k.clone()];
+    let texts = pack.kinds.iter().map(|x| format!("{}: {}", x.label, x.description)).chain(pack.categories.iter().map(|x| format!("{}: {}", x.title, x.description)));
+    for text in texts {
+        let mut v = fake_embed(&text);
+        for b in &basis {
+            let d = dot(&v, b);
+            v.iter_mut().zip(b).for_each(|(x, y)| *x -= d * y);
+        }
+        if dot(&v, &v) > 1e-6 {
+            basis.push(unit(v));
+        }
+    }
+    let mut other = fake_embed("zzqx unrelated");
+    for b in &basis {
+        let d = dot(&other, b);
+        other.iter_mut().zip(b).for_each(|(x, y)| *x -= d * y);
+    }
+    let other = unit(other);
+    let at = |cos: f32| -> Vec<f32> { k.iter().zip(&other).map(|(a, b)| cos * a + (1.0 - cos * cos).sqrt() * b).collect() };
+    let rows = |cos: f32| -> Vec<String> {
+        let opts = SearchOpts { near: Some(STANLEY), vector: Some((FAKE_MODEL.to_string(), at(cos))), ..Default::default() };
+        let v = c.search("zzqx", &opts, None).unwrap();
+        v["results"].as_array().unwrap().iter().filter(|r| r["type"] == "category").map(|r| r["id"].as_str().unwrap().to_string()).collect()
+    };
+    assert!(rows(0.485).iter().any(|id| id == "kind:drinking_water" || id == "category:water"), "{:?}", rows(0.485));
+    assert!(rows(0.42).is_empty(), "{:?}", rows(0.42));
 }

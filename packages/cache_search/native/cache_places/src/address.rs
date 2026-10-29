@@ -7,7 +7,7 @@
 //! nothing here knows any word of any language.
 
 use crate::addr::{self, Entry};
-use crate::geo::haversine_km;
+use crate::geo::{haversine_km, lon_scale};
 use crate::pack::{Pack, Result};
 use rusqlite::{params, OptionalExtension};
 
@@ -110,17 +110,31 @@ impl Pack {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// `fts_streets`, nearest `limit` to a point first: a street name a state has hundreds of ("Main Street") would otherwise
+    /// be cut by text score alone, before the town or the distance is looked at. Ordered by the centre of the row's box in the
+    /// R-tree; only the rows kept are read.
+    pub fn fts_streets_near(&self, fts: &str, lat: f64, lon: f64, limit: usize) -> Result<Vec<StreetRow>> {
+        let conn = self.conn();
+        let mut st = conn.prepare(&format!(
+            "SELECT {STREET_COLS} FROM (SELECT f.rowid AS id, (r.min_lat + r.max_lat) / 2 AS la, (r.min_lon + r.max_lon) / 2 AS lo \
+             FROM addr_fts f JOIN addr_rt r ON r.id = f.rowid WHERE addr_fts MATCH ?1 \
+             ORDER BY (la - ?2) * (la - ?2) + (lo - ?3) * (lo - ?3) * ?4 LIMIT ?5) n JOIN addr_streets s ON s.id = n.id"
+        ))?;
+        let rows = st.query_map(params![fts, lat, lon, lon_scale(lat), limit as i64], street_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn street_by_uid(&self, uid: &str) -> Result<Option<StreetRow>> {
         let conn = self.conn();
         Ok(conn.query_row(&format!("SELECT {STREET_COLS} FROM addr_streets s WHERE s.uid = ?1 LIMIT 1"), params![uid], street_row).optional()?)
     }
 
     /// The rows joined to `row`: the same street, town and postcode, within [`JOIN_KM`] of it (and of each other); `row`
-    /// itself included.
+    /// itself included. The rows of that name nearest `row` are read, so a common street name elsewhere does not crowd it out.
     pub fn street_group(&self, row: &StreetRow) -> Result<Vec<StreetRow>> {
         let ws = words(&row.street);
         let expr = ws.iter().map(|w| format!("\"{}\"", w.replace('"', ""))).collect::<Vec<_>>().join(" ");
-        let rows = if expr.is_empty() { vec![row.clone()] } else { self.fts_streets(&expr, 200)? };
+        let rows = if expr.is_empty() { vec![row.clone()] } else { self.fts_streets_near(&expr, row.lat, row.lon, 200)? };
         Ok(join(rows).into_iter().find(|g| g.iter().any(|r| r.id == row.id)).unwrap_or_else(|| vec![row.clone()]))
     }
 }

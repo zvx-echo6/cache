@@ -1,6 +1,6 @@
 //! Reading a places.sqlite pack: its metadata, category table, nearby queries and the lookups the geocoder uses.
 
-use crate::geo::{bbox_around, haversine_km};
+use crate::geo::{bbox_around, haversine_km, lon_scale};
 use crate::schema::{FORMAT_VERSION, MERGED_FORMAT_VERSION, MIN_FORMAT_VERSION};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
@@ -473,6 +473,20 @@ impl Pack {
         let conn = self.conn();
         let mut st = conn.prepare("SELECT rowid, bm25(places_fts, 10.0, 2.0) FROM places_fts WHERE places_fts MATCH ?1 ORDER BY 2 LIMIT ?2")?;
         let rows = st.query_map(params![fts, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// `fts_places`, nearest `limit` to a point first instead of best text score first. A name many places share (a chain's
+    /// hundreds of stores, all with the same text score) fills `fts_places`'s `limit` with whichever come first in the index;
+    /// this gives the ones near the point. The positions come from the R-tree (a place's box is its point), whose rows are
+    /// small, so a common word does not read every matching place row.
+    pub fn fts_places_near(&self, fts: &str, lat: f64, lon: f64, limit: usize) -> Result<Vec<(i64, f64)>> {
+        let conn = self.conn();
+        let mut st = conn.prepare(
+            "SELECT f.rowid, bm25(places_fts, 10.0, 2.0) FROM places_fts f JOIN places_rt r ON r.id = f.rowid WHERE places_fts MATCH ?1 \
+             ORDER BY (r.min_lat - ?2) * (r.min_lat - ?2) + (r.min_lon - ?3) * (r.min_lon - ?3) * ?4 LIMIT ?5",
+        )?;
+        let rows = st.query_map(params![fts, lat, lon, lon_scale(lat), limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 

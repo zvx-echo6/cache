@@ -44,6 +44,10 @@ const COS_CATEGORY: f32 = 0.50;
 const COS_MARGIN: f32 = 0.06;
 /// How many kinds the meaning step compares closely (a kind matches like a category: `COS_CATEGORY`, `COS_MARGIN`).
 const KIND_TOP: usize = 8;
+/// A kind also matches from `COS_KIND_CLEAR` when the best kind stands at least `COS_CLEAR_GAP` above the `KIND_TOP`-th: a short
+/// query ("ER", "vet") has lower cosines all round, but one kind clearly ahead of the rest is still what it means.
+const COS_KIND_CLEAR: f32 = 0.47;
+const COS_CLEAR_GAP: f32 = 0.06;
 /// A place or town is a meaning match at this cosine.
 const COS_PLACE: f32 = 0.50;
 /// A category matches the words when its keyword strength reaches this (title words count 1, description words 0.5).
@@ -606,8 +610,10 @@ impl PlacesCore {
                     }
                     kind_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                     if let Some(best) = kind_hits.first().map(|h| h.1) {
+                        let clear = kind_hits.get(KIND_TOP - 1).is_some_and(|h| best - h.1 >= COS_CLEAR_GAP);
+                        let floor = if clear { COS_KIND_CLEAR } else { COS_CATEGORY };
                         for (id, cos) in kind_hits {
-                            if cos < COS_CATEGORY || cos < best - COS_MARGIN || kind_rows.iter().any(|(k, _)| k.id == id) {
+                            if cos < floor || cos < best - COS_MARGIN || kind_rows.iter().any(|(k, _)| k.id == id) {
                                 continue;
                             }
                             // only kinds that have places on the phone

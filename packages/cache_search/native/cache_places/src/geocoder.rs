@@ -213,7 +213,12 @@ fn locality_rank(kind: &str) -> f64 {
     }
 }
 
-/// How well `name` (and its alternatives) fit the query words: 100 exact, 90 exact alternative, then partial.
+/// How well `name` (and its alternatives) fit the query words: 100 exact, 90 exact alternative, then partial. A word typed
+/// in full counts for more than the start of one: a name that starts with the query gets up to 45 by how much of its
+/// leading words the query typed ("dam" is half of "Damian", all of "Dam"), less one a word left over; a name that has the
+/// query's whole words, in order, further in ("Uinta National Forest" for "national forest") 40, less one a word left over;
+/// a name that only has the words somewhere gets up to 20, a whole word counting 1 and the start of a word the share of it
+/// typed.
 fn name_score(q_norm: &str, q_words: &[String], name: &str, alts: &str) -> f64 {
     let n = norm(name);
     if n == q_norm {
@@ -224,10 +229,49 @@ fn name_score(q_norm: &str, q_words: &[String], name: &str, alts: &str) -> f64 {
     }
     let nw = words(name);
     if n.starts_with(q_norm) {
-        return 45.0 - (nw.len().saturating_sub(q_words.len()) as f64).min(8.0);
+        let covered = nw.iter().take(q_words.len()).map(|w| w.chars().count()).sum::<usize>() + q_words.len().saturating_sub(1);
+        let typed = q_norm.chars().count() as f64 / covered.max(1) as f64;
+        return 45.0 * typed.min(1.0) - (nw.len().saturating_sub(q_words.len()) as f64).min(8.0);
     }
-    let have = q_words.iter().filter(|w| nw.iter().any(|x| x == *w || x.starts_with(w.as_str()))).count();
-    20.0 * have as f64 / q_words.len().max(1) as f64
+    if format!(" {n} ").contains(&format!(" {q_norm} ")) {
+        return 40.0 - (nw.len().saturating_sub(q_words.len()) as f64).min(8.0);
+    }
+    let have: f64 = q_words
+        .iter()
+        .map(|w| {
+            nw.iter()
+                .map(|x| if x == w { 1.0 } else if x.starts_with(w.as_str()) { w.chars().count() as f64 / x.chars().count() as f64 } else { 0.0 })
+                .fold(0.0, f64::max)
+        })
+        .sum();
+    20.0 * have / q_words.len().max(1) as f64
+}
+
+/// How well a street's words fit the query's street words, 0 to 1: each query word takes one street word, the same word
+/// or one it starts ("s" and "st" take "south" and "street", not "street" twice), and the share of words on both sides
+/// paired off is the fit. "S Main St" fits "South Main Street" 1 and "North Main Street" 2/3.
+fn street_fit(q: &[String], street: &[String]) -> f64 {
+    let mut used = vec![false; street.len()];
+    let mut paired = 0usize;
+    let mut left: Vec<&String> = Vec::new();
+    for w in q {
+        match street.iter().enumerate().position(|(i, x)| !used[i] && x == w) {
+            Some(i) => {
+                used[i] = true;
+                paired += 1;
+            }
+            None => left.push(w),
+        }
+    }
+    // the longer starts first, so a short one does not take the word a longer one needs
+    left.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    for w in left {
+        if let Some(i) = street.iter().enumerate().position(|(i, x)| !used[i] && x.starts_with(w.as_str())) {
+            used[i] = true;
+            paired += 1;
+        }
+    }
+    paired as f64 / q.len().max(street.len()).max(1) as f64
 }
 
 /// "amenity=hospital" -> "amenity:hospital" for places that come from OSM.
@@ -256,15 +300,15 @@ fn town_label(l: &LocalityRow) -> String {
 }
 
 /// A hit whose name fits the query at least this well (`name_score`: 100 exact, 90 an exact other name, up to 45 a name that
-/// starts with the query) is the place the query named. Less (a place that has one of the words in it) is not, and a town with a
-/// typing slip in it then goes first.
-pub(crate) const GOOD_NAME_MATCH: f64 = 40.0;
+/// starts with the query, by how much of it was typed) is the place the query named. Less (a place that has one of the words
+/// in it, or a name of which only its first letters were typed) is not, and a town with a typing slip in it then goes first.
+pub(crate) const GOOD_NAME_MATCH: f64 = 25.0;
 
 /// A hit whose whole name is the query (`name_match` 100) or whose alternative name is (90): nothing fuzzy replaces it.
 pub(crate) const EXACT_NAME_MATCH: f64 = 90.0;
 
-/// An exact house number, and one placed between its neighbours (`name_match`), and the bonus for a street that matched
-/// every word of the query.
+/// An exact house number, and one placed between its neighbours (`name_match`, times the street's `street_fit`), and the bonus
+/// for a street whose words fit the query's (`street_fit` 1; less as fewer words pair off).
 const ADDRESS_EXACT: f64 = 100.0;
 const ADDRESS_PLACED: f64 = 70.0;
 const ADDRESS_STREET: f64 = 60.0;
@@ -316,20 +360,25 @@ impl PackGeocoder {
             return Vec::new();
         }
         let expr = ws.iter().map(|w| format!("\"{}\"*", w.replace('"', ""))).collect::<Vec<_>>().join(" ");
-        let mut rows = Vec::new();
+        // the best text matches, and, when there are more of them than that, the matches nearest the town after the comma
+        // (else the bias point): a street name many towns share is otherwise cut before the town or the distance is looked at
+        let town = q.area.as_ref().and_then(|area| self.area_town(area, q.state.as_deref(), near));
+        let mut rows: Vec<address::StreetRow> = Vec::new();
         for p in packs {
-            rows.extend(p.fts_streets(&expr, ADDRESS_ROWS).unwrap_or_default());
+            let best = p.fts_streets(&expr, ADDRESS_ROWS).unwrap_or_default();
+            let more = best.len() >= ADDRESS_ROWS;
+            rows.extend(best);
+            if let Some((la, lo)) = town.or(near).filter(|_| more) {
+                let have: HashSet<i64> = rows.iter().map(|r| r.id).collect();
+                rows.extend(p.fts_streets_near(&expr, la, lo, ADDRESS_ROWS).unwrap_or_default().into_iter().filter(|r| !have.contains(&r.id)));
+            }
         }
         rows.retain(|r| q.state.as_ref().is_none_or(|s| r.state.as_ref().is_none_or(|rs| rs == s)));
         if let Some(area) = &q.area {
             let want = norm(area);
-            let mut town: Option<Option<(f64, f64)>> = None;
             rows.retain(|r| {
-                if [r.locality.as_deref(), r.postal_city.as_deref()].into_iter().flatten().any(|t| norm(t) == want) {
-                    return true;
-                }
-                let at = *town.get_or_insert_with(|| self.area_town(area, q.state.as_deref(), near));
-                at.is_some_and(|(la, lo)| haversine_km(la, lo, r.lat, r.lon) <= ADDRESS_AREA_KM)
+                [r.locality.as_deref(), r.postal_city.as_deref()].into_iter().flatten().any(|t| norm(t) == want)
+                    || town.is_some_and(|(la, lo)| haversine_km(la, lo, r.lat, r.lon) <= ADDRESS_AREA_KM)
             });
         }
         let mut hits: Vec<GeoHit> = Vec::new();
@@ -339,8 +388,10 @@ impl PackGeocoder {
             let name = format!("{} {}", f.number, r.street);
             let town = r.town().map(str::to_string);
             let label = [Some(name.as_str()), town.as_deref(), r.state.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(", ");
-            let name_match = if f.approximate { ADDRESS_PLACED } else { ADDRESS_EXACT };
-            let mut score = name_match + ADDRESS_STREET;
+            // the number, scaled by how well the street's words fit: "266 S Main St" is 266 South Main Street before 266 North Main
+            let fit = [Some(r.street.as_str()), r.street_expanded.as_deref()].into_iter().flatten().map(|st| street_fit(&ws, &words(st))).fold(0.0, f64::max);
+            let name_match = fit * if f.approximate { ADDRESS_PLACED } else { ADDRESS_EXACT };
+            let mut score = name_match + ADDRESS_STREET * fit;
             if let Some((blat, blon)) = near {
                 score += 25.0 * (-haversine_km(blat, blon, f.lat, f.lon) / 60.0).exp();
             }
@@ -445,9 +496,10 @@ impl PackGeocoder {
                     }
                     let alts = p.alt_names(true, id).unwrap_or_default();
                     let ns = name_score(&q_norm, &q_words, &l.name, &alts);
-                    // The town boost applies to a real name match only, so a town does not beat a place that fits more of the words.
+                    // The town boost applies to a real name match only (the whole name, or its start: a town name being typed), so
+                    // a town does not beat a place that fits more of the words.
                     let mut score = ns;
-                    if ns >= 45.0 {
+                    if ns >= 45.0 || norm(&l.name).starts_with(&q_norm) {
                         score += 60.0 + locality_rank(&l.kind) + 3.0 * ((l.population.unwrap_or(0) as f64) + 1.0).log10();
                     }
                     score += (-bm25).clamp(0.0, 20.0) * 0.3;
@@ -476,7 +528,14 @@ impl PackGeocoder {
                         approximate: false,
                     });
                 }
-                for (id, bm25) in p.fts_places(&expr, 80).unwrap_or_default() {
+                // the best text matches, and, when there are more of them than that, the matches nearest the bias point (a
+                // name many places share is otherwise cut before distance is looked at)
+                let mut found = p.fts_places(&expr, 80).unwrap_or_default();
+                if let Some((blat, blon)) = bias.filter(|_| found.len() >= 80) {
+                    let have: HashSet<i64> = found.iter().map(|(id, _)| *id).collect();
+                    found.extend(p.fts_places_near(&expr, blat, blon, 80).unwrap_or_default().into_iter().filter(|(id, _)| !have.contains(id)));
+                }
+                for (id, bm25) in found {
                     let Ok(Some(r)) = p.place(id) else { continue };
                     let Some(name) = r.name.clone() else { continue };
                     if q.state.as_ref().is_some_and(|s| r.state.as_ref() != Some(s)) {
@@ -726,5 +785,34 @@ mod tests {
         let w = words("Cassia Reg");
         assert_eq!(fts_expr(&w, false).unwrap(), "\"cassia\" \"reg\"*");
         assert_eq!(fts_expr(&w, true).unwrap(), "\"cassia\" OR \"reg\"*");
+    }
+
+    #[test]
+    fn a_whole_word_scores_above_the_start_of_one() {
+        let s = |q: &str, name: &str| name_score(&norm(q), &words(q), name, "");
+        // the query typed all of the name's first word, or only its start
+        assert!(s("dam", "Dam Road") > s("dam", "Damian Davenport"));
+        assert!(s("er", "ER Express") > s("er", "Ereinsure"));
+        assert!(s("vet", "Vet Clinic") > s("vet", "Veterans Memorial"));
+        assert!(s("er", "Ereinsure") < GOOD_NAME_MATCH && s("burl", "Burley") >= GOOD_NAME_MATCH);
+        // inside the name, too: the whole words in order, then a word anywhere, then the start of one
+        assert_eq!(s("national forest", "Uinta National Forest"), 39.0);
+        assert!(s("dam", "Deer Creek Dam") > s("dam", "Damian Davenport"));
+        assert!(s("dam", "Deer Creek Dam") > s("dam", "Deer Creek Damascus"));
+        assert!(s("forest national", "Uinta National Forest") > s("forest national", "Uinta National Forestry"));
+        // unchanged: exact, an exact other name, a whole-word prefix with one word left over
+        assert_eq!(s("burley", "Burley"), 100.0);
+        assert_eq!(name_score("burley", &words("burley"), "Burley City", "Burley"), 90.0);
+        assert_eq!(s("stanley", "Stanley Lake"), 44.0);
+    }
+
+    #[test]
+    fn street_words_pair_off_one_to_one() {
+        let f = |q: &str, st: &str| street_fit(&words(q), &words(st));
+        assert_eq!(f("S Main St", "South Main Street"), 1.0);
+        assert!((f("S Main St", "North Main Street") - 2.0 / 3.0).abs() < 1e-9);
+        assert!((f("S Main St", "Main Street") - 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(f("Main St", "Main Street"), 1.0);
+        assert_eq!(f("south main street", "South Main Street"), 1.0);
     }
 }
