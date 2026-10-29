@@ -5,6 +5,7 @@ import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/model_downloads.dart';
 import 'package:cache/models/search_model.dart';
 import 'package:cache/screens/model_search_screen.dart';
+import 'package:cache/screens/models_screen.dart';
 import 'package:cache/screens/search_model_line.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
@@ -79,5 +80,29 @@ void main() {
     expect(await offerSearchModelOnce(ctx, sm), isFalse);
     await tester.pumpAndSettle();
     expect(find.text('Get the search model?'), findsNothing);
+  });
+
+  testWidgets('Models: after the one-time question was answered, the search model can still be got under On this phone',
+      (tester) async {
+    final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir)
+      ..started = true
+      ..searchModelOffered = true
+      ..models = [ModelEntry(path: '${dir.path}/chat-Q4.gguf', size: 2)];
+    final sm = SearchModel(app: app, modelsDir: () async => dir);
+    final before = SearchModel.shared;
+    SearchModel.shared = sm;
+    addTearDown(() {
+      SearchModel.shared = before;
+      sm.dispose();
+    });
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ModelsScreen(app: app, memory: 8 << 30)));
+    await tester.pumpAndSettle();
+    expect(sm.shouldOffer, isFalse);
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('get-search-model')), 200);
+    expect(find.text('Meaning search needs the search model.'), findsOneWidget);
+    app.searchModel = ModelEntry(path: '${dir.path}/bge-m3-Q8_0.gguf', size: 2);
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('get-search-model')), findsNothing, reason: 'gone once it is on the phone');
   });
 }

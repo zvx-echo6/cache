@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../models/model_downloads.dart';
 import '../models/recommendations.dart';
+import '../models/search_model.dart';
 import '../theme.dart';
 import 'model_search_screen.dart';
+import 'search_model_line.dart';
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -109,6 +111,11 @@ class _ModelsScreenState extends State<ModelsScreen> {
                       const SizedBox(height: 16),
                       _heading(context, 'On this phone'),
                       for (final m in app.models) _tile(context, m),
+                      // The one-time question may have been answered "Not now" or closed, or the download after the first chat
+                      // model stopped: the search model can always be got here.
+                      if (SearchModel.shared case final sm?
+                          when sm.state == SearchModelState.missing || sm.state == SearchModelState.failed)
+                        SearchModelLine(searchModel: sm, padding: const EdgeInsets.fromLTRB(4, 8, 4, 8)),
                     ],
                   ],
                 ),
