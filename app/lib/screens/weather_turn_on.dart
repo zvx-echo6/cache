@@ -38,7 +38,9 @@ class WeatherTurnOn {
 
 /// Switches weather, alerts and wildfires on for "Where I am", asks for the location the usual way, and updates. When the
 /// location cannot be used, it offers to choose a place instead.
-Future<void> turnOnWeather(BuildContext context, WeatherTurnOn t) async {
+Future<void> turnOnWeather(BuildContext buttonContext, WeatherTurnOn t) async {
+  // The button goes away once weather is on, so the steps after it use the screen's overlay, which stays.
+  final context = _lasting(buttonContext);
   await t.switchOn();
   t.weather.settings.setWatched(kWatchHere, true);
   final loc = t.location;
@@ -65,7 +67,8 @@ Future<void> turnOnWeather(BuildContext context, WeatherTurnOn t) async {
 }
 
 /// Lets the person pick a saved place (or a downloaded region), or find one, to watch; then switches weather on and updates.
-Future<void> chooseWeatherPlace(BuildContext context, WeatherTurnOn t, {String? why}) async {
+Future<void> chooseWeatherPlace(BuildContext buttonContext, WeatherTurnOn t, {String? why}) async {
+  final context = _lasting(buttonContext);
   final picked = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
@@ -76,6 +79,9 @@ Future<void> chooseWeatherPlace(BuildContext context, WeatherTurnOn t, {String? 
   await t.switchOn();
   if (context.mounted) await _update(context, t.weather);
 }
+
+/// A context that outlives the button that was tapped: the navigator's overlay (under the navigator and the messenger).
+BuildContext _lasting(BuildContext context) => Navigator.of(context).overlay?.context ?? context;
 
 Future<bool> _explainLocation(BuildContext context) async => await showDialog<bool>(
   context: context,
