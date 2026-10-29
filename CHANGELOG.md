@@ -19,6 +19,7 @@ release notes).
 - A place you save is watched for weather and alerts
 - Models starts with a short list of recommended models, each with its size and whether it fits your phone
 - Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
+- Assistant: when a route can't reach a point away from the roads, it says whether the off-road data is missing or no off-road way was found
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes
