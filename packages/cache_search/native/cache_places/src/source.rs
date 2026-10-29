@@ -4,6 +4,7 @@
 use crate::geo::haversine_km;
 use crate::nearby::{installed_categories, ranked, MAX_KM};
 use crate::kind::shown;
+use crate::feed::{FeedSlot, TOOL_PREPARE_WAIT};
 use crate::pack::{Pack, PackSet, PlaceRow};
 use crate::Geocoder as PackGeo;
 use cache_tool::places::{Geocoder, GeocodeAnswer, GeocodeQuery, NearestQuery, PlaceMatch, PlaceSource, ResolvedPlace};
@@ -13,11 +14,18 @@ use std::sync::Arc;
 pub struct PackPlaceSource {
     packs: Arc<PackSet>,
     geo: Arc<dyn PackGeo>,
+    feed: FeedSlot,
 }
 
 impl PackPlaceSource {
     pub fn new(packs: Arc<PackSet>, geo: Arc<dyn PackGeo>) -> PackPlaceSource {
-        PackPlaceSource { packs, geo }
+        PackPlaceSource { packs, geo, feed: FeedSlot::default() }
+    }
+
+    /// The feed that fetches the places tiles around a `to_type` search's start first (the places core's).
+    pub fn with_feed(mut self, feed: FeedSlot) -> PackPlaceSource {
+        self.feed = feed;
+        self
     }
 }
 
@@ -116,6 +124,8 @@ impl PlaceSource for PackPlaceSource {
     }
 
     fn nearest(&self, q: &NearestQuery) -> Result<GeocodeAnswer, ToolError> {
+        // The places tiles around the start first, when the host plugged in a feed (it fetches only online).
+        self.feed.prepare(q.from.0, q.from.1, TOOL_PREPARE_WAIT);
         let packs = self.packs.current();
         let cats = installed_categories(&packs);
         if cats.is_empty() {

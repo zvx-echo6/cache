@@ -3,10 +3,8 @@
 //! (`places` and `warning_code` in the `cs_map_search` answer).
 
 use crate::pack::Pack;
-use crate::schema::{tile_id_l1, MERGED_FORMAT_VERSION};
-use rusqlite::params;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 /// What fetching the places tiles around a point did (the regions engine's `stream` answer for places).
@@ -33,20 +31,38 @@ pub trait PlacesFeed: Send + Sync {
 
 /// A merged database with at least one tile, or any single-region pack.
 pub(crate) fn has_data(p: &Pack) -> bool {
-    if p.format != MERGED_FORMAT_VERSION {
+    if !p.is_merged() {
         return true;
     }
     p.conn().query_row("SELECT EXISTS (SELECT 1 FROM tiles)", [], |r| r.get::<_, bool>(0)).unwrap_or(false)
 }
 
-/// The pack holds the point: a single-region pack by its box, the merged database by its tiles.
-pub(crate) fn holds(p: &Pack, lat: f64, lon: f64) -> bool {
-    if p.format != MERGED_FORMAT_VERSION {
-        return p.meta.contains(lat, lon);
+/// Where the places core, the `nearby` tool and the navigate tool's place source find the feed the host plugged in: one
+/// slot they share, so a feed plugged in after they were made reaches all of them.
+#[derive(Clone, Default)]
+pub struct FeedSlot(Arc<RwLock<Option<Arc<dyn PlacesFeed>>>>);
+
+impl FeedSlot {
+    pub fn set(&self, feed: Option<Arc<dyn PlacesFeed>>) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = feed;
     }
-    let tile = tile_id_l1(lat, lon);
-    p.conn().query_row("SELECT EXISTS (SELECT 1 FROM tiles WHERE tile = ?1)", params![tile], |r| r.get::<_, bool>(0)).unwrap_or(false)
+
+    pub fn get(&self) -> Option<Arc<dyn PlacesFeed>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Fetches the tiles around (`lat`, `lon`) when a feed is plugged in, waiting at most `wait`; None without a feed.
+    pub fn prepare(&self, lat: f64, lon: f64, wait: Duration) -> Option<PrepareAnswer> {
+        self.get().map(|f| f.prepare(lat, lon, wait))
+    }
 }
+
+/// How long the `nearby` tool and the navigate tool's `to_type` wait for the places tiles around their centre (as long as
+/// routing waits for its tiles).
+pub const TOOL_PREPARE_WAIT: Duration = Duration::from_secs(20);
+
+/// How long a map search waits for the places tiles around its centre.
+pub const SEARCH_PREPARE_WAIT: Duration = Duration::from_secs(3);
 
 /// The `places` object of a search answer (`installed`, `covers`, `pending`) and its `warning_code`: `fetching` while a
 /// tile is on its way, `no_places` when nothing is on the phone and nothing could be fetched, `not_here` when nothing on
@@ -56,7 +72,7 @@ pub(crate) fn holds(p: &Pack, lat: f64, lon: f64) -> bool {
 pub fn places_state(packs: &[Arc<Pack>], centre: Option<(f64, f64)>, prepared: Option<&PrepareAnswer>) -> (Value, Option<&'static str>) {
     let installed = packs.iter().any(|p| has_data(p));
     let covers = match centre {
-        Some((la, lo)) => packs.iter().any(|p| has_data(p) && holds(p, la, lo)),
+        Some((la, lo)) => packs.iter().any(|p| has_data(p) && p.covers(la, lo)),
         None => installed,
     };
     let pending = prepared.map(|a| a.pending).unwrap_or(0);

@@ -26,7 +26,7 @@
 
 use crate::address;
 use crate::coord::{self, Parsed};
-use crate::feed::{places_state, PlacesFeed, PrepareAnswer};
+use crate::feed::{places_state, FeedSlot, PlacesFeed, PrepareAnswer};
 use crate::geo::{bearing_deg, compass8, dms, haversine_km, round_to};
 use crate::geocoder::{GeoHit, Geocoder, HitKind};
 use crate::kind::{humanize, kind_of};
@@ -34,7 +34,7 @@ use crate::nearby::ranked;
 use crate::pack::{Category, LocalityRow, Pack, PackSet, PlaceRow};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Cosine range of bge-m3 for short texts: below LOW is noise, HIGH is a near-paraphrase.
 const COS_LOW: f32 = 0.30;
@@ -98,8 +98,9 @@ fn bad(m: impl Into<String>) -> MapError {
 pub struct PlacesCore {
     pub packs: Arc<PackSet>,
     pub geo: Arc<dyn Geocoder>,
-    /// Plugged in by the search host (the regions engine): fetches places tiles before a search.
-    feed: RwLock<Option<Arc<dyn PlacesFeed>>>,
+    /// Plugged in by the search host (the regions engine): fetches places tiles before a search. The `nearby` tool and the
+    /// navigate tool's place source made with this core share the slot.
+    pub feed: FeedSlot,
 }
 
 // ---- words -----------------------------------------------------------------------------------------------------------
@@ -415,17 +416,17 @@ impl PlacesCore {
     pub fn new(cfg: &crate::PlacesCfg) -> PlacesCore {
         let packs = Arc::new(PackSet::new(cfg.packs.iter().map(std::path::PathBuf::from).collect(), cfg.merged_dir.as_ref().map(std::path::PathBuf::from)));
         let geo: Arc<dyn Geocoder> = Arc::new(crate::PackGeocoder::new(packs.clone()));
-        PlacesCore { packs, geo, feed: RwLock::new(None) }
+        PlacesCore { packs, geo, feed: FeedSlot::default() }
     }
 
     /// Plugs in the feed that fetches places tiles (replacing any before it).
     pub fn plug_feed(&self, feed: Arc<dyn PlacesFeed>) {
-        *self.feed.write().unwrap_or_else(|e| e.into_inner()) = Some(feed);
+        self.feed.set(Some(feed));
     }
 
     /// The plugged-in feed, if any.
     pub fn feed(&self) -> Option<Arc<dyn PlacesFeed>> {
-        self.feed.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.feed.get()
     }
 
     /// The town, city or village whose name is exactly a run of the query's words (the longest run; the bigger kind of place

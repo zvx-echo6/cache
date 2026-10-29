@@ -68,9 +68,15 @@ char *cs_version(void);
  *            "sources_dir": ".../sources",           the source definition files (*.json, see DESIGN.md)
  *            "live_radius_km": 30},                  optional, default 30: live_data uses the nearest stored place's data
  *                                                    within this distance of the place asked about
- *   "places": {"packs": [".../idaho/places.sqlite"]},  optional: registers the nearby and locate tools over these places
- *                                  packs (docs/TOOLS.md). Packs are opened on demand: nearby is left out of
- *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack
+ *   "places": {"packs": [".../idaho/places.sqlite"],  optional: registers the nearby and locate tools over these places
+ *              "merged_dir": ".../regions/places"}, packs (docs/TOOLS.md). Packs are opened on demand: nearby is left out of
+ *                                  cs_tool_schemas until a pack exists; locate with a GPS fix needs no pack. "merged_dir"
+ *                                  (optional) is the folder of the downloaded regions' merged places database (its CURRENT
+ *                                  file, docs/PLACES-TILES.md), searched before the packs; with a "regions" section and no
+ *                                  "merged_dir" the regions engine's folder is used, and that engine fetches the places
+ *                                  tiles around a map search (waiting up to 3 s), nearby and navigate's to_type (20 s)
+ *                                  first when the network may be used. A tile merged while the handle is open is searched
+ *                                  by the next call; cs_places_refresh makes the next call check everything again
  *   "routing": {"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll"},   optional: the navigate tool
  *               "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles"}},  (see DESIGN.md)
  *                                  "tiles" may also be a folder of tiles (<level>/<aaa>/<bbb>/<ccc>.gph), named by
@@ -286,7 +292,11 @@ char *cs_tool_schemas(cs_handle *h);
  *     now.
  * The arguments are checked against the tool's schema before it runs: type (string, integer, number, boolean,
  * object), enum, minLength, maxLength, minimum, maximum, required and additionalProperties:false. Defaults are not
- * filled in. */
+ * filled in.
+ * search: the host may add "query_vector": {"model","vector":[...]} to args_json, the query as its own embedder made it
+ * (the app's search model). It is not an argument the model gives (not in the schema) and is taken out before the check;
+ * libraries whose settings name that model are then also searched by meaning. Without it the handle's query embedder is
+ * used, when it has one; otherwise the search is keyword-only. */
 char *cs_tool(cs_handle *h, cs_conv *c, const char *name, const char *args_json, const char *now);
 
 /* --- saved places (user.sqlite; logic in the cache_user crate) ---
@@ -379,16 +389,27 @@ char *cs_live_preview(const char *request_json);
  *   A town named in the query anchors it ("pharmacy near Burley" ranks from Burley). "near" is the map centre or the GPS fix
  *   (default: the fix from cs_set_location); every result reports its distance and direction from it. "meaning" runs the
  *   vector step when the pack has vectors (places_pack embed) and a vector of the pack's model is given as "query_vector" or
- *   the handle has a query embedder; otherwise it is skipped and "meaning" in the answer says why.
+ *   the handle has a query embedder; otherwise it is skipped and "meaning" in the answer says why. With a "regions" section
+ *   the places tiles around "near" are fetched and merged first when the network may be used (waiting up to 3 s).
  *   Returns {"query","near","interpreted":{"kind":"coordinates"|"text"|"empty","anchor"?,"categories"?},
- *     "meaning":"used"|"off"|"no_embedder"|"no_vectors"|"model_mismatch","results":[...]}. A result is
- *     {"id","type":"place"|"town"|"category"|"coordinates","name","kind","category","address","lat","lon","distance_m",
+ *     "meaning":"used"|"off"|"no_embedder"|"no_vectors"|"model_mismatch","results":[...],
+ *     "places":{"installed","covers","pending"},"warning_code"?,"warning"?}. "places" (a text search): "installed" is any
+ *     places data on the phone, "covers" a tile or pack there holds "near", "pending" the tiles still on their way.
+ *     "warning_code" is "no_places" (nothing installed, nothing could be fetched), "not_here" (nothing here holds "near",
+ *     nothing could be fetched) or "fetching" (a tile for the area is still arriving), absent otherwise; "warning" is the
+ *     older free text ("no places data is installed"). A result is
+ *     {"id","type":"place"|"town"|"address"|"category"|"coordinates","name","kind","category","address","lat","lon","distance_m",
  *      "direction","bearing_deg","matched":"name"|"category"|"meaning"|"coordinates","score", and when known "phone","hours",
  *      "website","summary","wikipedia_title","wikidata_id"}; "kind" is the text for the card ("Drinking water tap"), "kind_id"
  *      and "kind_label" (after "kind", when the pack has kinds) are the stable id (drinking_water, picnic_shelter, town) and the
  *      label, and "unnamed":true marks a place that has no name (its "name" is then its kind label); a coordinates result also has "formats" (decimal, dms, usng,
  *      plus_code), "format" and "precision_m"; a category result has no position (its nearest places follow it). "id" is what
- *      cs_map_route takes as an end: "place:<id>", "town:<id>", "loc:<lat>,<lon>".
+ *      cs_map_route takes as an end: "place:<id>", "town:<id>", "addr:<uid>/<number>", "loc:<lat>,<lon>", "kind:<id>".
+ *      An address result (a query that starts with a house number) has "type":"address","kind":"Address","kind_id":"address",
+ *      "name" ("350 N State St"), "address" ("350 N State St, Salt Lake City, UT"), and "approximate":true when the number
+ *      was placed between its neighbours rather than found. A kind of place matched by meaning is a category row with
+ *      "id":"kind:<kind id>","matched":"meaning" and "category" (its category or null), followed by its nearest places; as a
+ *      route end "kind:<id>" is the nearest place of that kind to the GPS fix.
  *
  * cs_map_route: {"from"?, "to", "via"?: [...], "mode"?: "drive"|"walk"|"bike", "land_access"?: "strict"|"pragmatic"|"emergency",
  *   "alternatives"?: 0-3 (default 2)}
@@ -418,6 +439,13 @@ char *cs_live_preview(const char *request_json);
  *   it, "then" the one after (its distance is from "next"), "leg" (off-road only) the bearing, distance and climb to the
  *   next point: {kind,target:{lat,lon},bearing_deg,cardinal,distance_m,climb_m,descent_m,grade_class,travel}. "now" (ISO 8601) adds "eta". Free the result with cs_free_string. */
 char *cs_map_search(cs_handle *h, const char *request_json);
+
+/* The places changed (a region's places merged or removed, a pack copied in): args_json NULL or {"packs"?: ["..."]}.
+ * "packs" replaces the single-region packs of the "places" section when given; either way the next search checks the
+ * merged database (its CURRENT and its data) and every pack file again. Returns {"ok":true,"packs":n,"merged":bool}
+ * ("packs": the single-region packs found, "merged": a merged database is open). Cheap, and safe to call often.
+ * not_configured without a "places" section; bad_json for another key or a "packs" that is not a list of paths. */
+char *cs_places_refresh(cs_handle *h, const char *args_json);
 char *cs_map_route(cs_handle *h, const char *request_json);
 char *cs_map_progress(cs_handle *h, const char *request_json);
 

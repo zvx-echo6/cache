@@ -5,7 +5,7 @@ use crate::schema::{FORMAT_VERSION, MERGED_FORMAT_VERSION, MIN_FORMAT_VERSION};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -553,8 +553,8 @@ impl Pack {
 /// picked up without reopening the handle; a tile merged into the merged database is seen by the next `current()`.
 pub struct PackSet {
     legacy: Mutex<Legacy>,
-    /// The folder of `CURRENT` and the merged databases (`regions/places`).
-    merged_dir: Option<PathBuf>,
+    /// The folder of `CURRENT` and the merged databases (`regions/places`): from the config, else the regions engine's.
+    merged_dir: RwLock<Option<PathBuf>>,
     merged: Mutex<Merged>,
 }
 
@@ -580,7 +580,7 @@ fn fine_stamp(path: &Path) -> Option<(u64, u128)> {
 impl PackSet {
     pub fn new(paths: Vec<PathBuf>, merged_dir: Option<PathBuf>) -> PackSet {
         let n = paths.len();
-        PackSet { legacy: Mutex::new(Legacy { paths, open: vec![None; n] }), merged_dir, merged: Mutex::new(Merged::default()) }
+        PackSet { legacy: Mutex::new(Legacy { paths, open: vec![None; n] }), merged_dir: RwLock::new(merged_dir), merged: Mutex::new(Merged::default()) }
     }
 
     /// Replaces the single-region packs (the app's refresh), and makes the next `current()` check everything again.
@@ -602,13 +602,26 @@ impl PackSet {
         self.legacy.lock().unwrap_or_else(|e| e.into_inner()).paths.clone()
     }
 
-    pub fn merged_dir(&self) -> Option<&Path> {
-        self.merged_dir.as_deref()
+    pub fn merged_dir(&self) -> Option<PathBuf> {
+        self.merged_dir.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Uses `dir` as the merged database's folder when none was configured (the regions engine's, plugged in by the host).
+    /// Returns whether it was taken.
+    pub fn default_merged_dir(&self, dir: PathBuf) -> bool {
+        let mut d = self.merged_dir.write().unwrap_or_else(|e| e.into_inner());
+        if d.is_some() {
+            return false;
+        }
+        *d = Some(dir);
+        drop(d);
+        self.recheck();
+        true
     }
 
     /// The merged database, if there is one: the one `CURRENT` names, reread when another connection changed it.
     fn merged(&self) -> Option<Arc<Pack>> {
-        let dir = self.merged_dir.as_ref()?;
+        let dir = self.merged_dir()?;
         let mut m = self.merged.lock().unwrap_or_else(|e| e.into_inner());
         let current = dir.join("CURRENT");
         let stamp = fine_stamp(&current);

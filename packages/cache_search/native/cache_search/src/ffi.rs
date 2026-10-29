@@ -569,6 +569,16 @@ pub unsafe extern "C" fn cs_map_progress(h: *mut Handle, request_json: *const c_
     with_handle(h, ptr::null_mut(), |h| out_string(h.map_progress(arg_str(request_json, "request_json")?)?))
 }
 
+/// # Safety
+/// `h` NULL or live; `args_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_places_refresh(h: *mut Handle, args_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let a = if args_json.is_null() { None } else { Some(arg_str(args_json, "args_json")?) };
+        out_string(h.ext.places_refresh(a)?)
+    })
+}
+
 // ---- videos (logic in cache_video; see ext.rs) ----
 
 /// # Safety
@@ -961,6 +971,7 @@ mod tests {
             assert!(cs_video_resolve(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_layers_list(ptr::null_mut()).is_null());
             assert!(cs_layers_server(ptr::null_mut(), ptr::null()).is_null());
+            assert!(cs_places_refresh(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_layers_plan(ptr::null_mut(), ptr::null()).is_null());
             cs_close(ptr::null_mut());
             cs_free_string(ptr::null_mut());
