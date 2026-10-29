@@ -24,6 +24,10 @@ const String kBackgroundTask = 'com.happylittle.cache.live-update';
 /// How often Android may run it (Android's minimum is 15 minutes; it picks the moment). iOS decides on its own.
 const Duration kBackgroundEvery = Duration(minutes: 30);
 
+/// The plugin's set-up (started in main); scheduling waits for it, since the system refuses a task from a plugin that has
+/// not stored the background entry point yet.
+Future<void>? backgroundReady;
+
 /// Where the phone was and which regions are downloaded, as the app last knew them, for "Where I am" and the regions in a
 /// background run (which has no GPS of its own and no map state).
 class LastPlace {
@@ -123,6 +127,7 @@ Future<void> runBackgroundUpdate() async {
 Future<bool> scheduleBackgroundUpdates({required bool anythingOn}) async {
   if (!(Platform.isAndroid || Platform.isIOS)) return false;
   try {
+    await backgroundReady;
     if (!anythingOn) {
       await Workmanager().cancelByUniqueName(kBackgroundTask);
       return false;

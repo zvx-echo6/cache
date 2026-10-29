@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -68,7 +69,7 @@ void main() {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
-  if (Platform.isAndroid || Platform.isIOS) Workmanager().initialize(cacheBackgroundDispatcher);
+  if (Platform.isAndroid || Platform.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
   runApp(const CacheApp());
 }
 
@@ -275,6 +276,8 @@ class _CacheAppState extends State<CacheApp> {
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
     app.addListener(_onApp);
+    // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
+    _lifecycle = AppLifecycleListener(onResume: () => unawaited(weather.updateIfDue(kBackgroundEvery)));
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
       if (mounted) setState(() => _coreDone = true);
@@ -291,6 +294,7 @@ class _CacheAppState extends State<CacheApp> {
       await weather.start();
       weather.addListener(_onWeather);
       _onWeather();
+      unawaited(weather.updateIfDue(kBackgroundEvery));
       actionRegistry.addListener(_installActions);
       await appActions.publishAll();
     });
@@ -320,6 +324,7 @@ class _CacheAppState extends State<CacheApp> {
   }
 
   ConversationStore? _store;
+  late final AppLifecycleListener _lifecycle;
   int? _backendGeneration;
   bool? _scheduledFor;
   bool _askedNotifications = false;
@@ -392,6 +397,7 @@ class _CacheAppState extends State<CacheApp> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);

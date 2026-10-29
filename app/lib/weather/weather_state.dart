@@ -750,6 +750,18 @@ class WeatherState extends ChangeNotifier {
     return UpdateReport(fetched: fetched, upToDate: fresh, failures: failures);
   }
 
+  /// When the app starts or comes back to the screen: the scheduled background run may not have come (iOS decides when, and
+  /// may not run it for hours), so an update that is due ([every] since the last run) runs now. What a background run wrote is
+  /// read first, so its time shows and it is not repeated. The core's refresh intervals still apply (no forced download).
+  Future<UpdateReport?> updateIfDue(Duration every) async {
+    if (!_started || _updating || enabledSources.isEmpty) return null;
+    _readStatus();
+    notifyListeners();
+    final last = _lastRunAt;
+    if (last != null && _now().difference(last) < every) return null;
+    return updateNow();
+  }
+
   String _fetchFailureWords(CacheSearchException e) => switch (e.code) {
     'quota' => 'reached its limit for now',
     'key_missing' => 'needs a key',

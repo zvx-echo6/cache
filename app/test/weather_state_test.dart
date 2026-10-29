@@ -534,6 +534,21 @@ void main() {
       expect(h.core.fetches.every((f) => f['force'] == true), isTrue);
     });
 
+    test('back on the screen: an update runs only when one is due, without forcing', () async {
+      h = await Harness.create();
+      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull, reason: 'nothing is switched on');
+      await setUp3(h);
+      final first = await h.weather.updateIfDue(const Duration(minutes: 30));
+      expect(first?.fetched, 4, reason: 'never updated: due');
+      expect(h.core.fetches.any((f) => f.containsKey('force')), isFalse);
+      h.core.fetches.clear();
+      h.clock = h.clock.add(const Duration(minutes: 10));
+      expect(await h.weather.updateIfDue(const Duration(minutes: 30)), isNull);
+      expect(h.core.fetches, isEmpty);
+      h.clock = h.clock.add(const Duration(minutes: 25));
+      expect((await h.weather.updateIfDue(const Duration(minutes: 30)))?.fetched, 4);
+    });
+
     test('mobile data off for updates: nothing is fetched, and "Update anyway" fetches', () async {
       h = await Harness.create();
       await setUp3(h);
