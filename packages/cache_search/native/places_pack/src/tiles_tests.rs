@@ -207,15 +207,18 @@ fn a_tiled_build_across_a_block_edge() {
         })
         .unwrap()
     };
-    let (exp, loc, uid, k, blob, lat, lon) = row("S STATE ST");
-    assert_eq!((exp.as_deref(), loc.as_deref(), k), (Some("SOUTH STATE STREET"), Some("Edgeville"), 3));
+    // Words in capitals are stored with a capital first letter; the uid is the source's street.
+    let (exp, loc, uid, k, blob, lat, lon) = row("S State St");
+    assert_eq!((exp.as_deref(), loc.as_deref(), k), (Some("South State Street"), Some("Edgeville"), 3));
     assert_eq!(uid, street_uid("S STATE ST", "84000", "Edgeville", t));
     let nums: Vec<String> = addr::decode(&blob, lat, lon).unwrap().iter().map(|e| e.number()).collect();
     assert_eq!(nums, ["10", "12", "14A"]);
     let twelve = addr::decode(&blob, lat, lon).unwrap().into_iter().find(|e| e.number() == "12").unwrap();
     assert!((twelve.lat - 40.5).abs() < 1e-6, "the first unit's point");
-    let (exp, loc, _, k, _, _, _) = row("MAIN ST");
-    assert_eq!((exp.as_deref(), loc.as_deref(), k), (Some("MAIN STREET"), Some("Edgeville"), 3));
+    let (exp, loc, _, k, _, _, _) = row("Main St");
+    assert_eq!((exp.as_deref(), loc.as_deref(), k), (Some("Main Street"), Some("Edgeville"), 3));
+    let city: String = c.query_row("SELECT postal_city FROM addr_streets WHERE street = 'Main St'", [], |r| r.get(0)).unwrap();
+    assert_eq!(city, "Edgeville", "EDGEVILLE in the source");
 
     // The common file: the rule kinds, then the derived kinds with a reviewed line or the data's own words.
     let tax = dir.join("taxonomy.tsv");

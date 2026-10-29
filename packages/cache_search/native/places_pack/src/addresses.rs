@@ -7,7 +7,9 @@
 //! is the address's postal_city (written as the town writes it when one of that name is within 30 km), else the
 //! nearest city, town or village of the same state within 10 km. Units are dropped; a house number that appears more than
 //! once in a row is kept once, with its first point (the CSV is in id order within a street). `street_expanded` is the
-//! street with its USPS Publication 28 abbreviations written out (`usps`), or NULL when that changes nothing.
+//! street with its USPS Publication 28 abbreviations written out (`usps`), or NULL when that changes nothing. Words the
+//! source wrote in capitals in a street or postal city are stored with a capital first letter (`title_case_capitals`), and
+//! so is the street suffix (`usps::suffix_in_title_case`).
 //!
 //! The output (`addresses.sqlite`) is `addr_streets` as the tiles have it, plus the tile, without ids: `cut` numbers the
 //! rows of each tile.
@@ -92,11 +94,33 @@ pub fn load_towns(blocks: &Path) -> Result<Towns, String> {
 }
 
 /// The row's stable id: the first 16 hex characters of sha256(street|postcode|town|tile), with runs of white space as one
-/// space. The street keeps its case: "Main St" and "MAIN ST" are two rows of the source, and two rows never share a uid.
+/// space. The street is the source's, in its case: "Main St" and "MAIN ST" are two rows of the source, and two rows never
+/// share a uid.
 pub fn street_uid(street: &str, postcode: &str, locality: &str, tile: u32) -> String {
     let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     let h = Sha256::digest(format!("{}|{}|{}|{tile}", norm(street), postcode.trim(), norm(locality)).as_bytes());
     h.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The text with each word the source wrote in capitals given a capital first letter only ("North STATE Street" ->
+/// "North State Street", "HURRICANE" -> "Hurricane"). Only words of 3 or more letters and nothing else are changed:
+/// "US", "SR", "NE", "3H", "1300", "McKay" and everything from a word holding "#" on stay as they are. Words are split
+/// on single spaces, so the rest of the text is unchanged byte for byte.
+pub fn title_case_capitals(s: &str) -> String {
+    let mut unit = false;
+    let words: Vec<String> = s
+        .split(' ')
+        .map(|w| {
+            unit |= w.contains('#');
+            let capitals = w.chars().count() >= 3 && w.chars().all(|c| c.is_alphabetic() && c.is_uppercase());
+            if unit || !capitals {
+                return w.to_string();
+            }
+            let mut c = w.chars();
+            c.next().map(|f| f.to_string() + &c.as_str().to_lowercase()).unwrap_or_default()
+        })
+        .collect();
+    words.join(" ")
 }
 
 struct Point {
@@ -138,7 +162,8 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
             None => groups.push((town, vec![p])),
         }
     }
-    let expanded = crate::usps::expand(&run.street);
+    let street = crate::usps::suffix_in_title_case(&title_case_capitals(&run.street));
+    let expanded = crate::usps::expand(&street);
     for (town, points) in groups {
         let mut seen: HashSet<(u32, String)> = HashSet::new();
         let mut nums: Vec<(&str, f64, f64)> = Vec::with_capacity(points.len());
@@ -172,7 +197,7 @@ fn write_run(c: &Connection, towns: &Towns, admins: &mut Admins, run: Run, rep: 
             params![
                 run.tile,
                 street_uid(&run.street, &run.postcode, &locality, run.tile),
-                run.street,
+                street,
                 expanded,
                 town,
                 (!first.postal_city.is_empty()).then_some(&first.postal_city),
@@ -247,7 +272,7 @@ pub fn addresses(cfg: &AddressesCfg) -> Result<AddressesReport, String> {
         }
         let opt = |s: &str| (!s.is_empty()).then(|| s.to_string());
         if let Some(r) = run.as_mut() {
-            r.points.push(Point { number: number.to_string(), postal_city: get(c_city).to_string(), lat, lon, state: opt(get(c_state)), country: opt(get(c_country)) });
+            r.points.push(Point { number: number.to_string(), postal_city: title_case_capitals(get(c_city)), lat, lon, state: opt(get(c_state)), country: opt(get(c_country)) });
         }
     }
     if let Some(r) = run.take() {
@@ -259,4 +284,48 @@ pub fn addresses(cfg: &AddressesCfg) -> Result<AddressesReport, String> {
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(rep)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capitals_become_title_case() {
+        assert_eq!(title_case_capitals("North STATE Street"), "North State Street");
+        assert_eq!(title_case_capitals("HURRICANE"), "Hurricane");
+        assert_eq!(title_case_capitals("MONUMENT VALLEY"), "Monument Valley");
+        assert_eq!(title_case_capitals("S STATE ST"), "S State ST");
+        assert_eq!(title_case_capitals("ÉCOLE"), "École");
+        // Short words, numbers, mixed and lower case are left as they are.
+        assert_eq!(title_case_capitals("US HWY 89 N"), "US Hwy 89 N");
+        assert_eq!(title_case_capitals("SR 3H NE"), "SR 3H NE");
+        assert_eq!(title_case_capitals("1300 East"), "1300 East");
+        assert_eq!(title_case_capitals("McKAY Lane"), "McKAY Lane");
+        assert_eq!(title_case_capitals("main street"), "main street");
+        assert_eq!(title_case_capitals("O'NEIL AVE"), "O'NEIL Ave");
+        // Nothing from a "#" on.
+        assert_eq!(title_case_capitals("MAIN ST #APT B"), "Main ST #APT B");
+        assert_eq!(title_case_capitals("MAIN ST # UNIT"), "Main ST # UNIT");
+        // White space is kept byte for byte.
+        assert_eq!(title_case_capitals(" NORTH  STATE "), " North  State ");
+        assert_eq!(title_case_capitals(""), "");
+    }
+
+    #[test]
+    fn street_and_expansion() {
+        let both = |s: &str| {
+            let street = crate::usps::suffix_in_title_case(&title_case_capitals(s));
+            let expanded = crate::usps::expand(&street);
+            (street, expanded)
+        };
+        assert_eq!(both("W MALBAR ST"), ("W Malbar St".into(), Some("West Malbar Street".into())));
+        assert_eq!(both("North STATE Street"), ("North State Street".into(), None));
+        assert_eq!(both("S STATE ST"), ("S State St".into(), Some("South State Street".into())));
+        assert_eq!(both("MAIN ST NE"), ("Main St NE".into(), Some("Main Street Northeast".into())));
+        // Mixed case from the source.
+        assert_eq!(both("E Lochmeadow CT"), ("E Lochmeadow Ct".into(), Some("East Lochmeadow Court".into())));
+        assert_eq!(both("West Glen Ellyn ln"), ("West Glen Ellyn Ln".into(), Some("West Glen Ellyn Lane".into())));
+        assert_eq!(both("US HWY 89 N"), ("US Hwy 89 N".into(), Some("US Hwy 89 North".into())), "HWY is not in the suffix position");
+    }
 }

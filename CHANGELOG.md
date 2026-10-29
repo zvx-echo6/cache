@@ -39,6 +39,7 @@ release notes).
 - With no model, the Ask screen has a button to get or choose one
 - Model names show the right quantisation in more cases
 - iPhone: the Hugging Face file list shows whether each file fits your phone
+- Map search: street and town names in addresses are no longer shown in capitals (North State Street, Hurricane)
 
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
