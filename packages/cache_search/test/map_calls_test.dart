@@ -297,6 +297,14 @@ void main() {
       await core.close();
     });
 
+    test('a local time is sent with its UTC offset, so the core can work out the arrival time', () {
+      final local = DateTime(2026, 10, 29, 14, 44, 5);
+      final s = rfc3339(local);
+      expect(s, matches(RegExp(r'^2026-10-29T14:44:05\.000[+-]\d\d:\d\d$')));
+      expect(DateTime.parse(s).isAtSameMomentAs(local), isTrue);
+      expect(rfc3339(DateTime.utc(2026, 10, 26, 12)), '2026-10-26T12:00:00.000Z');
+    });
+
     test('the progress request carries the fix and the thresholds, and the route only when asked', () async {
       final n = MapFake()..mapReplies['progress'] = jsonEncode((jsonDecode(fixture('progress-drive.json')) as List).first);
       final e = SearchEngine.open(n, const []);

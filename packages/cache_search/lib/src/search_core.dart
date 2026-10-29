@@ -162,7 +162,7 @@ class SearchCore {
           'lat': lat,
           'lon': lon,
           'accuracy_m': ?accuracyM,
-          if (now != null) 'now': now.toIso8601String(),
+          if (now != null) 'now': rfc3339(now),
           if (reset) 'reset': true,
           'off_route_m': ?offRouteM,
           'off_route_fixes': ?offRouteFixes,

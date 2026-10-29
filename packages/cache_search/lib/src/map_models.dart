@@ -1,5 +1,14 @@
 // The map calls of the core (cs_map_search, cs_map_route, cs_map_progress) as Dart values. The JSON shapes are
 // documented in native/include/cache_search.h; these classes only read them.
+/// [t] as RFC 3339 with its UTC offset, as the core reads a time ("now" of a progress request). Dart's own
+/// toIso8601String leaves the offset out of a local time, and the core cannot place such a time (no arrival time came back).
+String rfc3339(DateTime t) {
+  if (t.isUtc) return t.toIso8601String();
+  final o = t.timeZoneOffset;
+  final m = o.inMinutes.abs();
+  return '${t.toIso8601String()}${o.isNegative ? '-' : '+'}${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
+}
+
 /// A point on the earth, in degrees.
 class GeoPoint {
   const GeoPoint(this.lat, this.lon);

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cache/nav/speaker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,5 +54,11 @@ void main() {
     final speaker = FlutterTtsSpeaker(tts: tts, isIOS: false);
     await speaker.speak('Turn left');
     expect(tts.events, ['androidAudio', 'speak:Turn left']);
+  });
+
+  test('Android: the manifest lets the app see the text-to-speech engine (Android 11 and later hide it otherwise)', () {
+    final m = File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    final queries = RegExp(r'<queries>([\s\S]*?)</queries>').firstMatch(m)?.group(1) ?? '';
+    expect(queries, contains('android.intent.action.TTS_SERVICE'));
   });
 }
