@@ -297,6 +297,9 @@ above; no navi request was used to tune anything.
 offroad_pack build --out offroad.sqlite --bbox S,N,W,E --coverage-pmtiles elevation.pmtiles --friction-dir DIR --class-dir DIR \
     --trails trails.tif --barriers padus_barriers.tif --wilderness wilderness.tif --navi-db navi.db --parking-db osm-parking.db \
     [--zstd-level 15] [--limit-tiles N] [--threads N]
+offroad_pack build-sources --out offroad.sqlite --bbox S,N,W,E --coverage-pmtiles elevation.pmtiles --class-dir DIR \
+    --class-friction class_friction.tsv --trails trails.tif --barriers barriers.tif --wilderness wilderness.tif \
+    --parking parking.tsv --entry-points entry_points.tsv --mvum mvum.geojsonl   # from original sources (cache-packs offroad-region)
 offroad_pack elevation-extract --src idaho-dem-z12.pmtiles --bbox S,N,W,E --out elevation.pmtiles   # test elevation file
 offroad_pack inspect --pack offroad.sqlite
 offroad_pack route --pack P --elevation E [--valhalla-lib shim.dll --valhalla-tiles tiles.tar] --start lat,lon --end lat,lon \

@@ -1,7 +1,9 @@
-//! offroad_pack: build and inspect cache_offroad region packs (offroad.sqlite) from navi's data.
+//! offroad_pack: build and inspect cache_offroad region packs (offroad.sqlite), from navi's data (`build`) or
+//! from the original public sources the cache-packs `offroad-region` recipe prepares (`build-sources`).
 //! Pure Rust (no GDAL): PMTiles + Terrarium WebP, GeoTIFF mosaics, SQLite tables.
 mod pmw;
 mod raster;
+mod sources;
 mod wkb;
 
 use cache_offroad::grid::{self, GridMeta, PACK_TILE};
@@ -63,6 +65,7 @@ fn main() {
     let args = Args::parse(&argv[argv.len().min(1)..]);
     let r = match cmd.as_str() {
         "build" => build(&args),
+        "build-sources" => build_sources(&args),
         "inspect" => inspect(&args),
         "resample-check" => resample_check(&args),
         "raster-info" => raster_info(&args),
@@ -71,7 +74,7 @@ fn main() {
         "raster-window" => raster_window(&args),
         "route" => route_cmd(&args),
         "probe" => probe_cmd(&args),
-        _ => Err("usage: offroad_pack <build|inspect|route|directions|probe|resample-check|raster-info|raster-window|elevation-extract> [--key value ...]".into()),
+        _ => Err("usage: offroad_pack <build|build-sources|inspect|route|directions|probe|resample-check|raster-info|raster-window|elevation-extract> [--key value ...]".into()),
     };
     if let Err(e) = r {
         eprintln!("error: {e}");
@@ -82,7 +85,7 @@ fn main() {
 // ---- build ------------------------------------------------------------------------------------------
 
 struct Layers {
-    friction: raster::Mosaic,
+    friction: Friction,
     class: Option<raster::Mosaic>,
     trails: raster::Mosaic,
     barriers: raster::Mosaic,
@@ -107,6 +110,13 @@ fn dir_version(d: &Path) -> String {
     v.join(";")
 }
 
+/// Where the friction layer comes from: navi's friction mosaic, or the class layer through the recovered
+/// class -> friction table (the two are identical cell for cell; see cache-packs rules/offroad/class_friction.tsv).
+enum Friction {
+    Mosaic(raster::Mosaic),
+    FromClass(sources::ClassFriction),
+}
+
 /// Result of processing one DEM tile: pack-tile blobs.
 struct TileOut {
     rows: Vec<(&'static str, i64, i64, Vec<u8>)>,
@@ -121,7 +131,7 @@ fn process_tile(pm: &pmtiles::PmTiles, layers: &Layers, tx: i64, ty: i64, level:
     let lons: Vec<f64> = (0..512).map(|j| merc_lon((tx * 512 + j) as f64 + 0.5)).collect();
     let lats: Vec<f64> = (0..512).map(|i| merc_lat((ty * 512 + i) as f64 + 0.5)).collect();
     let (west, east, north, south) = (lons[0], lons[511], lats[0], lats[511]);
-    let mut do_layer = |name: &'static str, m: &raster::Mosaic| -> Result<(), String> {
+    let sample = |m: &raster::Mosaic| -> Result<Option<Vec<u8>>, String> {
         let patch = m.patch(west, east, south, north)?;
         let mut cells = vec![0u8; 512 * 512];
         let mut any = false;
@@ -132,9 +142,9 @@ fn process_tile(pm: &pmtiles::PmTiles, layers: &Layers, tx: i64, ty: i64, level:
                 any |= v != 0;
             }
         }
-        if !any {
-            return Ok(());
-        }
+        Ok(if any { Some(cells) } else { None })
+    };
+    let mut emit = |name: &'static str, cells: &[u8]| {
         for sy in 0..2usize {
             for sx in 0..2usize {
                 let mut t = vec![0u8; sub * sub];
@@ -146,16 +156,36 @@ fn process_tile(pm: &pmtiles::PmTiles, layers: &Layers, tx: i64, ty: i64, level:
                 }
             }
         }
-        Ok(())
     };
-    do_layer("friction", &layers.friction)?;
-    if let Some(c) = &layers.class {
-        do_layer("class", c)?;
+    let class = match &layers.class {
+        Some(c) => sample(c)?,
+        None => None,
+    };
+    match &layers.friction {
+        Friction::Mosaic(m) => {
+            if let Some(f) = sample(m)? {
+                emit("friction", &f);
+            }
+        }
+        Friction::FromClass(t) => {
+            if let Some(c) = &class {
+                emit("friction", &t.apply(c));
+            }
+        }
     }
-    do_layer("trails", &layers.trails)?;
-    do_layer("barriers", &layers.barriers)?;
+    if let Some(c) = &class {
+        emit("class", c);
+    }
+    if let Some(v) = sample(&layers.trails)? {
+        emit("trails", &v);
+    }
+    if let Some(v) = sample(&layers.barriers)? {
+        emit("barriers", &v);
+    }
     if let Some(w) = &layers.wilderness {
-        do_layer("wilderness", w)?;
+        if let Some(v) = sample(w)? {
+            emit("wilderness", &v);
+        }
     }
     Ok(Some(TileOut { rows }))
 }
@@ -183,7 +213,7 @@ fn build(a: &Args) -> Result<(), String> {
     let parking_db = PathBuf::from(a.get("parking-db")?);
 
     let layers = Layers {
-        friction: raster::Mosaic::open_dir(&fr_dir)?,
+        friction: Friction::Mosaic(raster::Mosaic::open_dir(&fr_dir)?),
         class: match &class_dir {
             Some(d) => Some(raster::Mosaic::open_dir(d)?),
             None => None,
@@ -197,77 +227,7 @@ fn build(a: &Args) -> Result<(), String> {
     };
     let pm = pmtiles::PmTiles::open(&dem)?;
     let (south, north, west, east) = bbox;
-    let (x0, y1) = grid::lat_lon_to_tile(south, west, 12);
-    let (x1, y0) = grid::lat_lon_to_tile(north, east, 12);
-    let mut tiles: Vec<(i64, i64)> = Vec::new();
-    for ty in y0..=y1 {
-        for tx in x0..=x1 {
-            if pm.get(12, tx as u64, ty as u64).is_some() {
-                tiles.push((tx, ty));
-            }
-        }
-    }
-    tiles.truncate(limit);
-    eprintln!("{} DEM tiles in bbox ({} in file), writing {}", tiles.len(), pm.tile_count(), out.display());
-
-    if out.exists() {
-        std::fs::remove_file(&out).map_err(|e| e.to_string())?;
-    }
-    if let Some(p) = out.parent() {
-        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-    }
-    let conn = Connection::open(&out).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA page_size=16384; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;").map_err(|e| e.to_string())?;
-    conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-
-    // tiles: workers -> channel -> this thread
-    let (tx_ch, rx_ch) = mpsc::sync_channel::<Result<TileOut, String>>(64);
-    let tiles_ref = &tiles;
-    let pm_ref = &pm;
-    let layers_ref = &layers;
-    let total = tiles.len();
-    let mut written = 0usize;
-    let mut err: Option<String> = None;
-    std::thread::scope(|sc| {
-        sc.spawn(move || {
-            tiles_ref.par_iter().for_each_with(tx_ch, |tx_ch, &(tx, ty)| match process_tile(pm_ref, layers_ref, tx, ty, level) {
-                Ok(Some(o)) => {
-                    let _ = tx_ch.send(Ok(o));
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    let _ = tx_ch.send(Err(e));
-                }
-            });
-        });
-        conn.execute_batch("BEGIN").unwrap();
-        let mut st = conn.prepare("INSERT OR REPLACE INTO tiles(layer, tx, ty, data) VALUES (?1,?2,?3,?4)").unwrap();
-        let mut last = Instant::now();
-        for r in rx_ch {
-            match r {
-                Ok(o) => {
-                    for (layer, tx, ty, blob) in o.rows {
-                        st.execute(params![layer, tx, ty, blob]).unwrap();
-                    }
-                    written += 1;
-                    if last.elapsed().as_secs() >= 20 {
-                        eprintln!("  {written}/{total} DEM tiles ({:.0}s)", t0.elapsed().as_secs_f64());
-                        last = Instant::now();
-                    }
-                }
-                Err(e) => {
-                    err = Some(e);
-                    break;
-                }
-            }
-        }
-        drop(st);
-        conn.execute_batch("COMMIT").unwrap();
-    });
-    if let Some(e) = err {
-        return Err(e);
-    }
-    eprintln!("tiles done: {written} DEM tiles in {:.0}s", t0.elapsed().as_secs_f64());
+    let (conn, written) = write_tiles(&pm, &layers, bbox, &out, level, limit, t0)?;
 
     // point data
     let (n_park, n_th, n_mvum) = write_points(&conn, &navi_db, &parking_db, bbox)?;
@@ -316,6 +276,212 @@ fn build(a: &Args) -> Result<(), String> {
     drop(conn);
     eprintln!("built {} in {:.0}s", out.display(), t0.elapsed().as_secs_f64());
     inspect_path(&out)
+}
+
+/// `build-sources`: the same pack (format 2) from the original public sources, as prepared by the cache-packs
+/// `offroad-region` recipe: WorldCover class tiles (friction comes from class through `--class-friction`), the
+/// recipe's trails / barriers / wilderness rasters, point TSVs and the MVUM GeoJSON-seq. `--coverage-pmtiles` is
+/// the region's elevation extract; its z12 tiles define the cells the pack covers.
+fn build_sources(a: &Args) -> Result<(), String> {
+    let t0 = Instant::now();
+    let out = PathBuf::from(a.get("out")?);
+    let bbox = parse_bbox(a.get("bbox")?)?;
+    let level: i32 = a.opt("zstd-level").map_or(Ok(12), |s| s.parse().map_err(|_| "bad --zstd-level".to_string()))?;
+    let limit: usize = a.opt("limit-tiles").map_or(Ok(usize::MAX), |s| s.parse().map_err(|_| "bad --limit-tiles".to_string()))?;
+    if let Some(t) = a.opt("threads") {
+        rayon::ThreadPoolBuilder::new().num_threads(t.parse().map_err(|_| "bad --threads")?).build_global().ok();
+    }
+    let dem = PathBuf::from(a.get("coverage-pmtiles")?);
+    let class_dir = PathBuf::from(a.get("class-dir")?);
+    let table_path = PathBuf::from(a.get("class-friction")?);
+    let trails = PathBuf::from(a.get("trails")?);
+    let barriers = PathBuf::from(a.get("barriers")?);
+    let wild = PathBuf::from(a.get("wilderness")?);
+    let parking = PathBuf::from(a.get("parking")?);
+    let entry = PathBuf::from(a.get("entry-points")?);
+    let mvum = PathBuf::from(a.get("mvum")?);
+
+    let table = sources::ClassFriction::load(&table_path)?;
+    let layers = Layers {
+        friction: Friction::FromClass(table.clone()),
+        class: Some(raster::Mosaic::open_dir(&class_dir)?),
+        trails: raster::Mosaic::open_files(&[trails.clone()])?,
+        barriers: raster::Mosaic::open_files(&[barriers.clone()])?,
+        wilderness: Some(raster::Mosaic::open_files(&[wild.clone()])?),
+    };
+    let pm = pmtiles::PmTiles::open(&dem)?;
+    let (south, north, west, east) = bbox;
+    let (conn, written) = write_tiles(&pm, &layers, bbox, &out, level, limit, t0)?;
+    eprintln!("tiles done in {:.0}s", t0.elapsed().as_secs_f64());
+
+    let (n_park, n_th, n_mvum) = write_points_sources(&conn, &parking, &entry, &mvum, bbox)?;
+    eprintln!("parking {n_park}, trailheads {n_th}, mvum {n_mvum}");
+
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let meta: Vec<(&str, String)> = vec![
+        ("format_version", FORMAT_VERSION.into()),
+        ("grid", "web-mercator z12 pixel grid; tile=256 cells; origin top-left of the world; row = ty*256+r, col = tx*256+c".into()),
+        ("grid_zoom", "12".into()),
+        ("pack_tile_size", "256".into()),
+        ("cell_sampling", "nearest at the true web-mercator centre of each z12 pixel".into()),
+        ("elevation", "external: Mapterhorn PMTiles area extract (z12, 512 px lossless Terrarium WebP), see cache_offroad::elevation".into()),
+        ("u8_codec", "zstd(raw 65536 bytes)".into()),
+        ("zstd_level", level.to_string()),
+        ("bbox_south", south.to_string()),
+        ("bbox_north", north.to_string()),
+        ("bbox_west", west.to_string()),
+        ("bbox_east", east.to_string()),
+        ("layers", "friction,class,trails,barriers,wilderness".into()),
+        ("mode_profile_hash", cache_offroad::cost::mode_profile_hash()),
+        ("build_unix_time", secs.to_string()),
+        ("built_from", "original sources (cache-packs recipe offroad-region)".into()),
+        ("source_tiles", written.to_string()),
+        ("friction_rule", "friction = class_friction[class]".into()),
+        ("class_friction_sha256", table.sha256.clone()),
+        ("src_coverage_pmtiles", file_version(&dem)),
+        ("src_class", dir_version(&class_dir)),
+        ("src_trails", file_version(&trails)),
+        ("src_barriers", file_version(&barriers)),
+        ("src_wilderness", file_version(&wild)),
+        ("src_parking", file_version(&parking)),
+        ("src_entry_points", file_version(&entry)),
+        ("src_mvum", file_version(&mvum)),
+        ("rows_parking", n_park.to_string()),
+        ("rows_trailheads", n_th.to_string()),
+        ("rows_mvum", n_mvum.to_string()),
+    ];
+    for (k, v) in meta {
+        conn.execute("INSERT INTO meta VALUES (?1, ?2)", params![k, v]).map_err(|e| e.to_string())?;
+    }
+    drop(conn);
+    eprintln!("built {} in {:.0}s", out.display(), t0.elapsed().as_secs_f64());
+    inspect_path(&out)
+}
+
+/// Point tables and MVUM from the recipe's files. Blocked parking (private, no, permit) is dropped here as in
+/// `write_points`, so a TSV that still carries it builds the same pack.
+fn write_points_sources(conn: &Connection, parking: &Path, entry: &Path, mvum: &Path, bbox: (f64, f64, f64, f64)) -> Result<(i64, i64, i64), String> {
+    let e = |x: rusqlite::Error| x.to_string();
+    conn.execute_batch("BEGIN").map_err(e)?;
+    let mut ins = conn.prepare("INSERT INTO parking(lat, lon, name, parking_type, access) VALUES (?1,?2,?3,?4,?5)").map_err(e)?;
+    let mut ins_i = conn.prepare("INSERT INTO parking_idx VALUES (?1,?2,?2,?3,?3)").map_err(e)?;
+    let mut n_park = 0;
+    for (lat, lon, name, kind, access) in sources::read_points_tsv(parking)? {
+        if matches!(access.as_str(), "private" | "no" | "permit") || !in_bbox(lat, lon, bbox) {
+            continue;
+        }
+        ins.execute(params![lat, lon, name, kind, access]).map_err(e)?;
+        ins_i.execute(params![conn.last_insert_rowid(), lon, lat]).map_err(e)?;
+        n_park += 1;
+    }
+    let mut ins = conn.prepare("INSERT INTO trailheads(lat, lon, name, highway_class) VALUES (?1,?2,?3,?4)").map_err(e)?;
+    let mut ins_i = conn.prepare("INSERT INTO trailheads_idx VALUES (?1,?2,?2,?3,?3)").map_err(e)?;
+    let mut n_th = 0;
+    for (lat, lon, name, kind, _) in sources::read_points_tsv(entry)? {
+        if !in_bbox(lat, lon, bbox) {
+            continue;
+        }
+        ins.execute(params![lat, lon, name, kind]).map_err(e)?;
+        ins_i.execute(params![conn.last_insert_rowid(), lon, lat]).map_err(e)?;
+        n_th += 1;
+    }
+    let mut ins = conn
+        .prepare("INSERT INTO mvum(is_trail, symbol, seasonal, maint, mtb_status, mtb_dates, atv_status, atv_dates, veh_status, veh_dates, geom) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)")
+        .map_err(e)?;
+    let mut ins_i = conn.prepare("INSERT INTO mvum_idx VALUES (?1,?2,?3,?4,?5)").map_err(e)?;
+    let mut n_mvum = 0;
+    for m in sources::read_mvum(mvum)? {
+        let (x0, x1, y0, y1) = sources::lines_bbox(&m.lines);
+        if x1 < bbox.2 || x0 > bbox.3 || y1 < bbox.0 || y0 > bbox.1 {
+            continue;
+        }
+        let [(ms, md), (as_, ad), (vs, vd)] = &m.access;
+        ins.execute(params![m.is_trail as i64, m.symbol, m.seasonal, m.maint, ms, md, as_, ad, vs, vd, encode_lines(&m.lines)]).map_err(e)?;
+        ins_i.execute(params![conn.last_insert_rowid(), x0, x1, y0, y1]).map_err(e)?;
+        n_mvum += 1;
+    }
+    drop(ins);
+    drop(ins_i);
+    conn.execute_batch("COMMIT").map_err(e)?;
+    Ok((n_park, n_th, n_mvum))
+}
+
+/// Opens a new pack at `out` with the schema and writes the u8 layer tiles of every DEM tile of `pm` inside
+/// `bbox`, in parallel. Returns the open connection and the number of DEM tiles processed.
+fn write_tiles(pm: &pmtiles::PmTiles, layers: &Layers, bbox: (f64, f64, f64, f64), out: &Path, level: i32, limit: usize, t0: Instant) -> Result<(Connection, usize), String> {
+    let (south, north, west, east) = bbox;
+    let (x0, y1) = grid::lat_lon_to_tile(south, west, 12);
+    let (x1, y0) = grid::lat_lon_to_tile(north, east, 12);
+    let mut tiles: Vec<(i64, i64)> = Vec::new();
+    for ty in y0..=y1 {
+        for tx in x0..=x1 {
+            if pm.get(12, tx as u64, ty as u64).is_some() {
+                tiles.push((tx, ty));
+            }
+        }
+    }
+    tiles.truncate(limit);
+    eprintln!("{} DEM tiles in bbox ({} in file), writing {}", tiles.len(), pm.tile_count(), out.display());
+
+    if out.exists() {
+        std::fs::remove_file(&out).map_err(|e| e.to_string())?;
+    }
+    if let Some(p) = out.parent() {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    let conn = Connection::open(&out).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA page_size=16384; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;").map_err(|e| e.to_string())?;
+    conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+
+    // tiles: workers -> channel -> this thread
+    let (tx_ch, rx_ch) = mpsc::sync_channel::<Result<TileOut, String>>(64);
+    let tiles_ref = &tiles;
+    let pm_ref = pm;
+    let layers_ref = layers;
+    let total = tiles.len();
+    let mut written = 0usize;
+    let mut err: Option<String> = None;
+    std::thread::scope(|sc| {
+        sc.spawn(move || {
+            tiles_ref.par_iter().for_each_with(tx_ch, |tx_ch, &(tx, ty)| match process_tile(pm_ref, layers_ref, tx, ty, level) {
+                Ok(Some(o)) => {
+                    let _ = tx_ch.send(Ok(o));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = tx_ch.send(Err(e));
+                }
+            });
+        });
+        conn.execute_batch("BEGIN").unwrap();
+        let mut st = conn.prepare("INSERT OR REPLACE INTO tiles(layer, tx, ty, data) VALUES (?1,?2,?3,?4)").unwrap();
+        let mut last = Instant::now();
+        for r in rx_ch {
+            match r {
+                Ok(o) => {
+                    for (layer, tx, ty, blob) in o.rows {
+                        st.execute(params![layer, tx, ty, blob]).unwrap();
+                    }
+                    written += 1;
+                    if last.elapsed().as_secs() >= 20 {
+                        eprintln!("  {written}/{total} DEM tiles ({:.0}s)", t0.elapsed().as_secs_f64());
+                        last = Instant::now();
+                    }
+                }
+                Err(e) => {
+                    err = Some(e);
+                    break;
+                }
+            }
+        }
+        drop(st);
+        conn.execute_batch("COMMIT").unwrap();
+    });
+    if let Some(e) = err {
+        return Err(e);
+    }
+    eprintln!("tiles done: {written} DEM tiles in {:.0}s", t0.elapsed().as_secs_f64());
+    Ok((conn, written))
 }
 
 fn write_points(conn: &Connection, navi_db: &Path, parking_db: &Path, bbox: (f64, f64, f64, f64)) -> Result<(i64, i64, i64), String> {
@@ -813,5 +979,104 @@ fn directions_cmd(a: &Args) -> Result<(), String> {
             println!("{out}");
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tiff::encoder::{colortype, TiffEncoder};
+
+    /// A north-up WGS84 GeoTIFF (uncompressed strips) of `f(lon, lat)` sampled at pixel centres.
+    fn write_geotiff(p: &Path, west: f64, north: f64, px: f64, w: u32, h: u32, f: &dyn Fn(f64, f64) -> u8) {
+        let mut data = vec![0u8; (w * h) as usize];
+        for i in 0..h {
+            for j in 0..w {
+                data[(i * w + j) as usize] = f(west + (j as f64 + 0.5) * px, north - (i as f64 + 0.5) * px);
+            }
+        }
+        let mut enc = TiffEncoder::new(std::fs::File::create(p).unwrap()).unwrap();
+        let mut img = enc.new_image::<colortype::Gray8>(w, h).unwrap();
+        img.encoder().write_tag(tiff::tags::Tag::ModelPixelScaleTag, &[px, px, 0.0][..]).unwrap();
+        img.encoder().write_tag(tiff::tags::Tag::ModelTiepointTag, &[0.0, 0.0, 0.0, west, north, 0.0][..]).unwrap();
+        img.write_data(&data).unwrap();
+    }
+
+    #[test]
+    fn build_sources_end_to_end() {
+        let dir = std::env::temp_dir().join(format!("offroad_pack_sources_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("class")).unwrap();
+        // one z12 DEM tile around (44.0, -115.0)
+        let (tx, ty) = grid::lat_lon_to_tile(44.0, -115.0, 12);
+        let (west, east) = (merc_lon((tx * 512) as f64), merc_lon(((tx + 1) * 512) as f64));
+        let (north, south) = (merc_lat((ty * 512) as f64), merc_lat(((ty + 1) * 512) as f64));
+        let mid = (west + east) / 2.0;
+        let (gw, gn, px) = (west - 0.01, north + 0.01, 0.0005);
+        let (w, h) = (((east - west + 0.02) / px).ceil() as u32, ((north - south + 0.02) / px).ceil() as u32);
+        write_geotiff(&dir.join("class/c.tif"), gw, gn, px, w, h, &|lon, _| if lon < mid { 10 } else { 80 });
+        let band = south + 0.3 * (north - south);
+        write_geotiff(&dir.join("trails.tif"), gw, gn, px, w, h, &|_, lat| if (lat - band).abs() < 0.001 { 25 } else { 0 });
+        write_geotiff(&dir.join("barriers.tif"), gw, gn, px, w, h, &|lon, lat| if lon > mid && lat > band { 255 } else { 0 });
+        write_geotiff(&dir.join("wild.tif"), gw, gn, px, w, h, &|_, _| 0);
+        let e7 = |v: f64| (v * 1e7).round() as i32;
+        let pm = pmw::build(vec![(pmtiles::zxy_to_tile_id(12, tx as u64, ty as u64), vec![1, 2, 3])], 12, [e7(west), e7(south), e7(east), e7(north)], "{}");
+        std::fs::write(dir.join("elev.pmtiles"), pm).unwrap();
+        std::fs::write(dir.join("cf.tsv"), "# test\nclass\tfriction\n10\t20\n80\t255\n").unwrap();
+        let (clat, clon) = ((north + south) / 2.0, (west + east) / 2.0);
+        std::fs::write(
+            dir.join("parking.tsv"),
+            format!("lat\tlon\tname\tparking_type\taccess\n{clat}\t{clon}\tLot\tsurface\t\n{clat}\t{clon}\tGated\tsurface\tprivate\n10\t10\tFar\t\t\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("entry.tsv"), format!("lat\tlon\thighway\tname\n{clat}\t{clon}\ttrack\tFS 1\n")).unwrap();
+        let mvum_in = format!(
+            r#"{{"properties":{{"is_trail":1,"symbol":"12","seasonal":"seasonal","atv":"open","atv_datesopen":"06/15-10/15"}},"geometry":{{"type":"MultiLineString","coordinates":[[[{w},{s}],[{e},{n}]]]}}}}"#,
+            w = west, s = south, e = east, n = north
+        );
+        let mvum_out = r#"{"properties":{"is_trail":0},"geometry":{"type":"LineString","coordinates":[[10,10],[11,11]]}}"#;
+        std::fs::write(dir.join("mvum.geojsonl"), format!("{mvum_in}\n{mvum_out}\n")).unwrap();
+        let out = dir.join("out/offroad.sqlite");
+        let s = |p: &str| dir.join(p).to_string_lossy().into_owned();
+        let bbox = format!("{},{},{},{}", south - 0.1, north + 0.1, west - 0.1, east + 0.1);
+        let argv: Vec<String> = [
+            "--out", &out.to_string_lossy(), "--bbox", &bbox, "--threads", "2", "--coverage-pmtiles", &s("elev.pmtiles"),
+            "--class-dir", &s("class"), "--class-friction", &s("cf.tsv"), "--trails", &s("trails.tif"), "--barriers", &s("barriers.tif"),
+            "--wilderness", &s("wild.tif"), "--parking", &s("parking.tsv"), "--entry-points", &s("entry.tsv"), "--mvum", &s("mvum.geojsonl"),
+        ]
+        .iter()
+        .map(|x| x.to_string())
+        .collect();
+        build_sources(&Args::parse(&argv)).unwrap();
+
+        let p = SqlitePack::open(&out).unwrap();
+        for l in [Layer::Friction, Layer::Class, Layer::Trails, Layer::Barriers, Layer::Wilderness] {
+            assert!(p.has_layer(l), "{l:?}");
+        }
+        let (r0, c0) = (ty * 512, tx * 512);
+        let class = p.read_u8(Layer::Class, r0, c0, 512, 512).unwrap();
+        let fric = p.read_u8(Layer::Friction, r0, c0, 512, 512).unwrap();
+        assert!(class.iter().any(|&c| c == 10) && class.iter().any(|&c| c == 80));
+        assert!(class.iter().zip(&fric).all(|(&c, &f)| f == match c { 10 => 20, 80 => 255, _ => 0 }));
+        assert!(p.read_u8(Layer::Trails, r0, c0, 512, 512).unwrap().iter().any(|&v| v == 25));
+        let bar = p.read_u8(Layer::Barriers, r0, c0, 512, 512).unwrap();
+        assert!(bar[5] == 0 && bar[511] == 255); // top-left open, top-right (east of mid, north of band) closed
+        assert!(p.read_u8(Layer::Wilderness, r0, c0, 512, 512).unwrap().iter().all(|&v| v == 0));
+        // cells outside the DEM tile have no tiles
+        assert!(p.read_u8(Layer::Class, r0, c0 + 512, 4, 4).unwrap().iter().all(|&v| v == 0));
+        let park = p.parking_in_box(west, east, south, north).unwrap();
+        assert_eq!(park.len(), 1);
+        assert_eq!(park[0].name, "Lot");
+        let th = p.trailheads_in_box(west, east, south, north).unwrap();
+        assert_eq!((th.len(), th[0].kind.as_str(), th[0].name.as_str()), (1, "track", "FS 1"));
+        let mv = p.mvum_in_box(south, north, west, east).unwrap();
+        assert_eq!(mv.len(), 1);
+        assert!(mv[0].is_trail);
+        assert_eq!(mv[0].access[1], (Some("open".into()), Some("06/15-10/15".into())));
+        assert_eq!(p.info.meta.get("rows_mvum").map(String::as_str), Some("1"));
+        let sha = sources::ClassFriction::load(&dir.join("cf.tsv")).unwrap().sha256;
+        assert_eq!(p.info.meta.get("class_friction_sha256"), Some(&sha));
+        drop(p);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
