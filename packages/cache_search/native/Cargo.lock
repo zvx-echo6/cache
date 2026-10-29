@@ -816,6 +816,7 @@ dependencies = [
  "cc",
  "common",
  "edge",
+ "flate2",
  "html-escape",
  "libc",
  "segment",
