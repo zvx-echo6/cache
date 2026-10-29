@@ -6,6 +6,16 @@ release notes).
 
 ## Unreleased
 
+### New
+- Models starts with a short list of recommended models, each with its size and whether it fits your phone
+
+### Fixed
+- Unload the model in use from Models to free memory
+- The keyboard closes when you tap outside a text box or scroll
+- Ask with no model has a button to get or choose one
+- Model names show the right quantisation in more cases
+- iPhone: the Hugging Face file list shows whether each file fits your phone
+
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
 ### Fixed
