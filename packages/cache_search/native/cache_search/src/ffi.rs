@@ -457,6 +457,81 @@ pub unsafe extern "C" fn cs_tool(
     })
 }
 
+// ---- actions (the act tool; logic in cache_act, glue in act.rs; docs/ACTIONS.md) ----
+
+/// The installed actions are replaced by `defs_json`. NULL on error (a NULL handle or argument, or JSON that is not an array).
+///
+/// # Safety
+/// `h` NULL or live; `defs_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_act_set_definitions(h: *mut Handle, defs_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let s = arg_str(defs_json, "defs_json")?;
+        out_string(h.act_set_definitions(s)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `modules_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_act_set_modules_off(h: *mut Handle, modules_json: *const c_char) -> i32 {
+    with_handle(h, -1, |h| {
+        let m = if modules_json.is_null() { None } else { Some(arg_str(modules_json, "modules_json")?) };
+        h.act_set_modules_off(m)?;
+        Ok(0)
+    })
+}
+
+/// A failed check is the content (the tool's error JSON), not a C error.
+///
+/// # Safety
+/// `h` NULL or live; `action` and `fields_json` NULL or NUL-terminated (`fields_json` may be NULL).
+#[no_mangle]
+pub unsafe extern "C" fn cs_act_resolve(h: *mut Handle, action: *const c_char, fields_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let a = arg_str(action, "action")?;
+        let f = if fields_json.is_null() { None } else { Some(arg_str(fields_json, "fields_json")?) };
+        out_string(h.act_resolve(a, f)?)
+    })
+}
+
+/// NULL on error; the error is in `cs_last_error(NULL)`.
+///
+/// # Safety
+/// `c` NULL or a live conversation; `run_id` and `reply_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_act_finish(c: *mut Conversation, run_id: *const c_char, reply_json: *const c_char) -> *mut c_char {
+    let r = guarded(|| {
+        if c.is_null() {
+            return Err(Error::bad_json("null conversation"));
+        }
+        let (id, reply) = (arg_str(run_id, "run_id")?, arg_str(reply_json, "reply_json")?);
+        out_string((*c).act_finish(id, reply)?)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
+/// NULL on error; the error is in `cs_last_error(NULL)`.
+///
+/// # Safety
+/// `c` NULL or a live conversation; `outcome_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_act_outcome(c: *mut Conversation, outcome_json: *const c_char) -> *mut c_char {
+    let r = guarded(|| {
+        if c.is_null() {
+            return Err(Error::bad_json("null conversation"));
+        }
+        out_string((*c).act_outcome(arg_str(outcome_json, "outcome_json")?)?)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
 // ---- saved places and live data (logic in cache_user / cache_live; see ext.rs) ----
 
 /// # Safety

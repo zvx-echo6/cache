@@ -65,7 +65,16 @@ cs: command line and HTTP wrapper over the cache_search core
   cs layers clear-cache --config <sources.json> [--layer <id>]
   cs layers tile     --config <sources.json> --layer <id> --z <z> --x <x> --y <y> [--out <file>]
   cs layers serve    --config <sources.json> [--online true|false]       (the tile server, until stopped)
-  cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [--live-policy <json>] [EMBED] [--open-timeout 600]
+  cs serve           --config <sources.json> [--listen 127.0.0.1:8433] [--allow-non-loopback] [--live-policy <json>]
+                     [--actions <defs.json>] [--action-results <results.json>] [EMBED] [--open-timeout 600]
+                     --actions: a JSON array of action definitions (docs/ACTIONS.md) installed at start (cs_act_set_definitions); the
+                     report is printed on stderr as one line `actions <json>`.
+                     --action-results: the scripted host for captures. A JSON object keyed by action id in two tables:
+                       {\"run\": {\"<read or open action>\": {\"ok\":true,\"result\":{...}} | {\"ok\":false,\"error\":{\"type\",\"detail\"}}},
+                        \"tap\": {\"<change action>\": {\"status\":\"done\",\"result\":{...}} | {\"status\":\"declined\"} |
+                                              {\"status\":\"failed\",\"error\":{\"type\",\"detail\"}}}}
+                     \"run\" values are the reply of cs_act_finish; \"tap\" values become the outcome of cs_act_outcome. Endpoints
+                     POST /conversations/{id}/act/finish {run_id} and /act/outcome {confirm_id} play them (docs/TOOLS.md, act).
 
   EMBED: --embed-lib <libcache_llama.so> --embed-model <model.gguf> [--embed-sha256 <hex>]
          [--embed-model-id <id>] [--embed-threads 4]
@@ -679,11 +688,22 @@ pub fn layers(argv: &[String]) -> Result<(), ApiError> {
 }
 
 pub fn serve(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["config", "listen", "live-policy", "open-timeout"], &["allow-non-loopback"], true)?;
+    let a = parse(argv, &["config", "listen", "live-policy", "open-timeout", "actions", "action-results"], &["allow-non-loopback"], true)?;
     let listen = a.get("listen").unwrap_or("127.0.0.1:8433").to_string();
     server::check_listen(&listen, a.flag("allow-non-loopback"))?;
-    let e = open_engine(&a)?;
-    server::run(e, &listen)
+    // read the host script before anything is opened, so a bad file fails fast
+    let defs = a.get("actions").map(|f| std::fs::read_to_string(f).map_err(|e| usage_err(format!("--actions {f}: {e}")))).transpose()?;
+    let script = match a.get("action-results") {
+        Some(f) => server::ActScript::parse(&std::fs::read_to_string(f).map_err(|e| usage_err(format!("--action-results {f}: {e}")))?)?,
+        None => server::ActScript::default(),
+    };
+    let mut e = open_engine(&a)?;
+    if let Some(d) = defs {
+        let report = e.core.act_set_definitions(&d)?;
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(err, "actions {report}");
+    }
+    server::run(e, &listen, script)
 }
 
 /// Print an error as one JSON line on stderr. Writes with `writeln!` and ignores a failed write: `eprintln!`

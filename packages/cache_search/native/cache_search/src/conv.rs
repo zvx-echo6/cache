@@ -15,6 +15,8 @@ pub struct Conversation {
     /// What `web_search` showed for each `web:<url>` address (title, snippet, fetch time), so `read` can fall back to
     /// the snippet. Lives and dies with the conversation; never written to disk.
     web: HashMap<String, WebNote>,
+    /// What tools count across calls (the `act` tool's confirm ids and host runs). Only `confirms` is exported.
+    pub tool_state: cache_tool::ConvState,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +39,9 @@ struct Export {
     ids: Vec<ExportId>,
     #[serde(default)]
     web_hits: HashMap<String, ExportHit>,
+    /// The `act` tool's confirm cards so far; absent in an export of a conversation that had none.
+    #[serde(default)]
+    confirms: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,7 +140,8 @@ impl Conversation {
     /// as this conversation would. Keys come out in this order: `format` (1), `next_n` (the number the next new
     /// address gets), `ids` (`{"n","address","title"}` in number order), `web_hits` (what `web_search` showed, by
     /// `web:<url>` address in sorted order, each `{"title","snippet","fetched"}`; the snippet is what `read` falls back
-    /// to). Same state, same bytes.
+    /// to), and `confirms` (the number of confirm cards the `act` tool has issued; left out while it is 0, so a conversation
+    /// that never used `act` exports as it always did). Same state, same bytes. Pending host runs are not exported.
     pub fn export_json(&self) -> String {
         let ids: Vec<Value> = (0..self.entries.len()).map(|i| self.id_json(i)).collect();
         let mut hits: Vec<(&String, &WebNote)> = self.web.iter().collect();
@@ -144,7 +150,12 @@ impl Conversation {
         for (address, w) in hits {
             web_hits.insert(address.clone(), json!({"title": w.title, "snippet": w.snippet, "fetched": w.fetched}));
         }
-        json!({"format": EXPORT_FORMAT, "next_n": self.entries.len() + 1, "ids": ids, "web_hits": web_hits}).to_string()
+        let mut out = json!({"format": EXPORT_FORMAT, "next_n": self.entries.len() + 1, "ids": ids, "web_hits": web_hits});
+        // only once the act tool has issued a confirm card, so a conversation without one exports as it always did
+        if self.tool_state.confirms > 0 {
+            out["confirms"] = json!(self.tool_state.confirms);
+        }
+        out.to_string()
     }
 
     /// A conversation from `export_json`'s output. Malformed JSON, a missing or non-integer `format`, ids that are
@@ -174,6 +185,7 @@ impl Conversation {
         for (address, h) in e.web_hits {
             c.web.insert(address, WebNote { title: h.title, snippet: h.snippet, fetched: h.fetched });
         }
+        c.tool_state.confirms = e.confirms;
         Ok(c)
     }
 
@@ -282,6 +294,23 @@ mod tests {
             c.export_json(),
             r#"{"format":1,"next_n":3,"ids":[{"n":1,"address":"web:https://b/","title":"B"},{"n":2,"address":"web:https://a/","title":"A"}],"web_hits":{"web:https://a/":{"title":"A","snippet":"ay","fetched":"2026-10-25 14:20"},"web:https://b/":{"title":"B","snippet":"bee","fetched":"2026-10-25 14:20"}}}"#
         );
+    }
+
+    #[test]
+    fn confirms_are_exported_only_when_above_zero_and_come_back() {
+        let mut c = Conversation::new();
+        call(&mut c, r#"[{"address":"a","title":"A","snippet":"s"}]"#);
+        assert!(!c.export_json().contains("confirms"));
+        c.tool_state.confirms = 3;
+        c.tool_state.runs = 5;
+        c.tool_state.pending.push(("r5".into(), "x.y".into()));
+        let e = c.export_json();
+        assert_eq!(e, r#"{"format":1,"next_n":2,"ids":[{"n":1,"address":"a","title":"A"}],"web_hits":{},"confirms":3}"#);
+        let d = Conversation::import_json(&e).unwrap();
+        assert_eq!(d.tool_state.confirms, 3);
+        // runs and pending runs are not part of an export
+        assert_eq!((d.tool_state.runs, d.tool_state.pending.len()), (0, 0));
+        assert_eq!(d.export_json(), e);
     }
 
     #[test]

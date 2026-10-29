@@ -18,7 +18,8 @@ dropped by the app.
 
 **Fixed and expandable tools.** Six fixed tools (search, read, navigate, nearby, locate, calculate) and one generic
 `live_data` tool whose sources come from what is installed on the phone, so new data sources never need new
-tool definitions or retraining. `calculate` needs no installed data, so it is always in the tool list. `web_search` is a seventh fixed tool that exists only while a web-search key is
+tool definitions or retraining. `calculate` needs no installed data, so it is always in the tool list. `act` is also a fixed tool, but its actions come from the
+modules the app has installed (see below); it is in the tool list only while at least one action is listed. `web_search` is a seventh fixed tool that exists only while a web-search key is
 configured and the phone is online; without them it is left out of the tool list.
 
 **Errors (every tool).** `{"ok": false, "error": {"type": "<code>", "detail": "<short text>"}}`. Shared codes:
@@ -562,6 +563,74 @@ temperatures; this is how fend works.
 Errors: `bad_arguments` (no expression, an empty one, not a string, or over 300 characters) and `calc_failed`, whose
 `detail` is the calculator's message (`division by zero`, `exchange rates are not available`, `unknown identifier 'ton'`,
 `cannot convert from drops to unitless: ...`) or `took too long`.
+
+### act (present only while the app has installed at least one action)
+
+Modules publish the things they can do as data; the model reaches them through this one tool, so a new module needs no new
+tool definition or retraining. The contract with the app (definitions, the confirm card, running actions) is
+[docs/ACTIONS.md](ACTIONS.md); this section is the tool as the model and the core see it.
+
+```json
+{"type": "function", "function": {
+  "name": "act",
+  "description": "Do something in one of the app's modules. Actions marked (confirm) show the user a confirm card; nothing changes until they tap it. * = required. Actions:\nplaces.save(name:string*, place:place*, note:string) - Save a place to the user's saved places. (confirm)\nplaces.list() - The user's saved places.",
+  "parameters": {"type": "object", "properties": {
+    "action": {"type": "string"},
+    "fields": {"type": "object"}},
+    "required": ["action"], "additionalProperties": false}}}
+```
+
+The description is built from the installed definitions (the two action lines above are an example): the header, then one line
+per action in module order and then the module's own order, `id(field:type*, ...) - description`, with ` (confirm)` after a
+`change` action. A field is `name:type`, an enum is its values joined by `|`, and `*` marks a required field. At most 40
+actions are listed. The model is trained on this exact text.
+
+Results. The model only ever sees these:
+
+```json
+{"ok": true, "status": "needs_confirmation", "confirm_id": "c1", "action": "places.save", "title": "Save a place",
+ "summary": {"name": "Elk camp", "place": "44.21000, -114.93000 (12 mi NE of Stanley)"}}
+{"ok": true, "status": "done", "action": "places.list", "result": {"places": [{"n": 1, "name": "Home"}]}}
+{"ok": false, "error": {"type": "bad_arguments", "detail": "note: must be at most 500 characters", "field": "note", "reason": "too_long"}}
+```
+
+A `change` action never runs from the call: the result is a confirm card for the app to show, and the model tells the user what
+the card will do and that nothing happens until they tap it. What the tap came to arrives later as a system message
+(`{"host_event":"act_outcome","ok":true,"status":"done"|"declined"|"failed","confirm_id":"c1","action":"places.save",...}`),
+not as a tool result. A `read` or `open` action is run by the app and its result comes straight back as `status` `done`;
+objects in `result` with an `address` carry `n` like any other tool result.
+
+Errors: `unknown_action`; `bad_arguments` with `field` and `reason` (`missing`, `unknown_field`, `wrong_type`, `not_allowed`,
+`too_long`, `out_of_range`, `bad_format`); `place_not_found` with `field` and `query`; `not_set_up` (the module is switched off).
+A `place` field takes a saved place name, a place name or address, or `lat,lon`, resolved as `navigate` resolves `to`.
+
+How the core and the app run the exchange (not seen by the model):
+
+| Step | Call | Result |
+|---|---|---|
+| install | `cs_act_set_definitions(defs)` | per-definition rejections and the actions not listed |
+| a `change` call | `cs_tool` | `needs_confirmation` with `confirm_id` (`c1`, `c2`, ...) |
+| the card is shown | `cs_act_resolve(action, fields)` | the machine values to run on a tap, places as `{"lat","lon","name"?,"label"?}` |
+| a `read` or `open` call | `cs_tool` | `{"ok":true,"status":"host_run","run_id":"r1","action":...,"fields":{...}}`, for the app only |
+| the app has run it | `cs_act_finish(conv, run_id, reply)` | the `done` result above (or the error), to add as the call's tool message |
+| the user taps | `cs_act_outcome(conv, outcome)` | the exact system message content, to add to the conversation |
+
+`cs serve` plays the app for captures: `--actions <defs.json>` installs definitions, and `--action-results <file>` scripts what
+the app returns. The file is one JSON object with two tables keyed by action id, `run` (the reply to a `host_run`, as
+`cs_act_finish` takes it) and `tap` (what a tap on that action's card comes to):
+
+```json
+{"run": {"places.list": {"ok": true, "result": {"places": [{"address": "place:home", "name": "Home"}]}},
+         "places.open": {"ok": false, "error": {"type": "unavailable", "detail": "Maps is not installed"}}},
+ "tap": {"places.save": {"status": "done", "result": {"saved": "Elk camp"}},
+         "places.delete": {"status": "declined"},
+         "home.source_switch": {"status": "failed", "error": {"type": "denied", "detail": "location is off"}}}}
+```
+
+`POST /conversations/{id}/act/finish` with `{"run_id":"r1"}` plays the scripted `run` reply (or give `{"run_id","reply"}`), and
+`POST /conversations/{id}/act/outcome` with `{"confirm_id":"c1"}` plays the scripted `tap` (or give `{"outcome":{...}}`); both
+return what the core returns. `POST /act/definitions`, `POST /act/modules-off` and `POST /act/resolve` mirror the other three
+calls.
 
 ### web_search (present only with a web-search key configured and the phone online)
 
