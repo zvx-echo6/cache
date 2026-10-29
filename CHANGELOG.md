@@ -30,6 +30,7 @@ release notes).
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
+- Ask: after Use my location, the message says your location is ready only once the assistant has it, like the Location ready button
 - Saved places can be removed: Remove place on the place card and in Settings > Weather and alerts > Places, after a confirm; a removed place is no longer watched
 - About: shows the version and build number of the installed app, and the note about builds names TestFlight only on iPhone and Google Play on Android
 - Regions: the size before downloading is closer to the real size for maps, and the sheet also shows the size in all, counted the way Local counts it, when part of the region is already on the phone

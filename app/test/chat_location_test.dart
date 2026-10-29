@@ -293,10 +293,28 @@ void main() {
     expect(bridge.known, isFalse);
     expect(find.text('Use my location'), findsOneWidget);
     expect(find.text('Location ready'), findsNothing);
+    expect(find.text('Location ready for your next question.'), findsNothing, reason: 'the pop-up waits for the core too');
     write.complete(true);
     await settleCore(tester);
     expect(bridge.known, isTrue);
     expect(find.text('Location ready'), findsOneWidget);
+    expect(find.text('Location ready for your next question.'), findsOneWidget);
+  });
+
+  testWidgets('when the core does not take the position, the pop-up does not say ready', (tester) async {
+    final source = SettingsSource()..next = fresh();
+    final (location, bridge) = (await tester.runAsync(() => setup(source, sync: (_) async => false)))!;
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
+        home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location, chatLocation: bridge)));
+    await tester.tap(find.text('Use my location'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await settleCore(tester);
+    expect(location.fix, isNotNull);
+    expect(bridge.known, isFalse);
+    expect(find.text('Location ready for your next question.'), findsNothing);
+    expect(find.text('Got your position, but the assistant could not use it yet. You can still chat.'), findsOneWidget);
   });
 
   testWidgets('blocked explicit location offers the existing Settings path', (tester) async {

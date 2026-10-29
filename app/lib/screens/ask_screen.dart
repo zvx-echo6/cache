@@ -121,11 +121,14 @@ class _AskScreenState extends State<AskScreen> {
       await location.setEnabled(true);
       explained = true;
     }
-    final ok = location.streamHeld
+    final read = location.streamHeld
         ? await location.prepareForChat(isCancelled: () => !mounted) != null
         : await location.request(explain: explained ? () async => true : _explainLocation);
+    // "Ready" only once the core has the position, as the chip and the system prompt say.
+    final bridge = widget.chatLocation;
+    final ok = read && (bridge == null || await bridge.settled());
     if (!mounted) return;
-    final text = ok ? 'Location ready for your next question.' : switch (location.problem) {
+    final text = ok ? 'Location ready for your next question.' : read ? 'Got your position, but the assistant could not use it yet. You can still chat.' : switch (location.problem) {
       LocationProblem.permissionBlocked => "Location is blocked. You can allow it in your phone's settings.",
       LocationProblem.permissionDenied => 'Cache was not allowed to use your location.',
       LocationProblem.serviceOff => "Your phone's location is switched off.",

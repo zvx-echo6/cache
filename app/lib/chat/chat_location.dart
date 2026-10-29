@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../location/location_service.dart';
@@ -34,7 +36,20 @@ class ChatLocation extends ChangeNotifier {
     final fix = await location.prepareForChat(isCancelled: isCancelled);
     if (isCancelled()) return;
     update(fix);
-    // Include any stream update queued while the earlier core write was pending.
+    await _drain(isCancelled);
+  }
+
+  /// Waits for the core updates asked for so far, at most [timeout]; true when the chat now has the position (the same
+  /// [known] the chip and the system prompt read).
+  Future<bool> settled({Duration timeout = const Duration(seconds: 5)}) async {
+    try {
+      await _drain(() => false).timeout(timeout);
+    } on TimeoutException catch (_) {}
+    return known;
+  }
+
+  /// Includes any stream update queued while an earlier core write was pending.
+  Future<void> _drain(bool Function() isCancelled) async {
     Future<void> pending;
     do {
       pending = _writes;
