@@ -110,8 +110,12 @@ struct Http {
 }
 impl Http {
     fn start(config: &str) -> Http {
+        Http::start_with(config, &[])
+    }
+    fn start_with(config: &str, extra: &[&str]) -> Http {
         let mut child = Command::new(env!("CARGO_BIN_EXE_cs"))
             .args(["serve", "--listen", "127.0.0.1:0", "--config", config])
+            .args(extra)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
@@ -490,4 +494,70 @@ fn live_data_resolves_place_names_through_the_places_pack() {
     assert_eq!(tool(&mut core, json!({"source": "weather", "place": "Home"}))["place"], "Home");
     assert_eq!(tool(&mut core, json!({"source": "weather", "place": "42.60,-113.70"}))["place"], "Home");
     assert_eq!(tool(&mut core, json!({"source": "weather", "place": "Rupert, Idaho"}))["error"]["type"], "geocode_empty");
+}
+
+// ---- cs serve --live-state: live_data's not_refreshed without a network --------------------------------------------------
+
+#[test]
+fn serve_live_state_gives_each_not_refreshed_reason_and_leaves_everything_else_alone() {
+    let port = mock_server();
+    let (t, cfg, _) = state("livestate", port);
+    // alerts installed too (never downloaded here: every state below stands in for the network)
+    std::fs::copy(manifest().join("../sources/alerts.json"), t.0.join("sources/alerts.json")).unwrap();
+    cli(&["places", "save", "--config", &cfg, "--place", r#"{"name":"Home","lat":42.536,"lon":-113.792}"#]);
+    let fetched = cli(&["live-fetch", "--config", &cfg, "--request", &format!(r#"{{"source":"weather","place":"Home","now":"{NOW}"}}"#)]);
+    assert!(fetched.contains(r#""fetched":true"#), "{fetched}");
+    // four hours after the download: past weather's 3-hour refresh interval, still valid
+    let due = "2026-10-25T14:50:00-06:00";
+    let expired = "2027-01-01T12:00:00-07:00";
+    let ask = |h: &Http, args: Value, now: &str| -> Value {
+        let id = serde_json::from_str::<Value>(&h.req("POST", "/conversations", "")).unwrap()["id"].as_str().unwrap().to_string();
+        let b = h.req("POST", &format!("/conversations/{id}/tool"), &json!({"name": "live_data", "args": args, "now": now}).to_string());
+        serde_json::from_str(serde_json::from_str::<Value>(&b).unwrap()["content"].as_str().unwrap()).unwrap()
+    };
+    let home = json!({"source": "weather", "place": "Home"});
+    let plain = Http::start(&cfg);
+    let before = ask(&plain, home.clone(), due);
+    let tools = plain.req("GET", "/tools", "");
+    drop(plain);
+    assert!(before.get("not_refreshed").is_none());
+    for (flags, words) in [
+        (vec!["--live-state", "off"], "this source is switched off"),
+        (vec!["--live-state", "offline"], "no connection"),
+        (vec!["--live-state", "metered"], "mobile data updates are off"),
+        (vec!["--live-state", "fail:fetch_failed"], "refresh failed: couldn't reach the source"),
+        (vec!["--live-state", "fail:quota"], "refresh failed: daily limit reached"),
+        (vec!["--live-state", "fail:key_missing"], "refresh failed: API key missing"),
+        (vec!["--live-state", "fail:bad_response"], "refresh failed: the source sent bad data"),
+        // one source's own state wins over the one for every source
+        (vec!["--live-state", "offline", "--live-state", "weather=metered"], "mobile data updates are off"),
+    ] {
+        let h = Http::start_with(&cfg, &flags);
+        let v = ask(&h, home.clone(), due);
+        assert_eq!(v["not_refreshed"], words, "{flags:?}");
+        let mut without = v.clone();
+        without.as_object_mut().unwrap().remove("not_refreshed");
+        assert_eq!(without.to_string(), before.to_string(), "{flags:?}: only the new field");
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys[..8], ["ok", "source", "place", "fetched_at", "valid_until", "age", "expired", "not_refreshed"]);
+        assert_eq!(h.req("GET", "/tools", ""), tools, "{flags:?}: the tool list does not follow the live state");
+    }
+    // normal: no reason, the same bytes as without the flag
+    let h = Http::start_with(&cfg, &["--live-state", "normal"]);
+    assert_eq!(ask(&h, home.clone(), due).to_string(), before.to_string());
+    drop(h);
+    // the two combined cases in one serve: weather expired on metered data, and alerts (never downloaded) while offline
+    let h = Http::start_with(&cfg, &["--live-state", "metered", "--live-state", "alerts=offline"]);
+    let v = ask(&h, home.clone(), expired);
+    assert_eq!((v["error"]["type"].as_str(), v["not_refreshed"].as_str()), (Some("expired"), Some("mobile data updates are off")), "{v}");
+    let v = ask(&h, json!({"source": "alerts", "place": "Home"}), due);
+    assert_eq!((v["error"]["type"].as_str(), v["not_refreshed"].as_str()), (Some("no_data"), Some("no connection")), "{v}");
+    drop(h);
+    // a bad state stops the start
+    for bad in [vec!["--live-state", "sleepy"], vec!["--live-state", "off", "--live-state", "offline"], vec!["--live-state", "=off"]] {
+        let mut args = vec!["serve", "--listen", "127.0.0.1:0", "--config", cfg.as_str()];
+        args.extend(bad.iter());
+        let o = Command::new(env!("CARGO_BIN_EXE_cs")).args(&args).output().unwrap();
+        assert!(!o.status.success(), "{bad:?}");
+    }
 }

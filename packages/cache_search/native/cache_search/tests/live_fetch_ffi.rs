@@ -152,6 +152,24 @@ fn the_metered_rule_and_disabled_sources_and_offline() {
 }
 
 #[test]
+fn the_reason_a_fetch_is_denied_and_capture_states_through_the_c_abi() {
+    use cache_tool::NotAllowed;
+    let f = Fx::new();
+    assert_eq!(f.policy(Some(r#"{"online":false,"allow_metered":false,"metered":true,"enabled_sources":["nws"]}"#)), 0);
+    assert_eq!((f.fetcher().not_allowed("nws"), f.fetcher().not_allowed("other")), (Some(NotAllowed::Offline), Some(NotAllowed::SwitchedOff)));
+    assert_eq!(f.policy(Some(r#"{"online":true,"allow_metered":false,"metered":true,"enabled_sources":["nws"]}"#)), 0);
+    assert_eq!(f.fetcher().not_allowed("nws"), Some(NotAllowed::MeteredOff));
+    assert_eq!(f.policy(Some(r#"{"online":false,"enabled_sources":[],"states":{"*":"normal","nws":"fail:bad_response"}}"#)), 0);
+    assert_eq!(f.probe()["live_fetcher"]["can_fetch_nws"], true, "a stand-in failure is a fetch that fails");
+    assert_eq!(f.fetcher().stand_in_failure("nws"), Some("bad_response"));
+    assert_eq!((f.fetcher().can_fetch("other"), f.fetcher().not_allowed("other")), (false, None));
+    assert_eq!(f.policy(Some(r#"{"online":true,"enabled_sources":[],"states":{"nws":"tired"}}"#)), -1);
+    let e: Value = serde_json::from_str(&take(unsafe { cs_last_error(f.h) }).unwrap()).unwrap();
+    assert_eq!(e["code"], "bad_json");
+    assert_eq!(f.fetcher().stand_in_failure("nws"), Some("bad_response"), "the old policy stays");
+}
+
+#[test]
 fn a_bad_policy_is_a_c_error_and_changes_nothing() {
     let f = Fx::new();
     assert_eq!(f.policy(Some(ALLOW)), 0);

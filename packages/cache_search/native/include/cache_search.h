@@ -266,8 +266,12 @@ int32_t cs_set_web(cs_handle *h, const char *provider, const char *key, int32_t 
  * (no callbacks). The handle keeps them in a built-in cache_tool::LiveFetcher that tools see as ToolCtx.live_fetcher.
  *
  * cs_live_set_fetch_policy: policy_json is {"online":bool,"allow_metered":bool,"metered":bool,"enabled_sources":[ids]}
- * ("online" and "enabled_sources" are required; "allow_metered" and "metered" default to false; no other field).
- * can_fetch(source) = online && source in enabled_sources && (!metered || allow_metered). Each call replaces the
+ * ("online" and "enabled_sources" are required; "allow_metered" and "metered" default to false; "states" is optional; no
+ * other field). can_fetch(source) = online && source in enabled_sources && (!metered || allow_metered); when it is false,
+ * live_data's not_refreshed says why (switched off, then offline, then metered). "states" (captures, cs serve --live-state)
+ * is {"<source_id>" | "*": "normal" | "off" | "offline" | "metered" | "fail:<fetch_failed|quota|key_missing|bad_response>"}:
+ * a source's own state, else "*", replaces the rule above for it ("normal": no fetch, no reason; "fail:<code>": the download
+ * fails with that code and nothing is sent). The app never sends it. Each call replaces the
  * policy; NULL policy_json clears it. With no policy set can_fetch is false for every source and ToolCtx.live_fetcher
  * is None, so a capture or a test never fetches. Returns 0; -1 with code "bad_json" for a malformed policy (the old one
  * stays).

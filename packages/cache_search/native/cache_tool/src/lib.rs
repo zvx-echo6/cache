@@ -67,6 +67,27 @@ pub trait LiveFetcher: Send + Sync {
     fn can_fetch(&self, source_id: &str) -> bool;
     /// The source's API key from the host's secure storage, if it needs one.
     fn key_for(&self, source_id: &str) -> Option<String>;
+    /// Why the host does not allow a fetch for this source right now (asked only when `can_fetch` is false); `None` when it
+    /// gives no reason (a capture's "normal" state).
+    fn not_allowed(&self, _source_id: &str) -> Option<NotAllowed> {
+        None
+    }
+    /// A failure the host stands in for the download, as a tool error code (asked only when `can_fetch` is true; captures only,
+    /// `cs serve --live-state fail:<code>`). `None` downloads for real.
+    fn stand_in_failure(&self, _source_id: &str) -> Option<&'static str> {
+        None
+    }
+}
+
+/// Why a live fetch is not allowed, highest priority first: live_data says it as `not_refreshed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotAllowed {
+    /// The source is not among the ones switched on.
+    SwitchedOff,
+    /// The phone has no connection.
+    Offline,
+    /// The phone is on mobile data and updates on mobile data are off.
+    MeteredOff,
 }
 
 /// What a tool sees of the caller's world.
