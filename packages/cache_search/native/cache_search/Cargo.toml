@@ -51,7 +51,7 @@ common = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347
 shard = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }
 # Writes the blank library template (a tar holding a shard snapshot, itself a tar); the same tar crate Qdrant unpacks
 # snapshots with (already in the lockfile through edge).
-tar = "0.4"
+tar = { version = "0.4", default-features = false }
 
 # Free-space check of update_library: statvfs on unix, GetDiskFreeSpaceExW on Windows (both already in the lockfile).
 [target.'cfg(unix)'.dependencies]
