@@ -414,10 +414,20 @@ fn compare_to_aida(example: &str, cache: &Value) {
     }
     assert!(cache.get("steps").is_none(), "turn instructions belong to Maps");
     if let Some(w) = cache.get("warnings") {
-        assert_eq!(names(&w[0]), ["code", "end", "road_point", "gap_m"]);
+        // AIDA's keys, then the two Cache adds (v2 S4): why that end got no off-road leg
+        assert_eq!(names(&w[0]), ["code", "end", "road_point", "gap_m", "reason", "detail"]);
         if let Some(aw) = aida.get("warnings") {
-            assert_eq!(sorted(names(&w[0])), sorted(names(&aw[0])));
+            let mut want = names(&aw[0]);
+            want.extend(["reason".to_string(), "detail".to_string()]);
+            assert_eq!(sorted(names(&w[0])), sorted(want));
         }
+        let detail = match w[0]["reason"].as_str() {
+            Some("not_downloaded") => "Off-road data for this area isn't on the phone; it loads when the phone is online.",
+            Some("no_way_found") => "Cache couldn't find an off-road way between the road and this point.",
+            Some("no_data") => "There is no off-road data for this area.",
+            other => panic!("{example}: offroad_unavailable reason {other:?}"),
+        };
+        assert_eq!(w[0]["detail"], detail, "{example}");
     }
     if let Some(n) = cache.get("offroad_note") {
         // AIDA's note with the grid size corrected (the z12 pixel grid is ~15 m in the US, not 30 m)
