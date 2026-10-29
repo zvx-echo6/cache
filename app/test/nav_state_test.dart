@@ -220,7 +220,7 @@ void main() {
             }),
           ]);
       final done = nav.dropPin(43.6, -116.2);
-      expect(nav.selected!.name, 'Dropped pin');
+      expect(nav.selected!.name, 'Pin 43.60, -116.20');
       expect(nav.selectedIsPin, isTrue);
       expect(nav.selected!.formats.keys, containsAll(['decimal', 'dms']));
       expect(nav.selected!.formats.containsKey('usng'), isFalse);
@@ -229,13 +229,21 @@ void main() {
       expect(nav.selected!.formats['plus_code'], '85M9G8VC+MM');
       expect(nav.selected!.formats['dms'], contains('N'));
       expect(nav.selected!.address, '3.2 mi NE of Boise, ID');
-      expect(nav.selected!.name, 'Dropped pin');
+      expect(nav.selected!.name, 'Pin 43.60, -116.20');
     });
 
     test('a pin still works when the core cannot answer', () async {
       backend.onSearch = (q, {near, meaning}) async => throw const CacheSearchException('not_configured', 'x');
       await nav.dropPin(43.6, -116.2);
       expect(nav.selected!.formats.keys, ['decimal', 'dms']);
+    });
+
+    test('a saved pin keeps its "Pin" name, so it reads as one place in a list', () async {
+      backend.onSearch = (q, {near, meaning}) async => throw const CacheSearchException('not_configured', 'x');
+      await nav.dropPin(40.7608, -111.891);
+      await nav.savePlace(nav.selected!);
+      await settle(5);
+      expect(backend.saved.single.$1, 'Pin 40.76, -111.89');
     });
 
     test('distance is from the phone; clearing needs the map, not a route', () async {

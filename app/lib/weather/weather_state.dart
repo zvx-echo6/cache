@@ -640,14 +640,15 @@ class WeatherState extends ChangeNotifier {
     return [for (final p in all) if (w.contains(p.id) && p.located) p];
   }
 
-  /// "Where I am, Home, Cabin, +2": the watched places by name.
+  /// The watched places by name, one per line ("Where I am", "Home", "Cabin", "+2 more"): a name can hold a comma, as
+  /// coordinates do.
   Future<String> watchedSummary() async {
     final all = await placeChoices();
     final w = settings.watchedPlaces;
     final names = [for (final p in all) if (w.contains(p.id)) p.name];
     if (names.isEmpty) return 'None';
-    if (names.length <= 3) return names.join(', ');
-    return '${names.take(3).join(', ')}, +${names.length - 3}';
+    if (names.length <= 3) return names.join('\n');
+    return [...names.take(3), '+${names.length - 3} more'].join('\n');
   }
 
   // ---------------------------------------------------------------- Update now

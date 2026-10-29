@@ -432,7 +432,7 @@ void main() {
       expect(WeatherState.placeRequest(c[3])['key'], 'region-idaho');
     });
 
-    test('Where I am waits for a position; a summary names the first three and counts the rest', () async {
+    test('Where I am waits for a position; a summary names the first three, one per line, and counts the rest', () async {
       h = await Harness.create();
       h.here = null;
       expect((await h.weather.watchedPlaces()), isEmpty);
@@ -445,9 +445,9 @@ void main() {
       for (final k in ['a', 'b', 'c']) {
         h.settings.setWatched('place:$k', true);
       }
-      expect(await h.weather.watchedSummary(), 'Where I am, Home, Cabin, +1');
+      expect(await h.weather.watchedSummary(), 'Where I am\nHome\nCabin\n+1 more');
       h.settings.setWatched('here', false);
-      expect(await h.weather.watchedSummary(), 'Home, Cabin, Work');
+      expect(await h.weather.watchedSummary(), 'Home\nCabin\nWork');
     });
 
     test('regions are the finished map areas by name, at the middle of their areas', () {

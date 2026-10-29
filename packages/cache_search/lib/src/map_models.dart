@@ -114,11 +114,11 @@ class MapPlace {
         precisionM: _d(j['precision_m']),
       );
 
-  /// A point the user dropped on the map (long-press): shown as "Dropped pin" with its coordinates.
-  factory MapPlace.pin(double lat, double lon, {Map<String, String> formats = const {}}) => MapPlace(
+  /// A point the user dropped on the map (long-press): shown as [name] ("Dropped pin" unless given) with its coordinates.
+  factory MapPlace.pin(double lat, double lon, {Map<String, String> formats = const {}, String name = 'Dropped pin'}) => MapPlace(
         id: 'loc:${lat.toStringAsFixed(6)},${lon.toStringAsFixed(6)}',
         type: 'coordinates',
-        name: 'Dropped pin',
+        name: name,
         kind: 'Coordinates',
         lat: lat,
         lon: lon,

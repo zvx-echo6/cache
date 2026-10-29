@@ -301,7 +301,7 @@ class NavState extends ChangeNotifier {
   /// A long press on the map: a pin with its coordinates now, and the rest (grid and Plus Code, the nearest town) as soon as
   /// the core has them.
   Future<void> dropPin(double lat, double lon) async {
-    final base = MapPlace.pin(lat, lon, formats: {'decimal': formatDecimal(lat, lon), 'dms': formatDms(lat, lon)});
+    final base = MapPlace.pin(lat, lon, name: pinName(lat, lon), formats: {'decimal': formatDecimal(lat, lon), 'dms': formatDms(lat, lon)});
     selected = base;
     searchOpen = false;
     notifyListeners();
@@ -312,7 +312,7 @@ class NavState extends ChangeNotifier {
         selected = MapPlace(
           id: base.id,
           type: 'coordinates',
-          name: 'Dropped pin',
+          name: base.name,
           kind: 'Coordinates',
           address: c.address,
           lat: lat,

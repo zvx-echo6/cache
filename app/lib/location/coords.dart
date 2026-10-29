@@ -3,6 +3,9 @@
 /// "42.53612, -113.79245" (five decimals is about a metre).
 String formatDecimal(double lat, double lon) => '${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}';
 
+/// "Pin 42.54, -113.79": the name of a dropped pin, which reads as one place in a list of names.
+String pinName(double lat, double lon) => 'Pin ${lat.toStringAsFixed(2)}, ${lon.toStringAsFixed(2)}';
+
 String _dms(double value, String positive, String negative) {
   final hemisphere = value < 0 ? negative : positive;
   final a = value.abs();
