@@ -1,7 +1,10 @@
 //! The `calculate` tool (docs/TOOLS.md): exact arithmetic and unit conversion on a formal expression the model writes,
 //! done by fend-core. It needs no installed data, so it is always available. A fresh fend context serves every call:
-//! nothing carries between calls, and no exchange-rate handler, random source or clock is set, so currency, dice and
-//! date-now expressions fail and a result depends on the expression alone.
+//! nothing carries between calls, and no exchange-rate handler, random source or clock is set, so currency and dice
+//! expressions fail and a result depends on the expression alone. Dates never reach fend: the date layer (`dates`)
+//! answers them first, with `today` taken from the tool's `now` (never the system clock).
+
+mod dates;
 
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Value};
@@ -142,14 +145,14 @@ impl Tool for CalculateTool {
     fn schema(&self) -> Option<Value> {
         Some(json!({"type": "function", "function": {
             "name": "calculate",
-            "description": "Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\".",
+            "description": "Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\". For dates write YYYY-MM-DD or today: \"today - 2026-10-20\" gives the days between, \"today + 30 days\" gives a date.",
             "parameters": {"type": "object", "properties": {
                 "expression": {"type": "string", "minLength": 1, "maxLength": 300,
                                "description": "Numbers, units, + - * / ^ and parentheses. Optionally end with 'to <unit>'."}},
                 "required": ["expression"], "additionalProperties": false}}}))
     }
 
-    fn run(&self, _ctx: &ToolCtx, args: &Value) -> Result<ToolOutput, ToolError> {
+    fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<ToolOutput, ToolError> {
         let obj = args.as_object().ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "arguments must be an object"))?;
         let expression = match obj.get("expression") {
             Some(Value::String(s)) if !s.trim().is_empty() => s.trim(),
@@ -157,6 +160,21 @@ impl Tool for CalculateTool {
         };
         if expression.chars().count() > MAX_EXPRESSION_CHARS {
             return Err(err(ToolError::BAD_ARGUMENTS, format!("\"expression\" must be at most {MAX_EXPRESSION_CHARS} characters")));
+        }
+
+        match dates::evaluate(expression, ctx.now) {
+            dates::Outcome::NotDates => {}
+            dates::Outcome::Failed(detail) => return Err(err("calc_failed", detail)),
+            dates::Outcome::Done { result, today } => {
+                let assumptions: Vec<String> = today.map(|t| format!("today is {t} (the phone's local date)")).into_iter().collect();
+                return Ok(ToolOutput::Json(json!({
+                    "ok": true,
+                    "expression": expression,
+                    "result": result,
+                    "exact": true,
+                    "assumptions": assumptions,
+                })));
+            }
         }
 
         let deadline = Deadline { end: Instant::now() + TIME_LIMIT, fired: AtomicBool::new(false) };
@@ -212,7 +230,7 @@ mod tests {
         assert_eq!(CalculateTool.name(), "calculate");
         assert_eq!(
             serde_json::to_string(&CalculateTool.schema().unwrap()).unwrap(),
-            r#"{"type":"function","function":{"name":"calculate","description":"Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\".","parameters":{"type":"object","properties":{"expression":{"type":"string","minLength":1,"maxLength":300,"description":"Numbers, units, + - * / ^ and parentheses. Optionally end with 'to <unit>'."}},"required":["expression"],"additionalProperties":false}}}"#
+            r#"{"type":"function","function":{"name":"calculate","description":"Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\". For dates write YYYY-MM-DD or today: \"today - 2026-10-20\" gives the days between, \"today + 30 days\" gives a date.","parameters":{"type":"object","properties":{"expression":{"type":"string","minLength":1,"maxLength":300,"description":"Numbers, units, + - * / ^ and parentheses. Optionally end with 'to <unit>'."}},"required":["expression"],"additionalProperties":false}}}"#
         );
     }
 
@@ -271,12 +289,11 @@ mod tests {
 
     #[test]
     fn failures_are_calc_failed() {
-        let cases: [(&str, &str); 8] = [
+        let cases: [(&str, &str); 7] = [
             ("1 + 1 drop", "cannot convert from drops to unitless: units 'meter^3' and 'unitless' are incompatible"),
             ("1/0", "division by zero"),
             ("5 USD to EUR", "exchange rates are not available"),
             ("roll d6", "random numbers are not available"),
-            ("today", "unable to get the current date"),
             ("now", "unknown identifier 'now'"),
             ("1 ton to kg", "unknown identifier 'ton'"),
             ("1 +", "unexpected input found"),
@@ -284,6 +301,59 @@ mod tests {
         for (input, detail) in cases {
             assert_eq!(call(input), format!(r#"{{"ok":false,"error":{{"type":"calc_failed","detail":"{detail}"}}}}"#), "{input:?}");
         }
+    }
+
+    /// The bytes of a call made at `now`.
+    fn call_at(expression: &str, now: &'static str) -> String {
+        let ctx = ToolCtx { location: None, places: &NoSavedPlaces, now, geocoder: None, live_fetcher: None };
+        match CalculateTool.run(&ctx, &json!({"expression": expression})) {
+            Ok(ToolOutput::Json(v)) => serde_json::to_string(&v).unwrap(),
+            Ok(ToolOutput::Text(_)) => panic!("expected json"),
+            Err(e) => serde_json::to_string(&e.to_json()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn dates_byte_for_byte() {
+        const NOW: &str = "2026-10-29T14:30:00-06:00";
+        let today = r#"["today is 2026-10-29 (the phone's local date)"]"#;
+        let ok = |e: &str, r: &str, a: &str| format!(r#"{{"ok":true,"expression":"{e}","result":"{r}","exact":true,"assumptions":{a}}}"#);
+        assert_eq!(
+            call_at("today - 2026-10-20", NOW),
+            r#"{"ok":true,"expression":"today - 2026-10-20","result":"9 days","exact":true,"assumptions":["today is 2026-10-29 (the phone's local date)"]}"#
+        );
+        let cases: [(&str, &str, &str); 11] = [
+            ("2026-10-29 + 2 weeks", "2026-11-12 (Thu)", "[]"),
+            ("2026-03-01 - 2026-02-28", "1 day", "[]"),
+            ("2026-02-28 - 2026-03-01", "-1 day", "[]"),
+            ("2026-10-20 - today", "-9 days", today),
+            ("today - today", "0 days", today),
+            ("today + 30 days", "2026-11-28 (Sat)", today),
+            ("today - 1 week", "2026-10-22 (Thu)", today),
+            ("TODAY+1DAY", "2026-10-30 (Fri)", today),
+            ("2026-10-29-007 days", "2026-10-22 (Thu)", "[]"),
+            ("today", "2026-10-29 (Thu)", today),
+            ("2026-11-12", "2026-11-12 (Thu)", "[]"),
+        ];
+        for (input, result, a) in cases {
+            assert_eq!(call_at(input, NOW), ok(input, result, a), "{input:?}");
+        }
+        // `today` is the date part of the tool's now, whatever its time or offset.
+        assert_eq!(call_at("today", "2026-12-31T23:59:59+14:00"), ok("today", "2026-12-31 (Thu)", r#"["today is 2026-12-31 (the phone's local date)"]"#));
+        // surrounding spaces are trimmed before the date layer, as before fend
+        assert_eq!(call_at("  2026-10-29 + 2 weeks ", NOW), ok("2026-10-29 + 2 weeks", "2026-11-12 (Thu)", "[]"));
+    }
+
+    #[test]
+    fn date_failures() {
+        let failed = |d: &str| format!(r#"{{"ok":false,"error":{{"type":"calc_failed","detail":"{d}"}}}}"#);
+        let forms = failed("dates work only as date - date, or date + or - a whole number of days or weeks; write dates as YYYY-MM-DD or today");
+        for e in ["today * 2", "today + 3", "today + 1.5 days", "today + -3 days", "today + 2026-10-20", "2026-02-30", "9999-12-31 + 1 day", "today + 3 months to weeks"] {
+            assert_eq!(call_at(e, "2026-10-29T14:30:00-06:00"), forms, "{e:?}");
+        }
+        assert_eq!(call_at("today", "n"), failed("unable to get the current date"));
+        // a date-free expression is still fend's
+        assert_eq!(call_at("now", "2026-10-29T14:30:00-06:00"), failed("unknown identifier 'now'"));
     }
 
     #[test]

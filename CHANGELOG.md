@@ -19,6 +19,7 @@ release notes).
 - A place you save is watched for weather and alerts
 - Models starts with a short list of recommended models, each with its size and whether it fits your phone
 - Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
+- Assistant: the calculator works out dates, such as the days between two dates or the date 30 days from today
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes

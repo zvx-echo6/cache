@@ -526,7 +526,7 @@ behaviour generalises to sources added later.
 ```json
 {"type": "function", "function": {
   "name": "calculate",
-  "description": "Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\".",
+  "description": "Exact arithmetic and unit conversion. Use it for any sum, dose, ratio, range or unit change instead of working it out yourself, and quote the result as given. Write a formal expression with numbers and units, e.g. \"8 drops/gallon * 5 gallons\", \"0.15 mg/kg * 70 kg\", \"12 gallons * 18 mpg\", \"98.6 degF to degC\". For dates write YYYY-MM-DD or today: \"today - 2026-10-20\" gives the days between, \"today + 30 days\" gives a date.",
   "parameters": {"type": "object", "properties": {
     "expression": {"type": "string", "minLength": 1, "maxLength": 300,
                    "description": "Numbers, units, + - * / ^ and parentheses. Optionally end with 'to <unit>'."}},
@@ -545,8 +545,31 @@ Result (an exact answer, then an approximate one; there is no `n`, because the r
 When the calculator marks the answer as approximate, `exact` is false and `result` is rounded to 6 significant digits;
 otherwise `exact` is true and the answer is unchanged. The calculator is fend (fend-core, MIT). A fresh one serves every
 call, so nothing carries over from an earlier call, and it has no exchange rates, random numbers or clock: currency
-(`5 USD to EUR`), dice (`roll d6`) and the date (`today`) fail. A calculation that runs longer than half a second is
-stopped.
+(`5 USD to EUR`) and dice (`roll d6`) fail. A calculation that runs longer than half a second is stopped.
+
+Dates. Before the expression goes to fend, a date layer answers these forms, and only these:
+
+- a date is `YYYY-MM-DD` or `today`; `today` is the date part of the tool's `now` (the phone's local date, pinned in
+  captures), never the system clock;
+- `<date> - <date>` gives the days between, `"N days"` (N may be negative; `"1 day"` and `"-1 day"` are singular, `"0 days"`
+  is plural);
+- `<date> + <n> days|weeks` and `<date> - <n> days|weeks`, with `n` a whole number without a sign, give a date as
+  `"YYYY-MM-DD (Thu)"` (the weekday as its three-letter English abbreviation);
+- a lone `<date>` gives that date with its weekday.
+
+`today`, `day(s)` and `week(s)` may be written in any case, and the spaces are optional (`today+30days`). The result is
+always exact. `assumptions` is `["today is YYYY-MM-DD (the phone's local date)"]` when `today` was used, otherwise empty.
+
+```json
+{"ok": true, "expression": "today - 2026-10-20", "result": "9 days", "exact": true,
+ "assumptions": ["today is 2026-10-29 (the phone's local date)"]}
+{"ok": true, "expression": "2026-10-29 + 2 weeks", "result": "2026-11-12 (Thu)", "exact": true, "assumptions": []}
+```
+
+Any other expression containing a date or `today` (other arithmetic, a fraction or a signed `n`, other units, an
+impossible date such as `2026-02-30`, or a result outside the years 0001-9999) fails with `calc_failed` and the detail
+`dates work only as date - date, or date + or - a whole number of days or weeks; write dates as YYYY-MM-DD or today`.
+`today` with no readable date in `now` fails with `unable to get the current date`.
 
 `assumptions` has one line for each unit in the expression whose definition varies by country or convention, in order of
 first appearance, each line once; it is empty when there are none. `drop`, `drops` and `gtt` give "1 drop = 0.05 mL".
@@ -562,7 +585,7 @@ temperatures; this is how fend works.
 
 Errors: `bad_arguments` (no expression, an empty one, not a string, or over 300 characters) and `calc_failed`, whose
 `detail` is the calculator's message (`division by zero`, `exchange rates are not available`, `unknown identifier 'ton'`,
-`cannot convert from drops to unitless: ...`) or `took too long`.
+`cannot convert from drops to unitless: ...`), `took too long`, or one of the two date details above.
 
 ### act (present only while the app has installed at least one action)
 

@@ -358,3 +358,18 @@ fn the_host_gives_search_its_query_vector() {
     let v = f.tool("read", r#"{"n":1,"query_vector":{"model":"m","vector":[1]}}"#);
     assert!(v["content"].as_str().unwrap().contains("bad_arguments"), "{v}");
 }
+
+#[test]
+fn calculate_takes_today_from_the_now_of_cs_tool() {
+    let f = Fx::new("today");
+    let v = f.tool("calculate", r#"{"expression":"today - 2026-10-20"}"#);
+    assert_eq!(
+        v["content"],
+        r#"{"ok":true,"expression":"today - 2026-10-20","result":"5 days","exact":true,"assumptions":["today is 2026-10-25 (the phone's local date)"]}"#
+    );
+    assert_eq!(v["ids"], json!([]));
+    assert_eq!(
+        f.tool("calculate", r#"{"expression":"2026-10-29 + 2 weeks"}"#)["content"],
+        r#"{"ok":true,"expression":"2026-10-29 + 2 weeks","result":"2026-11-12 (Thu)","exact":true,"assumptions":[]}"#
+    );
+}
