@@ -284,7 +284,26 @@ fn free_bytes(path: &Path) -> Option<u64> {
             return None;
         }
     }
-    fs4::available_space(&p).ok()
+    volume_free(&p)
+}
+
+/// Free bytes on the volume holding the existing path `p` (fs4, statvfs on unix).
+#[cfg(not(target_os = "ios"))]
+fn volume_free(p: &Path) -> Option<u64> {
+    fs4::available_space(p).ok()
+}
+
+/// iPhone: the app's `cache_free_bytes_on_disk` (same binary), which counts the space iOS can purge as iPhone Storage in
+/// Settings does; statvfs leaves it out.
+#[cfg(target_os = "ios")]
+fn volume_free(p: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    extern "C" {
+        fn cache_free_bytes_on_disk(path: *const std::ffi::c_char) -> i64;
+    }
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is a valid NUL-terminated path; the helper only reads it.
+    u64::try_from(unsafe { cache_free_bytes_on_disk(c.as_ptr()) }).ok()
 }
 
 /// Folders a delete left empty go too, up to (not including) `root`.

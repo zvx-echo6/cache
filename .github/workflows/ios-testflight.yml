@@ -108,7 +108,7 @@ jobs:
       - name: Check the disk-space helper on macOS
         run: |
           env -u IPHONEOS_DEPLOYMENT_TARGET clang -Wall -Wextra -Werror packages/cache_search/ios/Classes/cache_search.c \
-            packages/cache_search/ios/tests/free_space_test.c -o "$RUNNER_TEMP/free-space-test"
+            packages/cache_search/ios/tests/free_space_test.c -framework CoreFoundation -o "$RUNNER_TEMP/free-space-test"
           "$RUNNER_TEMP/free-space-test" "$RUNNER_TEMP" "$RUNNER_TEMP/missing-$(uuidgen)"
       - name: Compile the offline reader rules with WebKit
         run: |
