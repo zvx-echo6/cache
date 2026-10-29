@@ -28,6 +28,8 @@ cache_live = { path = "../cache_live" }
 cache_places = { path = "../cache_places" }
 # The calculate tool (exact arithmetic and unit conversion), registered by Handle::open.
 cache_calc = { path = "../cache_calc" }
+# The act tool (actions modules publish, confirm cards), registered by Handle::open; it is offered once the host installs actions.
+cache_act = { path = "../cache_act" }
 # The navigate tool (Valhalla road routing and off-road legs), registered from the "routing" section of the config.
 cache_navigate = { path = "../cache_navigate" }
 # Video sources (PeerTube): instances, browse, offline downloads, citation links; wired in ext.rs and job.rs.

@@ -254,6 +254,8 @@ pub struct Handle {
     pub zim_budget: Arc<ZimBudget>,
     /// The host-pushed live-fetch policy and keys (`cs_live_set_fetch_policy`, `cs_live_set_key`); memory only, cleared on close.
     pub fetcher: Arc<cache_tool::fetcher::PolicyFetcher>,
+    /// The actions modules have published, shared with the registered `act` tool (`cs_act_set_definitions`; see act.rs).
+    pub act: Arc<cache_act::ActState>,
 }
 
 impl Drop for Handle {
@@ -283,8 +285,10 @@ impl Handle {
             ext: Default::default(),
             zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(any(target_os = "android", target_os = "ios"))) * budget::MIB)),
             fetcher: Arc::new(cache_tool::fetcher::PolicyFetcher::new()),
+            act: Arc::new(cache_act::ActState::new()),
         };
         h.register_tool(Box::new(cache_calc::CalculateTool));
+        h.register_tool(Box::new(cache_act::ActTool(h.act.clone())));
         h.register_tool(Box::new(WebSearchTool(h.web.clone())));
         // The "user" and "live" sections of the config register cache_user as the saved places and cache_live as the
         // live_data tool: set_sources does it (ext.rs), so a later cs_set_sources can add them too.

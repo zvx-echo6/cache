@@ -697,6 +697,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_act"
+version = "0.1.0"
+dependencies = [
+ "cache_tool",
+ "serde_json",
+]
+
+[[package]]
 name = "cache_calc"
 version = "0.1.0"
 dependencies = [
@@ -812,6 +820,7 @@ dependencies = [
 name = "cache_search"
 version = "0.1.0"
 dependencies = [
+ "cache_act",
  "cache_calc",
  "cache_layers",
  "cache_live",

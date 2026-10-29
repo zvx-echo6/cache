@@ -213,9 +213,12 @@ char *cs_conversation_ids(cs_conv *c);
  *   {"format":1,
  *    "next_n":N,                                   the number the next new address gets (last id + 1; 1 when empty)
  *    "ids":[{"n","address","title"}, ...],         every number given, ascending
- *    "web_hits":{"<address>":{"title","snippet","fetched"}, ...}}
- *                                                  what web_search showed per web:<url> address (keys sorted), the
- *                                                  stored title/snippet `read` falls back to when the page fetch fails
+ *    "web_hits":{"<address>":{"title","snippet","fetched"}, ...}
+ *    ,"confirms":N}                                what web_search showed per web:<url> address (keys sorted), the
+ *                                                  stored title/snippet `read` falls back to when the page fetch fails;
+ *                                                  "confirms" (last, and only when N > 0) is the number of confirm cards the act
+ *                                                  tool has issued, so confirm ids continue (c4 after c3) in a saved chat.
+ *                                                  Pending act runs (cs_tool "host_run" not yet finished) are not exported.
  * The same state always gives the same bytes. NULL on error (cs_last_error(NULL)). */
 char *cs_conversation_export(cs_conv *c);
 
@@ -229,8 +232,8 @@ void cs_conversation_free(cs_conv *c);
 /* --- tools --- */
 
 /* The tools the model can call. search and read are built in; the host registers the others in Rust
- * (Handle::register_tool: navigate, nearby, locate, live_data, ...; calculate and web_search are registered by cs_open; calculate is always
- * available and web_search is switched on with cs_set_web). See docs/TOOLS.md for the
+ * (Handle::register_tool: navigate, nearby, locate, live_data, ...; calculate, act and web_search are registered by cs_open; calculate is always
+ * available, act is offered once cs_act_set_definitions installs actions, and web_search is switched on with cs_set_web). See docs/TOOLS.md for the
  * schemas and results, and DESIGN.md, Tools, for the dispatch. */
 
 /* The phone's GPS fix, for the tools that default to "where I am". accuracy_m < 0 means unknown. fixed_at is the
@@ -267,7 +270,7 @@ int32_t cs_live_set_fetch_policy(cs_handle *h, const char *policy_json);
 int32_t cs_live_set_key(cs_handle *h, const char *source_id, const char *key_or_null);
 
 /* A JSON array of the function schemas ({"type":"function","function":{...}}) of the tools available now, in this
- * order where present: search, read, navigate, nearby, locate, live_data, calculate, web_search (any other registered tool
+ * order where present: search, read, navigate, nearby, locate, live_data, calculate, act, web_search (any other registered tool
  * after them). A tool that is registered but has nothing installed to work with (its schema is None) is left out. */
 char *cs_tool_schemas(cs_handle *h);
 
@@ -281,13 +284,82 @@ char *cs_tool_schemas(cs_handle *h);
  *     {"ok":false,"error":{"type","detail",...}}, with type one of bad_arguments (also an unknown tool name or
  *     arguments that break the tool's schema: the detail names the field), no_location, not_set_up (the tool is
  *     registered but its data is not installed), not_found (read of a number not in c), internal (the tool
- *     failed), expired, no_data, unknown_source, not_configured, fetch_failed, quota, key_missing, bad_response.
+ *     failed), expired, no_data, unknown_source, not_configured, fetch_failed, quota, key_missing, bad_response, and for act
+ *     unknown_action and place_not_found (see "actions" below).
  *   - NULL (cs_last_error) only for a NULL or invalid handle or conv, an args_json that is not JSON, or an empty
  *     now.
  * The arguments are checked against the tool's schema before it runs: type (string, integer, number, boolean,
  * object), enum, minLength, maxLength, minimum, maximum, required and additionalProperties:false. Defaults are not
  * filled in. */
 char *cs_tool(cs_handle *h, cs_conv *c, const char *name, const char *args_json, const char *now);
+
+/* --- actions (the act tool; docs/ACTIONS.md is the contract, docs/TOOLS.md has the tool) ---
+ *
+ * Modules publish what they can do as data. The model sees one tool, act, whose description lists the installed actions; a call
+ * is checked against its definition, and nothing that changes data runs from it: a "change" action comes back as a confirm card
+ * for the host to show, and a "read" or "open" action is handed to the host to run. The core never runs an action. The host
+ * pushes the definitions in and plays the exchanges below (no callbacks). */
+
+/* Installs the actions, REPLACING the earlier set. defs_json is a JSON array of action definitions (docs/ACTIONS.md, "Action
+ * definition"), in module order and then each module's own order: that is the order the model reads them in. Each definition is
+ * checked alone: a bad one is rejected and the rest still load. Unknown keys in a definition are ignored.
+ * Returns {"accepted":N,"rejected":[{"index":I,"id"?:"...","field"?:"...","reason":"...","detail":"..."}],"not_listed":["id",...]}.
+ * reason is one of: not_object, bad_id, module_mismatch, duplicate_id (the first of an id stays), bad_title, bad_description,
+ * bad_effect, bad_fields, too_many_fields, bad_field_name, bad_field_type, bad_field_key, bad_enum, bad_limit,
+ * bad_field_description, bad_required. not_listed holds the ids beyond the 40 the tool description shows; they stay installed
+ * and callable. The act tool is in cs_tool_schemas only while at least one action is listed. The set is kept in memory only:
+ * push it again after cs_open. NULL (cs_last_error) for a NULL handle or defs_json, or JSON that is not an array. */
+char *cs_act_set_definitions(cs_handle *h, const char *defs_json);
+
+/* The modules that are switched off, as a JSON array of module ids (NULL or "[]" = none). Replaces the earlier list. Actions of an
+ * off module are left out of the tool description, and a call to one (and cs_act_resolve) answers not_set_up. Returns 0; -1 with
+ * code "bad_json" for a value that is not an array of strings (nothing changes). */
+int32_t cs_act_set_modules_off(cs_handle *h, const char *modules_json);
+
+/* What cs_tool answers to an act call (content of the {"content","ids"} reply; an act result is never numbered by cs_tool):
+ *   - read or open action, call passed the checks (the model never sees this):
+ *       {"ok":true,"status":"host_run","run_id":"r1","action":"places.list","fields":{...}}
+ *     fields are resolved as cs_act_resolve gives them. run_ids are r1, r2, ... per conversation. The host runs the action and
+ *     calls cs_act_finish with the run_id; the core's answer to that call is the tool result for the model.
+ *   - change action:
+ *       {"ok":true,"status":"needs_confirmation","confirm_id":"c1","action":"places.save","title":"Save a place",
+ *        "summary":{"name":"Elk camp","place":"44.21000, -114.93000 (12 mi NE of Stanley)"}}
+ *     confirm_ids are c1, c2, ... per conversation (kept in cs_conversation_export). The host shows a card; only a tap decides.
+ *     A place is shown as "<lat>, <lon> (<n> mi <compass> of <town>)" (the town part only when the places data names one), or
+ *     "<name> (<lat>, <lon>)" for a saved place or a place found by name; lat and lon have five decimals.
+ *   - a failure is the content, the shared error shape {"ok":false,"error":{"type","detail",...}}:
+ *       unknown_action; bad_arguments with "field" and "reason" (missing, unknown_field, wrong_type, not_allowed, too_long,
+ *       out_of_range, bad_format); place_not_found with "field" and "query"; not_set_up (the module is off, or no action is
+ *       installed). "action" missing is bad_arguments field "action" reason "missing"; "fields" that is not an object is field
+ *       "fields" reason "wrong_type"; "fields" may be left out; null for an optional field counts as left out. */
+
+/* The same checks and place resolution as an act call, for the host to keep with a confirm card: nothing runs, no confirm_id or
+ * run_id is taken, no conversation is needed. fields_json is the call's "fields" object (NULL = {}). Returns, as content:
+ *   {"ok":true,"action":"places.save","fields":{"name":"Elk camp","place":{"lat":44.21,"lon":-114.93,"name":"Elk camp","label":"home"}}}
+ * Fields are in the definition's order and only those given; a place field is {"lat","lon","name"?,"label"?} at full precision
+ * ("name" and "label" only when known), every other field is as given. A failure is the same error JSON as the act call.
+ * NULL only for a NULL or invalid handle, a NULL action, or a fields_json that is not JSON. */
+char *cs_act_resolve(cs_handle *h, const char *action, const char *fields_json);
+
+/* The host's reply to a host_run. reply_json is {"ok":true,"result":{...}} or {"ok":false,"error":{"type","detail"?}}. Returns the
+ * tool result for the model, which the host adds to the conversation as the act call's tool message:
+ *   {"ok":true,"status":"done","action":"places.list","result":{...}}      objects in result with an "address" key are numbered
+ *                                                                          in c like any tool result ("address" becomes "n")
+ *   {"ok":false,"error":{"type":...,"detail":...}}                         the host's failure, as the shared error shape
+ * Each run_id can be finished once. NULL with cs_last_error(NULL): "not_found" for a run_id that is unknown, finished, or from
+ * another conversation; "bad_json" for a NULL argument or a malformed reply. Nothing changes on NULL, so the run stays pending. */
+char *cs_act_finish(cs_conv *c, const char *run_id, const char *reply_json);
+
+/* What a tap on a confirm card came to. outcome_json is {"ok":bool,"status":"done"|"declined"|"failed","confirm_id":"c1",
+ * "action":"places.save","result":{...} (done) | "error":{"type","detail"?} (failed)}; ok is true for done and declined, false
+ * for failed. Returns the exact content of the system message the host adds to the conversation, keys in this order:
+ *   {"host_event":"act_outcome","ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{...}}
+ *   {"host_event":"act_outcome","ok":true,"status":"declined","confirm_id":"c1","action":"places.save"}
+ *   {"host_event":"act_outcome","ok":false,"status":"failed","confirm_id":"c1","action":"places.save","error":{"type":...,"detail":...}}
+ * "address" objects in a done result are numbered in c, so they are citable. NULL with cs_last_error(NULL), code "bad_json", for a
+ * NULL argument, a status other than the three, a missing key, an ok that does not go with the status, a done without a result or
+ * a failed without an error type. */
+char *cs_act_outcome(cs_conv *c, const char *outcome_json);
 
 /* --- saved places (user.sqlite; logic in the cache_user crate) ---
  *

@@ -18,7 +18,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 pub type QueryEmbedder = Box<dyn Fn(&str) -> Option<(String, Vec<f32>)> + Send + Sync>;
 
 /// The order of `cs_tool_schemas`. Registered tools with other names follow, in registration order.
-pub const TOOL_ORDER: [&str; 8] = ["search", "read", "navigate", "nearby", "locate", "live_data", "calculate", "web_search"];
+pub const TOOL_ORDER: [&str; 9] = ["search", "read", "navigate", "nearby", "locate", "live_data", "calculate", "act", "web_search"];
 
 /// Results of the built-in search.
 const SEARCH_K: usize = 5;
@@ -192,7 +192,7 @@ fn number_text(conv: &mut Conversation, text: &str, ids: &mut Vec<Value>) -> Str
 
 /// Walk `v` depth first in document order. In every object with a string `"address"`, that key becomes
 /// `"n": <number>` at the same position. The title is the object's `title`, `name`, `place_name` or `label`.
-fn number_json(conv: &mut Conversation, v: &mut Value, ids: &mut Vec<Value>) {
+pub(crate) fn number_json(conv: &mut Conversation, v: &mut Value, ids: &mut Vec<Value>) {
     match v {
         Value::Object(m) => {
             if let Some(Value::String(address)) = m.get("address") {
@@ -311,7 +311,11 @@ impl Handle {
         let content = match result {
             Ok(ToolOutput::Text(t)) => number_text(conv, &t, &mut ids),
             Ok(ToolOutput::Json(mut v)) => {
-                number_json(conv, &mut v, &mut ids);
+                // act's answers carry the user's own field values (a field may be called "address"); what a module's
+                // result holds is numbered later, by cs_act_finish
+                if name != "act" {
+                    number_json(conv, &mut v, &mut ids);
+                }
                 add_ok(&mut v);
                 v.to_string()
             }
@@ -326,7 +330,7 @@ impl Handle {
     }
 
     /// Steps 1 to 3 of the dispatch: find the tool, validate the arguments, run it (a panic is `internal`).
-    fn run_tool(&mut self, conv: &Conversation, name: &str, args: &Value, now: &str) -> std::result::Result<ToolOutput, ToolError> {
+    fn run_tool(&mut self, conv: &mut Conversation, name: &str, args: &Value, now: &str) -> std::result::Result<ToolOutput, ToolError> {
         let builtin = Builtin::of(name);
         let index = self.tools.iter().position(|t| t.name() == name);
         let schema = match (builtin, index) {
@@ -337,7 +341,10 @@ impl Handle {
                 None => return Err(ToolError::new(ToolError::NOT_SET_UP, format!("{name} is not set up"))),
             },
         };
-        validate_args(&schema, args).map_err(bad_arguments)?;
+        // a tool that checks its own arguments (act) reports them with field and reason, so the generic check is skipped
+        if !index.is_some_and(|i| self.tools[i].checks_own_arguments()) {
+            validate_args(&schema, args).map_err(bad_arguments)?;
+        }
         let run = catch_unwind(AssertUnwindSafe(|| match (builtin, index) {
             (Some(Builtin::Search), _) => self.run_search(args),
             (Some(Builtin::Read), _) => self.run_read(conv, args),
@@ -352,7 +359,7 @@ impl Handle {
                     // only once the host has pushed a policy; before that no tool can fetch
                     live_fetcher: if self.fetcher.is_set() { Some(&*self.fetcher) } else { None },
                 };
-                self.tools[i.expect("checked above")].run(&ctx, args)
+                self.tools[i.expect("checked above")].run_in(&ctx, args, &mut conv.tool_state)
             }
         }));
         run.unwrap_or_else(|_| Err(ToolError::new(ToolError::INTERNAL, format!("{name} failed"))))
@@ -618,6 +625,31 @@ mod tests {
         }
         h.register_tool(Box::new(Dummy { name: "navigate", schema: None, run: Box::new(|_, _| unreachable!()) }));
         assert_eq!(names(&h), ["search", "read", "nearby", "locate", "calculate", "web_search", "extra"]);
+    }
+
+    #[test]
+    fn act_is_listed_between_calculate_and_web_search_once_actions_are_installed() {
+        let mut h = handle();
+        let names = |h: &Handle| -> Vec<String> {
+            let v: Value = serde_json::from_str(&h.tool_schemas_json()).unwrap();
+            v.as_array().unwrap().iter().map(|s| s["function"]["name"].as_str().unwrap().to_string()).collect()
+        };
+        // registered by open, but with nothing installed it is left out and a call is not_set_up
+        assert_eq!(names(&h), ["search", "read", "calculate"]);
+        let mut c = Conversation::new();
+        assert_eq!(call(&mut h, &mut c, "act", r#"{"action":"a.b"}"#)["content"], r#"{"ok":false,"error":{"type":"not_set_up","detail":"act is not set up"}}"#);
+        h.act_set_definitions(r#"[{"id":"a.b","module":"a","title":"T","description":"D","effect":"read"}]"#).unwrap();
+        h.register_tool(dummy("web_search", Box::new(|_, _| Ok(ToolOutput::Text(String::new())))));
+        h.register_tool(dummy("extra", Box::new(|_, _| Ok(ToolOutput::Text(String::new())))));
+        assert_eq!(names(&h), ["search", "read", "calculate", "act", "web_search", "extra"]);
+        // act checks its own arguments, so the generic text never shows, and its answer is not numbered
+        let v = call(&mut h, &mut c, "act", r#"{}"#);
+        assert_eq!(v["content"], r#"{"ok":false,"error":{"type":"bad_arguments","detail":"action: required","field":"action","reason":"missing"}}"#);
+        let v = call(&mut h, &mut c, "act", r#"{"action":"a.b"}"#);
+        assert_eq!(v["content"], r#"{"ok":true,"status":"host_run","run_id":"r1","action":"a.b","fields":{}}"#);
+        assert_eq!(v["ids"], json!([]));
+        // the other tools keep the generic check
+        assert_eq!(call(&mut h, &mut c, "calculate", r#"{}"#)["content"], r#"{"ok":false,"error":{"type":"bad_arguments","detail":"expression: required"}}"#);
     }
 
     #[test]
