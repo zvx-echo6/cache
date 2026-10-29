@@ -12,6 +12,7 @@ use crate::grid::haversine_m;
 use crate::offroad_legs::*;
 use crate::pack::PackSource;
 use crate::router::{Boundary, RequestMode, RouteError, RouteOptions, RouteRequest, Router};
+use crate::snap::{plan_end, route_planned, EndPlan};
 use crate::valhalla::{decode_polyline6, encode_polyline6, Maneuver, Valhalla, ValhallaError};
 use serde_json::{json, Value};
 
@@ -109,6 +110,10 @@ pub struct DirectionsRequest {
     /// Optional OSM category hints of the two ends (seed the unified search like navi's start/end_category).
     pub from_category: Option<String>,
     pub to_category: Option<String>,
+    /// The end is a place's arrival point from the places data (a terminal, an entrance, a parking): it is where people go,
+    /// so it snaps to its own nearest road and is never moved to a public road (`snap`).
+    pub from_arrival: bool,
+    pub to_arrival: bool,
 }
 
 impl DirectionsRequest {
@@ -116,7 +121,7 @@ impl DirectionsRequest {
         DirectionsRequest {
             from, to, mode, offroad: OffroadChoice::Auto, offroad_snap_m: DEFAULT_OFFROAD_SNAP_M,
             merge_bearing_deg: DEFAULT_MERGE_BEARING_DEG, min_leg_m: DEFAULT_MIN_LEG_M, boundary: Boundary::Pragmatic,
-            from_category: None, to_category: None,
+            from_category: None, to_category: None, from_arrival: false, to_arrival: false,
         }
     }
 }
@@ -479,16 +484,24 @@ impl Env<'_> {
         if req.offroad == OffroadChoice::Always {
             return self.offroad_response(req, &rid);
         }
-        let trip = match self.valhalla_route(req.from, req.to, req.mode.costing()) {
+        let (from, to) = self.plan_ends(req);
+        let (trip, from, to) = match route_planned(self.valhalla, &from, &to, req.mode.costing()) {
             Ok(t) => t,
             Err(e) => {
+                let e = valhalla_failure(&e, req.from, req.to);
                 if req.offroad == OffroadChoice::Auto && e.code == "too_far" {
                     return self.offroad_response(req, &rid);
                 }
                 return self.fail(req, &rid, e);
             }
         };
-        self.directions_for_trip(req, &rid, trip)
+        self.directions_for_trip(req, &rid, trip, (from.public_road, to.public_road))
+    }
+
+    /// How the two ends snap to the roads (`snap`: past service roads to a public road, both carriageways of a split street).
+    fn plan_ends(&self, req: &DirectionsRequest) -> (EndPlan, EndPlan) {
+        let c = req.mode.costing();
+        (plan_end(self.valhalla, req.from, c, !req.from_arrival), plan_end(self.valhalla, req.to, c, !req.to_arrival))
     }
 
     /// Alternative road routes between the same two points (Valhalla's `alternates`), best first, each as full directions
@@ -501,17 +514,21 @@ impl Env<'_> {
         let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version);
         let mut road_only = req.clone();
         road_only.offroad = OffroadChoice::Never;
+        let (from, to) = self.plan_ends(req);
+        let public = (from.public_road, to.public_road);
         self.valhalla
-            .alternatives(req.from, req.to, req.mode.costing(), count)
+            .alternatives_ends(&from.ends[0], &to.ends[0], req.mode.costing(), count)
             .into_iter()
             .enumerate()
-            .map(|(i, t)| self.directions_for_trip(&road_only, &format!("{rid}-{}", i + 1), t))
+            .map(|(i, t)| self.directions_for_trip(&road_only, &format!("{rid}-{}", i + 1), t, public))
             .filter(|d| d.ok)
             .collect()
     }
 
     /// Directions from a Valhalla trip: the steps, and (for `Auto`) the off-road lead and tail when an end is away from the road.
-    fn directions_for_trip(&self, req: &DirectionsRequest, rid: &str, trip: crate::valhalla::Trip) -> Directions {
+    /// `public_road` says which ends (from, to) were moved past service roads to a public road: that gap is how people get to
+    /// the car, so it gets no off-road leg and no warning (project decision, 2026-10-29).
+    fn directions_for_trip(&self, req: &DirectionsRequest, rid: &str, trip: crate::valhalla::Trip, public_road: (bool, bool)) -> Directions {
         let rid = rid.to_string();
         if trip.shape.is_empty() || trip.maneuvers.is_empty() {
             return self.fail(req, &rid, DirectionsError::new("no_route", "No route found"));
@@ -529,8 +546,8 @@ impl Env<'_> {
         let mut out_shape = trip.shape_encoded.clone();
         if req.offroad == OffroadChoice::Auto {
             let (mut lead, mut tail) = (None, None);
-            for (end, p, road) in [("from", req.from, shape[0]), ("to", req.to, *shape.last().unwrap())] {
-                if haversine_m(p.0, p.1, road.0, road.1) <= req.offroad_snap_m {
+            for (end, p, road, public) in [("from", req.from, shape[0], public_road.0), ("to", req.to, *shape.last().unwrap(), public_road.1)] {
+                if public || haversine_m(p.0, p.1, road.0, road.1) <= req.offroad_snap_m {
                     continue;
                 }
                 let (a, b) = if end == "from" { (p, road) } else { (road, p) };
