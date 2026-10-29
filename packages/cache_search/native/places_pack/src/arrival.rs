@@ -10,7 +10,8 @@
 //!    the curb, so the middle one is on the frontage road's side.
 //! 2. A large area (outline at least `large_m` across: a park, a campus, a mall, a stadium): the public parking nearest its
 //!    point, inside the outline or within `adjacent_m` of it. (The main doors inside a campus's outline are its buildings'.)
-//! 3. Any other place with an outline and main doors on it: the main door nearest its point.
+//! 3. Any other place with an outline and main doors on it (a large building with no parking too): the main door nearest
+//!    its point.
 //!
 //! Anything else has no arrival point; the router then snaps the place's point itself (cache_offroad's `snap`, which moves
 //! an end off service roads to a public road nearby).
@@ -165,7 +166,8 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
                 let nearest = |xs: Vec<&Anchor>| xs.into_iter().min_by(|a, b| metres(here, (a.lat, a.lon)).total_cmp(&metres(here, (b.lat, b.lon)))).map(|a| (a.lat, a.lon));
                 if cfg.large_m > 0.0 && across(&e) >= cfg.large_m {
                     got = nearest(parking.within(&grow(e, cfg.adjacent_m))).map(|p| (p, 2));
-                } else {
+                }
+                if got.is_none() {
                     got = nearest(doors.within(&grow(e, cfg.outline_m)).into_iter().filter(|d| is_main(d)).collect()).map(|p| (p, 1));
                 }
             }
