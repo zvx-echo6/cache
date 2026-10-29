@@ -80,15 +80,17 @@ pub struct BlockReport {
     pub merged: usize,
     pub deduped: usize,
     pub enriched: usize,
+    /// Places of the block's own cells with an arrival point.
+    pub arrivals: usize,
     pub seconds: f64,
 }
 
 fn build_block(cfg: &BlocksCfg, rules: &Rules, rules_json: &str, sources: &str, h: &Connection, admins: &mut Admins, block: u32, cells: &BTreeSet<u32>) -> Result<BlockReport, String> {
     let t = Instant::now();
     let r = block_rect(block);
-    let (places, locs) = harvest::load(h, [r[0] - cfg.halo, r[1] - cfg.halo, r[2] + cfg.halo, r[3] + cfg.halo])?;
+    let (places, locs, anchors) = harvest::load(h, [r[0] - cfg.halo, r[1] - cfg.halo, r[2] + cfg.halo, r[3] + cfg.halo])?;
     let loaded = places.len();
-    let mut p = process(places, locs, rules, admins, &cfg.country, false);
+    let mut p = process(places, locs, &anchors, rules, admins, &cfg.country, false);
     let mine = |lat: f64, lon: f64| cells.contains(&tile_id_l1(lat, lon));
     p.retain_places(|r, _| mine(r.lat, r.lon));
     p.retain_localities(|l| mine(l.lat, l.lon));
@@ -125,6 +127,7 @@ fn build_block(cfg: &BlocksCfg, rules: &Rules, rules_json: &str, sources: &str, 
         merged: p.merged,
         deduped: p.deduped,
         enriched: p.enriched,
+        arrivals: p.rows.iter().filter(|r| r.arrival.is_some()).count(),
         seconds: t.elapsed().as_secs_f64(),
     })
 }
@@ -160,8 +163,8 @@ pub fn blocks(cfg: &BlocksCfg, rules: &Rules, rules_json: &str) -> Result<Vec<Bl
                         let r = build_block(cfg, rules, rules_json, &sources, &h, &mut admins, *b, cells).map_err(|e| format!("block {b}: {e}"));
                         if let Ok(r) = &r {
                             eprintln!(
-                                "block {:>5}: {:>2} tiles, {:>7} places of {} loaded with the halo, {:>5} towns ({} merged, {} deduped, {} ERs) in {:.1} s",
-                                r.block, r.cells, r.places, r.loaded, r.localities, r.merged, r.deduped, r.enriched, r.seconds
+                                "block {:>5}: {:>2} tiles, {:>7} places of {} loaded with the halo, {:>5} towns ({} merged, {} deduped, {} ERs, {} arrival points) in {:.1} s",
+                                r.block, r.cells, r.places, r.loaded, r.localities, r.merged, r.deduped, r.enriched, r.arrivals, r.seconds
                             );
                         }
                         done.lock().unwrap().push(r);

@@ -2,7 +2,8 @@
 //! hospital they belong to, give every place a state, country and nearest locality, and write places.sqlite.
 
 use crate::admins::Admins;
-use crate::model::{Harvest, PlaceSource, Raw, RawLocality};
+use crate::arrival::{self, ArrivalReport};
+use crate::model::{Anchor, Harvest, PlaceSource, Raw, RawLocality};
 use crate::rules::{generic_kind_id, Rules};
 use cache_places::geo::haversine_km;
 use cache_places::schema::{FORMAT_VERSION, SCHEMA};
@@ -311,6 +312,8 @@ pub struct Processed {
     pub merged: usize,
     pub deduped: usize,
     pub enriched: usize,
+    /// The places given an arrival point.
+    pub arrivals: ArrivalReport,
 }
 
 fn retain_with<T, G>(v: &mut Vec<T>, g: &mut Vec<G>, keep: &[bool]) {
@@ -340,9 +343,10 @@ impl Processed {
     }
 }
 
-/// Merge, enrich and dedupe the places, dedupe the towns, and give every row its state, country and (places) town.
-/// `country` fills the country of a row inside a state when the boundaries carry no polygon for the country.
-pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, rules: &Rules, admins: &mut Admins, country: &str, log: bool) -> Processed {
+/// Merge, enrich and dedupe the places, give them their arrival points from `anchors`, dedupe the towns, and give every
+/// row its state, country and (places) town. `country` fills the country of a row inside a state when the boundaries carry
+/// no polygon for the country.
+pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, anchors: &[Anchor], rules: &Rules, admins: &mut Admins, country: &str, log: bool) -> Processed {
     let say = |m: String| {
         if log {
             eprintln!("{m}");
@@ -354,6 +358,11 @@ pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, rules: &Rules, admins
     say(format!("{enriched} emergency rooms confirmed by a hospital; dropped {er_dropped} emergency-department records with no hospital"));
     let deduped = dedupe(&mut rows, rules);
     say(format!("dropped {deduped} duplicates"));
+    let arrivals = arrival::assign(&mut rows, anchors, &rules.arrival);
+    say(format!(
+        "arrival points: {} airports at a terminal, {} places at a main door, {} large areas at their parking",
+        arrivals.terminal, arrivals.entrance, arrivals.parking
+    ));
     let locs = dedupe_localities(locs);
     say(format!("{} localities", locs.len()));
 
@@ -383,7 +392,7 @@ pub fn process(mut rows: Vec<Raw>, locs: Vec<RawLocality>, rules: &Rules, admins
             None => nearest_locality(&grid, &locs, &loc_geo, r.lat, r.lon, &g.state),
         };
     }
-    Processed { rows, geo, locs, loc_geo, states, merged, deduped, enriched }
+    Processed { rows, geo, locs, loc_geo, states, merged, deduped, enriched, arrivals }
 }
 
 /// The nearest city, town or village of `state` within 10 km (`grid` holds the indices of `locs` that are not hamlets,
@@ -470,9 +479,9 @@ pub fn write_pack(out_path: &Path, p: &Processed, rules: &Rules, rules_json: &st
         let id = k as i64 + 1;
         let g = &p.geo[i];
         tx.execute(
-            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id, kind_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
-            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, g.locality, g.state, g.country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched, kind_id],
+            "INSERT INTO places(id, name, category, kind, lat, lon, street, locality, county, state, country, phone, hours, website, source, source_id, confidence, wikidata_id, wikipedia_title, wikivoyage_title, brand_wikidata, matched_source_id, kind_id, arrival_lat, arrival_lon) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            params![id, r.name, r.category, r.kind, r.lat, r.lon, r.street, g.locality, g.state, g.country, r.phone, r.hours, r.website, r.source, r.source_id, r.confidence, r.wiki.wikidata, r.wiki.wikipedia, r.wiki.wikivoyage, r.brand_wikidata, r.matched, kind_id, r.arrival.map(|a| a.0), r.arrival.map(|a| a.1)],
         )
         .map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO places_rt(id, min_lat, max_lat, min_lon, max_lon) VALUES (?1, ?2, ?2, ?3, ?3)", params![id, r.lat, r.lon]).map_err(|e| e.to_string())?;
@@ -564,7 +573,8 @@ pub fn build(
     }
     let mut admins = Admins::load(admins_path)?;
     let (min_lat, min_lon, max_lat, max_lon) = admins.bbox_of_state(&cfg.admin_state).ok_or_else(|| format!("no state called {:?} in the admin boundaries", cfg.admin_state))?;
-    let mut p = process(std::mem::take(&mut h.places), std::mem::take(&mut h.localities), rules, &mut admins, &cfg.country, true);
+    let anchors = std::mem::take(&mut h.anchors);
+    let mut p = process(std::mem::take(&mut h.places), std::mem::take(&mut h.localities), &anchors, rules, &mut admins, &cfg.country, true);
 
     // A neighbouring state's categories stay (an emergency room across the border can be the nearest); its other
     // named places go: they are another region's geocoder data.
@@ -634,6 +644,8 @@ mod tests {
             brand_wikidata: None,
             enrich: None,
             matched: None,
+            extent: None,
+            arrival: None,
         }
     }
 

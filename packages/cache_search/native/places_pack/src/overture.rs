@@ -105,6 +105,8 @@ impl PlaceSource for OvertureCsv {
                 brand_wikidata: nonempty(rec.get(c_brand_wd)).filter(|q| crate::model::is_qid(q)),
                 enrich,
                 matched: None,
+                extent: None,
+                arrival: None,
             });
         }
         Ok(())

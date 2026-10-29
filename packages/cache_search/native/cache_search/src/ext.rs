@@ -413,15 +413,15 @@ impl crate::handle::Handle {
         let near = self.location.as_ref().map(|l| (l.lat, l.lon));
         let places = self.ext.map_places.as_ref();
         let missing = || Error::bad_json(format!("{which}: not found"));
-        let from_endpoint = |e: cache_places::map::Endpoint| MapEnd { id: e.id, name: e.name, lat: e.lat, lon: e.lon, osm_category: e.osm_category };
+        let from_endpoint = |e: cache_places::map::Endpoint| MapEnd { id: e.id, name: e.name, lat: e.lat, lon: e.lon, osm_category: e.osm_category, arrival: e.arrival };
         match v {
             None | Some(serde_json::Value::Null) => match &self.location {
-                Some(l) => Ok(MapEnd { id: None, name: Some("Current location".into()), lat: l.lat, lon: l.lon, osm_category: None }),
+                Some(l) => Ok(MapEnd { id: None, name: Some("Current location".into()), lat: l.lat, lon: l.lon, osm_category: None, arrival: None }),
                 None => Err(Error::bad_json(format!("{which}: not given and no GPS fix is known"))),
             },
             Some(serde_json::Value::String(t)) => {
                 if let Some(p) = self.places.resolve(t) {
-                    return Ok(MapEnd { id: None, name: Some(p.name), lat: p.lat, lon: p.lon, osm_category: None });
+                    return Ok(MapEnd { id: None, name: Some(p.name), lat: p.lat, lon: p.lon, osm_category: None, arrival: None });
                 }
                 places.and_then(|c| c.resolve_text(t, near)).map(from_endpoint).ok_or_else(missing)
             }
@@ -447,6 +447,7 @@ impl crate::handle::Handle {
                     lat,
                     lon,
                     osm_category: text("osm_category").or_else(|| found.as_ref().filter(|_| same_spot).and_then(|f| f.osm_category.clone())),
+                    arrival: found.as_ref().filter(|_| same_spot).and_then(|f| f.arrival),
                 })
             }
             Some(_) => Err(Error::bad_json(format!("{which}: must be an object or a string"))),

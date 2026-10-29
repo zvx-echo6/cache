@@ -54,6 +54,37 @@ pub struct Raw {
     pub enrich: Option<(String, f64)>,
     /// The source id of the place it was matched to.
     pub matched: Option<String>,
+    /// The box around the place's outline, [south, west, north, east], for an OSM area (a way); None for a point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent: Option<[f64; 4]>,
+    /// Where a route to the place goes when that is not its point (`arrival`): (lat, lon).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival: Option<(f64, f64)>,
+}
+
+/// What an OSM feature that is not itself a place says about where people arrive at one (the `arrival` rules of
+/// categories.json pick them out).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnchorKind {
+    /// An airport terminal building.
+    Terminal,
+    /// A door people may use (an `entrance` node).
+    Entrance,
+    /// The main door.
+    MainEntrance,
+    /// A parking lot or garage the public may use.
+    Parking,
+}
+
+/// One arrival anchor: its point (a node, or the centre of a way) and the box around it ([south, west, north, east]; a
+/// node's is its point).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Anchor {
+    pub kind: AnchorKind,
+    pub lat: f64,
+    pub lon: f64,
+    pub extent: [f64; 4],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +101,7 @@ pub struct RawLocality {
 }
 
 /// Where a harvest's rows go once enough have gathered (`places_pack harvest` writes them to `harvest.sqlite`).
-pub type Sink = Box<dyn FnMut(Vec<Raw>, Vec<RawLocality>) -> Result<(), String>>;
+pub type Sink = Box<dyn FnMut(Vec<Raw>, Vec<RawLocality>, Vec<Anchor>) -> Result<(), String>>;
 
 /// What the sources read. Without a sink every row stays in memory (one region's `build`); with one, rows are handed on
 /// in batches, so a continent's harvest never sits in memory at once.
@@ -78,6 +109,8 @@ pub type Sink = Box<dyn FnMut(Vec<Raw>, Vec<RawLocality>) -> Result<(), String>>
 pub struct Harvest {
     pub places: Vec<Raw>,
     pub localities: Vec<RawLocality>,
+    /// Terminals, entrances and parking, for the places' arrival points.
+    pub anchors: Vec<Anchor>,
     sink: Option<Sink>,
     /// The first error of the sink (a source's reader callback cannot return one).
     error: Option<String>,
@@ -107,14 +140,21 @@ impl Harvest {
         }
     }
 
+    pub fn anchor(&mut self, a: Anchor) {
+        self.anchors.push(a);
+        if self.sink.is_some() && self.anchors.len() >= BATCH {
+            self.flush();
+        }
+    }
+
     /// Hands what has gathered to the sink (nothing without one).
     pub fn flush(&mut self) {
         let Some(sink) = self.sink.as_mut() else { return };
-        let (p, l) = (std::mem::take(&mut self.places), std::mem::take(&mut self.localities));
+        let (p, l, a) = (std::mem::take(&mut self.places), std::mem::take(&mut self.localities), std::mem::take(&mut self.anchors));
         self.flushed.0 += p.len();
         self.flushed.1 += l.len();
         if self.error.is_none() {
-            if let Err(e) = sink(p, l) {
+            if let Err(e) = sink(p, l, a) {
                 self.error = Some(e);
             }
         }

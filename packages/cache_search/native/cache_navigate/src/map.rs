@@ -41,13 +41,15 @@ pub struct MapEnd {
     pub lat: f64,
     pub lon: f64,
     pub osm_category: Option<String>,
+    /// Where a route to the place goes, when the places data says it is not its point (see `Waypoint`).
+    pub arrival: Option<(f64, f64)>,
 }
 
 impl MapEnd {
     fn waypoint(&self) -> Waypoint {
         match (&self.name, &self.osm_category) {
-            (Some(n), Some(c)) => Waypoint::place_with_category(n, self.lat, self.lon, c),
-            (Some(n), None) => Waypoint::place(n, self.lat, self.lon),
+            (Some(n), Some(c)) => Waypoint::place_with_category(n, self.lat, self.lon, c).with_arrival(self.arrival),
+            (Some(n), None) => Waypoint::place(n, self.lat, self.lon).with_arrival(self.arrival),
             _ => Waypoint::point(self.lat, self.lon),
         }
     }

@@ -19,11 +19,12 @@ pub use crate::directions::{Directions, OffroadChoice, TravelMode};
 
 /// A start or end of a trip: a bare coordinate, or a resolved place (the geocoder/place search of the app
 /// gives the coordinates; `category` is the place's OSM "key:value" hint, which seeds the travel modes at that
-/// end exactly like navi's `start_category` / `end_category`).
+/// end exactly like navi's `start_category` / `end_category`; `arrival` is where a route to the place goes when the places
+/// data says it is not the place's point: an airport's passenger terminal, a main entrance, a park's parking).
 #[derive(Debug, Clone)]
 pub enum Waypoint {
     Point { lat: f64, lon: f64 },
-    Place { name: String, lat: f64, lon: f64, category: Option<String> },
+    Place { name: String, lat: f64, lon: f64, category: Option<String>, arrival: Option<(f64, f64)> },
 }
 
 impl Waypoint {
@@ -31,10 +32,27 @@ impl Waypoint {
         Waypoint::Point { lat, lon }
     }
     pub fn place(name: &str, lat: f64, lon: f64) -> Waypoint {
-        Waypoint::Place { name: name.into(), lat, lon, category: None }
+        Waypoint::Place { name: name.into(), lat, lon, category: None, arrival: None }
     }
     pub fn place_with_category(name: &str, lat: f64, lon: f64, category: &str) -> Waypoint {
-        Waypoint::Place { name: name.into(), lat, lon, category: Some(category.into()) }
+        Waypoint::Place { name: name.into(), lat, lon, category: Some(category.into()), arrival: None }
+    }
+    /// The place with the point a route to it goes to (no change to a bare coordinate).
+    pub fn with_arrival(mut self, p: Option<(f64, f64)>) -> Waypoint {
+        if let Waypoint::Place { arrival, .. } = &mut self {
+            *arrival = p;
+        }
+        self
+    }
+    /// Where a route starts or ends: the place's arrival point when it has one, else its point.
+    pub fn route_point(&self) -> (f64, f64) {
+        match self {
+            Waypoint::Place { arrival: Some(a), .. } => *a,
+            _ => self.latlon(),
+        }
+    }
+    fn has_arrival(&self) -> bool {
+        matches!(self, Waypoint::Place { arrival: Some(_), .. })
     }
     pub fn latlon(&self) -> (f64, f64) {
         match self {
@@ -110,8 +128,8 @@ impl<'a> Navigator<'a> {
     /// with a coded error (no_route, too_far, out_of_coverage, route_too_long, ...), as in navi; only a malformed
     /// request is an `Err`.
     pub fn navigate(&self, req: &NavigateRequest) -> Result<Directions, NavigateError> {
-        check_point(req.from.latlon(), "from")?;
-        check_point(req.to.latlon(), "to")?;
+        check_point(req.from.route_point(), "from")?;
+        check_point(req.to.route_point(), "to")?;
         for (v, n) in [(req.offroad_snap_m, "offroad_snap_m"), (req.min_leg_m, "min_leg_m")] {
             if !v.is_finite() || v < 0.0 {
                 return Err(NavigateError::BadRequest(format!("{n} out of range")));
@@ -120,7 +138,9 @@ impl<'a> Navigator<'a> {
         if !(req.merge_bearing_deg > 0.0 && req.merge_bearing_deg <= 180.0) {
             return Err(NavigateError::BadRequest("merge_bearing_deg out of range".into()));
         }
-        let mut dr = DirectionsRequest::new(req.from.latlon(), req.to.latlon(), req.mode);
+        let mut dr = DirectionsRequest::new(req.from.route_point(), req.to.route_point(), req.mode);
+        dr.from_arrival = req.from.has_arrival();
+        dr.to_arrival = req.to.has_arrival();
         dr.offroad = req.offroad;
         dr.offroad_snap_m = req.offroad_snap_m;
         dr.merge_bearing_deg = req.merge_bearing_deg;
@@ -138,9 +158,11 @@ impl<'a> Navigator<'a> {
     /// Up to `count` alternative road routes (see [`Env::alternatives`]); empty for an off-road-only request or when the
     /// router gives none.
     pub fn alternatives(&self, req: &NavigateRequest, count: usize) -> Result<Vec<Directions>, NavigateError> {
-        check_point(req.from.latlon(), "from")?;
-        check_point(req.to.latlon(), "to")?;
-        let mut dr = DirectionsRequest::new(req.from.latlon(), req.to.latlon(), req.mode);
+        check_point(req.from.route_point(), "from")?;
+        check_point(req.to.route_point(), "to")?;
+        let mut dr = DirectionsRequest::new(req.from.route_point(), req.to.route_point(), req.mode);
+        dr.from_arrival = req.from.has_arrival();
+        dr.to_arrival = req.to.has_arrival();
         dr.offroad = req.offroad;
         dr.offroad_snap_m = req.offroad_snap_m;
         dr.merge_bearing_deg = req.merge_bearing_deg;

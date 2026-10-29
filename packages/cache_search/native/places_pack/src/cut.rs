@@ -115,7 +115,8 @@ fn open(p: &Path) -> Result<Connection, String> {
 }
 
 const PLACE_COLS: &str = "name, alt_names, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website, \
-                          wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence";
+                          wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence, \
+                          arrival_lat, arrival_lon";
 const LOCALITY_COLS: &str = "name, alt_names, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id";
 const ADDR_COLS: &str = "uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, min_lat, max_lat, min_lon, max_lon, n, numbers";
 
@@ -185,7 +186,7 @@ fn write_tile(cfg: &CutCfg, t: TileInput, towns: &Towns, addr: Option<&Connectio
     let mut counts: BTreeMap<(&str, String), i64> = BTreeMap::new();
     let (mut n_places, mut n_towns, mut n_ctx, mut n_streets, mut n_numbers) = (0i64, 0i64, 0i64, 0i64, 0i64);
     {
-        let mut ins = tx.prepare(&format!("INSERT INTO places(id, {PLACE_COLS}) VALUES ({})", placeholders(25))).map_err(|e| e.to_string())?;
+        let mut ins = tx.prepare(&format!("INSERT INTO places(id, {PLACE_COLS}) VALUES ({})", placeholders(27))).map_err(|e| e.to_string())?;
         for (block_id, v) in t.places {
             n_places += 1;
             let mut vals = vec![Value::Integer(n_places)];
@@ -292,11 +293,16 @@ fn cut_block(cfg: &CutCfg, path: &Path, towns: &Towns, addr: Option<&Connection>
         .query_row("SELECT value FROM meta WHERE key = 'cells'", [], |r| r.get::<_, String>(0))
         .map_err(|e| format!("{}: no cells in meta ({e})", path.display()))
         .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))?;
+    // A block built before arrival points has no arrival columns.
+    let has_arrival = c.prepare("SELECT arrival_lat FROM places LIMIT 0").is_ok();
+    let arrival = if has_arrival { "p.arrival_lat, p.arrival_lon" } else { "NULL, NULL" };
     let places = read_rows(
         &c,
-        "SELECT p.id, p.name, NULLIF(f.alt_names, ''), p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, \
-         p.website, p.wikidata_id, p.wikipedia_title, p.wikivoyage_title, p.summary, p.brand_wikidata, p.matched_source_id, p.source, p.source_id, p.confidence \
-         FROM places p LEFT JOIN places_fts f ON f.rowid = p.id ORDER BY p.id",
+        &format!(
+            "SELECT p.id, p.name, NULLIF(f.alt_names, ''), p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, \
+             p.website, p.wikidata_id, p.wikipedia_title, p.wikivoyage_title, p.summary, p.brand_wikidata, p.matched_source_id, p.source, p.source_id, p.confidence, {arrival} \
+             FROM places p LEFT JOIN places_fts f ON f.rowid = p.id ORDER BY p.id"
+        ),
         5,
         6,
     )?;

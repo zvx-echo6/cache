@@ -74,7 +74,7 @@ fn core(maneuvers: usize, alts: usize) -> NavCore {
 }
 
 fn end(name: &str, lat: f64, lon: f64) -> MapEnd {
-    MapEnd { id: None, name: Some(name.into()), lat, lon, osm_category: None }
+    MapEnd { id: None, name: Some(name.into()), lat, lon, osm_category: None, arrival: None }
 }
 
 fn req(via: Vec<MapEnd>, alternatives: usize) -> MapRouteReq {

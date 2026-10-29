@@ -1,6 +1,14 @@
 {
   "min_confidence": 0.5,
   "merge": {"close_m": 40, "near_m": 200, "name_similarity": 0.6, "general_name_similarity": 0.8},
+  "arrival": {
+    "terminal": [{"tags": {"aeroway": "terminal"}}],
+    "entrance": [{"tags": {"entrance": "*"}, "not": {"entrance": "service|emergency|exit|staff|garage|no", "access": "private|no"}}],
+    "main_entrance": [{"tags": {"entrance": "main"}}],
+    "parking": [{"tags": {"amenity": "parking"}, "not": {"access": "private|no"}}],
+    "airport_kinds": ["aerodrome", "airport"],
+    "airport_terminal_m": 3000, "large_m": 250, "outline_m": 20, "adjacent_m": 100
+  },
   "general": {
     "overture": {"min_confidence": 0.6},
     "osm": [

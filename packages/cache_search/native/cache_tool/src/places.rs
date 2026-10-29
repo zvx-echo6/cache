@@ -22,6 +22,9 @@ pub struct PlaceMatch {
     pub lon: f64,
     /// The place's OSM "key:value" (for example "highway:path"), which seeds the off-road travel modes at that end.
     pub osm_category: Option<String>,
+    /// Where a route to the place goes, when the places data says it is not the place's point (an airport's passenger
+    /// terminal, a main entrance, a park's parking).
+    pub arrival: Option<(f64, f64)>,
 }
 
 impl PlaceMatch {
@@ -38,6 +41,7 @@ impl PlaceMatch {
             lat,
             lon,
             osm_category: None,
+            arrival: None,
         }
     }
 }

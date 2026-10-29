@@ -20,6 +20,8 @@ pub(crate) struct Resolved {
     pub distance_km: Option<f64>,
     pub er_tier: Option<i64>,
     pub osm: Option<String>,
+    /// Where a route to the place goes, when the places data says it is not the place's point.
+    pub arrival: Option<(f64, f64)>,
     /// Other matches the places pack found for the same text.
     pub others: Vec<PlaceMatch>,
 }
@@ -38,6 +40,7 @@ impl Resolved {
             distance_km: None,
             er_tier: None,
             osm: None,
+            arrival: None,
             others: vec![],
         }
     }
@@ -58,6 +61,7 @@ impl Resolved {
             distance_km: m.distance_km,
             er_tier: m.er_tier,
             osm: m.osm_category,
+            arrival: m.arrival,
             others: vec![],
         }
     }
@@ -66,6 +70,7 @@ impl Resolved {
             Some(c) => Waypoint::place_with_category(&self.name, self.lat, self.lon, c),
             None => Waypoint::place(&self.name, self.lat, self.lon),
         }
+        .with_arrival(self.arrival)
     }
 }
 

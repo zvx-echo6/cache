@@ -1,8 +1,11 @@
 //! OpenStreetMap places from a `.osm.pbf` extract (Geofabrik): nodes and ways that match the category rules or are
 //! named places worth finding, and place=city|town|village|hamlet nodes for localities. Two passes: ways first (to
 //! learn which node positions are needed for their centres), then nodes. Relations are not read.
+//!
+//! The same passes collect the arrival anchors the `arrival` rules pick out (terminals, entrances, parking), and the box
+//! around each way place's outline, for the places' arrival points (`arrival.rs`).
 
-use crate::model::{format_phone, is_qid, Harvest, PlaceSource, Raw, RawLocality, Wiki};
+use crate::model::{format_phone, is_qid, Anchor, AnchorKind, Harvest, PlaceSource, Raw, RawLocality, Wiki};
 use crate::rules::{generic_kind_id, Rules};
 use osmpbf::{Element, ElementReader};
 use std::collections::{HashMap, HashSet};
@@ -102,8 +105,26 @@ fn classify(rules: &Rules, tags: &[(&str, &str)], id: String, lat: f64, lon: f64
             brand_wikidata: tag(tags, "brand:wikidata").map(|q| q.trim().to_string()).filter(|q| is_qid(q)),
             enrich: None,
             matched: None,
+            extent: None,
+            arrival: None,
         }),
     }
+}
+
+/// A way's centre (the mean of its sampled nodes) and the box around them [south, west, north, east]; None when none of
+/// its nodes is in the extract.
+fn outline(refs: &[i64], pos: &HashMap<i64, (f64, f64)>) -> Option<(f64, f64, [f64; 4])> {
+    let pts: Vec<(f64, f64)> = refs.iter().filter_map(|r| pos.get(r).copied()).collect();
+    if pts.is_empty() {
+        return None;
+    }
+    let lat = pts.iter().map(|x| x.0).sum::<f64>() / pts.len() as f64;
+    let lon = pts.iter().map(|x| x.1).sum::<f64>() / pts.len() as f64;
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for &(la, lo) in &pts {
+        b = [b[0].min(la), b[1].min(lo), b[2].max(la), b[3].max(lo)];
+    }
+    Some((lat, lon, b))
 }
 
 impl PlaceSource for OsmPbf {
@@ -114,9 +135,15 @@ impl PlaceSource for OsmPbf {
     fn read(&mut self, rules: &Rules, out: &mut Harvest) -> Result<(), String> {
         let open = || ElementReader::from_path(&self.path).map_err(|e| format!("{}: {e}", self.path.display()));
 
-        // Pass 1: the ways that matter, with a sample of their node ids.
+        // Pass 1: the ways that matter (places and arrival anchors), with a sample of their node ids.
         let mut ways: Vec<(Raw, Vec<i64>)> = Vec::new();
+        let mut anchor_ways: Vec<(AnchorKind, Vec<i64>)> = Vec::new();
         let mut need: HashSet<i64> = HashSet::new();
+        fn sample(w: &osmpbf::Way) -> Vec<i64> {
+            let refs: Vec<i64> = w.refs().collect();
+            let step = (refs.len() / 48).max(1);
+            refs.iter().step_by(step).copied().collect()
+        }
         open()?
             .for_each(|el| {
                 if let Element::Way(w) = el {
@@ -125,11 +152,14 @@ impl PlaceSource for OsmPbf {
                         return;
                     }
                     if let Some(p) = classify(rules, &tags, format!("osm:w{}", w.id()), f64::NAN, f64::NAN).place {
-                        let refs: Vec<i64> = w.refs().collect();
-                        let step = (refs.len() / 48).max(1);
-                        let sample: Vec<i64> = refs.iter().step_by(step).copied().collect();
-                        need.extend(sample.iter().copied());
-                        ways.push((p, sample));
+                        let s = sample(&w);
+                        need.extend(s.iter().copied());
+                        ways.push((p, s));
+                    }
+                    if let Some(k) = rules.arrival.anchor(&tags) {
+                        let s = sample(&w);
+                        need.extend(s.iter().copied());
+                        anchor_ways.push((k, s));
                     }
                 }
             })
@@ -157,17 +187,20 @@ impl PlaceSource for OsmPbf {
                 if let Some(l) = f.locality {
                     out.locality(l);
                 }
+                if let Some(kind) = rules.arrival.anchor(&tags) {
+                    out.anchor(Anchor { kind, lat, lon, extent: [lat, lon, lat, lon] });
+                }
             })
             .map_err(|e| format!("osm pass 2: {e}"))?;
 
         for (mut p, refs) in ways {
-            let pts: Vec<(f64, f64)> = refs.iter().filter_map(|r| pos.get(r).copied()).collect();
-            if pts.is_empty() {
-                continue;
-            }
-            p.lat = pts.iter().map(|x| x.0).sum::<f64>() / pts.len() as f64;
-            p.lon = pts.iter().map(|x| x.1).sum::<f64>() / pts.len() as f64;
+            let Some((lat, lon, extent)) = outline(&refs, &pos) else { continue };
+            (p.lat, p.lon, p.extent) = (lat, lon, Some(extent));
             out.place(p);
+        }
+        for (kind, refs) in anchor_ways {
+            let Some((lat, lon, extent)) = outline(&refs, &pos) else { continue };
+            out.anchor(Anchor { kind, lat, lon, extent });
         }
         Ok(())
     }
@@ -234,5 +267,26 @@ mod tests {
         assert_eq!(kind(&[("mountain_pass", "yes"), ("name", "Galena Summit")]), "mountain_pass");
         // A spring that is not for drinking is not a water place, and is only here when named.
         assert_eq!(kind(&[("natural", "spring"), ("drinking_water", "no"), ("name", "Salt Spring")]), "spring");
+    }
+
+    #[test]
+    fn arrival_anchors_follow_the_rules() {
+        let r = rules();
+        let a = |tags: &[(&str, &str)]| r.arrival.anchor(tags);
+        assert_eq!(a(&[("aeroway", "terminal"), ("building", "yes")]), Some(AnchorKind::Terminal));
+        assert_eq!(a(&[("entrance", "main"), ("door", "automatic")]), Some(AnchorKind::MainEntrance));
+        assert_eq!(a(&[("entrance", "yes")]), Some(AnchorKind::Entrance));
+        assert_eq!(a(&[("entrance", "service")]), None, "staff and service doors are not where people arrive");
+        assert_eq!(a(&[("entrance", "main"), ("access", "private")]), None);
+        assert_eq!(a(&[("amenity", "parking"), ("parking", "surface")]), Some(AnchorKind::Parking));
+        assert_eq!(a(&[("amenity", "parking"), ("access", "private")]), None);
+        assert_eq!(a(&[("amenity", "pharmacy")]), None);
+        let mut pos = HashMap::new();
+        pos.insert(1, (40.0, -111.0));
+        pos.insert(2, (40.002, -111.004));
+        let (lat, lon, b) = outline(&[1, 2, 3], &pos).unwrap();
+        assert!((lat - 40.001).abs() < 1e-9 && (lon + 111.002).abs() < 1e-9);
+        assert_eq!(b, [40.0, -111.004, 40.002, -111.0]);
+        assert!(outline(&[3], &pos).is_none());
     }
 }
