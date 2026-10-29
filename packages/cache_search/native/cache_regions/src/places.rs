@@ -345,12 +345,18 @@ impl Inner {
     /// the common file are fetched, the database is created and `CURRENT` names it.
     pub(crate) fn p_ensure(&self, timeout: Duration) -> Result<(String, Arc<Index>)> {
         let p = self.places()?;
-        if let Some(b) = self.st().p.build.clone() {
-            return Ok((b.clone(), self.p_index_of(p, &b, timeout)?));
+        // The build is read into a local first: a guard in an `if let` scrutinee lives through its body, and
+        // p_index_of locks the state again (a deadlock whenever the index was not in memory).
+        let built = self.st().p.build.clone();
+        if let Some(b) = built {
+            let idx = self.p_index_of(p, &b, timeout)?;
+            return Ok((b, idx));
         }
         let _one = lock(&p.init);
-        if let Some(b) = self.st().p.build.clone() {
-            return Ok((b.clone(), self.p_index_of(p, &b, timeout)?));
+        let built = self.st().p.build.clone();
+        if let Some(b) = built {
+            let idx = self.p_index_of(p, &b, timeout)?;
+            return Ok((b, idx));
         }
         let (c, common) = self.p_fetch_current(p, timeout)?;
         let idx = self.p_fetch_index(p, &c, timeout)?;
@@ -755,7 +761,10 @@ impl Inner {
         std::thread::scope(|sc| {
             for _ in 0..POOL {
                 sc.spawn(|| {
-                    while let Some(t) = lock(&queue).next() {
+                    loop {
+                        // Taken into a local, so the queue is not held while the tile downloads.
+                        let next = lock(&queue).next();
+                        let Some(t) = next else { break };
                         if self.p_fetch_tile(p, build, &t, None).is_ok() {
                             self.p_landed(build, &t, true);
                         }

@@ -205,7 +205,15 @@ fn map_search_answers_as_from_the_single_pack() {
     ] {
         let opts = SearchOpts { near, ..Default::default() };
         let x = a.search(q, &opts, Some(&embed)).unwrap();
-        assert_eq!(x, b.search(q, &opts, Some(&embed)).unwrap(), "{q}");
+        let y = b.search(q, &opts, Some(&embed)).unwrap();
+        let ids = |v: &Value| v["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        if ids(&y).iter().any(|id| id.starts_with("kind:")) {
+            // The merged database has kind vectors (from the common file) and the single pack none: a kind matched by
+            // meaning adds its row and places, and every result of the single pack is still there.
+            assert!(ids(&x).iter().all(|id| ids(&y).contains(id)), "{q}: {x} / {y}");
+        } else {
+            assert_eq!(x, y, "{q}");
+        }
         let plain = SearchOpts { near, meaning: false, ..Default::default() };
         assert_eq!(a.search(q, &plain, None).unwrap(), b.search(q, &plain, None).unwrap(), "{q} (names and categories only)");
     }
