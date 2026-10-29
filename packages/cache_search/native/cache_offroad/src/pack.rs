@@ -97,6 +97,10 @@ pub trait PackSource: Send + Sync {
     fn parking_in_box(&self, min_lon: f64, max_lon: f64, min_lat: f64, max_lat: f64) -> PResult<Vec<PointRec>>;
     fn trailheads_in_box(&self, min_lon: f64, max_lon: f64, min_lat: f64, max_lat: f64) -> PResult<Vec<PointRec>>;
     fn mvum_in_box(&self, south: f64, north: f64, west: f64, east: f64) -> PResult<Vec<MvumFeature>>;
+    /// Whether the pack's data covers the point (a pack that does not know its extent says yes).
+    fn covers(&self, _lat: f64, _lon: f64) -> bool {
+        true
+    }
 }
 
 // ---- geometry helpers shared by pack backends ---------------------------------------------------
@@ -244,6 +248,10 @@ impl SqlitePack {
 impl PackSource for SqlitePack {
     fn has_layer(&self, layer: Layer) -> bool {
         self.info.layers.iter().any(|l| l == layer.name())
+    }
+    fn covers(&self, lat: f64, lon: f64) -> bool {
+        let (s, n, w, e) = self.info.bbox;
+        s <= lat && lat <= n && w <= lon && lon <= e
     }
     fn read_u8(&self, layer: Layer, row0: i64, col0: i64, rows: usize, cols: usize) -> PResult<Vec<u8>> {
         self.read_window(layer, row0, col0, rows, cols, 0u8, &|b| decode_u8_tile(b))

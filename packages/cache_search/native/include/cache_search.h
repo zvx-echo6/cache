@@ -414,7 +414,7 @@ char *cs_live_preview(const char *request_json);
  *      "id":"kind:<kind id>","matched":"meaning" and "category" (its category or null), followed by its nearest places; as a
  *      route end "kind:<id>" is the nearest place of that kind to the GPS fix.
  *
- * cs_map_route: {"from"?, "to", "via"?: [...], "mode"?: "drive"|"walk"|"bike", "land_access"?: "strict"|"pragmatic"|"emergency",
+ * cs_map_route: {"from"?, "to", "via"?: [...], "mode"?: "drive"|"walk"|"bike"|"offroad_foot"|"offroad_vehicle", "land_access"?: "strict"|"pragmatic"|"emergency",
  *   "alternatives"?: 0-3 (default 2)}
  *   An end is {"id"?, "lat"?, "lon"?, "name"?} (a result's id brings the place's own category) or a string (an id, coordinates,
  *   a saved place, a place name). No "from" is the last GPS fix. The complete route, built by the same code as the navigate
@@ -426,7 +426,8 @@ char *cs_live_preview(const char *request_json);
  *     "terrain","follow"}],"major_roads","warnings":[{"code":"offroad_unavailable",...}],"alternatives":[<route objects>]}.
  *   ALL maneuvers are returned. Indices point into the decoded geometry. Alternatives are Valhalla's, for a plain road route.
  *   A route that cannot be made is {"ok":false,"route_id","mode","from","to","errors":[{"code","message"}]} with code no_route,
- *   too_far, out_of_coverage, route_too_long, upstream_timeout or internal. The route (and each alternative) is kept for
+ *   too_far, out_of_coverage, route_too_long, upstream_timeout or internal, or not_set_up for an off-road mode where no
+ *   off-road data covers both ends. The route (and each alternative) is kept for
  *   cs_map_progress.
  *
  * cs_map_progress: {"route_id" | "route": <a route object>, "lat","lon","accuracy_m"?,"now"?,"reset"?,"off_route_m"?: 50,

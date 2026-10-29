@@ -185,6 +185,8 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
     assert!(drive.get("offroad_mi").is_none());
     assert!(drive.get("steps").is_none());
     assert_eq!(drive["route_id"].as_str().unwrap().len(), 16);
+    // no traffic source yet: always present, null
+    assert!(drive.get("traffic").is_some_and(Value::is_null), "{drive}");
 
     // 2. walk from a point in the Sawtooths out to the nearest road and on to Stanley (off-road legs come back inside the route)
     let walk = d.content("walk-sawtooths-stanley", json!({"from": "44.0543,-115.4237", "to": "44.2210,-114.9318", "mode": "walk"}), None);
@@ -249,6 +251,60 @@ fn without_the_off_road_data_roads_still_route_and_the_gap_is_a_warning() {
 }
 
 #[test]
+fn offroad_modes_route_the_whole_trip_off_road_under_each_land_access() {
+    if data().is_none() {
+        eprintln!("skipped: the Idaho data is not set");
+        return;
+    }
+    let t = Tmp::new("offroad-modes");
+    let mut d = Doors::new(&t, true);
+    let schemas: Value = serde_json::from_str(&cli(&["tool-schemas", "--config", &d.cfg_path])).unwrap();
+    let nav = schemas.as_array().unwrap().iter().find(|s| s["function"]["name"] == "navigate").unwrap();
+    if let Ok(dir) = std::env::var("NAVIGATE_OUT_DIR") {
+        std::fs::write(PathBuf::from(dir).join("navigate-schema.json"), serde_json::to_string_pretty(nav).unwrap()).unwrap();
+    }
+    assert_eq!(nav["function"]["parameters"]["properties"]["mode"]["enum"], json!(["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"]));
+    // on foot and by vehicle between two points of the off-road parity set (R08), and by vehicle from the wilderness start of
+    // the directions parity set (D1) to Redfish Lake Lodge
+    let trips = [
+        ("foot-r08", "offroad_foot", "44.18,-114.95", "44.23,-114.9"),
+        ("vehicle-r08", "offroad_vehicle", "44.18,-114.95", "44.23,-114.9"),
+        ("vehicle-d1", "offroad_vehicle", "44.03164,-114.98780", "44.13596,-114.91450"),
+    ];
+    for (name, mode, from, to) in trips {
+        let mut ids = std::collections::BTreeSet::new();
+        for land in ["strict", "pragmatic", "emergency"] {
+            let v = d.content(&format!("offroad-{name}-{land}"), json!({"from": from, "to": to, "mode": mode, "land_access": land}), None);
+            if v["ok"] == false {
+                // no way under strict land access is the router's no_route, never a road route instead
+                assert_eq!((land, err_type(&v)), ("strict", "no_route"), "{v}");
+                continue;
+            }
+            assert_eq!(v["mode"], mode);
+            assert!(v["offroad_mi"].as_f64().unwrap() > 0.0, "{v}");
+            assert!(v.get("warnings").is_none(), "{v}");
+            assert!(v.get("traffic").is_some_and(Value::is_null), "{v}");
+            ids.insert(v["route_id"].as_str().unwrap().to_string());
+            // the map's snapshot of the same route says the mode and the land access
+            let full: Value = serde_json::from_str(&d.core.map_route(&json!({"route_id": v["route_id"]}).to_string()).unwrap()).unwrap();
+            assert_eq!((full["mode"].as_str(), full["land_access"].as_str(), full["routing"].as_str()), (Some(mode), Some(land), Some("offroad")));
+            assert_eq!(full["alternatives"], json!([]));
+        }
+        assert!(ids.len() >= 2, "{name}: each land access is its own route");
+    }
+
+    // without the off-road data an off-road mode says what is missing, through every door
+    let t2 = Tmp::new("offroad-modes-road");
+    let mut road = Doors::new(&t2, false);
+    let e = road.content("offroad-foot-no-data", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "offroad_foot"}), None);
+    assert_eq!(err_type(&e), "not_set_up");
+    assert!(e["error"]["detail"].as_str().unwrap().contains("off-road data for this area"), "{e}");
+    // and an area the installed off-road pack does not cover is the same
+    let e = d.content("offroad-vehicle-outside", json!({"from": "47.6062,-122.3321", "to": "47.25,-122.44", "mode": "offroad_vehicle"}), None);
+    assert_eq!(err_type(&e), "not_set_up", "{e}");
+}
+
+#[test]
 fn navigate_is_not_offered_without_the_routing_data() {
     let t = Tmp::new("none");
     let mut d = Doors::with_routing(&t, None);
@@ -270,9 +326,9 @@ fn navigate_is_not_offered_without_the_routing_data() {
 
 /// AIDA's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
 /// two own fields last. The recorded rows are serialised with sorted keys, so order is checked against this list.
-const RESULT_ORDER: [&str; 19] = [
+const RESULT_ORDER: [&str; 20] = [
     "ok", "n", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "nearest_search",
-    "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
+    "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "traffic", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
 ];
 const PLACE_ORDER: [&str; 11] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "near", "snap_distance_m", "lat", "lon"];
 
@@ -335,7 +391,7 @@ fn compare_to_aida(example: &str, cache: &Value) {
         }
     }
     for k in &got {
-        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
+        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start", "traffic"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
     }
     same_types(cache, aida, example);
     for end in ["from_matched", "to_matched"] {
@@ -363,7 +419,10 @@ fn compare_to_aida(example: &str, cache: &Value) {
         }
     }
     if let Some(n) = cache.get("offroad_note") {
-        assert_eq!(n, &aida["offroad_note"], "{example}: AIDA's note text");
+        // AIDA's note with the grid size corrected (the z12 pixel grid is ~15 m in the US, not 30 m)
+        let want = aida["offroad_note"].as_str().unwrap().replace("~30 m", "~15 m");
+        assert_ne!(want, aida["offroad_note"].as_str().unwrap(), "{example}: AIDA's note no longer says ~30 m");
+        assert_eq!(n.as_str().unwrap(), want, "{example}: AIDA's note text, grid size corrected");
     }
 }
 

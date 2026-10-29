@@ -1497,17 +1497,19 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 - **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
   (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
-- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
+- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike, and Cache's offroad_foot and offroad_vehicle), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
   Off-road legs come back inside the route, as in AIDA: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
   off-road lead-in or tail (drive uses the vehicle-class modes, walk foot, bike a two-wheeler), and a trip with no road gets a whole off-road route. Without the
-  off-road files the road route is returned with an `offroad_unavailable` warning.
+  off-road files the road route is returned with an `offroad_unavailable` warning. The off-road modes route the whole trip with the off-road router
+  (`offroad_foot`: foot only; `offroad_vehicle`: the unified Auto search), no road route first and no alternatives; where no off-road pack covers both ends
+  they are `not_set_up` (`cache_offroad::directions::OFFROAD_DATA_MISSING`), never a road route instead. A land access other than pragmatic is part of the route id.
 - **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
   `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` and `to_type` is `not_set_up`; the `to_type`
   enum is TOOLS.md's list until a pack supplies its categories. The nearest place of a type is chosen by routing to the pack's 5 nearest by straight line.
 - **Result = AIDA's navigate contract** (`nav_runtime.py navigate()`), in its build order: `ok`, `n` (from `address` = `nav:<route_id>`), `mode`, `location_bias`
   (`sender_node_position` for the phone's fix, `near:<name>`, `from_place`, null), `route_id`, `from_matched`, `to_matched` (place_name, kind, street, locality,
   county, state, distance_km, [er_tier], near, snap_distance_m, lat, lon), `other_destination_candidates` (always, at most 2; `drive_min` on a nearest search),
-  `nearest_search` {to_type, ranked_by, warnings}, `distance_mi`, `distance_km`, `duration_minutes`, `direction_from_start` (8-point compass word of the start-to-destination bearing), `major_roads` [{name, distance_km}], `step_count`, `steps`
+  `nearest_search` {to_type, ranked_by, warnings}, `distance_mi`, `distance_km`, `duration_minutes`, `direction_from_start` (8-point compass word of the start-to-destination bearing), `major_roads` [{name, distance_km}], `traffic` (Cache's; {delay_min, as_of, source, slow_sections [{name, delay_min}]} or null, null until a traffic source is wired), `step_count`, `steps`
   (at most 12; every off-road step is kept, the first road steps fill the rest), `steps_truncated`, `road_steps_omitted` / `offroad_steps_omitted`,
   `offroad_mi` + `offroad_note` (AIDA's text), `warnings` [{code, end, road_point, gap_m}]; then Cache's `map_region`, `map_region_age`. A step is index, kind,
   type, street_names, distance_mi, cardinal, instruction; off-road steps add travel, grade_class, elev_gain_m, elev_loss_m, terrain (only when known, underscores
@@ -1559,7 +1561,7 @@ instruction, length and time and its range of points, the totals (road and off-r
 object again after a restart. A fix is matched to the nearest point of the route within 300 m behind and 3 km ahead of the last match, and only on the whole route
 when that finds nothing on it, so a route that passes itself (an out-and-back) is not mistaken for its other pass. `off_route` is true when the fix has been farther
 than `off_route_m` (50) from the route, or than the GPS accuracy if that is larger, for `off_route_fixes` (3) fixes in a row; an off-road leg is a straight line
-between turn points over a 30 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
+between turn points over a ~15 m grid, so its tolerance is twice as wide. The app then calls `cs_map_route` from the fix. The answer has the matched point, the distance
 along the route, the next maneuver and the distance to it, the one after, the time and distance left, the ETA (if `now` is given) and, on an off-road leg, the bearing,
 distance and climb to the next point. `arrived` is true within `arrive_m` (25) of the end.
 

@@ -131,7 +131,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// No off-road data: the stand-ins are never read (the request is made with off-road set to "never").
+/// No off-road data: the stand-ins are never read (the request is made with off-road set to "never"; an off-road mode
+/// is refused because the stand-in pack covers nowhere).
 struct NoPack;
 struct NoElevation;
 
@@ -151,6 +152,9 @@ impl PackSource for NoPack {
     fn mvum_in_box(&self, _: f64, _: f64, _: f64, _: f64) -> cache_offroad::pack::PResult<Vec<cache_offroad::pack::MvumFeature>> {
         Ok(vec![])
     }
+    fn covers(&self, _: f64, _: f64) -> bool {
+        false
+    }
 }
 impl ElevationSource for NoElevation {
     fn read_elevation(&self, _: i64, _: i64, _: usize, _: usize) -> Result<Vec<f32>, cache_offroad::elevation::ElevError> {
@@ -158,14 +162,21 @@ impl ElevationSource for NoElevation {
     }
 }
 
-/// The modes of the tool (AIDA's): drive, walk, bike. Off-road legs come back inside the result when an end is away from
-/// the road network (drive searches with the vehicle-class modes, walk on foot, bike on a two-wheeler).
+/// The modes of the tool: AIDA's drive, walk, bike, where off-road legs come back inside the result when an end is away
+/// from the road network (drive searches with the vehicle-class modes, walk on foot, bike on a two-wheeler); and the
+/// off-road modes, which route the whole trip off-road: offroad_foot on foot, offroad_vehicle with navi's unified Auto
+/// search (4x4, ATV, two-wheeler, on foot where no vehicle can go).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ModeArg {
     Drive,
     Walk,
     Bike,
+    OffroadFoot,
+    OffroadVehicle,
 }
+
+/// The tool's `mode` values, in schema order.
+pub const MODES: [&str; 5] = ["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"];
 
 impl ModeArg {
     fn parse(s: &str) -> Option<ModeArg> {
@@ -173,6 +184,8 @@ impl ModeArg {
             "drive" => ModeArg::Drive,
             "walk" => ModeArg::Walk,
             "bike" => ModeArg::Bike,
+            "offroad_foot" => ModeArg::OffroadFoot,
+            "offroad_vehicle" => ModeArg::OffroadVehicle,
             _ => return None,
         })
     }
@@ -184,6 +197,8 @@ impl ModeArg {
             ModeArg::Drive => TravelMode::Drive,
             ModeArg::Walk => TravelMode::Walk,
             ModeArg::Bike => TravelMode::Bike,
+            ModeArg::OffroadFoot => TravelMode::OffroadFoot,
+            ModeArg::OffroadVehicle => TravelMode::OffroadVehicle,
         }
     }
 }
@@ -453,7 +468,7 @@ impl Tool for NavigateTool {
         }
         Some(json!({"type": "function", "function": {
             "name": "navigate",
-            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
             "strict": true,
             "parameters": {"type": "object", "properties": {
                 "from": {"type": "string", "maxLength": 300,
@@ -462,7 +477,8 @@ impl Tool for NavigateTool {
                        "description": "Destination place name, for a named place. For \"nearest X\" give to_type instead."},
                 "to_type": {"type": "string", "enum": self.to_types(),
                             "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."},
-                "mode": {"type": "string", "enum": ["drive", "walk", "bike"]},
+                "mode": {"type": "string", "enum": MODES,
+                         "description": "drive, walk and bike follow roads and paths. offroad_foot (on foot) and offroad_vehicle (4x4, ATV or dirt bike, on foot where no vehicle can go) go cross-country the whole way over trails, tracks and open ground, where off-road data is installed."},
                 "near": {"type": "string", "minLength": 1, "maxLength": 200,
                          "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
                 "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
@@ -627,7 +643,7 @@ impl Args {
             }
         };
         let mode = s("mode")?.ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "mode: required"))?;
-        let mode = ModeArg::parse(&mode).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "mode: must be one of drive, walk, bike"))?;
+        let mode = ModeArg::parse(&mode).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "mode: must be one of drive, walk, bike, offroad_foot, offroad_vehicle"))?;
         let land_access = match s("land_access")? {
             None => Boundary::Pragmatic,
             Some(x) => Boundary::from_name(&x).ok_or_else(|| err(ToolError::BAD_ARGUMENTS, "land_access: must be one of strict, pragmatic, emergency"))?,

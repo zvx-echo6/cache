@@ -158,6 +158,9 @@ fn options_are_checked() {
     assert!(parse_opts(&json!({"alternatives": 9})).is_err());
     let (m, l, a) = parse_opts(&json!({"mode": "walk", "land_access": "strict", "alternatives": false})).unwrap();
     assert_eq!((m, l, a), (TravelMode::Walk, Boundary::Strict, 0));
+    let (m, l, _) = parse_opts(&json!({"mode": "offroad_vehicle", "land_access": "emergency"})).unwrap();
+    assert_eq!((m, l), (TravelMode::OffroadVehicle, Boundary::Emergency));
+    assert_eq!(parse_opts(&json!({"mode": "offroad_foot"})).unwrap().0, TravelMode::OffroadFoot);
     assert_eq!(parse_opts(&json!({})).unwrap().2, 2);
 }
 
@@ -305,4 +308,17 @@ fn the_tile_stream_gets_every_stop_once_before_the_route() {
     let (r, _) = route(&c, &req(vec![end("V", 42.6, -113.6)], 0)).unwrap();
     assert_eq!(r["ok"], true);
     assert_eq!(*rec.0.lock().unwrap(), vec![vec![(42.5, -113.8), (42.6, -113.6), (42.5, -113.5)]]);
+}
+
+#[test]
+fn an_off_road_mode_without_the_off_road_data_is_a_failed_route_that_says_so() {
+    let mut r = req(vec![], 2);
+    r.mode = TravelMode::OffroadFoot;
+    r.land_access = Boundary::Strict;
+    let (out, active) = route(&core(6, 2), &r).unwrap();
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["mode"], "offroad_foot");
+    assert_eq!(out["errors"][0]["code"], "not_set_up");
+    assert_eq!(out["errors"][0]["message"], cache_offroad::directions::OFFROAD_DATA_MISSING);
+    assert!(active.is_empty());
 }

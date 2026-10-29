@@ -18,6 +18,7 @@ release notes).
 - Weather: turn it on in one tap from the Weather screen or Home
 - A place you save is watched for weather and alerts
 - Models starts with a short list of recommended models, each with its size and whether it fits your phone
+- Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes

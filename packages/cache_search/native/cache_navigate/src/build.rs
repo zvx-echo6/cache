@@ -7,8 +7,9 @@ use cache_offroad::offroad_legs::{bearing_deg, cardinal, round_py, Step};
 use cache_tool::ToolError;
 use serde_json::{json, Map, Value};
 
-/// AIDA's OFFROAD_NOTE, verbatim.
-const OFFROAD_NOTE: &str = "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.";
+/// AIDA's OFFROAD_NOTE, with the grid size corrected: AIDA says ~30 m, but the router's grid is the global z12 pixel grid
+/// (2^21 pixels around the world: 19 m at the equator, 13-15 m across the continental US).
+const OFFROAD_NOTE: &str = "Off-road legs are straight lines between turn points over a ~15 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.";
 
 /// "25 minutes old", "1 day old": the age in plain words, rounded down.
 pub fn age_words(secs: i64) -> String {
@@ -53,7 +54,7 @@ fn travel_phrase(t: &str) -> String {
 }
 
 /// AIDA's `_step_text`: navi's instruction, or for an off-road step what to follow, heading, length, slope, climb and
-/// terrain, prefixed with how it is travelled (except walking legs on a walking trip).
+/// terrain, prefixed with how it is travelled (except walking legs on a walking or off-road foot trip).
 pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
     if let Some(i) = s.instruction.as_deref().filter(|i| !i.is_empty()) {
         return i.to_string();
@@ -90,7 +91,7 @@ pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
         text.push_str(&format!(" ({})", climb.join(" ")));
     }
     match s.mode.as_deref() {
-        Some(t) if !(t == "foot" && trip_mode == "walk") => format!("{}: {text}", travel_phrase(t)),
+        Some(t) if !(t == "foot" && (trip_mode == "walk" || trip_mode == "offroad_foot")) => format!("{}: {text}", travel_phrase(t)),
         _ => text,
     }
 }
@@ -177,6 +178,9 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("duration_minutes".into(), json!(round_py(d.duration_s as f64 / 60.0, 1)));
     o.insert("direction_from_start".into(), json!(direction_word(bearing_deg((from.lat, from.lon), (to.lat, to.lon)))));
     o.insert("major_roads".into(), Value::Array(d.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k})).collect()));
+    // Traffic on the route: {"delay_min", "as_of", "source", "slow_sections": [{"name", "delay_min"}]}, or null when there is no
+    // traffic data (no traffic source wired yet, no key, offline). Always null for now (project decision, 2026-10-29).
+    o.insert("traffic".into(), Value::Null);
     let offroad_mi: f64 = d.steps.iter().filter(|s| is_offroad(s)).map(|s| s.distance_mi).sum();
     if d.steps.iter().any(is_offroad) {
         o.insert("offroad_mi".into(), json!(round_py(offroad_mi, 2)));
@@ -231,6 +235,16 @@ pub fn route_error(d: &Directions, from: &Resolved, to: &Resolved) -> ToolError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_note_names_the_routers_grid_size() {
+        assert!(OFFROAD_NOTE.contains("~15 m elevation grid"));
+        // the query grid's cell size across the continental US (Gulf coast to the Canadian border)
+        for lat in [26.0, 36.0, 44.0, 48.5] {
+            let m = cache_offroad::grid::GridMeta::from_bbox(lat, lat + 0.05, -114.05, -114.0);
+            assert!((12.0..=17.5).contains(&m.cell_size_m), "{lat}: {}", m.cell_size_m);
+        }
+    }
 
     #[test]
     fn python_floats_and_ages() {
@@ -293,6 +307,8 @@ mod step_tests {
         s.mode = Some("foot".into());
         s.follow = Some(cache_offroad::offroad_legs::Follow { trail_kind: "trail".into(), name: None });
         assert_eq!(step_text(&s, "walk"), "Follow the trail N 0.1 mi, flat (-5 m)");
+        assert_eq!(step_text(&s, "offroad_foot"), "Follow the trail N 0.1 mi, flat (-5 m)");
+        assert_eq!(step_text(&s, "offroad_vehicle"), "On foot: Follow the trail N 0.1 mi, flat (-5 m)");
         assert_eq!(step_text(&s, "drive"), "On foot: Follow the trail N 0.1 mi, flat (-5 m)");
         s.distance_mi = 5.0;
         assert!(step_text(&s, "walk").contains("5.0 mi"));

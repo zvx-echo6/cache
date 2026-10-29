@@ -52,7 +52,7 @@ class GuidanceEngine {
 
   /// The distances (metres) at which the far, near and at-it prompts are due, for the way of travel.
   List<double> get stages => switch (mode) {
-        'walk' => const [150, 60, 20],
+        'walk' || 'offroad_foot' => const [150, 60, 20],
         'bike' => const [300, 120, 40],
         _ => const [800, 300, 90],
       };

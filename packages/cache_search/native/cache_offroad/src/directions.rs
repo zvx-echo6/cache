@@ -19,6 +19,8 @@ pub const DEFAULT_OFFROAD_SNAP_M: f64 = 150.0;
 pub const DEFAULT_MERGE_BEARING_DEG: f64 = 60.0;
 pub const DEFAULT_MIN_LEG_M: f64 = 150.0;
 /// Where the Valhalla tiles end, (S, W, N, E): navi's North America default.
+/// The error message of an off-road mode where no off-road data covers an end (code `not_set_up`).
+pub const OFFROAD_DATA_MISSING: &str = "Off-road directions need off-road data for this area (the off-road pack and the elevation file), and none is installed for it";
 pub const COVERAGE_BBOX: (f64, f64, f64, f64) = (7.0, -169.0, 84.0, -52.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,11 @@ pub enum TravelMode {
     Drive,
     Walk,
     Bike,
+    /// Off-road the whole way on foot: trails and open ground (the unified search with only foot seeded).
+    OffroadFoot,
+    /// Off-road the whole way by vehicle: navi's unified Auto search over 4x4, ATV, two-wheeler and foot, switching at
+    /// parking lots, trailheads and road ends (on foot for the last part where no vehicle can go).
+    OffroadVehicle,
 }
 impl TravelMode {
     pub fn name(self) -> &'static str {
@@ -33,6 +40,8 @@ impl TravelMode {
             TravelMode::Drive => "drive",
             TravelMode::Walk => "walk",
             TravelMode::Bike => "bike",
+            TravelMode::OffroadFoot => "offroad_foot",
+            TravelMode::OffroadVehicle => "offroad_vehicle",
         }
     }
     pub fn from_name(s: &str) -> Option<TravelMode> {
@@ -40,6 +49,8 @@ impl TravelMode {
             "drive" => Some(TravelMode::Drive),
             "walk" => Some(TravelMode::Walk),
             "bike" => Some(TravelMode::Bike),
+            "offroad_foot" => Some(TravelMode::OffroadFoot),
+            "offroad_vehicle" => Some(TravelMode::OffroadVehicle),
             _ => None,
         }
     }
@@ -48,15 +59,22 @@ impl TravelMode {
             TravelMode::Drive => "auto",
             TravelMode::Walk => "pedestrian",
             TravelMode::Bike => "bicycle",
+            TravelMode::OffroadFoot => "pedestrian",
+            TravelMode::OffroadVehicle => "auto",
         }
     }
-    /// Off-road router request mode: drive mixes vehicle/4w/2w/foot; walk = foot; bike = 2w.
+    /// Off-road router request mode: drive and offroad_vehicle mix vehicle/4w/2w/foot; walk and offroad_foot = foot; bike = 2w.
     pub fn router_mode(self) -> RequestMode {
         match self {
-            TravelMode::Drive => RequestMode::Auto,
-            TravelMode::Walk => RequestMode::Single(Mode::Foot),
+            TravelMode::Drive | TravelMode::OffroadVehicle => RequestMode::Auto,
+            TravelMode::Walk | TravelMode::OffroadFoot => RequestMode::Single(Mode::Foot),
             TravelMode::Bike => RequestMode::Single(Mode::TwoW),
         }
+    }
+    /// The off-road modes route the whole trip with the off-road router (no road route first), and only where the
+    /// off-road data covers both ends.
+    pub fn offroad_only(self) -> bool {
+        matches!(self, TravelMode::OffroadFoot | TravelMode::OffroadVehicle)
     }
 }
 
@@ -192,8 +210,11 @@ fn in_coverage(lat: f64, lon: f64) -> bool {
     s <= lat && lat <= n && w <= lon && lon <= e
 }
 
-fn route_id(frm: (f64, f64), to: (f64, f64), mode: &str, version: &str) -> String {
+/// navi's route id; a land access other than pragmatic (navi's only one) is part of the key, so the same trip under another
+/// land access is another route.
+fn route_id(frm: (f64, f64), to: (f64, f64), mode: &str, boundary: Boundary, version: &str) -> String {
     use sha2::{Digest, Sha256};
+    let mode = if boundary == Boundary::Pragmatic { mode.to_string() } else { format!("{mode}|{}", boundary.name()) };
     let key = format!("{:.6},{:.6}|{:.6},{:.6}|{}|{}", frm.0, frm.1, to.0, to.1, mode, version);
     Sha256::digest(key.as_bytes()).iter().take(8).map(|b| format!("{:02x}", b)).collect()
 }
@@ -448,7 +469,13 @@ impl Env<'_> {
 
     /// `POST /api/directions`.
     pub fn directions(&self, req: &DirectionsRequest) -> Directions {
-        let rid = route_id(req.from, req.to, req.mode.name(), &self.version);
+        let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version);
+        if req.mode.offroad_only() {
+            if !(self.pack.covers(req.from.0, req.from.1) && self.pack.covers(req.to.0, req.to.1)) {
+                return self.fail(req, &rid, DirectionsError::new("not_set_up", OFFROAD_DATA_MISSING));
+            }
+            return self.offroad_response(req, &rid);
+        }
         if req.offroad == OffroadChoice::Always {
             return self.offroad_response(req, &rid);
         }
@@ -468,10 +495,10 @@ impl Env<'_> {
     /// with its own route id (`<id>-1`, `<id>-2`). Road only: an end away from the roads gets no off-road leg here, so callers
     /// offer these only for a route that has none. Empty when the router gives no alternatives.
     pub fn alternatives(&self, req: &DirectionsRequest, count: usize) -> Vec<Directions> {
-        if req.offroad == OffroadChoice::Always || count == 0 {
+        if req.offroad == OffroadChoice::Always || req.mode.offroad_only() || count == 0 {
             return vec![];
         }
-        let rid = route_id(req.from, req.to, req.mode.name(), &self.version);
+        let rid = route_id(req.from, req.to, req.mode.name(), req.boundary, &self.version);
         let mut road_only = req.clone();
         road_only.offroad = OffroadChoice::Never;
         self.valhalla

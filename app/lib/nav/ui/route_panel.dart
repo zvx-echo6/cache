@@ -46,6 +46,8 @@ class RoutePanel extends StatelessWidget {
   final Fmt fmt;
 
   static const _modes = [('drive', Icons.directions_car, 'Drive'), ('walk', Icons.directions_walk, 'Walk'), ('bike', Icons.directions_bike, 'Bike')];
+  static const _offroadModes = [('offroad_foot', 'On foot'), ('offroad_vehicle', 'Vehicle')];
+  static const _landAccess = [('strict', 'Stay on open land'), ('pragmatic', 'Usual'), ('emergency', 'Emergency: any land')];
 
   @override
   Widget build(BuildContext context) {
@@ -59,49 +61,95 @@ class RoutePanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                for (final m in _modes)
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: _ModeButton(
-                        key: ValueKey('mode-${m.$1}'),
-                        icon: m.$2,
-                        label: m.$3,
-                        selected: nav.mode == m.$1,
-                        onTap: () => nav.setMode(m.$1),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (nav.routing)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+            // Everything above Start scrolls when it is taller than about half the screen (large text, the off-road choices).
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: k.accent)),
-                    const SizedBox(width: 12),
-                    Text('Finding the way', style: TextStyle(fontSize: 17, color: k.secondary)),
+                    Row(
+                      children: [
+                        for (final m in _modes)
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 3),
+                              child: _ModeButton(
+                                key: ValueKey('mode-${m.$1}'),
+                                icon: m.$2,
+                                label: m.$3,
+                                selected: nav.mode == m.$1,
+                                onTap: () => nav.setMode(m.$1),
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: _ModeButton(
+                              key: const ValueKey('mode-offroad'),
+                              icon: Icons.terrain,
+                              label: 'Off-road',
+                              selected: nav.offroad,
+                              onTap: () => nav.setMode(nav.offroadMode),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (nav.offroad) ...[
+                      const SizedBox(height: 8),
+                      _Choices(
+                        choices: _offroadModes,
+                        selected: nav.mode,
+                        keyPrefix: 'offroad-mode',
+                        onSelected: nav.setMode,
+                      ),
+                      const SizedBox(height: 6),
+                      _Choices(
+                        choices: _landAccess,
+                        selected: nav.landAccess,
+                        keyPrefix: 'land',
+                        onSelected: nav.setLandAccess,
+                      ),
+                      if (nav.landAccess == 'emergency')
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text('Ignores land rules: the route may cross private or closed land.',
+                              key: const ValueKey('land-emergency-warning'), style: TextStyle(fontSize: 14, color: k.warning)),
+                        ),
+                    ],
+                    const SizedBox(height: 10),
+                    if (nav.routing)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: k.accent)),
+                            const SizedBox(width: 12),
+                            Text('Finding the way', style: TextStyle(fontSize: 17, color: k.secondary)),
+                          ],
+                        ),
+                      )
+                    else if (nav.routeError != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
+                      )
+                    else ...[
+                      for (var i = 0; i < nav.routes.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
+                        ),
+                      if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
+                    ],
                   ],
                 ),
-              )
-            else if (nav.routeError != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Text(nav.routeError!, key: const ValueKey('route-error'), style: TextStyle(fontSize: 17, color: k.emergency)),
-              )
-            else ...[
-              for (var i = 0; i < nav.routes.length; i++)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: _RouteCard(index: i, route: nav.routes[i], selected: i == nav.routeIndex, fmt: fmt, onTap: () => nav.selectRoute(i)),
-                ),
-              if (nav.route?.hasOffroad ?? false) _OffroadNote(route: nav.route!, fmt: fmt),
-            ],
+              ),
+            ),
             const SizedBox(height: 4),
             FilledButton.icon(
               key: const ValueKey('route-start'),
@@ -139,17 +187,54 @@ class _ModeButton extends StatelessWidget {
           onTap: onTap,
           child: SizedBox(
             height: 48,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, size: 22, color: selected ? k.accent : k.secondary),
-                const SizedBox(width: 6),
-                Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: selected ? k.accent : k.text)),
-              ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(icon, size: 22, color: selected ? k.accent : k.secondary),
+                    const SizedBox(width: 6),
+                    Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: selected ? k.accent : k.text)),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A row of choices, one selected (the off-road way of travel, the land access).
+class _Choices extends StatelessWidget {
+  const _Choices({required this.choices, required this.selected, required this.keyPrefix, required this.onSelected});
+
+  final List<(String, String)> choices;
+  final String selected;
+  final String keyPrefix;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        for (final c in choices)
+          ChoiceChip(
+            key: ValueKey('$keyPrefix-${c.$1}'),
+            label: Text(c.$2, style: TextStyle(fontSize: 15, color: selected == c.$1 ? k.accent : k.text)),
+            selected: selected == c.$1,
+            showCheckmark: false,
+            selectedColor: k.accent.withValues(alpha: 0.2),
+            side: BorderSide(color: selected == c.$1 ? k.accent : k.secondary.withValues(alpha: 0.5)),
+            onSelected: (_) => onSelected(c.$1),
+          ),
+      ],
     );
   }
 }

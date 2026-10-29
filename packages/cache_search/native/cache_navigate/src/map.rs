@@ -26,7 +26,7 @@ const KEEP_ROUTES: usize = 8;
 pub const OFF_ROUTE_M: f64 = 50.0;
 pub const OFF_ROUTE_FIXES: usize = 3;
 pub const ARRIVE_M: f64 = 25.0;
-/// An off-road leg is a straight line between turn points over a 30 m grid: its tolerance is this many times wider.
+/// An off-road leg is a straight line between turn points over a ~15 m grid (the global z12 pixel grid): its tolerance is this many times wider.
 const OFFROAD_TOLERANCE: f64 = 2.0;
 /// The window around the last matched position that a fix is matched in first, so a route that comes back past itself
 /// is not mistaken for the other pass.
@@ -72,7 +72,7 @@ pub fn parse_opts(v: &Value) -> Result<(TravelMode, Boundary, usize), ToolError>
     let bad = |m: String| ToolError::new(ToolError::BAD_ARGUMENTS, m);
     let mode = match v.get("mode") {
         None | Some(Value::Null) => TravelMode::Drive,
-        Some(m) => m.as_str().and_then(TravelMode::from_name).ok_or_else(|| bad("mode: must be one of drive, walk, bike".into()))?,
+        Some(m) => m.as_str().and_then(TravelMode::from_name).ok_or_else(|| bad("mode: must be one of drive, walk, bike, offroad_foot, offroad_vehicle".into()))?,
     };
     let land = match v.get("land_access") {
         None | Some(Value::Null) => Boundary::Pragmatic,
