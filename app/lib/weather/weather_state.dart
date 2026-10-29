@@ -617,6 +617,25 @@ class WeatherState extends ChangeNotifier {
     return out;
   }
 
+  String? _hereSeen;
+
+  /// The phone's position changed (the app calls this from the location service). The position is read when asked for, so
+  /// without this Home and the place lists kept "Where I am" as "not known yet" after the first fix arrived, until something
+  /// else changed. Listeners hear when "Where I am" gains, loses or moves its position (its key).
+  void positionChanged() {
+    final p = position?.call();
+    final key = p == null ? null : _hereKey(p.lat, p.lon);
+    if (key == _hereSeen) return;
+    _hereSeen = key;
+    notifyListeners();
+  }
+
+  /// "Where I am" is ticked and its position is not known yet: the place is waiting, not missing.
+  bool get waitingForPosition => settings.watchedPlaces.contains(kWatchHere) && position?.call() == null;
+
+  /// What Home says while it has no place to talk about.
+  String get _noPlaceWords => waitingForPosition ? 'Waiting for your position' : 'Choose a place to watch in Settings';
+
   /// The key for "where the phone is": the position rounded to 0.01 degrees, which the core's live_data tool also looks for.
   static String _hereKey(double lat, double lon) => 'at:${lat.toStringAsFixed(2)},${lon.toStringAsFixed(2)}';
 
@@ -661,7 +680,9 @@ class WeatherState extends ChangeNotifier {
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     if (srcs.isEmpty) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
     final places = await watchedPlaces();
-    if (places.isEmpty) return const UpdateReport(nothingToDo: 'No place is being watched. Choose one under Places.');
+    if (places.isEmpty) {
+      return UpdateReport(nothingToDo: waitingForPosition ? 'Waiting for your position.' : 'No place is being watched. Choose one under Places.');
+    }
     try {
       await policy.checkUpdate(anyway: anyway);
     } on MobileDataBlocked catch (e) {
@@ -865,7 +886,7 @@ class WeatherState extends ChangeNotifier {
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     if (forecast.isEmpty) return 'Not set up yet';
     final p = await homePlace();
-    if (p == null) return 'Choose a place to watch in Settings';
+    if (p == null) return _noPlaceWords;
     for (final v in await viewFor(p)) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
       if (v.expired) return 'Forecast expired for ${p.name} · needs a connection';
@@ -893,7 +914,7 @@ class WeatherState extends ChangeNotifier {
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     if (counted.isEmpty) return 'Not set up yet';
     final p = await homePlace();
-    if (p == null) return 'Choose a place to watch in Settings';
+    if (p == null) return _noPlaceWords;
     var warnings = 0, fires = 0;
     String? firstWarning, newest;
     var any = false, expired = false;

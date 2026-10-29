@@ -671,6 +671,38 @@ void main() {
       expect(await h.weather.homeWeatherLine(), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
     });
 
+    test('Home waits for the position while "Where I am" is ticked, and hears when it arrives', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.here = null;
+      expect(h.weather.waitingForPosition, isTrue);
+      expect(await h.weather.homeWeatherLine(), 'Waiting for your position');
+      expect(await h.weather.homeAlertsLine(), 'Waiting for your position');
+      expect((await h.weather.updateNow()).words, 'Waiting for your position.');
+      var heard = 0;
+      h.weather.addListener(() => heard++);
+      h.weather.positionChanged();
+      expect(heard, 0, reason: 'no position yet: nothing to tell');
+      h.here = (lat: 42.54, lon: -113.79);
+      h.weather.positionChanged();
+      expect(heard, 1, reason: 'the first fix is told');
+      h.here = (lat: 42.541, lon: -113.791);
+      h.weather.positionChanged();
+      expect(heard, 1, reason: 'a move inside the same 0.01 degree key is not');
+      h.here = (lat: 42.60, lon: -113.79);
+      h.weather.positionChanged();
+      expect(heard, 2);
+      h.core.stored['openmeteo-forecast'] = forecast();
+      expect(await h.weather.homeWeatherLine(), contains('Where I am'));
+      // Not ticked: Home asks for a place, as before.
+      h.here = null;
+      h.settings.setWatched('here', false);
+      expect(h.weather.waitingForPosition, isFalse);
+      expect(await h.weather.homeWeatherLine(), 'Choose a place to watch in Settings');
+      expect(await h.weather.homeAlertsLine(), 'Choose a place to watch in Settings');
+    });
+
     test('Home weather: an expired forecast says it needs a connection', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);

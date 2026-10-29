@@ -30,6 +30,7 @@ release notes).
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
+- Home: the Weather and Alerts cards pick up your position as soon as the phone has it, and say "Waiting for your position" until then instead of asking you to choose a place
 - Home: the Alerts card counts warnings and fires for one place, the same place as the Weather card, and names it, instead of adding up every watched place
 - Weather places: each watched place is on its own line, and a dropped pin is named like "Pin 40.76, -111.89", so its coordinates no longer read as two places
 - Cache no longer asks where you are when the phone already knows

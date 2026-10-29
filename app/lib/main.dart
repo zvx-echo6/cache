@@ -298,6 +298,8 @@ class _CacheAppState extends State<CacheApp> {
       if (e is PlaceSaved) appActions.publishWatch();
     });
     location.addListener(_rememberPlace);
+    // Home's Weather and Alerts cards and the place lists follow "Where I am" as its position arrives and moves.
+    location.addListener(weather.positionChanged);
     nav.addListener(_onNav);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
@@ -387,6 +389,7 @@ class _CacheAppState extends State<CacheApp> {
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
+    location.removeListener(weather.positionChanged);
     nav.removeListener(_onNav);
     app.session.dispose();
     browse.dispose();
