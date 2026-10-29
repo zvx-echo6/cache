@@ -113,7 +113,7 @@ fn to_matches_a_layer_point_and_the_same_name_elsewhere_is_a_candidate() {
     );
     assert_eq!(
         v["other_destination_candidates"].to_string(),
-        r#"[{"place_name":"North gate","kind":"layer_point","kind_label":"Rally Points","street":null,"locality":"Burley","county":null,"state":null,"distance_km":1.56}]"#
+        r#"[{"place_name":"North gate","kind":"layer_point","kind_label":"Rally Points","street":null,"locality":"Burley","county":null,"state":null,"distance_km":1.5653280747254208}]"#
     );
 }
 

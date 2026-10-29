@@ -683,7 +683,9 @@ mod tests {
         let split = pts.iter().find(|p| p.fields["offset"].as_str().unwrap().starts_with("split")).unwrap();
         assert_eq!(split.fields["offset"], "split: transmit 147.45 MHz");
         assert!(pts.iter().all(|p| p.fields["list"] == "repeaters_2610290107.kml"));
-        assert!(pts.iter().all(|p| p.fields["on_air"] == "yes" || p.fields["on_air"] == "no"));
+        // "On-air: Unknown" leaves on_air out
+        let on_air = |w: Option<&str>| pts.iter().filter(|p| p.fields.get("on_air").and_then(Value::as_str) == w).count();
+        assert_eq!((on_air(Some("yes")), on_air(Some("no")), on_air(None)), (187, 9, 22));
         // KML alone: every offset amount is missing, the CSV alone: nothing to show
         let k = import(&s, json!({"kind": "repeaters", "paths": [format!("{dir}/repeaters_2610290107.kml")]})).unwrap();
         assert_eq!(k["with_position"], 218);

@@ -437,6 +437,12 @@ Errors for these categories: `repeater` with no list imported is `not_set_up` ("
 enum check reports a value that was never offered first); none within 300 km is `nearby_empty` ("no repeaters within 300 km
 of ...", "no points of the layer \"Rally Points\" within ...").
 
+For captures, `cs serve --layers <file>` (repeatable; KML, KMZ, GPX, GeoJSON, or a layer JSON: a GeoJSON FeatureCollection
+with `"name"` and `"private": true|false`) imports each file as one layer at start, and `--repeaters <file>` (repeatable;
+RepeaterBook-style KML and/or CHIRP CSV) imports all the files given as one merged list, through the same import path as the
+app (`cs_userlayers_import`, with the config's `"user"` store). A later start replaces what an earlier one imported from the
+same files. Private layers are shown like the rest.
+
 ### locate
 
 ```json
