@@ -414,8 +414,9 @@ one place.
 A conversation lives only in memory. To continue a chat in a later session or another process, the app saves
 `cs_conversation_export(conv)` and restores it with `cs_conversation_import(json)`; the restored conversation numbers and reads
 exactly as the original would have (the same later `cs_format` and `cs_tool` calls give byte-identical `content` and `ids`).
-The export holds all the state a conversation has: the id map and what `web_search` showed for each web result (the
-title and snippet `read` falls back to when the page cannot be fetched). Nothing else is kept per conversation.
+The export holds all the state a conversation has: the id map, what `web_search` showed for each web result (the
+title and snippet `read` falls back to when the page cannot be fetched), and the number of confirm cards the `act` tool has
+issued. The host runs of `act` that are still pending are not kept.
 
 Format 1, one JSON object, keys always in this order (the same state always gives the same bytes):
 
@@ -423,7 +424,8 @@ Format 1, one JSON object, keys always in this order (the same state always give
 {"format":1,
  "next_n":4,
  "ids":[{"n":1,"address":"lib:x/1","title":"..."}, ...],
- "web_hits":{"web:https://a.example/1":{"title":"...","snippet":"...","fetched":"2026-10-25 14:20"}, ...}}
+ "web_hits":{"web:https://a.example/1":{"title":"...","snippet":"...","fetched":"2026-10-25 14:20"}, ...},
+ "confirms":2}
 ```
 
 - `format`: the version, an integer. An import of any other number is refused with `unsupported`; a missing or non-integer
@@ -435,6 +437,9 @@ Format 1, one JSON object, keys always in this order (the same state always give
 - `web_hits`: for each `web:<url>` address a `web_search` returned, `title` and `snippet` (as shown to the model, already
   cleaned) and `fetched` (local `YYYY-MM-DD HH:MM`, used in `read`'s header line). Keys are sorted by address. May be `{}`
   (and is read as `{}` when absent).
+- `confirms`: the number of confirm cards the `act` tool has issued (the next one is `c<confirms+1>`). The key is last and is
+  left out while it is 0, so a conversation that never used `act` exports exactly as before; absent reads as 0. The format
+  number stays 1, because an older core ignores the key.
 - Unknown keys are ignored on import. An import that fails changes nothing and returns no conversation.
 
 Errors with no handle follow the rest of the conversation calls: NULL, with the error in `cs_last_error(NULL)`.
@@ -456,7 +461,7 @@ in the conversation.
 places with `set_saved_places` (default `NoSavedPlaces`) and the query embedder of `search` with
 `set_query_embedder` (a callback `&str -> Option<(model id, vector)>`; with none, search is keyword-only, as
 `cs_search` is without a `query_vector`). `cs_open` registers the tools of the config's "user", "live" and "routing"
-sections (see Wiring and headless, and navigate below); it also registers `calculate` (cache_calc; it needs no data, so it is always offered) and `web_search`. `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data, calculate,
+sections (see Wiring and headless, and navigate below); it also registers `calculate` (cache_calc; it needs no data, so it is always offered), `act` (cache_act; offered once the host installs actions, see Actions below) and `web_search`. `cs_tool_schemas` lists tools in the order search, read, navigate, nearby, locate, live_data, calculate, act,
 web_search (a tool with another name follows, in registration order) and leaves out a tool whose `schema()` is
 None.
 
@@ -1033,6 +1038,35 @@ may have cached reads.
   2 CPUs and 1 GiB cap (about 14,400 docs/s), 594 MB index in 6 segments, peak anonymous memory 394 MB.
   Keyword query top 10: median 25 ms first pass, 3 ms warm.
 - Binary size: test binary with Edge 37.5 MB stripped (Linux x86_64).
+
+## Actions (the `act` tool, crate `cache_act`)
+
+The contract with the app is docs/ACTIONS.md; the tool as the model sees it is in docs/TOOLS.md. The core never runs an action
+and has no callbacks: the host pushes definitions in and plays the exchanges.
+
+- **`cache_act`** holds the definitions (`def`: parsing, with a reason for each refusal), the description the model reads
+  (`render`, byte-exact), the checks (`check`), `place` resolution (`place`: "lat,lon", then the saved places, then the places
+  pack through `ToolCtx.geocoder`, with the phone's fix as the point to prefer), the installed set (`state::ActState`, shared
+  between the handle and the registered `ActTool`) and the host's reply and outcome (`reply`).
+- **Registration.** `Handle::open` registers `ActTool` after `calculate`. Its `schema()` is `None` until
+  `cs_act_set_definitions` lists at least one action (modules switched off with `cs_act_set_modules_off` are left out), so
+  every existing tool list is unchanged. Definitions live in memory only.
+- **Two framework hooks.** `Tool::run_in(ctx, args, &mut ConvState)` (default: `run`) gives a tool a per-conversation counter
+  without changing `ToolCtx`: `act` counts confirm cards (`c1`, ...) and host runs (`r1`, ...) there, and the conversation owns the
+  state (`Conversation.tool_state`). `Tool::checks_own_arguments` (default false) lets `act` report argument problems with
+  `field` and `reason` instead of the generic validator's text. The result of an `act` call is not numbered by `cs_tool`: its
+  fields are the user's own values (a field may be called `address`).
+- **`Geocoder::describe_point(lat, lon)`** (default `None`) gives "12 mi NE of Stanley" for the confirm card; `cache_places`
+  builds it the way the map search words the same thing.
+- **Exchanges.** A `change` call returns `needs_confirmation` (counter `confirms`, exported). A `read` or `open` call returns
+  `host_run` with a `run_id` (pending in the conversation, not exported); `cs_act_finish(conv, run_id, reply)` removes it, numbers
+  the `"address"` objects in the result in the conversation's id map and returns the tool result. A reply that is malformed
+  leaves the run pending. `cs_act_outcome(conv, outcome)` shapes the system message of a tap, numbering a done result the same way.
+  `cs_act_resolve` runs the checks without a conversation and takes no id.
+- **Headless.** `cs serve --actions <defs.json> --action-results <file>` plays the host (format in docs/TOOLS.md), with
+  `/act/*` endpoints that mirror the calls.
+- **Tests.** `cache_act/tests/act.rs` (definitions, rendering bytes, checks, places, the exchanges), `cache_search/tests/act_ffi.rs`
+  (the C ABI round trip, numbering, export and import), `cli/tests/act.rs` (`cs serve`).
 
 ## Saved places and live data (crates `cache_user` and `cache_live`)
 
