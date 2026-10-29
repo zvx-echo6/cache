@@ -165,9 +165,12 @@ cap is about 470 MB. Timing, 107 km route (12.3 M cells), release build on the d
    navi routes explicit modes through the A/B/C/D scenario handlers with different results; there is nothing to match.
    For directions this means **walk and bike differ from navi by design**: navi sends walk to its foot scenario handler
    and bike to 2w; Cache runs the unified search seeded with foot / 2w. Drive (the unified Auto search) matches navi.
+   The off-road modes (`TravelMode::OffroadFoot`, `OffroadVehicle`) skip the road route and run the whole trip as navi's
+   `/api/offroute` does: `Single(Foot)` and `Auto`; they need the pack to cover both ends (`PackSource::covers`, the pack bbox),
+   else the directions fail with `not_set_up`.
 6. Directions: the `near` reverse-geocode of both ends is not done (`near` is null; navi asks navi-geo over HTTP); follow-leg
    names are null (navi reads PostGIS `entry_points`, which Cache has no table for; `Env.namer` is a hook for one); `route_id`
-   hashes the crate version instead of navi's git sha; the land-access mode is a request field (navi's directions hard-code
+   hashes the crate version instead of navi's git sha (and the land access, when it is not pragmatic); the land-access mode is a request field (navi's directions hard-code
    pragmatic); optional per-end OSM category hints seed the search (navi's directions send none).
 7. Extra request fields for tests: `start_modes`/`end_modes` override the category/spatial seeding.
 8. Per-mode layers are built sequentially (navi `LAYER_WORKERS=1`); `rayon` is used only for the blur, the corridor
@@ -302,7 +305,7 @@ offroad_pack inspect --pack offroad.sqlite
 offroad_pack route --pack P --elevation E [--valhalla-lib shim.dll --valhalla-tiles tiles.tar] --start lat,lon --end lat,lon \
     [--mode auto|foot|2w|4w|vehicle] [--boundary ..] [--start-category C --end-category C | --start-modes a,b --end-modes a,b] \
     [--affinity foot=2,4w=0.5] [--max-cells N] [--navi-layers --friction-dir .. --class-dir .. --trails .. --barriers .. --wilderness ..]
-offroad_pack directions --pack P --elevation E [--valhalla-lib .. --valhalla-tiles ..] --from lat,lon --to lat,lon [--mode drive|walk|bike] \
+offroad_pack directions --pack P --elevation E [--valhalla-lib .. --valhalla-tiles ..] --from lat,lon --to lat,lon [--mode drive|walk|bike|offroad_foot|offroad_vehicle] \
     [--offroad auto|never|always] [--boundary ..] [--json out.json]
 offroad_pack probe --pack P --elevation E --at lat,lon [--radius cells] [--map 1]
 offroad_pack resample-check --bbox S,N,W,E --friction-dir .. --class-dir .. --trails .. --barriers .. --wilderness ..
@@ -324,7 +327,7 @@ let nav = Navigator::new(&pack, &elevation, &valhalla);        // SqlitePack, Pm
 let d: Directions = nav.navigate(&NavigateRequest::new(
     Waypoint::point(44.03, -114.99),                            // or Waypoint::place(name, lat, lon) / place_with_category
     Waypoint::place("Redfish Lake Lodge", 44.1359, -114.9145),
-    TravelMode::Drive,                                          // Drive | Walk | Bike
+    TravelMode::Drive,                                          // Drive | Walk | Bike | OffroadFoot | OffroadVehicle
     Boundary::Pragmatic))?;                                     // land access: Strict | Pragmatic | Emergency
 let body = d.to_json();                                         // navi's /api/directions response shape
 ```

@@ -53,7 +53,7 @@ fn travel_phrase(t: &str) -> String {
 }
 
 /// AIDA's `_step_text`: navi's instruction, or for an off-road step what to follow, heading, length, slope, climb and
-/// terrain, prefixed with how it is travelled (except walking legs on a walking trip).
+/// terrain, prefixed with how it is travelled (except walking legs on a walking or off-road foot trip).
 pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
     if let Some(i) = s.instruction.as_deref().filter(|i| !i.is_empty()) {
         return i.to_string();
@@ -90,7 +90,7 @@ pub(crate) fn step_text(s: &Step, trip_mode: &str) -> String {
         text.push_str(&format!(" ({})", climb.join(" ")));
     }
     match s.mode.as_deref() {
-        Some(t) if !(t == "foot" && trip_mode == "walk") => format!("{}: {text}", travel_phrase(t)),
+        Some(t) if !(t == "foot" && (trip_mode == "walk" || trip_mode == "offroad_foot")) => format!("{}: {text}", travel_phrase(t)),
         _ => text,
     }
 }
@@ -293,6 +293,8 @@ mod step_tests {
         s.mode = Some("foot".into());
         s.follow = Some(cache_offroad::offroad_legs::Follow { trail_kind: "trail".into(), name: None });
         assert_eq!(step_text(&s, "walk"), "Follow the trail N 0.1 mi, flat (-5 m)");
+        assert_eq!(step_text(&s, "offroad_foot"), "Follow the trail N 0.1 mi, flat (-5 m)");
+        assert_eq!(step_text(&s, "offroad_vehicle"), "On foot: Follow the trail N 0.1 mi, flat (-5 m)");
         assert_eq!(step_text(&s, "drive"), "On foot: Follow the trail N 0.1 mi, flat (-5 m)");
         s.distance_mi = 5.0;
         assert!(step_text(&s, "walk").contains("5.0 mi"));

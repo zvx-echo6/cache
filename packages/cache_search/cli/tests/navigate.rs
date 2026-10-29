@@ -249,6 +249,54 @@ fn without_the_off_road_data_roads_still_route_and_the_gap_is_a_warning() {
 }
 
 #[test]
+fn offroad_modes_route_the_whole_trip_off_road_under_each_land_access() {
+    if data().is_none() {
+        eprintln!("skipped: the Idaho data is not set");
+        return;
+    }
+    let t = Tmp::new("offroad-modes");
+    let mut d = Doors::new(&t, true);
+    let schemas: Value = serde_json::from_str(&cli(&["tool-schemas", "--config", &d.cfg_path])).unwrap();
+    let nav = schemas.as_array().unwrap().iter().find(|s| s["function"]["name"] == "navigate").unwrap();
+    if let Ok(dir) = std::env::var("NAVIGATE_OUT_DIR") {
+        std::fs::write(PathBuf::from(dir).join("navigate-schema.json"), serde_json::to_string_pretty(nav).unwrap()).unwrap();
+    }
+    assert_eq!(nav["function"]["parameters"]["properties"]["mode"]["enum"], json!(["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"]));
+    // on foot between two points of the off-road parity set (R08), and by vehicle from Redfish Lake Lodge into the backcountry
+    let trips = [("foot-r08", "offroad_foot", "44.18,-114.95", "44.23,-114.9"), ("vehicle-redfish", "offroad_vehicle", "44.1359,-114.9145", "44.1047,-114.9447")];
+    for (name, mode, from, to) in trips {
+        let mut ids = std::collections::BTreeSet::new();
+        for land in ["strict", "pragmatic", "emergency"] {
+            let v = d.content(&format!("offroad-{name}-{land}"), json!({"from": from, "to": to, "mode": mode, "land_access": land}), None);
+            if v["ok"] == false {
+                // no way under strict land access is the router's no_route, never a road route instead
+                assert_eq!((land, err_type(&v)), ("strict", "no_route"), "{v}");
+                continue;
+            }
+            assert_eq!(v["mode"], mode);
+            assert!(v["offroad_mi"].as_f64().unwrap() > 0.0, "{v}");
+            assert!(v.get("warnings").is_none(), "{v}");
+            ids.insert(v["route_id"].as_str().unwrap().to_string());
+            // the map's snapshot of the same route says the mode and the land access
+            let full: Value = serde_json::from_str(&d.core.map_route(&json!({"route_id": v["route_id"]}).to_string()).unwrap()).unwrap();
+            assert_eq!((full["mode"].as_str(), full["land_access"].as_str(), full["routing"].as_str()), (Some(mode), Some(land), Some("offroad")));
+            assert_eq!(full["alternatives"], json!([]));
+        }
+        assert!(ids.len() >= 2, "{name}: each land access is its own route");
+    }
+
+    // without the off-road data an off-road mode says what is missing, through every door
+    let t2 = Tmp::new("offroad-modes-road");
+    let mut road = Doors::new(&t2, false);
+    let e = road.content("offroad-foot-no-data", json!({"from": "44.18,-114.95", "to": "44.23,-114.9", "mode": "offroad_foot"}), None);
+    assert_eq!(err_type(&e), "not_set_up");
+    assert!(e["error"]["detail"].as_str().unwrap().contains("off-road data for this area"), "{e}");
+    // and an area the installed off-road pack does not cover is the same
+    let e = d.content("offroad-vehicle-outside", json!({"from": "47.6062,-122.3321", "to": "47.25,-122.44", "mode": "offroad_vehicle"}), None);
+    assert_eq!(err_type(&e), "not_set_up", "{e}");
+}
+
+#[test]
 fn navigate_is_not_offered_without_the_routing_data() {
     let t = Tmp::new("none");
     let mut d = Doors::with_routing(&t, None);

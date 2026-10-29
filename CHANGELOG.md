@@ -6,6 +6,9 @@ release notes).
 
 ## Unreleased
 
+### New
+- Maps: off-road directions on foot or by vehicle, with a land-access choice, where off-road data is installed
+
 ## 1.0.0 (iOS build 22) - 2026-10-28
 
 ### Fixed

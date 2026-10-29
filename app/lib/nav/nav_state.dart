@@ -114,6 +114,17 @@ class NavState extends ChangeNotifier {
   // ---- directions ---------------------------------------------------------------------------------------------
 
   String mode = 'drive';
+
+  /// How an off-road route treats land the data marks private or closed: strict, pragmatic (the default) or emergency.
+  /// Sent only with an off-road mode; drive, walk and bike keep the core's default.
+  String landAccess = 'pragmatic';
+
+  /// The off-road mode the Off-road choice comes back to (on foot until the person picks Vehicle).
+  String offroadMode = 'offroad_foot';
+
+  /// The way of travel is one of the off-road modes (offroad_foot, offroad_vehicle).
+  bool get offroad => isOffroadMode(mode);
+  static bool isOffroadMode(String m) => m == 'offroad_foot' || m == 'offroad_vehicle';
   bool routing = false;
   String? routeError;
 
@@ -307,6 +318,8 @@ class NavState extends ChangeNotifier {
     routes = [snapshot];
     routeIndex = 0;
     mode = snapshot.mode;
+    if (offroad) offroadMode = mode;
+    landAccess = snapshot.landAccess;
     _routeFrom = GeoPoint((snapshot.from['lat'] as num).toDouble(), (snapshot.from['lon'] as num).toDouble());
     routeError = null;
     routing = false;
@@ -330,8 +343,17 @@ class NavState extends ChangeNotifier {
   Future<void> setMode(String m) async {
     if (m == mode) return;
     mode = m;
+    if (offroad) offroadMode = m;
     notifyListeners();
     if (phase == NavPhase.previewing) await _fetchRoutes();
+  }
+
+  /// The land access of off-road routes; routes again when an off-road route is shown.
+  Future<void> setLandAccess(String l) async {
+    if (l == landAccess) return;
+    landAccess = l;
+    notifyListeners();
+    if (phase == NavPhase.previewing && offroad) await _fetchRoutes();
   }
 
   void selectRoute(int i) {
@@ -357,7 +379,7 @@ class NavState extends ChangeNotifier {
     _routeFrom = from;
     notifyListeners();
     try {
-      final r = await backend.route(from: {'lat': from.lat, 'lon': from.lon, 'name': 'Your location'}, to: to.toEnd(), mode: mode, alternatives: 2);
+      final r = await backend.route(from: {'lat': from.lat, 'lon': from.lon, 'name': 'Your location'}, to: to.toEnd(), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 2);
       if (seq != _routeSeq) return;
       if (!r.ok) {
         routeError = routeErrorText(r);
@@ -385,6 +407,7 @@ class NavState extends ChangeNotifier {
       'out_of_coverage' => 'One of these places is outside the downloaded maps',
       'route_too_long' => 'The off-road part of this trip is too long to work out',
       'upstream_timeout' => 'Working out the route took too long. Try again',
+      'not_set_up' => 'Off-road needs off-road data for this area',
       _ => 'Could not get directions',
     };
   }
@@ -500,7 +523,7 @@ class NavState extends ChangeNotifier {
     notifyListeners();
     _say('Rerouting.');
     try {
-      final r = await backend.route(from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), mode: mode, alternatives: 0);
+      final r = await backend.route(from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
       if (!guiding) return;
       if (r.ok) {
         routes = [r];

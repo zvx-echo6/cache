@@ -285,6 +285,43 @@ void main() {
       expect(backend.calls.length, 3);
     });
 
+    test('off-road: the mode and the land access are sent, and land access only with an off-road mode', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson(fakeRouteJson(id: 'r-$mode', mode: mode, offroad: true));
+      await nav.openDirections(place('place:4', 'Cassia Regional Hospital'));
+      expect(nav.offroad, isFalse);
+      await nav.setMode('offroad_foot');
+      expect(nav.offroad, isTrue);
+      await nav.setLandAccess('strict');
+      await nav.setMode('offroad_vehicle');
+      await nav.setLandAccess('emergency');
+      expect(nav.offroadMode, 'offroad_vehicle');
+      await nav.setMode('drive');
+      // the land access stays for the next off-road route, but is not sent with drive
+      await nav.setLandAccess('pragmatic');
+      expect(backend.calls, [
+        'route:drive:Cassia Regional Hospital:from',
+        'route:offroad_foot:Cassia Regional Hospital:from',
+        'route:offroad_foot:Cassia Regional Hospital:from',
+        'route:offroad_vehicle:Cassia Regional Hospital:from',
+        'route:offroad_vehicle:Cassia Regional Hospital:from',
+        'route:drive:Cassia Regional Hospital:from',
+      ]);
+      expect(backend.landAccesses, [null, 'pragmatic', 'strict', 'strict', 'emergency', null]);
+      expect(nav.route!.routeId, 'r-drive');
+    });
+
+    test('off-road without off-road data for the area says what is needed', () async {
+      location.publish(fixAt(42.5, -113.8));
+      backend.onRoute = (to, mode, from) async => MapRoute.fromJson({
+            'ok': false, 'route_id': 'x', 'mode': mode,
+            'errors': [{'code': 'not_set_up', 'message': 'Off-road directions need off-road data for this area'}],
+          });
+      await nav.setMode('offroad_foot');
+      await nav.openDirections(place('place:4', 'Far'));
+      expect(nav.routeError, 'Off-road needs off-road data for this area');
+    });
+
     test('no position is said plainly; a route that cannot be made is explained', () async {
       await nav.openDirections(place('place:4', 'Far'));
       expect(nav.routeError, contains('position is not known'));

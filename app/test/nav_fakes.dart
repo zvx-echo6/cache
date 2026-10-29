@@ -121,6 +121,9 @@ class FakeBackend implements MapBackend {
   bool available;
 
   final List<String> calls = [];
+
+  /// The land access sent with each route call (null: none sent).
+  final List<String?> landAccesses = [];
   Future<MapSearchResponse> Function(String query, {GeoPoint? near, bool? meaning})? onSearch;
   Future<MapRoute> Function(Map<String, dynamic> to, String mode, Map<String, dynamic>? from)? onRoute;
   final List<MapProgress> progressQueue = [];
@@ -139,6 +142,7 @@ class FakeBackend implements MapBackend {
   @override
   Future<MapRoute> route({Map<String, dynamic>? from, required Map<String, dynamic> to, List<Map<String, dynamic>> via = const [], String mode = 'drive', String? landAccess, int alternatives = 2}) async {
     calls.add('route:$mode:${to['name']}:${from == null ? 'nofrom' : 'from'}');
+    landAccesses.add(landAccess);
     final h = onRoute;
     if (h == null) throw StateError('no route handler');
     return h(to, mode, from);

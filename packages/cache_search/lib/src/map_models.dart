@@ -222,7 +222,7 @@ class RouteSegment {
 
   final String kind;
 
-  /// drive/walk/bike for road stretches; foot, 2w, 4w, vehicle off-road.
+  /// The trip's mode (drive/walk/bike/offroad_foot/offroad_vehicle) for road stretches; foot, 2w, 4w, vehicle off-road.
   final String travel;
   final int startIndex;
   final int endIndex;

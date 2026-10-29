@@ -1485,10 +1485,12 @@ byte-identical output at every step, and runs `search` then `live_data` in one c
 
 - **Offered when** the tiles file and the shim library exist; otherwise `schema()` is None and a call is `not_set_up`. Valhalla starts on the first call
   (not at `cs_open`) and its own logging is switched off (the shim reads the config's `logging` section; `{"type": ""}`).
-- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
+- **Arguments.** AIDA's `from`, `to`, `to_type`, `mode` (drive, walk, bike, and Cache's offroad_foot and offroad_vehicle), `near`, plus `land_access` (strict, pragmatic = default, emergency), last.
   Off-road legs come back inside the route, as in AIDA: when the off-road pack and elevation exist, an end more than 150 m from the road network gets an
   off-road lead-in or tail (drive uses the vehicle-class modes, walk foot, bike a two-wheeler), and a trip with no road gets a whole off-road route. Without the
-  off-road files the road route is returned with an `offroad_unavailable` warning.
+  off-road files the road route is returned with an `offroad_unavailable` warning. The off-road modes route the whole trip with the off-road router
+  (`offroad_foot`: foot only; `offroad_vehicle`: the unified Auto search), no road route first and no alternatives; where no off-road pack covers both ends
+  they are `not_set_up` (`cache_offroad::directions::OFFROAD_DATA_MISSING`), never a road route instead. A land access other than pragmatic is part of the route id.
 - **Names.** `to`, `from` and `near` resolve in this order: "lat,lon" text, the user's saved places (`ctx.places`), then the places pack through
   `cache_tool::places::PlaceSource` (`Handle::set_place_source`). With no pack, other names are `geocode_empty` and `to_type` is `not_set_up`; the `to_type`
   enum is TOOLS.md's list until a pack supplies its categories. The nearest place of a type is chosen by routing to the pack's 5 nearest by straight line.

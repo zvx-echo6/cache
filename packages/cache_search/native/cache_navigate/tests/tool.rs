@@ -160,8 +160,9 @@ fn schema_needs_the_routing_data_and_lists_the_modes_and_types() {
     let s = tool(fake(), None).schema().unwrap();
     let p = &s["function"]["parameters"]["properties"];
     assert_eq!(s["function"]["name"], "navigate");
-    // AIDA's modes; off-road legs come inside the result
-    assert_eq!(p["mode"]["enum"], json!(["drive", "walk", "bike"]));
+    // AIDA's modes (off-road legs come inside the result), then the two off-road modes
+    assert_eq!(p["mode"]["enum"], json!(["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"]));
+    assert!(p["mode"]["description"].as_str().unwrap().contains("offroad_vehicle"));
     assert_eq!(p["to_type"]["enum"][0], "emergency_room");
     assert_eq!(p["to_type"]["enum"].as_array().unwrap().len(), 11);
     assert_eq!(s["function"]["parameters"]["required"], json!(["mode"]));
@@ -270,7 +271,7 @@ fn argument_errors() {
         (json!({"mode": "drive"}), "give exactly one of to or to_type"),
         (json!({"to": "Home", "to_type": "fuel", "mode": "drive"}), "give exactly one of to or to_type"),
         (json!({"to": "Home", "mode": "teleport"}), "mode"),
-        (json!({"to": "Home", "mode": "offroad_foot"}), "mode"),
+        (json!({"to": "Home", "mode": "offroad"}), "mode"),
         (json!({"to": "Home", "mode": "drive", "bogus": 1}), "bogus"),
         (json!({"to": "Home", "mode": "drive", "land_access": "reckless"}), "land_access"),
         (json!({"to": "Home"}), "mode"),
@@ -390,4 +391,19 @@ fn navigation_page_gets_the_exact_complete_tool_route_and_cache_is_bounded() {
         run(&t, Some(&here()), json!({"to":format!("{},-113.70", 42.61 + i as f64 * 0.01), "mode":"walk"})).unwrap();
     }
     assert!(t.core().tool_route(id).is_none(), "oldest of nine distinct routes is evicted");
+}
+
+#[test]
+fn offroad_modes_without_the_off_road_data_say_what_is_missing() {
+    // no off-road pack installed: no road route instead, and no off-road guess
+    let t = tool(fake(), None);
+    for mode in ["offroad_foot", "offroad_vehicle"] {
+        for land in ["strict", "pragmatic", "emergency"] {
+            let e = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": mode, "land_access": land})).unwrap_err();
+            assert_eq!(e.code, "not_set_up", "{mode} {land}");
+            assert_eq!(e.detail, cache_offroad::directions::OFFROAD_DATA_MISSING);
+            let j = e.to_json();
+            assert_eq!(keys(&j), ["ok", "error", "from_matched", "to_matched"]);
+        }
+    }
 }

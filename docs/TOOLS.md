@@ -116,7 +116,8 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
     "to_type": {"type": "string",
                 "enum": ["emergency_room", "hospital", "urgent_care", "pharmacy", "fuel", "police", "fire_station", "campground", "trailhead", "water", "shelter"],
                 "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."},
-    "mode": {"type": "string", "enum": ["drive", "walk", "bike"]},
+    "mode": {"type": "string", "enum": ["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"],
+             "description": "drive, walk and bike follow roads and paths. offroad_foot (on foot) and offroad_vehicle (4x4, ATV or dirt bike, on foot where no vehicle can go) go cross-country the whole way over trails, tracks and open ground, where off-road data is installed."},
     "near": {"type": "string", "minLength": 1, "maxLength": 200,
              "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."},
     "land_access": {"type": "string", "enum": ["strict", "pragmatic", "emergency"],
@@ -125,14 +126,31 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
 ```
 
 `to_type` lists the categories in the installed places pack; the 11 above are the default list while no pack says otherwise.
-Give exactly one of `to` and `to_type`. `mode` is `drive`, `walk` or `bike`, as in AIDA. `land_access` is the one
-argument added to AIDA's, and the last: it defaults to `pragmatic` and only matters for off-road legs.
+Give exactly one of `to` and `to_type`. `mode` is `drive`, `walk` or `bike`, as in AIDA, or one of the two off-road
+modes, `offroad_foot` and `offroad_vehicle` (Cache's additions). `land_access` is the one argument added to AIDA's, and
+the last: it defaults to `pragmatic` and only matters for off-road legs.
 
-**Off-road.** There is no off-road mode. When the start or the destination is away from the road network and the
+**Off-road legs in drive, walk and bike.** When the start or the destination is away from the road network and the
 off-road data (pack and elevation file) is installed, the off-road legs come back automatically inside the route:
 a drive uses the vehicle-class modes, a walk goes on foot, a bike uses a two-wheeler. The full Maps snapshot includes
 the off-road maneuvers; the assistant sees the off-road distance, explanation and warnings. Without the off-road data the road route is
 returned and the end that could not be reached gets a `warnings` entry.
+
+**Off-road modes.** `offroad_foot` and `offroad_vehicle` route the whole trip with the off-road router, with no road
+route first: `offroad_foot` on foot over trails and open ground (the unified search with only foot), `offroad_vehicle`
+with navi's unified Auto search (4x4, ATV and two-wheeler, switching at parking lots, trailheads and road ends, on foot
+for the last part where no vehicle can go). Roads the router uses are part of the route. The result has the same fields
+as any route; `offroad_mi` is the off-road part. They need the off-road data covering both ends: without it the call is
+`not_set_up` with the detail "Off-road directions need off-road data for this area (the off-road pack and the elevation
+file), and none is installed for it" (both matched places beside it), never a road route in their place. A trip too large
+for the off-road grid is `route_too_long`. There are no alternatives.
+
+**Land access.** `strict` treats land the data marks private or closed, and MVUM roads and trails closed to the vehicle,
+as a wall; `pragmatic` crosses them at five times the cost; `emergency` ignores them. Wilderness rules (no vehicles)
+apply under all three. It changes which way the route goes (and so its distance,
+time and `offroad_mi`), and a land access other than `pragmatic` gives a different `route_id`, so the same trip under
+two land accesses is two sources. When no way exists under the chosen land access the result is `no_route`. No field
+is added to the result.
 
 **Assistant summary and navigation handoff.** The model receives matched places, distance, travel time,
 major roads, off-road distance and warnings, with the canonical `nav:<route_id>` citation address. Turn instructions,
@@ -254,7 +272,8 @@ them, plus `direction_from_start` and the `lat` and `lon` of both matched places
 Fields:
 - `location_bias` says where matches were preferred: `sender_node_position` (the phone's fix), `near:<town>` (the
   place found for `near`), or `from_place` (the matched start); null when none applied.
-- `route_id` is the router's id for the route, the same value the tool's `n` address is built from.
+- `route_id` is the router's id for the route, the same value the tool's `n` address is built from (the ends, the mode,
+  and the land access when it is not `pragmatic`).
 - `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
   (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
   network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence. After `snap_distance_m` come `lat` and `lon`, the matched place's coordinates rounded to 5 decimals.
@@ -537,7 +556,7 @@ fetched.
 
 ## 1.x additions
 
-None at present. Off-road navigate (the `offroad_vehicle` and `offroad_foot` modes, `land_access` and the off-road step fields) is part of navigate in 1.0, above.
+None at present. Off-road navigate (the `offroad_foot` and `offroad_vehicle` modes, `land_access` and the off-road step fields) is part of navigate in 1.0, above.
 
 ---
 
