@@ -30,6 +30,7 @@ release notes).
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
+- Regions: a part that cannot be downloaded says so in plain words, such as "Places for this area aren't available yet.", instead of the server's error and address
 - Library: adding the blank template says it is empty and needs your own entries first, and a file that is not a library says "This file isn't a Cache library." instead of showing internal error text
 - Models: when the search model is missing, "Meaning search needs the search model" with Get it shows under On this phone, so it can be got after the one-time question was closed or its download stopped
 - Weather: when you open Cache or come back to it, weather, alerts and fires update if the last update is more than 30 minutes old, since iPhone runs background updates only when it chooses

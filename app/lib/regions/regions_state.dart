@@ -64,6 +64,27 @@ class RegionPlan {
 
 const String _needsConnection = 'Needs a connection to work out the size.';
 
+/// Which part of a region a problem is about, for [regionPartWords].
+enum RegionPart { routing, places }
+
+/// Plain words for a problem the core reports with a region part. The core's message is for the log: it holds addresses
+/// like "HTTP 404 from https://…". A file the server does not have (404 or 410) is a part not published for the area yet.
+String regionPartWords(RegionPart part, String? code, String message) {
+  if (code == 'offline') return 'Needs a connection.';
+  if (code == 'no_space') return 'There is not enough free space on this phone.';
+  // The core's HTTP failure reads "HTTP <status> from <address>" (cache_regions/src/http.rs).
+  final status = int.tryParse(RegExp(r'^HTTP (\d{3}) ').firstMatch(message)?.group(1) ?? '');
+  if (status == 404 || status == 410) {
+    return switch (part) {
+      RegionPart.places => "Places for this area aren't available yet.",
+      RegionPart.routing => "Road routing for this area isn't available yet.",
+    };
+  }
+  if (status != null) return "The download server couldn't send it just now. Try again later.";
+  if (message.contains('://')) return "Couldn't be downloaded. Try again later.";
+  return message;
+}
+
 /// What one region holds on this phone.
 enum RegionPhase { downloading, ready, paused, failed }
 
@@ -124,8 +145,14 @@ class LocalRegion {
     return RegionPhase.ready;
   }
 
-  String? get error =>
-      (routing?['error'] as String?) ?? (places?['error'] as String?) ?? areas.where((a) => a.error != null).map((a) => a.error).firstOrNull;
+  String? get error {
+    String? part(RegionPart which, Map<String, dynamic>? p) {
+      final e = p?['error'];
+      return e is String && e.isNotEmpty ? regionPartWords(which, p?['code'] as String?, e) : null;
+    }
+
+    return part(RegionPart.routing, routing) ?? part(RegionPart.places, places) ?? areas.where((a) => a.error != null).map((a) => a.error).firstOrNull;
+  }
 
   /// 0..1: the mean of the parts (road routing and places by bytes, the map by tiles).
   double get fraction {
@@ -402,14 +429,15 @@ class RegionsState extends ChangeNotifier {
         final j = await core.call('plan', {'id': r.id, 'name': r.name, 'geometry': geometry});
         final parts = j['parts'];
         if (parts is Map) {
-          (routing, routingProblem) = _partPlan(parts['routing']);
-          (places, placesProblem) = _partPlan(parts['places']);
+          (routing, routingProblem) = _partPlan(RegionPart.routing, parts['routing']);
+          (places, placesProblem) = _partPlan(RegionPart.places, parts['places']);
         } else {
           // A core without parts plans road routing only.
           routing = PartPlan.fromJson(j);
         }
       } on CacheSearchException catch (e) {
-        routingProblem = placesProblem = e.code == 'offline' ? _needsConnection : e.message;
+        routingProblem = e.code == 'offline' ? _needsConnection : regionPartWords(RegionPart.routing, e.code, e.message);
+        placesProblem = e.code == 'offline' ? _needsConnection : regionPartWords(RegionPart.places, e.code, e.message);
       } catch (_) {
         routingProblem = placesProblem = _needsConnection;
       }
@@ -443,11 +471,11 @@ class RegionsState extends ChangeNotifier {
   }
 
   /// One part's entry of the core's plan: its cost, or why it cannot be worked out. Nothing when the part is not there.
-  static (PartPlan?, String?) _partPlan(Object? e) {
+  static (PartPlan?, String?) _partPlan(RegionPart part, Object? e) {
     if (e is! Map) return (null, null);
     final j = e.cast<String, dynamic>();
     if (j['error'] != null) {
-      return (null, j['code'] == 'offline' ? _needsConnection : '${j['error']}');
+      return (null, j['code'] == 'offline' ? _needsConnection : regionPartWords(part, j['code'] as String?, '${j['error']}'));
     }
     return (PartPlan.fromJson(j), null);
   }

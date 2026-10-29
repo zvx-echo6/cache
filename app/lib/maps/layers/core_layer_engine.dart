@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../../settings/data_policy.dart';
 import '../geo.dart';
@@ -513,7 +513,7 @@ class CoreLayerEngine extends LayerEngine {
             _areas.remove(_key(a.layerId, a.id));
           }
         default:
-          a.error = _words(p.errorCode, p.errorMessage);
+          a.error = words(p.errorCode, p.errorMessage);
           if (r.update) a.phase = AreaPhase.done;
       }
       reload = true;
@@ -535,11 +535,13 @@ class CoreLayerEngine extends LayerEngine {
     }
   }
 
-  static String _words(String? code, String? message) => switch (code) {
+  @visibleForTesting
+  static String words(String? code, String? message) => switch (code) {
         'no_space' => 'There is not enough free space on this phone.',
         'limit_exceeded' => "This area is too big for the layer's source.",
         'offline' || 'fetch_failed' => 'No connection. Connect and tap Update to continue.',
-        _ => message == null || message.isEmpty ? 'The download stopped. Tap Update to continue.' : 'The download stopped: $message',
+        // A message that holds an address (an HTTP failure) is for the log, not the row.
+        _ => message == null || message.isEmpty || message.contains('://') ? 'The download stopped. Tap Update to continue.' : 'The download stopped: $message',
       };
 
   /// Stops a download and returns when it has ended: the core has stopped the job, a first download's partial files are deleted

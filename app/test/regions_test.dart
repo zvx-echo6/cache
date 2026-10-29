@@ -366,7 +366,23 @@ void main() {
       expect(p.routing, isNotNull);
       expect(p.places, isNull);
       expect(p.placesProblem, 'Needs a connection to work out the size.');
+      // Places not published for the area: plain words, not the server's answer.
+      r.core.placesOffline = false;
+      r.core.placesMissing = true;
+      final q = (await tester.runAsync(() => r.regions.plan(r.us['us-ut']!)))!;
+      expect(q.placesProblem, "Places for this area aren't available yet.");
       await r.dispose(tester);
+    });
+
+    test('download problems from the core are said in plain words', () {
+      expect(regionPartWords(RegionPart.places, 'fetch_failed', 'HTTP 404 from https://data.cached.info/places/current.json'),
+          "Places for this area aren't available yet.");
+      expect(regionPartWords(RegionPart.routing, 'fetch_failed', 'HTTP 404 from https://x/routing.tar'), "Road routing for this area isn't available yet.");
+      expect(regionPartWords(RegionPart.routing, 'fetch_failed', 'HTTP 503 from https://x/a'), "The download server couldn't send it just now. Try again later.");
+      expect(regionPartWords(RegionPart.places, 'internal', 'checksum mismatch for https://x/a'), "Couldn't be downloaded. Try again later.");
+      expect(regionPartWords(RegionPart.places, 'offline', 'the places server cannot be reached'), 'Needs a connection.');
+      final s = LocalRegion(id: 'r', name: 'R', places: {'state': 'failed', 'error': 'HTTP 404 from https://data.cached.info/places/x.pack'});
+      expect(s.error, "Places for this area aren't available yet.");
     });
 
     testWidgets('Local names the parts; a region from before places offers them, and Update adds only that part', (tester) async {

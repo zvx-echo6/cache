@@ -40,6 +40,9 @@ class FakeRegions implements RegionsCoreLike {
   /// The places part cannot be planned (its index is out of reach); road routing still is.
   bool placesOffline = false;
 
+  /// The places index answers 404 (places not published yet).
+  bool placesMissing = false;
+
   /// `places.generation`: one more on every merge, removal and build switch.
   int generation = 0;
 
@@ -144,6 +147,8 @@ class FakeRegions implements RegionsCoreLike {
             'routing': routing,
             'places': placesOffline
                 ? {'error': 'The places index could not be reached', 'code': 'offline'}
+                : placesMissing
+                ? {'error': 'HTTP 404 from https://data.cached.info/places/current.json', 'code': 'fetch_failed'}
                 : {'tiles': 4, 'bytes': placesBytes, 'download_bytes': placesBytes - placesAlready, 'shared_tiles': 1},
           },
         };

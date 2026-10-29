@@ -362,4 +362,9 @@ void main() {
     expect(engine.online, isTrue);
     expect((await core.layers('list'))['online'], isTrue);
   });
+
+  test('a stopped download never shows a server address', () {
+    expect(CoreLayerEngine.words('internal', 'HTTP 500 from https://cache.echo6.co/basemap/x.pmtiles'), 'The download stopped. Tap Update to continue.');
+    expect(CoreLayerEngine.words('internal', 'disk error'), 'The download stopped: disk error');
+  });
 }
