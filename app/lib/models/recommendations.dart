@@ -106,7 +106,7 @@ List<ModelRecommendation>? parseRecommendations(String text) {
     if (j is! Map || j['format'] != kRecommendationsFormat || j['models'] is! List) return null;
     return [
       for (final m in j['models'] as List)
-        if (ModelRecommendation.fromJson(m) case final r?) r,
+        ?ModelRecommendation.fromJson(m),
     ];
   } catch (_) {
     return null;

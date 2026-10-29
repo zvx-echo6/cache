@@ -253,6 +253,9 @@ class _LiveCard extends StatelessWidget {
   /// Shown as "Turn on weather" under the line while weather is not set up.
   final WeatherTurnOn? turnOn;
 
+  /// The card's line, and whether to offer "Turn on weather".
+  Future<(String, bool)> _read(WeatherState w) async => (await line(w), turnOn != null && await w.needsTurnOn());
+
   @override
   Widget build(BuildContext context) {
     final w = weather;
@@ -261,7 +264,7 @@ class _LiveCard extends StatelessWidget {
     return ListenableBuilder(
       listenable: w,
       builder: (context, _) => FutureBuilder<(String, bool)>(
-        future: () async => (await line(w), t != null && await w.needsTurnOn())(),
+        future: _read(w),
         builder: (context, snap) => _InfoCard(
           tile: tile,
           title: title,
