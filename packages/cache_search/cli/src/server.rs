@@ -22,6 +22,14 @@
 //!   POST   /live/key       {source_id, key}                      -> cs_live_set_key ({"ok":true}; the key is never echoed or logged)
 //!   DELETE /live/key/{source_id}                                 -> that key cleared ({"ok":true})
 //!   POST   /conversations/{id}/tool  {name, args, now}           -> cs_tool ({"content","ids"})
+//!   POST   /act/definitions              (the body is the JSON array of action definitions) -> cs_act_set_definitions (the report)
+//!   POST   /act/modules-off              (the body is a JSON array of module ids; empty = none) -> cs_act_set_modules_off ({"ok":true})
+//!   POST   /act/resolve                  {action, fields?}       -> cs_act_resolve
+//!   POST   /conversations/{id}/act/finish   {run_id, reply?}     -> cs_act_finish. Without "reply", the run's scripted reply from
+//!                                                                  --action-results ("run", by the run's action) is used
+//!   POST   /conversations/{id}/act/outcome  {outcome} | {confirm_id, action?} -> cs_act_outcome. Without "outcome", the scripted tap
+//!                                                                  ("tap", by the card's action) is used; the card's action is known
+//!                                                                  from the needs_confirmation this conversation was given
 //!   GET    /places                                               -> cs_places_list
 //!   POST   /places                       {place}                 -> cs_place_save (the body is the place JSON)
 //!   DELETE /places/{key}                                         -> cs_place_delete
@@ -70,15 +78,112 @@ pub fn check_listen(listen: &str, allow_non_loopback: bool) -> Result<(), ApiErr
     Ok(())
 }
 
+/// The scripted host of `cs serve --action-results <file>`: what the capture harness plays when the model asks for a
+/// read or open action ("run", the reply to a `host_run`) and when the user taps a confirm card ("tap"). Both are keyed by
+/// action id:
+///
+/// ```json
+/// {"run": {"places.list": {"ok": true, "result": {"places": []}},
+///          "places.open": {"ok": false, "error": {"type": "unavailable", "detail": "Maps is not installed"}}},
+///  "tap": {"places.save": {"status": "done", "result": {"saved": "Elk camp"}},
+///          "places.delete": {"status": "declined"},
+///          "home.source_switch": {"status": "failed", "error": {"type": "denied", "detail": "location is off"}}}}
+/// ```
+///
+/// A "run" value is the `reply` of `cs_act_finish` as it is. A "tap" value is `status` (done, declined or failed) with the
+/// `result` of a done tap or the `error` of a failed one; the server adds `ok`, `confirm_id` and `action` to make the outcome
+/// `cs_act_outcome` takes.
+#[derive(Default)]
+pub struct ActScript {
+    run: serde_json::Map<String, Value>,
+    tap: serde_json::Map<String, Value>,
+}
+
+impl ActScript {
+    pub fn parse(text: &str) -> Result<ActScript, ApiError> {
+        let bad = |m: String| ApiError::new("bad_json", format!("--action-results: {m}"));
+        let v: Value = serde_json::from_str(text).map_err(|e| bad(e.to_string()))?;
+        let Some(o) = v.as_object() else { return Err(bad("must be a JSON object with \"run\" and/or \"tap\"".into())) };
+        if let Some(k) = o.keys().find(|k| *k != "run" && *k != "tap") {
+            return Err(bad(format!("unknown key {k:?} (only \"run\" and \"tap\")")));
+        }
+        let table = |key: &str| -> Result<serde_json::Map<String, Value>, ApiError> {
+            match o.get(key) {
+                None => Ok(Default::default()),
+                Some(Value::Object(m)) => Ok(m.clone()),
+                Some(_) => Err(bad(format!("\"{key}\" must be an object keyed by action id"))),
+            }
+        };
+        let (run, tap) = (table("run")?, table("tap")?);
+        for (a, r) in &run {
+            if !r.get("ok").is_some_and(Value::is_boolean) {
+                return Err(bad(format!("run.{a}: needs \"ok\" (true with a \"result\", false with an \"error\")")));
+            }
+        }
+        for (a, t) in &tap {
+            let status = t.get("status").and_then(Value::as_str).unwrap_or("");
+            let fine = match status {
+                "done" => t.get("result").is_some_and(|r| !r.is_null()),
+                "declined" => true,
+                "failed" => t.get("error").is_some_and(Value::is_object),
+                _ => false,
+            };
+            if !fine {
+                return Err(bad(format!("tap.{a}: \"status\" is done (with a \"result\"), declined, or failed (with an \"error\")")));
+            }
+        }
+        Ok(ActScript { run, tap })
+    }
+
+    /// The outcome `cs_act_outcome` takes, for the card `confirm_id` of `action`.
+    fn outcome(&self, confirm_id: &str, action: &str) -> Result<Value, ApiError> {
+        let t = self.tap.get(action).ok_or_else(|| ApiError::new("not_found", format!("no scripted tap for {action}")))?;
+        let status = t["status"].as_str().unwrap_or("");
+        let mut o = json!({"ok": status != "failed", "status": status, "confirm_id": confirm_id, "action": action});
+        if let Some(r) = t.get("result") {
+            o["result"] = r.clone();
+        }
+        if status == "failed" {
+            o["error"] = t["error"].clone();
+        }
+        Ok(o)
+    }
+}
+
 pub struct State {
     pub engine: Engine,
     convs: HashMap<String, Conv>,
     next: u64,
+    pub script: ActScript,
+    /// Runs and cards the conversations were handed, so a finish or a tap can name just the id: `(conversation, id) -> action`.
+    runs: HashMap<(String, String), String>,
+    cards: HashMap<(String, String), String>,
 }
 
 impl State {
     pub fn new(engine: Engine) -> State {
-        State { engine, convs: HashMap::new(), next: 1 }
+        State { engine, convs: HashMap::new(), next: 1, script: ActScript::default(), runs: HashMap::new(), cards: HashMap::new() }
+    }
+
+    /// Remember the `host_run` or `needs_confirmation` a `cs_tool` call gave.
+    fn note_act(&mut self, conv: &str, tool_reply: &str) {
+        let Ok(v) = serde_json::from_str::<Value>(tool_reply) else { return };
+        let Some(Ok(c)) = v["content"].as_str().map(serde_json::from_str::<Value>) else { return };
+        let (action, key) = (c["action"].as_str(), (conv.to_string(), String::new()));
+        let Some(action) = action else { return };
+        match c["status"].as_str() {
+            Some("host_run") => {
+                if let Some(id) = c["run_id"].as_str() {
+                    self.runs.insert((key.0, id.to_string()), action.to_string());
+                }
+            }
+            Some("needs_confirmation") => {
+                if let Some(id) = c["confirm_id"].as_str() {
+                    self.cards.insert((key.0, id.to_string()), action.to_string());
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -216,7 +321,53 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
             let args = if v["args"].is_null() { json!({}) } else { v["args"].clone() };
             let now = v["now"].as_str().unwrap_or("");
             let conv = st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?;
-            st.engine.core.tool(conv, name, &args.to_string(), now)
+            let out = st.engine.core.tool(conv, name, &args.to_string(), now)?;
+            if name == "act" {
+                st.note_act(id, &out);
+            }
+            Ok(out)
+        }
+        (Method::Post, ["act", "definitions"]) => st.engine.core.act_set_definitions(body),
+        (Method::Post, ["act", "modules-off"]) => {
+            let none = body.trim().is_empty();
+            st.engine.core.act_set_modules_off(if none { None } else { Some(body) })?;
+            Ok(json!({"ok": true}).to_string())
+        }
+        (Method::Post, ["act", "resolve"]) => {
+            let v = body_json(body)?;
+            let fields = if v["fields"].is_null() { None } else { Some(v["fields"].to_string()) };
+            st.engine.core.act_resolve(need_str(&v, "action")?, fields.as_deref())
+        }
+        (Method::Post, ["conversations", id, "act", "finish"]) => {
+            let v = body_json(body)?;
+            let run_id = need_str(&v, "run_id")?;
+            let reply = match &v["reply"] {
+                Value::Null => {
+                    let action = st.runs.get(&(id.to_string(), run_id.to_string())).ok_or_else(|| ApiError::new("not_found", format!("no run {run_id} was handed out by this conversation")))?;
+                    st.script.run.get(action).ok_or_else(|| ApiError::new("not_found", format!("no scripted reply for {action}")))?.to_string()
+                }
+                r => r.to_string(),
+            };
+            let conv = st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?;
+            conv.act_finish(run_id, &reply)
+        }
+        (Method::Post, ["conversations", id, "act", "outcome"]) => {
+            let v = body_json(body)?;
+            let outcome = match &v["outcome"] {
+                Value::Null => {
+                    let confirm_id = need_str(&v, "confirm_id")?;
+                    let known = st.cards.get(&(id.to_string(), confirm_id.to_string())).cloned();
+                    let action = match (v["action"].as_str(), known) {
+                        (Some(a), _) => a.to_string(),
+                        (None, Some(a)) => a,
+                        (None, None) => return Err(ApiError::new("not_found", format!("no card {confirm_id} was handed out by this conversation; give \"action\""))),
+                    };
+                    st.script.outcome(confirm_id, &action)?
+                }
+                o => o.clone(),
+            };
+            let conv = st.convs.get_mut(*id).ok_or_else(|| conv_not_found(id))?;
+            conv.act_outcome(&outcome.to_string())
         }
         (Method::Delete, ["conversations", id]) => {
             st.convs.remove(*id).ok_or_else(|| conv_not_found(id))?;
@@ -281,13 +432,14 @@ fn route(st: &mut State, method: &Method, path: &str, body: &str) -> Result<Stri
 }
 
 /// Bind and serve until the process is stopped. Prints `listening <addr>` on stdout once it accepts connections.
-pub fn run(engine: Engine, listen: &str) -> Result<(), ApiError> {
+pub fn run(engine: Engine, listen: &str, script: ActScript) -> Result<(), ApiError> {
     let server = Server::http(listen).map_err(|e| ApiError::new("io", format!("binding {listen}: {e}")))?;
     let addr = server.server_addr().to_string();
     println!("listening {addr}");
     use std::io::Write;
     let _ = std::io::stdout().flush();
     let mut st = State::new(engine);
+    st.script = script;
     let json_header = Header::from_bytes("Content-Type", "application/json").expect("header");
     for mut req in server.incoming_requests() {
         let mut body = String::new();

@@ -205,6 +205,30 @@ impl Core {
         self.result(p)
     }
 
+    /// `cs_act_set_definitions`: the report `{"accepted","rejected","not_listed"}`.
+    pub fn act_set_definitions(&mut self, defs_json: &str) -> Result<String, ApiError> {
+        let d = cstring(defs_json, "definitions")?;
+        let p = unsafe { cs_act_set_definitions(self.h, d.as_ptr()) };
+        self.result(p)
+    }
+
+    /// `cs_act_set_modules_off`: the modules switched off (JSON array of ids); None switches none off.
+    pub fn act_set_modules_off(&mut self, modules_json: Option<&str>) -> Result<(), ApiError> {
+        let m = modules_json.map(|j| cstring(j, "modules")).transpose()?;
+        if unsafe { cs_act_set_modules_off(self.h, m.as_ref().map_or(ptr::null(), |c| c.as_ptr())) } != 0 {
+            return Err(ApiError::from_json(take(unsafe { cs_last_error(self.h) })));
+        }
+        Ok(())
+    }
+
+    /// `cs_act_resolve`: the checked, resolved fields of an action call (or its error JSON).
+    pub fn act_resolve(&mut self, action: &str, fields_json: Option<&str>) -> Result<String, ApiError> {
+        let a = cstring(action, "action")?;
+        let f = fields_json.map(|j| cstring(j, "fields")).transpose()?;
+        let p = unsafe { cs_act_resolve(self.h, a.as_ptr(), f.as_ref().map_or(ptr::null(), |c| c.as_ptr())) };
+        self.result(p)
+    }
+
     /// Make built-in `search` embed its query with `embedder` (the core never links an embedder itself).
     pub fn set_query_embedder(&mut self, embedder: Arc<Mutex<Embedder>>) {
         // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.
@@ -479,6 +503,18 @@ impl Conv {
     /// `cs_conversation_export`: the conversation's whole state (format 1).
     pub fn export(&mut self) -> Result<String, ApiError> {
         take(unsafe { cs_conversation_export(self.c) }).ok_or_else(thread_error)
+    }
+
+    /// `cs_act_finish`: the host's reply to a `host_run`; the result for the model.
+    pub fn act_finish(&mut self, run_id: &str, reply_json: &str) -> Result<String, ApiError> {
+        let (i, r) = (cstring(run_id, "run_id")?, cstring(reply_json, "reply")?);
+        take(unsafe { cs_act_finish(self.c, i.as_ptr(), r.as_ptr()) }).ok_or_else(thread_error)
+    }
+
+    /// `cs_act_outcome`: a tap's outcome as the system message content.
+    pub fn act_outcome(&mut self, outcome_json: &str) -> Result<String, ApiError> {
+        let o = cstring(outcome_json, "outcome")?;
+        take(unsafe { cs_act_outcome(self.c, o.as_ptr()) }).ok_or_else(thread_error)
     }
 
     /// `cs_conversation_import`: a new conversation from an export.
