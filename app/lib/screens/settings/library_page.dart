@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../browse/catalogue_screen.dart' as kiwix;
 import '../../video/format.dart';
+import '../libraries_screen.dart';
 import '../sources_screen.dart';
 import 'deps.dart';
 import 'widgets.dart';
@@ -30,7 +31,7 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget build(BuildContext context) {
     final s = deps.sources;
     return ListenableBuilder(
-      listenable: Listenable.merge([s, deps.hub.storage]),
+      listenable: Listenable.merge([s, deps.hub.storage, ?deps.browse.libraries]),
       builder: (context, _) {
         final u = deps.hub.storage;
         final n = s.zims.length;
@@ -56,6 +57,15 @@ class _LibraryPageState extends State<LibraryPage> {
                     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SourcesScreen(sources: s))).then((_) => deps.hub.storage.measure());
                   },
                 ),
+                if (deps.browse.libraries != null)
+                  SettingsRow(
+                    icon: Icons.library_books_outlined,
+                    title: 'Libraries',
+                    status: [Part(deps.browse.libraries!.summary)],
+                    onTap: () => Navigator.of(context)
+                        .push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: deps.browse.libraries!)))
+                        .then((_) => deps.hub.storage.measure()),
+                  ),
                 SettingsRow(
                   icon: Icons.cloud_download_outlined,
                   title: 'Get more from the Kiwix library',

@@ -11,6 +11,10 @@ release notes).
 - Map search says when places for the area are missing or on their way, and offers the region
 - The search model (605 MB) now comes with your first chat model and gives meaning search to maps, the library and the assistant
 - Assistant: can save places, watch places for weather and start navigation after you confirm on a card
+- Add a library from a file on the device or a download link, in Library > Libraries
+- A newer copy of a library you have is offered as an update and swapped in safely
+- Remove a library, and see its size, entries and whether it is ready
+- Get a blank library template to build your own library
 
 ### Fixed
 - Regions: the keyboard no longer pops up after the download sheet closes

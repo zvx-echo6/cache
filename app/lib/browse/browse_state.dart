@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../files.dart';
 import '../settings/data_policy.dart';
+import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
 import 'zim_download.dart';
@@ -51,6 +52,7 @@ class BrowseState extends ChangeNotifier {
     KiwixCatalog? catalog,
     ZimDownloader? downloader,
     this.policy,
+    this.libraries,
     this.settingsDirOverride,
     Future<Uint8List?> Function(Uri url)? iconFetch,
     String? phoneLanguage,
@@ -67,6 +69,9 @@ class BrowseState extends ChangeNotifier {
   final ZimDownloader downloader;
   /// The mobile data rule (Settings > Storage and data); null: no rule.
   final DataPolicy? policy;
+
+  /// The libraries on the device (the Library screen's Libraries row); null leaves the row out.
+  final LibrariesState? libraries;
   final Directory? settingsDirOverride;
   final Future<Uint8List?> Function(Uri url) _iconFetch;
   final String? _phoneLanguage;

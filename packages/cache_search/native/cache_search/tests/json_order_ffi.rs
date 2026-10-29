@@ -139,11 +139,11 @@ fn search_read_and_library_status_order() {
     assert_eq!(
         keys(s),
         ["id", "kind", "path", "title", "language", "indexed", "building", "stale", "opening", "updating", "docs", "embedding_model",
-         "library_id", "keyword_source", "settings", "error"]
+         "library_id", "keyword_source", "whole_library_only", "settings", "error"]
     );
     assert_eq!(
         keys(&s["settings"]),
-        ["format", "library_id", "title", "fields", "leave_out", "embedding", "keyword_index", "guessed"]
+        ["format", "library_id", "version", "title", "fields", "leave_out", "embedding", "keyword_index", "guessed"]
     );
     assert_eq!(keys(&s["settings"]["embedding"]), ["vector", "model", "sha256", "dims"]);
     assert_eq!(

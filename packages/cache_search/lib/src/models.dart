@@ -1,10 +1,11 @@
-/// A source the core searches. Today a ZIM; a library (Qdrant collection) can be added later.
+/// A source the core searches: a ZIM, or a library (a Qdrant collection's shard, docs/LIBRARY-FORMAT.md).
 class SourceConfig {
   const SourceConfig.zim({required this.path, required this.indexDir})
       : kind = 'zim',
         settings = null;
 
-  /// A library; [settings] is the library settings file's JSON (cache-library.json) or null to let the core guess.
+  /// A library: [path] is its unpacked shard folder, [indexDir] the folder of its keyword index, and [settings] the
+  /// library settings file's JSON (cache-library.json) or null to let the core guess.
   const SourceConfig.library({required this.path, required this.indexDir, this.settings}) : kind = 'library';
 
   final String kind;
@@ -16,7 +17,7 @@ class SourceConfig {
         'kind': kind,
         'path': path,
         'index_dir': indexDir,
-        if (settings != null) 'settings': settings,
+        'settings': ?settings,
       };
 }
 
@@ -26,7 +27,7 @@ class SourceConfig {
 /// cs_set_sources without them keeps the earlier ones.
 Map<String, dynamic> openConfigJson(List<SourceConfig> sources, {Map<String, dynamic>? extra}) => {
       'sources': [for (final s in sources) s.toJson()],
-      if (extra != null) ...extra,
+      ...?extra,
     };
 
 /// One hit of cs_search.
@@ -139,6 +140,7 @@ class SourceStatus {
     this.error,
     this.keywordSource,
     this.embeddingModel,
+    this.wholeLibraryOnly,
   });
 
   factory SourceStatus.fromJson(Map<String, dynamic> j) {
@@ -156,6 +158,7 @@ class SourceStatus {
       docs: (j['docs'] ?? 0) as int,
       keywordSource: j['keyword_source'] as String?,
       embeddingModel: j['embedding_model'] as String?,
+      wholeLibraryOnly: j['whole_library_only'] as bool?,
       error: e is Map ? CoreSourceError(e['code'] as String, (e['message'] ?? '') as String) : null,
     );
   }
@@ -177,6 +180,9 @@ class SourceStatus {
   /// The embedding model a library's settings name (its query vectors must come from it); null for a ZIM or a library
   /// that names none.
   final String? embeddingModel;
+  /// For a library: true when its entries lack `doc_id` and `doc_version`, so it can only be updated as a whole; null for
+  /// a ZIM or a library that is still opening.
+  final bool? wholeLibraryOnly;
   final int docs;
   final CoreSourceError? error;
 
@@ -232,7 +238,7 @@ class ToolOutput {
 enum JobState { running, done, cancelled, failed }
 
 class JobProgress {
-  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes});
+  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes, this.detail});
 
   factory JobProgress.fromJson(Map<String, dynamic> j) {
     final e = j['error'];
@@ -243,6 +249,7 @@ class JobProgress {
       errorCode: e is Map ? e['code'] as String? : null,
       errorMessage: e is Map ? e['message'] as String? : null,
       bytes: j['detail'] is Map ? ((j['detail'] as Map)['bytes'] as num?)?.toInt() : null,
+      detail: j['detail'] is Map ? (j['detail'] as Map).cast<String, dynamic>() : null,
     );
   }
 
@@ -254,6 +261,10 @@ class JobProgress {
 
   /// Bytes written so far (layer downloads).
   final int? bytes;
+
+  /// What a kind reports besides the counts (layer downloads: bytes; unpack_library and check_library: the library's
+  /// point count and settings), or null.
+  final Map<String, dynamic>? detail;
 
   bool get isFinished => state != JobState.running;
 

@@ -211,6 +211,16 @@ Risks.
 - The pinned rev is a git revision, not a crates.io release, so it gets no automatic fixes; the core is built
   against that one revision.
 
+### Adding a library on the device
+
+The app adds a library with the jobs `unpack_library` (a shard snapshot or a `.cache-library` archive unpacked into a
+new folder with byte progress, `cache-library.json` taken out of it, then one read-only open that counts the points and
+works out the settings), `check_library` (the same check with a settings file chosen afterwards) and builds its keyword
+index with `index_library` before it puts the folder in place; `library_template` writes the blank template. Format and
+template: docs/LIBRARY-FORMAT.md; job parameters: cache_search.h. Qdrant Edge cannot make snapshots, so the template's
+snapshot is the empty shard folder (made by the read-write `EdgeShard`) in a tar, the layout Qdrant's own
+`restore_unpacked_snapshot` reads (segment files directly in the segment folder).
+
 ### Library settings file
 
 A small plain-JSON file written by whoever builds the library. App convention: it is named `cache-library.json`
@@ -240,6 +250,8 @@ v1 format:
 ```
 - `format`: settings format version; 1 for this layout.
 - `library_id`: stable id chosen by the builder; the same across versions of one library; used in addresses.
+- `version`: optional, the builder's label for this copy (a string or a whole number, kept as text); shown when a
+  copy with the same `library_id` replaces another.
 - `title`: the library's name shown in the app.
 - `fields`: which payload field holds what. All entries are optional except `text`; null or missing = not mapped.
   - `title`: the hit's title.

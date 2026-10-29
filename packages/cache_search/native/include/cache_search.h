@@ -55,7 +55,7 @@ char *cs_version(void);
  *   "sources": [
  *     {"kind":"zim",     "path":"/.../wikimed.zim",  "index_dir":"/.../wikimed.idx"},
  *     {"kind":"library", "path":"<shard dir>",       "index_dir":"<tantivy dir>",
- *      "settings":{"format":1,"library_id":"...","title":"...","fields":{"text":"content",...},
+ *      "settings":{"format":1,"library_id":"...","version":"..."?,"title":"...","fields":{"text":"content",...},
  *                  "leave_out":[...],"embedding":{"vector":"","model":"...","sha256":"...","dims":1024},
  *                  "keyword_index":"auto"}}
  *   ],
@@ -136,6 +136,9 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
 /* {"sources":[{"id","kind","path","title","language","indexed":bool,"building":bool,"stale":bool,
  *              "opening":bool,"updating":bool,"docs":N,"embedding_model":"..."|null,
  *              "library_id":"..."|null,"keyword_source":"own"|"device"|"none"|null,
+ *              "whole_library_only":bool|null (libraries: true when its points lack the payload fields doc_id and
+ *                                  doc_version, judged on a sample of its first 20 points, so it can only be replaced
+ *                                  as a whole; null while opening; see docs/LIBRARY-FORMAT.md),
  *              "settings":{...}|null (libraries: the settings in use, with "guessed":bool),
  *              "error":null|{"code","message"}}]}
  * "opening" is true for a library whose background open (see cs_open) has not finished: until then it has no
@@ -662,6 +665,27 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   before the read-write load. cs_job_start fails with "busy" if an update, another library_manifest or an
  *   index_library job is using that library, "not_found" if library_path or the folder of out_path does not
  *   exist and "bad_json" for empty paths or an out_path inside the library.
+ * kind "unpack_library": {"snapshot_path","dir","settings"?}
+ *   adds a library: unpacks a Qdrant shard snapshot, or a .cache-library archive (the same snapshot with
+ *   cache-library.json added at its root; docs/LIBRARY-FORMAT.md), into the new folder "dir" (it must not exist, or be
+ *   empty; its parent must exist), writes segments_manifest.json, takes cache-library.json out of the folder and checks
+ *   the library: it opens read-only once, its points are counted and its settings worked out ("settings" given here
+ *   win over the archive's; without either they are guessed). cs_job_start fails at once with "bad_json" (empty paths,
+ *   "dir" not empty, bad settings), "not_found", "io" (not a tar archive) or "no_space" ({"needed","available"}: the
+ *   snapshot size + max(5% of it, 256 MiB) must be free). Progress is bytes of the snapshot read. When done, the
+ *   progress JSON carries "detail": {"segments":N,"docs":N,"settings":{...}|null (the settings used: given or the
+ *   archive's),"settings_source":"given"|"archive"|null,"resolved":{...}|null (the settings in use, as cs_status shows
+ *   them),"settings_error":null|{"code","message"} (no settings could be worked out: choose a settings file and run
+ *   check_library),"whole_library_only":bool,"own_text_index":bool (its own BM25-scored text index on the mapped text
+ *   field: with keyword_index "auto" no index_library job is needed)}. A job that fails or is cancelled removes "dir" again.
+ * kind "check_library": {"library_path","settings"?}
+ *   the same check on a library folder that is already unpacked (for example with a settings file chosen afterwards);
+ *   "detail" as for unpack_library, without "settings_source". Writes nothing but a missing segments_manifest.json.
+ * kind "library_template": {"out_path"}
+ *   writes the blank library template: a tar file holding README.md, cache-library.json (format 1, a placeholder
+ *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
+ *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
+ *   in steps, total 3.
  * kind "video_download": {"dir","instance","video","choice"?:"lowest","token"?}
  *   downloads one video for offline use. "dir" is the "video" folder of the cs_open config; "choice" is "audio",
  *   "lowest", "highest" or a resolution from cs_video_get's options (a resolution the video lacks gives the nearest one

@@ -53,6 +53,7 @@ import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
+import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
 import 'screens/settings/about_pages.dart' show kCreditsAsset;
@@ -80,7 +81,9 @@ class CacheApp extends StatefulWidget {
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
-  late final BrowseState browse = BrowseState(sources: sources, policy: policy);
+  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries);
+  // Libraries (Qdrant collections the core searches): added from a file or a link, in their own folder beside the ZIMs.
+  late final LibrariesState libraries = LibrariesState(sources: sources, policy: policy);
   late final LocationService location = LocationService(
     onFix: (f) => chatLocation.update(f),
   );
@@ -191,7 +194,7 @@ class _CacheAppState extends State<CacheApp> {
     sharing: sharing,
     regions: regions,
     storage: StorageUsage(
-      library: () => [sources.zimsDir, sources.indexesDir],
+      library: () => [sources.zimsDir, sources.indexesDir, libraries.dir],
       maps: () => [
         if (sources.layersSection['dir'] is String) Directory(sources.layersSection['dir'] as String),
         if (sources.zimsDir != null) Directory('${sources.zimsDir!.parent.path}/packs'),
@@ -299,6 +302,7 @@ class _CacheAppState extends State<CacheApp> {
     settingsRead.then((_) => regions.init());
     layout.init();
     sources.init();
+    libraries.init();
     browse.init();
     video.init();
     location.init();
@@ -387,6 +391,7 @@ class _CacheAppState extends State<CacheApp> {
     browse.dispose();
     nav.dispose();
     searchModel.dispose();
+    libraries.dispose();
     sources.dispose();
     video.dispose();
     layout.dispose();

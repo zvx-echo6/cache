@@ -380,6 +380,7 @@ void _workerMain(List<dynamic> init) {
                 'docs': s.docs,
                 'keyword_source': s.keywordSource,
                 'embedding_model': s.embeddingModel,
+                'whole_library_only': s.wholeLibraryOnly,
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];
@@ -499,6 +500,7 @@ void _workerMain(List<dynamic> init) {
             'done': p.done,
             'total': p.total,
             'error': p.errorCode == null ? null : {'code': p.errorCode, 'message': p.errorMessage},
+            if (p.detail != null) 'detail': p.detail,
           };
         case 'jobCancel':
           jobs[a['job']]!.cancel();

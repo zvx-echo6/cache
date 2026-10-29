@@ -834,6 +834,7 @@ dependencies = [
  "serde_json",
  "shard",
  "tantivy",
+ "tar",
  "thiserror 1.0.69",
  "ureq",
  "uuid",

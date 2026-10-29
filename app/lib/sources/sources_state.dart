@@ -72,6 +72,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Directory? indexesDir;
   List<ZimFile> zims = [];
 
+  /// The libraries' source entries (set by the libraries' state, libraries_state.dart); they join the ZIMs in the list the
+  /// core is given.
+  List<SourceConfig> Function()? librarySources;
+
   SearchCore? _core;
 
   /// Why search cannot be used on this device, or null.
@@ -89,7 +93,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   final Map<String, JobProgress> _progress = {};
   final Map<String, String> _failed = {};
   Timer? _poll;
-  bool _busyRefresh = false;
+  /// The refresh running, and whether another was asked for meanwhile (it runs right after, so a caller that waits on
+  /// refresh always sees a list made after it asked: the libraries' state relies on that before it moves a library).
+  Future<void>? _refreshing;
+  bool _refreshAgain = false;
 
   bool get coreReady => _core != null;
 
@@ -220,7 +227,23 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   List<SourceConfig> _configs() => [
     for (final z in zims)
       SourceConfig.zim(path: z.path, indexDir: _indexDir(z)),
+    ...?librarySources?.call(),
   ];
+
+  /// What the core last said about the source at [path] (a ZIM file, or a library's shard folder), or null.
+  SourceStatus? statusAt(String path) => _status[path];
+
+  /// Reads the core's status again without changing the source list.
+  Future<void> reloadStatus() async {
+    final core = _core;
+    if (core == null) return;
+    try {
+      await _readStatus(core);
+    } catch (e) {
+      error = _words(e);
+    }
+    notifyListeners();
+  }
 
   /// Where unfinished downloads wait, on the same file system as the ZIMs so finishing is a rename.
   Directory get partialDir => Directory('${zimsDir!.path}/.partial');
@@ -327,9 +350,21 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   }
 
   /// Scans the folder again, hands the list to the core and starts the index job of every ZIM that has none.
-  Future<void> refresh() async {
-    if (_busyRefresh) return;
-    _busyRefresh = true;
+  Future<void> refresh() {
+    final running = _refreshing;
+    if (running != null) {
+      _refreshAgain = true;
+      return running;
+    }
+    return _refreshing = () async {
+      do {
+        _refreshAgain = false;
+        await _refreshOnce();
+      } while (_refreshAgain);
+    }().whenComplete(() => _refreshing = null);
+  }
+
+  Future<void> _refreshOnce() async {
     try {
       _scan();
       final core = _core;
@@ -353,7 +388,6 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     } catch (e) {
       error = _words(e);
     } finally {
-      _busyRefresh = false;
       notifyListeners();
     }
   }
@@ -703,7 +737,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     ];
     if (ready.isEmpty) {
       throw StateError(
-        zims.isEmpty
+        zims.isEmpty && (librarySources?.call().isEmpty ?? true)
             ? 'No sources have been added to this phone yet'
             : 'The sources are still being indexed',
       );
