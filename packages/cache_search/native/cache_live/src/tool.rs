@@ -375,7 +375,6 @@ impl Tool for LiveDataTool {
         let mut picked = self.pick(&c, &l, &asked, now);
         let refresh_secs = l.def.refresh_minutes as i64 * 60;
         let due = picked.as_ref().map(|p| p.2.expired || now >= p.2.row.fetched_at + refresh_secs).unwrap_or(true);
-        let mut refresh_failed: Option<ToolError> = None;
         let mut not_refreshed: Option<String> = None;
         if let Some(f) = ctx.live_fetcher.filter(|_| due) {
             if f.can_fetch(&l.def.id) {
@@ -385,7 +384,6 @@ impl Tool for LiveDataTool {
                 };
                 if let Err(e) = got {
                     not_refreshed = Some(not_refreshed_words(Err(&e.code)));
-                    refresh_failed = Some(e);
                 }
                 picked = self.pick(&c, &l, &asked, now);
             } else {
@@ -405,11 +403,8 @@ impl Tool for LiveDataTool {
         let shown = if own { asked.name.clone() } else { place.name.clone() };
         let off = v.zone();
         if v.expired {
-            let mut e = err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off)));
-            if let Some(r) = refresh_failed {
-                e = e.with("refresh_failed", r.code);
-            }
-            return Err(with_reason(e));
+            // a failed refresh is said by not_refreshed alone (it replaced the error's refresh_failed code)
+            return Err(with_reason(err(ToolError::EXPIRED, format!("{} data expired {}", l.def.id, date_of(v.row.valid_until, &off)))));
         }
         let period = when.map(|w| period(w, days, now, &off)).transpose()?;
         let chosen: Vec<&crate::map::Item> = match &period {

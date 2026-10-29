@@ -1483,8 +1483,8 @@ path: `Live::fetch` (refresh interval, the source's quotas, the scrubbed errors)
   live_data): the fetcher's `not_allowed` reason, or the failed download's code in words. Without a fetcher, or when it gives
   no reason, the output is exactly as before. A failed download with older valid data answers from that data plus
   `not_refreshed`; with nothing stored it is `no_data` plus `not_refreshed` (project decision (2026-10-29): before, the
-  download's own error); when the stored copy has expired the `expired` error carries `refresh_failed: <code>` and
-  `not_refreshed`.
+  download's own error); when the stored copy has expired it is the `expired` error plus `not_refreshed`, which replaced
+  the error's `refresh_failed: <code>` (project decision (2026-10-29)).
 
 ### Nothing to report is a numbered entry
 

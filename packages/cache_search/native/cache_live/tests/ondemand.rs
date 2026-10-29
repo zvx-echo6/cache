@@ -217,7 +217,7 @@ fn a_named_place_is_fetched_with_its_facts_and_a_denied_offline_policy_does_not_
 }
 
 #[test]
-fn a_failed_fetch_says_why_and_the_expired_error_names_a_failed_refresh() {
+fn a_failed_fetch_says_why_and_the_expired_error_says_the_refresh_failed() {
     let (env, srv) = alerts("failed");
     let g = grant(&["alerts"]);
     let here = burley_loc();
@@ -231,7 +231,7 @@ fn a_failed_fetch_says_why_and_the_expired_error_names_a_failed_refresh() {
     *srv.status.lock().unwrap() = 500;
     let e = env.run(json!({"source": "alerts"}), Some(&here), "2026-10-26T11:00:00-06:00", None, Some(&g)).unwrap_err();
     assert_eq!(e.code, "expired");
-    assert_eq!(e.to_json()["error"]["refresh_failed"], "fetch_failed");
+    assert!(e.to_json()["error"].get("refresh_failed").is_none(), "not_refreshed replaced it");
     assert_eq!(e.to_json()["not_refreshed"], "refresh failed: couldn't reach the source");
 }
 
@@ -401,7 +401,7 @@ fn not_refreshed_golden_bytes() {
     let e = env.run(json!({"source": "alerts"}), Some(&here), EXPIRED, None, Some(&stand_in("quota"))).unwrap_err();
     assert_eq!(
         e.to_json().to_string(),
-        r#"{"ok":false,"error":{"type":"expired","detail":"alerts data expired 2026-10-25","refresh_failed":"quota"},"not_refreshed":"refresh failed: daily limit reached"}"#
+        r#"{"ok":false,"error":{"type":"expired","detail":"alerts data expired 2026-10-25"},"not_refreshed":"refresh failed: daily limit reached"}"#
     );
     // nothing ever downloaded, offline
     let (empty, _srv2) = alerts("nr-golden-empty");

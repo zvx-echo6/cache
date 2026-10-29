@@ -517,11 +517,11 @@ returns that data plus `not_refreshed`, not an error:
  "none": true}
 ```
 
-On `expired` and `no_data` it is a top-level field beside `error`; a failed download with nothing stored is `no_data`, and the
-`expired` error keeps its `refresh_failed` code:
+On `expired` and `no_data` it is a top-level field beside `error`, and it is the only place a failed refresh is said (it replaced
+the `expired` error's earlier `refresh_failed` code); a failed download with nothing stored is `no_data`:
 
 ```json
-{"ok": false, "error": {"type": "expired", "detail": "alerts data expired 2026-10-25", "refresh_failed": "quota"},
+{"ok": false, "error": {"type": "expired", "detail": "alerts data expired 2026-10-25"},
  "not_refreshed": "refresh failed: daily limit reached"}
 {"ok": false, "error": {"type": "no_data", "detail": "no alerts data has been downloaded for current location"},
  "not_refreshed": "no connection"}
