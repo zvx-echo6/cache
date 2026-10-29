@@ -34,6 +34,9 @@ InAppWebViewSettings readerSettings({required bool customScheme}) =>
             ]
           : [],
       javaScriptEnabled: true,
+      // Android: when the page's renderer dies (the phone ran low on memory, or it crashed) the reader is told and shows a
+      // Reload button. Without this, Android ends the whole app.
+      useOnRenderProcessGone: true,
       blockNetworkLoads: true,
       allowFileAccess: false,
       allowContentAccess: false,

@@ -61,6 +61,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   Uri? _start;
   String? _startError;
+
+  /// The page's renderer died (Android ends it when memory runs low): the WebView is gone and Reload makes a new one.
+  bool _pageGone = false;
+  int _webGeneration = 0;
   String _pageTitle = '';
   String? _currentAddress;
   bool _canBack = false;
@@ -123,6 +127,27 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         _canForward = f;
       });
     }
+  }
+
+  void _pageStopped() {
+    _web = null;
+    if (mounted) {
+      setState(() {
+        _pageGone = true;
+        _progress = 0;
+        _canBack = false;
+        _canForward = false;
+      });
+    }
+  }
+
+  /// A new WebView at the page that was on screen.
+  void _reload() {
+    setState(() {
+      _start = reloadUrl(_currentAddress, _start, customScheme: _customScheme);
+      _pageGone = false;
+      _webGeneration++;
+    });
   }
 
   void _open(String address) {
@@ -363,9 +388,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         ),
       );
     }
+    if (_pageGone) return ReaderPageGone(onReload: _reload);
     final start = _start;
     if (start == null) return const Center(child: CircularProgressIndicator());
     return InAppWebView(
+      key: ValueKey('reader-web-$_webGeneration'),
       initialUrlRequest: URLRequest(url: WebUri.uri(start)),
       initialSettings: readerSettings(customScheme: _customScheme),
       findInteractionController: _findController,
@@ -418,6 +445,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           setState(() => _pageTitle = t);
         }
       },
+      onRenderProcessGone: (c, detail) => _pageStopped(),
       onLoadStop: (c, u) => _syncNav(),
       onUpdateVisitedHistory: (c, u, r) {
         final uri = u?.uriValue;
@@ -542,6 +570,43 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                 onTap: () => _open(s.address),
               ),
         ],
+      ),
+    );
+  }
+}
+
+/// Where Reload opens a new page: the page that was on screen, else where the reader started.
+Uri? reloadUrl(String? currentAddress, Uri? start, {required bool customScheme}) =>
+    (currentAddress == null ? null : readerUrl(currentAddress, customScheme: customScheme)) ?? start;
+
+/// Shown in place of the page when its renderer has stopped.
+class ReaderPageGone extends StatelessWidget {
+  const ReaderPageGone({super.key, required this.onReload});
+
+  final VoidCallback onReload;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'This page stopped. The phone may be low on memory.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 18, color: k.text),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              key: const ValueKey('reader-reload'),
+              onPressed: onReload,
+              child: const Text('Reload'),
+            ),
+          ],
+        ),
       ),
     );
   }
