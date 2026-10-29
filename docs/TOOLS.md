@@ -27,16 +27,15 @@ configured and the phone is online; without them it is left out of the tool list
 `origin_unknown` instead), `not_set_up` (the needed
 data, such as a map region or the alerts source, isn't on the phone), `internal`, and these, added with the
 tool framework:
-- `not_configured`: the tool needs a setting that has not been made;
 - `fetch_failed`: a download or network request failed (no connection, timeout, the server refused);
 - `quota`: the provider's usage limit is reached;
 - `key_missing`: an API key the tool needs is not set;
 - `bad_response`: the provider answered with something the tool cannot use.
 
-A tool may also put fields at the top level beside `error` (navigate adds `from_matched` and `to_matched`), and `detail`
-is left out when it is empty.
+A tool may also put fields at the top level beside `error` (navigate adds `from_matched` and `to_matched`, live_data adds
+`not_refreshed`), and `detail` is left out when it is empty.
 
-**Dated data (live sources).** Every item from a live source carries:
+**Dated data (live sources).** Every `live_data` result carries, once at its top level (not on each item):
 - `fetched_at`: local time it was downloaded, ISO 8601 with offset;
 - `valid_until`: local time after which it must not be used;
 - `age`: plain words, e.g. "2 hours old", "3 days old";
@@ -44,7 +43,7 @@ is left out when it is empty.
 When everything requested has expired or nothing was ever downloaded, the tool returns
 `{"ok": false, "error": {"type": "expired" | "no_data", "detail": ...}}` and the assistant says so plainly,
 e.g. "I no longer have weather data. We need to go online for more." It never answers from the stale data or
-from memory.
+from memory. When due data was not refreshed, `not_refreshed` says why (see live_data).
 
 **System prompt context.** The app puts the current local date and time, and whether the phone's location is
 known, into the system prompt. When the location is known, tools that take a place default to it.
@@ -301,7 +300,9 @@ Fields:
   and the land access when it is not `pragmatic`).
 - `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
   (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
-  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence. After `snap_distance_m` come `lat` and `lon`, the matched place's coordinates rounded to 5 decimals.
+  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one: an integer 1 to 3 (navi's tiers;
+  1 is a hospital with an emergency department listing, 3 a hospital without one; the installed places pack gives 1 or 3),
+  unlike nearby's string `er_tier`. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence. After `snap_distance_m` come `lat` and `lon`, the matched place's coordinates rounded to 5 decimals.
 - **The user's map layers.** `to` and `from` match a point of the user's own map layers by its exact name (ignoring case
   and extra spaces) after `lat,lon` text and saved places and before the places search. The matched place then has
   `"kind": "layer_point"` and `kind_label` right after `kind`: the layer's name (`kind_label` appears only on layer points),
@@ -320,10 +321,6 @@ Fields:
   the extra minutes traffic adds to the whole route (already in `duration_minutes`), when the traffic data was read (local
   time, ISO 8601 with offset), where it came from, and the slowed roads with their own delays (empty when none). The
   assistant mentions traffic only when it is not null. Project decision (2026-10-29).
-- Every step has `index`, `kind` (`road`, `offroad` or `offroad_follow`), `type`, `street_names`, `distance_mi`,
-  `cardinal` and `instruction`. Off-road steps add `travel` (`foot`, `2w`, `4w` or `vehicle`), `grade_class`,
-  `elev_gain_m`, `elev_loss_m`, `terrain` (only when known) and, on `offroad_follow`, `follow` (`name` and
-  `trail_kind`). The off-road `instruction` is AIDA's text, written by the tool; road steps carry the router's text.
 - `offroad_mi` and `offroad_note` appear only when the route has off-road legs. `offroad_note` is AIDA's text with the grid
   size corrected to "~15 m" (AIDA says ~30 m; the router's grid is the global z12 pixel grid, 13-15 m across the
   continental US); the example above shows Cache's text.
@@ -405,6 +402,11 @@ Result:
 `phone`, `website` and `hours` only when the map data has them; `open_status` on every row (see **Place details**
 below). `hours_note` follows `places` only when at least one row has `hours`.
 
+On `emergency_room` rows `er_tier` follows `open_status`, as a string: `"confirmed"` (a hospital with an emergency
+department listing) or `"likely"` (a hospital without one); a `"likely"` row then has the pack's `note` ("hospital,
+likely has an emergency room"). Navigate's `er_tier` is an integer instead (see navigate); both are
+as built.
+
 **Place details.** A place's phone, website and opening hours are shown in `nearby` rows and on navigate's `to_matched`
 (there is no separate read of a place):
 - `phone`, `website`: as the map data has them. `hours`: the raw OSM `opening_hours` string.
@@ -440,7 +442,11 @@ rules (`places_pack/categories.json`), never from names. A category can hold sev
 `shelter` holds emergency shelters, picnic shelters, trail shelters and huts), so the answer reads `kind_label` to say which. A place
 the map data gives no name is called by its kind label and has `"unnamed": true` (`{"name": "Drinking water tap", "kind": "drinking_water",
 "kind_label": "Drinking water tap", "unnamed": true, ...}`): the model says "an unnamed drinking water tap", never a bare "Water" or
-"Shelter". A pack of the older format (1) has no kinds: those fields are absent. Errors: `nearby_empty`, `no_location`, `not_set_up`.
+"Shelter". A pack of the older format (1) has no kinds: those fields are absent.
+
+Errors: `nearby_empty` (with `category` and `searched_within_km`), `no_location`, `not_set_up`, `geocode_empty` (no place
+matches `near`; `error` has `query`), and `bad_arguments` (no `category`, a category with no places of that kind
+installed, a `layer_...` category no longer on the phone, an empty `near`, or a `limit` outside 1 to 10).
 
 **The user's own points.** After the pack's categories the enum has `repeater` (described "repeater = amateur radio repeaters
 from the user's imported lists") while at least one imported repeater has a position, then one category per map layer with
@@ -902,7 +908,7 @@ fetched.
 
 ## 1.x additions
 
-None at present. Off-road navigate (the `offroad_foot` and `offroad_vehicle` modes, `land_access` and the off-road step fields) is part of navigate in 1.0, above.
+None at present. Off-road navigate (the `offroad_foot` and `offroad_vehicle` modes and `land_access`) is part of navigate in 1.0, above.
 
 ---
 
