@@ -178,6 +178,9 @@ pub fn result(d: &Directions, from: &Resolved, to: &Resolved, mode: &str, x: Ext
     o.insert("duration_minutes".into(), json!(round_py(d.duration_s as f64 / 60.0, 1)));
     o.insert("direction_from_start".into(), json!(direction_word(bearing_deg((from.lat, from.lon), (to.lat, to.lon)))));
     o.insert("major_roads".into(), Value::Array(d.major_roads.iter().map(|(n, k)| json!({"name": n, "distance_km": k})).collect()));
+    // Traffic on the route: {"delay_min", "as_of", "source", "slow_sections": [{"name", "delay_min"}]}, or null when there is no
+    // traffic data (no traffic source wired yet, no key, offline). Always null for now (project decision, 2026-10-29).
+    o.insert("traffic".into(), Value::Null);
     let offroad_mi: f64 = d.steps.iter().filter(|s| is_offroad(s)).map(|s| s.distance_mi).sum();
     if d.steps.iter().any(is_offroad) {
         o.insert("offroad_mi".into(), json!(round_py(offroad_mi, 2)));

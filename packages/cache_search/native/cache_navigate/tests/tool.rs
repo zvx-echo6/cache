@@ -179,8 +179,10 @@ fn road_route_has_aidas_shape() {
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     assert_eq!(
         keys(&v),
-        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "map_region", "map_region_age"]
+        ["address", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "traffic", "map_region", "map_region_age"]
     );
+    // no traffic source yet: the block is always there and null
+    assert_eq!(v["traffic"], Value::Null);
     assert!(v["address"].as_str().unwrap().starts_with("nav:"));
     assert_eq!(v["address"], format!("nav:{}", v["route_id"].as_str().unwrap()));
     assert_eq!(v["mode"], "drive");

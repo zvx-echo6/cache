@@ -185,6 +185,8 @@ fn navigate_is_identical_through_cli_serve_and_the_c_abi() {
     assert!(drive.get("offroad_mi").is_none());
     assert!(drive.get("steps").is_none());
     assert_eq!(drive["route_id"].as_str().unwrap().len(), 16);
+    // no traffic source yet: always present, null
+    assert!(drive.get("traffic").is_some_and(Value::is_null), "{drive}");
 
     // 2. walk from a point in the Sawtooths out to the nearest road and on to Stanley (off-road legs come back inside the route)
     let walk = d.content("walk-sawtooths-stanley", json!({"from": "44.0543,-115.4237", "to": "44.2210,-114.9318", "mode": "walk"}), None);
@@ -276,6 +278,7 @@ fn offroad_modes_route_the_whole_trip_off_road_under_each_land_access() {
             assert_eq!(v["mode"], mode);
             assert!(v["offroad_mi"].as_f64().unwrap() > 0.0, "{v}");
             assert!(v.get("warnings").is_none(), "{v}");
+            assert!(v.get("traffic").is_some_and(Value::is_null), "{v}");
             ids.insert(v["route_id"].as_str().unwrap().to_string());
             // the map's snapshot of the same route says the mode and the land access
             let full: Value = serde_json::from_str(&d.core.map_route(&json!({"route_id": v["route_id"]}).to_string()).unwrap()).unwrap();
@@ -318,9 +321,9 @@ fn navigate_is_not_offered_without_the_routing_data() {
 
 /// AIDA's build order of the result and of a step (nav_runtime.py `navigate()`), with Cache's `n` after `ok` and its
 /// two own fields last. The recorded rows are serialised with sorted keys, so order is checked against this list.
-const RESULT_ORDER: [&str; 19] = [
+const RESULT_ORDER: [&str; 20] = [
     "ok", "n", "mode", "location_bias", "route_id", "from_matched", "to_matched", "other_destination_candidates", "nearest_search",
-    "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
+    "distance_mi", "distance_km", "duration_minutes", "direction_from_start", "major_roads", "traffic", "offroad_mi", "offroad_note", "warnings", "map_region", "map_region_age",
 ];
 const PLACE_ORDER: [&str; 11] = ["place_name", "kind", "street", "locality", "county", "state", "distance_km", "near", "snap_distance_m", "lat", "lon"];
 
@@ -383,7 +386,7 @@ fn compare_to_aida(example: &str, cache: &Value) {
         }
     }
     for k in &got {
-        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
+        assert!(aida.get(k).is_some() || ["n", "map_region", "map_region_age", "direction_from_start", "traffic"].contains(&k.as_str()) || conditional.contains(&k.as_str()), "{example}: Cache has an extra key {k}");
     }
     same_types(cache, aida, example);
     for end in ["from_matched", "to_matched"] {

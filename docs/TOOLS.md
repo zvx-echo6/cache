@@ -106,7 +106,7 @@ For a library concept: title, book, author, page, summary and key facts. Unknown
 ```json
 {"type": "function", "function": {
   "name": "navigate",
-  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
   "strict": true,
   "parameters": {"type": "object", "properties": {
     "from": {"type": "string", "maxLength": 300,
@@ -262,6 +262,7 @@ them, plus `direction_from_start` and the `lat` and `lon` of both matched places
       "distance_km": 0.39
     }
   ],
+  "traffic": null,
   "offroad_mi": 0.11,
   "offroad_note": "Off-road legs are straight lines between turn points over a ~15 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
   "map_region": "Idaho",
@@ -282,6 +283,13 @@ Fields:
 - `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (AIDA passes navi's values through: `navi_places/nearby.py` `_rank`.)
 - `direction_from_start` is the compass direction of the straight-line (initial great-circle) bearing from the start to the destination, one lower-case word of eight: `north`, `northeast`, `east`, `southeast`, `south`, `southwest`, `west`, `northwest` (45 degree sectors centred on each point). It follows `duration_minutes`.
 - `major_roads` is a list of `{"name", "distance_km"}`.
+- `traffic` follows `major_roads` on every route: null when there is no traffic data (no traffic key, offline, or no
+  traffic source on the phone), which is every route for now; the source (TomTom flow data adjusting the road route) is
+  not wired yet. When there is data it is
+  `{"delay_min": 7.5, "as_of": "2026-10-29T08:10:00-06:00", "source": "TomTom", "slow_sections": [{"name": "I-84", "delay_min": 6.0}]}`:
+  the extra minutes traffic adds to the whole route (already in `duration_minutes`), when the traffic data was read (local
+  time, ISO 8601 with offset), where it came from, and the slowed roads with their own delays (empty when none). The
+  assistant mentions traffic only when it is not null. Project decision (2026-10-29).
 - Every step has `index`, `kind` (`road`, `offroad` or `offroad_follow`), `type`, `street_names`, `distance_mi`,
   `cardinal` and `instruction`. Off-road steps add `travel` (`foot`, `2w`, `4w` or `vehicle`), `grade_class`,
   `elev_gain_m`, `elev_loss_m`, `terrain` (only when known) and, on `offroad_follow`, `follow` (`name` and
