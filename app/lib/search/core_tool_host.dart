@@ -11,11 +11,15 @@ import 'core_numbering.dart';
 /// through the core's dispatch (cs_tool). It numbers sources in the chat's [CoreNumbering] conversation, which
 /// is the one saved and restored with the chat; that numbering is freed by the loop, not here.
 class CoreToolHost implements ToolHost {
-  CoreToolHost({required this.core, required this.numbering, this.lookupRoute});
+  CoreToolHost({required this.core, required this.numbering, this.lookupRoute, this.queryVector});
 
   final SearchCore core;
   final CoreNumbering numbering;
   final Future<MapRoute> Function(String routeId)? lookupRoute;
+
+  /// The query vector of a `search` call, made with the app's search model (null: the search runs on keywords). It goes
+  /// to the core with the call as `query_vector`, which is not one of the arguments the model gives.
+  final Future<QueryVector?> Function(String query)? queryVector;
 
   /// The successful structured tool result is authoritative even when numbering
   /// reuses an existing n and returns no new ids. Never inspect model prose.
@@ -48,7 +52,13 @@ class CoreToolHost implements ToolHost {
 
   @override
   Future<HostToolResult> call(String name, Map<String, dynamic> args, DateTime now) async {
-    final o = await (await numbering.conversation).tool(name, args, now: isoWithOffset(now));
+    var sent = args;
+    final query = args['query'];
+    if (name == 'search' && query is String && queryVector != null) {
+      final v = await queryVector!(query);
+      if (v != null) sent = {...args, 'query_vector': v.toJson()};
+    }
+    final o = await (await numbering.conversation).tool(name, sent, now: isoWithOffset(now));
     final ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title)];
     return HostToolResult(
       content: o.content,

@@ -300,9 +300,15 @@ impl Handle {
         if now.trim().is_empty() {
             return Err(Error::bad_json("now is required"));
         }
-        let args: Value = serde_json::from_str(args_json).map_err(|e| Error::bad_json(format!("args_json: {e}")))?;
+        let mut args: Value = serde_json::from_str(args_json).map_err(|e| Error::bad_json(format!("args_json: {e}")))?;
+        // The host's query vector for built-in search (its own embedder made it): not an argument the model gives, so it
+        // is taken out before the arguments are checked against the schema.
+        let host_vector = match (Builtin::of(name), args.as_object_mut()) {
+            (Some(Builtin::Search), Some(o)) => o.remove("query_vector"),
+            _ => None,
+        };
         let mut ids: Vec<Value> = Vec::new();
-        let result = self.run_tool(conv, name, &args, now);
+        let result = self.run_tool(conv, name, &args, now, host_vector);
         // What web_search showed is remembered in the conversation, so a later read can fall back to the snippet.
         for (address, note) in self.web.take_pending() {
             conv.note_web(&address, note);
@@ -326,7 +332,7 @@ impl Handle {
     }
 
     /// Steps 1 to 3 of the dispatch: find the tool, validate the arguments, run it (a panic is `internal`).
-    fn run_tool(&mut self, conv: &Conversation, name: &str, args: &Value, now: &str) -> std::result::Result<ToolOutput, ToolError> {
+    fn run_tool(&mut self, conv: &Conversation, name: &str, args: &Value, now: &str, host_vector: Option<Value>) -> std::result::Result<ToolOutput, ToolError> {
         let builtin = Builtin::of(name);
         let index = self.tools.iter().position(|t| t.name() == name);
         let schema = match (builtin, index) {
@@ -339,7 +345,7 @@ impl Handle {
         };
         validate_args(&schema, args).map_err(bad_arguments)?;
         let run = catch_unwind(AssertUnwindSafe(|| match (builtin, index) {
-            (Some(Builtin::Search), _) => self.run_search(args),
+            (Some(Builtin::Search), _) => self.run_search(args, host_vector),
             (Some(Builtin::Read), _) => self.run_read(conv, args),
             (None, i) => {
                 // the installed places pack (if any) is the geocoder tools resolve names through
@@ -359,11 +365,14 @@ impl Handle {
     }
 
     /// Built-in `search`: the top 5 as `{{addr:<address>}} <title> — <snippet>` lines (the same title and snippet
-    /// rules as `cs_format`; one line each, no ` — ` when the snippet is empty).
-    fn run_search(&mut self, args: &Value) -> std::result::Result<ToolOutput, ToolError> {
+    /// rules as `cs_format`; one line each, no ` — ` when the snippet is empty). The query vector is the host's
+    /// (`query_vector` sent with the call), else the handle's embedder's; without either the search is keyword-only.
+    fn run_search(&mut self, args: &Value, host_vector: Option<Value>) -> std::result::Result<ToolOutput, ToolError> {
         let query = args["query"].as_str().unwrap_or("");
         let mut opts = json!({"k": SEARCH_K});
-        if let Some((model, vector)) = self.embedder.as_ref().and_then(|embed| embed(query)) {
+        if let Some(v) = host_vector.filter(|v| !v.is_null()) {
+            opts["query_vector"] = v;
+        } else if let Some((model, vector)) = self.embedder.as_ref().and_then(|embed| embed(query)) {
             opts["query_vector"] = json!({"model": model, "vector": vector});
         }
         let out = self.search(query, Some(&opts.to_string())).map_err(tool_error)?;

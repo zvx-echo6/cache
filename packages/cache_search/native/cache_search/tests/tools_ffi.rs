@@ -339,3 +339,22 @@ fn the_query_embedder_gives_search_its_vector() {
     unsafe { (*f.h).set_query_embedder(Box::new(|_q: &str| None)) };
     assert!(f.tool("search", r#"{"query":"sesquipedalian"}"#)["content"].as_str().unwrap().contains("Doc 5"));
 }
+
+#[test]
+fn the_host_gives_search_its_query_vector() {
+    let f = Fx::new("hostvec");
+    let qv = json!({"model": MODEL, "vector": vector(6)});
+    let args = json!({"query": "qqqqzzzz", "query_vector": qv}).to_string();
+    // the host's vector is used, and is not an argument the schema rejects
+    let v = f.tool("search", &args);
+    assert!(v["content"].as_str().unwrap().starts_with("[1] Doc 6"), "{v}");
+    // it wins over the handle's embedder
+    unsafe { (*f.h).set_query_embedder(Box::new(|_q: &str| Some(("other".to_string(), vector(6))))) };
+    let v = f.tool("search", &json!({"query": "qqqqzzzz", "query_vector": {"model": MODEL, "vector": vector(6)}}).to_string());
+    assert!(v["content"].as_str().unwrap().starts_with("[1] Doc 6"), "{v}");
+    // a null vector leaves the embedder's (of another model here: keywords only)
+    assert_eq!(f.tool("search", r#"{"query":"qqqqzzzz","query_vector":null}"#)["content"], "No results found.");
+    // other tools still reject it
+    let v = f.tool("read", r#"{"n":1,"query_vector":{"model":"m","vector":[1]}}"#);
+    assert!(v["content"].as_str().unwrap().contains("bad_arguments"), "{v}");
+}

@@ -647,6 +647,9 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     return null;
   }
 
+  /// The query vector of the assistant's `search` tool, which searches every library (null: keywords only).
+  Future<QueryVector?> toolQueryVector(String query) => _queryVector(query, null);
+
   /// The model a library in [ids] (every source when null) needs for meaning search and that is not on this phone, or
   /// null when nothing is missing. The search model is named first.
   String? missingModel({List<String>? ids}) {

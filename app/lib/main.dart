@@ -207,7 +207,7 @@ class _CacheAppState extends State<CacheApp> {
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
     newHost: (numbering) => sources.core == null || numbering is! CoreNumbering
         ? null
-        : CoreToolHost(core: sources.core!, numbering: numbering),
+        : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector),
     numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => chatLocation.known,
     prepareTurn: chatLocation.prepare,
