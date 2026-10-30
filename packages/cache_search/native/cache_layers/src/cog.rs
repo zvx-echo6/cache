@@ -606,8 +606,8 @@ mod tests {
                 ent(277, 3, 1, 1),
                 ent(322, 3, 1, 8),
                 ent(323, 3, 1, 8),
-                ent(324, 4, ((w / 8) * (w / 8)) as u32, o as u32),
-                ent(325, 4, ((w / 8) * (w / 8)) as u32, c as u32),
+                ent(324, 4, (w / 8) * (w / 8), o as u32),
+                ent(325, 4, (w / 8) * (w / 8), c as u32),
                 ent(320, 3, 768, cmap as u32),
             ];
             if with_geo {

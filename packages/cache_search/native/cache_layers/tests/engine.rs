@@ -257,7 +257,7 @@ fn plan_limits_download_serve_delete() {
         let raw = st.get(z, x, y).unwrap().unwrap_or_else(|| panic!("missing {z}/{x}/{y}"));
         assert_eq!(gunzip(&raw), tile_body(z, x, y));
     }
-    assert_eq!(host.stats.max_in_flight.load(Ordering::SeqCst) <= 3, true, "per-layer parallel limit");
+    assert!(host.stats.max_in_flight.load(Ordering::SeqCst) <= 3, "per-layer parallel limit");
     // served from the download with no connection and no request
     inner.set_online(false);
     let hits = host.stats.hits.load(Ordering::SeqCst);
@@ -313,7 +313,7 @@ fn parallel_limit_is_kept() {
     let (r, _) = run(&inner, r#"{"layer":"slow","area":"p","bbox":[-114,42,-113,43],"minzoom":0,"maxzoom":8}"#, None);
     assert!(matches!(r.unwrap(), Done::Finished));
     let m = host.stats.max_in_flight.load(Ordering::SeqCst);
-    assert!(m <= 2 && m >= 2, "max in flight {m}");
+    assert_eq!(m, 2, "max in flight {m}");
 }
 
 #[test]
