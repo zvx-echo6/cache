@@ -88,6 +88,7 @@ class AppSettings extends ChangeNotifier {
   Set<String> _liveOn = {};
   Set<String> _watched = {kWatchHere};
   Set<String>? _seenPlaces;
+  Set<String> _defaultsSeen = {};
   String? _catalogueUrl;
   List<String> _extraCatalogues = [];
   File? _file;
@@ -153,6 +154,7 @@ class AppSettings extends ChangeNotifier {
       _liveOn = _strings(j['liveSourcesOn']).toSet();
       if (j['watchedPlaces'] is List) _watched = _strings(j['watchedPlaces']).toSet();
       if (j['seenSavedPlaces'] is List) _seenPlaces = _strings(j['seenSavedPlaces']).toSet();
+      _defaultsSeen = _strings(j['liveDefaultsSeen']).toSet();
       final u = j['catalogueUrl'];
       _catalogueUrl = u is String && u.trim().isNotEmpty ? u.trim() : null;
       _extraCatalogues = _strings(j['extraCatalogues']);
@@ -177,6 +179,7 @@ class AppSettings extends ChangeNotifier {
         'liveSourcesOn': _liveOn.toList()..sort(),
         'watchedPlaces': _watched.toList()..sort(),
         if (_seenPlaces != null) 'seenSavedPlaces': _seenPlaces!.toList()..sort(),
+        if (_defaultsSeen.isNotEmpty) 'liveDefaultsSeen': _defaultsSeen.toList()..sort(),
         'catalogueUrl': _catalogueUrl,
         'extraCatalogues': _extraCatalogues,
       }));
@@ -219,6 +222,17 @@ class AppSettings extends ChangeNotifier {
     on ? next.addAll(ids) : next.removeAll(ids);
     if (next.length == _liveOn.length && next.containsAll(_liveOn)) return;
     _liveOn = next;
+    _save();
+  }
+
+  /// The sources whose default ("on by default") has been applied once: after that only the person switches them.
+  Set<String> get liveDefaultsSeen => Set.unmodifiable(_defaultsSeen);
+
+  /// Notes that the defaults of [ids] were applied.
+  void noteLiveDefaults(Iterable<String> ids) {
+    final next = {..._defaultsSeen, ...ids};
+    if (next.length == _defaultsSeen.length) return;
+    _defaultsSeen = next;
     _save();
   }
 

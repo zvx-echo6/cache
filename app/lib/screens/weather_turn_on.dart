@@ -33,6 +33,8 @@ class WeatherTurnOn {
     for (final r in rows) {
       if (!weather.rowIsOn(r)) await weather.setRowOn(r, true);
     }
+    // the emergency alerts (FEMA IPAWS) go with the weather alerts
+    await weather.applyAlertDefaults(force: true);
   }
 }
 

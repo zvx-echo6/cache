@@ -187,6 +187,40 @@ void main() {
     });
   });
 
+  group('FEMA IPAWS emergency alerts', () {
+    Map<String, String> withIpaws() => buildCatalogue(connectors: [
+      entry('nws-alerts-point', 'alerts', 'Weather alerts (NWS, by point)', provider: 'NWS'),
+      entry('ipaws-alerts-near', 'alerts', 'Emergency alerts', provider: 'FEMA IPAWS'),
+      entry('openmeteo-forecast', 'weather', 'Weather forecast (Open-Meteo)', provider: 'Open-Meteo', coverage: 'worldwide', refresh: 180),
+    ]);
+
+    test('go with "Weather alerts" the first time the catalogue offers them; after that the switch is the person\'s', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
+      h.web.serve('https://cache.echo6.co/connectors/', withIpaws());
+      await h.weather.refreshCatalogues();
+      expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
+      expect(h.weather.sourceById('ipaws-alerts-near')!.featured, isTrue, reason: 'a row of its own on the Weather and alerts page');
+      await h.weather.setSourceOn(h.weather.sourceById('ipaws-alerts-near')!, false);
+      await h.weather.refreshCatalogues();
+      expect(h.weather.isOn('ipaws-alerts-near'), isFalse, reason: 'switched off stays off');
+      // the curated switches (and the model's list of them) are as before
+      expect(kCurated.map((r) => r.title), isNot(contains('Emergency alerts')));
+    });
+
+    test('stay off without "Weather alerts", and Turn on weather switches them on with it', () async {
+      h = await Harness.create(serve: false);
+      h.web.serve('https://cache.echo6.co/connectors/', withIpaws());
+      await h.weather.refreshCatalogues();
+      expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      await h.weather.applyAlertDefaults(force: true);
+      expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
+      expect(h.weather.isOn('nws-alerts-point'), isTrue);
+    });
+  });
+
   group('the catalogue is updated, added to and removed from', () {
     test('an update replaces the downloaded definitions: changed, new and gone sources', () async {
       h = await Harness.create();
@@ -496,6 +530,9 @@ void main() {
       expect(r.map((x) => x.name), ['Home', 'Idaho'], reason: 'named as the region, only with a finished map');
       expect(r.last.lat, 45.5);
       expect(r.last.lon, -114);
+      // its whole area, for alerts: the box of its maps (the same box once)
+      expect(r.last.boxes, [[-117, 42, -111, 49]]);
+      expect(r.last.area!['type'], 'MultiPolygon');
     });
   });
 

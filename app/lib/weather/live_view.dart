@@ -18,7 +18,7 @@ LiveGroup groupOf(Connector c) {
 
 /// One stored item of a source for a place, as the core gives it to the app.
 class LiveItem {
-  const LiveItem({required this.address, required this.label, this.time, this.fields = const {}, this.noneActive = false});
+  const LiveItem({required this.address, required this.label, this.time, this.fields = const {}, this.noneActive = false, this.area});
 
   factory LiveItem.fromJson(Map<String, dynamic> j) => LiveItem(
     address: '${j['address'] ?? ''}',
@@ -30,6 +30,7 @@ class LiveItem {
           if (e.value != null) '${e.key}': '${e.value}',
     },
     noneActive: j['none_active'] == true,
+    area: j['area'] is Map ? (j['area'] as Map).cast<String, dynamic>() : null,
   );
 
   final String address;
@@ -41,6 +42,15 @@ class LiveItem {
 
   /// The "no active alerts" entry a source gives when it has nothing.
   final bool noneActive;
+
+  /// The item's area (GeoJSON) when the source gives one: an alert's polygons and circles. The app's own; the model never sees it.
+  final Map<String, dynamic>? area;
+
+  /// The item's own key, the last part of its address (`live:<source>/<place>/<key>`): an alert's CAP identifier.
+  String get key {
+    final parts = address.split('/');
+    return parts.length >= 3 ? parts.sublist(2).join('/') : address;
+  }
 
   /// The published definitions' label for how far the item is from the place ("From the place", as WFIGS gives it now).
   static const String fromThePlace = 'From the place';

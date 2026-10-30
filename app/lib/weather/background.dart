@@ -41,7 +41,7 @@ class LastPlace {
 
   Map<String, Object?> toJson() => {
     if (here != null) 'here': {'lat': here!.lat, 'lon': here!.lon},
-    'regions': [for (final r in regions) {'name': r.name, 'lat': r.lat, 'lon': r.lon}],
+    'regions': [for (final r in regions) {'name': r.name, 'lat': r.lat, 'lon': r.lon, if (r.boxes.isNotEmpty) 'boxes': r.boxes}],
   };
 
   static LastPlace fromJson(Object? j) {
@@ -52,7 +52,15 @@ class LastPlace {
       regions: [
         for (final r in (j['regions'] as List? ?? const []))
           if (r is Map && r['name'] is String && r['lat'] is num && r['lon'] is num)
-            WatchRegion(name: r['name'] as String, lat: (r['lat'] as num).toDouble(), lon: (r['lon'] as num).toDouble()),
+            WatchRegion(
+              name: r['name'] as String,
+              lat: (r['lat'] as num).toDouble(),
+              lon: (r['lon'] as num).toDouble(),
+              boxes: [
+                for (final b in (r['boxes'] as List? ?? const []))
+                  if (b is List && b.length == 4 && b.every((x) => x is num)) [for (final x in b) (x as num).toDouble()],
+              ],
+            ),
       ],
     );
   }

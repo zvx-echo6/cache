@@ -466,9 +466,36 @@ class WeatherState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The alert sources a catalogue switches on by default for US places that no curated switch holds (FEMA IPAWS): they go with
+  /// the "Weather alerts" switch (NWS, US).
+  List<Connector> get _usAlertDefaults {
+    final curated = {for (final r in kCurated) ...r.ids, ...liveReplaces.keys, ...liveReplaces.values};
+    return [
+      for (final c in sources)
+        if (c.entry?.defaultOn == true && c.category == 'alerts' && c.coverage == 'US' && !c.needsKey && !curated.contains(c.id)) c,
+    ];
+  }
+
+  bool get _weatherAlertsOn => rowIsOn(kCurated.firstWhere((r) => r.title == 'Weather alerts'));
+
+  /// Switches on the US alert sources that go with "Weather alerts" (FEMA IPAWS): the first time a catalogue offers one, where
+  /// "Weather alerts" is on, and always with [force] (Turn on weather). After that it is the person's switch.
+  Future<void> applyAlertDefaults({bool force = false}) async {
+    final news = [for (final c in _usAlertDefaults) if (force || !settings.liveDefaultsSeen.contains(c.id)) c];
+    if (news.isEmpty) return;
+    settings.noteLiveDefaults([for (final c in news) c.id]);
+    if (force || _weatherAlertsOn) await setSourcesOn(news, true);
+  }
+
   /// Syncs everything the core holds from what is on: the definitions folder, the keys and the fetch policy.
   Future<void> _applyAll() async {
     if (!_started && _store == null) return;
+    // a US alert source new in the catalogue goes with "Weather alerts" once (FEMA IPAWS for someone who has NWS alerts on)
+    final defaults = [for (final c in _usAlertDefaults) if (!settings.liveDefaultsSeen.contains(c.id)) c];
+    if (defaults.isNotEmpty) {
+      settings.noteLiveDefaults([for (final c in defaults) c.id]);
+      if (_weatherAlertsOn) settings.setLiveSourcesOn({for (final c in defaults) c.id}, true);
+    }
     await _syncFolder();
     await pushKeys();
     await pushPolicy();
@@ -670,6 +697,7 @@ class WeatherState extends ChangeNotifier {
         lat: r.lat,
         lon: r.lon,
         key: 'region-${_slug(r.name)}',
+        area: r.area,
       ));
     }
     return out;
@@ -702,12 +730,14 @@ class WeatherState extends ChangeNotifier {
     return t.isEmpty ? 'region' : t;
   }
 
-  /// The place object the core takes for a download.
+  /// The place object the core takes for a download. A region carries its whole area, which alert sources that match by area
+  /// (FEMA IPAWS) match against; a point source (NWS by point) still uses the middle.
   static Map<String, dynamic> placeRequest(WatchPlace p) => {
     'key': p.key,
     'name': p.kind == PlaceKind.here ? 'current location' : p.name,
     'lat': p.lat,
     'lon': p.lon,
+    if (p.area != null) 'area': p.area,
   };
 
   /// Removes a saved place: the core forgets it and it is no longer watched. Only saved places can be removed.
@@ -969,13 +999,13 @@ class WeatherState extends ChangeNotifier {
       byPlace[p] = await viewFor(p);
     }
     await placeAlerts?.load();
-    final fresh = pickNewAlerts(byPlace, await t.read(), rules: placeAlerts?.ruleFor);
+    final fresh = pickNewAlerts(byPlace, await t.read(), rules: placeAlerts?.ruleFor, toldAlerts: await t.readAlerts());
     if (fresh.isEmpty) return 0;
     var shown = 0;
     for (final a in fresh) {
       if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
     }
-    await t.add([for (final a in fresh) a.item.address]);
+    await t.add([for (final a in fresh) ...a.allAddresses], alerts: [for (final a in fresh) ...a.told]);
     return shown;
   }
 
@@ -1027,6 +1057,8 @@ class WeatherState extends ChangeNotifier {
       break;
     }
     final warnings = <HomeAlert>[];
+    // one line per alert: NWS and FEMA IPAWS often carry the same one (see sameAlert)
+    final listed = <(LiveItem, String)>[];
     var fires = <HomeAlert>[];
     var anyAlerts = false, alertsExpired = false;
     String? checked;
@@ -1036,18 +1068,21 @@ class WeatherState extends ChangeNotifier {
       alertsExpired = alertsExpired || v.expired;
       checked ??= v.age;
       final who = v.source.provider;
+      final fire = v.source.category == 'fire';
       final items = [
         for (final i in v.active)
+          if (fire || !listed.any((l) => sameAlert(l.$1, p, true, i, p, true, sourceA: l.$2, sourceB: v.source.id)))
           HomeAlert(
             fire: v.source.category == 'fire',
             label: i.label,
             detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (who.isNotEmpty) who].join(' · '),
           ),
       ];
-      if (v.source.category == 'fire') {
+      if (fire) {
         if (items.length > fires.length) fires = items;
       } else {
         warnings.addAll(items);
+        listed.addAll([for (final i in v.active) (i, v.source.id)]);
       }
     }
     return HomeWeather(
