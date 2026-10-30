@@ -322,6 +322,12 @@ void main() {
   });
 
   group('the ring menu', () {
+    test('the centre: the first ring opens the coordinate card, the notebook ring goes back', () {
+      expect(ringCentre(notebooks: false, page: 0), RingCentre.coordinates);
+      expect(ringCentre(notebooks: true, page: 2), RingCentre.previousPage);
+      expect(ringCentre(notebooks: true, page: 0), RingCentre.firstRing);
+    });
+
     test('at most six wedges; More pages the same ring', () {
       final items = [for (var i = 0; i < 12; i++) RingItem(id: 'n$i', label: 'N$i', icon: Icons.book)];
       expect(ringPage(items.take(6).toList(), 0).length, 6);

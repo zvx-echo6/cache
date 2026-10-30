@@ -30,6 +30,13 @@ int ringPages(List<RingItem> items) => items.length <= kRingMax ? 1 : ((items.le
 
 const String kRingMore = '_more';
 
+/// What a tap on a ring's centre does: on the first ring it opens the spot's coordinate card (lat/lon, grid, Plus Code, nearest
+/// town); on the notebook ring it goes back a page, and from the first page back to the first ring.
+enum RingCentre { coordinates, previousPage, firstRing }
+
+RingCentre ringCentre({required bool notebooks, required int page}) =>
+    !notebooks ? RingCentre.coordinates : (page > 0 ? RingCentre.previousPage : RingCentre.firstRing);
+
 /// A ring menu in Cache's style: rounded wedges on dark cards around a centre, line icons, the wedge under the finger in
 /// orange. [centre] is drawn in the middle (the place, or a back arrow); tapping the centre calls [onCentre]. Every wedge is
 /// also a button for screen readers.

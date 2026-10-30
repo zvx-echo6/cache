@@ -564,18 +564,20 @@ class _MapsScreenState extends State<MapsScreen> {
     }
   }
 
+  /// The centre: the first ring's opens the spot's coordinate card (the dropped-pin card, with its formats); the notebook ring's
+  /// goes back.
   void _ringBack() {
     final r = _ring;
     if (r == null) return;
-    setState(() {
-      if (!r.notebooks) {
-        _ring = null;
-      } else if (r.page > 0) {
-        r.page--;
-      } else {
-        r.notebooks = false;
-      }
-    });
+    switch (ringCentre(notebooks: r.notebooks, page: r.page)) {
+      case RingCentre.coordinates:
+        setState(() => _ring = null);
+        nav.dropPin(r.lat, r.lon);
+      case RingCentre.previousPage:
+        setState(() => r.page--);
+      case RingCentre.firstRing:
+        setState(() => r.notebooks = false);
+    }
   }
 
   Widget _ringOverlay(BuildContext context, _Ring r, CacheTokens k) {
