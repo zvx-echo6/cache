@@ -197,12 +197,21 @@ void main() {
       final semantics = tester.ensureSemantics();
       final b = GuideBook.parse(['# 9. Test\n\n## Shots\n\nBefore.\n\n![The Regions sheet](shot:regions-sheet)\n\nAfter.\n']);
       await show(tester, GuideSectionScreen(book: b, section: b.sections.single));
+      await tester.runAsync(() => precacheImage(const AssetImage('$kGuideShotsDir/regions-sheet.png'), tester.element(find.byType(GuideSectionScreen))));
+      await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('guide-shot-regions-sheet')), findsOneWidget);
       expect(find.text('The Regions sheet'), findsOneWidget);
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
-      await tester.pumpAndSettle();
       expect(find.bySemanticsLabel('The Regions sheet'), findsOneWidget, reason: 'read once, as the picture');
       semantics.dispose();
+    });
+
+    testWidgets('a picture missing from the build leaves nothing, not a caption on its own', (tester) async {
+      final b = GuideBook.parse(['# 9. Test\n\n## Shots\n\nBefore.\n\n![Not in this build](shot:no-such-picture)\n\nAfter.\n']);
+      await show(tester, GuideSectionScreen(book: b, section: b.sections.single));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pumpAndSettle();
+      expect(find.text('Not in this build'), findsNothing);
+      expect(find.textContaining('After.', findRichText: true), findsOneWidget);
     });
 
     test('every screenshot a chapter shows is bundled', () {

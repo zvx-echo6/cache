@@ -139,38 +139,40 @@ class GuideShot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        key: ValueKey('guide-shot-$id'),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 320),
-              child: DecoratedBox(
-                decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.35)), borderRadius: BorderRadius.circular(14)),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(13),
-                  child: Image.asset(
-                    '$kGuideShotsDir/$id.png',
-                    semanticLabel: caption,
-                    fit: BoxFit.contain,
-                    // A picture missing from this build: the caption still says what it showed.
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+    // The picture and its caption show together once the picture is there; a picture missing from this build leaves nothing
+    // (never a caption with no picture).
+    return Image.asset(
+      '$kGuideShotsDir/$id.png',
+      semanticLabel: caption,
+      fit: BoxFit.contain,
+      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      frameBuilder: (context, picture, frame, sync) {
+        if (frame == null && !sync) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            key: ValueKey('guide-shot-$id'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 320),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.35)), borderRadius: BorderRadius.circular(14)),
+                    child: ClipRRect(borderRadius: BorderRadius.circular(13), child: picture),
                   ),
                 ),
               ),
-            ),
+              if (caption.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ExcludeSemantics(
+                  child: Text(caption, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary)),
+                ),
+              ],
+            ],
           ),
-          if (caption.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            ExcludeSemantics(
-              child: Text(caption, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary)),
-            ),
-          ],
-        ],
-      ),
+        );
+      },
     );
   }
 }
