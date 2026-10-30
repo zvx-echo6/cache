@@ -1,0 +1,342 @@
+[
+ {
+  "row": "act-048",
+  "host_reply_all": {
+   "checked_at": "2026-09-06 10:00",
+   "sections": [
+    {
+     "address": "app:setup/connection",
+     "title": "Connection",
+     "items": [
+      {
+       "label": "Network",
+       "value": "Wi-Fi"
+      },
+      {
+       "label": "Mobile data downloads",
+       "value": "off"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Downloads, Wi-Fi and mobile data"
+    },
+    {
+     "address": "app:setup/regions",
+     "title": "Regions",
+     "items": [
+      {
+       "label": "Idaho",
+       "value": "maps, routing, places, off-road; 3 weeks old"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Download a region"
+    },
+    {
+     "address": "app:setup/libraries",
+     "title": "Libraries",
+     "items": [
+      {
+       "label": "Wikipedia (medical)",
+       "value": "4.1 GB"
+      },
+      {
+       "label": "Recon library",
+       "value": "2.3 GB"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Add to your Library"
+    },
+    {
+     "address": "app:setup/live_data",
+     "title": "Live data",
+     "items": [
+      {
+       "label": "nws-alerts-point",
+       "value": "on, never downloaded"
+      },
+      {
+       "label": "openmeteo-forecast",
+       "value": "on, never downloaded"
+      },
+      {
+       "label": "usgs-quakes-near",
+       "value": "on, never downloaded"
+      },
+      {
+       "label": "wfigs-incidents-near",
+       "value": "on, never downloaded"
+      },
+      {
+       "label": "wfigs-perimeters-near",
+       "value": "on, never downloaded"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Turn on weather and alerts"
+    },
+    {
+     "address": "app:setup/web_search",
+     "title": "Web search",
+     "items": [
+      {
+       "label": "Kagi key",
+       "value": "not set"
+      }
+     ],
+     "guide": "Cache guide: 4. Services and keys: Web search with Kagi"
+    },
+    {
+     "address": "app:setup/places",
+     "title": "Place details",
+     "items": [
+      {
+       "label": "Opening hours and phone numbers",
+       "value": "from the Idaho region, 3 weeks old"
+      }
+     ],
+     "guide": "Cache guide: 5. Notebooks: The Places notebook"
+    },
+    {
+     "address": "app:setup/models",
+     "title": "Models",
+     "items": [
+      {
+       "label": "In use",
+       "value": "Gemma 4 (4.1 GB)"
+      },
+      {
+       "label": "Other models downloaded",
+       "value": "none"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Choose a model"
+    },
+    {
+     "address": "app:setup/location",
+     "title": "Location",
+     "items": [
+      {
+       "label": "Permission",
+       "value": "while using the app"
+      },
+      {
+       "label": "Use my location",
+       "value": "on"
+      },
+      {
+       "label": "Position",
+       "value": "known now"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Let Cache use your location"
+    }
+   ]
+  },
+  "host_reply_area_connection": {
+   "checked_at": "2026-09-06 10:00",
+   "sections": [
+    {
+     "address": "app:setup/connection",
+     "title": "Connection",
+     "items": [
+      {
+       "label": "Network",
+       "value": "Wi-Fi"
+      },
+      {
+       "label": "Mobile data downloads",
+       "value": "off"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Downloads, Wi-Fi and mobile data"
+    }
+   ]
+  },
+  "host_reply_area_location": {
+   "checked_at": "2026-09-06 10:00",
+   "sections": [
+    {
+     "address": "app:setup/location",
+     "title": "Location",
+     "items": [
+      {
+       "label": "Permission",
+       "value": "while using the app"
+      },
+      {
+       "label": "Use my location",
+       "value": "on"
+      },
+      {
+       "label": "Position",
+       "value": "known now"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Let Cache use your location"
+    }
+   ]
+  }
+ },
+ {
+  "row": "act-116",
+  "host_reply_all": {
+   "checked_at": "2026-10-17 12:20",
+   "sections": [
+    {
+     "address": "app:setup/connection",
+     "title": "Connection",
+     "items": [
+      {
+       "label": "Network",
+       "value": "Wi-Fi"
+      },
+      {
+       "label": "Mobile data downloads",
+       "value": "off"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Downloads, Wi-Fi and mobile data"
+    },
+    {
+     "address": "app:setup/regions",
+     "title": "Regions",
+     "items": [
+      {
+       "label": "Idaho",
+       "value": "maps, routing, places, off-road; 3 weeks old"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Download a region"
+    },
+    {
+     "address": "app:setup/libraries",
+     "title": "Libraries",
+     "items": [
+      {
+       "label": "Wikipedia (medical)",
+       "value": "4.1 GB"
+      },
+      {
+       "label": "Recon library",
+       "value": "2.3 GB"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Add to your Library"
+    },
+    {
+     "address": "app:setup/live_data",
+     "title": "Live data",
+     "items": [
+      {
+       "label": "nws-alerts-point",
+       "value": "on, never downloaded"
+      },
+      {
+       "label": "openmeteo-forecast",
+       "value": "on, never downloaded"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Turn on weather and alerts"
+    },
+    {
+     "address": "app:setup/web_search",
+     "title": "Web search",
+     "items": [
+      {
+       "label": "Kagi key",
+       "value": "not set"
+      }
+     ],
+     "guide": "Cache guide: 4. Services and keys: Web search with Kagi"
+    },
+    {
+     "address": "app:setup/places",
+     "title": "Place details",
+     "items": [
+      {
+       "label": "Opening hours and phone numbers",
+       "value": "from the Idaho region, 3 weeks old"
+      }
+     ],
+     "guide": "Cache guide: 5. Notebooks: The Places notebook"
+    },
+    {
+     "address": "app:setup/models",
+     "title": "Models",
+     "items": [
+      {
+       "label": "In use",
+       "value": "Gemma 4 (4.1 GB)"
+      },
+      {
+       "label": "Other models downloaded",
+       "value": "none"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Choose a model"
+    },
+    {
+     "address": "app:setup/location",
+     "title": "Location",
+     "items": [
+      {
+       "label": "Permission",
+       "value": "while using the app"
+      },
+      {
+       "label": "Use my location",
+       "value": "on"
+      },
+      {
+       "label": "Position",
+       "value": "known now"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Let Cache use your location"
+    }
+   ]
+  },
+  "host_reply_area_connection": {
+   "checked_at": "2026-10-17 12:20",
+   "sections": [
+    {
+     "address": "app:setup/connection",
+     "title": "Connection",
+     "items": [
+      {
+       "label": "Network",
+       "value": "Wi-Fi"
+      },
+      {
+       "label": "Mobile data downloads",
+       "value": "off"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Downloads, Wi-Fi and mobile data"
+    }
+   ]
+  },
+  "host_reply_area_location": {
+   "checked_at": "2026-10-17 12:20",
+   "sections": [
+    {
+     "address": "app:setup/location",
+     "title": "Location",
+     "items": [
+      {
+       "label": "Permission",
+       "value": "while using the app"
+      },
+      {
+       "label": "Use my location",
+       "value": "on"
+      },
+      {
+       "label": "Position",
+       "value": "known now"
+      }
+     ],
+     "guide": "Cache guide: 1. Getting started: Let Cache use your location"
+    }
+   ]
+  }
+ }
+]

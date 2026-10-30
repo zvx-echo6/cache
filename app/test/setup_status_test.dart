@@ -36,29 +36,23 @@ void main() {
     expect(reg.rejected, isEmpty);
   });
 
-  for (final row in ['act-048', 'act-116']) {
-    // Pending: the captures carry the old guide titles and labels; the training session regenerates them for the new ones
-    // (guide titles and the "Use my location" item, 2026-10-30). Not deleted: it runs again once the fixtures are new.
-    test('the host reply matches the captures ($row)', skip: 'pending: fixtures to be regenerated for the new guide titles', () async {
-      final fixture = parityJson('setup-status-$row.json') as Map<String, dynamic>;
-      final calls = fixture['calls'] as List;
-      expect(calls, isNotEmpty);
-      for (final c in calls) {
-        final args = jsonDecode(((c as Map)['tool_call'] as Map)['function']['arguments'] as String) as Map;
-        final area = (args['fields'] as Map?)?['area'] as String?;
-        // The host reply exactly as the harness gave it to cs_act_finish: area-filtered, addresses kept.
-        final hostReply = (c['host_reply'] as Map).cast<String, dynamic>();
-        final expected = (hostReply['result'] as Map).cast<String, dynamic>();
-        final by = {
-          for (final s in expected['sections'] as List) ((s as Map)['address'] as String).split('/').last: _items(s['items']),
-        };
-        final deps = _deps(by);
-        final reg = ActionRegistry()
-          ..publish('app', [kSetupStatusDefinition], {
-            'app.setup_status': (f) => runSetupStatus(deps, f, now: () => _at(expected['checked_at'] as String)),
-          });
+  // S11 after the UI simplification (setup-status-v1030.json): each row's host replies as the harness gave them to cs_act_finish,
+  // for every part and filtered to connection and to location.
+  for (final row in (parityJson('setup-status-v1030.json') as List).cast<Map<String, dynamic>>()) {
+    test('the host reply matches the capture (${row['row']})', () async {
+      final all = (row['host_reply_all'] as Map).cast<String, dynamic>();
+      final by = {
+        for (final s in all['sections'] as List) ((s as Map)['address'] as String).split('/').last: _items(s['items']),
+      };
+      final deps = _deps(by);
+      final reg = ActionRegistry()
+        ..publish('app', [kSetupStatusDefinition], {
+          'app.setup_status': (f) => runSetupStatus(deps, f, now: () => _at(all['checked_at'] as String)),
+        });
+      for (final (area, key) in [(null, 'host_reply_all'), ('connection', 'host_reply_area_connection'), ('location', 'host_reply_area_location')]) {
+        final expected = {'ok': true, 'result': row[key]};
         final run = await reg.run('app.setup_status', {'area': ?area});
-        expect(jsonEncode(CoreToolHost.finishReply(run)), jsonEncode(hostReply));
+        expect(jsonEncode(CoreToolHost.finishReply(run)), jsonEncode(expected), reason: key);
       }
     });
   }
