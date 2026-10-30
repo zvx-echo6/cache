@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Library: open the Cache guide and read it like a book, with chapters, links between sections, links that open the part of Cache a section is about, and search; a guide citation in Ask and the guide buttons on Set up Cache open the exact section
 - Notebooks: keep several notebooks, starting with a Journal; make more from Journal, Log, Notes or Places, or from 16 starter logs
 - Notebooks: an entry can have a title, text, a date, a place, photos, attached documents and the notebook's own fields
 - Notebooks: type Markdown in any entry and it formats as you type (headings, bold, lists, checkboxes, quotes, code, links, tables); "?" shows how; tap a checkbox's box to tick it
