@@ -90,8 +90,11 @@ fn open_ready(src: Value) -> (*mut Handle, Value) {
 }
 
 /// The names and bytes of the files in a tar.
+/// The files of a tar, compressed with gzip or not.
 fn tar_files(path: &Path) -> Vec<(String, Vec<u8>)> {
-    let mut a = tar::Archive::new(std::fs::File::open(path).unwrap());
+    let f = std::fs::File::open(path).unwrap();
+    let r: Box<dyn std::io::Read> = if libadd::is_gzip(path).unwrap() { Box::new(flate2::read::GzDecoder::new(f)) } else { Box::new(f) };
+    let mut a = tar::Archive::new(r);
     let mut out = Vec::new();
     for e in a.entries().unwrap() {
         let mut e = e.unwrap();
@@ -130,6 +133,7 @@ fn template(t: &TempDir) -> (PathBuf, Value) {
     let p = run("library_template", json!({"out_path": out.to_str().unwrap()}));
     assert_eq!(p["state"], "done", "{p}");
     assert_eq!((p["done"].as_u64(), p["total"].as_u64()), (Some(3), Some(3)));
+    assert!(libadd::is_gzip(&out).unwrap(), "the template is written compressed");
     let files = tar_files(&out);
     let names: Vec<&str> = files.iter().map(|f| f.0.as_str()).collect();
     assert_eq!(names, ["README.md", "cache-library.json", "blank-library.snapshot"]);
@@ -154,6 +158,41 @@ fn template(t: &TempDir) -> (PathBuf, Value) {
     let left: Vec<_> = std::fs::read_dir(&t.0).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
     assert!(left.iter().all(|n| !n.to_string_lossy().starts_with('.')), "{left:?}");
     (snap, settings)
+}
+
+#[test]
+fn a_compressed_library_adds_like_an_uncompressed_one() {
+    let t = TempDir::new("gzip");
+    // A plain snapshot (its settings are worked out from the payload), and the same file compressed.
+    let plain = plain_snapshot(&t, "gz", true);
+    let packed = t.path("gz.cache-library.gz");
+    {
+        let mut e = flate2::write::GzEncoder::new(std::fs::File::create(&packed).unwrap(), flate2::Compression::best());
+        std::io::copy(&mut std::fs::File::open(&plain).unwrap(), &mut e).unwrap();
+        e.finish().unwrap();
+    }
+    assert!(std::fs::metadata(&packed).unwrap().len() < std::fs::metadata(&plain).unwrap().len());
+    let mut docs = Vec::new();
+    for (name, file) in [("a", &plain), ("b", &packed)] {
+        let dir = t.path(&format!("libs/{name}/shard"));
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        let p = run("unpack_library", json!({"snapshot_path": file.to_str().unwrap(), "dir": dir.to_str().unwrap()}));
+        assert_eq!(p["state"], "done", "{name}: {p}");
+        assert_eq!(p["done"], p["total"], "{name}: progress counts the file's own bytes");
+        docs.push(p["detail"]["docs"].clone());
+    }
+    assert_eq!(docs[0], docs[1]);
+    assert_eq!(docs[0], 30);
+    // a gzip file that does not hold a tar is refused before anything is made
+    let junk = t.path("junk.cache-library");
+    {
+        let mut e = flate2::write::GzEncoder::new(std::fs::File::create(&junk).unwrap(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut e, &[7u8; 2048]).unwrap();
+        e.finish().unwrap();
+    }
+    let dir = t.path("libs/junk/shard");
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    assert!(start("unpack_library", json!({"snapshot_path": junk.to_str().unwrap(), "dir": dir.to_str().unwrap()})).is_null());
 }
 
 #[test]

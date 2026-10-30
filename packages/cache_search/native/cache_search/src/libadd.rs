@@ -74,9 +74,12 @@ pub struct UnpackRequest {
     /// Settings chosen beside the snapshot; they win over a settings file in the archive.
     pub settings: Option<Value>,
     pub size: u64,
+    /// The file is gzip-compressed (a `.cache-library` may be; it is unpacked through gzip).
+    pub gzip: bool,
 }
 
-/// Check the parameters without creating anything: the snapshot is a file that starts with a tar header, `dir`
+/// Check the parameters without creating anything: the snapshot is a file that starts with a tar header (directly, or
+/// inside gzip), `dir`
 /// does not exist (or is an empty folder) and its parent does, `settings` (if given) parses, and the free space on
 /// `dir`'s file system holds the unpacked library: snapshot size + max(5% of it, 256 MiB) (`no_space` otherwise).
 pub fn prepare_unpack(snapshot_path: &str, dir: &str, settings: Option<Value>, fake_available: Option<u64>) -> Result<UnpackRequest> {
@@ -101,22 +104,56 @@ pub fn prepare_unpack(snapshot_path: &str, dir: &str, settings: Option<Value>, f
     if !parent.is_dir() {
         return Err(Error::not_found(format!("the folder of {} does not exist", dir.display())));
     }
-    libupdate::check_tar_header(&snapshot)?;
+    let gzip = is_gzip(&snapshot)?;
+    if gzip {
+        let f = std::fs::File::open(&snapshot).map_err(|e| op(&format!("opening the snapshot {}", snapshot.display()), e))?;
+        libupdate::check_tar_start(flate2::read::GzDecoder::new(std::io::BufReader::new(f)))?;
+    } else {
+        libupdate::check_tar_header(&snapshot)?;
+    }
     let size = std::fs::metadata(&snapshot).map_err(|e| op(&format!("reading {}", snapshot.display()), e))?.len();
-    let margin = libupdate::margin_for(size);
-    let needed = size.saturating_add(margin);
+    // What the unpacked library takes: the file itself, or for a compressed one the size its gzip trailer gives (the
+    // trailer counts modulo 4 GiB, so never less than the file).
+    let unpacked = if gzip { gzip_unpacked_size(&snapshot)?.max(size) } else { size };
+    let margin = libupdate::margin_for(unpacked);
+    let needed = unpacked.saturating_add(margin);
     let available = match fake_available {
         Some(n) => n,
         None => libupdate::available_bytes(parent)?,
     };
     if needed > available {
         return Err(Error::no_space(
-            format!("not enough free space to add the library: {needed} bytes needed (snapshot {size} + margin {margin}), {available} available"),
+            format!("not enough free space to add the library: {needed} bytes needed (snapshot {unpacked} + margin {margin}), {available} available"),
             needed,
             available,
         ));
     }
-    Ok(UnpackRequest { snapshot, dir, settings, size })
+    Ok(UnpackRequest { snapshot, dir, settings, size, gzip })
+}
+
+/// True when the file starts with the gzip magic bytes (a compressed `.cache-library`).
+pub fn is_gzip(path: &Path) -> Result<bool> {
+    let mut f = std::fs::File::open(path).map_err(|e| op(&format!("opening {}", path.display()), e))?;
+    let mut m = [0u8; 2];
+    let mut n = 0;
+    while n < 2 {
+        match f.read(&mut m[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) => return Err(op(&format!("reading {}", path.display()), e)),
+        }
+    }
+    Ok(n == 2 && m == [0x1f, 0x8b])
+}
+
+/// The unpacked size a gzip file's trailer gives (its last 4 bytes, little-endian, modulo 4 GiB).
+fn gzip_unpacked_size(path: &Path) -> Result<u64> {
+    use std::io::{Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| op(&format!("opening {}", path.display()), e))?;
+    f.seek(SeekFrom::End(-4)).map_err(|e| op(&format!("reading {}", path.display()), e))?;
+    let mut b = [0u8; 4];
+    f.read_exact(&mut b).map_err(|e| op(&format!("reading {}", path.display()), e))?;
+    Ok(u32::from_le_bytes(b) as u64)
 }
 
 /// Reads the snapshot, counting bytes for the progress and stopping (with an error the caller recognises) when
@@ -183,7 +220,13 @@ pub fn run_unpack(
         cancelled,
         stopped: false,
     };
-    if let Err(e) = common::tar_unpack::tar_unpack_reader(&mut reader, &req.dir) {
+    // A compressed file is read through gzip; the progress counts the file's own bytes either way.
+    let unpacked = if req.gzip {
+        common::tar_unpack::tar_unpack_reader(&mut flate2::read::GzDecoder::new(&mut reader), &req.dir).map(|_| ())
+    } else {
+        common::tar_unpack::tar_unpack_reader(&mut reader, &req.dir).map(|_| ())
+    };
+    if let Err(e) = unpacked {
         if reader.stopped {
             return Ok(Outcome::Cancelled);
         }
@@ -333,14 +376,17 @@ pub fn write_template(out: &Path, progress: &dyn Fn(u64, u64)) -> Result<Outcome
     progress(2, TEMPLATE_STEPS);
     let tmp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
     let r = (|| -> Result<()> {
+        // Written gzip-compressed: the blank snapshot's preallocated files are zeros.
         let f = std::fs::File::create(&tmp).map_err(|e| op(&format!("creating {}", tmp.display()), e))?;
-        let mut tar = tar::Builder::new(std::io::BufWriter::new(f));
+        let gz = flate2::write::GzEncoder::new(std::io::BufWriter::new(f), flate2::Compression::best());
+        let mut tar = tar::Builder::new(gz);
         tar.mode(tar::HeaderMode::Deterministic);
         append_bytes(&mut tar, "README.md", TEMPLATE_README.as_bytes())?;
         let settings = serde_json::to_string_pretty(&template_settings()).expect("json") + "\n";
         append_bytes(&mut tar, SETTINGS_FILE, settings.as_bytes())?;
         tar.append_path_with_name(&snap, TEMPLATE_SNAPSHOT).map_err(|e| op("writing the template", e))?;
-        let w = tar.into_inner().map_err(|e| op("writing the template", e))?;
+        let gz = tar.into_inner().map_err(|e| op("writing the template", e))?;
+        let w = gz.finish().map_err(|e| op("writing the template", e))?;
         w.into_inner().map_err(|e| op("writing the template", e.error()))?.sync_all().map_err(|e| op("writing the template", e))?;
         std::fs::rename(&tmp, out).map_err(|e| op(&format!("writing {}", out.display()), e))
     })();

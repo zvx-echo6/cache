@@ -225,8 +225,12 @@ fn retry_fs<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> 
 /// A snapshot must start with a valid tar header (512 bytes whose checksum field matches). Anything else is
 /// refused at once with a clear message, before a single file is created.
 pub(crate) fn check_tar_header(path: &Path) -> Result<()> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).map_err(|e| op(&format!("opening the snapshot {}", path.display()), e))?;
+    let f = std::fs::File::open(path).map_err(|e| op(&format!("opening the snapshot {}", path.display()), e))?;
+    check_tar_start(f)
+}
+
+/// [check_tar_header] on a reader (a file, or a gzip stream of one).
+pub(crate) fn check_tar_start(mut f: impl std::io::Read) -> Result<()> {
     let mut h = [0u8; 512];
     let mut n = 0;
     while n < h.len() {
