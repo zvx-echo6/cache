@@ -6,7 +6,6 @@ import 'data_policy.dart';
 import '../regions/regions_state.dart';
 import '../sharing/sharing_state.dart';
 import '../weather/weather_state.dart';
-import 'location_access.dart';
 import 'storage_usage.dart';
 import 'web_search_setup.dart';
 
@@ -16,7 +15,7 @@ typedef UrlOpener = Future<void> Function(String url);
 Future<void> openInSystemBrowser(String url) => InAppBrowser.openWithSystemBrowser(url: WebUri(url));
 
 /// What the Settings pages share besides the app's main state objects: the saved choices, the mobile-data rule, the web search
-/// service, the live data sources (weather, alerts, fires), the storage measurements, the location permission reader and how to open a link.
+/// service, the live data sources (weather, alerts, fires), the storage measurements and how to open a link.
 class SettingsHub {
   SettingsHub({
     required this.settings,
@@ -26,9 +25,8 @@ class SettingsHub {
     required this.weather,
     this.sharing,
     this.regions,
-    LocationAccessProbe? locationAccess,
     this.openUrl = openInSystemBrowser,
-  }) : locationAccess = locationAccess ?? GeolocatorAccessProbe();
+  });
 
   final AppSettings settings;
   final DataPolicy policy;
@@ -41,7 +39,6 @@ class SettingsHub {
 
   /// Regions and downloads (road routing and map by region); null where the app has none (tests).
   final RegionsState? regions;
-  final LocationAccessProbe locationAccess;
   final UrlOpener openUrl;
 
   Listenable get changes => Listenable.merge([settings, webSearch, storage, weather]);

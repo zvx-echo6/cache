@@ -30,6 +30,12 @@ class RecordingController extends VideoPlayerController {
   }
 
   @override
+  Future<void> setPlaybackSpeed(double speed) async {
+    calls.add('speed:$speed');
+    value = value.copyWith(playbackSpeed: speed);
+  }
+
+  @override
   Future<void> seekTo(Duration position) async {
     calls.add('seek:${position.inMilliseconds}');
     value = value.copyWith(position: position);
@@ -184,6 +190,32 @@ void main() {
     await tester.tap(find.byTooltip('Forward 10 seconds'));
     await tester.pump();
     expect(c.calls.last, 'seek:60000');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Playback speed, and true full screen with the controls on a tap; Back leaves full screen', (tester) async {
+    final c = RecordingController();
+    await open(tester, c, target(offset: 3));
+    expect(find.text('1x'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('player-speed')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('speed-1.5')));
+    await tester.pumpAndSettle();
+    expect(c.calls.last, 'speed:1.5');
+    expect(find.text('1.5x'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('player-fullscreen')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-full')), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing, reason: 'the video alone');
+    expect(find.byTooltip('Leave full screen'), findsOneWidget, reason: 'the controls show at first');
+    await tester.tap(find.byKey(const ValueKey('player-full')), warnIfMissed: false);
+    await tester.pump();
+    expect(find.byTooltip('Leave full screen'), findsNothing, reason: 'a tap hides them');
+    final nav = tester.state<NavigatorState>(find.byType(Navigator));
+    await nav.maybePop();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-full')), findsNothing);
+    expect(find.byType(AppBar), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../theme.dart';
@@ -34,6 +35,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String? _captionLabel;
   bool _dragging = false;
   double _dragValue = 0;
+
+  /// True full screen: the video alone, landscape for a wide video, the system bars hidden (immersive); a tap shows the controls.
+  bool _full = false;
+  bool _overlay = true;
+  Timer? _hide;
+
+  /// The playback speeds offered.
+  static const List<double> speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   VideoTarget get t => widget.target;
 
@@ -105,8 +114,67 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    _hide?.cancel();
+    if (_full) _restoreSystem();
     _c?.dispose();
     super.dispose();
+  }
+
+  void _setFull(bool on) {
+    final c = _c;
+    setState(() => _full = on);
+    _showOverlay();
+    if (on) {
+      final wide = c == null || !c.value.isInitialized || c.value.aspectRatio >= 1;
+      unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+      unawaited(SystemChrome.setPreferredOrientations(
+        wide ? const [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight] : const [DeviceOrientation.portraitUp],
+      ));
+    } else {
+      unawaited(_restoreSystem());
+    }
+  }
+
+  static Future<void> _restoreSystem() async {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    await SystemChrome.setPreferredOrientations(const []);
+  }
+
+  /// Shows the full-screen controls for a few seconds.
+  void _showOverlay() {
+    _hide?.cancel();
+    if (mounted) setState(() => _overlay = true);
+    if (_full) {
+      _hide = Timer(const Duration(seconds: 3), () {
+        if (mounted && (_c?.value.isPlaying ?? false)) setState(() => _overlay = false);
+      });
+    }
+  }
+
+  Future<void> _pickSpeed() async {
+    final c = _c;
+    if (c == null) return;
+    final v = await showModalBottomSheet<double>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final sp in speeds)
+              ListTile(
+                key: ValueKey('speed-$sp'),
+                minTileHeight: 48,
+                title: Text(sp == 1 ? 'Normal' : '${sp}x'),
+                trailing: c.value.playbackSpeed == sp ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(ctx, sp),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (v != null) await c.setPlaybackSpeed(v);
+    if (mounted) setState(() {});
   }
 
   Future<void> _skip(int seconds) async {
@@ -123,6 +191,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final c = _c;
     final ready = c != null && c.value.isInitialized;
     final error = _error ?? (c != null && c.value.hasError ? "This video can't be played." : null);
+    if (_full && ready && error == null) return _fullScreen(context, c);
     return Scaffold(
       appBar: AppBar(title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
       body: error != null
@@ -163,6 +232,48 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
     );
   }
+
+  /// The video alone on black; a tap shows or hides the controls; Back leaves full screen.
+  Widget _fullScreen(BuildContext context, VideoPlayerController c) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop) _setFull(false);
+    },
+    child: Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        key: const ValueKey('player-full'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _overlay ? setState(() => _overlay = false) : _showOverlay(),
+        child: Stack(
+          children: [
+            Center(child: AspectRatio(aspectRatio: t.isAudio ? 16 / 9 : c.value.aspectRatio, child: VideoPlayer(c))),
+            if (_captionsOn && c.value.caption.text.isNotEmpty)
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: _overlay ? 140 : 32,
+                child: Text(
+                  c.value.caption.text,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 18, color: Colors.white, shadows: [Shadow(blurRadius: 4)]),
+                ),
+              ),
+            if (_overlay)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  color: Colors.black54,
+                  child: SafeArea(top: false, child: Theme(data: ThemeData.dark(), child: _controls(context, c))),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   Widget _controls(BuildContext context, VideoPlayerController c) {
     final k = context.t;
@@ -212,6 +323,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   onPressed: () => _pickCaptions(on: !_captionsOn),
                 ),
               ],
+              const SizedBox(width: 8),
+              TextButton(
+                key: const ValueKey('player-speed'),
+                onPressed: _pickSpeed,
+                child: Text(c.value.playbackSpeed == 1 ? '1x' : '${c.value.playbackSpeed}x', style: const TextStyle(fontSize: 15)),
+              ),
+              if (!t.isAudio)
+                IconButton(
+                  key: const ValueKey('player-fullscreen'),
+                  iconSize: 30,
+                  tooltip: _full ? 'Leave full screen' : 'Full screen',
+                  icon: Icon(_full ? Icons.fullscreen_exit : Icons.fullscreen),
+                  onPressed: () => _setFull(!_full),
+                ),
             ],
           ),
         ],
