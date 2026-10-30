@@ -98,6 +98,7 @@ You can mark a notebook, or an entry, "Private". In "Notebooks", "Private" means
 - A private notebook is not sent to your other devices, and is not synced, unless you include it. To include it, open "Edit notebook". When the notebook is private, a switch "Include in sync and sharing" appears. It is off by default.
 - Once Cache is open, the assistant can read everything in your notebooks, including private ones, to answer you. It does this on your phone. It is not sent anywhere to do so.
 - Private is not encryption or a lock. The data is protected by the phone's own encryption and screen lock. Keep a screen lock on the phone.
+- Obsidian and Logseq folders are an exception to being left out. If you connect a folder in "Notebooks" > "Connections", entries in private notebooks are written to it too, with a private mark in their properties. The folder is on your phone or in the storage you chose. Once they are in the folder, any app that can open that folder can read them as plain Markdown.
 
 Starter logs for health, such as medication or blood pressure, start as private. You can switch it off.
 

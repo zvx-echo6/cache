@@ -193,7 +193,7 @@ The switch is called "Use my location". It is in two places, and it is the same 
 
 To stop Cache using your location for your questions, turn the switch off. Cache does not ask for location in "Ask" and shows no location button there.
 
-If the phone has blocked location for Cache, the row says "Blocked in the phone's settings" and the switch is greyed out. If the phone's own location is off, it says "The phone's location is switched off". Tap "Open the phone's settings" and allow location.
+If the phone has blocked location for Cache, it says "Blocked in the phone's settings". If the phone's own location is off, it says "The phone's location is switched off". In "Settings" the row then shows a "Phone settings" button instead of the switch. In the + menu in "Ask" the switch is greyed out and there is an "Open the phone's settings" button. Use it to allow location.
 
 On the map:
 1. Open "Maps" and tap the locate button ("Find me").

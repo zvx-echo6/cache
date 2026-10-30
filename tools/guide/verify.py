@@ -66,6 +66,7 @@ Q = [
     ('use my location', G + '1. Getting started: Let Cache use your location'),
     ('how do I change the app to dark mode', G + '3. Settings, page by page: Appearance'),
     ("my phone is full and a download stopped", G + "6. When something doesn't work: Storage full"),
+    ('obsidian vault', G + '5. Notebooks: Write notebooks to Obsidian or Logseq'),
     ('how do I follow a route while driving', G + '2. Using Cache: Follow a route'),
 ]
 for q, exp in Q:

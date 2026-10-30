@@ -95,7 +95,10 @@ Delete always asks first. The pop-up says what it frees and how much storage you
 1. Open "Ask" from the bar, or use the search box on "Home" and tap "Ask Cache:".
 2. If the title says "No model", tap it and choose a model first.
 3. Type your question in "Ask anything" and tap "Send".
-4. While it works you see "Thinking…" or "Searching your sources…". Tap "Stop" to stop it.
+4. If Cache is still starting, the question waits and you see "Starting…". It is answered when Cache is ready.
+5. While it works you see "Thinking…" or "Searching your sources…". Tap "Stop" to stop it.
+
+If Cache's search can't start, the answer is "Cache's search couldn't start, so this wasn't answered." Tap "Try again".
 
 Cache looks in your sources before it answers: your Library, your libraries, downloaded places and maps, weather and alerts data, and, if you set it up, web search when you are online.
 
@@ -103,7 +106,7 @@ Location: Cache uses where you are whenever your phone allows it. It never asks 
 1. Tap the "+" button to the left of the box where you type.
 2. Turn off "Use my location".
 
-If the phone has blocked location for Cache, that switch is greyed out and says why.
+If the phone has blocked location for Cache, that switch is greyed out and says why: "Blocked in the phone's settings", or "The phone's location is switched off".
 
 If the assistant works out a route, the answer has an "Open navigation" button. Tap it to open the route in "Maps". If it says "Navigation unavailable: this route snapshot is no longer available.", ask again for directions.
 
@@ -200,7 +203,7 @@ The card's buttons:
 - "Add to Home": puts the place on "Home" as a shortcut.
 - "Close": closes the card.
 
-Press and hold on the map opens the ring menu, with directions to that spot, saving it to a notebook, and its coordinates. See the section The map ring menu in chapter 5.
+Press and hold on the map opens the ring menu: "To here", "From here", "Add stop" (while a route is shown), "Save" and "Measure". The centre opens the spot's coordinates. See the section The map ring menu in chapter 5.
 
 Saved places are listed in the Places notebook. Open Notebooks and tap Places. To change a place or its weather setting, see the section Add or edit a place in chapter 5.
 
@@ -303,6 +306,10 @@ To add a site:
 To watch:
 1. Tap the instance. Choose "Latest" or "Channels", or search it.
 2. Tap a video, then "Play".
+
+In the player:
+- Tap the speed button (it shows 1x) to pick a playback speed from 0.5x to 2x. "Normal" is 1x.
+- Tap "Full screen" for true full screen: the video alone, turned to landscape for a wide video, with the system bars hidden. Tap the screen to show the controls. Back, or "Leave full screen", leaves it.
 
 To save a video for offline:
 1. On the video, tap "Download".
