@@ -19,7 +19,6 @@ release notes).
 - Notebooks: keep them in an Obsidian vault or a Logseq graph you pick on the phone (classic Markdown graphs both ways, Logseq 2 by export); changes made in both places are merged and only the same words changed twice are asked about (Notebooks > Connections)
 - Maps: add places from a KML, KMZ, GPX or GeoJSON file as a Places notebook, and repeater lists from a RepeaterBook KML or CHIRP CSV, under My layers
 - Notebooks: notebook sync keeps your notebooks and their photos the same on your linked devices (tick Notebooks in Sharing and sync); changes made on two devices are merged, and only the same words changed on both are asked about; private items stay on the device unless you include them (Notebooks > Connections)
-- Optional app PIN: Cache asks for it when it opens (Notebooks > App PIN)
 - Logs: quick add with your last values filled in, "Last done" and "Due again", and a Home card that logs in two taps
 - Notebooks: search across all notebooks, and delete any entry (with Undo) or a whole notebook
 - Maps: notebooks with places show their pins, each notebook a layer under My layers

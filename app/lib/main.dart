@@ -393,7 +393,7 @@ class _CacheAppState extends State<CacheApp> {
     },
   );
   late final NotebookDeps notebookDeps = NotebookDeps(
-      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: appPin,
+      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
       shareAvailable: () => sharing.enabled);
   // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
   late final NotebookConnections connections = NotebookConnections(
@@ -470,7 +470,7 @@ class _CacheAppState extends State<CacheApp> {
       unawaited(weather.updateIfDue(kBackgroundEvery));
       unawaited(connections.syncAll());
     });
-    appPin.init();
+    if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
       if (mounted) setState(() => _coreDone = true);
@@ -660,7 +660,7 @@ class _CacheAppState extends State<CacheApp> {
             ),
           ],
         ),
-        home: appPin.locked ? PinLockScreen(pin: appPin) : Shell(
+        home: appLockAsked(appPin) ? PinLockScreen(pin: appPin) : Shell(
           app: app,
           chat: chat,
           sources: sources,

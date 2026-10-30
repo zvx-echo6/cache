@@ -10,6 +10,12 @@ import '../video/token_store.dart';
 /// The optional app PIN (project decision, 2026-10-29): when one is set, Cache asks for it when it opens. It only gates opening
 /// the app; nothing is encrypted with it and it hides nothing from Cache (the assistant) once Cache is open. The PIN itself is
 /// never stored: only a salted PBKDF2-HMAC-SHA256 hash, in the phone's secure storage.
+/// App lock is not in 1.0 (moved to 1.1): nothing offers it, and a PIN stored by an earlier test build is never asked for.
+const bool kAppLockEnabled = false;
+
+/// Whether Cache shows its lock screen now: never while app lock is not in the app, whatever is stored.
+bool appLockAsked(AppPin pin) => kAppLockEnabled && pin.locked;
+
 class AppPin extends ChangeNotifier {
   AppPin(this._store, {this.iterations = 60000, DateTime Function()? clock}) : _now = clock ?? DateTime.now;
 

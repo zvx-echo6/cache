@@ -12,6 +12,9 @@ import 'package:cache/notebook/sync/sync_engine.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/screens/notebooks/connections_screen.dart';
 import 'package:cache/screens/notebooks/notebook_editor.dart';
+import 'package:cache/screens/notebooks/notebook_screen.dart';
+import 'package:cache/screens/notebooks/notebooks_screen.dart';
+import 'package:cache/notebook/places.dart';
 import 'package:cache/screens/pin_screen.dart';
 import 'package:cache/settings/app_pin.dart';
 import 'package:cache/theme.dart';
@@ -431,6 +434,25 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect((nb.privateSharing! as _Included).ids, {notes!.id});
+    });
+
+    testWidgets('1.0 asks for no PIN: a PIN stored by an earlier build is treated as off, and Notebooks offers no App PIN', (tester) async {
+      final store = MemoryTokenStore();
+      final pin = AppPin(store, iterations: 10);
+      await tester.runAsync(() async {
+        await pin.set('2468');
+        await pin.init();
+      });
+      expect(kAppLockEnabled, isFalse);
+      expect(appLockAsked(pin), isFalse, reason: 'a stored PIN is off in 1.0');
+      final nb = fakeNotebook(FakeNotebookBackend());
+      await tester.runAsync(nb.start);
+      final deps = NotebookDeps(notebook: nb, places: PlaceChoices.none, pin: kAppLockEnabled ? pin : null);
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: NotebooksScreen(deps: deps)));
+      await tester.pump();
+      expect(find.byType(PinLockScreen), findsNothing);
+      expect(find.byKey(const ValueKey('notebooks-menu')), findsNothing);
+      expect(find.text('App PIN'), findsNothing);
     });
 
     testWidgets('the lock screen: the right PIN opens Cache, a wrong one says so', (tester) async {
