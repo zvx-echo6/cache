@@ -2,6 +2,7 @@
 """Hands an uploaded build to the public TestFlight testers, through the App Store Connect API.
 
 Usage: testflight_public.py <build number> [group name, default "Public"]
+       testflight_public.py --check-newer <build number>   (fails unless it is higher than every build already uploaded)
 Environment: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_B64 (the API key the upload uses), BUNDLE_ID, and optionally WHATS_NEW (the
 "What to test" text). Without WHATS_NEW the text is the "Unreleased" section of CHANGELOG.md, as plain text.
 
@@ -116,17 +117,49 @@ def fail(msg: str):
     sys.exit(1)
 
 
-def main():
-    if len(sys.argv) < 2:
-        fail("usage: testflight_public.py <build number> [group name]")
-    number = sys.argv[1]
-    group_name = sys.argv[2] if len(sys.argv) > 2 else "Public"
-    asc = Asc()
-
+def app_id(asc: Asc) -> str:
     st, apps = asc.call("GET", f"/v1/apps?filter[bundleId]={os.environ['BUNDLE_ID']}")
     if st != 200 or not apps.get("data"):
         fail(f"app {os.environ['BUNDLE_ID']} not found ({st})")
-    app = apps["data"][0]["id"]
+    return apps["data"][0]["id"]
+
+
+def highest_build(asc: Asc, app: str) -> int:
+    """The highest build number uploaded for the app, of any version (0 when there is none)."""
+    best, path = 0, f"/v1/builds?filter[app]={app}&fields[builds]=version&limit=200"
+    while path:
+        st, page = asc.call("GET", path)
+        if st != 200:
+            fail(f"listing the builds: {st} {page}")
+        for b in page.get("data", []):
+            v = b["attributes"].get("version", "")
+            if v.isdigit():
+                best = max(best, int(v))
+        nxt = page.get("links", {}).get("next")
+        path = nxt[len(API):] if nxt and nxt.startswith(API) else None
+    return best
+
+
+def check_newer(number: str):
+    if not number.isdigit():
+        fail(f"the build number must be a whole number, not {number!r}")
+    asc = Asc()
+    last = highest_build(asc, app_id(asc))
+    if int(number) <= last:
+        fail(f"build {number} is not higher than the last TestFlight build ({last}): raise the version in app/pubspec.yaml")
+    print(f"build {number} is higher than the last TestFlight build ({last})")
+
+
+def main():
+    if len(sys.argv) < 2:
+        fail("usage: testflight_public.py <build number> [group name]")
+    if sys.argv[1] == "--check-newer":
+        check_newer(sys.argv[2] if len(sys.argv) > 2 else "")
+        return
+    number = sys.argv[1]
+    group_name = sys.argv[2] if len(sys.argv) > 2 else "Public"
+    asc = Asc()
+    app = app_id(asc)
 
     st, groups = asc.call("GET", f"/v1/apps/{app}/betaGroups?limit=200")
     group = next((g for g in groups.get("data", []) if g["attributes"]["name"] == group_name), None)

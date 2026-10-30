@@ -8,6 +8,7 @@ import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/web_search_setup.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/version.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,7 +42,7 @@ void main() {
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
       expect(find.text('Dark'), findsOneWidget);
-      expect(find.text('1.0.0 · AGPL-3.0'), findsOneWidget);
+      expect(find.text('$kAppVersion · AGPL-3.0'), findsOneWidget);
       await r.dispose(tester);
     });
 

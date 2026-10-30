@@ -223,6 +223,17 @@ void main() {
     expect(kAppLicenceId, 'AGPL-3.0-or-later');
   });
 
+  test('the version is 1.0.<build>, the same build number on both phones, and shown whole', () {
+    final line = File('pubspec.yaml').readAsLinesSync().firstWhere((l) => l.startsWith('version:'));
+    final m = RegExp(r'^version:\s*(\d+\.\d+\.(\d+))\+(\d+)\s*$').firstMatch(line);
+    expect(m, isNotNull, reason: line);
+    expect(m!.group(2), m.group(3), reason: 'version 1.0.27 is build 27 (the iOS workflow checks the same)');
+    expect(versionLabel('1.0.27', '27'), '1.0.27');
+    expect(versionLabel('1.0.0', '26'), '1.0.0 (build 26)', reason: 'an older build keeps its number');
+    expect(versionLabel('1.0.27', ''), '1.0.27');
+    expect(versionLabel('', ''), kAppVersion);
+  });
+
   test('preferences.json holds no key', () async {
     final s = await open();
     s.setWebSearchOn(true);
