@@ -1,7 +1,10 @@
 //! Source definitions: data, never code. One JSON file per source (format reference in DESIGN.md, "Live sources").
 //!
-//! Format 2 is a superset of format 1: every format 1 file reads unchanged. The JSON Schema of the format is generated
-//! from these types (feature `schema`) and committed as `packages/cache_search/schema/live-source.schema.json`.
+//! Format 2 is a superset of format 1, and format 3 of format 2: every older file reads unchanged. Format 3 adds `cache_hours`
+//! on a request (a document fetched once and reused) and `cap_area` on an item (CAP alert areas matched against the place); a
+//! definition that uses either says `"format": 3`, so an older core refuses it with a clear reason instead of misreading it.
+//! The JSON Schema of the format is generated from these types (feature `schema`) and committed as
+//! `packages/cache_search/schema/live-source.schema.json`.
 
 use crate::{Error, Result};
 use serde::Deserialize;
@@ -9,7 +12,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// The format this core writes about and prefers. Definitions of `MIN_FORMAT..=FORMAT` are read.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 pub const MIN_FORMAT: u32 = 1;
 
 /// Hard limits the definition's own settings cannot exceed.
@@ -20,12 +23,14 @@ pub const MAX_MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_PAGES: u32 = 50;
 pub const MAX_FAN_OUT: u32 = 50;
 pub const MAX_STEPS: usize = 6;
+/// The longest a fetched document may be reused (`cache_hours`): a week.
+pub const MAX_CACHE_HOURS: f64 = 168.0;
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct SourceDef {
-    /// 1 or 2. Format 2 adds everything described in DESIGN.md that format 1 lacks.
+    /// 1, 2 or 3. Format 2 adds everything described in DESIGN.md that format 1 lacks; format 3 adds `cache_hours` and `cap_area`.
     pub format: u32,
     /// Lower-case letters, digits, `_` and `-`.
     pub id: String,
@@ -102,6 +107,10 @@ pub struct RequestDef {
     pub id: Option<String>,
     /// Steps only: repeat this step for each element of a list found in an earlier response.
     pub for_each: Option<ForEachDef>,
+    /// Format 3, GET only, sources without a key or login: a response for the same address is reused for this many hours (at
+    /// most 168) instead of being fetched again, for documents that never change once published (one CAP alert, the county a
+    /// point is in). A refusal that will not change (HTTP 403, 404 or 410) is remembered for as long, so it is not asked again.
+    pub cache_hours: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -287,10 +296,34 @@ pub struct ItemDef {
     /// Path to a GeoJSON geometry for the item's area.
     #[serde(default)]
     pub area: Option<String>,
+    /// Format 3: the item's CAP `<area>` blocks. Their polygons and circles become the item's area (instead of `area`), and with
+    /// `match_place` the item is kept only when its area reaches the place.
+    #[serde(default)]
+    pub cap_area: Option<CapAreaDef>,
     /// One item for a part of the day ahead (the night, the daytime) instead of one per element: values are read over the
     /// elements of a time series that fall in it, with `agg`. The item's time and end are the period's unless given.
     #[serde(default)]
     pub window: Option<WindowDef>,
+}
+
+/// An item's CAP areas (OASIS CAP 1.2 `<area>`: `polygon`, `circle`, `geocode`), see `cap.rs`.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct CapAreaDef {
+    /// Path to the `<area>` block, or a list of them.
+    pub path: String,
+    /// Keep the item only when one of its polygons or circles contains the place (overlaps the place's area, for a place given
+    /// with one), or one of its geocodes named `code` is one of the place's codes. An item with neither is left out.
+    #[serde(default)]
+    pub match_place: bool,
+    /// The geocode name compared with the place's codes ("SAME": US county codes).
+    #[serde(default)]
+    pub code: Option<String>,
+    /// More of the place's codes, found in the response (the county an earlier step says the place is in). They join the codes
+    /// the place was given with (`codes` on the place object).
+    #[serde(default)]
+    pub place_codes: Vec<Spec>,
 }
 
 /// The part of the day ahead an item covers, in the place's local time, from when the data was fetched: the one in progress,
@@ -657,6 +690,47 @@ impl SourceDef {
         for (i, it) in self.items.iter().enumerate() {
             it.validate(&format!("items[{i}]"), &self.params, errs, id);
         }
+        // format 3 features
+        let keyed = self.api_key.is_some() || self.basic_auth.is_some();
+        for (i, q) in self.requests().iter().enumerate() {
+            let at = if self.request.steps.is_empty() { "request".to_string() } else { format!("request.steps[{i}]") };
+            if let Some(h) = q.cache_hours {
+                if self.format < 3 {
+                    bad!(format!("{at}.cache_hours: needs \"format\": 3"));
+                }
+                if !(h > 0.0 && h <= MAX_CACHE_HOURS) {
+                    bad!(format!("{at}.cache_hours: more than 0 and at most {MAX_CACHE_HOURS}"));
+                }
+                if q.method.as_deref().unwrap_or("GET") != "GET" || q.paging.is_some() {
+                    bad!(format!("{at}.cache_hours: only for a GET request without paging"));
+                }
+                if keyed {
+                    bad!(format!("{at}.cache_hours: not for a source with a key or login (its responses are not kept)"));
+                }
+            }
+        }
+        if self.request.cache_hours.is_some() && !self.request.steps.is_empty() {
+            bad!("request.cache_hours: with steps, give it inside the step");
+        }
+        for (i, it) in self.items.iter().enumerate() {
+            if let Some(c) = &it.cap_area {
+                if self.format < 3 {
+                    bad!(format!("items[{i}].cap_area: needs \"format\": 3"));
+                }
+                if it.area.is_some() {
+                    bad!(format!("items[{i}]: give area or cap_area, not both"));
+                }
+                if c.path.trim().is_empty() {
+                    bad!(format!("items[{i}].cap_area.path: required"));
+                }
+                if c.code.is_none() && !c.place_codes.is_empty() {
+                    bad!(format!("items[{i}].cap_area.place_codes: needs code (the geocode name they are compared with)"));
+                }
+                for (j, s) in c.place_codes.iter().enumerate() {
+                    s.validate(&format!("items[{i}].cap_area.place_codes[{j}]"), &self.params, errs, id);
+                }
+            }
+        }
         // placeholders naming a key need the key declared
         let uses_key = self.requests().iter().any(|q| request_text(q).contains("{api_key}"))
             || self.request.headers.values().any(|v| v.contains("{api_key}"));
@@ -812,7 +886,7 @@ impl ItemDef {
             if n.point.is_some() && n.geometry.is_some() {
                 errs.push(format!("source {id:?}: {at}.near: give point or geometry, not both"));
             }
-            if n.point.is_none() && n.geometry.is_none() && self.point.is_none() && self.area.is_none() {
+            if n.point.is_none() && n.geometry.is_none() && self.point.is_none() && self.area.is_none() && self.cap_area.is_none() {
                 errs.push(format!("source {id:?}: {at}.near: needs the item to have a point or area, or a point or geometry here"));
             }
             if let Some(p) = &n.point {
@@ -825,7 +899,7 @@ impl ItemDef {
             match (&k.by, k.distance) {
                 (Some(b), false) => b.validate(&format!("{at}.by"), params, errs, id),
                 (None, true) => {
-                    if self.near.is_none() && self.point.is_none() && self.area.is_none() {
+                    if self.near.is_none() && self.point.is_none() && self.area.is_none() && self.cap_area.is_none() {
                         errs.push(format!("source {id:?}: {at}.distance: the item needs a point or area (or near) to measure to"));
                     }
                 }

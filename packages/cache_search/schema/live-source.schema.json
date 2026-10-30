@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Cache live source definition, format 2 (reads formats 1 to 2)",
+  "title": "Cache live source definition, format 3 (reads formats 1 to 3)",
   "type": "object",
   "required": [
     "description",
@@ -48,11 +48,11 @@
       "type": "string"
     },
     "format": {
-      "description": "1 or 2. Format 2 adds everything described in DESIGN.md that format 1 lacks.",
+      "description": "1, 2 or 3. Format 2 adds everything described in DESIGN.md that format 1 lacks; format 3 adds `cache_hours` and `cap_area`.",
       "type": "integer",
       "format": "uint32",
       "minimum": 1,
-      "maximum": 2
+      "maximum": 3
     },
     "id": {
       "description": "Lower-case letters, digits, `_` and `-`.",
@@ -188,6 +188,40 @@
         "op": {
           "description": "\"add\", \"sub\", \"mul\", \"div\" (left to right over `args`), \"min\" or \"max\". The signs + - * / are also accepted.",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CapAreaDef": {
+      "description": "An item's CAP areas (OASIS CAP 1.2 `<area>`: `polygon`, `circle`, `geocode`), see `cap.rs`.",
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "code": {
+          "description": "The geocode name compared with the place's codes (\"SAME\": US county codes).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "match_place": {
+          "description": "Keep the item only when one of its polygons or circles contains the place (overlaps the place's area, for a place given with one), or one of its geocodes named `code` is one of the place's codes. An item with neither is left out.",
+          "default": false,
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Path to the `<area>` block, or a list of them.",
+          "type": "string"
+        },
+        "place_codes": {
+          "description": "More of the place's codes, found in the response (the county an earlier step says the place is in). They join the codes the place was given with (`codes` on the place object).",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Spec"
+          }
         }
       },
       "additionalProperties": false
@@ -399,6 +433,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "cap_area": {
+          "description": "Format 3: the item's CAP `<area>` blocks. Their polygons and circles become the item's area (instead of `area`), and with `match_place` the item is kept only when its area reaches the place.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CapAreaDef"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "each": {
@@ -786,6 +831,15 @@
             "string",
             "null"
           ]
+        },
+        "cache_hours": {
+          "description": "Format 3, GET only, sources without a key or login: a response for the same address is reused for this many hours (at most 168) instead of being fetched again, for documents that never change once published (one CAP alert, the county a point is in). A refusal that will not change (HTTP 403, 404 or 410) is remembered for as long, so it is not asked again.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
         },
         "for_each": {
           "description": "Steps only: repeat this step for each element of a list found in an earlier response.",
@@ -1340,5 +1394,5 @@
       "additionalProperties": false
     }
   },
-  "$id": "https://github.com/zvx-echo6/cache/schema/live-source-format-2.json"
+  "$id": "https://github.com/zvx-echo6/cache/schema/live-source-format-3.json"
 }

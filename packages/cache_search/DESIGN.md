@@ -1102,7 +1102,9 @@ works on every platform; the app points `"live": {"db_path", "sources_dir"}` at 
 on install, and a user adds or shares more by dropping files there (the starter catalogue is `cache-packs/connectors/`). An
 unreadable file is listed under `errors` by `cs_live_sources` and does not stop the others.
 
-This section is the format reference. The format is **2**; format 1 files read unchanged (format 2 only adds). Unknown keys
+This section is the format reference. The format is **3**; format 1 and 2 files read unchanged (each format only adds). A
+file that uses a format 3 feature (`cache_hours`, `cap_area`, below) must say `"format": 3`, so a core that reads only formats 1
+and 2 refuses it by name ("format: 3 is not supported") and the app leaves that one connector out of a catalogue. Unknown keys
 are errors, so typos show, and every error names its field (`items[0].fields[2].time.in: ...`). The JSON Schema of the format
 is generated from the Rust types and committed as `packages/cache_search/schema/live-source.schema.json` (editors that know JSON Schema
 complete and check against it; `UPDATE_SCHEMA=1 cargo test -p cache_live --features schema` rewrites it, and the same test
@@ -1377,6 +1379,24 @@ object of step responses), so a changed definition re-maps it without a download
 
 Workflow: write the `request`, run `cs live-preview` with a throwaway `items`, read the paths, write the mapping, run `cs live-preview` again,
 then `cs live-check`.
+
+#### Format 3: kept documents and CAP alert areas
+
+* `cache_hours` on a request or a step (GET only, not with paging, not for a source with a key or login; at most 168): a response
+  for the same address is reused for that long instead of being fetched again, across places and fetches (the `live_doc` table
+  of live.sqlite). For documents that never change once published: one CAP alert of a feed, the county a point is in. A refusal
+  that will not change (HTTP 403, 404, 410: an alert that has expired) is remembered for as long and is not asked again; in a
+  fan-out such a document is left out without counting as a failure, so a feed whose every entry has expired is "nothing
+  active", not an error. Kept documents count against no quota.
+* `cap_area` on an item: `{"path": "<the CAP area block, or a list of them>", "match_place": true, "code": "SAME", "place_codes":
+  [values]}`. The polygons ("lat,lon lat,lon ...") and circles ("lat,lon radius_km") of the OASIS CAP 1.2 `<area>` blocks become
+  the item's area (a GeometryCollection; a shape whose coordinates cannot be read is dropped, not the item). With `match_place`
+  the item is kept only when a shape contains the place's point, or overlaps the place's `area` when the place object has one (a
+  downloaded region), or one of its geocodes named `code` is one of the place's codes: `codes` on the place object
+  (`{"SAME": ["016001"]}`) and the `place_codes` values found in the response (the county an earlier step says the point is in).
+  Nothing in it knows a provider: any CAP feed is read the same way.
+* The place object of `cs_live_fetch` may carry `area` (a GeoJSON geometry) and `codes`; they are kept with the row so a changed
+  definition maps it the same way. Only `cap_area` reads them; nothing the model sees changes shape.
 
 #### Not in the format, on purpose
 

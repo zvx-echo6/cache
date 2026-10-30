@@ -1,0 +1,274 @@
+{
+  "format": 3,
+  "id": "ipaws-alerts-near",
+  "title": "Emergency alerts",
+  "provider": "FEMA IPAWS",
+  "description": "emergency alerts from local, state and federal officials, including evacuation orders, for the place (FEMA IPAWS, US)",
+  "attribution": "Alerts from the issuing officials through FEMA's Integrated Public Alert and Warning System (IPAWS); county lookup from the US National Weather Service (weather.gov)",
+  "none_label": "No active emergency alerts",
+  "request": {
+    "headers": {
+      "User-Agent": "Cache (https://github.com/zvx-echo6/cache-packs)"
+    },
+    "steps": [
+      {
+        "id": "county",
+        "url": "https://api.weather.gov/zones?type=county&point={lat:4},{lon:4}&include_geometry=false",
+        "headers": {
+          "Accept": "application/geo+json"
+        },
+        "cache_hours": 24
+      },
+      {
+        "id": "feed",
+        "url": "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/feed",
+        "response": "xml",
+        "headers": {
+          "Accept": "application/xml"
+        },
+        "xml": {
+          "always_array": [
+            "entry"
+          ]
+        }
+      },
+      {
+        "id": "docs",
+        "url": "{e:link.@href|raw}",
+        "response": "xml",
+        "headers": {
+          "Accept": "application/xml"
+        },
+        "xml": {
+          "always_array": [
+            "info"
+          ]
+        },
+        "cache_hours": 24,
+        "for_each": {
+          "from": "feed",
+          "path": "feed.entry",
+          "as": "e",
+          "limit": 50
+        }
+      }
+    ]
+  },
+  "refresh_minutes": 10,
+  "quota": {
+    "per_minute": 60,
+    "per_day": 3000,
+    "per_month": 60000
+  },
+  "validity": {
+    "fixed_hours": 6
+  },
+  "require": [
+    "feed.feed"
+  ],
+  "items": [
+    {
+      "each": "docs",
+      "key": {
+        "path": "alert.identifier"
+      },
+      "label": {
+        "first_of": [
+          {
+            "path": "alert.info[0].headline"
+          },
+          {
+            "path": "alert.info[0].event"
+          }
+        ],
+        "max_chars": 120
+      },
+      "time": {
+        "path": "alert.sent",
+        "time": {
+          "in": "rfc3339",
+          "zone": "place",
+          "out": "datetime_s"
+        }
+      },
+      "ends": {
+        "path": "alert.info[0].expires",
+        "time": {
+          "in": "rfc3339"
+        }
+      },
+      "where": [
+        {
+          "value": {
+            "path": "alert.status"
+          },
+          "equals": "Actual"
+        },
+        {
+          "value": {
+            "path": "alert.scope"
+          },
+          "equals": "Public"
+        },
+        {
+          "value": {
+            "path": "alert.msgType"
+          },
+          "in": [
+            "Alert",
+            "Update"
+          ]
+        }
+      ],
+      "cap_area": {
+        "path": "alert.info[0].area",
+        "match_place": true,
+        "code": "SAME",
+        "place_codes": [
+          {
+            "template": "0{s}{c}",
+            "vars": {
+              "s": {
+                "path": "^county.features[0].properties.state",
+                "lookup": {
+                  "AL": "01",
+                  "AK": "02",
+                  "AZ": "04",
+                  "AR": "05",
+                  "CA": "06",
+                  "CO": "08",
+                  "CT": "09",
+                  "DE": "10",
+                  "DC": "11",
+                  "FL": "12",
+                  "GA": "13",
+                  "HI": "15",
+                  "ID": "16",
+                  "IL": "17",
+                  "IN": "18",
+                  "IA": "19",
+                  "KS": "20",
+                  "KY": "21",
+                  "LA": "22",
+                  "ME": "23",
+                  "MD": "24",
+                  "MA": "25",
+                  "MI": "26",
+                  "MN": "27",
+                  "MS": "28",
+                  "MO": "29",
+                  "MT": "30",
+                  "NE": "31",
+                  "NV": "32",
+                  "NH": "33",
+                  "NJ": "34",
+                  "NM": "35",
+                  "NY": "36",
+                  "NC": "37",
+                  "ND": "38",
+                  "OH": "39",
+                  "OK": "40",
+                  "OR": "41",
+                  "PA": "42",
+                  "RI": "44",
+                  "SC": "45",
+                  "SD": "46",
+                  "TN": "47",
+                  "TX": "48",
+                  "UT": "49",
+                  "VT": "50",
+                  "VA": "51",
+                  "WA": "53",
+                  "WV": "54",
+                  "WI": "55",
+                  "WY": "56",
+                  "AS": "60",
+                  "GU": "66",
+                  "MP": "69",
+                  "PR": "72",
+                  "VI": "78"
+                }
+              },
+              "c": {
+                "path": "^county.features[0].properties.id",
+                "after_last": "C"
+              }
+            }
+          }
+        ]
+      },
+      "sort": [
+        {
+          "by": {
+            "path": "alert.info[0].severity"
+          },
+          "rank": [
+            "Extreme",
+            "Severe",
+            "Moderate",
+            "Minor",
+            "Unknown"
+          ]
+        },
+        {
+          "by": {
+            "path": "alert.sent"
+          },
+          "time": true,
+          "desc": true
+        }
+      ],
+      "fields": [
+        {
+          "label": "Event",
+          "path": "alert.info[0].event"
+        },
+        {
+          "label": "Severity",
+          "path": "alert.info[0].severity",
+          "case": "lower",
+          "omit_if": [
+            "unknown"
+          ]
+        },
+        {
+          "label": "Issued by",
+          "path": "alert.info[0].senderName"
+        },
+        {
+          "label": "Area",
+          "first_of": [
+            {
+              "path": "alert.info[0].area.areaDesc"
+            },
+            {
+              "path": "alert.info[0].area[0].areaDesc"
+            }
+          ],
+          "max_chars": 160
+        },
+        {
+          "label": "Expires",
+          "path": "alert.info[0].expires",
+          "time": {
+            "in": "rfc3339",
+            "zone": "place",
+            "out": "%Y-%m-%d %H:%M"
+          }
+        },
+        {
+          "label": "Instructions",
+          "first_of": [
+            {
+              "path": "alert.info[0].instruction"
+            },
+            {
+              "path": "alert.info[0].description"
+            }
+          ],
+          "max_chars": 400
+        }
+      ]
+    }
+  ]
+}

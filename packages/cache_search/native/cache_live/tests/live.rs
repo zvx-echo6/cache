@@ -66,9 +66,12 @@ struct Env {
     places: UserStore,
 }
 
+/// A definition for `Env::new`: file name, definition JSON, and optionally the stand-in server (port, path) its url is sent to.
+type TestDef<'a> = (&'a str, Value, Option<(u16, &'a str)>);
+
 impl Env {
     /// `defs`: (file name, definition JSON). Their request.url is rewritten to `http://127.0.0.1:<port><path>`.
-    fn new(name: &str, defs: Vec<(&str, Value, Option<(u16, &str)>)>) -> Env {
+    fn new(name: &str, defs: Vec<TestDef>) -> Env {
         let dir = std::env::temp_dir().join(format!("cache-live-test-{}-{}", std::process::id(), name));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sources")).unwrap();

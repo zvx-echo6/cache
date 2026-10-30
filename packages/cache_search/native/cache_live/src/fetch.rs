@@ -28,6 +28,9 @@ pub struct RowMeta {
     /// Repeated requests that failed and are missing from the data.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub skipped: usize,
+    /// The area and codes the place was fetched with (a region), so a changed definition maps it the same way again.
+    #[serde(default, skip_serializing_if = "map::PlaceGeo::is_empty")]
+    pub place: map::PlaceGeo,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -39,11 +42,31 @@ impl RowMeta {
         row.meta.as_deref().and_then(|m| serde_json::from_str(m).ok()).unwrap_or_default()
     }
     pub fn to_text(&self) -> Option<String> {
-        if self.params.is_empty() && !self.truncated && self.skipped == 0 {
+        if self.params.is_empty() && !self.truncated && self.skipped == 0 && self.place.is_empty() {
             None
         } else {
             serde_json::to_string(self).ok()
         }
+    }
+}
+
+/// `cache_hours` responses in live.sqlite (`live_doc`), kept a week at most.
+struct DbDocs<'c> {
+    c: &'c Connection,
+}
+
+impl crate::request::DocCache for DbDocs<'_> {
+    fn get(&self, url: &str, since: i64) -> Option<(u16, Vec<u8>)> {
+        self.c
+            .query_row("SELECT status, body FROM live_doc WHERE url=?1 AND at>=?2", params![url, since], |r| Ok((r.get::<_, u16>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .ok()
+    }
+    fn put(&self, url: &str, status: u16, body: &[u8], now: i64) {
+        let _ = self.c.execute(
+            "INSERT INTO live_doc(url,at,status,body) VALUES(?1,?2,?3,?4) ON CONFLICT(url) DO UPDATE SET at=?2,status=?3,body=?4",
+            params![url, now, status, body],
+        );
+        let _ = self.c.execute("DELETE FROM live_doc WHERE at<?1", [now - (crate::def::MAX_CACHE_HOURS * 3600.0) as i64]);
     }
 }
 
@@ -143,9 +166,10 @@ impl Live {
             c.execute("DELETE FROM live_log WHERE at<?1", [now - 31 * 86_400])?;
             Ok(())
         };
-        let out = execute(&RunCtx { def: d, place, info, params: par, secrets, now }, &mut gate)?;
-        let m = map::map_response_with(d, &out.tree, now, place.lat, place.lon, par)?;
-        let meta = RowMeta { params: par.clone(), truncated: out.truncated, skipped: out.skipped };
+        let cache = DbDocs { c };
+        let out = execute(&RunCtx { def: d, place, info, params: par, secrets, now, docs: Some(&cache) }, &mut gate)?;
+        let m = map::map_response_at(d, &out.tree, now, place.lat, place.lon, &info.geo, par)?;
+        let meta = RowMeta { params: par.clone(), truncated: out.truncated, skipped: out.skipped, place: info.geo.clone() };
         let mut row = Row {
             place: place.clone(),
             fetched_at: now,

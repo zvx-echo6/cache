@@ -507,7 +507,7 @@ fn basic_auth_bearer_header_and_a_rejected_login() {
     let r = env.fetch(json!({"source": "bearer", "api_key": "tok-123"})).unwrap();
     assert_eq!(labels(&r), ["bearer ok"]);
     let e = env.fetch(json!({"source": "bearer", "api_key": "other", "force": true})).unwrap_err();
-    assert_eq!(e.message, "HTTP 403: denied (the key or login was refused)".replace(": denied", ": denied"));
+    assert_eq!(e.message, "HTTP 403: denied (the key or login was refused)");
     // sources_json says what each source needs
     let list: Value = serde_json::from_str(&env.live.sources_json()).unwrap();
     let basic = list["sources"].as_array().unwrap().iter().find(|s| s["id"] == "basic").unwrap();
@@ -702,14 +702,14 @@ fn errors_name_the_field_and_old_definitions_still_read() {
     assert!(e.contains("items[0].fields[0].time") && e.contains("inn"), "{e}");
     // several mistakes are all listed, each with its field
     let mut d = good.clone();
-    d["format"] = json!(3);
+    d["format"] = json!(4);
     d["request"] = json!({"url": "https://x/{nope", "method": "PUT", "response": "yaml"});
     d["items"][0]["fields"][0] = json!({"label": "A", "path": "a", "const": 1});
     d["items"][0]["where"] = json!([{"field": "Missing", "equals": 1}, {"value": {"path": "x"}}]);
     d["items"][0]["near"] = json!({"max": 5, "unit": "furlong"});
     d["items"][0]["sort"] = json!([{"by": {"path": "x"}, "distance": true}]);
     let e = cache_live::def::SourceDef::parse(&d.to_string()).unwrap_err().message;
-    for want in ["format: 3 is not supported", "request.method", "request.response", "items[0].fields[0]: a value", "items[0].where[0].field", "items[0].where[1]: needs a test", "items[0].near.unit", "items[0].sort[0]"] {
+    for want in ["format: 4 is not supported", "request.method", "request.response", "items[0].fields[0]: a value", "items[0].where[0].field", "items[0].where[1]: needs a test", "items[0].near.unit", "items[0].sort[0]"] {
         assert!(e.contains(want), "missing {want:?} in {e}");
     }
     // steps: unknown earlier step, repeated step, undeclared parameter and key

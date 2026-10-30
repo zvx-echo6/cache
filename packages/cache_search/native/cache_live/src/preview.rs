@@ -4,7 +4,7 @@
 
 use crate::def::SourceDef;
 use crate::fetch::{check_secrets, secrets_of};
-use crate::map::{map_response_with, stamp, Item};
+use crate::map::{map_response_at, stamp, Item};
 use crate::request::{execute, PlaceInfo, RunCtx};
 use crate::{now_from, params, Error, Place, Result};
 use serde::Deserialize;
@@ -145,7 +145,7 @@ pub fn preview(req_json: &str) -> Result<String> {
     let secrets = secrets_of(&def, r.api_key.as_deref(), r.secrets.as_ref());
     check_secrets(&def, &secrets)?;
     let now = now_from(r.now.as_deref())?;
-    let out = execute(&RunCtx { def: &def, place: &place, info: &info, params: &par, secrets: &secrets, now }, &mut || Ok(()))?;
+    let out = execute(&RunCtx { def: &def, place: &place, info: &info, params: &par, secrets: &secrets, now, docs: None }, &mut || Ok(()))?;
 
     let budget = r.raw_chars.unwrap_or(12_000);
     let mut raw = Value::Null;
@@ -170,7 +170,7 @@ pub fn preview(req_json: &str) -> Result<String> {
     }
     o.insert("raw".into(), raw);
     o.insert("paths".into(), json!(ps));
-    match map_response_with(&def, &out.tree, now, place.lat, place.lon, &par) {
+    match map_response_at(&def, &out.tree, now, place.lat, place.lon, &info.geo, &par) {
         Ok(m) => {
             let shown: Vec<&Item> = m.items.iter().take(r.max_items.unwrap_or(20)).collect();
             o.insert("zone".into(), json!(m.zone.name().map(str::to_string)));

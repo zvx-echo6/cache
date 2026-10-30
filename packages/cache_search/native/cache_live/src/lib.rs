@@ -6,6 +6,7 @@
 //! (`LiveDataTool`): both come from the same stored row through the same code (`Live::view`).
 //! Nothing here reads the system clock unless the caller gives no time: every call takes `now`.
 
+pub mod cap;
 pub mod convert;
 pub mod def;
 pub mod fetch;
@@ -194,6 +195,7 @@ fn open_db(path: &Path) -> Result<Connection> {
             source TEXT NOT NULL, place_key TEXT NOT NULL, at INTEGER NOT NULL, code TEXT NOT NULL, message TEXT NOT NULL,
             PRIMARY KEY(source, place_key));
          CREATE TABLE IF NOT EXISTS live_log(source TEXT NOT NULL, at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS live_doc(url TEXT PRIMARY KEY, at INTEGER NOT NULL, status INTEGER NOT NULL, body BLOB NOT NULL);
          CREATE INDEX IF NOT EXISTS live_log_at ON live_log(source, at);",
     )?;
     // a database made before the tz column existed
@@ -466,8 +468,8 @@ impl Live {
         let Some(mut row) = load_row(c, &l.def.id, &place.key)? else { return Ok(None) };
         if row.def_hash != l.hash {
             let root: Value = serde_json::from_str(&row.raw).map_err(|e| Error::bad_response(format!("stored response: {e}")))?;
-            let params = fetch::RowMeta::of(&row).params;
-            let m = map::map_response_with(&l.def, &root, row.fetched_at, row.place.lat, row.place.lon, &params)?;
+            let meta = fetch::RowMeta::of(&row);
+            let m = map::map_response_at(&l.def, &root, row.fetched_at, row.place.lat, row.place.lon, &meta.place, &meta.params)?;
             row.items = m.items;
             row.set_zone(m.zone);
             row.valid_until = m.valid_until;

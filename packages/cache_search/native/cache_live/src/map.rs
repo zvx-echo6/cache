@@ -18,6 +18,7 @@
 //! `limit` keeps the first few.
 
 use crate::def::{AggSpec, CalcSpec, Cond, DistanceSpec, ItemDef, Num, SourceDef, Spec, TimeSpec, WindowDef};
+use crate::cap;
 use crate::geo::{self, Near};
 use crate::tz::Zone;
 use crate::{Error, Result};
@@ -107,7 +108,27 @@ struct Ctx<'a> {
     lon: f64,
     /// The item group's `window`, when it has one.
     win: Option<&'a Win<'a>>,
+    /// The place's area and codes, when it was given with them (`cap_area` matches against them).
+    pg: &'a PlaceGeo,
 }
+
+/// What a place can carry besides its point: an area (a downloaded region's outline, GeoJSON) and codes by name (`{"SAME":
+/// ["016001"]}`). `cap_area` with `match_place` matches alert areas against them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaceGeo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub codes: BTreeMap<String, Vec<String>>,
+}
+
+impl PlaceGeo {
+    pub fn is_empty(&self) -> bool {
+        self.area.is_none() && self.codes.is_empty()
+    }
+}
+
+static NO_GEO: PlaceGeo = PlaceGeo { area: None, codes: BTreeMap::new() };
 
 /// A `window` worked out for one response: the period, the series' elements and which of them fall in it.
 struct Win<'a> {
@@ -223,7 +244,7 @@ fn follow<'a>(ctx: &Ctx<'a>, path: &str) -> Option<&'a Value> {
 pub fn lookup<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
     static Z: Zone = Zone::UTC;
     static P: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
-    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone: &Z, params: P.get_or_init(Params::new), now: 0, lat: 0.0, lon: 0.0, win: None };
+    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone: &Z, params: P.get_or_init(Params::new), now: 0, lat: 0.0, lon: 0.0, win: None, pg: &NO_GEO };
     follow(&ctx, path)
 }
 
@@ -590,6 +611,9 @@ fn item_near(g: &ItemDef, ctx: &Ctx) -> Option<Near> {
             return Some(geo::to_point(ctx.lat, ctx.lon, la, lo));
         }
     }
+    if let Some(c) = &g.cap_area {
+        return geo::nearest(&cap::read(follow(ctx, &c.path)?).geometry?, ctx.lat, ctx.lon);
+    }
     let a = g.area.as_ref()?;
     geo::nearest(follow(ctx, a)?, ctx.lat, ctx.lon)
 }
@@ -621,8 +645,35 @@ fn map_item(def: &ItemDef, ctx: &Ctx) -> Option<Item> {
         ends: def.ends.as_ref().and_then(|e| eval_instant(e, ctx)).or_else(|| ctx.win.map(|w| w.to)),
         fields: Fields(fields),
         point,
-        area: def.area.as_ref().and_then(|p| follow(ctx, p)).filter(|v| v.is_object()).cloned(),
+        area: match &def.cap_area {
+            Some(c) => follow(ctx, &c.path).and_then(|a| cap::read(a).geometry),
+            None => def.area.as_ref().and_then(|p| follow(ctx, p)).filter(|v| v.is_object()).cloned(),
+        },
     })
+}
+
+/// `cap_area` with `match_place`: whether the item's CAP area reaches the place. A polygon or circle contains the place's point,
+/// or overlaps the place's area when it has one; or one of the item's geocodes named `code` is one of the place's codes (those it
+/// was given with, and those `place_codes` finds in the response).
+fn cap_reaches(c: &crate::def::CapAreaDef, item: &Item, ctx: &Ctx) -> bool {
+    if let Some(g) = &item.area {
+        let hit = match &ctx.pg.area {
+            Some(pa) => geo::intersects(g, pa),
+            None => geo::nearest(g, ctx.lat, ctx.lon).map(|n| n.inside).unwrap_or(false),
+        };
+        if hit {
+            return true;
+        }
+    }
+    let Some(name) = &c.code else { return false };
+    let mut mine: Vec<String> = ctx.pg.codes.iter().filter(|(k, _)| k.eq_ignore_ascii_case(name)).flat_map(|(_, v)| v.iter().map(|x| x.trim().to_string())).collect();
+    mine.extend(c.place_codes.iter().filter_map(|s| eval(s, ctx)).map(|s| s.trim().to_string()));
+    mine.retain(|m| !m.is_empty());
+    if mine.is_empty() {
+        return false;
+    }
+    let Some(areas) = follow(ctx, &c.path) else { return false };
+    cap::read(areas).codes.iter().any(|(n, v)| n.eq_ignore_ascii_case(name) && mine.iter().any(|m| m == v))
 }
 
 fn same(have: &str, want: &Value) -> bool {
@@ -723,7 +774,7 @@ fn bad(m: String) -> Error {
 pub fn zone_for(def: &SourceDef, root: &Value, lat: f64, lon: f64) -> Result<Zone> {
     let utc = Zone::UTC;
     let none = Params::new();
-    let probe = Ctx { root, cur: root, idx: 0, key: None, zone: &utc, params: &none, now: 0, lat, lon, win: None };
+    let probe = Ctx { root, cur: root, idx: 0, key: None, zone: &utc, params: &none, now: 0, lat, lon, win: None, pg: &NO_GEO };
     if let Some(p) = &def.timezone_path {
         if let Some(z) = follow(&probe, p).and_then(Value::as_str).and_then(Zone::from_name) {
             return Ok(z);
@@ -775,8 +826,13 @@ pub fn map_response(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lo
 
 /// `map_response` with the user's parameters (`{"param": "name"}` in the definition reads them).
 pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lon: f64, params: &Params) -> Result<Mapped> {
+    map_response_at(def, root, fetched_at, lat, lon, &NO_GEO, params)
+}
+
+/// `map_response_with` for a place that may carry an area and codes (see `PlaceGeo`).
+pub fn map_response_at(def: &SourceDef, root: &Value, fetched_at: i64, lat: f64, lon: f64, pg: &PlaceGeo, params: &Params) -> Result<Mapped> {
     let zone = zone_for(def, root, lat, lon)?;
-    let at = |cur| Ctx { root, cur, idx: 0, key: None, zone: &zone, params, now: fetched_at, lat, lon, win: None };
+    let at = |cur| Ctx { root, cur, idx: 0, key: None, zone: &zone, params, now: fetched_at, lat, lon, win: None, pg };
     for p in &def.require {
         if follow(&at(root), p).is_none() {
             return Err(bad(format!("the response has no {p:?}")));
@@ -789,6 +845,11 @@ pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f6
             let Some(it) = map_item(g, &ctx) else { return };
             if !g.filter.iter().all(|c| cond_ok(c, &it, &ctx)) {
                 return;
+            }
+            if let Some(c) = g.cap_area.as_ref().filter(|c| c.match_place) {
+                if !cap_reaches(c, &it, &ctx) {
+                    return;
+                }
             }
             if let Some(n) = &g.near {
                 let Some(max) = num_of(&n.max, &ctx) else { return };
@@ -814,12 +875,12 @@ pub fn map_response_with(def: &SourceDef, root: &Value, fetched_at: i64, lat: f6
                 match target {
                     Value::Array(arr) => {
                         for (i, el) in arr.iter().enumerate() {
-                            push(Ctx { root, cur: el, idx: i, key: None, zone: &zone, params, now: fetched_at, lat, lon, win: None }, &mut group);
+                            push(Ctx { root, cur: el, idx: i, key: None, zone: &zone, params, now: fetched_at, lat, lon, win: None, pg }, &mut group);
                         }
                     }
                     Value::Object(obj) => {
                         for (i, (k, el)) in obj.iter().enumerate() {
-                            push(Ctx { root, cur: el, idx: i, key: Some(k.as_str()), zone: &zone, params, now: fetched_at, lat, lon, win: None }, &mut group);
+                            push(Ctx { root, cur: el, idx: i, key: Some(k.as_str()), zone: &zone, params, now: fetched_at, lat, lon, win: None, pg }, &mut group);
                         }
                     }
                     _ => return Err(bad(format!("no list at {p:?}"))),
@@ -865,7 +926,7 @@ fn validity(def: &SourceDef, root: &Value, zone: &Zone, fetched_at: i64, lat: f6
     }
     let path = v.end_path.as_deref().unwrap_or("");
     let none = Params::new();
-    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now: fetched_at, lat, lon, win: None };
+    let ctx = Ctx { root, cur: root, idx: 0, key: None, zone, params: &none, now: fetched_at, lat, lon, win: None, pg: &NO_GEO };
     let val = follow(&ctx, path).ok_or_else(|| bad(format!("no end time at {path:?}")))?;
     let local = TimeSpec { input: "local".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
     let rfc = TimeSpec { input: "rfc3339".into(), pattern: None, assume: None, out: None, zone: None, not_before: None };
@@ -923,7 +984,7 @@ mod tests {
     static Z: Zone = Zone::Fixed(-21600);
     static NO_PARAMS: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
     fn ctx<'a>(root: &'a Value, cur: &'a Value, idx: usize) -> Ctx<'a> {
-        Ctx { root, cur, idx, key: None, zone: &Z, params: NO_PARAMS.get_or_init(Params::new), now: 1_792_000_000, lat: 42.536, lon: -113.792, win: None }
+        Ctx { root, cur, idx, key: None, zone: &Z, params: NO_PARAMS.get_or_init(Params::new), now: 1_792_000_000, lat: 42.536, lon: -113.792, win: None, pg: &NO_GEO }
     }
 
     #[test]
@@ -1012,7 +1073,7 @@ mod tests {
         let c = ctx(&root, &root, 0);
         let t = |v: Value| eval(&spec(v), &c);
         assert_eq!(t(json!({"path":"ms","time":{"in":"unix_ms","out":"datetime_s"}})).unwrap(), "2026-10-25T13:40:00-06:00");
-        assert_eq!(t(json!({"path":"str_ms","time":{"in":"unix_ms","out":"date"}})).is_some(), true);
+        assert!(t(json!({"path":"str_ms","time":{"in":"unix_ms","out":"date"}})).is_some());
         for p in ["utc1", "utc2", "utc3"] {
             assert_eq!(t(json!({"path":p,"time":{"in":"utc","out":"%H:%M %:z"}})).unwrap(), "13:40 -06:00", "{p}");
         }

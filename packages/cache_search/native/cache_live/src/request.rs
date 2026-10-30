@@ -4,7 +4,7 @@
 
 use crate::convert::{gunzip_if_needed, to_tree};
 use crate::def::{ParamDef, RequestDef, SourceDef, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_S, MAX_FAN_OUT, MAX_PAGES};
-use crate::map::{lookup, plain_text, Params};
+use crate::map::{lookup, plain_text, Params, PlaceGeo};
 use crate::{Error, Place, Result};
 use base64::Engine as _;
 use chrono::DateTime;
@@ -35,12 +35,33 @@ pub struct PlaceInfo {
     pub county_fips: Option<String>,
     pub country: Option<String>,
     pub country_name: Option<String>,
+    /// `area` (a GeoJSON geometry: a region's outline) and `codes` (`{"SAME": ["016001", ...]}`) of the place object, for
+    /// `cap_area`. Anything else in those members is ignored.
+    pub geo: PlaceGeo,
 }
 
 impl PlaceInfo {
     pub fn from_value(v: Option<&Value>) -> PlaceInfo {
         let g = |k: &str| v.and_then(|v| v.get(k)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-        PlaceInfo { state: g("state"), state_name: g("state_name"), county: g("county"), county_fips: g("county_fips"), country: g("country"), country_name: g("country_name") }
+        let area = v.and_then(|v| v.get("area")).filter(|a| a.get("type").and_then(Value::as_str).is_some()).cloned();
+        let mut codes = BTreeMap::new();
+        if let Some(o) = v.and_then(|v| v.get("codes")).and_then(Value::as_object) {
+            for (k, list) in o {
+                let vals: Vec<String> = list.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default();
+                if !k.trim().is_empty() && !vals.is_empty() {
+                    codes.insert(k.trim().to_string(), vals);
+                }
+            }
+        }
+        PlaceInfo {
+            state: g("state"),
+            state_name: g("state_name"),
+            county: g("county"),
+            county_fips: g("county_fips"),
+            country: g("country"),
+            country_name: g("country_name"),
+            geo: PlaceGeo { area, codes },
+        }
     }
 }
 
@@ -384,6 +405,25 @@ pub struct RunCtx<'a> {
     pub params: &'a Params,
     pub secrets: &'a Secrets,
     pub now: i64,
+    /// Where responses of requests with `cache_hours` are kept between fetches; None reuses nothing (`cs live-preview`).
+    pub docs: Option<&'a dyn DocCache>,
+}
+
+/// Responses kept by address for `cache_hours` (live.sqlite in the app). Only GET requests of sources without a key or login.
+pub trait DocCache {
+    /// The status and body stored for `url` at or after `since` (Unix seconds).
+    fn get(&self, url: &str, since: i64) -> Option<(u16, Vec<u8>)>;
+    fn put(&self, url: &str, status: u16, body: &[u8], now: i64);
+}
+
+/// The HTTP status of a failure that will not change on asking again (a document taken down or expired), from the message
+/// `send` writes.
+fn lasting_refusal(e: &Error) -> Option<u16> {
+    if e.code != "fetch_failed" {
+        return None;
+    }
+    let code: u16 = e.message.strip_prefix("HTTP ")?.get(..3)?.parse().ok()?;
+    [403, 404, 410].contains(&code).then_some(code)
 }
 
 struct Runner<'a, 'g> {
@@ -435,6 +475,7 @@ pub fn execute(rc: &RunCtx, gate: &mut dyn FnMut() -> Result<()>) -> Result<Outc
                     let limit = f.limit.unwrap_or(10).min(MAX_FAN_OUT) as usize;
                     let mut outs = Vec::new();
                     let mut last_err = None;
+                    let mut gone = 0usize;
                     for el in list.iter().take(limit) {
                         let mut vars = BTreeMap::new();
                         vars.insert(f.name.clone(), el.clone());
@@ -442,13 +483,15 @@ pub fn execute(rc: &RunCtx, gate: &mut dyn FnMut() -> Result<()>) -> Result<Outc
                         match run.run_http(&merged, &id, &exp) {
                             Ok(v) => outs.push(v),
                             Err(e) if e.code == "quota" || e.code == "key_missing" || e.code == "bad_json" => return Err(e),
+                            // a kept document (cache_hours) that its server says is gone (an alert that expired): left out, not a failure
+                            Err(e) if merged.cache_hours.is_some() && lasting_refusal(&e).is_some() => gone += 1,
                             Err(e) => {
                                 run.skipped += 1;
                                 last_err = Some(e);
                             }
                         }
                     }
-                    if outs.is_empty() && !list.is_empty() {
+                    if outs.is_empty() && !list.is_empty() && gone < list.len().min(limit) {
                         return Err(last_err.unwrap_or_else(|| Error::fetch_failed("every repeated request failed")));
                     }
                     Value::Array(outs)
@@ -496,8 +539,33 @@ impl<'a, 'g> Runner<'a, 'g> {
         let body = self.build_body(r, exp)?;
         let kind = r.response.as_deref();
         let fetch = |this: &mut Self, url: &str| -> Result<Value> {
-            let bytes = this.send(r, step, url, &headers, body.as_ref())?;
-            to_tree(&bytes, kind, r.table.as_ref(), r.xml.as_ref())
+            let kept = r.cache_hours.filter(|_| r.method.as_deref().unwrap_or("GET") == "GET").zip(this.rc.docs);
+            let Some((hours, docs)) = kept else {
+                let bytes = this.send(r, step, url, &headers, body.as_ref())?;
+                return to_tree(&bytes, kind, r.table.as_ref(), r.xml.as_ref());
+            };
+            let now = this.rc.now;
+            if let Some((status, bytes)) = docs.get(url, now - (hours * 3600.0) as i64) {
+                this.log.push(ReqLog { step: step.into(), method: "GET".into(), url: scrub(url.to_string(), &this.scrub), status, bytes: bytes.len(), ms: 0 });
+                return if status == 200 {
+                    to_tree(&bytes, kind, r.table.as_ref(), r.xml.as_ref())
+                } else {
+                    Err(Error::fetch_failed(format!("HTTP {status} (remembered from an earlier try)")))
+                };
+            }
+            match this.send(r, step, url, &headers, body.as_ref()) {
+                Ok(bytes) => {
+                    let tree = to_tree(&bytes, kind, r.table.as_ref(), r.xml.as_ref())?;
+                    docs.put(url, 200, &bytes, now);
+                    Ok(tree)
+                }
+                Err(e) => {
+                    if let Some(code) = lasting_refusal(&e) {
+                        docs.put(url, code, &[], now);
+                    }
+                    Err(e)
+                }
+            }
         };
         let Some(p) = &r.paging else {
             return fetch(self, &url0);

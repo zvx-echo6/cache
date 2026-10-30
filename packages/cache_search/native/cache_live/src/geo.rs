@@ -208,6 +208,56 @@ pub fn nearest(geometry: &Value, lat: f64, lon: f64) -> Option<Near> {
     Some(Near { inside: false, km, bearing: bearing_deg(lat, lon, plat, plon) })
 }
 
+/// The polygons (outer ring first, then holes) and the loose points of a geometry, for [`intersects`].
+fn parts(g: &Value) -> (Vec<Vec<Ring>>, Vec<(f64, f64)>) {
+    let g = match g.get("type").and_then(Value::as_str) {
+        Some("Feature") => &g["geometry"],
+        _ => g,
+    };
+    let mut polys = Vec::new();
+    polygons(g, &mut polys);
+    polys.retain(|p| !p.is_empty());
+    let mut ps = Vec::new();
+    paths(g, &mut ps);
+    (polys, ps.into_iter().flatten().collect())
+}
+
+fn in_polygon(p: &[Ring], lon: f64, lat: f64) -> bool {
+    in_ring(&p[0], lon, lat) && !p[1..].iter().any(|h| in_ring(h, lon, lat))
+}
+
+/// Whether segments a-b and c-d cross or touch (lon, lat treated as flat: alert areas are small).
+fn segments_meet(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    let cross = |o: (f64, f64), p: (f64, f64), q: (f64, f64)| (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0);
+    let on = |o: (f64, f64), p: (f64, f64), q: (f64, f64)| q.0 >= o.0.min(p.0) && q.0 <= o.0.max(p.0) && q.1 >= o.1.min(p.1) && q.1 <= o.1.max(p.1);
+    let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0)) {
+        return true;
+    }
+    (d1 == 0.0 && on(c, d, a)) || (d2 == 0.0 && on(c, d, b)) || (d3 == 0.0 && on(a, b, c)) || (d4 == 0.0 && on(a, b, d))
+}
+
+fn rings_meet(r: &Ring, s: &Ring) -> bool {
+    (0..r.len()).any(|i| (0..s.len()).any(|j| segments_meet(r[i], r[(i + 1) % r.len()], s[j], s[(j + 1) % s.len()])))
+}
+
+fn polygons_meet(p: &[Ring], q: &[Ring]) -> bool {
+    p.iter().any(|r| q.iter().any(|s| rings_meet(r, s)))
+        || p[0].iter().any(|&(x, y)| in_polygon(q, x, y))
+        || q[0].iter().any(|&(x, y)| in_polygon(p, x, y))
+}
+
+/// Whether two GeoJSON geometries share any point: an area overlaps or touches the other, contains one of its points, or (two
+/// points) they are the same point. Holes are respected. Lines count by their points only.
+pub fn intersects(a: &Value, b: &Value) -> bool {
+    let (pa, xa) = parts(a);
+    let (pb, xb) = parts(b);
+    pa.iter().any(|p| pb.iter().any(|q| polygons_meet(p, q)))
+        || xa.iter().any(|&(x, y)| pb.iter().any(|q| in_polygon(q, x, y)))
+        || xb.iter().any(|&(x, y)| pa.iter().any(|p| in_polygon(p, x, y)))
+        || xa.iter().any(|u| xb.contains(u))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +295,24 @@ mod tests {
         let line = nearest(&json!({"type":"LineString","coordinates":[[-113.0,42.0],[-113.0,43.0]]}), 42.5, -113.792).unwrap();
         assert!((line.bearing - 90.0).abs() < 1.0 && line.km > 50.0 && line.km < 70.0, "{} {}", line.km, line.bearing);
         assert!(nearest(&Value::Null, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn areas_that_overlap_touch_contain_or_miss() {
+        let a = square(42.0, -114.0, 43.0, -113.0);
+        assert!(intersects(&a, &square(42.5, -113.5, 43.5, -112.5)), "crossing edges");
+        assert!(intersects(&a, &square(42.2, -113.8, 42.4, -113.6)), "one inside the other");
+        assert!(intersects(&square(42.2, -113.8, 42.4, -113.6), &a), "the other way round");
+        assert!(intersects(&a, &square(43.0, -114.0, 44.0, -113.0)), "a shared edge");
+        assert!(!intersects(&a, &square(44.0, -114.0, 45.0, -113.0)), "apart");
+        assert!(intersects(&a, &json!({"type":"Point","coordinates":[-113.5,42.5]})));
+        assert!(!intersects(&a, &json!({"type":"Point","coordinates":[-110.0,42.5]})));
+        // inside a hole is not inside the area
+        let holed = json!({"type":"Polygon","coordinates":[
+            [[-114.0,42.0],[-113.0,42.0],[-113.0,43.0],[-114.0,43.0],[-114.0,42.0]],
+            [[-113.9,42.1],[-113.1,42.1],[-113.1,42.9],[-113.9,42.9],[-113.9,42.1]]]});
+        assert!(!intersects(&holed, &square(42.4, -113.6, 42.6, -113.4)));
+        assert!(intersects(&json!({"type":"GeometryCollection","geometries":[square(10.0, 10.0, 11.0, 11.0), a.clone()]}), &square(42.9, -113.1, 43.2, -112.8)));
+        assert!(intersects(&json!({"type":"Feature","geometry":a}), &json!({"type":"MultiPolygon","coordinates":[[[[-113.5,42.5],[-113.4,42.5],[-113.4,42.6],[-113.5,42.5]]]]})));
     }
 }
