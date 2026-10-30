@@ -54,16 +54,19 @@ On ["Settings" > "Cache model and web search"](cache://settings/assistant), "Con
 
 ## Maps
 
-This page shows your map downloads and layers.
+This page lists your regions and your map layers.
 
 ![Settings, Maps](shot:settings-maps)
 
 1. Go to ["Settings" > "Maps"](cache://settings/maps).
-2. Use a row:
-   - "Downloaded": each area, with size and date. Tap one to open the layer list. It says "Nothing downloaded" if empty.
-   - "Regions": opens the "Regions" sheet to download, update and delete regions.
-   - "Layers": shows how many layers exist, how many are on, and the space they use. Tap it for the full list.
-   - "Advanced": layer definitions. Most people never need it.
+2. Under "Regions", each region on the phone has one row. A downloading region shows its parts, for example `Map stopped at 80% · Places 40% · Off-road waiting`, with "Carry on".
+3. Tap a region to open its page. Press and hold it for "Carry on", "Check for update" and "Delete".
+4. Tap "Download another region" to get more ("Directions, map, places and off-road for an area").
+5. Under "Layers", tap "Layers" for the full list. It shows how many layers exist, how many are on, and the space they use.
+6. Tap "Advanced" for layer definitions. Most people never need it.
+
+- If nothing is downloaded, the page says "Nothing downloaded".
+- For the region page and the pop-up, see A region's own page in chapter 1.
 
 ## Layer definitions (Advanced)
 
@@ -88,7 +91,7 @@ This page turns weather sources on and off.
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. If data is old, the line warns, for example "Updated 3 days ago".
-3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire hotspots".
+3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire detections near the place (NASA FIRMS)".
 4. Turn its switch on or off.
 
 Each row says what the source gives and who provides it. Tap a row to open the source's page. It has "Use this source".
@@ -194,7 +197,7 @@ This page shows what Cache uses and lets you free space.
 
 The page also has "Clean up", "Mobile data downloads" and "Kept free for the phone". Each has its own section below.
 
-- If a download won't fit, tap "Free up space" in its pop-up. It opens this page.
+- If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
 ## Clean up
 
@@ -210,7 +213,7 @@ The page also has "Clean up", "Mobile data downloads" and "Kept free for the pho
 
 ## Off-road data in Storage
 
-Open "Regions" in ["Settings" > "Storage"](cache://settings/storage) to see an "Off-road data" group. It has a row for each state, such as "[size] · used by [regions]". It says "Downloading" while it runs.
+Open "Regions" in ["Settings" > "Storage"](cache://settings/storage) to see an "Off-road data" group. It has a row for each state, with its size and `used by` the regions that use it. It says "Downloading" while it runs.
 
 ![Storage, Regions](shot:storage-regions)
 
@@ -239,7 +242,7 @@ The row "Kept free for the phone" shows "10% of storage, 5 to 20 GB" and the cur
 - It keeps 10% of total storage free, never less than 5 GB and never more than 20 GB.
 - On iPhone, Cache also stays within what iOS says is available. The stricter limit wins.
 
-- If a download won't fit, the pop-up says "Needs 28 GB more. Cache always leaves 20 GB for the phone." (numbers vary). Tap "Free up space".
+- If a download won't fit, the pop-up is titled "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Tap "Free up space".
 
 ## Sharing and sync: set up and link devices
 

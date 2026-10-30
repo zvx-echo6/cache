@@ -11,13 +11,14 @@ On a fresh install, "Home" shows a "Set up Cache" card. It gets Cache ready in f
 3. Tap "Turn on weather" for forecasts and alerts.
 4. Tap "Add a library" for Wikipedia, medical and survival references.
 
-A tick shows on each row when it is done. When all four are done, the card goes away by itself. "Edit Home" can also hide it.
+A tick shows on each row when it is done. When all four are done, the card goes away by itself.
 
-Nothing downloads or switches on until you tap. You can do the steps in any order.
+Nothing downloads or switches on until you tap. You can do the steps in any order. Press and hold a row to open its part of this guide.
 
-- If "Get your area" says "[region] · Not offline yet", the download is still running.
-- If it says "[region] · Stopped. Tap to carry on", tap the row. Cache says "Carrying on with [region]".
-- If you're on mobile data with "Mobile data downloads" off, that message has a "Download anyway" button.
+To hide the card, tap "Hide". Cache says "Set up Cache hidden. Bring it back in Edit Home." Tap "Undo" to bring it back at once, or use "Edit Home" later.
+
+- If "Get your area" shows the region and its parts, the download is running. For example `Idaho · Map stopped at 80% · Places 40% · Off-road waiting. Tap to carry on`.
+- If it says to tap to carry on, tap the row. A pop-up asks "Carry on with [region]?"
 
 ## Choose a model
 
@@ -35,20 +36,20 @@ A model is about 3 to 5 GB.
 
 - If you're on mobile data, the download waits for Wi-Fi. See Downloads, Wi-Fi and mobile data.
 - If a model says "Not supported: Cache needs a model that can use tools", pick another.
-- If there's no room, the pop-up button says "Free up space".
+- If there's no room, the pop-up is "Not enough space". Tap "Free up space".
 
 ## The search model
 
 The search model is a small second model, 605 MB. Cache uses it to search by meaning in your libraries and places. It is not a chat model.
 
-![The search model line on the Models screen](shot:models-search-model-row)
-
 It comes with your first model. The download pop-up has the line "Search model (once, for searching by meaning)".
 
-If it is missing or its download stopped:
+If its download stops:
 1. Open the Models screen.
-2. Under "On this phone", find "Meaning search needs the search model."
-3. Tap "Get it".
+2. In the download bar, find "Search model: download stopped ([reason])".
+3. Tap "Try again".
+
+- If a library needs a different model, a search in it says "Meaning search needs the model [name]." Cache can't download that model. It searches by keywords instead.
 
 ## Unload or delete a model
 
@@ -104,71 +105,113 @@ Weather and alerts always update, on any connection.
 
 - If you're on mobile data with that switch off, the pop-up offers "Wait for Wi-Fi". It is the default. The download starts when you're on Wi-Fi.
 - If you want it now, tap "Download now".
-- If it won't fit, the button says "Free up space". Tap it to open "Storage". See Storage full in chapter 6.
+- If it won't fit, the pop-up is "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Tap "Free up space" to open "Storage". See Storage full in chapter 6.
 - If a download stops, it picks up where it left off. See A download stopped in chapter 6.
 
 ## Download a region
 
-A region lets maps, directions and place search work with no connection. One download has routing, map, places and off-road.
+A region lets maps, directions and place search work with no connection. One download has directions, map, places and off-road.
 
 ![The Regions sheet](shot:regions-sheet)
 
-1. Open "Maps", tap "Layers", then "Download a region". You can also go to ["Settings" > "Maps" > "Regions"](cache://maps/regions).
-2. On the "Downloads" tab, find your region. Use "Search regions" or browse "Countries".
-3. Tap its download button. A region already here shows "On this phone".
-4. In the pop-up, check the sizes and storage bar, then tap "Download".
+1. Open "Maps", tap "Layers", then ["Download a region"](cache://maps/regions). You can also go to ["Settings" > "Maps"](cache://settings/maps) and tap "Download another region".
+2. Find your region. Each row shows its kind and size, for example `County · 19 MB`.
+3. Tap its download button.
+4. In the pop-up, check the size and storage, then tap "Download".
 
 To get several at once:
 1. Tap "Select" in the header.
 2. Tick the regions.
-3. Tap "Download N", then confirm.
+3. Tap "Download N · size", then confirm.
 
 If your area isn't listed, tap ["Draw your own area instead"](cache://maps/draw).
 
-- If a region shows a short reason instead of a button, it can't be downloaded. For example, "This region is too big to download the map in one go." or "This region has no outline yet."
-- If the list won't load, connect once. After that it works offline.
-- If you're on mobile data, the pop-up offers "Wait for Wi-Fi". See Downloads, Wi-Fi and mobile data.
-- If there's no room, the button says "Free up space".
+- If a row says `off-road shared with Idaho`, that state's off-road data is downloaded once for all its regions.
+- If a size says "Size unknown", the catalogue has none for it.
+- If the list won't load, connect once. It says "Couldn't read the list of regions. It needs a connection the first time."
+- If you're on mobile data, see Downloads, Wi-Fi and mobile data.
+- If a download stops, see A region's own page.
+
+## The region download pop-up
+
+One pop-up asks before every region download. Its title says which case it is.
+
+- New region: "Download [region]?" It lists what you get, "Map, directions, places and off-road.", and the size.
+- Several regions: "Download 3 regions?" with each size.
+- A region partly here: "Carry on with [region]?" It says how much is to go and how much is already here.
+- Off-road missing: "Add off-road to [region]?" It says what is already here and what is to download.
+- Not enough room: "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." The buttons are "Cancel" and "Free up space".
+
+Every pop-up also shows "Phone storage", with the free space before and after.
+
+Tap "Download", "Carry on" or "Free up space" to go ahead, or "Cancel".
+
+- If you're on mobile data with "Mobile data downloads" off, the pop-up offers "Wait for Wi-Fi" first. See Downloads, Wi-Fi and mobile data.
+- If the state's off-road data is already here, the pop-up says only this area's terrain is new.
 
 ## Region download progress and off-road data
 
-While a region downloads, its row shows each part and where it stands. Parts you can use are ready before the rest.
+While a region downloads, its row shows each part and where it stands. A part that is ready already works.
 
 ![A region downloading, part by part](shot:region-row)
 
-The row lists "Map", "Directions", "Places" and "Off-road". Each says ready, a percentage, waiting, stopped or paused. For example: Map ready · Directions 40% · Off-road waiting.
+1. Open the "Regions" sheet and tap the "Local" tab.
+2. Read the row. For example `Map 87% · Places 40% · Off-road waiting`.
+3. Read the bar under it. For example `56% of 2.8 GB in all · now map`.
 
-- Cache downloads from where the phone is outwards.
-- A part that says ready already works.
-- The "Local" tab shows the same line for every region still downloading.
-
-If a download stopped, tap the region's update button. If it stopped because Cache was closed, you can also tap "Get your area" in the Set up card. See A download stopped in chapter 6.
+- The parts are map, directions, places and off-road.
+- A stopped part reads `Map stopped at 80%`.
+- If it stopped, tap "Carry on". See A region's own page.
 
 ## Off-road data in regions
 
-Off-road routing needs terrain heights and a state's off-road pack. Cache shares the pack between regions.
+Off-road routing needs a state's off-road data and the terrain heights of your area. Cache shares the state's data between regions.
 
 ![A region's own page](shot:region-detail)
 
-- Each region downloads its own terrain heights.
-- A state's off-road pack downloads once, for all that state's regions.
-- If the pack is already here, the pop-up has an "Off-road" line with "Already on this phone". The size line adds "terrain heights for this region about [size]".
+- A state's off-road data downloads once, for all that state's regions.
+- Each region adds its own terrain heights.
+- The "Local" tab lists it under "Off-road data", with `used by` the regions that use it.
 
-A state's pack stays while any region that uses it is on the phone.
+It says "Each state's off-road data is downloaded once and kept while a region that uses it is on this phone."
+
+- If a region says `On this phone · off-road not added`, open it and tap "Add".
+
+## A region's own page
+
+Tap a region on the "Local" tab, or in "Settings" > "Maps", to open its page. It shows the region's total size and each part with its state.
+
+1. Open the region. The parts are "Map", "Directions", "Places" and "Off-road".
+2. Read each state: "Ready", a percentage with `to go`, waiting, or "Stopped".
+3. Fix a part right there. A stopped part has "Carry on". A failed one has "Try again". Missing off-road says "Not on this phone", with "Add".
+
+Below the parts, "Map layers in this region" lists each layer the same way.
+
+To remove the region, tap "Delete [region]" at the bottom. The "Region options" menu is at the top right.
+
+- If a part says "Couldn't finish", tap "Try again". If it keeps failing, remove the region and download it again.
+- If you're offline, connect first.
+
+## Press and hold a region
+
+Press and hold a region for its quick menu. It is the same on the "Local" tab, in the Regions sheet and in "Settings" > "Maps".
+
+1. Press and hold the region.
+2. Choose "Carry on", "Check for update" or "Delete". A region with no off-road also has "Add off-road".
+
+"Open" shows the region's page. Tapping the region does the same.
+
+- "Delete" asks first. The pop-up says its map, directions, places and off-road data are removed. Parts another region uses stay.
 
 ## Update or remove a region
 
-Downloaded regions are on the "Regions" sheet, "Local" tab. Open it from ["Maps" > "Layers" > "Download a region"](cache://maps/regions).
+A region's update means newer map, directions or places data.
 
-![The Local tab of the Regions sheet](shot:region-row)
+1. Press and hold the region on the "Local" tab.
+2. Tap "Check for update".
+3. Cache says it is checking. If something is newer, it updates.
 
-The tab lists regions largest first, with size and parts.
-
-- To update one, tap its update button.
-- To remove one, tap its delete button, then "Delete". The pop-up shows what it frees.
-- If a region says "Places not downloaded", update it to add places.
-
-If you remove a region, parts another region uses stay on the phone.
+To remove a region, press and hold it and tap "Delete", then confirm. It says "[region] deleted".
 
 ## Check for region updates
 
@@ -182,9 +225,9 @@ The "Updates" tab shows what has newer data. Updates use Wi-Fi unless you allow 
 
 The tab shows:
 - "Road routing" and "Places": "Up to date", or a new build with its size.
-- "Map": each region map and the date it was downloaded.
+- "Map": each region map with the date it was downloaded.
 
-While places update, search keeps using the old places until the new ones are complete.
+- While places update, search keeps using the old places until the new ones are complete.
 
 ## Add to your Library
 
@@ -202,7 +245,7 @@ When it finishes, Cache checks the file and adds it to your Library. Then it ind
 Versions without pictures are much smaller.
 
 - If you're on mobile data, the pop-up may offer "Wait for Wi-Fi".
-- If there's no room, the button says "Free up space".
+- If there's no room, the pop-up is "Not enough space". Tap "Free up space".
 - If indexing seems slow, see An index still building in chapter 6.
 
 ## Add your own library
@@ -321,8 +364,6 @@ To fix it:
 ## Location on the map
 
 The map has its own location controls.
-
-![The Maps screen](shot:maps-find-me)
 
 1. Open "Maps" and tap the locate button ("Find me").
 2. When Cache asks "Use your location?", tap "Continue".
