@@ -24,6 +24,9 @@ on:
         description: Play track
         type: string
         default: alpha
+  # Only so GitHub lists this workflow while it is not on the default branch (a manual run needs that): a push builds nothing.
+  push:
+    branches: [android-play]
 
 concurrency:
   group: android-play
@@ -37,6 +40,7 @@ env:
 
 jobs:
   plan:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       build_name: ${{ steps.v.outputs.build_name }}
