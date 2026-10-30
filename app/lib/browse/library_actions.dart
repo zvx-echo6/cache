@@ -14,7 +14,7 @@ import 'opds.dart';
 /// What the Library's hold menu (and the "..." of an opened item) offers for one item. An action that does not apply is null and
 /// is left out of the menu.
 class LibraryActions {
-  const LibraryActions({required this.title, required this.bytes, required this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free});
+  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free});
 
   final String title;
   final int bytes;
@@ -24,7 +24,8 @@ class LibraryActions {
   final Future<void> Function()? checkUpdate;
   final Future<void> Function()? changeIcon;
   final VoidCallback? addToHome;
-  final Future<void> Function() delete;
+  /// Null for an item that cannot be deleted (the guide that ships in the app).
+  final Future<void> Function()? delete;
 }
 
 /// The one menu: Check for update, Change icon, Add to Home, Delete (which confirms first).
@@ -53,7 +54,7 @@ Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
             if (a.checkUpdate != null) item('update', Icons.system_update_alt, 'Check for update'),
             if (a.changeIcon != null) item('icon', Icons.image_outlined, 'Change icon'),
             if (a.addToHome != null) item('home', Icons.add_to_home_screen, 'Add to Home'),
-            item('delete', Icons.delete_outline, 'Delete · frees ${formatBytes(a.bytes)}', danger: true),
+            if (a.delete != null) item('delete', Icons.delete_outline, 'Delete · frees ${formatBytes(a.bytes)}', danger: true),
             const SizedBox(height: 8),
           ],
         ),
@@ -69,7 +70,7 @@ Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
     case 'home':
       a.addToHome!();
     case 'delete':
-      if (await confirmDelete(context, name: a.title, bytes: a.bytes, free: a.free)) await a.delete();
+      if (await confirmDelete(context, name: a.title, bytes: a.bytes, free: a.free)) await a.delete!();
   }
 }
 

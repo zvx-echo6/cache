@@ -102,6 +102,8 @@ flutter:
     - assets/brand/tiles/
     # The credits text (a copy of CREDITS.md at the repository root; a test keeps them equal).
     - assets/credits.md
+    # The setup guide library (gzip-compressed .cache-library), installed on first launch and always present.
+    - assets/guide/cache-guide.cache-library
     # The recommended models built into the app (a copy of docs/models-recommended.json; a test keeps them equal).
     - assets/models/recommended.json
 

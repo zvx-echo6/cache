@@ -49,6 +49,8 @@ release notes).
 - Models: tighter cards; the search model is one line in the first model's download pop-up (for searching by meaning), with no separate question
 - Ask: Cache uses your location whenever the phone allows it and never asks; the + button beside the box holds the Use my location switch
 - Ask: tap the model name for the model and the memory it takes, Switch model, Unload and Manage models
+- Library: the Cache guide comes with the app, so its setup help is there from the first start with no download; it cannot be deleted
+- Library: a library file compressed with gzip can be added (from a file or a link) like an uncompressed one, and the blank template is saved compressed
 
 ### Fixed
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat

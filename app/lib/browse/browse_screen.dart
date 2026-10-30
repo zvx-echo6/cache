@@ -163,7 +163,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
         _say('Choose a picture (PNG, JPEG, WebP or GIF).');
       }
     },
-    delete: () => libs!.remove(l),
+    // The guide that ships in the app is always there.
+    delete: libs!.isGuide(l) ? null : () => libs!.remove(l),
   );
 
   void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));

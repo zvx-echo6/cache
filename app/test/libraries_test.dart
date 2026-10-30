@@ -214,7 +214,7 @@ void main() {
   String? picked;
   final saved = <String, Uint8List>{};
 
-  Future<void> setUpLibs({bool wifi = true}) async {
+  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide}) async {
     sources = SourcesState(
       zimsDirOverride: Directory('${tmp.path}/zims'),
       indexesDirOverride: Directory('${tmp.path}/indexes'),
@@ -234,6 +234,7 @@ void main() {
         return true;
       },
       pollInterval: const Duration(milliseconds: 5),
+      bundledGuide: guide,
     );
     await sources.init();
     await libs.init();
@@ -343,6 +344,33 @@ void main() {
       await libs.addFile(f, confirmUpdate: never, askSettings: noSettings);
       expect(libs.task?.error, 'This is an empty library template. Fill it with your own entries first (see the README inside).');
       expect(libs.libraries, isEmpty);
+    });
+
+    test('the template written compressed (gzip) is still recognised as the template', () async {
+      await setUpLibs();
+      final f = File('${tmp.path}/cache-library-template.tar.gz')
+        ..writeAsBytesSync(gzip.encode(_tar({'README.md': utf8.encode('# Template'), 'cache-library.json': utf8.encode('{}'), 'blank-library.snapshot': List.filled(700, 1)})));
+      expect(tarEntryNames(f), ['README.md', 'cache-library.json', 'blank-library.snapshot']);
+      expect(kLibraryTemplateName, endsWith('.tar.gz'));
+    });
+
+    test('the guide that ships in the app is installed on start, kept, and installed again when it is gone', () async {
+      var copies = 0;
+      await setUpLibs(guide: () async {
+        copies++;
+        return libFile('guide-$copies.cache-library', _lib(id: kGuideLibraryId, version: kGuideVersion, title: 'Cache guide'));
+      });
+      await libs.whenIdle();
+      expect(libs.libraries.map(libs.titleOf), ['Cache guide']);
+      expect(libs.isGuide(libs.libraries.single), isTrue);
+      expect(copies, 1);
+      await libs.ensureGuide();
+      expect(copies, 1, reason: 'the same copy is there: nothing is done');
+      await libs.remove(libs.libraries.single);
+      expect(libs.libraries, isEmpty);
+      await libs.ensureGuide();
+      expect(libs.libraries.map(libs.titleOf), ['Cache guide']);
+      expect(copies, 2);
     });
 
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {

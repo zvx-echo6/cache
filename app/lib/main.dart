@@ -91,7 +91,21 @@ class _CacheAppState extends State<CacheApp> {
   late final SourcesState sources = SourcesState();
   late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries);
   // Libraries (Qdrant collections the core searches): added from a file or a link, in their own folder beside the ZIMs.
-  late final LibrariesState libraries = LibrariesState(sources: sources, policy: policy);
+  late final LibrariesState libraries = LibrariesState(
+    sources: sources,
+    policy: policy,
+    // The setup guide ships compressed in the assets; it is copied out to be added like any library file.
+    bundledGuide: () async {
+      try {
+        final bytes = await rootBundle.load('assets/guide/cache-guide.cache-library');
+        final f = File('${(await getTemporaryDirectory()).path}/cache-guide.cache-library');
+        await f.writeAsBytes(bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes), flush: true);
+        return f;
+      } catch (_) {
+        return null;
+      }
+    },
+  );
   late final LocationService location = LocationService(
     onFix: (f) => chatLocation.update(f),
   );
