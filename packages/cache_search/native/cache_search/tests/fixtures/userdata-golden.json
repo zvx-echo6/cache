@@ -1,0 +1,315 @@
+{
+ "about": "Model-visible user map data as recorded for training (make_parity.py, harness-v2/parity/userdata-golden.json). The repeater rows are reduced to their key order (the recorded list carries real call signs). A Places notebook must reach the tools in exactly these shapes.",
+ "layers_setup": [
+  {
+   "name": "Magic Valley Meetup",
+   "points": [
+    {
+     "name": "Shoshone Falls Lot",
+     "lat": 42.5944,
+     "lon": -114.4003,
+     "notes": "North overlook lot, easy to find."
+    },
+    {
+     "name": "Rally Point",
+     "lat": 42.563,
+     "lon": -114.461,
+     "notes": "Twin Falls church group meeting spot, rear lot."
+    }
+   ]
+  },
+  {
+   "name": "Ham Club",
+   "points": [
+    {
+     "name": "Rally Point",
+     "lat": 42.8697,
+     "lon": -112.451,
+     "notes": "Field day site at Ross Park, Pocatello. Net control sets up here."
+    },
+    {
+     "name": "Chinese Peak Repeater Site",
+     "lat": 42.847,
+     "lon": -112.365,
+     "notes": "Locked gate."
+    }
+   ]
+  }
+ ],
+ "nearby_layer": {
+  "tool_call": {
+   "id": "call_3",
+   "type": "function",
+   "function": {
+    "name": "nearby",
+    "arguments": "{\"category\": \"layer_magic_valley_meetup\"}"
+   }
+  },
+  "tool_message": "{\"ok\":true,\"category\":\"layer_magic_valley_meetup\",\"center\":\"current location\",\"ranked_by\":\"distance\",\"places\":[{\"n\":2,\"name\":\"Rally Point\",\"kind\":\"layer_point\",\"kind_label\":\"Magic Valley Meetup\",\"locality\":\"Twin Falls\",\"distance_mi\":0.2,\"direction\":\"NE\",\"notes\":\"Twin Falls church group meeting spot, rear lot.\"},{\"n\":3,\"name\":\"Shoshone Falls Lot\",\"kind\":\"layer_point\",\"kind_label\":\"Magic Valley Meetup\",\"locality\":\"Twin Falls\",\"distance_mi\":3.9,\"direction\":\"NE\",\"notes\":\"North overlook lot, easy to find.\"}],\"map_region\":\"test\",\"map_region_age\":\"6 days old\"}"
+ },
+ "navigate_layer_point": {
+  "tool_call": {
+   "id": "call_5",
+   "type": "function",
+   "function": {
+    "name": "navigate",
+    "arguments": "{\"mode\": \"drive\", \"to\": \"Rally Point\", \"near\": \"Twin Falls, Idaho\"}"
+   }
+  },
+  "tool_message": "{\"ok\":true,\"n\":6,\"mode\":\"drive\",\"location_bias\":\"sender_node_position\",\"route_id\":\"731e39aae95d4f64\",\"from_matched\":{\"place_name\":\"current location\",\"kind\":null,\"street\":null,\"locality\":null,\"county\":null,\"state\":null,\"distance_km\":null,\"near\":null,\"snap_distance_m\":19,\"lat\":42.56078,\"lon\":-114.46234},\"to_matched\":{\"place_name\":\"Rally Point\",\"kind\":\"layer_point\",\"kind_label\":\"Ham Club\",\"street\":null,\"locality\":\"Pocatello\",\"county\":null,\"state\":null,\"distance_km\":167.87131422442934,\"near\":null,\"snap_distance_m\":127,\"lat\":42.8697,\"lon\":-112.451},\"other_destination_candidates\":[{\"place_name\":\"Rally Point\",\"kind\":\"layer_point\",\"kind_label\":\"Magic Valley Meetup\",\"street\":null,\"locality\":\"Twin Falls\",\"county\":null,\"state\":null,\"distance_km\":0.2701491222935842}],\"distance_mi\":114.04,\"distance_km\":183.53,\"duration_minutes\":95.0,\"direction_from_start\":\"east\",\"major_roads\":[{\"name\":\"I 84\",\"distance_km\":157.16},{\"name\":\"US 30\",\"distance_km\":24.55},{\"name\":\"Shoshone Street East\",\"distance_km\":0.96}],\"traffic\":null,\"map_region\":\"Idaho\",\"map_region_age\":\"9 days old\"}"
+ },
+ "locate_layer_point": {
+  "tool_call": {
+   "id": "call_2",
+   "type": "function",
+   "function": {
+    "name": "locate",
+    "arguments": "{\"place\": \"Lemhi Pass Camp\", \"near\": \"Salmon, Idaho\"}"
+   }
+  },
+  "tool_message": "{\"ok\":true,\"n\":1,\"place_name\":\"Lemhi Pass Camp\",\"kind\":\"layer_point\",\"kind_label\":\"Hunting Camps\",\"lat\":44.974,\"lon\":-113.444,\"lat_lon_dms\":\"44°58'26\\\"N 113°26'38\\\"W\",\"nearest_town\":\"Leadore, ID\",\"distance_to_town_mi\":20.7,\"usng\":\"12T UQ 07288 82968\",\"plus_code\":\"85P8XHF4+JC\"}"
+ },
+ "act_places_list": {
+  "tool_call": {
+   "id": "call_1",
+   "type": "function",
+   "function": {
+    "name": "act",
+    "arguments": "{\"action\": \"places.list\"}"
+   }
+  },
+  "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"places.list\",\"result\":{\"places\":[{\"name\":\"Home\",\"lat\":42.56078,\"lon\":-114.46234}]}}"
+ },
+ "act_places_save": {
+  "tool_call": {
+   "id": "call_1",
+   "type": "function",
+   "function": {
+    "name": "act",
+    "arguments": "{\"action\": \"places.save\", \"fields\": {\"name\": \"Landing strip\", \"place\": \"44.9,-116.1\"}}"
+   }
+  },
+  "tool_message": "{\"ok\":true,\"status\":\"needs_confirmation\",\"confirm_id\":\"c1\",\"action\":\"places.save\",\"title\":\"Save a place\",\"summary\":{\"name\":\"Landing strip\",\"place\":\"44.90000, -116.10000 (0.8 mi S of McCall, ID)\"}}"
+ },
+ "nearby_repeater_keys": {
+  "top": [
+   "ok",
+   "category",
+   "center",
+   "ranked_by",
+   "places",
+   "map_region",
+   "map_region_age",
+   "repeater_note"
+  ],
+  "row": [
+   "n",
+   "name",
+   "kind",
+   "kind_label",
+   "locality",
+   "distance_mi",
+   "direction",
+   "frequency",
+   "offset",
+   "tone",
+   "mode",
+   "on_air",
+   "list",
+   "details"
+  ]
+ },
+ "declarations_with_layers": [
+  {
+   "type": "function",
+   "function": {
+    "name": "navigate",
+    "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+    "strict": true,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "from": {
+       "type": "string",
+       "maxLength": 300,
+       "description": "Starting place name, or \"lat,lon\" coordinates the person gave. Omit it when the person means where they are now."
+      },
+      "to": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 300,
+       "description": "Destination place name, for a named place. For \"nearest X\" give to_type instead."
+      },
+      "to_type": {
+       "type": "string",
+       "enum": [
+        "emergency_room",
+        "hospital",
+        "urgent_care",
+        "pharmacy",
+        "fuel",
+        "police",
+        "fire_station",
+        "campground",
+        "trailhead",
+        "water",
+        "shelter"
+       ],
+       "description": "Use this instead of to whenever the person asks for the nearest place of a kind. Finds the nearest one by travel time from the start. For a hospital in an emergency use emergency_room."
+      },
+      "mode": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "walk",
+        "bike",
+        "offroad_foot",
+        "offroad_vehicle"
+       ],
+       "description": "drive, walk and bike follow roads and paths. offroad_foot (on foot) and offroad_vehicle (4x4, ATV or dirt bike, on foot where no vehicle can go) go cross-country the whole way over trails, tracks and open ground, where off-road data is installed."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "description": "Town and state the trip is in, e.g. \"Burley, Idaho\". Give it whenever the question names or implies one."
+      },
+      "land_access": {
+       "type": "string",
+       "enum": [
+        "strict",
+        "pragmatic",
+        "emergency"
+       ],
+       "description": "Off-road legs only: how land the map data marks private or closed is treated. strict avoids it, pragmatic (the default) crosses it only when it saves a lot, emergency ignores it. This follows the map data's access rules and cannot guarantee access on the ground."
+      }
+     },
+     "required": [
+      "mode"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "nearby",
+    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "category": {
+       "type": "string",
+       "enum": [
+        "emergency_room",
+        "hospital",
+        "urgent_care",
+        "pharmacy",
+        "fuel",
+        "police",
+        "fire_station",
+        "campground",
+        "trailhead",
+        "water",
+        "shelter",
+        "layer_ham_club",
+        "layer_magic_valley_meetup"
+       ],
+       "description": "Kind of place. emergency_room = hospital emergency rooms; for a hospital in an emergency use emergency_room; hospital = hospitals, for information or a non-emergency visit; urgent_care = walk-in urgent care and medical clinics; pharmacy = pharmacies and drug stores; fuel = gas stations; police = police stations; fire_station = fire stations; campground = campgrounds and campsites; trailhead = trailheads and trail access points; water = drinking water taps and fountains, water points, wells and springs; a result's kind says which; shelter = public shelters, huts and cabins open to travellers; a result's kind says what it is (emergency shelter, picnic shelter, trail shelter or hut); layer_ham_club = Ham Club: points in the user's own map layer; layer_magic_valley_meetup = Magic Valley Meetup: points in the user's own map layer."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "description": "Town and state, or a place name. Omit to search around the phone's current location."
+      },
+      "limit": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 10,
+       "default": 5
+      }
+     },
+     "required": [
+      "category"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "locate",
+    "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\".",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "place": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 300,
+       "description": "Place name. Omit for the phone's current location."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200
+      }
+     },
+     "required": [],
+     "additionalProperties": false
+    }
+   }
+  }
+ ],
+ "declarations_with_repeaters": [
+  {
+   "type": "function",
+   "function": {
+    "name": "nearby",
+    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "category": {
+       "type": "string",
+       "enum": [
+        "emergency_room",
+        "hospital",
+        "urgent_care",
+        "pharmacy",
+        "fuel",
+        "police",
+        "fire_station",
+        "campground",
+        "trailhead",
+        "water",
+        "shelter",
+        "repeater"
+       ],
+       "description": "Kind of place. emergency_room = hospital emergency rooms; for a hospital in an emergency use emergency_room; hospital = hospitals, for information or a non-emergency visit; urgent_care = walk-in urgent care and medical clinics; pharmacy = pharmacies and drug stores; fuel = gas stations; police = police stations; fire_station = fire stations; campground = campgrounds and campsites; trailhead = trailheads and trail access points; water = drinking water taps and fountains, water points, wells and springs; a result's kind says which; shelter = public shelters, huts and cabins open to travellers; a result's kind says what it is (emergency shelter, picnic shelter, trail shelter or hut); repeater = amateur radio repeaters from the user's imported lists."
+      },
+      "near": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 200,
+       "description": "Town and state, or a place name. Omit to search around the phone's current location."
+      },
+      "limit": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 10,
+       "default": 5
+      }
+     },
+     "required": [
+      "category"
+     ],
+     "additionalProperties": false
+    }
+   }
+  }
+ ]
+}

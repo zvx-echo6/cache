@@ -16,6 +16,7 @@ mod store;
 mod time;
 
 pub use def::{validate_due_every, NotebookDef};
+pub use store::{PlacePoint, PlacesBook};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -80,6 +81,29 @@ impl Notebook {
         PathBuf::from(&self.cfg.media_dir)
     }
 
+    /// Runs `f` on the open database (opening it the first time).
+    fn with_conn<T>(&self, f: impl FnOnce(&mut rusqlite::Connection) -> Result<T>) -> Result<T> {
+        let mut guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some(store::open(Path::new(&self.cfg.db_path))?);
+        }
+        f(guard.as_mut().expect("opened above"))
+    }
+
+    /// The notebooks made from the Places template, oldest first, each with its entries that have a place (oldest first):
+    /// what the core keeps in step with the saved places (the saved-places notebook) and the map layers (the others).
+    pub fn places_books(&self) -> Result<Vec<PlacesBook>> {
+        self.with_conn(|c| store::places_books(c))
+    }
+
+    /// The saved-places notebook's id, made the first time (see the `saved_places` op).
+    pub fn saved_places_id(&self) -> Result<String> {
+        self.with_conn(|c| {
+            let n = store::saved_places(c, &serde_json::json!({}))?;
+            Ok(n["id"].as_str().unwrap_or_default().to_string())
+        })
+    }
+
     /// Runs `op` with `args_json` (an object; empty or absent = `{}`).
     pub fn call(&self, op: &str, args_json: Option<&str>) -> Result<String> {
         let args: serde_json::Value = match args_json.map(str::trim).filter(|a| !a.is_empty()) {
@@ -89,13 +113,8 @@ impl Notebook {
         if !args.is_object() {
             return Err(Error::bad("args must be a JSON object"));
         }
-        let mut guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.is_none() {
-            *guard = Some(store::open(Path::new(&self.cfg.db_path))?);
-        }
-        let c = guard.as_mut().expect("opened above");
         let media = self.media_dir();
-        let out = match op {
+        let out = self.with_conn(|c| Ok(match op {
             "notebooks" => store::notebooks(c, &args)?,
             "notebook" => store::notebook_get(c, &args)?,
             "notebook_save" => store::notebook_save(c, &args)?,
@@ -106,8 +125,9 @@ impl Notebook {
             "entry_delete" => store::entry_delete(c, &media, &args)?,
             "search" => store::search(c, &args)?,
             "pins" => store::pins(c, &args)?,
+            "saved_places" => store::saved_places(c, &args)?,
             _ => return Err(Error { code: "unsupported", message: format!("unknown notebook op {op:?}") }),
-        };
+        }))?;
         Ok(out.to_string())
     }
 }

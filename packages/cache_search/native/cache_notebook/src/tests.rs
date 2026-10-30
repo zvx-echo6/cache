@@ -333,3 +333,65 @@ fn a_newer_schema_is_refused() {
     drop(c);
     assert_eq!(Notebook::new(cfg(&t.0)).call("notebooks", None).unwrap_err().code, "unsupported");
 }
+
+#[test]
+fn props_mark_a_place_and_take_it_off_the_map() {
+    let (nb, _t) = notebook("props");
+    let p = call(&nb, "notebook_save", json!({"template": "places", "def": {"name": "Caches", "fields": []}}));
+    let a = call(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:30:00-06:00", "title": "Cache 1",
+        "place": {"lat": 43.6, "lon": -116.1}, "props": {"color": "teal", "on_map": true}}));
+    assert_eq!(a["props"], json!({"color": "teal", "on_map": true}));
+    let keys: Vec<&String> = a.as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["id", "notebook_id", "occurred_at", "title", "values", "place", "photos", "files", "props", "draft", "private", "created", "updated", "rev"]);
+    let b = call(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "title": "Cache 2",
+        "place": {"lat": 43.7, "lon": -116.2}, "props": {"on_map": false}}));
+    let pins = |a: Value| call(&nb, "pins", a)["entries"].as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(pins(json!({})), ["Cache 1"]);
+    assert_eq!(pins(json!({"notebook_id": p["id"]})), ["Cache 1"]);
+    // no props: shown, and no "props" key
+    let c = call(&nb, "entry_save", json!({"id": b["id"], "notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "title": "Cache 2", "place": {"lat": 43.7, "lon": -116.2}}));
+    assert!(c.get("props").is_none());
+    assert_eq!(pins(json!({})).len(), 2);
+    for bad in [json!({"color": "Red!"}), json!({"on_map": "no"}), json!({"size": 3}), json!([1])] {
+        assert_eq!(err(&nb, "entry_save", json!({"notebook_id": p["id"], "occurred_at": "2026-10-27T16:31:00-06:00", "props": bad})).code, "bad_json");
+    }
+}
+
+#[test]
+fn the_saved_places_notebook_is_made_once_and_kept() {
+    let (nb, _t) = notebook("saved");
+    call(&nb, "notebook_save", json!({"template": "places", "def": {"name": "Places", "fields": []}}));
+    let s = call(&nb, "saved_places", json!({}));
+    assert_eq!((s["def"]["name"].clone(), s["template"].clone(), s["saved_places"].clone(), s["map"].clone()), (json!("Saved places"), json!("places"), json!(true), json!(true)));
+    assert_eq!(call(&nb, "saved_places", json!({}))["id"], s["id"]);
+    assert_eq!(nb.saved_places_id().unwrap(), s["id"].as_str().unwrap());
+    assert_eq!(err(&nb, "notebook_delete", json!({"id": s["id"]})).code, "bad_json");
+    call(&nb, "entry_save", json!({"notebook_id": s["id"], "occurred_at": "2026-10-27T16:30:00-06:00", "title": "Home", "body": "Gate code",
+        "place": {"lat": 43.6, "lon": -116.1, "key": "home"}}));
+    call(&nb, "entry_save", json!({"notebook_id": s["id"], "occurred_at": "2026-10-27T16:30:00-06:00", "title": "Draft", "draft": true, "place": {"lat": 1, "lon": 2}}));
+    let books = nb.places_books().unwrap();
+    assert_eq!(books.len(), 2);
+    let saved = books.iter().find(|b| b.saved).unwrap();
+    assert_eq!(saved.points.len(), 1);
+    assert_eq!((saved.points[0].title.as_deref(), saved.points[0].body.as_deref(), saved.points[0].key.as_deref()), (Some("Home"), Some("Gate code"), Some("home")));
+    assert!(books.iter().any(|b| !b.saved && b.name == "Places" && b.points.is_empty()));
+}
+
+#[test]
+fn a_version_1_database_gains_props() {
+    let (nb, t) = notebook("v1");
+    let j = journal_id(&nb);
+    call(&nb, "entry_save", json!({"notebook_id": j, "occurred_at": "2026-10-27T16:30:00-06:00", "body": "kept"}));
+    drop(nb);
+    let c = rusqlite::Connection::open(t.0.join("notebook.sqlite")).unwrap();
+    c.execute_batch("ALTER TABLE entries DROP COLUMN app_props; UPDATE meta SET value='1' WHERE key='schema_version';").unwrap();
+    drop(c);
+    let nb = Notebook::new(cfg(&t.0));
+    let e = &call(&nb, "entries", json!({"notebook_id": j}))["entries"][0];
+    assert_eq!(e["body"], "kept");
+    call(&nb, "entry_save", json!({"id": e["id"], "notebook_id": j, "occurred_at": "2026-10-27T16:30:00-06:00", "body": "kept", "props": {"color": "blue"}}));
+    drop(nb);
+    let c = rusqlite::Connection::open(t.0.join("notebook.sqlite")).unwrap();
+    let v: String = c.query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0)).unwrap();
+    assert_eq!(v, "2");
+}

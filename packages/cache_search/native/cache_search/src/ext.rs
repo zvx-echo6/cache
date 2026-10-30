@@ -36,6 +36,8 @@ pub struct Ext {
     pub regions: Option<std::sync::Arc<cache_regions::Regions>>,
     /// Notebooks from the `notebook` section (`cs_notebook`).
     pub notebook: Option<cache_notebook::Notebook>,
+    /// The saved places and the Places notebooks were brought in step since the notebook was configured (nbplaces.rs).
+    pub places_synced: std::sync::atomic::AtomicBool,
 }
 
 /// The regions engine as the navigate tool's tile stream: its folder is the one to route on, and a route's tiles are fetched
@@ -226,17 +228,9 @@ impl Ext {
         if let Some(c) = cfg {
             if self.notebook.as_ref().map(|n| n.cfg() != &c).unwrap_or(true) {
                 self.notebook = Some(cache_notebook::Notebook::new(c));
+                self.places_synced.store(false, std::sync::atomic::Ordering::SeqCst);
             }
         }
-    }
-
-    /// `cs_notebook`: one op of Notebooks (cache_search.h lists them).
-    pub fn notebook(&self, op: &str, args_json: Option<&str>) -> Result<String> {
-        let nb = self
-            .notebook
-            .as_ref()
-            .ok_or_else(|| Error::new(ErrorCode::NotConfigured, "Notebooks need \"notebook\": {\"db_path\", \"media_dir\"} in the cs_open config"))?;
-        nb.call(op, args_json).map_err(|e| Error::new(ErrorCode::from_str_code(e.code), e.message))
     }
 
     fn layers(&self) -> Result<&cache_layers::Layers> {
@@ -296,16 +290,20 @@ impl Ext {
         self.user()?.list_json().map_err(user_err)
     }
 
+    /// Saves the place; its entry in the saved-places notebook follows (nbplaces.rs).
     pub fn place_save(&self, json: &str) -> Result<String> {
-        self.user()?.save(json).map_err(user_err)
+        let out = self.user()?.save(json).map_err(user_err)?;
+        self.place_saved(&out);
+        Ok(out)
     }
 
-    /// Deletes the place and the live data downloaded for it.
+    /// Deletes the place, the live data downloaded for it and its entry in the saved-places notebook.
     pub fn place_delete(&self, key: &str) -> Result<String> {
         let out = self.user()?.delete(key).map_err(user_err)?;
         if let Some(l) = &self.live {
             l.forget_place(key);
         }
+        self.place_deleted(key);
         Ok(out)
     }
 

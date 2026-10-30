@@ -15,7 +15,7 @@ pub mod store;
 mod xml;
 mod zip;
 
-pub use store::MapStore;
+pub use store::{MapStore, NotebookLayer, NotebookPoint};
 
 use serde::{Deserialize, Serialize};
 

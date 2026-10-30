@@ -17,6 +17,7 @@ pub mod libindex;
 pub mod library;
 pub mod libreg;
 pub mod libupdate;
+pub mod nbplaces;
 pub mod search;
 pub mod suggest;
 pub mod tools;
