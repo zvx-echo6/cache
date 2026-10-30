@@ -266,7 +266,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
       key: ValueKey('library-${l.folderName}'),
       icon: icon.existsSync() ? icon : null,
       title: s.titleOf(l),
-      detail: ['Your own', if (n > 0) '$n ${n == 1 ? 'entry' : 'entries'}', formatBytes(l.size)].join(' · '),
+      // The guide ships inside the app; every other library is one the person added.
+      detail: [s.isGuide(l) ? 'Built in' : 'Your own', if (n > 0) '$n ${n == 1 ? 'entry' : 'entries'}', formatBytes(l.size)].join(' · '),
       badge: badge,
       onTap: () => _openLibrary(l),
       onHold: () => showLibraryMenu(context, _libraryActions(l)),

@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cache/browse/browse_screen.dart' show LibraryItemScreen;
+import 'package:cache/browse/browse_screen.dart' show BrowseScreen, LibraryItemScreen;
+import 'package:cache/browse/browse_state.dart';
 import 'package:cache/browse/zim_download.dart';
 import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/sources/libraries_state.dart';
@@ -90,6 +91,9 @@ class _LibNative implements CsNative {
       return {'id': null, 'kind': 'library', 'path': path, 'title': _base(dir), 'docs': 0, 'error': {'code': 'io', 'message': 'cannot open'}};
     }
     final r = _resolved(settings, dir, fake);
+    // "opening_reads": N: the core is still opening the library (on its background thread) for the next N status reads.
+    final reads = (fake['opening_reads'] as int?) ?? 0;
+    if (reads > 0) File('$path/fake.json').writeAsStringSync(jsonEncode({...fake, 'opening_reads': reads - 1}));
     return {
       'id': r['library_id'],
       'kind': 'library',
@@ -97,7 +101,7 @@ class _LibNative implements CsNative {
       'title': r['title'],
       'indexed': File('${s['index_dir']}/done').existsSync(),
       'building': false,
-      'opening': false,
+      'opening': reads > 0,
       'updating': false,
       'docs': fake['docs'] ?? 0,
       'whole_library_only': fake['whole'] ?? false,
@@ -373,6 +377,23 @@ void main() {
       expect(copies, 2);
     });
 
+    test('a library the core is still opening at start is read again until it is open, then its index is resumed', () async {
+      await setUpLibs();
+      await libs.addFile(libFile('m.cache-library', _lib()), confirmUpdate: never, askSettings: noSettings);
+      final shard = libs.libraries.single.shardPath;
+      // The app is started again: the core opens the library on its own thread, so the first lists say it is opening, and the
+      // keyword index was not finished before the app closed.
+      libs.dispose();
+      sources.dispose();
+      File('$shard/fake.json').writeAsStringSync(jsonEncode({...jsonDecode(_lib()) as Map, 'opening_reads': 3}));
+      Directory(libs.libraries.single.indexPath).deleteSync(recursive: true);
+      await setUpLibs();
+      await libs.whenIdle();
+      final l = libs.libraries.single;
+      expect(libs.statusOf(l)!.opening, isFalse, reason: 'nothing else reads the list again; the row must not stay on Opening');
+      expect(libs.phaseOf(l), LibraryPhase.ready, reason: 'the index left unfinished is built once the library is open');
+    });
+
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {
       await setUpLibs();
       final f = File('${tmp.path}/photos.tar')..writeAsBytesSync(_tar({'a.jpg': List.filled(10, 2)}));
@@ -498,6 +519,24 @@ void main() {
       await settle(tester, () => libs.task == null && libs.libraries.isNotEmpty && libs.versionOf(libs.libraries.single) == '2');
       expect(libs.docsOf(libs.libraries.single), 5);
       expect(libs.libraries, hasLength(1));
+    });
+
+    testWidgets('the Library calls the guide that ships in the app built in, and a library the person added their own', (tester) async {
+      late BrowseState browse;
+      await tester.runAsync(() async {
+        await setUpLibs(guide: () async => libFile('guide.cache-library', _lib(id: kGuideLibraryId, version: kGuideVersion, title: 'Cache guide')));
+        await libs.addFile(libFile('m.cache-library', _lib(docs: 2)), confirmUpdate: never, askSettings: noSettings);
+        await libs.whenIdle();
+        browse = BrowseState(sources: sources, libraries: libs, policy: testPolicy(), settingsDirOverride: tmp, phoneLanguage: 'en');
+        await browse.init();
+      });
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: BrowseScreen(browse: browse, active: true)));
+      await tester.pump();
+      expect(find.textContaining('Built in · 3 entries'), findsOneWidget, reason: 'the guide is not one of the person\'s own');
+      expect(find.textContaining('Your own · 2 entries'), findsOneWidget);
+      expect(find.text('Opening'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      browse.dispose();
     });
 
     testWidgets('the template action saves the blank template', (tester) async {

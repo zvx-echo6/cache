@@ -172,6 +172,20 @@ class LibrariesState extends ChangeNotifier {
     await sources.refresh();
     _resumeIndexes();
     await ensureGuide();
+    await _whileOpening();
+    _resumeIndexes();
+  }
+
+  /// The core opens each library on a background thread after cs_open, so the first list can show a library as still opening.
+  /// Nothing else reads the list again on its own, so the row stayed on its opening badge and its index was never resumed: the
+  /// status is read again until no library is opening (for at most ten minutes, like an add).
+  Future<void> _whileOpening() async {
+    for (var i = 0; i < 2400 && !_disposed; i++) {
+      if (!libraries.any((l) => statusOf(l)?.opening ?? false)) return;
+      await Future<void>.delayed(pollInterval);
+      if (_disposed) return;
+      await sources.reloadStatus();
+    }
   }
 
   /// True for the guide that ships in the app (it is never offered for delete).
