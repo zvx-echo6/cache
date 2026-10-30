@@ -49,14 +49,6 @@ void main() {
 
   Fix fresh() => Fix(lat: 42.5, lon: -113.8, accuracyM: 10, time: DateTime.now());
 
-  // The bridge is made inside runAsync, so its core writes finish on the real event loop: give it turns, then rebuild.
-  Future<void> settleCore(WidgetTester tester) async {
-    for (var i = 0; i < 5; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump();
-    }
-  }
-
   Future<(LocationService, ChatLocation)> setup(FakeSource source,
       {Future<bool> Function(Fix?)? sync}) async {
     late ChatLocation bridge;
@@ -258,73 +250,43 @@ void main() {
     expect(backend.requests, hasLength(3));
   });
 
-  testWidgets('Ask composer location action explains and requests permission explicitly', (tester) async {
+  testWidgets('Ask never asks for the location: no location line; the + menu holds the "Use my location" switch', (tester) async {
     final source = SettingsSource()..next = fresh();
     final (location, bridge) = (await tester.runAsync(() => setup(source)))!;
-    final app = AppState();
-    final chat = ChatController(tools: const []);
-    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
-        home: AskScreen(app: app, chat: chat, location: location, chatLocation: bridge)));
-    expect(source.prompts, 0);
-    await tester.tap(find.text('Use my location'));
-    await tester.pumpAndSettle();
-    expect(find.text('Use your location?'), findsOneWidget);
-    expect(find.text('Cache uses your location to find nearby places. You can turn location off in Settings.'), findsOneWidget);
-    expect(source.prompts, 0);
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-    expect(source.prompts, 1);
-    await settleCore(tester);
-    expect(find.text('Location ready'), findsOneWidget);
-  });
-
-  testWidgets('the Location ready chip waits for the core to confirm, like the system prompt', (tester) async {
-    final source = SettingsSource()..next = fresh();
-    final write = Completer<bool>();
-    final (location, bridge) = (await tester.runAsync(() => setup(source, sync: (_) => write.future)))!;
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
         home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location, chatLocation: bridge)));
-    await tester.tap(find.text('Use my location'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-    await settleCore(tester);
-    expect(location.fix, isNotNull);
-    expect(bridge.known, isFalse);
-    expect(find.text('Use my location'), findsOneWidget);
+    expect(find.text('Use my location'), findsNothing);
     expect(find.text('Location ready'), findsNothing);
-    expect(find.text('Location ready for your next question.'), findsNothing, reason: 'the pop-up waits for the core too');
-    write.complete(true);
-    await settleCore(tester);
-    expect(bridge.known, isTrue);
-    expect(find.text('Location ready'), findsOneWidget);
-    expect(find.text('Location ready for your next question.'), findsOneWidget);
+    expect(source.prompts, 0);
+    await tester.tap(find.byKey(const ValueKey('ask-plus')));
+    await tester.pumpAndSettle();
+    expect(find.text('Use my location'), findsOneWidget);
+    expect(find.text('Cache finds things near you'), findsOneWidget);
+    expect(tester.widget<SwitchListTile>(find.byKey(const ValueKey('use-my-location'))).value, isTrue);
+    // The switch turns location off (run on the real event loop: the choice is written to a file before the folder goes).
+    final sw = tester.widget<SwitchListTile>(find.byKey(const ValueKey('use-my-location')));
+    await tester.runAsync(() async {
+      sw.onChanged!(false);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pump();
+    expect(location.enabled, isFalse);
+    expect(source.prompts, 0, reason: 'nothing is asked');
+    await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('when the core does not take the position, the pop-up does not say ready', (tester) async {
-    final source = SettingsSource()..next = fresh();
-    final (location, bridge) = (await tester.runAsync(() => setup(source, sync: (_) async => false)))!;
-    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
-        home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location, chatLocation: bridge)));
-    await tester.tap(find.text('Use my location'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-    await settleCore(tester);
-    expect(location.fix, isNotNull);
-    expect(bridge.known, isFalse);
-    expect(find.text('Location ready for your next question.'), findsNothing);
-    expect(find.text('Got your position, but the assistant could not use it yet. You can still chat.'), findsOneWidget);
-  });
-
-  testWidgets('blocked explicit location offers the existing Settings path', (tester) async {
+  testWidgets('when the phone blocks the location, the switch is off and says why, with the way to the phone settings', (tester) async {
     final source = SettingsSource()..state = LocationPermissionState.deniedForever;
     final (location, _) = (await tester.runAsync(() => setup(source)))!;
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
         home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location)));
-    await tester.tap(find.text('Use my location'));
+    await tester.tap(find.byKey(const ValueKey('ask-plus')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Settings'));
+    final sw = tester.widget<SwitchListTile>(find.byKey(const ValueKey('use-my-location')));
+    expect(sw.onChanged, isNull);
+    expect(sw.value, isFalse);
+    expect(find.text("Blocked in the phone's settings"), findsOneWidget);
+    await tester.tap(find.text("Open the phone's settings"));
     await tester.pumpAndSettle();
     expect(source.settingsOpened, 1);
     expect(source.prompts, 0);
