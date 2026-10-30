@@ -44,6 +44,11 @@ const String kUserSource = 'cache-user';
 const String kUserAreas = 'user-areas';
 const String kUserLines = 'user-lines';
 const String kUserRepeaters = 'user-repeaters';
+
+/// A distance being measured (the ring's Measure): its line and its points.
+const String kMeasureSource = 'cache-measure';
+const String kMeasureLine = 'measure-line';
+const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
@@ -193,6 +198,10 @@ Map<String, dynamic> buildMapStyle({
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
   sources[kUserSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  sources[kMeasureSource] = {
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
@@ -455,6 +464,21 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p) => [
         },
       },
       {
+        'id': kMeasureLine,
+        'type': 'line',
+        'source': kMeasureSource,
+        'filter': ['==', ['geometry-type'], 'LineString'],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {'line-color': p.css('route'), 'line-width': 3, 'line-dasharray': [3, 1.5]},
+      },
+      {
+        'id': kMeasurePoints,
+        'type': 'circle',
+        'source': kMeasureSource,
+        'filter': ['==', ['geometry-type'], 'Point'],
+        'paint': {'circle-radius': 5, 'circle-color': p.css('route'), 'circle-stroke-width': 2, 'circle-stroke-color': p.css('routeCasing')},
+      },
+      {
         'id': kPinResults,
         'type': 'circle',
         'source': kPinSource,
@@ -541,6 +565,8 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     kUserLines,
     kUserRepeaters,
     kNotebookPins,
+    kMeasureLine,
+    kMeasurePoints,
     kPinResults,
     kPinSelected,
     kPositionAccuracyFill,

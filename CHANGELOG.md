@@ -13,7 +13,9 @@ release notes).
 - Places notebook: your saved places, with "Where I am" and your downloaded regions, each place with its own marker colour; tap the marker to show or hide it on the map
 - Places: one screen to add or edit a place: search an address, place or coordinates, or tap the map; name, colour, notes, photos, and weather and alerts
 - Places: each place's alerts can follow your alert setting, have their own distance and kinds, or be off
-- Maps: press and hold the map for To here or Save; Save opens your notebooks (most used first) and makes an entry at that spot
+- Maps: press and hold the map for a ring: To here, From here, Add stop (while a route is shown), Save and Measure; Save opens your notebooks (most used first) and makes an entry at that spot; the centre opens the spot's coordinates
+- Maps: Measure draws a line from the held spot; each tap adds a point, with the running total, Undo and Done
+- Directions: start from a spot you hold on the map, and add up to 10 stops on the way
 - Maps: add places from a KML, KMZ, GPX or GeoJSON file as a Places notebook, and repeater lists from a RepeaterBook KML or CHIRP CSV, under My layers
 - Notebooks: notebook sync keeps your notebooks and their photos the same on your linked devices (tick Notebooks in Sharing and sync); changes made on two devices are merged, and only the same words changed on both are asked about; private items stay on the device unless you include them (Notebooks > Connections)
 - Optional app PIN: Cache asks for it when it opens (Notebooks > App PIN)

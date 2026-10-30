@@ -128,7 +128,7 @@ void main() {
   test('without a base map there is still a background, the route and pin layers and the position layers', () {
     final style = build(CacheThemeId.dark, [StyleLayerUse(defs.firstWhere((d) => d.id == 'hillshade'))]);
     final ids = [for (final l in style['layers'] as List) (l as Map)['id']];
-    expect(ids, ['background', 'hillshade-shade', kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
+    expect(ids, ['background', 'hillshade-shade', kRouteAlt, kRouteCasing, kRouteRoad, kRouteFollow, kRouteOffroad, kUserAreas, kUserLines, kUserRepeaters, kNotebookPins, kMeasureLine, kMeasurePoints, kPinResults, kPinSelected, kPositionAccuracyFill, kPositionAccuracyLine, kPositionDot, kPositionHeading]);
   });
 
   test('overlays are drawn between the base map\'s roads and labels, contour labels on top', () {

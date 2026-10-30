@@ -18,6 +18,7 @@ import '../maps/ui/download_sheet.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
+import '../maps/measure.dart';
 import '../maps/ui/ring_menu.dart';
 import '../maps/user_layers.dart';
 import '../nav/nav_geojson.dart';
@@ -216,6 +217,7 @@ class _MapsScreenState extends State<MapsScreen> {
     await _pushNotebooks();
     _userSig = -1;
     await _pushUser();
+    await _pushMeasure();
     _onNav(); // A route may have been loaded before this screen/listener existed.
     _afterCameraSettles();
   }
@@ -492,6 +494,13 @@ class _MapsScreenState extends State<MapsScreen> {
   }
 
   Future<void> _onMapTap(math.Point<double> point, LatLng at) async {
+    final m = _measure;
+    if (m != null) {
+      HapticFeedback.selectionClick();
+      setState(() => m.add(at.latitude, at.longitude));
+      await _pushMeasure();
+      return;
+    }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
     if (nav.searchOpen) {
       nav.closeSearch(clear: false);
@@ -505,7 +514,7 @@ class _MapsScreenState extends State<MapsScreen> {
   _Ring? _ring;
 
   void _onMapLongPress(math.Point<double> point, LatLng at) {
-    if (nav.phase != NavPhase.browsing) return;
+    if (nav.guiding || _measure != null) return;
     HapticFeedback.mediumImpact();
     final ring = _Ring(at: _downAt ?? MediaQuery.sizeOf(context).center(Offset.zero), lat: at.latitude, lon: at.longitude);
     setState(() => _ring = ring);
@@ -533,7 +542,11 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!r.notebooks) {
       return [
         const RingItem(id: 'to', label: 'To here', icon: Icons.near_me_outlined),
+        const RingItem(id: 'from', label: 'From here', icon: Icons.trip_origin),
+        // Add stop only while a route is shown.
+        if (nav.phase == NavPhase.previewing) const RingItem(id: 'stop', label: 'Add stop', icon: Icons.add_location_alt_outlined),
         if (widget.notebooks != null && widget.onNewEntryAt != null) const RingItem(id: 'save', label: 'Save', icon: Icons.book_outlined),
+        const RingItem(id: 'measure', label: 'Measure', icon: Icons.straighten),
       ];
     }
     final all = [for (final n in widget.notebooks?.notebooks ?? const <Notebook>[]) RingItem(id: n.id, label: n.name, icon: _bookIcon(n))];
@@ -548,7 +561,19 @@ class _MapsScreenState extends State<MapsScreen> {
     switch (item.id) {
       case 'to':
         setState(() => _ring = null);
-        nav.openDirections(MapPlace.pin(r.lat, r.lon, name: r.name ?? pinName(r.lat, r.lon), formats: {'decimal': formatDecimal(r.lat, r.lon)}));
+        nav.openDirections(_ringPlace(r));
+      case 'from':
+        setState(() => _ring = null);
+        nav.setFrom(_ringPlace(r));
+      case 'stop':
+        setState(() => _ring = null);
+        nav.addStop(_ringPlace(r));
+      case 'measure':
+        setState(() {
+          _ring = null;
+          _measure = MeasureLine(r.lat, r.lon);
+        });
+        _pushMeasure();
       case 'save':
         widget.notebooks?.start();
         setState(() {
@@ -566,6 +591,36 @@ class _MapsScreenState extends State<MapsScreen> {
 
   /// The centre: the first ring's opens the spot's coordinate card (the dropped-pin card, with its formats); the notebook ring's
   /// goes back.
+  MapPlace _ringPlace(_Ring r) => MapPlace.pin(r.lat, r.lon, name: r.name ?? pinName(r.lat, r.lon), formats: {'decimal': formatDecimal(r.lat, r.lon)});
+
+  // ---- measuring a distance (the ring's Measure) -------------------------------------------------------------
+
+  MeasureLine? _measure;
+
+  Future<void> _pushMeasure() async {
+    final c = _controller;
+    if (c == null || !_styleReady) return;
+    try {
+      await c.setGeoJsonSource(kMeasureSource, _measure?.geoJson() ?? const {'type': 'FeatureCollection', 'features': <Object>[]});
+    } catch (_) {}
+  }
+
+  void _measureDone() {
+    setState(() => _measure = null);
+    _pushMeasure();
+  }
+
+  Widget _measurePanel(BuildContext context, MeasureLine m, CacheTokens k) => MeasurePanel(
+        total: nav.fmt.distance(m.totalM),
+        points: m.points.length,
+        canUndo: m.canUndo,
+        onUndo: () {
+          setState(m.undo);
+          _pushMeasure();
+        },
+        onDone: _measureDone,
+      );
+
   void _ringBack() {
     final r = _ring;
     if (r == null) return;
@@ -844,9 +899,14 @@ class _MapsScreenState extends State<MapsScreen> {
           ),
         if (!drawing) ...[
           _topLayer(context, fix, follow),
-          _bottomLayer(context),
+          if (_measure == null) _bottomLayer(context),
         ],
         if (_ring != null && !drawing) _ringOverlay(context, _ring!, k),
+        if (_measure != null && !drawing)
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: _measurePanel(context, _measure!, k))),
+          ),
         if (drawing)
           AreaDrawOverlay(
             layerTitle: drawDef?.title ?? 'this layer',
@@ -875,6 +935,31 @@ class _MapsScreenState extends State<MapsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Flexible(child: top),
+            if (!previewing && !guiding && nav.fromPlace != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  key: const ValueKey('from-chip'),
+                  padding: const EdgeInsets.only(left: 14),
+                  decoration: mapPanel(context, radius: 16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.trip_origin, size: 18, color: context.t.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text('From ${nav.fromPlace!.name}: choose where to go',
+                            maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: context.t.text)),
+                      ),
+                      IconButton(
+                        tooltip: 'Start from your location',
+                        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: nav.clearFrom,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (!searching) ...[
               const SizedBox(height: 10),
               Row(
@@ -1008,4 +1093,44 @@ class _Ring {
   /// The notebook ring (after Save), and its page.
   bool notebooks = false;
   int page = 0;
+}
+
+/// The measuring bar: the running total in the person's units, how many points, Undo for the last point, and Done.
+class MeasurePanel extends StatelessWidget {
+  const MeasurePanel({super.key, required this.total, required this.points, required this.canUndo, required this.onUndo, required this.onDone});
+
+  final String total;
+  final int points;
+  final bool canUndo;
+  final VoidCallback onUndo;
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Container(
+      key: const ValueKey('measure-panel'),
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      decoration: mapPanel(context, radius: 20, alpha: 0.98),
+      child: Row(
+        children: [
+          Icon(Icons.straighten, color: k.accent),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(total, key: const ValueKey('measure-total'), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
+                Text(points < 2 ? 'Tap the map to add points' : '$points points · tap the map to add more',
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+              ],
+            ),
+          ),
+          TextButton(key: const ValueKey('measure-undo'), onPressed: canUndo ? onUndo : null, child: const Text('Undo')),
+          FilledButton(key: const ValueKey('measure-done'), onPressed: onDone, child: const Text('Done')),
+        ],
+      ),
+    );
+  }
 }
