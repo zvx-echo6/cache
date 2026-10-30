@@ -437,8 +437,8 @@ after `er_tier` / `note`): `about` then `wikipedia`. Layer points and repeaters 
 - `about`: the place's summary as the data build stored it in the pack's `about` column (`places_pack about`), shown as it
   is; the app never cuts it. The build collapses white space (every run is one space, ends trimmed); a summary of at most
   400 characters (Unicode scalar values) is stored whole. A longer one is cut by a local model at a sentence end, and the
-  cut is kept only when it is an exact prefix of the summary, at most 400 characters, ending in `.`, `!` or `?`; otherwise
-  the place has no `about`. See RECIPE.md (places_pack), "The about step".
+  cut is kept only when it is an exact prefix of the summary, at most 400 characters, ending in `.`, `!` or `?` (optionally
+  followed by one closing quote or bracket); otherwise the place has no `about`. See RECIPE.md (places_pack), "The about step".
 - `wikipedia`: the English Wikipedia article title, exactly as the pack's `wikipedia_title` column has it
   (`"Shoshone Falls"`). `read` of the row's number opens the article (see read).
 
