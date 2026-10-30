@@ -16,6 +16,7 @@ import '../chat/navigation_action.dart';
 import '../guide/app_links.dart';
 import '../guide/guide_book.dart';
 import '../guide/guide_reader.dart';
+import '../regions/ui/region_actions.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
@@ -28,7 +29,6 @@ import '../search/app_search.dart';
 import '../search/app_search_providers.dart';
 import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
-import '../settings/data_policy.dart' show MobileDataBlocked;
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
@@ -120,6 +120,7 @@ class _ShellState extends State<Shell> {
     widget.maps.addListener(_onMaps);
     openAppPlace = _goToPlace;
     appPlaceScreen = _placeScreen;
+    askCacheInstead = _askFromGuide;
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
@@ -141,6 +142,7 @@ class _ShellState extends State<Shell> {
     widget.maps.removeListener(_onMaps);
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
+    if (askCacheInstead == _askFromGuide) askCacheInstead = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
@@ -278,22 +280,8 @@ class _ShellState extends State<Shell> {
     }
   }
 
-  Future<void> _carryOn(RegionsState regions, LocalRegion l, {bool anyway = false}) async {
-    final m = ScaffoldMessenger.of(context);
-    try {
-      await regions.updateRegion(l.id, anyway: anyway);
-      m.hideCurrentSnackBar();
-      m.showSnackBar(SnackBar(content: Text('Carrying on with ${l.name}')));
-    } on MobileDataBlocked catch (e) {
-      m.hideCurrentSnackBar();
-      m.showSnackBar(SnackBar(
-        content: Text(e.message),
-        action: SnackBarAction(label: 'Download anyway', onPressed: () => _carryOn(regions, l, anyway: true)),
-      ));
-    } catch (e) {
-      _say('$e');
-    }
-  }
+  Future<void> _carryOn(RegionsState regions, LocalRegion l) =>
+      carryOnNow(ScaffoldMessenger.of(context), regions, l.id, name: l.name, again: l.phase == RegionPhase.failed);
 
   /// Home's search across Cache: one provider per module (Notebooks add theirs here).
   late final AppSearch _search = AppSearch([
@@ -345,6 +333,12 @@ class _ShellState extends State<Shell> {
       ),
     ],
   ]);
+
+  /// "Ask Cache instead" under a guide search that found nothing: the guide closes and Ask asks what was searched for.
+  void _askFromGuide(String text) {
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    _askFromHome(text);
+  }
 
   /// Enter in Home's search: a new chat that asks exactly what was typed.
   void _askFromHome(String text) {

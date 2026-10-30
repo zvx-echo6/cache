@@ -105,6 +105,18 @@ class _HomeScreenState extends State<HomeScreen> {
     r.open();
   }
 
+  /// "Hide" on Set up Cache: the block is switched off (Edit Home switches it on again), with Undo.
+  void _hideSetup() {
+    widget.layout.setBlockOn(HomeBlock.setup, false);
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('setup-hidden'),
+      content: const Text('Set up Cache hidden. Bring it back in Edit Home.'),
+      action: SnackBarAction(label: 'Undo', onPressed: () => widget.layout.setBlockOn(HomeBlock.setup, true)),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -135,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox.shrink()
                 else
                   switch (b) {
-                    HomeBlock.setup => widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!),
+                    HomeBlock.setup => widget.setup == null ? const SizedBox.shrink() : SetupCard(setup: widget.setup!, onHide: _hideSetup),
                     HomeBlock.ask => Padding(padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
                     HomeBlock.weather => Padding(
                       padding: const EdgeInsets.only(bottom: 12),

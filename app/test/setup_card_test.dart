@@ -82,6 +82,9 @@ void main() {
   Future<void> weatherOn(WidgetTester tester) => tester.runAsync(() => r.weather.setRowOn(WeatherTurnOn.rows.first, true));
 
   Finder row(String key) => find.byKey(ValueKey(key));
+
+  /// "(N of 4 done)" in the card's line under its title.
+  Finder count(int n) => find.textContaining('($n of 4 done)', findRichText: true);
   Finder tickIn(String key) => find.descendant(of: row(key), matching: find.byKey(const ValueKey('setup-tick')));
 
   testWidgets('fresh install: four lines to do, each with its reason, and each opens its screen', (tester) async {
@@ -89,7 +92,7 @@ void main() {
     await home(tester);
     expect(find.byKey(const ValueKey('setup-card')), findsOneWidget);
     expect(find.text('Set up Cache'), findsOneWidget);
-    expect(find.text('0 of 4 done'), findsOneWidget);
+    expect(count(0), findsOneWidget);
     for (final t in ['Choose a model', 'Get your area', 'Turn on weather', 'Add a library']) {
       expect(find.text(t), findsOneWidget);
     }
@@ -113,7 +116,7 @@ void main() {
     model();
     zim();
     await home(tester);
-    expect(find.text('2 of 4 done'), findsOneWidget);
+    expect(count(2), findsOneWidget);
     expect(tickIn('setup-model'), findsOneWidget);
     expect(tickIn('setup-library'), findsOneWidget);
     expect(tickIn('setup-area'), findsNothing);
@@ -134,9 +137,9 @@ void main() {
       ..total = 100;
     regions.onPhone = [_region('downloading', done: 50)];
     await home(tester);
-    expect(find.text('0 of 4 done'), findsOneWidget);
+    expect(count(0), findsOneWidget);
     expect(find.text('gemma-4-E2B-it-Q4_K_M.gguf · downloading 34%'), findsOneWidget);
-    expect(find.textContaining('Wasatch Front · Not offline yet'), findsOneWidget, reason: 'parts work as they land, but it is not offline yet');
+    expect(find.textContaining(RegExp(r'^Wasatch Front · Directions \d+%')), findsOneWidget, reason: 'the same words as the region\'s row in Regions');
     expect(find.byKey(const ValueKey('setup-progress')), findsNWidgets(2));
     final bar = tester.widget<LinearProgressIndicator>(
       find.descendant(of: row('setup-model'), matching: find.byKey(const ValueKey('setup-progress'))),
@@ -145,7 +148,7 @@ void main() {
 
     regions.set([_region('ready')]);
     await tester.pumpAndSettle();
-    expect(find.text('1 of 4 done'), findsOneWidget);
+    expect(count(1), findsOneWidget);
     expect(tickIn('setup-area'), findsOneWidget);
     expect(find.text('Wasatch Front · directions and places · 120 MB'), findsOneWidget);
     await r.dispose(tester);
@@ -161,7 +164,7 @@ void main() {
       ),
     ];
     await home(tester);
-    expect(find.text('Idaho · Stopped. Tap to carry on'), findsOneWidget, reason: 'no "Tap Update" for a button that is not here');
+    expect(find.text("Idaho · Directions couldn't finish. Tap to carry on"), findsOneWidget, reason: 'no "Tap Update" for a button that is not here');
     expect(find.textContaining('Tap Update'), findsNothing);
     expect(setup.stoppedRegion?.id, 'us-id', reason: 'the shell carries this one on when the line is tapped');
     await tester.tap(row('setup-area'));
@@ -175,8 +178,11 @@ void main() {
   testWidgets('each line opens its section of the guide, the same section the assistant points to', (tester) async {
     await rig(tester);
     await home(tester);
+    // The guide is in the line's press-and-hold menu (the ? buttons are gone).
+    await tester.longPress(row('setup-area'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('setup-area-guide')));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(opened, ['Cache guide: 1. Getting started: Download a region']);
     expect(SetupCache.guideTitles, [
       'Cache guide: 1. Getting started: Choose a model',
@@ -199,12 +205,19 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('an ordinary Home block: no hide button and no Settings row; switched off in Edit Home, the weather card offers "Turn on weather"', (tester) async {
+  testWidgets('Hide switches the block off, with Undo; Edit Home brings it back; then the weather card offers "Turn on weather"', (tester) async {
     await rig(tester);
     model();
     await home(tester);
-    expect(find.text('1 of 4 done'), findsOneWidget);
-    expect(find.byKey(const ValueKey('setup-hide')), findsNothing);
+    expect(count(1), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('setup-hide')));
+    await tester.pump();
+    expect(find.text('Set up Cache hidden. Bring it back in Edit Home.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('setup-card')), findsNothing);
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('setup-card')), findsOneWidget, reason: 'Undo puts it back');
     layout.setBlockOn(HomeBlock.setup, false);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('setup-card')), findsNothing);

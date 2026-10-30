@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 
 import '../actions/setup_status.dart' show kSetupAreas;
 import '../app_state.dart';
@@ -110,7 +112,7 @@ class SetupCache {
     final withRouting = [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting) l];
     if (withRouting.any((l) => l.phase == RegionPhase.ready)) return null;
     final going = withRouting.firstOrNull;
-    return going?.phase == RegionPhase.failed ? going : null;
+    return going?.phase == RegionPhase.failed || going?.phase == RegionPhase.stopped ? going : null;
   }
 
   /// A region with its road routing on the phone is done; one with road routing on its way runs.
@@ -124,12 +126,11 @@ class SetupCache {
     }
     final going = withRouting.firstOrNull;
     if (going == null) return const SetupLine(SetupPhase.todo);
+    // The same words as the region's row in Regions (one source: they always agree).
     return switch (going.phase) {
       RegionPhase.paused => SetupLine(SetupPhase.running, detail: '${going.name} · ${regions!.paused ?? 'paused'}', fraction: going.fraction),
-      // The part's own words ("Tap Update to continue") point at a button that is not on this card, and do not fit its line.
-      RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · Stopped. Tap to carry on'),
-      // Parts work as they are saved, but the area is not offline until every part is.
-      _ => SetupLine(SetupPhase.running, detail: '${going.name} · Not offline yet${_percent(going.fraction)}', fraction: going.fraction),
+      RegionPhase.stopped || RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · ${going.partsLine}. Tap to carry on'),
+      _ => SetupLine(SetupPhase.running, detail: '${going.name} · ${going.partsLine}', fraction: going.fraction),
     };
   }
 
@@ -171,12 +172,16 @@ class SetupCache {
 Future<void> showAddToLibrary(BuildContext context, BrowseState browse) =>
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: browse)));
 
-/// The "Set up Cache" block on Home: four lines, each with its button and a tick when done. It goes away by itself when all four are
-/// done; it is an ordinary Home block, so Edit Home can switch it off like any other.
+/// The "Set up Cache" block on Home: four lines, each with a tick when done and a chevron while it is not; tapping a line does it, and
+/// pressing and holding it opens its part of the guide. It goes away by itself when all four are done; "Hide" switches it off before
+/// that (it is an ordinary Home block, so Edit Home brings it back).
 class SetupCard extends StatelessWidget {
-  const SetupCard({super.key, required this.setup});
+  const SetupCard({super.key, required this.setup, this.onHide});
 
   final SetupCache setup;
+
+  /// "Hide": switches the block off (Edit Home brings it back); null leaves it out.
+  final VoidCallback? onHide;
 
   static const _titles = ['Choose a model', 'Get your area', 'Turn on weather', 'Add a library'];
   static const _reasons = ['The AI that answers your questions', 'Maps, directions and places for your area', 'Forecasts and alerts for your places', 'Wikipedia, medical and survival guides'];
@@ -206,19 +211,32 @@ class SetupCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Row(
+            children: [
+              Expanded(child: Text('Set up Cache', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: k.text))),
+              if (onHide != null)
+                TextButton(
+                  key: const ValueKey('setup-hide'),
+                  onPressed: onHide,
+                  style: TextButton.styleFrom(minimumSize: const Size(48, 40), padding: const EdgeInsets.symmetric(horizontal: 12)),
+                  child: const Text('Hide'),
+                )
+              else
+                const SizedBox(height: 40),
+            ],
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: Row(
-              children: [
-                Expanded(child: Text('Set up Cache', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: k.text))),
-                Text('${s.doneCount} of ${s.lines.length} done', key: const ValueKey('setup-count'), style: TextStyle(fontSize: 12, color: k.secondary)),
-              ],
+            child: Text.rich(
+              TextSpan(children: [
+                const TextSpan(text: 'Four things make Cache useful '),
+                TextSpan(text: '(${s.doneCount} of ${s.lines.length} done)'),
+              ]),
+              key: const ValueKey('setup-count'),
+              style: TextStyle(fontSize: 13, color: k.secondary),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12, top: 2),
-            child: Text('Four things make Cache useful. Each works right here.', style: TextStyle(fontSize: 12, color: k.secondary)),
-          ),
+          const SizedBox(height: 4),
           for (var i = 0; i < 4; i++)
             _SetupRow(
               key: ValueKey(_keys[i]),
@@ -279,7 +297,7 @@ class _SetupRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                Text(line.detail ?? reason, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                Text(line.detail ?? reason, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
                 if (running) ...[
                   const SizedBox(height: 6),
                   LinearProgressIndicator(
@@ -294,13 +312,6 @@ class _SetupRow extends StatelessWidget {
               ],
             ),
           ),
-          if (onGuide != null)
-            IconButton(
-              key: ValueKey('${key is ValueKey<String> ? (key as ValueKey<String>).value : title}-guide'),
-              tooltip: 'How to: $title',
-              icon: Icon(Icons.help_outline, size: 20, color: k.secondary),
-              onPressed: onGuide,
-            ),
           if (!line.done) ...[
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: k.secondary),
@@ -308,11 +319,39 @@ class _SetupRow extends StatelessWidget {
         ],
       ),
     );
-    if (line.done) return ConstrainedBox(constraints: const BoxConstraints(minHeight: 48), child: body);
+    final guide = onGuide;
+    void hold() async {
+      HapticFeedback.mediumImpact();
+      final open = await showModalBottomSheet<bool>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!line.done)
+                ListTile(leading: const Icon(Icons.play_arrow), title: Text(title), onTap: () => Navigator.pop(ctx, false)),
+              ListTile(
+                key: ValueKey('${key is ValueKey<String> ? (key as ValueKey<String>).value : title}-guide'),
+                leading: const Icon(Icons.menu_book_outlined),
+                title: const Text('How to, in the guide'),
+                onTap: () => Navigator.pop(ctx, true),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+      if (open == true) guide!();
+      if (open == false) onTap();
+    }
+
     return Semantics(
-      button: true,
+      button: !line.done,
+      customSemanticsActions: guide == null ? null : {CustomSemanticsAction(label: 'How to, in the guide'): guide},
       child: InkWell(
-        onTap: onTap,
+        onTap: line.done ? null : onTap,
+        onLongPress: guide == null ? null : hold,
         borderRadius: BorderRadius.circular(12),
         child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 48), child: body),
       ),
