@@ -33,7 +33,7 @@ Kagi's API terms: https://kagi.com/privacy/api
 
 ## Satellite fire hotspots with NASA FIRMS
 
-NASA FIRMS reports possible fires seen by satellites, often hours before ground reports. Cache's "Satellite fire hotspots" source shows detections from the last day near your place, with time, confidence and fire power.
+NASA FIRMS reports possible fires seen by satellites, often hours before ground reports. Cache's "Satellite fire detections near the place (NASA FIRMS)" source shows detections from the last day near your place, with time, confidence and fire power.
 
 It's free. You need a free FIRMS map key.
 
@@ -45,7 +45,7 @@ One email address gets one key. To resend or change it, log in at the FIRMS down
 
 To add it to Cache:
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
-2. Tap "Get key" on "Satellite fire hotspots".
+2. Tap "Get key" on "Satellite fire detections near the place (NASA FIRMS)".
 3. Paste the key and tap "Check and save".
 
 Limits: 5,000 transactions in any 10 minutes (NASA FIRMS, checked 2026-10-29). Cache stays far below that.
