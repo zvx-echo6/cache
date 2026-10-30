@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../browse/zim_download.dart' show FreeSpace, freeBytesOnDisk;
+import 'damaged_files.dart';
 import 'data_kinds.dart';
 import 'space.dart';
 
@@ -23,17 +25,21 @@ Future<int> directorySize(Directory dir) async {
 }
 
 /// What the app keeps on the phone, by kind ([DataKind], the same list Sharing shares), measured from the files themselves; the free
-/// space and what Cache leaves for the phone; and Clean up: unfinished downloads and temporary files, never anything kept.
+/// space and what Cache leaves for the phone; and Clean up: unfinished downloads, damaged files and temporary files, never anything
+/// the person saved.
 class StorageUsage extends ChangeNotifier {
   StorageUsage({
     required this.kinds,
     required this.freeIn,
     this.leftovers = _noDirs,
+    this.manifests = _noManifests,
     this.busy = _idle,
     FreeSpace? freeSpace,
     TotalSpace? totalSpace,
+    DamagedFiles? damaged,
   }) : _freeSpace = freeSpace ?? freeBytesOnDisk,
-       _totalSpace = totalSpace ?? totalBytesOnDisk;
+       _totalSpace = totalSpace ?? totalBytesOnDisk,
+       _damaged = damaged ?? DamagedFiles();
 
   /// The kinds Storage lists, in order.
   final List<DataKind> kinds;
@@ -44,12 +50,21 @@ class StorageUsage extends ChangeNotifier {
   /// Where unfinished downloads and temporary files collect (partial-download folders, the temporary folder). Clean up empties them.
   final List<Directory?> Function() leftovers;
 
+  /// The downloaded files that have a published manifest (size and SHA-256): one that does not match it is damaged, and Clean up
+  /// removes it so it can be downloaded again. Files with no manifest are never checked.
+  final List<FileManifest> Function() manifests;
+
   /// True while a download runs (its unfinished file is in use, so Clean up waits).
   final bool Function() busy;
   final FreeSpace _freeSpace;
   final TotalSpace _totalSpace;
+  final DamagedFiles _damaged;
+
+  /// The damaged files found by the last measure.
+  List<FileManifest> damagedFiles = const [];
 
   static List<Directory?> _noDirs() => const [];
+  static List<FileManifest> _noManifests() => const [];
   static bool _idle() => false;
 
   final Map<String, int> _bytes = {};
@@ -102,18 +117,52 @@ class StorageUsage extends ChangeNotifier {
       for (final k in kinds) {
         _bytes[k.id] = await _sum(k.folders);
       }
-      cleanupBytes = await _sum(leftovers());
+      // Sizes at once; the checksums (worked out once per file) follow.
+      damagedFiles = await _damaged.find(manifests(), hash: false);
+      cleanupBytes = await _sum(leftovers()) + _bytesOf(damagedFiles);
       measured = true;
     } finally {
       _busy = false;
       notifyListeners();
     }
+    unawaited(_checkSums());
   }
 
-  /// Deletes what is in the leftover folders (not the folders themselves) and measures again. Returns the bytes freed.
+  int _bytesOf(List<FileManifest> files) {
+    var t = 0;
+    for (final m in files) {
+      try {
+        t += File(m.path).lengthSync();
+      } catch (_) {}
+    }
+    return t;
+  }
+
+  Future<void>? _summing;
+
+  Future<void> _checkSums() => _summing ??= () async {
+        try {
+          final found = await _damaged.find(manifests());
+          final before = _bytesOf(damagedFiles);
+          damagedFiles = found;
+          cleanupBytes = cleanupBytes - before + _bytesOf(found);
+          notifyListeners();
+        } catch (_) {
+        } finally {
+          _summing = null;
+        }
+      }();
+
+  /// Deletes what is in the leftover folders (not the folders themselves) and the damaged downloads, and measures again. Returns the
+  /// bytes freed.
   Future<int> cleanUp() async {
     if (busy()) return 0;
     final before = cleanupBytes;
+    for (final m in await _damaged.find(manifests())) {
+      try {
+        await File(m.path).delete();
+      } catch (_) {}
+    }
     for (final d in leftovers()) {
       if (d == null) continue;
       try {

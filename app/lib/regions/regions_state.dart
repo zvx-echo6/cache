@@ -10,6 +10,7 @@ import '../files.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../search/core_config.dart';
+import '../settings/damaged_files.dart';
 import '../settings/data_policy.dart';
 import 'offroad_catalogue.dart';
 import 'region_catalogue.dart';
@@ -545,6 +546,18 @@ class RegionsState extends ChangeNotifier {
   /// The folder the off-road packs are kept in, `<build>/<id>/offroad.sqlite` (the router reads every pack in it).
   Future<Directory> offroadDir() async => Directory('${(await supportDir()).path}/regions/offroad');
   String? _offroadPath;
+
+  /// The off-road packs on the phone and what they must be (the catalogue's size and SHA-256), for Storage's damaged-file check.
+  List<FileManifest> get offroadManifests {
+    final dir = _offroadPath;
+    if (dir == null) return const [];
+    final seen = <String>{};
+    return [
+      for (final k in _kept.values)
+        for (final p in k.offroad)
+          if (_packRuns[p.path] == null && seen.add(p.path)) FileManifest('$dir/${p.path}', bytes: p.bytes, sha256: p.sha256),
+    ];
+  }
 
   bool _packOnPhone(String path) {
     final dir = _offroadPath;

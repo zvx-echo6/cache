@@ -94,6 +94,7 @@ release notes).
 
 ### Changed
 - Maps: a layer no longer has a download of its own; Draw your own area instead, in the Regions sheet, draws an area on the map and downloads it as a region through the same sheet and pop-up
+- Storage: Clean up also removes damaged off-road data (a file whose size or checksum does not match what was published), so it can be downloaded again
 - Weather, alerts and other small updates always use any connection; the Mobile data downloads switch in Storage is for big downloads only
 
 ## 1.0.0 (iOS build 22) - 2026-10-28

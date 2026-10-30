@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/settings/app_settings.dart';
+import 'package:cache/settings/damaged_files.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/space.dart';
 import 'package:cache/settings/storage_usage.dart';
 import 'package:cache/version.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -175,6 +177,33 @@ void main() {
     expect(await directorySize(root), 4000);
   });
 
+  test('Clean up removes downloads that do not match their manifest (size or SHA-256), never a file without one', () async {
+    final d = Directory('${dir.path}/packs')..createSync();
+    File write(String name, List<int> bytes) => File('${d.path}/$name')..writeAsBytesSync(bytes);
+    final good = write('good.sqlite', utf8.encode('pack'));
+    final short = write('short.sqlite', utf8.encode('pac'));
+    final wrong = write('wrong.sqlite', utf8.encode('pakc'));
+    final mine = write('mine.sqlite', utf8.encode('saved by the person'));
+    final sum = sha256Hex(utf8.encode('pack'));
+    final manifests = [
+      FileManifest(good.path, bytes: 4, sha256: sum),
+      FileManifest(short.path, bytes: 4, sha256: sum),
+      FileManifest(wrong.path, bytes: 4, sha256: sum),
+      FileManifest('${d.path}/missing.sqlite', bytes: 4, sha256: sum),
+    ];
+    final u = StorageUsage(kinds: const [], freeIn: () => dir, manifests: () => manifests, freeSpace: (_) => 1, totalSpace: (_) => 1);
+    await u.measure();
+    // the size is known at once, the checksum soon after
+    for (var i = 0; i < 100 && u.damagedFiles.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(u.damagedFiles.map((m) => m.path), [short.path, wrong.path]);
+    expect(u.cleanupBytes, 7);
+    expect(await u.cleanUp(), 7);
+    expect([good.existsSync(), short.existsSync(), wrong.existsSync(), mine.existsSync()], [true, false, false, true]);
+    expect(await DamagedFiles().find(manifests), isEmpty);
+  });
+
   test('the space kept for the phone: 10% of storage, at least 5 GB, at most 20 GB', () {
     const gb = 1 << 30;
     expect(reserveFor(32 * gb), 5 * gb);
@@ -201,3 +230,5 @@ void main() {
     expect((jsonDecode(text) as Map).keys, isNot(contains('key')));
   });
 }
+
+String sha256Hex(List<int> bytes) => sha256.convert(bytes).toString();

@@ -280,6 +280,8 @@ class _CacheAppState extends State<CacheApp> {
         _beside(app.modelsDir, '.partial'),
         if (_tempPath != null) Directory(_tempPath!),
       ],
+      // Damaged downloads: the files whose published size and SHA-256 are kept (the off-road packs).
+      manifests: () => regions.offroadManifests,
       busy: () =>
           browse.transfers.values.any((t) => t.phase != TransferPhase.failed && t.phase != TransferPhase.blockedByMobileData) ||
           modelDownloads.current != null ||
