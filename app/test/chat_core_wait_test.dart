@@ -6,12 +6,13 @@ import 'package:cache/history/conversation_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'chat_fakes.dart';
+import 'support/act_core_stand_in.dart';
 
 void main() {
   test('a question asked while the core starts shows Starting… and waits; it is answered once the core is up', () async {
     final core = Completer<bool>();
     final backend = ScriptedBackend([(_) => say('Boil it for a minute.')]);
-    final chat = ChatController(tools: const [], waitForCore: () => core.future)..setBackend(backend);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], waitForCore: () => core.future)..setBackend(backend);
     final sent = chat.send('How do I make water safe?');
     await Future<void>.delayed(Duration.zero);
     expect(chat.messages.last.phase, TurnPhase.starting);
@@ -29,7 +30,7 @@ void main() {
     var starts = 0;
     var up = false;
     final backend = ScriptedBackend([(_) => say('Boil it.')]);
-    final chat = ChatController(tools: const [], waitForCore: () async {
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], waitForCore: () async {
       starts++;
       return up;
     })

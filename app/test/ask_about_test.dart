@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'chat_fakes.dart';
 import 'support/parity_fixtures.dart';
+import 'support/act_core_stand_in.dart';
 
 /// The core's tools: live_data answers with the recorded result, search with one line.
 class LiveHost implements ToolHost {
@@ -72,7 +73,7 @@ void main() {
         return say('A freeze warning means sub-freezing temperatures are expected [1].');
       },
     ]);
-    final chat = ChatController(tools: const [], newHost: (_) => host)..setBackend(backend);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => host)..setBackend(backend);
     await chat.send(about.question, seed: about);
     expect(host.calls.single.$1, 'live_data');
     expect(host.calls.single.$2, {'source': 'nws-alerts-point', 'place': 'Pocatello'});
@@ -94,7 +95,7 @@ void main() {
       (_) => _call('search', '{"query": "pets"}'),
       (_) => say('Bring pets in [5].'),
     ]);
-    final chat = ChatController(tools: const [], newHost: (_) => host)..setBackend(backend);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => host)..setBackend(backend);
     await chat.send(about.question, seed: about);
     for (final r in backend.requests.take(3)) {
       expect(r['tools'], isNotNull);

@@ -7,6 +7,7 @@ import 'package:cache/history/titles.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'chat_fakes.dart';
+import 'support/act_core_stand_in.dart';
 
 void main() {
   late ConversationStore store;
@@ -200,7 +201,7 @@ void main() {
 
   group('chat controller', () {
     ChatController make(ConversationStore s, ScriptedBackend backend, BatchSearch search) {
-      final chat = ChatController(
+      final chat = ChatController(actCore: const ActCoreStandIn(), 
         tools: [search],
         newNumbering: () => MemoryNumbering([]),
         numberingState: const MemoryNumberingState(),

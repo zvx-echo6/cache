@@ -5,6 +5,7 @@ import 'package:cache/screens/history_drawer.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/act_core_stand_in.dart';
 
 Conversation conv(int id, String title, DateTime updated, {bool pinned = false}) => Conversation(
       id: id,
@@ -81,7 +82,7 @@ void main() {
     setUp(() {
       clock = now;
       store = ConversationStore.memory(now: () => clock);
-      chat = ChatController(tools: const [])..attachStore(store);
+      chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..attachStore(store);
     });
     tearDown(() => store.close());
 

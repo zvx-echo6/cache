@@ -68,7 +68,7 @@ class ChatController extends ChangeNotifier {
     this.numberingState,
     this.actions,
     this.waitForCore,
-    this.actCore = const ActCoreStandIn(),
+    required this.actCore,
     this.outcomeForm = kActOutcomeForm,
   });
 

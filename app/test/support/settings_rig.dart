@@ -33,6 +33,7 @@ import '../video_fake.dart';
 import 'weather_fakes.dart';
 import 'sync_fake.dart';
 import 'test_layer_engine.dart';
+import 'act_core_stand_in.dart';
 
 class FakeAccess implements LocationAccessProbe {
   FakeAccess(this.value);
@@ -190,7 +191,7 @@ class SettingsRig {
     r.position = RigPositionSource(permissionState: permission);
     r.app = AppState(settingsDirOverride: r.dir, modelsDirOverride: r.modelsDir);
     r.store = ConversationStore.memory();
-    r.chat = ChatController(tools: const [])..attachStore(r.store);
+    r.chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..attachStore(r.store);
     r.engine = TestLayerEngine(policy: r.policy);
     r.browse = BrowseState(sources: r.sources, policy: r.policy, settingsDirOverride: r.dir, phoneLanguage: 'en');
     r.video = VideoState(

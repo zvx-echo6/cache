@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../packages/cache_search/test/engine_test.dart' show FakeNative;
 import 'support/parity_fixtures.dart';
+import 'support/act_core_stand_in.dart';
 
 /// The core's act calls, inside the worker: an act call is handed back as host_run, cs_act_finish echoes the reply it got (so the
 /// test sees what reached the core) and numbers one result, cs_act_outcome tags what it got.

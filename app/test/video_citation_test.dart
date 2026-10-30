@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'chat_fakes.dart';
+import 'support/act_core_stand_in.dart';
 
 const _message = '[1] Purifying water, part 2 — Bring it to a rolling boil.\n[2] Water — Boiling kills germs.';
 
@@ -45,7 +46,7 @@ void main() {
     addTearDown(store.close);
     final host = _VideoHost();
     final backend = ScriptedBackend([(_) => callSearch('boil water'), (_) => say('Boil it for a minute [1][2].')]);
-    final chat = ChatController(tools: const [], newHost: (_) => host)
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => host)
       ..setBackend(backend)
       ..attachStore(store);
     await chat.send('How do I make water safe?');
@@ -68,7 +69,7 @@ void main() {
     final dir = Directory.systemTemp.createTempSync('video-cite-');
     addTearDown(() => dir.deleteSync(recursive: true));
     final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
-    final chat = ChatController(tools: const []);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
     chat.messages.add(ChatMessage.assistant()
       ..phase = TurnPhase.done
       ..text = 'Boil it [1][2].'
