@@ -127,7 +127,30 @@
      "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"connection\"}}"
     }
    },
-   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":1,\"title\":\"Connection\",\"items\":[{\"label\":\"Network\",\"value\":\"Wi-Fi\"},{\"label\":\"Updates on mobile data\",\"value\":\"on\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Mobile data\"},{\"n\":2,\"title\":\"Regions\",\"items\":[{\"label\":\"Idaho\",\"value\":\"maps, routing, places, off-road; 3 weeks old\"}],\"guide\":\"Cache guide: 1. Getting started: Download a region\"},{\"n\":3,\"title\":\"Libraries\",\"items\":[{\"label\":\"Wikipedia (medical)\",\"value\":\"4.1 GB\"},{\"label\":\"Recon library\",\"value\":\"2.3 GB\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Libraries page\"},{\"n\":4,\"title\":\"Live data\",\"items\":[{\"label\":\"Weather forecast (Open-Meteo)\",\"value\":\"on, updated 2 hours ago\"},{\"label\":\"Weather Service alerts\",\"value\":\"on, updated 40 minutes ago\"},{\"label\":\"Wildfires (NIFC)\",\"value\":\"on, updated 3 hours ago\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Weather and alerts\"},{\"n\":5,\"title\":\"Web search\",\"items\":[{\"label\":\"Kagi key\",\"value\":\"set\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Web search with Kagi\"},{\"n\":6,\"title\":\"Place details\",\"items\":[{\"label\":\"Opening hours and phone numbers\",\"value\":\"from the Idaho region, 3 weeks old\"}],\"guide\":\"Cache guide: 2. Using Cache: The place card and saving a place\"},{\"n\":7,\"title\":\"Models\",\"items\":[{\"label\":\"In use\",\"value\":\"Gemma 4 (4.1 GB)\"},{\"label\":\"Other models downloaded\",\"value\":\"none\"}],\"guide\":\"Cache guide: 1. Getting started: Choose a model\"},{\"n\":8,\"title\":\"Location\",\"items\":[{\"label\":\"Permission\",\"value\":\"while using the app\"},{\"label\":\"Position\",\"value\":\"known now\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Notifications and location\"}]}}"
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/connection",
+       "title": "Connection",
+       "items": [
+        {
+         "label": "Network",
+         "value": "Wi-Fi"
+        },
+        {
+         "label": "Updates on mobile data",
+         "value": "on"
+        }
+       ],
+       "guide": "Cache guide: 3. Settings, page by page: Mobile data"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":1,\"title\":\"Connection\",\"items\":[{\"label\":\"Network\",\"value\":\"Wi-Fi\"},{\"label\":\"Updates on mobile data\",\"value\":\"on\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Mobile data\"}]}}"
   },
   {
    "tool_call": {
@@ -138,7 +161,26 @@
      "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"regions\"}}"
     }
    },
-   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":1,\"title\":\"Connection\",\"items\":[{\"label\":\"Network\",\"value\":\"Wi-Fi\"},{\"label\":\"Updates on mobile data\",\"value\":\"on\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Mobile data\"},{\"n\":2,\"title\":\"Regions\",\"items\":[{\"label\":\"Idaho\",\"value\":\"maps, routing, places, off-road; 3 weeks old\"}],\"guide\":\"Cache guide: 1. Getting started: Download a region\"},{\"n\":3,\"title\":\"Libraries\",\"items\":[{\"label\":\"Wikipedia (medical)\",\"value\":\"4.1 GB\"},{\"label\":\"Recon library\",\"value\":\"2.3 GB\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Libraries page\"},{\"n\":4,\"title\":\"Live data\",\"items\":[{\"label\":\"Weather forecast (Open-Meteo)\",\"value\":\"on, updated 2 hours ago\"},{\"label\":\"Weather Service alerts\",\"value\":\"on, updated 40 minutes ago\"},{\"label\":\"Wildfires (NIFC)\",\"value\":\"on, updated 3 hours ago\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Weather and alerts\"},{\"n\":5,\"title\":\"Web search\",\"items\":[{\"label\":\"Kagi key\",\"value\":\"set\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Web search with Kagi\"},{\"n\":6,\"title\":\"Place details\",\"items\":[{\"label\":\"Opening hours and phone numbers\",\"value\":\"from the Idaho region, 3 weeks old\"}],\"guide\":\"Cache guide: 2. Using Cache: The place card and saving a place\"},{\"n\":7,\"title\":\"Models\",\"items\":[{\"label\":\"In use\",\"value\":\"Gemma 4 (4.1 GB)\"},{\"label\":\"Other models downloaded\",\"value\":\"none\"}],\"guide\":\"Cache guide: 1. Getting started: Choose a model\"},{\"n\":8,\"title\":\"Location\",\"items\":[{\"label\":\"Permission\",\"value\":\"while using the app\"},{\"label\":\"Position\",\"value\":\"known now\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Notifications and location\"}]}}"
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/regions",
+       "title": "Regions",
+       "items": [
+        {
+         "label": "Idaho",
+         "value": "maps, routing, places, off-road; 3 weeks old"
+        }
+       ],
+       "guide": "Cache guide: 1. Getting started: Download a region"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":2,\"title\":\"Regions\",\"items\":[{\"label\":\"Idaho\",\"value\":\"maps, routing, places, off-road; 3 weeks old\"}],\"guide\":\"Cache guide: 1. Getting started: Download a region\"}]}}"
   },
   {
    "tool_call": {
@@ -149,7 +191,30 @@
      "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"libraries\"}}"
     }
    },
-   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":1,\"title\":\"Connection\",\"items\":[{\"label\":\"Network\",\"value\":\"Wi-Fi\"},{\"label\":\"Updates on mobile data\",\"value\":\"on\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Mobile data\"},{\"n\":2,\"title\":\"Regions\",\"items\":[{\"label\":\"Idaho\",\"value\":\"maps, routing, places, off-road; 3 weeks old\"}],\"guide\":\"Cache guide: 1. Getting started: Download a region\"},{\"n\":3,\"title\":\"Libraries\",\"items\":[{\"label\":\"Wikipedia (medical)\",\"value\":\"4.1 GB\"},{\"label\":\"Recon library\",\"value\":\"2.3 GB\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Libraries page\"},{\"n\":4,\"title\":\"Live data\",\"items\":[{\"label\":\"Weather forecast (Open-Meteo)\",\"value\":\"on, updated 2 hours ago\"},{\"label\":\"Weather Service alerts\",\"value\":\"on, updated 40 minutes ago\"},{\"label\":\"Wildfires (NIFC)\",\"value\":\"on, updated 3 hours ago\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Weather and alerts\"},{\"n\":5,\"title\":\"Web search\",\"items\":[{\"label\":\"Kagi key\",\"value\":\"set\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Web search with Kagi\"},{\"n\":6,\"title\":\"Place details\",\"items\":[{\"label\":\"Opening hours and phone numbers\",\"value\":\"from the Idaho region, 3 weeks old\"}],\"guide\":\"Cache guide: 2. Using Cache: The place card and saving a place\"},{\"n\":7,\"title\":\"Models\",\"items\":[{\"label\":\"In use\",\"value\":\"Gemma 4 (4.1 GB)\"},{\"label\":\"Other models downloaded\",\"value\":\"none\"}],\"guide\":\"Cache guide: 1. Getting started: Choose a model\"},{\"n\":8,\"title\":\"Location\",\"items\":[{\"label\":\"Permission\",\"value\":\"while using the app\"},{\"label\":\"Position\",\"value\":\"known now\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Notifications and location\"}]}}"
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/libraries",
+       "title": "Libraries",
+       "items": [
+        {
+         "label": "Wikipedia (medical)",
+         "value": "4.1 GB"
+        },
+        {
+         "label": "Recon library",
+         "value": "2.3 GB"
+        }
+       ],
+       "guide": "Cache guide: 3. Settings, page by page: Libraries page"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":3,\"title\":\"Libraries\",\"items\":[{\"label\":\"Wikipedia (medical)\",\"value\":\"4.1 GB\"},{\"label\":\"Recon library\",\"value\":\"2.3 GB\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Libraries page\"}]}}"
   },
   {
    "tool_call": {
@@ -160,7 +225,34 @@
      "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"live_data\"}}"
     }
    },
-   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":1,\"title\":\"Connection\",\"items\":[{\"label\":\"Network\",\"value\":\"Wi-Fi\"},{\"label\":\"Updates on mobile data\",\"value\":\"on\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Mobile data\"},{\"n\":2,\"title\":\"Regions\",\"items\":[{\"label\":\"Idaho\",\"value\":\"maps, routing, places, off-road; 3 weeks old\"}],\"guide\":\"Cache guide: 1. Getting started: Download a region\"},{\"n\":3,\"title\":\"Libraries\",\"items\":[{\"label\":\"Wikipedia (medical)\",\"value\":\"4.1 GB\"},{\"label\":\"Recon library\",\"value\":\"2.3 GB\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Libraries page\"},{\"n\":4,\"title\":\"Live data\",\"items\":[{\"label\":\"Weather forecast (Open-Meteo)\",\"value\":\"on, updated 2 hours ago\"},{\"label\":\"Weather Service alerts\",\"value\":\"on, updated 40 minutes ago\"},{\"label\":\"Wildfires (NIFC)\",\"value\":\"on, updated 3 hours ago\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Weather and alerts\"},{\"n\":5,\"title\":\"Web search\",\"items\":[{\"label\":\"Kagi key\",\"value\":\"set\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Web search with Kagi\"},{\"n\":6,\"title\":\"Place details\",\"items\":[{\"label\":\"Opening hours and phone numbers\",\"value\":\"from the Idaho region, 3 weeks old\"}],\"guide\":\"Cache guide: 2. Using Cache: The place card and saving a place\"},{\"n\":7,\"title\":\"Models\",\"items\":[{\"label\":\"In use\",\"value\":\"Gemma 4 (4.1 GB)\"},{\"label\":\"Other models downloaded\",\"value\":\"none\"}],\"guide\":\"Cache guide: 1. Getting started: Choose a model\"},{\"n\":8,\"title\":\"Location\",\"items\":[{\"label\":\"Permission\",\"value\":\"while using the app\"},{\"label\":\"Position\",\"value\":\"known now\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Notifications and location\"}]}}"
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/live_data",
+       "title": "Live data",
+       "items": [
+        {
+         "label": "Weather forecast (Open-Meteo)",
+         "value": "on, updated 2 hours ago"
+        },
+        {
+         "label": "Weather Service alerts",
+         "value": "on, updated 40 minutes ago"
+        },
+        {
+         "label": "Wildfires (NIFC)",
+         "value": "on, updated 3 hours ago"
+        }
+       ],
+       "guide": "Cache guide: 3. Settings, page by page: Weather and alerts"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":4,\"title\":\"Live data\",\"items\":[{\"label\":\"Weather forecast (Open-Meteo)\",\"value\":\"on, updated 2 hours ago\"},{\"label\":\"Weather Service alerts\",\"value\":\"on, updated 40 minutes ago\"},{\"label\":\"Wildfires (NIFC)\",\"value\":\"on, updated 3 hours ago\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Weather and alerts\"}]}}"
   },
   {
    "tool_call": {
@@ -168,10 +260,127 @@
     "type": "function",
     "function": {
      "name": "act",
+     "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"web_search\"}}"
+    }
+   },
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/web_search",
+       "title": "Web search",
+       "items": [
+        {
+         "label": "Kagi key",
+         "value": "set"
+        }
+       ],
+       "guide": "Cache guide: 3. Settings, page by page: Web search with Kagi"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":5,\"title\":\"Web search\",\"items\":[{\"label\":\"Kagi key\",\"value\":\"set\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Web search with Kagi\"}]}}"
+  },
+  {
+   "tool_call": {
+    "id": "call_6",
+    "type": "function",
+    "function": {
+     "name": "act",
+     "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"places\"}}"
+    }
+   },
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/places",
+       "title": "Place details",
+       "items": [
+        {
+         "label": "Opening hours and phone numbers",
+         "value": "from the Idaho region, 3 weeks old"
+        }
+       ],
+       "guide": "Cache guide: 2. Using Cache: The place card and saving a place"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":6,\"title\":\"Place details\",\"items\":[{\"label\":\"Opening hours and phone numbers\",\"value\":\"from the Idaho region, 3 weeks old\"}],\"guide\":\"Cache guide: 2. Using Cache: The place card and saving a place\"}]}}"
+  },
+  {
+   "tool_call": {
+    "id": "call_7",
+    "type": "function",
+    "function": {
+     "name": "act",
+     "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"models\"}}"
+    }
+   },
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/models",
+       "title": "Models",
+       "items": [
+        {
+         "label": "In use",
+         "value": "Gemma 4 (4.1 GB)"
+        },
+        {
+         "label": "Other models downloaded",
+         "value": "none"
+        }
+       ],
+       "guide": "Cache guide: 1. Getting started: Choose a model"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":7,\"title\":\"Models\",\"items\":[{\"label\":\"In use\",\"value\":\"Gemma 4 (4.1 GB)\"},{\"label\":\"Other models downloaded\",\"value\":\"none\"}],\"guide\":\"Cache guide: 1. Getting started: Choose a model\"}]}}"
+  },
+  {
+   "tool_call": {
+    "id": "call_8",
+    "type": "function",
+    "function": {
+     "name": "act",
      "arguments": "{\"action\": \"app.setup_status\", \"fields\": {\"area\": \"location\"}}"
     }
    },
-   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":1,\"title\":\"Connection\",\"items\":[{\"label\":\"Network\",\"value\":\"Wi-Fi\"},{\"label\":\"Updates on mobile data\",\"value\":\"on\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Mobile data\"},{\"n\":2,\"title\":\"Regions\",\"items\":[{\"label\":\"Idaho\",\"value\":\"maps, routing, places, off-road; 3 weeks old\"}],\"guide\":\"Cache guide: 1. Getting started: Download a region\"},{\"n\":3,\"title\":\"Libraries\",\"items\":[{\"label\":\"Wikipedia (medical)\",\"value\":\"4.1 GB\"},{\"label\":\"Recon library\",\"value\":\"2.3 GB\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Libraries page\"},{\"n\":4,\"title\":\"Live data\",\"items\":[{\"label\":\"Weather forecast (Open-Meteo)\",\"value\":\"on, updated 2 hours ago\"},{\"label\":\"Weather Service alerts\",\"value\":\"on, updated 40 minutes ago\"},{\"label\":\"Wildfires (NIFC)\",\"value\":\"on, updated 3 hours ago\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Weather and alerts\"},{\"n\":5,\"title\":\"Web search\",\"items\":[{\"label\":\"Kagi key\",\"value\":\"set\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Web search with Kagi\"},{\"n\":6,\"title\":\"Place details\",\"items\":[{\"label\":\"Opening hours and phone numbers\",\"value\":\"from the Idaho region, 3 weeks old\"}],\"guide\":\"Cache guide: 2. Using Cache: The place card and saving a place\"},{\"n\":7,\"title\":\"Models\",\"items\":[{\"label\":\"In use\",\"value\":\"Gemma 4 (4.1 GB)\"},{\"label\":\"Other models downloaded\",\"value\":\"none\"}],\"guide\":\"Cache guide: 1. Getting started: Choose a model\"},{\"n\":8,\"title\":\"Location\",\"items\":[{\"label\":\"Permission\",\"value\":\"while using the app\"},{\"label\":\"Position\",\"value\":\"known now\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Notifications and location\"}]}}"
+   "host_reply": {
+    "ok": true,
+    "result": {
+     "checked_at": "2026-09-06 10:00",
+     "sections": [
+      {
+       "address": "app:setup/location",
+       "title": "Location",
+       "items": [
+        {
+         "label": "Permission",
+         "value": "while using the app"
+        },
+        {
+         "label": "Position",
+         "value": "known now"
+        }
+       ],
+       "guide": "Cache guide: 3. Settings, page by page: Notifications and location"
+      }
+     ]
+    }
+   },
+   "tool_message": "{\"ok\":true,\"status\":\"done\",\"action\":\"app.setup_status\",\"result\":{\"checked_at\":\"2026-09-06 10:00\",\"sections\":[{\"n\":8,\"title\":\"Location\",\"items\":[{\"label\":\"Permission\",\"value\":\"while using the app\"},{\"label\":\"Position\",\"value\":\"known now\"}],\"guide\":\"Cache guide: 3. Settings, page by page: Notifications and location\"}]}}"
   }
  ]
 }
