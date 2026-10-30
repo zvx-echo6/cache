@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cache/actions/action_registry.dart';
 import 'package:cache/actions/setup_status.dart';
+import 'package:cache/search/core_tool_host.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/parity_fixtures.dart';
@@ -43,35 +44,19 @@ void main() {
       for (final c in calls) {
         final args = jsonDecode(((c as Map)['tool_call'] as Map)['function']['arguments'] as String) as Map;
         final area = (args['fields'] as Map?)?['area'] as String?;
-        // The regenerated fixtures carry the host reply itself (area-filtered, addresses kept). The first ones only have what
-        // the model saw, which the core numbered ("address" became "n") and which had every part whatever the area: the parts
-        // are put back by their order.
-        final Map<String, dynamic> expected;
-        String? asked = area;
-        if (c['host_reply'] != null) {
-          expected = (c['host_reply'] as Map).cast<String, dynamic>();
-        } else {
-          final seen = (jsonDecode(c['tool_message'] as String) as Map)['result'] as Map;
-          final sections = seen['sections'] as List;
-          expect(sections, hasLength(kSetupAreas.length));
-          expected = {
-            'checked_at': seen['checked_at'],
-            'sections': [
-              for (var i = 0; i < sections.length; i++)
-                {
-                  'address': 'app:setup/${kSetupAreas[i].id}',
-                  for (final e in (sections[i] as Map).entries)
-                    if (e.key != 'n') e.key as String: e.value,
-                },
-            ],
-          };
-          asked = null;
-        }
+        // The host reply exactly as the harness gave it to cs_act_finish: area-filtered, addresses kept.
+        final hostReply = (c['host_reply'] as Map).cast<String, dynamic>();
+        final expected = (hostReply['result'] as Map).cast<String, dynamic>();
         final by = {
           for (final s in expected['sections'] as List) ((s as Map)['address'] as String).split('/').last: _items(s['items']),
         };
-        final reply = await runSetupStatus(_deps(by), {'area': ?asked}, now: () => _at(expected['checked_at'] as String));
-        expect(jsonEncode(reply), jsonEncode(expected));
+        final deps = _deps(by);
+        final reg = ActionRegistry()
+          ..publish('app', [kSetupStatusDefinition], {
+            'app.setup_status': (f) => runSetupStatus(deps, f, now: () => _at(expected['checked_at'] as String)),
+          });
+        final run = await reg.run('app.setup_status', {'area': ?area});
+        expect(jsonEncode(CoreToolHost.finishReply(run)), jsonEncode(hostReply));
       }
     });
   }

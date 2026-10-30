@@ -49,15 +49,15 @@
  },
  {
   "file": "setup-status-act-048.json",
-  "bytes": 13359,
-  "sha256": "f7ee7c20cd03e004dc02576593afe9775d98e153d2a08c0885f5ce79a544a588",
-  "what": "app.setup_status: the host reply the harness scripted for act-048, and each act call with the tool message the model saw"
+  "bytes": 11016,
+  "sha256": "d57ae02be7d4e9a52f2bf77a0ad1ac6f4b3b3d2482f3d64a2251f6b6cd07b813",
+  "what": "app.setup_status for act-048: each act call, the exact host reply (host_reply; null in records made before 2026-10-30) and the tool message the model saw"
  },
  {
   "file": "setup-status-act-116.json",
-  "bytes": 4614,
-  "sha256": "77eb9e37b147812b9d12afb77c916fb430e16bdf2d829460f3cdd32c5473316f",
-  "what": "app.setup_status: the host reply the harness scripted for act-116, and each act call with the tool message the model saw"
+  "bytes": 3357,
+  "sha256": "ae9c0ba7c5ca0104fc6fa453876588cd58c59cf6ebcf27975bbdc34de9f7fedc",
+  "what": "app.setup_status for act-116: each act call, the exact host reply (host_reply; null in records made before 2026-10-30) and the tool message the model saw"
  },
  {
   "file": "ask-about-this-seed.json",
