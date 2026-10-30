@@ -1,3 +1,53 @@
 # Guide labels that are not in this branch's app yet, one per line. ci_check.py lets these pass.
 #
 # Notebook branch (Notebooks, the Places notebook, the map's ring menu, App lock): remove this block when notebook merges.
++ Add place
+2 of 3
+Add entry
+Add field
+Add photo
+Alerts for
+Choices
+Could not attach the file: [reason]
+Could not make it: [reason]
+Create
+Custom for this place
+Due again
+Edit notebook
+Entry deleted
+Hide field
+How far out
+Journal
+LAST DONE
+Label
+Log
+Log again
+Marker colour
+New entry
+New notebook
+No notebooks yet. Make one with New notebook.
+No position yet
+Not saved. Your phone may be out of space.
+Notebooks
+Notebooks could not open. Your entries are still on this phone.
+Notes
+Photos
+Same as your alert setting
+Search
+Show on map
+Show on the map
+Start from
+Starter logs
+Title (optional)
+To here
+Unfinished entry · Tue 4:12 PM
+Unit
+Write an entry
+You already have a notebook with this name.
+
+# Catalogue source titles: the app shows them from the published connector catalogue, so they are data, not app text.
+Idaho 511 winter road conditions
+Traffic flow at the place (TomTom)
+
+# app-batch, not built yet: the region download with a drawn area (round item 5). Remove when it is.
+Draw your own area instead

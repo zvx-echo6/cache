@@ -225,8 +225,8 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.subdirectory_arrow_left,
             title: Text.rich(
               TextSpan(children: [
-                TextSpan(text: 'Ask Cache: ', style: TextStyle(color: k.accent)),
-                TextSpan(text: text, style: TextStyle(color: k.accent, fontStyle: FontStyle.italic)),
+                TextSpan(text: 'Ask Cache:', style: TextStyle(color: k.accent)),
+                TextSpan(text: ' $text', style: TextStyle(color: k.accent, fontStyle: FontStyle.italic)),
               ]),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

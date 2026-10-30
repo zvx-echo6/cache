@@ -425,7 +425,7 @@ class LocalTab extends StatelessWidget {
                       statusText(context, switch (l.phase) {
                         RegionPhase.ready => [
                           Part('${formatBytes(l.bytes)} · ${partsWords(l)}'),
-                          if (regions.missesPlaces(l)) const Part(' · Places not downloaded', Tone.warn),
+                          if (regions.missesPlaces(l)) ...const [Part(' · '), Part('Places not downloaded', Tone.warn)],
                         ],
                         _ => localParts(regions, l),
                       }),
