@@ -42,18 +42,19 @@ class LiveItem {
   /// The "no active alerts" entry a source gives when it has nothing.
   final bool noneActive;
 
-  /// "Distance" or "Distance to fire edge" style fields, when the source gives one.
-  String? get distance {
-    for (final e in fields.entries) {
-      if (e.key.toLowerCase().startsWith('distance')) return e.value;
-    }
-    return null;
-  }
+  /// The published definitions' label for how far the item is from the place ("From the place", as WFIGS gives it now).
+  static const String fromThePlace = 'From the place';
+
+  /// Whether [label] is the item's distance: "From the place", or the older "Distance" and "Distance to fire edge".
+  static bool isDistance(String label) => label == fromThePlace || label.toLowerCase().startsWith('distance');
+
+  /// How far the item is from the place, when the source gives it ("From the place" first, then a "Distance" field).
+  String? get distance => fields[fromThePlace] ?? [for (final e in fields.entries) if (isDistance(e.key)) e.value].firstOrNull;
 
   /// A short line under the label: the first two fields that are not the distance.
   String get summary => [
     for (final e in fields.entries)
-      if (!e.key.toLowerCase().startsWith('distance')) '${e.key} ${e.value}',
+      if (!isDistance(e.key)) '${e.key} ${e.value}',
   ].take(2).join(' · ');
 }
 

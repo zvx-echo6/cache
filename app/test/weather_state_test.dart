@@ -756,6 +756,24 @@ void main() {
       expect(await homeWeather(h.weather), contains('expired'));
     });
 
+    test('a fire\'s distance is read from the published "From the place" field (else "Distance"), on Home and for pop-ups', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/1', 'label': 'East Fork fire', 'fields': {'Size': '266 acres', 'Contained': '55%', 'From the place': '78 mi'}},
+        ],
+      };
+      final fire = (await h.weather.homeCard()).alerts.single;
+      expect(fire.detail, '78 mi · Size 266 acres · Contained 55% · NIFC WFIGS');
+      const old = LiveItem(address: 'a', label: 'b', fields: {'Distance': '38 mi S', 'Contained': '5%'});
+      expect((old.distance, old.summary, distanceMiles(old)), ('38 mi S', 'Contained 5%', 38.0));
+      const now = LiveItem(address: 'a', label: 'b', fields: {'Size': '266 acres', 'From the place': '8 mi'});
+      expect((now.distance, now.summary, distanceMiles(now)), ('8 mi', 'Size 266 acres', 8.0), reason: 'a fire within 10 mi is serious');
+    });
+
     test('Home alerts: none active, then a count with the first one', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Wildfires'), true);
