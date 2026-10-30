@@ -146,9 +146,10 @@ fn search_read_and_library_status_order() {
         ["format", "library_id", "version", "title", "fields", "leave_out", "embedding", "keyword_index", "guessed"]
     );
     assert_eq!(keys(&s["settings"]["embedding"]), ["vector", "model", "sha256", "dims"]);
+    // "time" is there because the status JSON echoes the library's field mapping for the app; the model never sees it
     assert_eq!(
         keys(&s["settings"]["fields"]),
-        ["title", "title_fallback", "text", "summary", "page", "source_type", "author", "link", "document"]
+        ["title", "title_fallback", "text", "summary", "page", "source_type", "author", "link", "time", "document"]
     );
 
     let r = take(unsafe { cs_search(h, cstr("sesquipedalian").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) }).unwrap();
