@@ -84,13 +84,17 @@ void main() {
     await _show(tester, o, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, o.regions, lat: 42.56, lon: -114.46), child: const Text('open')))));
     await tester.tap(find.text('open'));
     await o.settle(tester);
+    await o.settle(tester);
+    await tester.pump(const Duration(milliseconds: 400));
     plans = o.core.calls.where((c) => c == 'plan').length;
     expect(plans, 0, reason: 'nothing is worked out on the phone for a region of the catalogue');
     expect(find.textContaining('Working out the size'), findsNothing);
     expect(find.textContaining("Can't be downloaded here"), findsNothing);
     final county = o.us['us-id-twin-falls-county']!;
     // Its size counts off-road: only its terrain, as the state's pack comes with Idaho, and the line says so.
-    final line = tester.widget<Text>(find.byKey(ValueKey('region-line-${county.id}'))).data!;
+    final lines = [for (final t in tester.widgetList<Text>(find.byType(Text))) t.data ?? ''];
+    final line = tester.widgetList<Text>(find.byKey(ValueKey('region-line-${county.id}'))).firstOrNull?.data;
+    expect(line, isNotNull, reason: 'the sheet shows: $lines');
     expect(line, 'County · ${formatBytes(o.regions.offer(county).bytes!)} · off-road shared with Idaho');
     expect(find.byKey(const ValueKey('region-fix-us-id')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('region-fix-us-id')));

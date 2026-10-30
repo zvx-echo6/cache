@@ -435,9 +435,8 @@ void main() {
     final stopped = again.areasOf('hillshade').single;
     expect(stopped.phase, AreaPhase.failed);
     await again.update(stopped.id);
-    expect(stopped.error, isNull);
-    expect(stopped.phase, AreaPhase.running);
     await until(() => again.areasOf('hillshade').single.phase == AreaPhase.done);
+    expect(again.areasOf('hillshade').single.error, isNull, reason: 'carried on, not "cannot be continued"');
   });
 
   test('definitions are saved, listed as the user\'s own, removed; the core refusing one is a format error', () async {
