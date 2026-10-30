@@ -67,7 +67,7 @@ void main() {
       final c = buildCoreExtras(filesDir: files, supportDir: support);
       expect(((c['places'] as Map)['packs'] as List).single, endsWith('places.sqlite'));
       expect(((c['routing'] as Map)['valhalla'] as Map)['shim'], 'libvalhalla_shim.so');
-      expect((c['routing'] as Map).containsKey('offroad'), isFalse);
+      expect((c['routing'] as Map)['offroad'], {'dir': '${support.path}/regions/offroad'});
       expect((c['live'] as Map)['sources_dir'], '${files.path}/live-defs');
     } finally {
       dir.deleteSync(recursive: true);

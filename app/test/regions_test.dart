@@ -420,7 +420,7 @@ void main() {
 
       await tester.tap(find.byTooltip('Delete Twin Falls County'));
       await tester.pumpAndSettle();
-      expect(find.text('Its road routing, map and places are removed from this phone. Parts another region uses stay.'), findsOneWidget);
+      expect(find.text('Its road routing, map, places and off-road data are removed from this phone. Parts another region uses stay.'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       await r.dispose(tester);
@@ -536,7 +536,7 @@ void main() {
     await tester.tap(find.text('open'));
     await r.settle(tester);
     expect(find.text('Regions'), findsOneWidget);
-    expect(find.text('Each region has routing, map and places.'), findsOneWidget);
+    expect(find.text('Each region has routing, map, places and off-road.'), findsOneWidget);
     expect(find.text('Twin Falls County'), findsOneWidget);
     expect(find.byType(Checkbox), findsNothing, reason: 'no tick boxes until Select');
     expect(find.byTooltip('Download Twin Falls County'), findsOneWidget);

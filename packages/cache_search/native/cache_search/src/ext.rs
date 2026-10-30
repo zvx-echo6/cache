@@ -153,7 +153,34 @@ impl crate::handle::Handle {
     }
 }
 
+/// The map layer engine's elevation layer (the starter `elevation`: Mapterhorn's tiles) as the off-road router's z12 elevation.
+pub const ELEVATION_LAYER: &str = "elevation";
+
+/// z12 elevation tiles from the layer engine: its downloaded areas and the tiles viewed before, never the network (a route is
+/// worked out from what is on the phone, as it was from an elevation file).
+struct LayerElevationTiles(std::sync::Arc<cache_layers::core::Inner>);
+
+impl cache_navigate::ElevationTiles for LayerElevationTiles {
+    fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, String> {
+        match self.0.tile_local(ELEVATION_LAYER, 12, x as u32, y as u32) {
+            Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => Ok(Some(bytes)),
+            Ok(_) => Ok(None),
+            // no elevation layer installed: no elevation, as with no file
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(e.message),
+        }
+    }
+}
+
 impl Ext {
+    /// The navigate tool's region packs read elevation from the map's elevation layer, when both are configured.
+    pub fn plug_elevation(&self) {
+        if let (Some(nav), Some(l)) = (&self.nav, &self.layers) {
+            let source = cache_navigate::TileElevation::new(LayerElevationTiles(l.inner.clone()));
+            nav.set_elevation(Some(std::sync::Arc::new(source)));
+        }
+    }
+
     /// Apply the `regions` section; absent keeps what was set before. The engine is the process's one for that folder
     /// (`cache_regions::Regions::open_shared`), so the app's `cs_regions_open` on the same folder shares it.
     pub fn configure_regions(&mut self, regions: Option<cache_regions::Config>) -> Result<()> {

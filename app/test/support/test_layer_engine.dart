@@ -98,7 +98,7 @@ class TestLayerEngine extends LayerEngine {
   }
 
   @override
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area) async {
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) async {
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     if (def.onlineOnly) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: "This layer's terms do not allow keeping it offline.");
@@ -109,6 +109,10 @@ class TestLayerEngine extends LayerEngine {
     final perTile = (def.raw['approx_tile_bytes'] as num?)?.toInt() ?? 30000;
     final maxTiles = (def.raw['download_limit_tiles'] as num?)?.toInt() ?? 3000;
     final maxBytes = (def.raw['download_limit_bytes'] as num?)?.toInt() ?? 50 * 1024 * 1024;
+    if (zoom != null) {
+      final n = TileMath.countRange(area, zoom, zoom);
+      return AreaEstimate(tiles: n, bytes: n * perTile, maxZoom: zoom, allowed: true);
+    }
     for (var z = def.maxZoom; z >= def.minZoom; z--) {
       final n = TileMath.countRange(area, def.minZoom, z);
       if (n <= maxTiles && n * perTile <= maxBytes) {
@@ -130,17 +134,17 @@ class TestLayerEngine extends LayerEngine {
   List<DownloadedArea> areasOf(String layerId) => [for (final a in _areas) if (a.layerId == layerId) a];
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
-    final est = await estimate(layerId, area);
+    final est = await estimate(layerId, area, zoom: zoom);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
     final a = DownloadedArea(
       id: 'a${_next++}',
       layerId: layerId,
       bounds: area,
       label: label,
-      minZoom: def.minZoom,
+      minZoom: zoom ?? def.minZoom,
       maxZoom: est.maxZoom,
       totalTiles: est.tiles,
     );

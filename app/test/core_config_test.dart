@@ -93,7 +93,8 @@ void main() {
       touch('packs/idaho/places.sqlite');
       touch('packs/idaho/valhalla/tiles.tar');
       touch('packs/idaho/offroad.sqlite');
-      expect((build()['routing'] as Map).containsKey('offroad'), isFalse);
+      // not both: off-road reads the packs downloaded with regions
+      expect((build()['routing'] as Map)['offroad'], {'dir': '${support.path}/regions/offroad'});
       File('${files.path}/packs/idaho/valhalla/tiles.tar').deleteSync();
       final v = (build()['routing'] as Map)['valhalla'] as Map;
       expect(v['tiles'], '', reason: 'empty: the core routes on the regions folder');

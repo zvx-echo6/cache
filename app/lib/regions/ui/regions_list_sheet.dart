@@ -23,7 +23,7 @@ Future<void> showRegionsSheet(BuildContext context, RegionsState regions, {requi
 }
 
 /// What downloading a region adds: the parts not on the phone yet that can be downloaded here, and their size.
-typedef RegionParts = ({int bytes, bool routing, bool map, bool places});
+typedef RegionParts = ({int bytes, bool routing, bool map, bool places, bool offroad});
 
 /// The parts of [r] still to download, from its [plan].
 RegionParts regionParts(RegionsState regions, RegionRecord r, RegionPlan plan) {
@@ -31,11 +31,16 @@ RegionParts regionParts(RegionsState regions, RegionRecord r, RegionPlan plan) {
   final routing = !(here?.hasRouting ?? false) && plan.routing != null;
   final map = !(here?.hasMap ?? false) && plan.mapAllowed.isNotEmpty;
   final places = !(here?.hasPlaces ?? false) && plan.places != null;
+  final offroad = !(here?.hasOffroad ?? false) && plan.offroadAllowed;
   return (
-    bytes: (routing ? plan.routing!.downloadBytes : 0) + (map ? plan.mapBytes : 0) + (places ? plan.places!.downloadBytes : 0),
+    bytes: (routing ? plan.routing!.downloadBytes : 0) +
+        (map ? plan.mapBytes : 0) +
+        (places ? plan.places!.downloadBytes : 0) +
+        (offroad ? plan.offroad!.downloadBytes : 0),
     routing: routing,
     map: map,
     places: places,
+    offroad: offroad,
   );
 }
 
@@ -113,9 +118,9 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     if (choice == DownloadChoice.cancel) return;
     for (final (rec, p) in todo) {
       if (choice == DownloadChoice.now) {
-        await r.download(rec, routing: p.routing, map: p.map, places: p.places, anyway: true);
+        await r.download(rec, routing: p.routing, map: p.map, places: p.places, offroad: p.offroad, anyway: true);
       } else {
-        await r.downloadOnWifi(rec, routing: p.routing, map: p.map, places: p.places);
+        await r.downloadOnWifi(rec, routing: p.routing, map: p.map, places: p.places, offroad: p.offroad);
       }
     }
     if (mounted) {
@@ -169,7 +174,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                         ),
                     ],
                   ),
-                  Text('Each region has routing, map and places.', style: TextStyle(fontSize: 12, color: k.secondary)),
+                  Text('Each region has routing, map, places and off-road.', style: TextStyle(fontSize: 12, color: k.secondary)),
                   const SizedBox(height: 8),
                   if (_error != null)
                     Text(_error!, style: TextStyle(fontSize: 13, color: k.warning))

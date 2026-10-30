@@ -1,6 +1,9 @@
 //! The `routing` section of the `cs_open` config:
 //! `{"valhalla": {"tiles": ".../tiles.tar", "shim": ".../valhalla_shim.dll", "region": "Idaho"},
-//!   "offroad": {"pack": ".../offroad.sqlite", "elevation": ".../elevation.pmtiles", "max_cells": 8000000}}`.
+//!   "offroad": {"dir": ".../regions/offroad", "max_cells": 8000000}}`.
+//! Off-road reads the region packs in `dir` (`<build>/<region>/offroad.sqlite`, the app's region downloads) with elevation from
+//! the map layer engine's elevation layer (plugged in by cache_search). `{"pack", "elevation"}` (one pack and a local PMTiles
+//! file of z12 elevation) is the desktop and test form, and wins when both files are there.
 //! `tiles` may also be a folder of tiles (`<level>/<aaa>/<bbb>/<ccc>.gph`, the downloaded regions), and may be left out when
 //! the regions engine says which folder (the `regions` section of the `cs_open` config); `region` then names what is there.
 //! `region` and `max_cells` are optional. Without `valhalla` (or while its files are missing) the tool is not offered;
@@ -33,8 +36,13 @@ pub struct ValhallaCfg {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct OffroadCfg {
+    #[serde(default)]
     pub pack: String,
+    #[serde(default)]
     pub elevation: String,
+    /// The folder of downloaded region packs: every `<build>/<region>/offroad.sqlite` in it.
+    #[serde(default)]
+    pub dir: Option<String>,
     /// Cell cap of one off-road search (default 20 million; the phone is about 8 million).
     #[serde(default)]
     pub max_cells: Option<usize>,

@@ -30,6 +30,7 @@ import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
+import 'regions/offroad_catalogue.dart';
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
@@ -250,6 +251,8 @@ class _CacheAppState extends State<CacheApp> {
     policy: policy,
     supportDir: getApplicationSupportDirectory,
     catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
+    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
     maps: maps,
     onPlacesChanged: () async {
       try {

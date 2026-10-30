@@ -474,6 +474,7 @@ impl Handle {
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
         self.ext.plug_regions();
         self.ext.configure_layers(cfg.layers)?;
+        self.ext.plug_elevation();
         Ok(())
     }
 

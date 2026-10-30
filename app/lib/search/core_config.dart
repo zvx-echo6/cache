@@ -75,7 +75,8 @@ Map<String, dynamic> buildCoreExtras({
     'routing': {
       // No tiles.tar: the region engine's folder (an empty `tiles`).
       'valhalla': {'tiles': tiles ?? '', 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
-      if (offroadPack != null) 'offroad': {'pack': offroadPack, 'elevation': elevation},
+      // Off-road: the region packs downloaded with regions (regions_state.dart), with elevation from the map's elevation layer.
+      'offroad': offroadPack != null ? {'pack': offroadPack, 'elevation': elevation} : {'dir': '${supportDir.path}/regions/offroad'},
     },
     // The region engine (cs_open's regions section): where it keeps its tiles and where it fetches road routing and places from.
     'regions': regionsConfig(supportDir, routingBaseUrl: regionsBaseUrl, placesBaseUrl: placesBaseUrl),

@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Regions include off-road: the off-road data of the state or province the region is in (checked against its published checksum) and its terrain heights, with their size in the download pop-up; off-road directions work wherever a region with off-road is on the phone
 - Ask: a source from a video transcript opens the video at the moment it cites (libraries map `fields.time` and `fields.link`)
 - Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; it goes away by itself when all four are done
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
