@@ -41,6 +41,7 @@ class CatalogueEntry {
     required this.needsKey,
     required this.keyAlias,
     required this.defaultOn,
+    this.featured = false,
     required this.path,
     required this.attribution,
     required this.license,
@@ -57,6 +58,10 @@ class CatalogueEntry {
   final bool needsKey;
   final String? keyAlias;
   final bool defaultOn;
+
+  /// Listed first on the Weather and alerts page (the rest are under "More sources"). The catalogue says so with `featured`; a
+  /// catalogue that does not use it features the sources it switches on by default.
+  final bool featured;
   final String path;
   final String attribution;
   final String license;
@@ -89,6 +94,7 @@ class CatalogueEntry {
       needsKey: needsKey,
       keyAlias: needsKey && alias is String && alias.isNotEmpty ? alias : null,
       defaultOn: j['default_on'] == true,
+      featured: j['featured'] is bool ? j['featured'] as bool : j['default_on'] == true,
       path: path,
       attribution: _str(j, 'attribution', required: false),
       license: _str(j, 'license', required: false),

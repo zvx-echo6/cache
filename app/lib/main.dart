@@ -38,6 +38,7 @@ import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
 import 'models/search_model.dart';
+import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
 import 'settings/storage_usage.dart';
@@ -59,7 +60,11 @@ import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
 import 'screens/settings/about_pages.dart' show kCreditsAsset;
+import 'browse/browse_screen.dart';
+import 'regions/ui/regions_screen.dart';
+import 'screens/models_screen.dart';
 import 'screens/shell.dart';
+import 'screens/videos/library_screen.dart' as videos show LibraryScreen;
 import 'theme.dart';
 import 'keyboard.dart';
 
@@ -160,18 +165,71 @@ class _CacheAppState extends State<CacheApp> {
   );
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
-  // Sharing and sync: Cache's own folders, each with a fixed id so the same kind of thing on linked devices is one shared folder.
+
+  /// The phone's temporary folder, read at start (Clean up empties it).
+  String? _tempPath;
+
+  Directory? _support(String name) => _supportPath == null ? null : Directory('$_supportPath/$name');
+  Directory? _beside(Directory? dir, String name) => dir == null ? null : Directory('${dir.path}${Platform.pathSeparator}$name');
+
+  /// What Cache keeps on the phone, by kind, and the folders that hold it: Storage measures this list and Sharing shares it, so they
+  /// agree. A folder in `shared` has a fixed share id (the same kind on linked devices is one shared folder).
+  late final List<DataKind> dataKinds = [
+    DataKind(
+      id: 'library',
+      label: 'Library',
+      icon: Icons.menu_book_outlined,
+      shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
+      // Search indexes are built on each device.
+      local: () => [sources.indexesDir],
+      count: () => sources.zims.length + libraries.libraries.length,
+      list: () => BrowseScreen(browse: browse, active: true, layout: layout),
+    ),
+    DataKind(
+      id: 'models',
+      label: 'Models',
+      icon: Icons.memory,
+      shared: () => {'models': app.modelsDir},
+      count: () => app.models.length + (app.searchModel == null ? 0 : 1),
+      list: () => ModelsScreen(app: app),
+    ),
+    DataKind(
+      id: 'regions',
+      label: 'Regions',
+      icon: Icons.map_outlined,
+      // The layer engine's tiles, the region engine's routing and places, and the legacy hand-placed packs folder.
+      shared: () => {
+        'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
+        'regions': _support('regions'),
+        'packs': _beside(sources.zimsDir?.parent, 'packs'),
+      },
+      count: () => regions.local.length,
+      list: () => RegionsScreen(regions: regions, initialTab: 1),
+    ),
+    DataKind(
+      id: 'videos',
+      label: 'Videos and weather',
+      icon: Icons.smart_display_outlined,
+      shared: () => {'videos': video.dir},
+      // Weather is fetched by each device.
+      local: () => [_support('live-catalogues'), weather.liveFolder],
+      list: () => videos.LibraryScreen(video: video),
+    ),
+    DataKind(
+      id: 'shared',
+      label: 'Shared folder',
+      icon: Icons.folder_shared_outlined,
+      shared: () => {'shared': _beside(sources.zimsDir?.parent, 'Shared')},
+      inStorage: false,
+    ),
+  ];
+
+  // Sharing and sync: Cache's own folders, by kind.
   late final SharingState sharing = SharingState(
     policy: policy,
     supportDir: getApplicationSupportDirectory,
     deviceName: Platform.isAndroid ? 'Android phone' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
-    kinds: [
-      ShareKind('library', 'Library', () => sources.zimsDir),
-      ShareKind('maps', 'Maps', () => sources.zimsDir == null ? null : Directory('${sources.zimsDir!.parent.path}/packs')),
-      ShareKind('models', 'Models', () => app.modelsDir),
-      ShareKind('videos', 'Videos', () => video.dir),
-      ShareKind('shared', 'Shared folder', () => sources.zimsDir == null ? null : Directory('${sources.zimsDir!.parent.path}/Shared')),
-    ],
+    kinds: dataKinds,
   );
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
@@ -198,15 +256,20 @@ class _CacheAppState extends State<CacheApp> {
     sharing: sharing,
     regions: regions,
     storage: StorageUsage(
-      library: () => [sources.zimsDir, sources.indexesDir, libraries.dir],
-      maps: () => [
-        if (sources.layersSection['dir'] is String) Directory(sources.layersSection['dir'] as String),
-        if (sources.zimsDir != null) Directory('${sources.zimsDir!.parent.path}/packs'),
-        if (_supportPath != null) Directory('$_supportPath/regions'),
-      ],
-      models: () => [app.modelsDir],
-      videos: () => [video.dir],
+      kinds: [for (final k in dataKinds) if (k.inStorage) k],
       freeIn: () => app.modelsDir ?? sources.zimsDir,
+      // Unfinished downloads (ZIMs, libraries, models) and the temporary folder.
+      leftovers: () => [
+        if (sources.zimsDir != null) sources.partialDir,
+        _beside(libraries.dir, '.partial'),
+        _beside(app.modelsDir, '.partial'),
+        if (_tempPath != null) Directory(_tempPath!),
+      ],
+      busy: () =>
+          browse.transfers.values.any((t) => t.phase != TransferPhase.failed && t.phase != TransferPhase.blockedByMobileData) ||
+          modelDownloads.current != null ||
+          (libraries.task?.running ?? false) ||
+          video.tasks.any((t) => t.isActive),
     ),
   );
   late final LayoutState layout = LayoutState();
@@ -299,6 +362,7 @@ class _CacheAppState extends State<CacheApp> {
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
     // switched on, and the place the background runs use is kept up to date.
     final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
+    getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
     settingsRead.then((_) => supportRead).then((_) => sources.whenCoreReady()).then((core) async {
       if (core == null) return;
       await LocalAlertNotifier.instance.init();
@@ -345,7 +409,7 @@ class _CacheAppState extends State<CacheApp> {
     final on = weather.enabledSources.isNotEmpty;
     if (_scheduledFor != on) {
       _scheduledFor = on;
-      weather.backgroundUpdates = await scheduleBackgroundUpdates(anythingOn: on);
+      await scheduleBackgroundUpdates(anythingOn: on);
       if (on && !_askedNotifications) {
         _askedNotifications = true;
         await PlatformNotificationAccess().request();

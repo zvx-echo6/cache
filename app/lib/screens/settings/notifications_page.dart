@@ -6,7 +6,8 @@ import '../../theme.dart';
 import 'deps.dart';
 import 'widgets.dart';
 
-/// Settings > Notifications and location: alert pop-ups, quiet hours, ringing through for extreme alerts, and the location permission.
+/// Settings > Notifications: the one "Pop up for" choice (Serious only, All alerts, None), quiet hours, and the location permission
+/// that keeps alerts working in the background. Every alert is listed in Weather either way.
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key, required this.deps});
 
@@ -59,11 +60,32 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
 
   List<Part> _locationStatus() => switch (_access) {
     null => const [Part('Checking…')],
-    LocationAccess.always => const [Part('Always', Tone.ok), Part(' · keeps alerts and updates working in the background')],
-    LocationAccess.whileUsing => const [Part('While using the app', Tone.warn), Part(' · alerts and updates pause when Cache is closed. Tap to change it.')],
+    LocationAccess.always => const [Part('Always', Tone.ok), Part(' · alerts keep working in the background')],
+    LocationAccess.whileUsing => const [Part('While using the app', Tone.warn), Part(' · alerts pause when Cache is closed')],
     LocationAccess.denied => const [Part('Off', Tone.warn), Part(' · tap to allow')],
     LocationAccess.blocked => const [Part('Blocked', Tone.danger), Part(" · tap to open the phone's settings")],
   };
+
+  /// None asks once: Cache will then not interrupt even for an evacuation.
+  Future<void> _choose(PopUpFor v) async {
+    final s = d.hub.settings;
+    if (v == PopUpFor.none && !s.toldNoPopUps) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('No pop-ups at all?'),
+          content: const Text('Cache will not interrupt you for anything, not even an evacuation order. Alerts are still listed in Weather.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep pop-ups')),
+            TextButton(key: const ValueKey('confirm-no-popups'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Turn off')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      s.setToldNoPopUps();
+    }
+    s.setPopUpFor(v);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,38 +93,85 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) => SettingsPage(
-        title: 'Notifications and location',
+        title: 'Notifications',
         children: [
           SettingsGroup(
-            label: 'Pop-ups',
+            label: 'Pop up for',
             rows: [
-              SwitchRow(
-                title: 'Alert pop-ups',
-                status: const [Part('Weather alerts and fires near your places')],
-                value: s.alertPopups,
-                onChanged: s.setAlertPopups,
-              ),
+              for (final v in PopUpFor.values) _ChoiceRow(choice: v, selected: s.popUpFor == v, onTap: () => _choose(v)),
               SettingsRow(
+                key: const ValueKey('quiet-hours'),
+                leading: const AlertGlyph(Icons.bedtime_outlined),
                 title: 'Quiet hours',
-                status: s.quiet.on ? [Part('${s.quiet.label} · alerts still arrive, silently')] : const [Part('Off')],
+                status: s.quiet.on ? [Part('${formatMinutes(s.quiet.from)}–${formatMinutes(s.quiet.to)} · serious still ring')] : const [Part('Off')],
                 onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => QuietHoursPage(settings: s))),
-              ),
-              SwitchRow(
-                title: 'Ring through for extreme alerts',
-                status: const [Part('Evacuation orders, tornado and flash flood warnings')],
-                value: s.ringThroughExtreme,
-                onChanged: s.setRingThroughExtreme,
               ),
             ],
           ),
+          const NoteText('Every alert is listed in Weather either way.'),
           SettingsGroup(
             label: 'Location',
             rows: [
               SettingsRow(title: 'Location access', status: _locationStatus(), onTap: _locationTapped),
             ],
           ),
-          const NoteText('Location is used only on this phone, never sent anywhere.'),
         ],
+      ),
+    );
+  }
+}
+
+/// The square glyph at the start of an alert row: "!!" on red for serious, "!" on yellow for all, a dash for none. The glyph carries
+/// the meaning, so the colour is never the only sign.
+class AlertGlyph extends StatelessWidget {
+  const AlertGlyph(this.icon, {super.key, this.text, this.color});
+
+  final IconData? icon;
+  final String? text;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final fill = color ?? k.background;
+    final on = color == null ? k.secondary : k.background;
+    return Container(
+      width: 28,
+      height: 28,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: fill, borderRadius: BorderRadius.circular(7)),
+      child: text != null
+          ? Text(text!, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: on, height: 1))
+          : Icon(icon, size: 18, color: on),
+    );
+  }
+}
+
+class _ChoiceRow extends StatelessWidget {
+  const _ChoiceRow({required this.choice, required this.selected, required this.onTap});
+
+  final PopUpFor choice;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final (String title, String detail, Widget glyph) = switch (choice) {
+      PopUpFor.serious => ('Serious only', 'Evacuations, extreme and severe warnings', AlertGlyph(null, text: '!!', color: k.emergency)),
+      PopUpFor.all => ('All alerts', 'Adds watches and advisories', AlertGlyph(null, text: '!', color: k.warning)),
+      PopUpFor.none => ('None', 'Nothing pops up', const AlertGlyph(Icons.remove)),
+    };
+    return Semantics(
+      inMutuallyExclusiveGroup: true,
+      checked: selected,
+      child: SettingsRow(
+        key: ValueKey('popup-${choice.name}'),
+        leading: glyph,
+        title: title,
+        status: [Part(detail)],
+        trailing: Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: selected ? k.accent : k.secondary),
+        onTap: onTap,
       ),
     );
   }
@@ -141,7 +210,7 @@ class QuietHoursPage extends StatelessWidget {
               rows: [
                 SwitchRow(
                   title: 'Quiet hours',
-                  status: const [Part('Alerts still arrive, silently')],
+                  status: const [Part('Alerts arrive silently; serious ones still ring')],
                   value: q.on,
                   onChanged: (v) => settings.setQuiet(q.copyWith(on: v)),
                 ),
@@ -163,7 +232,6 @@ class QuietHoursPage extends StatelessWidget {
                 ),
               ],
             ),
-            const NoteText('Extreme alerts can still ring through. Change that on the page before.'),
           ],
         );
       },

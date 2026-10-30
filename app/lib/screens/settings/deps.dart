@@ -6,7 +6,6 @@ import '../../maps/maps_state.dart';
 import '../../settings/hub.dart';
 import '../../sources/sources_state.dart';
 import '../../video/video_state.dart';
-import '../setup_card.dart';
 
 /// Everything the Settings pages read and change, gathered once so a page takes one argument.
 class SettingsDeps {
@@ -20,7 +19,6 @@ class SettingsDeps {
     required this.location,
     required this.hub,
     this.onOpenAsk,
-    this.setup,
   });
 
   final AppState app;
@@ -34,7 +32,4 @@ class SettingsDeps {
 
   /// Called after a saved conversation is chosen, to bring the Ask screen forward.
   final void Function()? onOpenAsk;
-
-  /// "Set up Cache" (the row that shows the Home card again); null leaves the row out.
-  final SetupCache? setup;
 }

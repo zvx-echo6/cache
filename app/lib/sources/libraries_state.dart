@@ -348,12 +348,17 @@ class LibrariesState extends ChangeNotifier {
 
   // ---- adding
 
-  /// Lets the person pick a library file (a .cache-library archive, or a plain Qdrant snapshot) and adds it.
+  /// Lets the person pick a file and adds it: a .cache-library archive or a plain Qdrant snapshot as a library, a .zim as a ZIM
+  /// (copied in and indexed like a downloaded one), so one "From a file" adds either.
   Future<void> pickAndAdd({required ConfirmUpdate confirmUpdate, required AskSettings askSettings}) async {
     if (task != null && task!.running) return;
     final path = await _pickFile();
     if (path == null) return;
     try {
+      if (path.toLowerCase().endsWith('.zim')) {
+        await sources.addZim(File(path));
+        return;
+      }
       await addFile(File(path), confirmUpdate: confirmUpdate, askSettings: askSettings);
     } finally {
       try {

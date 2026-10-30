@@ -50,6 +50,9 @@ class Connector {
   String get category => entry?.category ?? 'other';
   String? get docs => entry?.docs;
 
+  /// Listed first on the Weather and alerts page; a built-in source (the stand-in until a catalogue arrives) always is.
+  bool get featured => entry?.featured ?? true;
+
   /// Minutes between downloads (the source's refresh interval).
   int get refreshMinutes {
     final v = def['refresh_minutes'];

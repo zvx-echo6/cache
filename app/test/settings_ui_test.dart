@@ -22,26 +22,27 @@ Switch switchIn(WidgetTester tester, String title) =>
 
 void main() {
   group('the Settings home: every row says its state, from the real state', () {
-    testWidgets('a fresh phone', (tester) async {
+    testWidgets('a fresh phone: eight rows, each with its state in one line', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SettingsScreen(deps: r.deps));
       await tester.pump();
       for (final title in [
-        'Assistant', 'Library', 'Maps', 'Weather and alerts', 'Videos', 'Notifications and location', 'Storage and data',
-        'Sharing and sync', 'Appearance', 'About and credits',
+        'Cache model and web search', 'Maps', 'Weather and alerts', 'Notifications', 'Storage', 'Sharing and sync', 'Appearance',
+        'Credits and licences',
       ]) {
         expect(find.text(title), findsOneWidget, reason: title);
       }
-      expect(find.text('Choose a model · Web search off'), findsOneWidget);
-      expect(find.text('No sources yet'), findsOneWidget);
-      expect(find.textContaining('Nothing downloaded · '), findsOneWidget);
+      for (final gone in ['Library', 'Videos', 'Set up Cache', 'Assistant']) {
+        expect(find.text(gone), findsNothing, reason: '$gone is not a Settings row');
+      }
+      expect(find.text('Choose a model · web search off'), findsOneWidget);
+      expect(find.text('No regions yet · miles'), findsOneWidget);
       expect(find.text('Nothing on'), findsOneWidget, reason: 'Weather and alerts');
-      expect(find.text('No instances · 0 downloaded'), findsOneWidget);
-      expect(find.text('Pop-ups on · Quiet 10 PM to 6 AM'), findsOneWidget);
-      expect(find.text('41.0 GB free · Updates on any connection'), findsOneWidget);
+      expect(find.text('Serious alerts · quiet 10 PM–6 AM'), findsOneWidget);
+      expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
       expect(find.text('Dark'), findsOneWidget);
-      expect(find.text('Version 1.0.0 · AGPL-3.0'), findsOneWidget);
+      expect(find.text('1.0.0 · AGPL-3.0'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -56,23 +57,23 @@ void main() {
       await tester.runAsync(r.sources.refresh);
       await tester.runAsync(r.storage.measure);
       await r.show(tester, SettingsScreen(deps: r.deps));
-      expect(find.text('2 sources · 5.0 MB'), findsOneWidget);
-      // The Library page and Storage and data say the same figure.
-      expect(r.storage.libraryBytes, 5 << 20);
+      expect(find.text('5.0 MB used · 41.0 GB free'), findsOneWidget);
+      expect(r.storage.bytesOf('library'), 5 << 20);
 
-      r.settings.setAlertPopups(false);
+      r.settings.setPopUpFor(PopUpFor.all);
       r.settings.setQuiet(const QuietHours(on: true, from: 23 * 60, to: 5 * 60 + 30));
-      r.settings.setMobileForUpdates(false);
       await r.webSearch.saveKey('abc');
       await tester.runAsync(() => r.app.setTheme(CacheThemeId.tactical));
       await tester.pump();
-      expect(find.text('Pop-ups off · Quiet 11 PM to 5:30 AM'), findsOneWidget);
-      expect(find.text('41.0 GB free · Updates on Wi-Fi only'), findsOneWidget);
-      expect(find.text('Choose a model · Web search on'), findsOneWidget);
+      expect(find.text('All alerts · quiet 11 PM–5:30 AM'), findsOneWidget);
+      expect(find.text('Choose a model · web search on'), findsOneWidget);
       expect(find.text('Tactical'), findsOneWidget);
       r.settings.setQuiet(r.settings.quiet.copyWith(on: false));
       await tester.pump();
-      expect(find.text('Pop-ups off · No quiet hours'), findsOneWidget);
+      expect(find.text('All alerts'), findsOneWidget);
+      r.settings.setPopUpFor(PopUpFor.none);
+      await tester.pump();
+      expect(find.text('No pop-ups'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -87,7 +88,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Weather and alerts'));
       await tester.pumpAndSettle();
-      expect(find.text('Update now'), findsOneWidget, reason: 'the Weather and alerts page');
+      expect(find.byKey(const ValueKey('weather-refresh')), findsOneWidget, reason: 'the Weather and alerts page');
       await r.dispose(tester);
     });
 
@@ -258,16 +259,40 @@ void main() {
     });
   });
 
-  group('Notifications and location', () {
-    testWidgets('pop-ups, quiet hours and ring-through are stored', (tester) async {
+  group('Notifications', () {
+    testWidgets('one "Pop up for" choice with !!, ! and dash; None warns once; quiet hours are stored', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, NotificationsPage(deps: r.deps));
-      expect(find.text('10 PM to 6 AM · alerts still arrive, silently'), findsOneWidget);
-      await tester.tap(find.descendant(of: rowWith('Alert pop-ups'), matching: find.byType(Switch)));
-      await tester.tap(find.descendant(of: rowWith('Ring through for extreme alerts'), matching: find.byType(Switch)));
+      expect(find.text('Pop up for'.toUpperCase()), findsOneWidget);
+      expect(find.text('Serious only'), findsOneWidget);
+      expect(find.text('!!'), findsOneWidget);
+      expect(find.text('!'), findsOneWidget);
+      expect(find.byIcon(Icons.remove), findsOneWidget);
+      expect(find.text('10 PM–6 AM · serious still ring'), findsOneWidget);
+      expect(find.text('Every alert is listed in Weather either way.'), findsOneWidget);
+      expect(find.byType(Switch), findsNothing, reason: 'no pop-up switch and no ring-through switch');
+      expect(r.settings.popUpFor, PopUpFor.serious);
+      await tester.tap(find.text('All alerts'));
       await tester.pump();
-      expect(r.settings.alertPopups, isFalse);
-      expect(r.settings.ringThroughExtreme, isFalse);
+      expect(r.settings.popUpFor, PopUpFor.all);
+      // None: a one-time warning that Cache will not interrupt for evacuations.
+      await tester.tap(find.text('None'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('not even an evacuation order'), findsOneWidget);
+      await tester.tap(find.text('Keep pop-ups'));
+      await tester.pumpAndSettle();
+      expect(r.settings.popUpFor, PopUpFor.all, reason: 'kept');
+      await tester.tap(find.text('None'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-no-popups')));
+      await tester.pumpAndSettle();
+      expect(r.settings.popUpFor, PopUpFor.none);
+      await tester.tap(find.text('Serious only'));
+      await tester.pump();
+      await tester.tap(find.text('None'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('not even an evacuation order'), findsNothing, reason: 'the warning is shown once');
+      expect(r.settings.popUpFor, PopUpFor.none);
       // Quiet hours page: switch, from, to.
       await tester.tap(find.text('Quiet hours'));
       await tester.pumpAndSettle();
@@ -298,16 +323,15 @@ void main() {
       // All of it is on disk.
       final again = AppSettings(settingsDirOverride: r.dir);
       await tester.runAsync(again.init);
-      expect(again.alertPopups, isFalse);
-      expect(again.ringThroughExtreme, isFalse);
+      expect(again.popUpFor, PopUpFor.none);
       expect(again.quiet.from, 21 * 60 + 30);
       expect(again.quiet.on, isFalse);
       await r.dispose(tester);
     });
 
     for (final c in [
-      (LocationAccess.always, 'Always · keeps alerts and updates working in the background'),
-      (LocationAccess.whileUsing, 'While using the app · alerts and updates pause when Cache is closed. Tap to change it.'),
+      (LocationAccess.always, 'Always · alerts keep working in the background'),
+      (LocationAccess.whileUsing, 'While using the app · alerts pause when Cache is closed'),
       (LocationAccess.denied, 'Off · tap to allow'),
       (LocationAccess.blocked, "Blocked · tap to open the phone's settings"),
     ]) {
@@ -344,8 +368,8 @@ void main() {
     });
   });
 
-  group('Storage and data', () {
-    testWidgets('sizes come from the files, the meter adds them up, and the switches are saved', (tester) async {
+  group('Storage', () {
+    testWidgets('sizes come from the files by kind, the line adds them up, Clean up, the one mobile-data switch and the space kept free', (tester) async {
       final r = await SettingsRig.create(tester);
       void file(Directory d, String name, int bytes) => File('${d.path}/$name').openSync(mode: FileMode.write)
         ..truncateSync(bytes)
@@ -357,6 +381,8 @@ void main() {
       file(r.modelsDir, 'other.gguf', 2 << 20);
       await tester.runAsync(r.app.refreshModels);
       file(r.videosDir, 'v.mp4', 1 << 20);
+      final leftovers = Directory('${r.dir.path}/leftovers')..createSync();
+      file(leftovers, 'x.part', 1 << 20);
       await r.show(tester, StoragePage(deps: r.deps));
       for (var i = 0; i < 40 && !r.storage.measured; i++) {
         await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
@@ -364,49 +390,52 @@ void main() {
       }
       expect(r.storage.measured, isTrue);
       await tester.pump();
-      expect(find.text('12.0 MB used'), findsOneWidget);
-      expect(find.text('41.0 GB free'), findsOneWidget);
-      Finder kindText(String t, String s) => find.descendant(of: find.byKey(ValueKey('kind-$t')), matching: find.textContaining(s));
-      expect(kindText('Library', '6.0 MB'), findsOneWidget);
-      expect(kindText('Library', 'search indexes'), findsOneWidget);
-      expect(kindText('Maps', '3.0 MB'), findsOneWidget);
-      expect(kindText('Assistant models', '2.0 MB'), findsOneWidget);
-      expect(kindText('Assistant models', 'other 2.0 MB'), findsOneWidget, reason: 'the models that make up the figure are listed');
-      expect(kindText('Videos', 'Nothing downloaded'), findsOneWidget, reason: 'the connector files alone are not a figure');
-      // Mobile data: updates on, downloads off by default.
-      expect(switchIn(tester, 'Use mobile data for updates').value, isTrue);
-      expect(switchIn(tester, 'Use mobile data for downloads').value, isFalse);
-      await tester.tap(find.descendant(of: rowWith('Use mobile data for downloads'), matching: find.byType(Switch)));
-      await tester.tap(find.descendant(of: rowWith('Use mobile data for updates'), matching: find.byType(Switch)));
+      expect(find.text('12.0 MB used by Cache · 41.0 GB free on the phone'), findsOneWidget);
+      Finder kindText(String id, String s) => find.descendant(of: find.byKey(ValueKey('kind-$id')), matching: find.textContaining(s));
+      expect(kindText('library', '6.0 MB'), findsOneWidget);
+      expect(kindText('regions', '3.0 MB'), findsOneWidget);
+      expect(kindText('models', '1 · 2.0 MB'), findsOneWidget);
+      expect(kindText('videos', '1.0 MB'), findsOneWidget);
+      // The space kept for the phone is information: 10% of a 128 GB phone.
+      expect(find.text('Kept free for the phone'), findsOneWidget);
+      expect(find.text('10% of storage, 5 to 20 GB'), findsOneWidget);
+      expect(find.text('12.8 GB'), findsOneWidget);
+      // Clean up empties the unfinished downloads.
+      expect(find.text('Clean up · 1.0 MB'), findsOneWidget);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Clean up'));
+      for (var i = 0; i < 40 && leftovers.listSync().isNotEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+      }
+      await tester.pump();
+      expect(leftovers.listSync(), isEmpty);
+      expect(File('${r.libraryDir.path}/a.zim').existsSync(), isTrue, reason: 'nothing kept is touched');
+      // One mobile-data switch, for big downloads; off by default.
+      expect(find.text('Use mobile data for updates'), findsNothing);
+      expect(switchIn(tester, 'Mobile data downloads').value, isFalse);
+      expect(find.text('Off: big downloads wait for Wi-Fi'), findsOneWidget);
+      await tester.tap(find.descendant(of: rowWith('Mobile data downloads'), matching: find.byType(Switch)));
       await tester.pump();
       expect(r.settings.mobileForDownloads, isTrue);
-      expect(r.settings.mobileForUpdates, isFalse);
       final again = AppSettings(settingsDirOverride: r.dir);
       await tester.runAsync(again.init);
       expect(again.mobileForDownloads, isTrue);
-      expect(again.mobileForUpdates, isFalse);
       await r.dispose(tester);
     });
 
-    testWidgets('each kind opens the list where its items are deleted', (tester) async {
+    testWidgets('each kind opens the list where its items are removed', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, StoragePage(deps: r.deps));
-      await tester.tap(find.byKey(const ValueKey('kind-Library')));
+      await tester.tap(find.byKey(const ValueKey('kind-library')));
       await tester.pumpAndSettle();
-      expect(find.text('Sources'), findsOneWidget);
+      expect(find.byKey(const ValueKey('library-empty')), findsOneWidget, reason: 'the Library list');
       await tester.pageBack();
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('kind-Maps')));
-      await tester.pumpAndSettle();
-      expect(find.text('Layers'), findsWidgets);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('kind-Assistant models')));
+      await tester.tap(find.byKey(const ValueKey('kind-models')));
       await tester.pumpAndSettle();
       expect(find.text('Models'), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('kind-Videos')));
+      await tester.tap(find.byKey(const ValueKey('kind-videos')));
       await tester.pumpAndSettle();
       expect(find.text('Saved videos'), findsOneWidget);
       await r.dispose(tester);

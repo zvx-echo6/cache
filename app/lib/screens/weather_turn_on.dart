@@ -98,16 +98,9 @@ Future<bool> _explainLocation(BuildContext context) async => await showDialog<bo
 Future<void> _update(BuildContext context, WeatherState w) async {
   final r = await w.updateNow(force: true);
   if (!context.mounted) return;
-  final m = ScaffoldMessenger.of(context);
-  m.hideCurrentSnackBar();
-  if (r.blocked != null) {
-    m.showSnackBar(SnackBar(
-      content: Text(r.blocked!.message),
-      action: SnackBarAction(label: 'Update anyway', onPressed: () => w.updateNow(anyway: true, force: true)),
-    ));
-  } else {
-    m.showSnackBar(SnackBar(content: Text(r.words)));
-  }
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(r.words)));
 }
 
 /// The two buttons of the weather's empty states: "Turn on weather" and "Choose a place instead".

@@ -1,6 +1,4 @@
 import 'package:cache/screens/settings/catalogues_page.dart';
-import 'package:cache/screens/settings/data_sources_page.dart';
-import 'package:cache/screens/settings/keys_page.dart';
 import 'package:cache/screens/settings/places_page.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
@@ -21,55 +19,69 @@ Switch switchIn(WidgetTester tester, String title) => tester.widget<Switch>(find
 
 const secret = 'SENTINEL-KEY-77b0e2-do-not-leak';
 
+/// A tall screen, so every source row is built.
+void tall(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 2400);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+}
+
 void main() {
   group('Weather and alerts', () {
-    testWidgets('the page of the design: status line, the free switches, the key one, places, Advanced', (tester) async {
+    testWidgets('one line for the age with a small refresh button; the catalogue\'s featured sources, the rest under More sources; places', (tester) async {
+      tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
       expect(find.text('Weather and alerts'), findsOneWidget);
       expect(find.text('Nothing switched on yet'), findsOneWidget);
-      expect(find.text('Update now'), findsOneWidget);
-      expect(find.text('FREE'), findsOneWidget);
-      expect(find.text('NEEDS YOUR OWN KEY (FREE)'), findsOneWidget);
-      for (final t in ['Weather forecast', 'Weather alerts', 'Wildfires', 'Earthquakes', 'River levels', 'Avalanche']) {
+      expect(find.byKey(const ValueKey('weather-refresh')), findsOneWidget);
+      expect(find.text('Update now'), findsNothing);
+      expect(find.text('What Cache watches for your places. All free; some need a free key you get from the provider.'), findsOneWidget);
+      for (final t in ['Weather alerts (NWS, by point)', 'Weather forecast (Open-Meteo)', 'Wildfires near the place (WFIGS)', 'Earthquakes near the place (USGS)']) {
         expect(find.text(t), findsOneWidget, reason: t);
         expect(switchIn(tester, t).value, isFalse, reason: '$t starts off');
       }
-      expect(find.text('16 days ahead · Open-Meteo'), findsOneWidget);
-      expect(find.text('Warnings and watches · NWS'), findsOneWidget);
-      expect(find.text('Fires and their edges · NIFC WFIGS'), findsOneWidget);
-      expect(find.text('Satellite fire hotspots'), findsOneWidget);
-      expect(find.text('Add key'), findsOneWidget);
+      // Each row says what the source gives and who provides it.
+      expect(find.text('What Weather forecast (Open-Meteo) gives · Open-Meteo'), findsOneWidget);
+      // A featured source that needs a key has "Get key" on its row.
+      expect(find.text('Satellite fire detections near the place (NASA FIRMS)'), findsOneWidget);
+      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsOneWidget);
+      // The rest, under More sources.
+      expect(find.text('Space weather: Kp index'), findsNothing);
+      expect(find.text('More sources'), findsOneWidget);
+      expect(find.text('3 more'), findsOneWidget);
+      // Weather alerts and fires have their own icons.
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
       expect(find.text('Where I am'), findsOneWidget, reason: 'the Places summary');
-      expect(find.text('Advanced'), findsOneWidget);
-      expect(find.text('All data sources, more'), findsOneWidget);
+      expect(find.text('Advanced'), findsNothing);
       await r.dispose(tester);
     });
 
-    testWidgets('a keyless source is simply switched on: it is registered with the core and in the policy', (tester) async {
+    testWidgets('a keyless source is switched on with its switch: it is registered with the core and in the policy', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(rowWith('Wildfires'));
+      const t = 'Wildfires near the place (WFIGS)';
+      await tester.tap(find.descendant(of: rowWith(t), matching: find.byType(Switch)));
       await tester.pump();
       await tester.pump();
-      expect(switchIn(tester, 'Wildfires').value, isTrue);
-      expect(r.weather.registeredIds, {'wfigs-incidents-near', 'wfigs-perimeters-near'});
-      expect(r.liveCore.policies.last!['enabled_sources'], ['wfigs-incidents-near', 'wfigs-perimeters-near']);
+      expect(switchIn(tester, t).value, isTrue);
+      expect(r.weather.registeredIds, {'wfigs-incidents-near'});
+      expect(r.liveCore.policies.last!['enabled_sources'], ['wfigs-incidents-near']);
       expect(find.text('Not updated yet'), findsOneWidget);
-      await tester.tap(rowWith('Wildfires'));
+      await tester.tap(find.descendant(of: rowWith(t), matching: find.byType(Switch)));
       await tester.pump();
       await tester.pump();
-      expect(switchIn(tester, 'Wildfires').value, isFalse);
+      expect(switchIn(tester, t).value, isFalse);
       expect(r.weather.registeredIds, isEmpty);
       await r.dispose(tester);
     });
 
-    testWidgets('a source that needs a key asks for it first; saving checks it, switches the source on and never shows it again', (tester) async {
+    testWidgets('Get key on the row: saving checks the key, switches the source on and never shows it again', (tester) async {
+      tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.text('Add key'));
+      await tester.tap(find.byKey(const ValueKey('get-key-firms-viirs-near')));
       await tester.pumpAndSettle();
-      expect(find.text('Satellite fire hotspots'), findsNWidgets(2), reason: 'the row and the sheet');
       expect(find.text('Get a key from NASA FIRMS'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('get-key')));
       await tester.pump();
@@ -87,9 +99,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('key-field')), findsNothing, reason: 'the sheet closed');
-      expect(find.text('Add key'), findsNothing);
-      expect(switchIn(tester, 'Satellite fire hotspots').value, isTrue);
-      expect(find.textContaining('is on'), findsOneWidget);
+      expect(find.byKey(const ValueKey('get-key-firms-viirs-near')), findsNothing);
+      expect(switchIn(tester, 'Satellite fire detections near the place (NASA FIRMS)').value, isTrue);
       expect(r.liveCore.keys['firms-viirs-near'], secret);
       // the key is on no screen
       expect(find.textContaining(secret), findsNothing);
@@ -97,34 +108,27 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Update now: one line says what happened; on mobile data with updates off it offers "Update anyway"', (tester) async {
+    testWidgets('the refresh button updates and says what happened; on mobile data it still updates', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(rowWith('Weather alerts'));
+      await tester.tap(find.descendant(of: rowWith('Weather alerts (NWS, by point)'), matching: find.byType(Switch)));
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('update-now')));
+      await tester.tap(find.byKey(const ValueKey('weather-refresh')));
       await tester.pumpAndSettle();
       expect(find.text('Updated'), findsOneWidget, reason: 'the snack bar');
       expect(find.text('Updated just now'), findsOneWidget, reason: 'the status line');
       expect(r.liveCore.fetches.length, 1);
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
-      r.settings.setMobileForUpdates(false);
       r.probe.change(ConnectionKind.mobile);
       await tester.pumpAndSettle();
-      expect(find.textContaining('Updates paused: mobile data is off for updates'), findsOneWidget);
-      r.liveCore.fetchedNew = false;
-      await tester.tap(find.byKey(const ValueKey('update-now')));
+      await tester.tap(find.byKey(const ValueKey('weather-refresh')));
       await tester.pumpAndSettle();
-      expect(r.liveCore.fetches.length, 1, reason: 'nothing was fetched');
-      expect(find.textContaining('mobile data is switched off for updates'), findsOneWidget);
-      await tester.tap(find.text('Update anyway'));
-      await tester.pumpAndSettle();
-      expect(r.liveCore.fetches.length, 2);
+      expect(r.liveCore.fetches.length, 2, reason: 'updates use mobile data');
       await r.dispose(tester);
     });
 
-    testWidgets('a stale status line gives the age and the reason', (tester) async {
+    testWidgets('old data turns the line into a warning with the age and the reason', (tester) async {
       final r = await SettingsRig.create(tester);
       await tester.runAsync(() async {
         await r.weather.setRowOn(kCurated.first, true);
@@ -134,11 +138,13 @@ void main() {
       r.probe.change(ConnectionKind.none);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.pumpAndSettle();
-      expect(find.text('Last updated 3 days ago · No connection since Monday'), findsOneWidget);
+      expect(find.text('Updated 3 days ago · No connection since Monday'), findsOneWidget);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsWidgets);
       await r.dispose(tester);
     });
 
-    testWidgets('Places and Advanced open their pages', (tester) async {
+    testWidgets('Places and More sources open their pages', (tester) async {
+      tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
       await tester.tap(find.text('Places'));
@@ -146,9 +152,20 @@ void main() {
       expect(find.text('Save a place on the map to add it here.'), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Advanced'));
+      await tester.tap(find.text('More sources'));
       await tester.pumpAndSettle();
-      expect(find.text('All data sources'), findsOneWidget);
+      expect(find.byKey(const ValueKey('search-sources')), findsOneWidget);
+      expect(find.text('Space weather: Kp index'), findsOneWidget);
+      expect(find.text('Road conditions (Idaho 511)'), findsOneWidget);
+      expect(find.text('Weather alerts (NWS, by point)'), findsNothing, reason: 'featured sources are on the main page');
+      await tester.enterText(find.byKey(const ValueKey('search-sources')), 'winter');
+      await tester.pump();
+      expect(find.text('Winter road conditions (Idaho 511)'), findsOneWidget);
+      expect(find.text('Space weather: Kp index'), findsNothing);
+      await tester.enterText(find.byKey(const ValueKey('search-sources')), 'zzz');
+      await tester.pump();
+      expect(find.text('No source matches your search.'), findsOneWidget);
+      expect(find.text('Add sources from a link'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -159,11 +176,11 @@ void main() {
         await r.show(tester, WeatherPage(deps: r.deps), theme: theme);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        expect(find.text('Weather forecast'), findsOneWidget);
+        expect(find.text('Weather forecast (Open-Meteo)'), findsOneWidget);
         await r.show(tester, PlacesPage(deps: r.deps), theme: theme);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        await r.show(tester, DataSourcesPage(deps: r.deps), theme: theme);
+        await r.show(tester, MoreSourcesPage(deps: r.deps), theme: theme);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         await r.dispose(tester);
@@ -227,34 +244,6 @@ void main() {
     });
   });
 
-  group('All data sources', () {
-    testWidgets('searchable, grouped On, Free, Needs your own key; Manage keys and Add sources from a link below', (tester) async {
-      final r = await SettingsRig.create(tester);
-      await tester.runAsync(() => r.weather.setRowOn(kCurated[1], true));
-      await r.show(tester, DataSourcesPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      expect(find.text('Search 11 sources'), findsOneWidget);
-      expect(find.text('ON'), findsOneWidget);
-      expect(find.text('FREE'), findsOneWidget);
-      expect(find.text('NEEDS YOUR OWN KEY'), findsOneWidget);
-      expect(find.text('Weather alerts (NWS, by point)'), findsOneWidget);
-      expect(find.text('NWS · every 15 min'), findsOneWidget);
-      expect(find.text('Manage keys'), findsOneWidget);
-      expect(find.text('None saved on this phone'), findsOneWidget);
-      expect(find.text('Add sources from a link'), findsOneWidget);
-      await tester.enterText(find.byKey(const ValueKey('search-sources')), 'idaho');
-      await tester.pump();
-      expect(find.text('Road conditions (Idaho 511)'), findsOneWidget);
-      expect(find.text('Winter road conditions (Idaho 511)'), findsOneWidget);
-      expect(find.text('Weather alerts (NWS, by point)'), findsNothing);
-      expect(find.text('ON'), findsNothing, reason: 'empty groups have no heading');
-      await tester.enterText(find.byKey(const ValueKey('search-sources')), 'zzzz');
-      await tester.pump();
-      expect(find.text('No source matches your search.'), findsOneWidget);
-      await r.dispose(tester);
-    });
-  });
-
   group('A data source', () {
     testWidgets('what it gives, who provides it, how often, how old the copy is, the last problem, and its switch', (tester) async {
       final r = await SettingsRig.create(tester);
@@ -281,14 +270,14 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('a source that needs a key shows a key button in place of the switch; with a key it shows Replace', (tester) async {
+    testWidgets('a source that needs a key shows Get key in place of the switch; with a key it shows Replace', (tester) async {
       final r = await SettingsRig.create(tester);
       await r.show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'));
       await tester.pumpAndSettle();
       expect(find.text('Needs your own key'), findsOneWidget);
-      expect(find.text('Add key'), findsOneWidget);
+      expect(find.text('Get key'), findsOneWidget);
       expect(find.byType(Switch), findsNothing);
-      await tester.tap(find.text('Add key'));
+      await tester.tap(find.text('Get key'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const ValueKey('key-field')), secret);
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
@@ -301,19 +290,15 @@ void main() {
     });
   });
 
-  group('Manage keys', () {
-    testWidgets('saved keys are listed by name, never shown, and can be replaced or removed after asking', (tester) async {
+  group('A key on its source', () {
+    testWidgets('a saved key is never shown, and is replaced or removed (after asking) on its source', (tester) async {
       final r = await SettingsRig.create(tester);
       await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('firms-viirs-near')!, secret));
-      await r.show(tester, KeysPage(deps: r.deps));
+      await r.show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'));
       await tester.pumpAndSettle();
-      expect(find.text('NASA FIRMS key'), findsOneWidget);
-      expect(find.textContaining('Used by Satellite fire detections'), findsOneWidget);
       expect(find.textContaining(secret), findsNothing);
       // replace
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('replace-key')));
+      await tester.tap(find.text('Replace'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const ValueKey('key-field')), '$secret-2');
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
@@ -322,16 +307,12 @@ void main() {
       expect(find.text('Key replaced'), findsOneWidget);
       await tester.pump(const Duration(seconds: 5));
       // remove
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('remove-key')));
       await tester.pumpAndSettle();
       expect(find.textContaining('turns off'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       expect(r.weather.hasKey('firms'), isTrue);
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('remove-key')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('confirm-remove-key')));
@@ -339,7 +320,7 @@ void main() {
       expect(r.weather.hasKey('firms'), isFalse);
       expect(r.secrets.values, isEmpty);
       expect(r.liveCore.keys['firms-viirs-near'], isNull);
-      expect(find.textContaining('No keys are saved'), findsOneWidget);
+      expect(find.text('Get key'), findsOneWidget);
       await r.dispose(tester);
     });
   });
@@ -402,16 +383,12 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('on mobile data with updates off the check waits for "Check anyway"', (tester) async {
+    testWidgets('on mobile data the check goes ahead (updates use any connection)', (tester) async {
       final r = await SettingsRig.create(tester);
       r.web.serve(other, buildCatalogue(id: 'friends', title: 'Friends catalogue', base: other, connectors: [entry('river-x', 'hydrology', 'River X')]));
-      r.settings.setMobileForUpdates(false);
       r.probe.change(ConnectionKind.mobile);
       await r.show(tester, CataloguesPage(deps: r.deps));
       await enterLink(tester, '${other}catalogue.json');
-      expect(find.textContaining('mobile data is switched off for updates'), findsOneWidget);
-      await tester.tap(find.text('Check anyway'));
-      await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('preview-title')), findsOneWidget);
       await r.dispose(tester);
     });

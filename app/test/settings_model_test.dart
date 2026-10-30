@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/settings/app_settings.dart';
+import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
+import 'package:cache/settings/space.dart';
 import 'package:cache/settings/storage_usage.dart';
 import 'package:cache/version.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
@@ -22,12 +25,11 @@ void main() {
     return s;
   }
 
-  test('the defaults: pop-ups on, quiet 10 PM to 6 AM, ring through on, updates on mobile data on, downloads off, web search off', () async {
+  test('the defaults: serious alerts pop up, quiet 10 PM to 6 AM, updates always on mobile data, downloads off, web search off', () async {
     final s = await open();
-    expect(s.alertPopups, isTrue);
+    expect(s.popUpFor, PopUpFor.serious);
     expect(s.quiet.on, isTrue);
     expect(s.quiet.label, '10 PM to 6 AM');
-    expect(s.ringThroughExtreme, isTrue);
     expect(s.mobileForUpdates, isTrue);
     expect(s.mobileForDownloads, isFalse);
     expect(s.webSearchOn, isFalse);
@@ -35,19 +37,17 @@ void main() {
 
   test('every choice is saved and read back', () async {
     final s = await open();
-    s.setAlertPopups(false);
+    s.setPopUpFor(PopUpFor.all);
+    s.setToldNoPopUps();
     s.setQuiet(const QuietHours(on: true, from: 21 * 60 + 30, to: 7 * 60));
-    s.setRingThroughExtreme(false);
-    s.setMobileForUpdates(false);
     s.setMobileForDownloads(true);
     s.setWebSearchOn(true);
     final again = await open();
-    expect(again.alertPopups, isFalse);
+    expect(again.popUpFor, PopUpFor.all);
+    expect(again.toldNoPopUps, isTrue);
     expect(again.quiet.from, 21 * 60 + 30);
     expect(again.quiet.to, 7 * 60);
     expect(again.quiet.label, '9:30 PM to 7 AM');
-    expect(again.ringThroughExtreme, isFalse);
-    expect(again.mobileForUpdates, isFalse);
     expect(again.mobileForDownloads, isTrue);
     expect(again.webSearchOn, isTrue);
     again.setQuiet(again.quiet.copyWith(on: false));
@@ -58,7 +58,14 @@ void main() {
     File('${dir.path}/preferences.json').writeAsStringSync('{not json');
     final s = await open();
     expect(s.mobileForDownloads, isFalse);
-    expect(s.alertPopups, isTrue);
+    expect(s.popUpFor, PopUpFor.serious);
+  });
+
+  test('the old pop-up switch reads as the one choice: off is None, on is Serious only', () async {
+    File('${dir.path}/preferences.json').writeAsStringSync('{"alertPopups": false, "ringThroughExtreme": true}');
+    expect((await open()).popUpFor, PopUpFor.none);
+    File('${dir.path}/preferences.json').writeAsStringSync('{"alertPopups": true}');
+    expect((await open()).popUpFor, PopUpFor.serious);
   });
 
   test('quiet hours cross midnight', () {
@@ -82,13 +89,18 @@ void main() {
     final s = await open();
     final night = DateTime(2026, 10, 26, 23, 30);
     final noon = DateTime(2026, 10, 26, 12);
-    expect(s.deliveryFor(extreme: false, now: noon), AlertDelivery.normal);
-    expect(s.deliveryFor(extreme: false, now: night), AlertDelivery.silent);
-    expect(s.deliveryFor(extreme: true, now: night), AlertDelivery.normal, reason: 'extreme alerts ring through');
-    s.setRingThroughExtreme(false);
-    expect(s.deliveryFor(extreme: true, now: night), AlertDelivery.silent);
-    s.setAlertPopups(false);
-    expect(s.deliveryFor(extreme: true, now: noon), AlertDelivery.none);
+    // Serious only (the default): only serious alerts pop up, and they ring in quiet hours too.
+    expect(s.deliveryFor(serious: true, now: noon), AlertDelivery.normal);
+    expect(s.deliveryFor(serious: true, now: night), AlertDelivery.normal, reason: 'serious still ring');
+    expect(s.deliveryFor(serious: false, now: noon), AlertDelivery.none);
+    // All alerts: the rest pop up too, silently in quiet hours.
+    s.setPopUpFor(PopUpFor.all);
+    expect(s.deliveryFor(serious: false, now: noon), AlertDelivery.normal);
+    expect(s.deliveryFor(serious: false, now: night), AlertDelivery.silent);
+    expect(s.deliveryFor(serious: true, now: night), AlertDelivery.normal);
+    // None: nothing pops up.
+    s.setPopUpFor(PopUpFor.none);
+    expect(s.deliveryFor(serious: true, now: noon), AlertDelivery.none);
   });
 
   test('times are said the way people say them', () {
@@ -117,15 +129,6 @@ void main() {
       await p.checkDownload();
     });
 
-    test('updates follow their own switch', () async {
-      final s = await open();
-      final p = DataPolicy(settings: s, probe: FakeProbe(ConnectionKind.mobile));
-      await p.checkUpdate();
-      s.setMobileForUpdates(false);
-      await expectLater(p.checkUpdate(), throwsA(isA<MobileDataBlocked>().having((e) => e.updates, 'updates', isTrue)));
-      await p.checkUpdate(anyway: true);
-    });
-
     test('the connection kinds from the system list', () {
       expect(ConnectivityProbe.kindOf([ConnectivityResult.wifi, ConnectivityResult.mobile]), ConnectionKind.wifi);
       expect(ConnectivityProbe.kindOf([ConnectivityResult.mobile]), ConnectionKind.mobile);
@@ -142,21 +145,47 @@ void main() {
     File('${root.path}/sub/deeper/c.bin').writeAsBytesSync(List.filled(500, 1));
     expect(await directorySize(root), 4000);
     expect(await directorySize(Directory('${dir.path}/nothing')), 0);
+    final leftovers = Directory('${dir.path}/partial')..createSync();
+    File('${leftovers.path}/x.part').writeAsBytesSync(List.filled(300, 1));
     final u = StorageUsage(
-      library: () => [root, null],
-      maps: () => [Directory('${root.path}/sub')],
-      models: () => [],
-      videos: () => [Directory('${root.path}/sub/deeper')],
+      kinds: [
+        DataKind(id: 'library', label: 'Library', icon: Icons.book, shared: () => {'library': root}, local: () => [null]),
+        DataKind(id: 'regions', label: 'Regions', icon: Icons.map, shared: () => {'maps': Directory('${root.path}/sub')}),
+        DataKind(id: 'models', label: 'Models', icon: Icons.memory),
+        DataKind(id: 'videos', label: 'Videos', icon: Icons.movie, local: () => [Directory('${root.path}/sub/deeper')]),
+      ],
       freeIn: () => dir,
+      leftovers: () => [leftovers],
       freeSpace: (_) => 12345,
+      totalSpace: (_) => 64 << 30,
     );
     await u.measure();
-    expect(u.libraryBytes, 4000);
-    expect(u.mapsBytes, 3000);
-    expect(u.modelsBytes, 0);
-    expect(u.videosBytes, 500);
+    expect(u.bytesOf('library'), 4000);
+    expect(u.bytesOf('regions'), 3000);
+    expect(u.bytesOf('models'), 0);
+    expect(u.bytesOf('videos'), 500);
     expect(u.usedBytes, 7500);
     expect(u.freeBytes, 12345);
+    expect(u.reserveBytes, (64 << 30) ~/ 10, reason: '10% of a 64 GB phone');
+    // Clean up empties the leftover folders and nothing else.
+    expect(u.cleanupBytes, 300);
+    expect(await u.cleanUp(), 300);
+    expect(leftovers.existsSync(), isTrue);
+    expect(leftovers.listSync(), isEmpty);
+    expect(await directorySize(root), 4000);
+  });
+
+  test('the space kept for the phone: 10% of storage, at least 5 GB, at most 20 GB', () {
+    const gb = 1 << 30;
+    expect(reserveFor(32 * gb), 5 * gb);
+    expect(reserveFor(128 * gb), (128 * gb) ~/ 10);
+    expect(reserveFor(512 * gb), 20 * gb);
+    expect(reserveFor(null), 20 * gb, reason: 'unknown storage keeps the most');
+    const s = Space(free: 30 * gb, reserve: 20 * gb);
+    expect(s.usable, 10 * gb);
+    expect(s.shortBy(4 * gb), 0);
+    expect(s.shortBy(38 * gb), 28 * gb);
+    expect(const Space(free: null, reserve: 5 * gb).shortBy(1 << 40), 0, reason: 'unknown free space does not block');
   });
 
   test('the version in the app is the version in pubspec.yaml', () {

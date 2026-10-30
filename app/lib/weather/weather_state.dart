@@ -26,21 +26,77 @@ import 'words.dart';
 /// Where the phone is, as far as weather is concerned.
 typedef Position = ({double lat, double lon});
 
-/// What the status line at the top of Weather and alerts says.
+/// What the one status line at the top of Weather and alerts says.
 class WeatherStatus {
-  const WeatherStatus({required this.headline, required this.detail, required this.tone});
+  const WeatherStatus({required this.headline, required this.tone});
 
-  /// The age, and the reason when the data is stale: "Last updated 3 days ago · No connection since Friday".
+  /// The age, and the reason when the data is old: "Updated 1 hour ago", "Updated 3 days ago · No connection since Friday".
   final String headline;
-  final String detail;
   final StatusTone tone;
 }
 
 enum StatusTone { ok, warn, quiet }
 
+/// What the Weather and alerts card on Home shows (see [WeatherState.homeCard]).
+class HomeWeather {
+  const HomeWeather({
+    this.message,
+    this.place = '',
+    this.temperature,
+    this.conditions,
+    this.high,
+    this.low,
+    this.age,
+    this.expired = false,
+    this.forecastMissing = false,
+    this.alerts = const [],
+    this.alertsKnown = false,
+    this.alertsExpired = false,
+    this.checked,
+  });
+
+  /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Choose a place to watch in Settings".
+  final String? message;
+  final String place;
+
+  /// "45 °F" and "clear sky", as the forecast source writes them.
+  final String? temperature;
+  final String? conditions;
+  final String? high;
+  final String? low;
+
+  /// "1 hour old".
+  final String? age;
+
+  /// The forecast is past its time and needs a connection.
+  final bool expired;
+
+  /// A forecast source is on but nothing is downloaded for the place yet.
+  final bool forecastMissing;
+
+  /// Warnings first, then fires.
+  final List<HomeAlert> alerts;
+
+  /// Something is known about alerts here (a source is on and has downloaded for the place).
+  final bool alertsKnown;
+  final bool alertsExpired;
+
+  /// How old the alert data is ("20 minutes old").
+  final String? checked;
+}
+
+/// One warning or fire on the Home card: its name and one line of detail.
+class HomeAlert {
+  const HomeAlert({required this.fire, required this.label, required this.detail});
+
+  final bool fire;
+  final String label;
+  final String detail;
+}
+
 /// What one "Update now" did.
 class UpdateReport {
-  const UpdateReport({this.fetched = 0, this.upToDate = 0, this.failures = const [], this.blocked, this.offline = false, this.nothingToDo});
+  const UpdateReport({this.fetched = 0, this.upToDate = 0, this.failures = const [], this.offline = false, this.nothingToDo});
 
   /// Downloads that brought new data.
   final int fetched;
@@ -51,18 +107,15 @@ class UpdateReport {
   /// "NWS for Home: HTTP 503" and so on, one per failed download.
   final List<String> failures;
 
-  /// Set when the update did not start because mobile data is switched off for updates.
-  final MobileDataBlocked? blocked;
   final bool offline;
 
   /// Why there was nothing to update ("Nothing is switched on", "No place is being watched").
   final String? nothingToDo;
 
-  bool get ok => blocked == null && !offline && nothingToDo == null && failures.isEmpty;
+  bool get ok => !offline && nothingToDo == null && failures.isEmpty;
 
   /// One sentence for the person.
   String get words {
-    if (blocked != null) return blocked!.message;
     if (offline) return 'No connection. Update when you are online.';
     if (nothingToDo != null) return nothingToDo!;
     if (failures.isNotEmpty) return fetched + upToDate > 0 ? 'Updated, but ${failures.first}' : failures.first;
@@ -82,8 +135,7 @@ class SourceInfo {
 
 /// The Weather and alerts part of the app: which live data sources there are (built in and from catalogues), which are switched on,
 /// their keys, the places to watch, and Update now. It tells the search core what it may fetch (the policy), gives it the keys (memory
-/// only) and keeps the core's source folder holding the definitions of the sources that are on. Background updates and notifications
-/// are a later part; [backgroundUpdates] is where the status line will say so.
+/// only) and keeps the core's source folder holding the definitions of the sources that are on.
 class WeatherState extends ChangeNotifier {
   WeatherState({
     required this.settings,
@@ -129,9 +181,6 @@ class WeatherState extends ChangeNotifier {
 
   /// What has been told about already, so a pop-up is never repeated; null with [notifier].
   final ToldStore? told;
-
-  /// True once background updates are scheduled (the status line says how updates happen).
-  bool backgroundUpdates = false;
 
   /// Set when an alert pop-up is tapped: the Weather screen shows that place and opens that item.
   final ValueNotifier<AlertFocus?> focus = ValueNotifier<AlertFocus?>(null);
@@ -436,6 +485,9 @@ class WeatherState extends ChangeNotifier {
     }
   }
 
+  /// The core's source folder once it is known (Storage counts it).
+  Directory? get liveFolder => _folder?.dir;
+
   /// The sources the core has registered (the ones that are on).
   Set<String> get registeredIds => Set.unmodifiable(_registered);
 
@@ -459,13 +511,13 @@ class WeatherState extends ChangeNotifier {
     }
   }
 
-  /// cs_live_set_fetch_policy: online, metered, the person's mobile-data setting, and the sources that are on.
+  /// cs_live_set_fetch_policy: online, metered, mobile data allowed (updates always use any connection), and the sources that are on.
   Future<void> pushPolicy() async {
     final k = await policy.probe.current();
     _kind = k;
     final body = <String, dynamic>{
       'online': k != ConnectionKind.none,
-      'allow_metered': settings.mobileForUpdates,
+      'allow_metered': true,
       'metered': k == ConnectionKind.mobile,
       'enabled_sources': ([for (final c in enabledSources) c.id]..sort()),
     };
@@ -483,7 +535,7 @@ class WeatherState extends ChangeNotifier {
 
   /// Downloads every catalogue in use again and replaces what is kept; the sources on are re-registered. A catalogue that cannot be
   /// reached keeps what it had, with the reason in [catalogueErrors].
-  Future<void> refreshCatalogues({bool anyway = false}) async {
+  Future<void> refreshCatalogues() async {
     if (_refreshing || _store == null) return;
     _refreshing = true;
     _catalogueErrors.clear();
@@ -491,13 +543,10 @@ class WeatherState extends ChangeNotifier {
     try {
       for (final url in catalogueUrls) {
         try {
-          await policy.checkUpdate(anyway: anyway);
           if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection.');
           final loaded = await _loader.load(url);
           _store!.save(loaded);
           _catalogues = _store!.loadAll();
-        } on MobileDataBlocked catch (e) {
-          _catalogueErrors[url] = e.message;
         } on CatalogueException catch (e) {
           _catalogueErrors[url] = e.message;
         } catch (e) {
@@ -528,8 +577,7 @@ class WeatherState extends ChangeNotifier {
 
   /// Downloads a catalogue from [address] and checks every definition in it, without keeping anything. The person is shown what it
   /// adds, then [addCatalogue] keeps it. Throws [CatalogueException] with the reason in words.
-  Future<LoadedCatalogue> previewCatalogue(String address, {bool anyway = false}) async {
-    await policy.checkUpdate(anyway: anyway);
+  Future<LoadedCatalogue> previewCatalogue(String address) async {
     if (await policy.probe.current() == ConnectionKind.none) throw const NetworkProblem('No connection. Connect to add a catalogue.');
     final url = address.trim();
     if (catalogueUrls.contains(url)) throw const CatalogueException('That catalogue is already added.');
@@ -687,22 +735,16 @@ class WeatherState extends ChangeNotifier {
   // ---------------------------------------------------------------- Update now
 
   /// Fetches every source that is on, for every watched place, through the core: the same fetch the assistant uses, with the core's
-  /// own refresh intervals and quotas, so a copy that is still fresh is not downloaded again. Respects the mobile-data setting;
-  /// [anyway] is the person's "Update anyway". [force] is a person's Update now: every source is downloaded again even when
-  /// its copy is younger than its refresh interval (a forecast is kept for 3 hours), still within the core's quotas.
-  Future<UpdateReport> updateNow({bool anyway = false, bool force = false}) async {
+  /// own refresh intervals and quotas, so a copy that is still fresh is not downloaded again. Updates use any connection, mobile data
+  /// too. [force] is a person's refresh: every source is downloaded again even when its copy is younger than its refresh interval (a
+  /// forecast is kept for 3 hours), still within the core's quotas.
+  Future<UpdateReport> updateNow({bool force = false}) async {
     if (_updating) return const UpdateReport(nothingToDo: 'Already updating');
     final srcs = [for (final c in enabledSources) if (keyReady(c)) c];
     if (srcs.isEmpty) return const UpdateReport(nothingToDo: 'Switch on a source to update it.');
     final places = await watchedPlaces();
     if (places.isEmpty) {
       return UpdateReport(nothingToDo: waitingForPosition ? 'Waiting for your position.' : 'No place is being watched. Choose one under Places.');
-    }
-    try {
-      await policy.checkUpdate(anyway: anyway);
-    } on MobileDataBlocked catch (e) {
-      notifyListeners();
-      return UpdateReport(blocked: e);
     }
     _kind = await policy.probe.current();
     if (_kind == ConnectionKind.none) {
@@ -778,34 +820,21 @@ class WeatherState extends ChangeNotifier {
 
   // ---------------------------------------------------------------- the status line
 
-  /// The age of the data, and why when it is stale (see [WeatherStatus]).
+  /// The age of the data, and why when it is old (see [WeatherStatus]).
   WeatherStatus status() {
     final on = enabledSources;
-    if (on.isEmpty) {
-      return const WeatherStatus(headline: 'Nothing switched on yet', detail: 'Switch on weather, alerts or fires below.', tone: StatusTone.quiet);
-    }
+    if (on.isEmpty) return const WeatherStatus(headline: 'Nothing switched on yet', tone: StatusTone.quiet);
     final now = _now();
-    final paused = _kind == ConnectionKind.mobile && !settings.mobileForUpdates;
-    final offline = _kind == ConnectionKind.none;
-    final reason = offline
-        ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}'
-        : paused
-        ? 'Updates paused: mobile data is off for updates'
-        : null;
-    final cadence = backgroundUpdates ? 'Updates in the background when there is a connection' : 'Updates when you tap Update now, and when you ask the assistant';
+    final reason = _kind == ConnectionKind.none ? 'No connection since ${dayWords(_lastOnlineAt ?? now, now)}' : null;
     final ok = _lastOkAt;
-    if (ok == null) {
-      return WeatherStatus(headline: reason == null ? 'Not updated yet' : 'Not updated yet · $reason', detail: reason == null ? 'Tap Update now to get the data.' : cadence, tone: StatusTone.warn);
-    }
+    if (ok == null) return WeatherStatus(headline: reason == null ? 'Not updated yet' : 'Not updated yet · $reason', tone: StatusTone.warn);
     final age = now.difference(ok);
     final stale = age.inMinutes > on.map((c) => c.refreshMinutes).reduce((a, b) => a < b ? a : b);
     final failed = _lastFailure != null && _lastRunAt != null && !_lastRunAt!.isBefore(ok);
-    if (!stale && reason == null && !failed) {
-      return WeatherStatus(headline: 'Updated ${agoWords(age)}', detail: cadence, tone: StatusTone.ok);
-    }
-    final why = reason ?? (failed ? _lastFailure! : 'Tap Update now to refresh');
-    final lead = stale ? 'Last updated ${agoWords(age)}' : 'Updated ${agoWords(age)}';
-    return WeatherStatus(headline: '$lead · $why', detail: cadence, tone: stale || failed || reason != null ? StatusTone.warn : StatusTone.ok);
+    final head = 'Updated ${agoWords(age)}';
+    if (!stale && !failed && reason == null) return WeatherStatus(headline: head, tone: StatusTone.ok);
+    final why = reason ?? (failed ? _lastFailure! : null);
+    return WeatherStatus(headline: why == null ? head : '$head · $why', tone: StatusTone.warn);
   }
 
   /// "3 on · Updated 12 min ago": the line under the Weather and alerts row of Settings.
@@ -874,9 +903,9 @@ class WeatherState extends ChangeNotifier {
     return out;
   }
 
-  /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's settings say: nothing when
-  /// pop-ups are off, silent in quiet hours unless it is extreme and ringing through is on. Everything checked is remembered as told,
-  /// shown or not, so turning pop-ups on later does not bring back old alerts. Returns how many were shown.
+  /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's "Pop up for" says, silent in
+  /// quiet hours unless it is serious. Everything checked is remembered as told, shown or not, so choosing more pop-ups later does not
+  /// bring back old alerts. Returns how many were shown.
   Future<int> checkAlerts() async {
     final n = notifier, t = told;
     if (n == null || t == null) return 0;
@@ -888,7 +917,7 @@ class WeatherState extends ChangeNotifier {
     if (fresh.isEmpty) return 0;
     var shown = 0;
     for (final a in fresh) {
-      if (await n.show(a, settings.deliveryFor(extreme: a.extreme, now: _now()))) shown++;
+      if (await n.show(a, settings.deliveryFor(serious: a.serious, now: _now()))) shown++;
     }
     await t.add([for (final a in fresh) a.item.address]);
     return shown;
@@ -908,68 +937,70 @@ class WeatherState extends ChangeNotifier {
     return await homePlace() == null;
   }
 
-  /// The Weather card on Home: "45 °F, clear sky · High 52 °F, low 30 °F · Stanley · 2 hours old".
-  Future<String> homeWeatherLine() async {
+  /// The Weather and alerts card on Home, for the place Home talks about ([homePlace]): the forecast now (temperature, conditions,
+  /// the day's high and low), and the warnings in force and fires near it. Other watched places are on the Weather screen; so are
+  /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
+  /// listed are those of the one fire source that reports the most.
+  Future<HomeWeather> homeCard() async {
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
-    if (forecast.isEmpty) return 'Not set up yet';
+    final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
+    if (forecast.isEmpty && counted.isEmpty) return const HomeWeather(message: 'Not set up yet');
     final p = await homePlace();
-    if (p == null) return _noPlaceWords;
-    for (final v in await viewFor(p)) {
+    if (p == null) return HomeWeather(message: _noPlaceWords);
+    final views = await viewFor(p);
+    String? temperature, conditions, high, low, age;
+    var forecastExpired = false;
+    for (final v in views) {
       if (v.group != LiveGroup.forecast || v.items.isEmpty) continue;
-      if (v.expired) return 'Forecast expired for ${p.name} · needs a connection';
       final now = v.items.firstWhere((i) => i.address.endsWith('/now'), orElse: () => v.items.first);
       final day = v.items.firstWhere((i) => !i.address.endsWith('/now'), orElse: () => now);
+      temperature = now.fields['Temperature'];
+      conditions = now.fields['Conditions'];
       // the names before "Daytime high" and "Low (early morning)" too, for a definition not updated yet
-      final high = day.fields['Daytime high'] ?? day.fields['High'];
-      final low = day.fields['Low (early morning)'] ?? day.fields['Low'];
-      final parts = <String>[
-        [now.fields['Temperature'], now.fields['Conditions']].whereType<String>().join(', '),
-        if (high != null && low != null) 'High $high, low $low',
-        p.name,
-        if (v.age != null) v.age!,
-      ].where((x) => x.isNotEmpty).toList();
-      return parts.join(' · ');
+      high = day.fields['Daytime high'] ?? day.fields['High'];
+      low = day.fields['Low (early morning)'] ?? day.fields['Low'];
+      age = v.age;
+      forecastExpired = v.expired;
+      break;
     }
-    return 'No forecast yet for ${p.name} · Update in Weather';
-  }
-
-  /// The Alerts card on Home: warnings in force and fires near the place Home talks about ([homePlace], the same place as the
-  /// Weather card), named in the line: "1 warning, 2 fires nearby: Red Flag Warning · Stanley". Other watched places are on the
-  /// Weather screen; so are earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their
-  /// perimeters), so fires are the most any one fire source reports, not the sum.
-  Future<String> homeAlertsLine() async {
-    final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
-    if (counted.isEmpty) return 'Not set up yet';
-    final p = await homePlace();
-    if (p == null) return _noPlaceWords;
-    var warnings = 0, fires = 0;
-    String? firstWarning, newest;
-    var any = false, expired = false;
-    for (final v in await viewFor(p)) {
+    final warnings = <HomeAlert>[];
+    var fires = <HomeAlert>[];
+    var anyAlerts = false, alertsExpired = false;
+    String? checked;
+    for (final v in views) {
       if (!counted.any((c) => c.id == v.source.id) || v.missing) continue;
-      any = true;
-      expired = expired || v.expired;
-      newest ??= v.age;
+      anyAlerts = true;
+      alertsExpired = alertsExpired || v.expired;
+      checked ??= v.age;
+      final who = v.source.provider;
+      final items = [
+        for (final i in v.active)
+          HomeAlert(
+            fire: v.source.category == 'fire',
+            label: i.label,
+            detail: [?i.distance, if (i.summary.isNotEmpty) i.summary, if (who.isNotEmpty) who].join(' · '),
+          ),
+      ];
       if (v.source.category == 'fire') {
-        if (v.active.length > fires) fires = v.active.length;
+        if (items.length > fires.length) fires = items;
       } else {
-        warnings += v.active.length;
-        if (v.active.isNotEmpty) firstWarning ??= v.active.first.label;
+        warnings.addAll(items);
       }
     }
-    if (!any) return 'Nothing downloaded yet · Update in Weather';
-    if (warnings == 0 && fires == 0) {
-      return [
-        expired ? 'None known' : 'None active',
-        p.name,
-        if (expired) 'data expired, needs a connection' else if (newest != null) 'checked $newest',
-      ].join(' · ');
-    }
-    final parts = [
-      if (warnings > 0) warnings == 1 ? '1 warning' : '$warnings warnings',
-      if (fires > 0) fires == 1 ? '1 fire nearby' : '$fires fires nearby',
-    ];
-    return '${[parts.join(', '), ?firstWarning].join(': ')} · ${p.name}';
+    return HomeWeather(
+      place: p.name,
+      temperature: temperature,
+      conditions: conditions,
+      high: high,
+      low: low,
+      age: age,
+      expired: forecastExpired,
+      forecastMissing: forecast.isNotEmpty && temperature == null && conditions == null,
+      alerts: [...warnings, ...fires],
+      alertsKnown: anyAlerts,
+      alertsExpired: alertsExpired,
+      checked: checked,
+    );
   }
 
   // ---------------------------------------------------------------- what is remembered between starts

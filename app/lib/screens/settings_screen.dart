@@ -1,25 +1,23 @@
 import 'package:flutter/material.dart';
 
-import '../maps/layers/layer_def.dart';
+import '../nav/units.dart';
+import '../theme.dart';
+import '../settings/app_settings.dart';
 import '../sharing/sharing_state.dart';
 import '../version.dart';
-import '../theme.dart';
 import '../video/format.dart';
 import 'settings/about_pages.dart';
-import 'setup_card.dart';
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
-import 'settings/library_page.dart';
 import 'settings/maps_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/sharing_page.dart';
 import 'settings/storage_page.dart';
-import 'settings/videos_page.dart';
 import 'settings/weather_page.dart';
 import 'settings/widgets.dart';
 
-/// Settings: ten rows in three groups, each saying its current state, each opening one page, and "Set up Cache" first.
+/// Settings: eight rows, only things that can be changed, each with its state in one line and opening one page.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.deps});
 
@@ -31,6 +29,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   SettingsDeps get d => widget.deps;
+  late final Future<String> _version = installedVersion();
 
   @override
   void initState() {
@@ -45,96 +44,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) d.hub.storage.measure();
   }
 
-  List<Part> _assistant() {
+  /// "Gemma 4 E2B · web search off".
+  List<Part> _model() {
     final app = d.app;
-    final model = app.active == null ? 'No model' : app.displayName(app.active!);
-    final Part state = app.loading != null
-        ? const Part('Loading…')
-        : app.active == null
-        ? const Part('Choose a model', Tone.warn)
-        : const Part('Ready', Tone.ok);
     return joinParts([
-      if (app.active != null) [Part(model)],
-      [state],
-      [Part(d.hub.webSearch.active ? 'Web search on' : 'Web search off')],
+      if (app.loading != null)
+        const [Part('Loading…')]
+      else if (app.active == null)
+        const [Part('Choose a model', Tone.warn)]
+      else
+        [Part(app.displayName(app.active!))],
+      [Part(d.hub.webSearch.active ? 'web search on' : 'web search off')],
     ]);
   }
 
-  List<Part> _library() {
-    final s = d.sources;
-    if (s.unavailable != null && s.zims.isEmpty) return const [Part('Not available', Tone.warn)];
-    if (s.zims.isEmpty) return const [Part('No sources yet')];
-    final n = s.zims.length;
-    // The same figure as Storage and data: the sources and their search indexes, measured on disk.
-    final u = d.hub.storage;
-    return [Part('$n ${n == 1 ? 'source' : 'sources'}${u.measured ? ' · ${formatBytes(u.libraryBytes)}' : ''}')];
-  }
-
+  /// "Idaho Falls, Twin Falls · miles".
   List<Part> _maps() {
-    final m = d.maps;
-    if (m.engine.problem != null) return const [Part('Not available', Tone.warn)];
-    final done = <String>{};
-    var running = 0;
-    for (final l in m.catalogueLayers) {
-      for (final a in m.areasOfCard(l)) {
-        if (a.phase == AreaPhase.done) done.add(a.label.split(' · ').first);
-        if (a.phase == AreaPhase.running) running++;
-      }
-    }
-    final String held;
-    if (done.isEmpty) {
-      held = running > 0 ? 'Downloading' : 'Nothing downloaded';
-    } else if (done.length == 1 && done.first != 'This region') {
-      held = '${done.first} downloaded';
-    } else {
-      held = '${done.length} ${done.length == 1 ? 'area' : 'areas'} downloaded';
-    }
-    final layers = m.catalogueLayers.length;
+    if (d.maps.engine.problem != null) return const [Part('Not available', Tone.warn)];
+    final names = [for (final r in d.hub.regions?.local ?? const []) r.name];
+    final units = unitsForLocale(WidgetsBinding.instance.platformDispatcher.locale) == UnitSystem.imperial ? 'miles' : 'kilometres';
     return joinParts([
-      [Part(held)],
-      if (layers > 0) [Part('$layers ${layers == 1 ? 'layer' : 'layers'}')],
+      [Part(names.isEmpty ? 'No regions yet' : names.join(', '))],
+      [Part(units)],
     ]);
   }
 
-  List<Part> _weather() => [Part(d.hub.weather.settingsLine())];
-
-  List<Part> _videos() {
-    final v = d.video;
-    if (v.unavailable != null) return const [Part('Not available', Tone.warn)];
-    final String where = v.instances.isEmpty
-        ? 'No instances'
-        : v.instances.length == 1
-        ? v.instances.first.host
-        : '${v.instances.length} instances';
+  /// "4 sources · 2 places".
+  List<Part> _weather() {
+    final w = d.hub.weather;
+    final on = w.enabledSources.length;
+    if (on == 0) return const [Part('Nothing on')];
+    final places = d.hub.settings.watchedPlaces.length;
     return joinParts([
-      [Part(where)],
-      [Part('${v.saved.length} downloaded')],
+      [Part(on == 1 ? '1 source' : '$on sources')],
+      [Part(places == 1 ? '1 place' : '$places places')],
     ]);
   }
 
+  /// "Serious alerts · quiet 10 PM–7 AM".
   List<Part> _notifications() {
     final s = d.hub.settings;
     return joinParts([
-      [Part(s.alertPopups ? 'Pop-ups on' : 'Pop-ups off')],
-      [Part(s.quiet.on ? 'Quiet ${s.quiet.label}' : 'No quiet hours')],
+      [
+        switch (s.popUpFor) {
+          PopUpFor.serious => const Part('Serious alerts'),
+          PopUpFor.all => const Part('All alerts'),
+          PopUpFor.none => const Part('No pop-ups', Tone.warn),
+        },
+      ],
+      if (s.quiet.on && s.popUpFor != PopUpFor.none) [Part('quiet ${formatMinutes(s.quiet.from)}–${formatMinutes(s.quiet.to)}')],
     ]);
   }
 
-  List<Part> _sharing(SharingState s) {
-    if (!s.enabled) return const [Part('Off', Tone.quiet)];
-    if (!s.running) return [Part(s.error ?? 'Starting…', s.error == null ? Tone.normal : Tone.warn)];
-    final n = s.peers.length;
-    final shared = s.shares.length;
-    return [Part(n == 1 ? '1 linked device' : '$n linked devices'), Part(' · $shared shared')];
-  }
-
+  /// "118 GB used · 103 GB free".
   List<Part> _storage() {
     final u = d.hub.storage;
-    final s = d.hub.settings;
     return joinParts([
+      if (u.measured) [Part('${formatBytes(u.usedBytes)} used')],
       [Part(u.freeBytes == null ? 'Free space unknown' : '${formatBytes(u.freeBytes!)} free')],
-      [Part(s.mobileForUpdates ? 'Updates on any connection' : 'Updates on Wi-Fi only')],
     ]);
+  }
+
+  /// "Linked to iPhone".
+  List<Part> _sharing(SharingState s) {
+    if (!s.enabled) return const [Part('Off')];
+    if (!s.running) return [Part(s.error ?? 'Starting…', s.error == null ? Tone.normal : Tone.warn)];
+    final peers = s.peers;
+    if (peers.isEmpty) return const [Part('Not linked yet')];
+    if (peers.length == 1) return [Part('Linked to ${peers.single['name'] ?? 'one device'}')];
+    return [Part('Linked to ${peers.length} devices')];
   }
 
   @override
@@ -142,73 +120,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListenableBuilder(
-        listenable: Listenable.merge([
-          d.app,
-          d.sources,
-          d.maps,
-          d.video,
-          d.hub.changes,
-          d.chat.historyRevision,
-        ]),
+        listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [
-            if (d.setup case final setup?) ...[
-              SettingsGroup(
-                rows: [
-                  ListenableBuilder(
-                    listenable: setup.changes,
-                    builder: (context, _) => FutureBuilder<SetupStatus>(
-                      future: setup.read(),
-                      builder: (context, snap) => SettingsRow(
-                        key: const ValueKey('settings-setup'),
-                        icon: Icons.checklist,
-                        title: 'Set up Cache',
-                        status: [Part(snap.data == null ? '…' : '${snap.data!.doneCount} of ${snap.data!.lines.length} done')],
-                        onTap: () => openSetup(context, setup),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-            ],
             SettingsGroup(
               rows: [
-                SettingsRow(icon: Icons.lightbulb_outline, title: 'Assistant', status: _assistant(), onTap: () => _open(AssistantPage(deps: d))),
-                SettingsRow(icon: Icons.menu_book_outlined, title: 'Library', status: _library(), onTap: () => _open(LibraryPage(deps: d))),
-                SettingsRow(icon: Icons.map_outlined, title: 'Maps', status: _maps(), onTap: () => _open(MapsPage(deps: d))),
                 SettingsRow(
+                  key: const ValueKey('settings-model'),
+                  icon: Icons.lightbulb_outline,
+                  title: 'Cache model and web search',
+                  status: _model(),
+                  onTap: () => _open(AssistantPage(deps: d)),
+                ),
+                SettingsRow(key: const ValueKey('settings-maps'), icon: Icons.map_outlined, title: 'Maps', status: _maps(), onTap: () => _open(MapsPage(deps: d))),
+                SettingsRow(
+                  key: const ValueKey('settings-weather'),
                   icon: Icons.cloud_outlined,
                   title: 'Weather and alerts',
                   status: _weather(),
                   onTap: () => _open(WeatherPage(deps: d)),
                 ),
-                SettingsRow(icon: Icons.smart_display_outlined, title: 'Videos', status: _videos(), onTap: () => _open(VideosPage(deps: d))),
-              ],
-            ),
-            const SizedBox(height: 14),
-            SettingsGroup(
-              rows: [
-                SettingsRow(icon: Icons.notifications_none, title: 'Notifications and location', status: _notifications(), onTap: () => _open(NotificationsPage(deps: d))),
-                SettingsRow(icon: Icons.sd_storage_outlined, title: 'Storage and data', status: _storage(), onTap: () => _open(StoragePage(deps: d))),
-                if (d.hub.sharing != null)
+                SettingsRow(
+                  key: const ValueKey('settings-notifications'),
+                  icon: Icons.notifications_none,
+                  title: 'Notifications',
+                  status: _notifications(),
+                  onTap: () => _open(NotificationsPage(deps: d)),
+                ),
+                SettingsRow(
+                  key: const ValueKey('settings-storage'),
+                  icon: Icons.sd_storage_outlined,
+                  title: 'Storage',
+                  status: _storage(),
+                  onTap: () => _open(StoragePage(deps: d)),
+                ),
+                if (d.hub.sharing case final sharing?)
                   ListenableBuilder(
-                    listenable: d.hub.sharing!,
+                    listenable: sharing,
                     builder: (context, _) => SettingsRow(
-                      icon: Icons.share_outlined,
+                      key: const ValueKey('settings-sharing'),
+                      icon: Icons.sync_alt,
                       title: 'Sharing and sync',
-                      status: _sharing(d.hub.sharing!),
-                      onTap: () => _open(SharingPage(sharing: d.hub.sharing!)),
+                      status: _sharing(sharing),
+                      onTap: () => _open(SharingPage(sharing: sharing)),
                     ),
                   ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            SettingsGroup(
-              rows: [
-                SettingsRow(icon: Icons.contrast, title: 'Appearance', status: [Part(d.app.theme.label)], onTap: () => _open(AppearancePage(app: d.app))),
-                SettingsRow(icon: Icons.info_outline, title: 'About and credits', status: [Part('Version $kAppVersion · $kAppLicenceShort')], onTap: () => _open(const AboutPage())),
+                SettingsRow(
+                  key: const ValueKey('settings-appearance'),
+                  icon: Icons.contrast,
+                  title: 'Appearance',
+                  status: [Part(d.app.theme.label)],
+                  onTap: () => _open(AppearancePage(app: d.app)),
+                ),
+                FutureBuilder<String>(
+                  future: _version,
+                  initialData: kAppVersion,
+                  builder: (context, snap) => SettingsRow(
+                    key: const ValueKey('settings-credits'),
+                    icon: Icons.info_outline,
+                    title: 'Credits and licences',
+                    status: [Part('${snap.data ?? kAppVersion} · $kAppLicenceShort')],
+                    onTap: () => _open(const AboutPage()),
+                  ),
+                ),
               ],
             ),
           ],

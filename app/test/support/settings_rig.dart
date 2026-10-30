@@ -1,14 +1,18 @@
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/browse/browse_state.dart';
 import 'package:cache/chat/chat_controller.dart';
 import 'package:cache/history/conversation_store.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:cache/maps/maps_state.dart';
+import 'package:cache/screens/models_screen.dart';
 import 'package:cache/screens/settings/deps.dart';
+import 'package:cache/screens/videos/library_screen.dart' as videos show LibraryScreen;
 import 'package:cache/settings/app_settings.dart';
+import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/hub.dart';
 import 'package:cache/settings/location_access.dart';
@@ -164,12 +168,23 @@ class SettingsRig {
     r.modelsDir = Directory('${r.dir.path}/models')..createSync();
     r.videosDir = Directory('${r.dir.path}/videos')..createSync();
     r.storage = StorageUsage(
-      library: () => [r.libraryDir],
-      maps: () => [r.mapsDir],
-      models: () => [r.modelsDir],
-      videos: () => [r.videosDir],
+      kinds: [
+        DataKind(
+          id: 'library',
+          label: 'Library',
+          icon: Icons.menu_book_outlined,
+          shared: () => {'library': r.libraryDir},
+          count: () => r.sources.zims.length,
+          list: () => BrowseScreen(browse: r.browse, active: true),
+        ),
+        DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': r.modelsDir}, count: () => r.app.models.length, list: () => ModelsScreen(app: r.app)),
+        DataKind(id: 'regions', label: 'Regions', icon: Icons.map_outlined, shared: () => {'maps': r.mapsDir}),
+        DataKind(id: 'videos', label: 'Videos and weather', icon: Icons.smart_display_outlined, shared: () => {'videos': r.videosDir}, list: () => videos.LibraryScreen(video: r.video)),
+      ],
       freeIn: () => r.dir,
+      leftovers: () => [Directory('${r.dir.path}/leftovers')],
       freeSpace: (_) => 41 * 1024 * 1024 * 1024,
+      totalSpace: (_) => 128 * 1024 * 1024 * 1024,
     );
     r.access = FakeAccess(locationAccess);
     r.position = RigPositionSource(permissionState: permission);
@@ -206,7 +221,7 @@ class SettingsRig {
     r.sharing = SharingState(
       policy: r.policy,
       supportDir: () async => r.dir,
-      kinds: [ShareKind('shared', 'Shared folder', () => Directory('${r.dir.path}/Shared'))],
+      kinds: [DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': Directory('${r.dir.path}/Shared')}, inStorage: false)],
       opener: (_) async => r.sync,
     );
     r.hub = SettingsHub(

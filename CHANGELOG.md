@@ -7,13 +7,13 @@ release notes).
 ## Unreleased
 
 ### New
-- Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; hide it, and find it again in Settings > Set up Cache
+- Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; it goes away by itself when all four are done
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search
 - Map search says when places for the area are missing or on their way, and offers the region
 - The search model (605 MB) now comes with your first chat model and gives meaning search to maps, the library and the assistant
 - Assistant: can save places, watch places for weather and start navigation after you confirm on a card
-- Add a library from a file on the device or a download link, in Library > Libraries
+- Add your own library from a file on the device or a download link, in Library > Add to Library > Your own library
 - A newer copy of a library you have is offered as an update and swapped in safely
 - Remove a library, and see its size, entries and whether it is ready
 - Get a blank library template to build your own library
@@ -33,6 +33,19 @@ release notes).
 - Weather: "Ask about this" on an alert opens the chat with that alert's live data already looked up, so the answer starts from it
 - Assistant: a conversation can be in voice mode, where answers are kept to a few plain spoken sentences (the voice controls come later)
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
+- Library: one list of everything, your ZIMs and your own libraries, each with its icon, a short description and its size; a badge shows only for an exception such as "Update ready"
+- Library: press and hold an item (or "..." when it is open) for Check for update, Change icon, Add to Home and Delete; one Add to Library screen holds Kiwix's collections, each with its own download button, and your own library
+- Library: a download can be paused and resumed
+- Downloads: one pop-up before every download lists what it brings with its size and the phone's storage after; when it does not fit it says how much more is needed and offers Free up space
+- Downloads: Cache always leaves 10% of the phone's storage free (at least 5 GB, at most 20 GB)
+- Downloads: on mobile data with Mobile data downloads off, the pop-up offers Wait for Wi-Fi, and the download starts by itself on Wi-Fi
+- Delete always asks first, saying what it frees and the storage after
+- Home: one search box searches the Library, places and addresses, and map layers; the first row always asks Cache exactly what you typed, and Enter starts that chat
+- Home: one Weather and alerts card with a weather icon and the temperature, and each warning and fire near you with its own icon
+- Settings: eight rows, each with its state in one line: Cache model and web search, Maps, Weather and alerts, Notifications, Storage, Sharing and sync, Appearance, Credits and licences
+- Notifications: one choice, Pop up for: Serious only (the default), All alerts or None; serious alerts still ring in quiet hours
+- Storage: what each kind of thing uses (Library, Models, Regions, Videos and weather), each opening a list to remove items, Clean up for unfinished downloads and temporary files, and the space kept free for the phone
+- Weather and alerts settings: one line says how old the data is, with a small refresh button; the sources come from the catalogue, featured ones first and the rest under More sources, and a key is added from the source's own row
 
 ### Fixed
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
@@ -50,8 +63,8 @@ release notes).
 - About: shows the version and build number of the installed app, and the note about builds names TestFlight only on iPhone and Google Play on Android
 - Regions: the size before downloading is closer to the real size for maps, and the sheet also shows the size in all, counted the way Local counts it, when part of the region is already on the phone
 - Library: when the phone runs low on memory while you read, the page stops and offers Reload instead of closing Cache
-- Home: the Weather and Alerts cards pick up your position as soon as the phone has it, and say "Waiting for your position" until then instead of asking you to choose a place
-- Home: the Alerts card counts warnings and fires for one place, the same place as the Weather card, and names it, instead of adding up every watched place
+- Home: the Weather and alerts card picks up your position as soon as the phone has it, and say "Waiting for your position" until then instead of asking you to choose a place
+- Home: the Weather and alerts card shows warnings and fires for one place, the same place as the forecast, instead of adding up every watched place
 - Weather places: each watched place is on its own line, and a dropped pin is named like "Pin 40.76, -111.89", so its coordinates no longer read as two places
 - Cache no longer asks where you are when the phone already knows
 - Assistant: asking to open a place, route, live data or location result no longer fails with an internal error
@@ -65,6 +78,9 @@ release notes).
 - iPhone: the Hugging Face file list shows whether each file fits your phone
 - Map search: street and town names in addresses are no longer shown in capitals (North State Street, Hurricane)
 - Maps: BLM roads and trails and Forest Service trails draw in their own colours and dashes
+
+### Changed
+- Weather, alerts and other small updates always use any connection; the Mobile data downloads switch in Storage is for big downloads only
 
 ## 1.0.0 (iOS build 22) - 2026-10-28
 

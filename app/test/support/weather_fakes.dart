@@ -30,6 +30,7 @@ Map<String, dynamic> entry(
   String? docs,
   String? path,
   int refresh = 15,
+  bool? featured,
 }) => {
   'id': id,
   'title': title,
@@ -45,6 +46,7 @@ Map<String, dynamic> entry(
   'license': 'Public domain',
   'refresh': refresh,
   'docs': ?docs,
+  'featured': ?featured,
 };
 
 /// The files of a catalogue, by path relative to its base address: catalogue.json and one definition per connector.
@@ -87,8 +89,8 @@ Map<String, String> standardCatalogue() => buildCatalogue(connectors: [
   entry('usgs-quakes-near', 'earthquakes', 'Earthquakes near the place (USGS)', provider: 'USGS', coverage: 'worldwide'),
   entry('nwps-gauges-near', 'hydrology', 'River gauges near the place (NWPS)', provider: 'NOAA NWPS', refresh: 30),
   entry('avalanche-forecast-zones', 'avalanche', 'Avalanche danger near the place (avalanche.org)', provider: 'avalanche.org', refresh: 60),
-  entry('swpc-kp', 'space-weather', 'Space weather: Kp index', provider: 'NOAA SWPC', coverage: 'worldwide'),
-  entry('firms-viirs-near', 'fire', 'Satellite fire detections near the place (NASA FIRMS)', provider: 'NASA FIRMS', coverage: 'worldwide', keyAlias: 'firms', docs: 'https://firms.modaps.eosdis.nasa.gov/api/area/'),
+  entry('swpc-kp', 'space-weather', 'Space weather: Kp index', provider: 'NOAA SWPC', coverage: 'worldwide', featured: false),
+  entry('firms-viirs-near', 'fire', 'Satellite fire detections near the place (NASA FIRMS)', provider: 'NASA FIRMS', coverage: 'worldwide', keyAlias: 'firms', docs: 'https://firms.modaps.eosdis.nasa.gov/api/area/', featured: true),
   entry('idaho511-events', 'roads', 'Road conditions (Idaho 511)', provider: 'Idaho 511', coverage: 'Idaho', keyAlias: 'idaho511', docs: 'https://511.idaho.gov/developers'),
   entry('idaho511-winter-roads', 'roads', 'Winter road conditions (Idaho 511)', provider: 'Idaho 511', coverage: 'Idaho', keyAlias: 'idaho511'),
 ]);

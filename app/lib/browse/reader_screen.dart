@@ -23,7 +23,12 @@ class ZimReaderScreen extends StatefulWidget {
     required this.zim,
     this.address,
     this.layout,
+    this.itemMenu,
   });
+
+  /// The Library's menu for this item (Check for update, Change icon, Add to Home, Delete), behind "..."; given the way to add the page
+  /// on screen to Home. Without it "..." offers Add to Home alone.
+  final Future<void> Function(BuildContext context, VoidCallback? addPage)? itemMenu;
 
   /// Where "Add to Home" puts a shortcut to the page being read; the menu item is hidden when null.
   final LayoutState? layout;
@@ -306,7 +311,14 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                 ),
                 onPressed: _toggleFind,
               ),
-              if (widget.layout != null)
+              if (widget.itemMenu != null)
+                IconButton(
+                  key: const ValueKey('item-menu'),
+                  tooltip: 'More',
+                  icon: const Icon(Icons.more_horiz),
+                  onPressed: () => widget.itemMenu!(context, widget.layout == null ? null : _addToHome),
+                )
+              else if (widget.layout != null)
                 PopupMenuButton<String>(
                   tooltip: 'More',
                   onSelected: (v) {

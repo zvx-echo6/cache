@@ -45,9 +45,23 @@ class QuietHours {
   String get label => '${formatMinutes(from)} to ${formatMinutes(to)}';
 }
 
+/// Which alerts pop up: the one choice in Settings > Notifications. Every alert is listed in Weather either way.
+enum PopUpFor {
+  /// Evacuations, extreme and severe warnings (the default).
+  serious,
+
+  /// Watches and advisories too.
+  all,
+
+  /// Nothing pops up.
+  none;
+
+  static PopUpFor byName(Object? n) => PopUpFor.values.firstWhere((v) => v.name == n, orElse: () => PopUpFor.serious);
+}
+
 /// What an alert should do when it arrives: the answer the alert notification code asks [AppSettings.deliveryFor].
 enum AlertDelivery {
-  /// Alert pop-ups are off: no notification.
+  /// It does not pop up.
   none,
 
   /// A notification with no sound or vibration (quiet hours).
@@ -57,8 +71,8 @@ enum AlertDelivery {
   normal,
 }
 
-/// The choices a person makes in Settings that the rest of the app reads: alert pop-ups, quiet hours, ringing through for
-/// extreme alerts, whether mobile data may be used, and the web search switch. Saved in preferences.json beside the app's other
+/// The choices a person makes in Settings that the rest of the app reads: which alerts pop up, quiet hours, whether big downloads
+/// may use mobile data, and the web search switch. Saved in preferences.json beside the app's other
 /// settings and read back at start. (The key to a service is not here: keys live in secure storage.)
 class AppSettings extends ChangeNotifier {
   AppSettings({this.settingsDirOverride});
@@ -66,10 +80,9 @@ class AppSettings extends ChangeNotifier {
   /// Test hook.
   final Directory? settingsDirOverride;
 
-  bool _alertPopups = true;
+  PopUpFor _popUpFor = PopUpFor.serious;
+  bool _toldNoPopUps = false;
   QuietHours _quiet = const QuietHours();
-  bool _ringThroughExtreme = true;
-  bool _mobileForUpdates = true;
   bool _mobileForDownloads = false;
   bool _webSearchOn = false;
   Set<String> _liveOn = {};
@@ -79,19 +92,19 @@ class AppSettings extends ChangeNotifier {
   List<String> _extraCatalogues = [];
   File? _file;
 
-  /// Weather alerts and fires near the person's places show as pop-ups.
-  bool get alertPopups => _alertPopups;
+  /// Which alerts near the person's places pop up.
+  PopUpFor get popUpFor => _popUpFor;
 
-  /// When alerts arrive silently.
+  /// The one-time warning for "None" (Cache will not interrupt for evacuations) has been shown.
+  bool get toldNoPopUps => _toldNoPopUps;
+
+  /// When alerts that are not serious arrive silently. Serious ones still ring.
   QuietHours get quiet => _quiet;
 
-  /// Evacuation orders, tornado and flash flood warnings make a sound even in quiet hours.
-  bool get ringThroughExtreme => _ringThroughExtreme;
+  /// Weather, alerts and the other small updates always use any connection, mobile data too.
+  bool get mobileForUpdates => true;
 
-  /// Small, regular downloads (weather, alerts, fires, catalogues) may use mobile data. On by default.
-  bool get mobileForUpdates => _mobileForUpdates;
-
-  /// Large downloads (maps, library, videos) may use mobile data. Off by default.
+  /// Large downloads (maps, library, models, videos) may use mobile data. Off by default: they wait for Wi-Fi.
   bool get mobileForDownloads => _mobileForDownloads;
 
   /// The person's switch for searching the web. Only has an effect once a search service has a key.
@@ -124,7 +137,9 @@ class AppSettings extends ChangeNotifier {
       final f = _file!;
       if (!f.existsSync()) return;
       final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-      _alertPopups = j['alertPopups'] != false;
+      // Before the one choice there was a pop-up switch: off reads as None.
+      _popUpFor = j['popUpFor'] != null ? PopUpFor.byName(j['popUpFor']) : (j['alertPopups'] == false ? PopUpFor.none : PopUpFor.serious);
+      _toldNoPopUps = j['toldNoPopUps'] == true;
       final q = j['quiet'];
       if (q is Map) {
         _quiet = QuietHours(
@@ -133,8 +148,6 @@ class AppSettings extends ChangeNotifier {
           to: ((q['to'] as num?)?.toInt() ?? 6 * 60).clamp(0, 1439),
         );
       }
-      _ringThroughExtreme = j['ringThroughExtreme'] != false;
-      _mobileForUpdates = j['mobileForUpdates'] != false;
       _mobileForDownloads = j['mobileForDownloads'] == true;
       _webSearchOn = j['webSearchOn'] == true;
       _liveOn = _strings(j['liveSourcesOn']).toSet();
@@ -156,10 +169,9 @@ class AppSettings extends ChangeNotifier {
       final f = _file;
       if (f == null) return;
       writeStringAtomicSync(f, jsonEncode({
-        'alertPopups': _alertPopups,
+        'popUpFor': _popUpFor.name,
+        if (_toldNoPopUps) 'toldNoPopUps': true,
         'quiet': {'on': _quiet.on, 'from': _quiet.from, 'to': _quiet.to},
-        'ringThroughExtreme': _ringThroughExtreme,
-        'mobileForUpdates': _mobileForUpdates,
         'mobileForDownloads': _mobileForDownloads,
         'webSearchOn': _webSearchOn,
         'liveSourcesOn': _liveOn.toList()..sort(),
@@ -171,27 +183,21 @@ class AppSettings extends ChangeNotifier {
     } catch (_) {}
   }
 
-  void setAlertPopups(bool v) {
-    if (v == _alertPopups) return;
-    _alertPopups = v;
+  void setPopUpFor(PopUpFor v) {
+    if (v == _popUpFor) return;
+    _popUpFor = v;
+    _save();
+  }
+
+  void setToldNoPopUps() {
+    if (_toldNoPopUps) return;
+    _toldNoPopUps = true;
     _save();
   }
 
   void setQuiet(QuietHours q) {
     if (q.on == _quiet.on && q.from == _quiet.from && q.to == _quiet.to) return;
     _quiet = q;
-    _save();
-  }
-
-  void setRingThroughExtreme(bool v) {
-    if (v == _ringThroughExtreme) return;
-    _ringThroughExtreme = v;
-    _save();
-  }
-
-  void setMobileForUpdates(bool v) {
-    if (v == _mobileForUpdates) return;
-    _mobileForUpdates = v;
     _save();
   }
 
@@ -262,11 +268,12 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
-  /// What the alert notification code does with an alert arriving at [now]. [extreme] is an evacuation order, a tornado or a flash flood
-  /// warning. Pop-ups off: nothing. Inside quiet hours: silent, unless it is extreme and ringing through is on.
-  AlertDelivery deliveryFor({required bool extreme, DateTime? now}) {
-    if (!_alertPopups) return AlertDelivery.none;
-    if (_quiet.contains(now ?? DateTime.now()) && !(extreme && _ringThroughExtreme)) return AlertDelivery.silent;
+  /// What the alert notification code does with an alert arriving at [now]. [serious] is an evacuation, an extreme or a severe
+  /// warning. None: nothing pops up; Serious only: only serious ones do. Inside quiet hours the rest arrive silently; serious ones
+  /// still ring.
+  AlertDelivery deliveryFor({required bool serious, DateTime? now}) {
+    if (_popUpFor == PopUpFor.none || (_popUpFor == PopUpFor.serious && !serious)) return AlertDelivery.none;
+    if (!serious && _quiet.contains(now ?? DateTime.now())) return AlertDelivery.silent;
     return AlertDelivery.normal;
   }
 }

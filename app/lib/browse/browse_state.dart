@@ -9,14 +9,18 @@ import 'package:path_provider/path_provider.dart';
 
 import '../files.dart';
 import '../settings/data_policy.dart';
+import '../settings/space.dart';
 import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
 import 'zim_download.dart';
 
 enum TransferPhase {
-  /// Not started: the phone is on mobile data and downloads on mobile data are off. "Download anyway" starts it.
+  /// Waiting for Wi-Fi: the phone is on mobile data and mobile data downloads are off. It starts by itself on Wi-Fi.
   blockedByMobileData,
+
+  /// Paused by the person; the partly downloaded file stays and Resume continues it.
+  paused,
   starting,
   downloading,
   verifying,
@@ -57,11 +61,24 @@ class BrowseState extends ChangeNotifier {
     Future<Uint8List?> Function(Uri url)? iconFetch,
     String? phoneLanguage,
   }) : catalog = catalog ?? KiwixCatalog(),
-       downloader = downloader ?? ZimDownloader(),
+       downloader = downloader ?? ZimDownloader(freeSpace: usableBytesOnDisk),
        _iconFetch = iconFetch ?? _fetchIcon,
        // ignore: prefer_initializing_formals
        _phoneLanguage = phoneLanguage {
     sources.addListener(_onSources);
+    // Downloads waiting for Wi-Fi start by themselves once the connection (or the switch) allows them.
+    _net = policy?.probe.changes.listen((_) => _startWaiting());
+    policy?.settings.addListener(_startWaiting);
+  }
+
+  StreamSubscription<ConnectionKind>? _net;
+
+  Future<void> _startWaiting() async {
+    final waiting = [for (final t in transfers.values) if (t.phase == TransferPhase.blockedByMobileData) t];
+    if (waiting.isEmpty || policy == null || await policy!.blocksDownload()) return;
+    for (final t in waiting) {
+      unawaited(download(t.entry, replaces: t.replaces));
+    }
   }
 
   final SourcesState sources;
@@ -262,20 +279,12 @@ class BrowseState extends ChangeNotifier {
   bool checkingUpdates = false;
   String? updateError;
 
-  /// The last update check did not run because the phone is on mobile data and updates on mobile data are off.
-  bool updatesBlocked = false;
   DateTime? lastUpdateCheck;
 
-  /// Asks the catalogue whether a newer dated release exists for each installed ZIM (same name and variant).
-  Future<void> checkUpdates({bool anyway = false}) async {
+  /// Asks the catalogue whether a newer dated release exists for each installed ZIM (same name and variant). An update check is small
+  /// and uses any connection.
+  Future<void> checkUpdates() async {
     if (checkingUpdates) return;
-    updatesBlocked = false;
-    if (!anyway && policy != null && await policy!.blocksUpdate()) {
-      updatesBlocked = true;
-      updateError = const MobileDataBlocked(updates: true).message;
-      notifyListeners();
-      return;
-    }
     checkingUpdates = true;
     updateError = null;
     notifyListeners();
@@ -336,6 +345,7 @@ class BrowseState extends ChangeNotifier {
     final existing = transfers[entry.id];
     if (existing != null &&
         existing.phase != TransferPhase.failed &&
+        existing.phase != TransferPhase.paused &&
         existing.phase != TransferPhase.blockedByMobileData) {
       return;
     }
@@ -395,8 +405,8 @@ class BrowseState extends ChangeNotifier {
       _onSources();
     } on DownloadException catch (e) {
       if (e.code == 'cancelled') {
-        // Only this transfer: a new download of the entry may already be in its place.
-        if (transfers[entry.id] == t) transfers.remove(entry.id);
+        // Only this transfer: a new download of the entry may already be in its place. A paused one stays, to resume.
+        if (transfers[entry.id] == t && t.phase != TransferPhase.paused) transfers.remove(entry.id);
       } else {
         t.phase = TransferPhase.failed;
         t.error = e.message;
@@ -410,6 +420,24 @@ class BrowseState extends ChangeNotifier {
       loop.complete();
       if (_loops[entry.id] == loop.future) _loops.remove(entry.id);
     }
+  }
+
+  /// Pauses a download: it stops and keeps the partly downloaded file; [resume] continues it.
+  void pause(CatalogEntry entry) {
+    final t = transfers[entry.id];
+    if (t == null || (t.phase != TransferPhase.downloading && t.phase != TransferPhase.starting)) return;
+    t.phase = TransferPhase.paused;
+    t.token?.cancel();
+    notifyListeners();
+  }
+
+  /// Continues a paused download from where it stopped.
+  Future<void> resume(CatalogEntry entry) async {
+    final t = transfers[entry.id];
+    if (t == null || t.phase != TransferPhase.paused) return;
+    // The paused loop closes the file first; the new one waits for it and continues the file (on mobile data with mobile data
+    // downloads off, it waits for Wi-Fi).
+    await download(entry, replaces: t.replaces);
   }
 
   /// Stops a download and throws away the partly downloaded file.
@@ -482,6 +510,8 @@ class BrowseState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _net?.cancel();
+    policy?.settings.removeListener(_startWaiting);
     sources.removeListener(_onSources);
     for (final t in transfers.values) {
       t.token?.cancel();

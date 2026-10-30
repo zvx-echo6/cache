@@ -225,16 +225,13 @@ void main() {
       expect(h.weather.catalogueErrors.values.single, contains("Couldn't reach"));
     });
 
-    test('updates are paused on mobile data when the setting is off, and go on with "anyway"', () async {
+    test('catalogue updates use mobile data too (updates always do)', () async {
       h = await Harness.create();
-      h.settings.setMobileForUpdates(false);
       h.probe.change(ConnectionKind.mobile);
       final before = h.web.requested.length;
       await h.weather.refreshCatalogues();
-      expect(h.web.requested.length, before);
-      expect(h.weather.catalogueErrors.values.single, contains('mobile data'));
-      await h.weather.refreshCatalogues(anyway: true);
       expect(h.web.requested.length, greaterThan(before));
+      expect(h.weather.catalogueErrors, isEmpty);
     });
 
     test('another catalogue is checked and shown first, then added, and can be removed', () async {
@@ -283,7 +280,7 @@ void main() {
   });
 
   group('the fetch policy', () {
-    test('it is pushed at start: online, not metered, the person\'s setting, nothing enabled', () async {
+    test('it is pushed at start: online, not metered, mobile data allowed, nothing enabled', () async {
       h = await Harness.create();
       expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': false, 'enabled_sources': <String>[]});
     });
@@ -291,27 +288,26 @@ void main() {
     test('it follows the connection: mobile data, none, Wi-Fi again', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather alerts'), true);
-      h.settings.setMobileForUpdates(false);
       await Future<void>.delayed(Duration.zero);
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(h.lastPolicy, {'online': true, 'allow_metered': false, 'metered': true, 'enabled_sources': ['nws-alerts-point']});
+      expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': true, 'enabled_sources': ['nws-alerts-point']});
       h.probe.change(ConnectionKind.none);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(h.lastPolicy['online'], false);
       h.probe.change(ConnectionKind.wifi);
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(h.lastPolicy, {'online': true, 'allow_metered': false, 'metered': false, 'enabled_sources': ['nws-alerts-point']});
+      expect(h.lastPolicy, {'online': true, 'allow_metered': true, 'metered': false, 'enabled_sources': ['nws-alerts-point']});
     });
 
-    test('it follows the settings: the mobile-data switch and the sources that are on', () async {
+    test('it follows the settings: the sources that are on; mobile data is always allowed for updates', () async {
       h = await Harness.create();
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(h.lastPolicy['allow_metered'], true);
-      h.settings.setMobileForUpdates(false);
+      h.settings.setMobileForDownloads(false);
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(h.lastPolicy['allow_metered'], false);
+      expect(h.lastPolicy['allow_metered'], true);
       await h.weather.setRowOn(row('Wildfires'), true);
       expect(h.lastPolicy['enabled_sources'], ['wfigs-incidents-near', 'wfigs-perimeters-near']);
     });
@@ -549,16 +545,12 @@ void main() {
       expect((await h.weather.updateIfDue(const Duration(minutes: 30)))?.fetched, 4);
     });
 
-    test('mobile data off for updates: nothing is fetched, and "Update anyway" fetches', () async {
+    test('on mobile data, updates still fetch, also with mobile data downloads off', () async {
       h = await Harness.create();
       await setUp3(h);
-      h.settings.setMobileForUpdates(false);
+      h.settings.setMobileForDownloads(false);
       h.probe.change(ConnectionKind.mobile);
-      final r = await h.weather.updateNow();
-      expect(r.blocked, isNotNull);
-      expect(r.words, contains('mobile data is switched off for updates'));
-      expect(h.core.fetches, isEmpty);
-      expect((await h.weather.updateNow(anyway: true)).fetched, 4);
+      expect((await h.weather.updateNow()).fetched, 4);
     });
 
     test('offline: nothing is fetched and it says so', () async {
@@ -604,32 +596,31 @@ void main() {
       expect(h.weather.status().headline, 'Nothing switched on yet');
       await h.weather.setRowOn(row('Weather alerts'), true);
       expect(h.weather.status().headline, 'Not updated yet');
-      expect(h.weather.status().detail, 'Tap Update now to get the data.');
+      expect(h.weather.status().tone, StatusTone.warn);
       await h.weather.updateNow();
       expect(h.weather.status().headline, 'Updated just now');
       expect(h.weather.status().tone, StatusTone.ok);
       h.clock = h.clock.add(const Duration(minutes: 12));
       expect(h.weather.status().headline, 'Updated 12 min ago');
-      // past the source's refresh time (15 min): stale, and the reason
+      // past the source's refresh time (15 min): old, so the line turns into a warning
       h.clock = h.clock.add(const Duration(minutes: 20));
-      expect(h.weather.status().headline, 'Last updated 32 min ago · Tap Update now to refresh');
+      expect(h.weather.status().headline, 'Updated 32 min ago');
       expect(h.weather.status().tone, StatusTone.warn);
     });
 
-    test('offline since Friday, and paused on mobile data, are the reasons beside the age', () async {
+    test('offline since Friday is the reason beside the age; mobile data never pauses updates', () async {
       h = await Harness.create(clock: DateTime(2026, 10, 23, 9));
       await h.weather.setRowOn(row('Weather alerts'), true);
       await h.weather.updateNow();
       h.probe.change(ConnectionKind.none);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       h.clock = DateTime(2026, 10, 26, 9);
-      expect(h.weather.status().headline, 'Last updated 3 days ago · No connection since Friday');
-      // back online but on mobile data with updates off
-      h.settings.setMobileForUpdates(false);
+      expect(h.weather.status().headline, 'Updated 3 days ago · No connection since Friday');
+      // back online on mobile data: no reason, just old
       h.probe.change(ConnectionKind.mobile);
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(h.weather.status().headline, 'Last updated 3 days ago · Updates paused: mobile data is off for updates');
-      expect(h.weather.status().detail, contains('Update now'));
+      expect(h.weather.status().headline, 'Updated 3 days ago');
+      expect(h.weather.status().tone, StatusTone.warn);
     });
 
     test('a failed update shows its reason beside the age', () async {
@@ -686,15 +677,15 @@ void main() {
 
     test('Home: nothing switched on says so', () async {
       h = await Harness.create();
-      expect(await h.weather.homeWeatherLine(), 'Not set up yet');
-      expect(await h.weather.homeAlertsLine(), 'Not set up yet');
+      expect(await homeWeather(h.weather), 'Not set up yet');
+      expect(await homeAlerts(h.weather), 'Not set up yet');
     });
 
     test('Home weather: now, today and the place, with the age', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.stored['openmeteo-forecast'] = forecast();
-      expect(await h.weather.homeWeatherLine(), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
     });
 
     test('Home weather: the field names the definition uses now', () async {
@@ -707,7 +698,7 @@ void main() {
         'fields': {'Daytime high': '52 °F', 'Low (early morning)': '30 °F'},
       };
       h.core.stored['openmeteo-forecast'] = f;
-      expect(await h.weather.homeWeatherLine(), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
+      expect(await homeWeather(h.weather), '45 °F, clear sky · High 52 °F, low 30 °F · Where I am · 1 hour old');
     });
 
     test('Home waits for the position while "Where I am" is ticked, and hears when it arrives', () async {
@@ -716,8 +707,8 @@ void main() {
       await h.weather.setRowOn(row('Wildfires'), true);
       h.here = null;
       expect(h.weather.waitingForPosition, isTrue);
-      expect(await h.weather.homeWeatherLine(), 'Waiting for your position');
-      expect(await h.weather.homeAlertsLine(), 'Waiting for your position');
+      expect(await homeWeather(h.weather), 'Waiting for your position');
+      expect(await homeAlerts(h.weather), 'Waiting for your position');
       expect((await h.weather.updateNow()).words, 'Waiting for your position.');
       var heard = 0;
       h.weather.addListener(() => heard++);
@@ -733,20 +724,20 @@ void main() {
       h.weather.positionChanged();
       expect(heard, 2);
       h.core.stored['openmeteo-forecast'] = forecast();
-      expect(await h.weather.homeWeatherLine(), contains('Where I am'));
+      expect(await homeWeather(h.weather), contains('Where I am'));
       // Not ticked: Home asks for a place, as before.
       h.here = null;
       h.settings.setWatched('here', false);
       expect(h.weather.waitingForPosition, isFalse);
-      expect(await h.weather.homeWeatherLine(), 'Choose a place to watch in Settings');
-      expect(await h.weather.homeAlertsLine(), 'Choose a place to watch in Settings');
+      expect(await homeWeather(h.weather), 'Choose a place to watch in Settings');
+      expect(await homeAlerts(h.weather), 'Choose a place to watch in Settings');
     });
 
     test('Home weather: an expired forecast says it needs a connection', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);
       h.core.stored['openmeteo-forecast'] = {...forecast(), 'expired': true};
-      expect(await h.weather.homeWeatherLine(), contains('expired'));
+      expect(await homeWeather(h.weather), contains('expired'));
     });
 
     test('Home alerts: none active, then a count with the first one', () async {
@@ -759,7 +750,7 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/none', 'label': 'No active fires', 'none_active': true, 'fields': {}},
         ],
       };
-      expect(await h.weather.homeAlertsLine(), 'None active · Where I am · checked 20 minutes old');
+      expect(await homeAlerts(h.weather), 'None active · Where I am · checked 20 minutes old');
       h.core.stored['wfigs-incidents-near'] = {
         'age': '20 minutes old',
         'expired': false,
@@ -768,7 +759,7 @@ void main() {
           {'address': 'live:wfigs-incidents-near/x/2', 'label': 'Forleen fire', 'fields': {'Distance': '52 mi W'}},
         ],
       };
-      expect(await h.weather.homeAlertsLine(), '2 fires nearby · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Where I am');
       await h.weather.setRowOn(row('Weather alerts'), true);
       h.core.stored['nws-alerts-point'] = {
         'age': '5 minutes old',
@@ -777,7 +768,7 @@ void main() {
           {'address': 'live:nws-alerts-point/x/1', 'label': 'Red Flag Warning', 'fields': {'Severity': 'severe'}},
         ],
       };
-      expect(await h.weather.homeAlertsLine(), '1 warning, 2 fires nearby: Red Flag Warning · Where I am');
+      expect(await homeAlerts(h.weather), '1 warning · 2 fires · Red Flag Warning · Where I am');
       // a fire reported by both the incident and the perimeter source counts once
       await h.weather.setRowOn(row('Weather alerts'), false);
       h.core.stored['wfigs-perimeters-near'] = {
@@ -787,7 +778,7 @@ void main() {
           {'address': 'live:wfigs-perimeters-near/x/1', 'label': 'East Fork fire perimeter', 'fields': {'Distance to fire edge': '38 mi S'}},
         ],
       };
-      expect(await h.weather.homeAlertsLine(), '2 fires nearby · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Where I am');
       // earthquakes are not counted on Home
       await h.weather.setRowOn(row('Earthquakes'), true);
       h.core.stored['usgs-quakes-near'] = {
@@ -797,14 +788,14 @@ void main() {
           {'address': 'live:usgs-quakes-near/x/1', 'label': 'M 2.1 near Hyde Park', 'fields': {'Magnitude': '2.1'}},
         ],
       };
-      expect(await h.weather.homeAlertsLine(), '2 fires nearby · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Where I am');
       // another watched place's fires are not added in: Home counts the place it names
       h.core.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 43, lon: -114)];
       h.settings.setWatched('place:cabin', true);
       expect((await h.weather.watchedPlaces()).length, 2);
-      expect(await h.weather.homeAlertsLine(), '2 fires nearby · Where I am');
+      expect(await homeAlerts(h.weather), '2 fires · Where I am');
       h.settings.setWatched('here', false);
-      expect(await h.weather.homeAlertsLine(), '2 fires nearby · Cabin');
+      expect(await homeAlerts(h.weather), '2 fires · Cabin');
     });
 
     test('the view groups forecasts and alerts, and marks a source with nothing downloaded', () async {
@@ -830,11 +821,34 @@ void main() {
       ],
     };
 
+    /// "All alerts", so fires pop up too.
     Future<Harness> withNotifier(FakeNotifier n) async {
       final hh = await Harness.create(notifier: n);
+      hh.settings.setPopUpFor(PopUpFor.all);
       await hh.weather.setRowOn(row('Wildfires'), true);
       return hh;
     }
+
+    test('Serious only (the default): a severe or extreme warning pops up; a fire or an advisory does not, and stays listed', () async {
+      final n = FakeNotifier();
+      h = await Harness.create(notifier: n);
+      expect(h.settings.popUpFor, PopUpFor.serious);
+      await h.weather.setRowOn(row('Wildfires'), true);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      h.core.stored['nws-alerts-point'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:nws/x/1', 'label': 'Red Flag Warning', 'fields': {'Severity': 'severe'}},
+          {'address': 'live:nws/x/2', 'label': 'Wind Advisory', 'fields': {'Severity': 'moderate'}},
+        ],
+      };
+      await h.weather.updateNow();
+      expect(n.shown.map((a) => a.item.label), ['Red Flag Warning']);
+      expect(n.shown.single.serious, isTrue);
+      expect(await homeAlerts(h.weather), contains('Wind Advisory'), reason: 'every alert is listed in Weather either way');
+    });
 
     test('a new fire pops up once; the next update does not repeat it', () async {
       final n = FakeNotifier();
@@ -868,7 +882,7 @@ void main() {
       expect(n.shown.length, 1, reason: 'already told');
     });
 
-    test('in quiet hours it is silent, and an extreme warning rings through when that is on', () async {
+    test('in quiet hours the rest arrive silently; serious ones still ring', () async {
       final n = FakeNotifier();
       h = await withNotifier(n);
       await h.weather.setRowOn(row('Weather alerts'), true);
@@ -888,14 +902,14 @@ void main() {
       expect(n.shown.firstWhere((a) => a.item.label == 'Flash Flood Warning').extreme, isTrue);
     });
 
-    test('with pop-ups off nothing shows, and turning them on later does not bring back old alerts', () async {
+    test('with None nothing shows, and choosing pop-ups later does not bring back old alerts', () async {
       final n = FakeNotifier();
       h = await withNotifier(n);
-      h.settings.setAlertPopups(false);
+      h.settings.setPopUpFor(PopUpFor.none);
       h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
       await h.weather.updateNow();
       expect(n.shown, isEmpty);
-      h.settings.setAlertPopups(true);
+      h.settings.setPopUpFor(PopUpFor.all);
       await h.weather.updateNow();
       expect(n.shown, isEmpty);
     });
@@ -908,4 +922,32 @@ void main() {
       expect(AlertFocus.fromPayload('not json'), isNull);
     });
   });
+}
+
+/// The Home card's weather part as one line, the way the card lays it out.
+Future<String> homeWeather(WeatherState w) async {
+  final c = await w.homeCard();
+  if (c.message != null) return c.message!;
+  return [
+    [c.temperature, c.conditions].whereType<String>().join(', '),
+    if (c.high != null && c.low != null) 'High ${c.high}, low ${c.low}',
+    c.place,
+    if (c.expired) 'forecast expired' else ?c.age,
+  ].join(' · ');
+}
+
+/// The Home card's alerts part as one line: the counts, the warnings by name, the place.
+Future<String> homeAlerts(WeatherState w) async {
+  final c = await w.homeCard();
+  if (c.message != null) return c.message!;
+  if (!c.alertsKnown) return 'Nothing downloaded yet';
+  final fires = c.alerts.where((a) => a.fire).length;
+  final warnings = c.alerts.length - fires;
+  if (c.alerts.isEmpty) return 'None active · ${c.place} · checked ${c.checked}';
+  return [
+    if (warnings > 0) warnings == 1 ? '1 warning' : '$warnings warnings',
+    if (fires > 0) fires == 1 ? '1 fire' : '$fires fires',
+    for (final a in c.alerts) if (!a.fire) a.label,
+    c.place,
+  ].join(' · ');
 }

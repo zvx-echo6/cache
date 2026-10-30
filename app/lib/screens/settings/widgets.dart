@@ -32,14 +32,16 @@ Color toneColor(CacheTokens k, Tone t) => switch (t) {
   Tone.quiet => k.secondary,
 };
 
-/// The small text under a row's name.
-Widget statusText(BuildContext context, List<Part> parts, {double size = 14}) {
+/// The small text under a row's name: one short line by default (it ends in an ellipsis), [maxLines] null for a fact that wraps.
+Widget statusText(BuildContext context, List<Part> parts, {double size = 13, int? maxLines = 1}) {
   final k = context.t;
   return Text.rich(
     TextSpan(
       children: [for (final p in parts) TextSpan(text: p.text, style: TextStyle(color: toneColor(k, p.tone)))],
       style: TextStyle(fontSize: size, height: 1.35, color: k.secondary),
     ),
+    maxLines: maxLines,
+    overflow: maxLines == null ? null : TextOverflow.ellipsis,
   );
 }
 
@@ -145,6 +147,7 @@ class SettingsRow extends StatelessWidget {
     this.chevron,
     this.dim = false,
     this.danger = false,
+    this.statusLines = 1,
   });
 
   final IconData? icon;
@@ -162,6 +165,9 @@ class SettingsRow extends StatelessWidget {
   final bool dim;
   final bool danger;
 
+  /// Lines the status may take; null lets a long fact wrap.
+  final int? statusLines;
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -174,7 +180,7 @@ class SettingsRow extends StatelessWidget {
     );
     final showChevron = chevron ?? (onTap != null && trailing == null);
     final titleColor = danger ? k.emergency : (dim ? k.secondary : k.text);
-    final lead = leading ?? (icon == null ? null : Icon(icon, size: 24, color: k.secondary));
+    final lead = leading ?? (icon == null ? null : Icon(icon, size: 22, color: k.secondary));
     return Semantics(
       container: true,
       child: Material(
@@ -184,9 +190,9 @@ class SettingsRow extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 64),
+            constraints: const BoxConstraints(minHeight: 52),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
               child: Row(
                 children: [
                   if (lead != null) ...[lead, const SizedBox(width: 14)],
@@ -195,10 +201,10 @@ class SettingsRow extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(title, style: TextStyle(fontSize: 17, color: titleColor)),
+                        Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: titleColor)),
                         if (status != null || statusWidget != null) ...[
-                          const SizedBox(height: 3),
-                          statusWidget ?? statusText(context, status!),
+                          const SizedBox(height: 2),
+                          statusWidget ?? statusText(context, status!, maxLines: statusLines),
                         ],
                       ],
                     ),
@@ -284,7 +290,7 @@ class AdvancedRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
           child: Row(
             children: [
-              Text('Advanced', style: TextStyle(fontSize: 17, color: k.text)),
+              Text('Advanced', style: TextStyle(fontSize: 15, color: k.text)),
               const SizedBox(width: 10),
               Expanded(child: Text(status, textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.secondary))),
               const SizedBox(width: 6),

@@ -201,6 +201,7 @@ class CatalogueStore {
           'needs_key': e.needsKey,
           if (e.keyAlias != null) 'key_alias': e.keyAlias,
           'default_on': e.defaultOn,
+          'featured': e.featured,
           'path': e.path,
           'attribution': e.attribution,
           'license': e.license,

@@ -35,9 +35,9 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  test('the default bar is Ask, Maps, Library and the default Home is Ask box, Weather, Alerts, Shortcuts', () {
+  test('the default bar is Ask, Maps, Library and the default Home is Set up Cache, the search box, Weather and alerts, Shortcuts', () {
     expect(layout.pinned, [ModuleId.ask, ModuleId.maps, ModuleId.library]);
-    expect(layout.visibleBlocks, [HomeBlock.ask, HomeBlock.weather, HomeBlock.alerts, HomeBlock.shortcuts]);
+    expect(layout.visibleBlocks, [HomeBlock.setup, HomeBlock.ask, HomeBlock.weather, HomeBlock.shortcuts]);
     expect(layout.shortcuts, isEmpty);
   });
 
@@ -71,9 +71,9 @@ void main() {
 
     final again = await open();
     expect(again.pinned, [ModuleId.ask, ModuleId.maps, ModuleId.videos]);
-    expect(again.blockOrder, [HomeBlock.shortcuts, HomeBlock.ask, HomeBlock.weather, HomeBlock.alerts]);
+    expect(again.blockOrder, [HomeBlock.shortcuts, HomeBlock.setup, HomeBlock.ask, HomeBlock.weather]);
     expect(again.isOn(HomeBlock.weather), isFalse);
-    expect(again.visibleBlocks, [HomeBlock.shortcuts, HomeBlock.ask, HomeBlock.alerts]);
+    expect(again.visibleBlocks, [HomeBlock.shortcuts, HomeBlock.setup, HomeBlock.ask]);
     expect([for (final s in again.shortcuts) s.kind], ShortcutKind.values);
     final p = again.shortcuts[1].place!;
     expect((p.id, p.name, p.lat, p.lon, p.kind, p.address), (hospital.id, hospital.name, 42.5, -113.5, 'Hospital', hospital.address));
@@ -83,7 +83,7 @@ void main() {
   });
 
   test('Reset to default puts the blocks back and keeps the shortcuts', () async {
-    layout.setBlockOn(HomeBlock.alerts, false);
+    layout.setBlockOn(HomeBlock.weather, false);
     layout.moveBlock(0, 2);
     layout.addShortcut(Shortcut.module(ModuleId.videos));
     layout.resetBlocks();
@@ -106,6 +106,14 @@ void main() {
     expect([for (final s in layout.shortcuts) s.title], ['Videos']);
   });
 
+  test('a layout from before: the Alerts block is gone, Set up Cache goes first, and a hidden setup card is the block switched off', () async {
+    File('${dir.path}/layout.json').writeAsStringSync('{"blocks": ["shortcuts", "ask", "weather", "alerts"], "setupHidden": true}');
+    final old = await open();
+    expect(old.blockOrder, [HomeBlock.setup, HomeBlock.shortcuts, HomeBlock.ask, HomeBlock.weather]);
+    expect(old.isOn(HomeBlock.setup), isFalse);
+    old.dispose();
+  });
+
   test('a damaged file leaves the defaults', () async {
     File('${dir.path}/layout.json').writeAsStringSync('{not json');
     final again = await open();
@@ -119,7 +127,7 @@ void main() {
         '{"pinned":["videos","nope","ask","maps","library","videos"],"blocks":["shortcuts"],"off":[],"shortcuts":[]}');
     final again = await open();
     expect(again.pinned, [ModuleId.videos, ModuleId.ask, ModuleId.maps]);
-    expect(again.blockOrder.first, HomeBlock.shortcuts);
+    expect(again.blockOrder.take(2), [HomeBlock.setup, HomeBlock.shortcuts], reason: 'a block added since goes first only if it is Set up Cache');
     expect(again.blockOrder.toSet(), HomeBlock.values.toSet());
     again.dispose();
   });

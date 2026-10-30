@@ -20,6 +20,8 @@ import '../maps/maps_state.dart';
 import '../models/search_model.dart';
 import '../nav/nav_state.dart';
 import '../regions/ui/region_sheet.dart';
+import '../search/app_search.dart';
+import '../search/app_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
@@ -30,8 +32,10 @@ import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
+import 'download_confirm.dart' show openStorageForSpace;
 import 'search_model_line.dart';
 import 'settings/deps.dart';
+import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
 import 'settings_screen.dart';
 import 'setup_card.dart';
@@ -96,6 +100,9 @@ class _ShellState extends State<Shell> {
     // Once the models folder has been read: an install with a chat model and no search model is asked once to get it.
     widget.app.addListener(_offerSearchModel);
     _offerSearchModel();
+    // "Free up space" in any download pop-up opens Settings > Storage.
+    openStorageForSpace = (context) =>
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
   }
 
   bool _searchModelAsked = false;
@@ -167,12 +174,10 @@ class _ShellState extends State<Shell> {
     location: widget.location,
     hub: widget.hub,
     onOpenAsk: _openAskFromSettings,
-    setup: _setup,
   );
 
-  /// "Set up Cache" on Home and in Settings: each line opens the screen the feature uses everywhere.
+  /// "Set up Cache" on Home: each line opens the screen the feature uses everywhere.
   late final SetupCache _setup = SetupCache(
-    layout: widget.layout,
     app: widget.app,
     weather: widget.hub.weather,
     sources: widget.sources,
@@ -198,6 +203,45 @@ class _ShellState extends State<Shell> {
     } else {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
     }
+  }
+
+  /// Home's search across Cache: one provider per module (Notebooks add theirs here).
+  late final AppSearch _search = AppSearch([
+    LibrarySearchProvider(
+      sources: widget.sources,
+      openZim: (z) async {
+        final id = widget.sources.idOf(z);
+        if (id != null) _openSource(await widget.sources.zimMainPage(id));
+      },
+      openAddress: _openSource,
+    ),
+    PlacesSearchProvider(
+      backend: widget.nav.backend,
+      near: () => _here,
+      distance: widget.nav.fmt.distance,
+      open: (p) {
+        if (widget.nav.phase != NavPhase.browsing) {
+          _say('Finish or end the route first');
+          return;
+        }
+        widget.nav.select(p);
+        _goModule(ModuleId.maps);
+      },
+    ),
+    LayersSearchProvider(
+      maps: widget.maps,
+      open: (l) {
+        widget.maps.setOn(l.id, true);
+        _goModule(ModuleId.maps);
+      },
+    ),
+  ]);
+
+  /// Enter in Home's search: a new chat that asks exactly what was typed.
+  void _askFromHome(String text) {
+    widget.chat.newChat();
+    _goModule(ModuleId.ask);
+    widget.chat.send(text);
   }
 
   void _openSettings() {
@@ -319,7 +363,8 @@ class _ShellState extends State<Shell> {
                 onOpenWeather: () => _goModule(ModuleId.weather),
                 turnOn: _weatherTurnOn,
                 setup: _setup,
-                onOpenAsk: () => _goModule(ModuleId.ask),
+                search: _search,
+                onAsk: _askFromHome,
                 onOpenSettings: _openSettings,
                 onOpenShortcut: _openShortcut,
               ),

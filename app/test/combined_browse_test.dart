@@ -27,8 +27,8 @@ void main() {
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Videos'), findsNothing);
     expect(find.textContaining('PeerTube'), findsNothing);
-    expect(find.text('Get more from the Kiwix library'), findsOneWidget);
-    expect(find.textContaining('No ZIMs on this phone yet'), findsOneWidget);
+    expect(find.text('Add to Library'), findsOneWidget);
+    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     browse.dispose();
