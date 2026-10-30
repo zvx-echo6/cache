@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 
 import '../../theme.dart';
 
@@ -148,6 +150,8 @@ class SettingsRow extends StatelessWidget {
     this.dim = false,
     this.danger = false,
     this.statusLines = 1,
+    this.onHold,
+    this.holdLabel = 'Options',
   });
 
   final IconData? icon;
@@ -168,6 +172,10 @@ class SettingsRow extends StatelessWidget {
   /// Lines the status may take; null lets a long fact wrap.
   final int? statusLines;
 
+  /// Press and hold: the row's menu (also in the accessibility actions as [holdLabel]).
+  final VoidCallback? onHold;
+  final String holdLabel;
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -181,14 +189,22 @@ class SettingsRow extends StatelessWidget {
     final showChevron = chevron ?? (onTap != null && trailing == null);
     final titleColor = danger ? k.emergency : (dim ? k.secondary : k.text);
     final lead = leading ?? (icon == null ? null : Icon(icon, size: 22, color: k.secondary));
+    final hold = onHold;
     return Semantics(
       container: true,
+      customSemanticsActions: hold == null ? null : {CustomSemanticsAction(label: holdLabel): hold},
       child: Material(
         color: k.surface,
         borderRadius: radius,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
+          onLongPress: hold == null
+              ? null
+              : () {
+                  HapticFeedback.mediumImpact();
+                  hold();
+                },
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 52),
             child: Padding(

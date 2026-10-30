@@ -338,6 +338,7 @@ class CoreLayerEngine extends LayerEngine {
             );
         area
           ..phase = AreaPhase.failed
+          ..interrupted = area.error == null || area.interrupted
           ..error = area.error ?? 'Stopped before it finished. Tap Update to continue.';
         _areas[_key(id, aid)] = area;
         _areaLayer[aid] = downloadLayer;
@@ -397,6 +398,9 @@ class CoreLayerEngine extends LayerEngine {
 
   @override
   List<DownloadedArea> areasOf(String layerId) => [for (final a in _areas.values) if (a.layerId == layerId) a];
+
+  @override
+  String downloadLayerOf(String layerId) => (_entries[layerId]?['download_layer'] as String?) ?? super.downloadLayerOf(layerId);
 
   @override
   int storageOf(String layerId) => ((_entries[layerId]?['installed'] as Map?)?['bytes'] as num?)?.toInt() ?? 0;
@@ -572,6 +576,7 @@ class CoreLayerEngine extends LayerEngine {
     a
       ..phase = AreaPhase.running
       ..error = null
+      ..interrupted = false
       ..doneTiles = update ? 0 : a.doneTiles;
     _areaLayer[a.id] = (_entries[a.layerId]?['download_layer'] as String?) ?? a.layerId;
     _running[a.id] = _Run(a, job, update);

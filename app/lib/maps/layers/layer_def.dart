@@ -314,6 +314,10 @@ class DownloadedArea {
   AreaPhase phase;
   String? error;
 
+  /// Stopped part way with nothing wrong (Cache was closed while it ran, or an older build left it): it carries on, it did not
+  /// fail.
+  bool interrupted = false;
+
   /// When the tiles were fetched (updates restart it).
   DateTime? fetchedAt;
 

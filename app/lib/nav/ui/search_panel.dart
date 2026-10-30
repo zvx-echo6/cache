@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../maps/ui/map_widgets.dart';
 import '../../regions/regions_state.dart';
-import '../../regions/ui/region_sheet.dart';
+import '../../regions/ui/region_actions.dart';
 import '../../regions/ui/regions_screen.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
@@ -147,7 +147,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
       return;
     }
     _focus.unfocus();
-    showRegionSheet(context, regions, rec);
+    openRegionOffer(context, regions, rec);
   }
 
   Widget _results(BuildContext context) {

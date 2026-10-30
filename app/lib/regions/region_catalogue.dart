@@ -14,6 +14,55 @@ const String kRegionCatalogueBase = '$kDataBaseUrl/regions/';
 /// The kind of a region drawn on the map rather than taken from the catalogue.
 const String kDrawnRegionKind = 'drawn';
 
+/// The kind of map downloads kept from before regions (per-layer area downloads of 1.0.0 builds) that no region on the phone holds:
+/// they list as one area, map only.
+const String kAreaRegionKind = 'area';
+
+/// What each part of a catalogue region weighs, worked out when the catalogue is built (cache-packs, regions/region_sizes.py) from
+/// the published routing and places indexes, the map layers' tile directories and the off-road catalogue: nothing is worked out on
+/// the phone. A part the catalogue cannot size is left out (null, or missing from [map]).
+class RegionSizes {
+  const RegionSizes({this.routing, this.places, this.map = const {}, this.offroadPacks = const {}, this.offroadTerrain});
+
+  /// Road routing: the gzipped tiles of the region's outline.
+  final int? routing;
+
+  /// Places and addresses; null while places are not published.
+  final int? places;
+
+  /// Each map layer (by the id it downloads as: hillshade and contour lines download as "elevation"): its bytes at the most detail
+  /// that fits one download.
+  final Map<String, int> map;
+
+  /// The off-road packs that cover the region, by pack id, and the terrain heights over the region (z12).
+  final Map<String, int> offroadPacks;
+  final int? offroadTerrain;
+
+  bool get hasOffroad => offroadPacks.isNotEmpty;
+
+  static RegionSizes? fromJson(Object? v) {
+    if (v is! Map) return null;
+    int? n(Object? x) => x is num ? x.toInt() : null;
+    final map = <String, int>{};
+    for (final e in ((v['map'] as Map?) ?? const {}).entries) {
+      final b = e.value is List && (e.value as List).isNotEmpty ? n((e.value as List).first) : n(e.value);
+      if (b != null) map[e.key as String] = b;
+    }
+    final off = v['offroad'];
+    final packs = <String, int>{};
+    if (off is Map) {
+      for (final e in ((off['packs'] as Map?) ?? const {}).entries) {
+        final b = n(e.value);
+        if (b != null) packs[e.key as String] = b;
+      }
+    }
+    return RegionSizes(routing: n(v['routing']), places: n(v['places']), map: map, offroadPacks: packs, offroadTerrain: off is Map ? n(off['terrain']) : null);
+  }
+}
+
+/// When the catalogue first carried sizes: a country's file kept on the phone from before is read again once.
+final DateTime kRegionSizesSince = DateTime.utc(2026, 10, 31);
+
 /// One region of the catalogue, at any scale: a country, a state, several states, part of a state, a valley, a metro area, a
 /// county or a city. Regions overlap freely; [parents] are every region it sits in.
 class RegionRecord {
@@ -28,6 +77,7 @@ class RegionRecord {
     this.description,
     this.polygon,
     this.country,
+    this.sizes,
   });
 
   final String id;
@@ -51,6 +101,9 @@ class RegionRecord {
   /// The ISO 3166-1 code of the country it is in ("US").
   final String? country;
 
+  /// What each part weighs, from the catalogue; null for a region it has no sizes for (and a drawn area).
+  final RegionSizes? sizes;
+
   /// An area drawn on the map ("Draw your own area instead"): a rectangle, downloaded like any region.
   factory RegionRecord.drawn(GeoBounds b, {DateTime? at}) => RegionRecord(
     id: 'drawn-${(at ?? DateTime.now()).millisecondsSinceEpoch}',
@@ -72,6 +125,7 @@ class RegionRecord {
     description: j['description'] as String?,
     polygon: j['polygon'] as String?,
     country: j['country'] as String?,
+    sizes: RegionSizes.fromJson(j['sizes']),
   );
 
   /// The box the map layers are downloaded for. The layer engine takes a box, never a polygon, so the map part of a region
@@ -238,7 +292,8 @@ class RegionCatalogue {
   Future<RegionShard> shard(String id) async {
     final known = _shards[id];
     if (known != null) return known;
-    final text = await _text('$id.json');
+    // A country's file from before the catalogue had sizes is read again (once): the sizes come with it.
+    final text = await _text('$id.json', freshAfter: kRegionSizesSince);
     // A large country's shard is several megabytes of JSON: read off the screen's thread.
     final s = await Isolate.run(() => RegionShard.parse(id, text));
     return _shards[id] = s;
@@ -331,11 +386,15 @@ class RegionCatalogue {
     }
   }
 
-  /// The text of [name]: the copy on the phone while it is younger than [maxAge], else fetched (and kept), else the old copy.
-  Future<String> _text(String name, {String? url}) async {
+  /// The text of [name]: the copy on the phone while it is younger than [maxAge] (and newer than [freshAfter]), else fetched (and
+  /// kept), else the old copy.
+  Future<String> _text(String name, {String? url, DateTime? freshAfter}) async {
     final f = File('${(await dir()).path}/$name');
     final have = await f.exists();
-    if (have && _now().difference(await f.lastModified()) < maxAge) return f.readAsString();
+    if (have) {
+      final at = await f.lastModified();
+      if (_now().difference(at) < maxAge && (freshAfter == null || at.isAfter(freshAfter))) return f.readAsString();
+    }
     try {
       final bytes = await _fetch(Uri.parse(url ?? '$base$name'));
       final text = utf8.decode(bytes);

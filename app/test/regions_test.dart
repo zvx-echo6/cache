@@ -131,43 +131,27 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('the size before downloading counts only what is new; parts can be picked; Download starts them', (tester) async {
+  testWidgets('a region of the catalogue: one pop-up with its parts and its size from the catalogue, nothing worked out; Download starts them', (tester) async {
     final r = await _Rig.boot(tester);
-    final est = (await tester.runAsync(() => r.s.engine.estimate('basemap', r.county.bounds!)))!;
-    expect(est.allowed, isTrue);
     await r.s.show(tester, RegionsScreen(regions: r.regions));
+    r.core.calls.clear();
     await _openCountySheet(tester);
-
-    expect(find.text('Download Twin Falls County'), findsOneWidget);
-    expect(find.text('Road routing'), findsOneWidget);
-    expect(find.text('About 80 MB · 40 MB already on this phone'), findsOneWidget, reason: 'only the routing tiles not on the phone are counted');
-    expect(find.text('About ${formatBytes(est.bytes)} · Base map · detail down to zoom ${est.maxZoom}'), findsOneWidget);
-    expect(find.text('About ${formatBytes((80 << 20) + est.bytes)} to download'), findsOneWidget);
-    // The size in all counts what Local will count: the routing tiles already on the phone too.
-    final already = (40 << 20) + est.bytesAlready;
-    expect(find.text('About ${formatBytes((80 << 20) + est.bytes + already)} on this phone in all, ${formatBytes(already)} of it already here'), findsOneWidget);
-    expect(r.core.calls, contains('plan'));
-
-    // Untick the map: only road routing is counted and downloaded.
-    await tester.tap(find.byKey(const ValueKey('part-map')));
-    await tester.pump();
-    expect(find.text('About 80 MB to download'), findsOneWidget);
-    expect(find.text('About 120 MB on this phone in all, 40 MB of it already here'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('part-map')));
-    await tester.pump();
-
-    await tester.tap(find.byKey(const ValueKey('region-download')));
     await r.settle(tester);
-    // The one download pop-up: the region and its size.
+    expect(r.core.calls, isNot(contains('plan')), reason: 'the size comes with the catalogue (1.0.27 worked it out for a minute)');
+    final offer = r.regions.offer(r.county);
+    expect(offer.kind, RegionOfferKind.download);
     expect(find.text('Download Twin Falls County?'), findsOneWidget);
+    expect(find.text(formatBytes(offer.bytes!)), findsOneWidget);
+    expect(find.byType(CheckboxListTile), findsNothing, reason: 'no per-part sheet');
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
+    await tester.pump();
+    expect(find.text('Downloading Twin Falls County'), findsOneWidget, reason: 'the tap says what it did');
     await r.settle(tester);
     expect(r.core.added.single['id'], _county);
     expect(r.core.added.single['geometry'], isA<Map<String, dynamic>>());
     expect(r.s.engine.areasOf('basemap').single.label, 'Twin Falls County');
-    expect(find.text('Download Twin Falls County'), findsNothing, reason: 'the sheet closes once the download starts');
 
-    // Without a connection the core cannot plan; the sheet says so instead of a size.
+    // A drawn area is the one region worked out on the phone; without a connection the core cannot plan it and says so.
     r.core.offline = true;
     final p = (await tester.runAsync(() => r.regions.plan(r.us['us-ut']!)))!;
     expect(p.routing, isNull);
@@ -182,8 +166,11 @@ void main() {
     await tester.pump();
     expect(find.text('Twin Falls County'), findsOneWidget);
     // each part on its own line of state, not one percentage for the whole region
-    expect(find.textContaining(RegExp(r'^Map (ready|\d+%) · Directions \d+%$')), findsOneWidget);
+    // only the parts not ready yet, each with where it stands, and a bar that says what it is
+    expect(find.textContaining(RegExp(r'^(Map \d+% · )?Directions \d+%$')), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(find.byKey(const ValueKey('local-bar-$_county')), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^\d+% (of .+ )?in all · now (map|directions)$')), findsOneWidget);
     // with no position known, everything downloads from the region's centre outwards
     final b = r.county.bounds!;
     final centre = [(b.south + b.north) / 2, (b.west + b.east) / 2];
@@ -196,7 +183,7 @@ void main() {
       await r.regions.refresh();
     });
     await tester.pump();
-    expect(find.textContaining('Road routing and map'), findsOneWidget);
+    expect(find.textContaining('Ready · '), findsOneWidget);
     expect(find.textContaining('next time Cache opens'), findsNothing, reason: 'the next route uses it, nothing waits for a restart');
 
     final saved = jsonDecode(File('${r.s.dir.path}/$kRegionsAppFile').readAsStringSync()) as Map;
@@ -208,10 +195,13 @@ void main() {
     expect(((extras['routing'] as Map)['valhalla'] as Map)['tiles'], '');
     expect((extras['regions'] as Map)['dir'], '${r.s.dir.path}/regions');
 
-    await tester.tap(find.byTooltip('Delete Twin Falls County'));
+    // press and hold: the region's menu; Delete asks first
+    await tester.longPress(find.byKey(const ValueKey('local-$_county')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('region-action-delete')));
     await tester.pumpAndSettle();
     expect(find.text('Delete Twin Falls County?'), findsOneWidget);
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.byKey(const ValueKey('confirm-delete')));
     await r.settle(tester);
     expect(r.core.regions, isEmpty);
     expect(r.core.calls, contains('remove'));
@@ -225,8 +215,6 @@ void main() {
     expect(r.core.policies.last, {'network': false}, reason: 'the same rule as sharing: no mobile data unless downloads may use it');
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
-
-    await tester.tap(find.byKey(const ValueKey('region-download')));
     await r.settle(tester);
     // The pop-up says so and offers Wait for Wi-Fi first.
     expect(find.byKey(const ValueKey('download-mobile')), findsOneWidget);
@@ -270,7 +258,9 @@ void main() {
       areas: [DownloadedArea(id: 'a', layerId: 'basemap', bounds: const GeoBounds(south: 42, west: -115, north: 43, east: -114), label: 'C', minZoom: 0, maxZoom: 14, totalTiles: 10, doneTiles: 10, phase: AreaPhase.done)],
       offroad: const [OffroadPackState(name: 'Idaho', bytes: 1000, doneBytes: 0, done: false)],
     );
-    expect(l.partsLine, 'Map ready · Directions 40% · Places ready · Off-road waiting');
+    // the parts that are ready are not named: they work already
+    expect(l.partsLine, 'Directions 40% · Off-road waiting');
+    expect([for (final p in l.parts) '${p.name} ${p.words}'], ['Map ready', 'Directions 40%', 'Places ready', 'Off-road waiting']);
     s.dispose();
     await rig.dispose(tester);
   });
@@ -293,8 +283,8 @@ void main() {
     expect([for (final l in r.regions.local) l.id], ['us-id', 'us-ut', _county]);
     final y = [for (final id in ['us-id', 'us-ut', _county]) tester.getTopLeft(find.byKey(ValueKey('local-$id'))).dy];
     expect(y[0] < y[1] && y[1] < y[2], isTrue);
-    expect(find.text('900 MB · Road routing'), findsOneWidget);
-    expect(find.text('Largest first. A part two regions share is kept once.'), findsOneWidget);
+    expect(find.text('Ready · 900 MB'), findsOneWidget);
+    expect(find.text('Tap a region to open it. Press and hold for Carry on, Check for update and Delete.'), findsOneWidget);
     await r.dispose(tester);
   });
 
@@ -353,8 +343,8 @@ void main() {
       hub: hub,
     );
     await r.s.show(tester, MapsPage(deps: deps));
-    expect(find.text('Road routing and map for a region'), findsOneWidget);
-    await tester.tap(find.text('Nothing downloaded'));
+    expect(find.text('Download a region'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('regions-row')));
     await tester.pumpAndSettle();
     expect(find.text('Regions'), findsOneWidget);
     expect(find.text('Downloads'), findsOneWidget);
@@ -372,36 +362,18 @@ void main() {
   });
 
   group('places and addresses', () {
-    testWidgets('the sheet has a third part with its own size, counted in the total; Download asks for every part picked', (tester) async {
+    testWidgets('places are offered once they are published (the catalogue has their size), and downloaded first', (tester) async {
       final r = await _Rig.boot(tester, places: true);
       expect(r.config?['places_base_url'], kPlacesBaseUrl, reason: 'the engine is told where places are published');
-      final est = (await tester.runAsync(() => r.s.engine.estimate('basemap', r.county.bounds!)))!;
-      await r.s.show(tester, RegionsScreen(regions: r.regions));
-      await _openCountySheet(tester);
-
-      expect(find.byKey(const ValueKey('part-routing')), findsOneWidget);
-      expect(find.byKey(const ValueKey('part-map')), findsOneWidget);
-      expect(find.byKey(const ValueKey('part-places')), findsOneWidget);
-      expect(find.text('Places and addresses'), findsOneWidget);
-      expect(find.text('About 16 MB · 4.0 MB already on this phone'), findsOneWidget);
-      expect(find.text('About ${formatBytes((80 << 20) + est.bytes + (16 << 20))} to download'), findsOneWidget);
-      final y = [for (final k in ['part-routing', 'part-map', 'part-places']) tester.getTopLeft(find.byKey(ValueKey(k))).dy];
-      expect(y[0] < y[1] && y[1] < y[2], isTrue, reason: 'under the two parts there were');
-
-      await tester.tap(find.byKey(const ValueKey('part-places')));
-      await tester.pump();
-      expect(find.text('About ${formatBytes((80 << 20) + est.bytes)} to download'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('part-places')));
-      await tester.tap(find.byKey(const ValueKey('part-routing')));
-      await tester.pump();
-      expect(find.text('About ${formatBytes(est.bytes + (16 << 20))} to download'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('part-routing')));
-      await tester.pump();
-
-      await tester.tap(find.byKey(const ValueKey('region-download')));
-      await r.settle(tester);
-      await tester.tap(find.byKey(const ValueKey('confirm-download')));
-      await r.settle(tester);
+      // The published catalogue has no places sizes yet: no region is offered places (they could only fail).
+      expect(r.regions.offer(r.county).places, isFalse);
+      final c = r.county;
+      final withPlaces = RegionRecord(id: c.id, name: c.name, kind: c.kind, bbox: c.bbox, country: c.country,
+          sizes: RegionSizes(routing: c.sizes!.routing, places: 16 << 20, map: c.sizes!.map, offroadPacks: c.sizes!.offroadPacks, offroadTerrain: c.sizes!.offroadTerrain));
+      final o = r.regions.offer(withPlaces);
+      expect(o.places, isTrue);
+      expect(o.bytes, r.regions.offer(c).bytes! + (16 << 20));
+      await tester.runAsync(() => r.regions.download(withPlaces, routing: o.routing, map: false, places: o.places, anyway: true));
       expect(r.core.added.single['parts'], ['places', 'routing']);
       expect(r.regions.regionOf(_county)!.hasPlaces, isTrue);
 
@@ -442,24 +414,28 @@ void main() {
       });
       await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
       await tester.pump();
-      expect(find.text('${formatBytes(140 << 20)} · Road routing and places'), findsOneWidget);
-      expect(find.textContaining('Road routing and map · Places not downloaded'), findsOneWidget);
+      expect(find.text('Ready · ${formatBytes(140 << 20)}'), findsOneWidget);
+      expect(r.regions.missesPlaces(r.regions.regionOf(_county)!), isTrue);
       expect(r.core.added.last['parts'], ['routing']);
 
-      await tester.tap(find.byTooltip('Update Twin Falls County'));
+      await tester.longPress(find.byKey(const ValueKey('local-$_county')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('region-action-update')));
       await r.settle(tester);
       expect(r.core.added.last['id'], _county);
       expect(r.core.added.last['parts'], ['places'], reason: 'only the missing part');
       r.core.finish(_county);
       await tester.runAsync(r.regions.refresh);
       await tester.pump();
-      expect(find.textContaining('Road routing, map and places'), findsOneWidget);
-      expect(find.textContaining('Places not downloaded'), findsNothing);
+      expect(r.regions.regionOf(_county)!.hasPlaces, isTrue);
+      expect(r.regions.missesPlaces(r.regions.regionOf(_county)!), isFalse);
 
-      await tester.tap(find.byTooltip('Delete Twin Falls County'));
+      await tester.longPress(find.byKey(const ValueKey('local-$_county')));
       await tester.pumpAndSettle();
-      expect(find.text('Its road routing, map, places and off-road data are removed from this phone. Parts another region uses stay.'), findsOneWidget);
-      await tester.tap(find.text('Keep'));
+      await tester.tap(find.byKey(const ValueKey('region-action-delete')));
+      await tester.pumpAndSettle();
+      expect(find.text('Its map, directions, places and off-road data are removed from this phone. Parts another region uses stay.'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await r.dispose(tester);
     });
@@ -574,7 +550,8 @@ void main() {
     await tester.tap(find.text('open'));
     await r.settle(tester);
     expect(find.text('Regions'), findsOneWidget);
-    expect(find.text('Each region has routing, map, places and off-road.'), findsOneWidget);
+    expect(find.text('Each region has directions, map, places and off-road.'), findsOneWidget);
+    expect(find.textContaining('County · ${formatBytes(r.regions.offer(r.county).bytes!)}'), findsOneWidget, reason: 'sizes at once');
     expect(find.text('Twin Falls County'), findsOneWidget);
     expect(find.byType(Checkbox), findsNothing, reason: 'no tick boxes until Select');
     expect(find.byTooltip('Download Twin Falls County'), findsOneWidget);
@@ -665,10 +642,11 @@ void main() {
     final r = await _Rig.boot(tester);
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
-    expect(find.text('Download Twin Falls County'), findsOneWidget);
+    await r.settle(tester);
+    expect(find.text('Download Twin Falls County?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(find.text('Download Twin Falls County'), findsNothing);
+    expect(find.text('Download Twin Falls County?'), findsNothing);
     final field = tester.widget<EditableText>(find.descendant(of: find.byKey(const ValueKey('region-search')), matching: find.byType(EditableText)));
     expect(field.focusNode.hasFocus, isFalse);
     expect(tester.testTextInput.isVisible, isFalse, reason: 'no keyboard');

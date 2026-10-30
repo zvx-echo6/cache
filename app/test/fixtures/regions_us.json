@@ -27,7 +27,51 @@
     "IMelika",
     "Fereende Stoaten fon Amerikoa",
     "Vereinigte Schtaate vo Amerika"
-   ]
+   ],
+   "sizes": {
+    "routing": 7438030381,
+    "map": {
+     "public-lands": [
+      456763396,
+      12
+     ],
+     "elevation": [
+      464387062,
+      8
+     ],
+     "hillshade": [
+      464387062,
+      8
+     ],
+     "contours": [
+      464387062,
+      8
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "arizona": 1101692928,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "colorado": 817577984,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nebraska": 417923072,
+      "nevada": 1320779776,
+      "new-mexico": 937656320,
+      "north-dakota": 323534848,
+      "oregon": 762380288,
+      "south-dakota": 303071232,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 17366405658
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:15:04Z"
+   }
   },
   {
    "id": "us-id",
@@ -61,7 +105,52 @@
     "Aidaho",
     "Aydaho",
     "Aighdeachobh"
-   ]
+   ],
+   "sizes": {
+    "routing": 112629848,
+    "map": {
+     "basemap": [
+      440704217,
+      15
+     ],
+     "blm-routes": [
+      14868080,
+      14
+     ],
+     "mvum": [
+      65460731,
+      14
+     ],
+     "public-lands": [
+      21151427,
+      12
+     ],
+     "usfs-trails-roads": [
+      98337059,
+      14
+     ],
+     "elevation": [
+      302510642,
+      11
+     ],
+     "hillshade": [
+      302510642,
+      11
+     ],
+     "contours": [
+      302510642,
+      11
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 791792096
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:14Z"
+   }
   },
   {
    "id": "us-id-ada-county",
@@ -91,7 +180,52 @@
    ],
    "alt": [
     "Ada"
-   ]
+   ],
+   "sizes": {
+    "routing": 25571551,
+    "map": {
+     "basemap": [
+      25918020,
+      15
+     ],
+     "blm-routes": [
+      518455,
+      14
+     ],
+     "mvum": [
+      361047,
+      14
+     ],
+     "public-lands": [
+      1398276,
+      12
+     ],
+     "usfs-trails-roads": [
+      841150,
+      14
+     ],
+     "elevation": [
+      11023990,
+      12
+     ],
+     "hillshade": [
+      11023990,
+      12
+     ],
+     "contours": [
+      11023990,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "oregon": 762380288
+     },
+     "terrain": 6015974
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:12Z"
+   }
   },
   {
    "id": "us-id-boise",
@@ -118,7 +252,52 @@
    "polygon": "polygons/us-id-boise.geojson",
    "alt": [
     "Boise City"
-   ]
+   ],
+   "sizes": {
+    "routing": 17512681,
+    "map": {
+     "basemap": [
+      13361107,
+      15
+     ],
+     "blm-routes": [
+      309244,
+      14
+     ],
+     "mvum": [
+      125171,
+      14
+     ],
+     "public-lands": [
+      1221243,
+      12
+     ],
+     "usfs-trails-roads": [
+      533629,
+      14
+     ],
+     "elevation": [
+      3679834,
+      12
+     ],
+     "hillshade": [
+      3679834,
+      12
+     ],
+     "contours": [
+      3679834,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "oregon": 762380288
+     },
+     "terrain": 1200644
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:12Z"
+   }
   },
   {
    "id": "us-id-jerome-county",
@@ -148,7 +327,52 @@
    ],
    "alt": [
     "Jerome"
-   ]
+   ],
+   "sizes": {
+    "routing": 5032257,
+    "map": {
+     "basemap": [
+      4007175,
+      15
+     ],
+     "blm-routes": [
+      169128,
+      14
+     ],
+     "mvum": [
+      74154,
+      14
+     ],
+     "public-lands": [
+      1155174,
+      12
+     ],
+     "usfs-trails-roads": [
+      272745,
+      14
+     ],
+     "elevation": [
+      7317134,
+      12
+     ],
+     "hillshade": [
+      7317134,
+      12
+     ],
+     "contours": [
+      7317134,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 3526420
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:15Z"
+   }
   },
   {
    "id": "us-id-magic-valley",
@@ -187,7 +411,52 @@
    ],
    "alt": [
     "South Central Idaho"
-   ]
+   ],
+   "sizes": {
+    "routing": 12751587,
+    "map": {
+     "basemap": [
+      30189512,
+      15
+     ],
+     "blm-routes": [
+      1518674,
+      14
+     ],
+     "mvum": [
+      4990033,
+      14
+     ],
+     "public-lands": [
+      2859132,
+      12
+     ],
+     "usfs-trails-roads": [
+      4633248,
+      14
+     ],
+     "elevation": [
+      96245080,
+      12
+     ],
+     "hillshade": [
+      96245080,
+      12
+     ],
+     "contours": [
+      96245080,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 67108756
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:16Z"
+   }
   },
   {
    "id": "us-id-southern-idaho",
@@ -224,7 +493,52 @@
    "alt": [
     "South Idaho",
     "Snake River Plain"
-   ]
+   ],
+   "sizes": {
+    "routing": 73305595,
+    "map": {
+     "basemap": [
+      192252725,
+      15
+     ],
+     "blm-routes": [
+      13105974,
+      14
+     ],
+     "mvum": [
+      28724793,
+      14
+     ],
+     "public-lands": [
+      11618738,
+      12
+     ],
+     "usfs-trails-roads": [
+      34382078,
+      14
+     ],
+     "elevation": [
+      483785984,
+      12
+     ],
+     "hillshade": [
+      483785984,
+      12
+     ],
+     "contours": [
+      483785984,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 344375660
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:18Z"
+   }
   },
   {
    "id": "us-id-twin-falls",
@@ -249,7 +563,52 @@
    "wikidata": "Q548384",
    "gers_id": "3ac9ac5b-02e1-454e-802b-5f86c9b8ee7f",
    "polygon": "polygons/us-id-twin-falls.geojson",
-   "alt": []
+   "alt": [],
+   "sizes": {
+    "routing": 2799591,
+    "map": {
+     "basemap": [
+      1438627,
+      15
+     ],
+     "blm-routes": [
+      169128,
+      14
+     ],
+     "mvum": [
+      70799,
+      14
+     ],
+     "public-lands": [
+      1061571,
+      12
+     ],
+     "usfs-trails-roads": [
+      270382,
+      14
+     ],
+     "elevation": [
+      2423464,
+      12
+     ],
+     "hillshade": [
+      2423464,
+      12
+     ],
+     "contours": [
+      2423464,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 245360
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:18Z"
+   }
   },
   {
    "id": "us-id-twin-falls-county",
@@ -279,7 +638,52 @@
    ],
    "alt": [
     "Twin Falls"
-   ]
+   ],
+   "sizes": {
+    "routing": 5615211,
+    "map": {
+     "basemap": [
+      9029178,
+      15
+     ],
+     "blm-routes": [
+      169525,
+      14
+     ],
+     "mvum": [
+      1195002,
+      14
+     ],
+     "public-lands": [
+      1362900,
+      12
+     ],
+     "usfs-trails-roads": [
+      1144958,
+      14
+     ],
+     "elevation": [
+      21465344,
+      12
+     ],
+     "hillshade": [
+      21465344,
+      12
+     ],
+     "contours": [
+      21465344,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 13358700
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:18Z"
+   }
   },
   {
    "id": "us-intermountain-west",
@@ -319,7 +723,67 @@
    "alt": [
     "Intermountain",
     "Inter-mountain West"
-   ]
+   ],
+   "sizes": {
+    "routing": 606917084,
+    "map": {
+     "basemap": [
+      572441390,
+      13
+     ],
+     "blm-routes": [
+      75165949,
+      14
+     ],
+     "mvum": [
+      192473354,
+      14
+     ],
+     "public-lands": [
+      80314712,
+      12
+     ],
+     "usfs-trails-roads": [
+      253406922,
+      14
+     ],
+     "elevation": [
+      482868590,
+      10
+     ],
+     "hillshade": [
+      482868590,
+      10
+     ],
+     "contours": [
+      482868590,
+      10
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "arizona": 1101692928,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "colorado": 817577984,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nebraska": 417923072,
+      "nevada": 1320779776,
+      "new-mexico": 937656320,
+      "north-dakota": 323534848,
+      "oregon": 762380288,
+      "south-dakota": 303071232,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 7793309310
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:56Z"
+   }
   },
   {
    "id": "us-metro-twin-falls-id",
@@ -347,7 +811,52 @@
    "population_source": "census-2024",
    "alt": [
     "Twin Falls"
-   ]
+   ],
+   "sizes": {
+    "routing": 7553570,
+    "map": {
+     "basemap": [
+      9467991,
+      15
+     ],
+     "blm-routes": [
+      169525,
+      14
+     ],
+     "mvum": [
+      1218528,
+      14
+     ],
+     "public-lands": [
+      1372637,
+      12
+     ],
+     "usfs-trails-roads": [
+      1157470,
+      14
+     ],
+     "elevation": [
+      22513142,
+      12
+     ],
+     "hillshade": [
+      22513142,
+      12
+     ],
+     "contours": [
+      22513142,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 14406498
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:19:16Z"
+   }
   },
   {
    "id": "us-mountain-west",
@@ -384,7 +893,67 @@
    "alt": [
     "Mountain States",
     "Rocky Mountain States"
-   ]
+   ],
+   "sizes": {
+    "routing": 867963216,
+    "map": {
+     "basemap": [
+      736922297,
+      13
+     ],
+     "blm-routes": [
+      91491392,
+      14
+     ],
+     "mvum": [
+      213852242,
+      14
+     ],
+     "public-lands": [
+      94689405,
+      12
+     ],
+     "usfs-trails-roads": [
+      287114242,
+      14
+     ],
+     "elevation": [
+      567052284,
+      10
+     ],
+     "hillshade": [
+      567052284,
+      10
+     ],
+     "contours": [
+      567052284,
+      10
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "arizona": 1101692928,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "colorado": 817577984,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nebraska": 417923072,
+      "nevada": 1320779776,
+      "new-mexico": 937656320,
+      "north-dakota": 323534848,
+      "oregon": 762380288,
+      "south-dakota": 303071232,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 8725589316
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:20:38Z"
+   }
   },
   {
    "id": "us-pacific-northwest",
@@ -419,7 +988,61 @@
     "PNW",
     "Pacific NW",
     "Cascadia"
-   ]
+   ],
+   "sizes": {
+    "routing": 476726158,
+    "map": {
+     "basemap": [
+      642454212,
+      14
+     ],
+     "blm-routes": [
+      17199866,
+      14
+     ],
+     "mvum": [
+      128468400,
+      14
+     ],
+     "public-lands": [
+      41133179,
+      12
+     ],
+     "usfs-trails-roads": [
+      193169093,
+      14
+     ],
+     "elevation": [
+      609903618,
+      11
+     ],
+     "hillshade": [
+      609903618,
+      11
+     ],
+     "contours": [
+      609903618,
+      11
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nevada": 1320779776,
+      "oregon": 762380288,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 3393953826
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:23:22Z"
+   }
   },
   {
    "id": "us-ut",
@@ -451,7 +1074,52 @@
     "UT",
     "Uta",
     "Utaho"
-   ]
+   ],
+   "sizes": {
+    "routing": 118261230,
+    "map": {
+     "basemap": [
+      299853659,
+      15
+     ],
+     "blm-routes": [
+      26138599,
+      14
+     ],
+     "mvum": [
+      22683858,
+      14
+     ],
+     "public-lands": [
+      12350886,
+      12
+     ],
+     "usfs-trails-roads": [
+      22124391,
+      14
+     ],
+     "elevation": [
+      576924656,
+      12
+     ],
+     "hillshade": [
+      576924656,
+      12
+     ],
+     "contours": [
+      576924656,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "utah": 978681856
+     },
+     "terrain": 423737044
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:24:27Z"
+   }
   }
  ],
  "tree": [

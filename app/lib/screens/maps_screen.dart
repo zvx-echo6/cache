@@ -15,7 +15,7 @@ import '../maps/palette/map_palette.dart';
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
 import '../regions/region_catalogue.dart';
-import '../regions/ui/region_sheet.dart';
+import '../regions/ui/region_actions.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
@@ -758,8 +758,9 @@ class _MapsScreenState extends State<MapsScreen> {
     final area = GeoBounds(south: lats.reduce(math.min), west: lons.reduce(math.min), north: lats.reduce(math.max), east: lons.reduce(math.max));
     if (!mounted) return;
     setState(() => _drawing = false);
-    // The same region sheet and download pop-up as a region from the list.
-    await showRegionSheet(context, regions, RegionRecord.drawn(area));
+    // The same download pop-up as a region from the list. A drawn area is the one region whose size is worked out on the phone.
+    final rec = RegionRecord.drawn(area);
+    await openRegionOffer(context, regions, rec, drawnSize: () => drawnSizeOf(context, regions, rec));
   }
 
   // ---- credits ------------------------------------------------------------------------------------------

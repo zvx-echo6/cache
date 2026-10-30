@@ -59,6 +59,20 @@ abstract class LayerEngine extends ChangeNotifier {
   /// Downloaded and downloading areas of a layer.
   List<DownloadedArea> areasOf(String layerId);
 
+  /// The layer [layerId]'s tiles are downloaded as: hillshade and contour lines are drawn from the elevation layer's tiles, so their
+  /// areas are the elevation layer's (and list under all three). Itself for any other layer.
+  String downloadLayerOf(String layerId) => layer(layerId)?.raw['derived_from'] as String? ?? layerId;
+
+  /// Every downloaded area once (an elevation area lists under elevation, hillshade and contour lines).
+  List<DownloadedArea> get allAreas {
+    final seen = <String>{};
+    return [
+      for (final l in layers)
+        for (final a in areasOf(l.id))
+          if (seen.add(a.id)) a,
+    ];
+  }
+
   /// Stops a running download and removes what it fetched.
   Future<void> cancel(String areaId);
 

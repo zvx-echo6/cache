@@ -33,16 +33,33 @@ void Function(BuildContext context)? openStorageForSpace;
 /// The one confirm pop-up for every download (Library, Regions, Models and the rest): the items with their sizes, what it does to the
 /// phone's storage, and, when it will not fit, how much more is needed and a way to Storage. On mobile data with mobile-data
 /// downloads off it says so and offers "Wait for Wi-Fi" first. [space] is the storage the files go to.
+///
+/// [summary] is said in place of the list of items ("Map, directions, places and off-road."), with [bytes] the size in all (null:
+/// not known, "Size unknown"); [action] is the button's word ("Download", "Carry on"); [name] is what is downloaded, for "Idaho needs
+/// 1.8 GB" when it does not fit.
 Future<DownloadChoice> confirmDownload(
   BuildContext context, {
   required String title,
   required List<DownloadLine> lines,
   required Space space,
   bool mobileBlocked = false,
+  List<String>? summary,
+  int? bytes,
+  String action = 'Download',
+  String? name,
 }) async {
   final choice = await showDialog<DownloadChoice>(
     context: context,
-    builder: (ctx) => _DownloadDialog(title: title, lines: lines, space: space, mobileBlocked: mobileBlocked),
+    builder: (ctx) => _DownloadDialog(
+      title: title,
+      lines: lines,
+      space: space,
+      mobileBlocked: mobileBlocked,
+      summary: summary,
+      bytes: summary == null ? null : bytes,
+      action: action,
+      name: name,
+    ),
   );
   return choice ?? DownloadChoice.cancel;
 }
@@ -51,14 +68,19 @@ Future<DownloadChoice> confirmDownload(
 Future<DownloadChoice> askToDownload(
   BuildContext context, {
   required String title,
-  required List<DownloadLine> lines,
+  List<DownloadLine> lines = const [],
   required String dir,
   DataPolicy? policy,
   Space Function(String dir) spaceOf = Space.of,
+  List<String>? summary,
+  int? bytes,
+  String action = 'Download',
+  String? name,
 }) async {
   final blocked = policy != null && await policy.blocksDownload();
   if (!context.mounted) return DownloadChoice.cancel;
-  return confirmDownload(context, title: title, lines: lines, space: spaceOf(dir), mobileBlocked: blocked);
+  return confirmDownload(context,
+      title: title, lines: lines, space: spaceOf(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name);
 }
 
 /// Delete always asks first, in the same shape: what it frees, the storage after, that it can come back, and a red Delete.
@@ -141,29 +163,74 @@ class _SizeLine extends StatelessWidget {
 }
 
 class _DownloadDialog extends StatelessWidget {
-  const _DownloadDialog({required this.title, required this.lines, required this.space, required this.mobileBlocked});
+  const _DownloadDialog({
+    required this.title,
+    required this.lines,
+    required this.space,
+    required this.mobileBlocked,
+    this.summary,
+    this.bytes,
+    this.action = 'Download',
+    this.name,
+  });
 
   final String title;
   final List<DownloadLine> lines;
   final Space space;
   final bool mobileBlocked;
+  final List<String>? summary;
+  final int? bytes;
+  final String action;
+  final String? name;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final total = lines.fold<int>(0, (s, l) => s + l.bytes);
+    final said = summary;
+    final known = said == null || bytes != null;
+    final total = said == null ? lines.fold<int>(0, (s, l) => s + l.bytes) : (bytes ?? 0);
     final free = space.free;
     final short = space.shortBy(total);
     final fits = short == 0;
     final storage = openStorageForSpace;
+    final body = TextStyle(fontSize: 15, height: 1.4, color: k.text);
+    if (!fits && said != null) {
+      // Not enough room: what it needs, what there is, and the way to make room as the button.
+      final usable = space.usable ?? 0;
+      return AlertDialog(
+        title: const Text('Not enough space'),
+        content: Text(
+          '${name ?? 'This download'} needs ${formatBytes(total)}. You have ${formatBytes(usable)} to use; Cache keeps '
+          '${formatBytes(space.reserve)} free for the phone.',
+          key: const ValueKey('download-short'),
+          style: body,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, DownloadChoice.cancel), child: const Text('Cancel')),
+          if (storage != null)
+            FilledButton(
+              key: const ValueKey('free-up-space'),
+              onPressed: () {
+                Navigator.pop(context, DownloadChoice.cancel);
+                storage(context);
+              },
+              child: const Text('Free up space'),
+            ),
+        ],
+      );
+    }
     return AlertDialog(
       title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final l in lines) _SizeLine(name: l.name, bytes: l.bytes, note: l.note),
-          if (free != null) ...[
+          if (said != null)
+            for (final (i, line) in said.indexed)
+              Padding(padding: EdgeInsets.only(top: i == 0 ? 0 : 6), child: Text(line, key: ValueKey('download-summary-$i'), style: body))
+          else
+            for (final l in lines) _SizeLine(name: l.name, bytes: l.bytes, note: l.note),
+          if (free != null && known) ...[
             const SizedBox(height: 10),
             _Bar(free: free, bytes: total, fits: fits),
             const SizedBox(height: 6),
@@ -203,7 +270,7 @@ class _DownloadDialog extends StatelessWidget {
           FilledButton(key: const ValueKey('wait-for-wifi'), onPressed: () => Navigator.pop(context, DownloadChoice.whenWifi), child: const Text('Wait for Wi-Fi')),
         ] else ...[
           TextButton(onPressed: () => Navigator.pop(context, DownloadChoice.cancel), child: const Text('Cancel')),
-          FilledButton(key: const ValueKey('confirm-download'), onPressed: () => Navigator.pop(context, DownloadChoice.now), child: const Text('Download')),
+          FilledButton(key: const ValueKey('confirm-download'), onPressed: () => Navigator.pop(context, DownloadChoice.now), child: Text(action)),
         ],
       ],
     );

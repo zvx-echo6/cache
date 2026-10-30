@@ -37,6 +37,8 @@ class WatchRegion {
 List<WatchRegion> watchRegionsOf(Iterable<LocalRegion> regions) {
   final byName = <String, List<DownloadedArea>>{};
   for (final r in regions) {
+    // Map downloads kept from before regions are not regions to watch (they never were).
+    if (r.isArea) continue;
     final done = [for (final a in r.areas) if (a.phase == AreaPhase.done) a];
     if (done.isNotEmpty) byName.putIfAbsent(r.name, () => []).addAll(done);
   }

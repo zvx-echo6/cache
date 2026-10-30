@@ -30,7 +30,9 @@ SetupDeps setupDepsFrom({
   DateTime Function() now = DateTime.now,
 }) {
   String? age(DateTime? t) => t == null ? null : setupAge(now().difference(t));
-  List<LocalRegion> ready() => [for (final r in regions.local) if (r.phase == RegionPhase.ready) r];
+  // Map downloads kept from before regions (listed with the regions on screen since 1.0.28) were never regions to the assistant:
+  // what it reads stays as it was.
+  List<LocalRegion> ready() => [for (final r in regions.local) if (r.phase == RegionPhase.ready && !r.isArea) r];
   return SetupDeps(
     connection: () async => [
       SetupItem('Network', switch (await policy.probe.current()) {

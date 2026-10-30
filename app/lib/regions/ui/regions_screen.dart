@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import '../../maps/ui/format.dart';
 import '../../screens/settings/widgets.dart';
 import '../../settings/data_policy.dart';
+import '../problem_words.dart';
 import '../../theme.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
-import 'region_sheet.dart';
+import 'region_actions.dart';
+import 'region_page.dart';
 
 /// Regions and downloads, like OsmAnd's Maps & Resources: Downloads (the catalogue as a tree, with search), Local (what is on
 /// this phone, largest first, with update and delete) and Updates (by part, with Update all).
@@ -64,16 +66,7 @@ Widget _list(List<Widget> children) => ListView(
 );
 
 /// The small line under a region's name: what of it is on the phone, or nothing.
-List<Part> localParts(RegionsState regions, LocalRegion? l) {
-  if (l == null) return const [];
-  return switch (l.phase) {
-    // Each part on its own: a part that is ready works while the others download.
-    RegionPhase.downloading => [Part(l.partsLine)],
-    RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn), Part(' · ${l.partsLine}')],
-    RegionPhase.failed => [Part(l.partsLine, Tone.danger)],
-    RegionPhase.ready => [const Part('On this phone', Tone.ok), Part(' · ${formatBytes(l.bytes)}')],
-  };
-}
+List<Part> localParts(RegionsState regions, LocalRegion? l) => l == null ? const [] : regionStatusParts(regions, l);
 
 /// The parts a region has on the phone, in order: "Road routing, map and places".
 String partsWords(LocalRegion l) {
@@ -135,7 +128,7 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
     try {
       final rec = await r.catalogue.record(h.id, shardId: h.shardId);
       if (rec == null) throw StateError('missing');
-      if (mounted) await showRegionSheet(context, r, rec);
+      if (mounted) await openRegionOffer(context, r, rec);
     } catch (_) {
       if (mounted) say(context, 'This region could not be read. Connect and try again.');
     }
@@ -145,7 +138,7 @@ class _DownloadsTabState extends State<DownloadsTab> with AutomaticKeepAliveClie
     // Coming back here must not give the search field the focus (and the keyboard) again.
     FocusManager.instance.primaryFocus?.unfocus();
     if (c.count <= 1) {
-      await showRegionSheet(context, r, c.record);
+      await openRegionOffer(context, r, c.record);
       return;
     }
     await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionNodePage(regions: r, shardId: c.shard, nodeId: c.record.id, title: c.record.name)));
@@ -291,7 +284,7 @@ class _RegionNodePageState extends State<RegionNodePage> {
       return;
     }
     final rec = s[n.id];
-    if (rec != null) await showRegionSheet(context, r, rec);
+    if (rec != null) await openRegionOffer(context, r, rec);
   }
 
   @override
@@ -337,7 +330,7 @@ class _RegionNodePageState extends State<RegionNodePage> {
                           [Part(regionKindLabel(self.kind, country: self.country))],
                           localParts(r, r.regionOf(self.id)),
                         ]),
-                        onTap: () => showRegionSheet(context, r, self),
+                        onTap: () => openRegionOffer(context, r, self),
                       ),
                     ],
                   ),
@@ -366,41 +359,37 @@ class _RegionNodePageState extends State<RegionNodePage> {
 
 // ---- Local -----------------------------------------------------------------------------------------------
 
-class LocalTab extends StatelessWidget {
+class LocalTab extends StatefulWidget {
   const LocalTab({super.key, required this.regions});
 
   final RegionsState regions;
 
-  Future<void> _delete(BuildContext context, LocalRegion l) async {
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete ${l.name}?'),
-        content: const Text('Its road routing, map, places and off-road data are removed from this phone. Parts another region uses stay.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (yes != true) return;
-    try {
-      await regions.remove(l.id);
-    } catch (e) {
-      if (context.mounted) say(context, '$e');
-    }
+  @override
+  State<LocalTab> createState() => _LocalTabState();
+}
+
+class _LocalTabState extends State<LocalTab> {
+  RegionsState get regions => widget.regions;
+
+  @override
+  void initState() {
+    super.initState();
+    regions.addListener(_note);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _note());
   }
 
-  Future<void> _update(BuildContext context, LocalRegion l, {bool anyway = false}) async {
-    try {
-      await regions.updateRegion(l.id, anyway: anyway);
-    } on MobileDataBlocked catch (e) {
-      if (context.mounted) {
-        say(context, e.message, action: SnackBarAction(label: 'Download anyway', onPressed: () => _update(context, l, anyway: true)));
-      }
-    } catch (e) {
-      if (context.mounted) say(context, '$e');
-    }
+  @override
+  void dispose() {
+    regions.removeListener(_note);
+    super.dispose();
+  }
+
+  /// The one-time note after old map downloads were tidied up.
+  void _note() {
+    final n = regions.tidyNote;
+    if (n == null || !mounted) return;
+    regions.tidyNote = null;
+    say(context, n);
   }
 
   @override
@@ -408,54 +397,17 @@ class LocalTab extends StatelessWidget {
     return ListenableBuilder(
       listenable: regions,
       builder: (context, _) {
-        final k = context.t;
         final local = regions.local;
         return _list([
-          if (regions.paused != null && local.any((l) => l.phase != RegionPhase.ready))
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: statusText(context, [Part(regions.paused!, Tone.warn)])),
+          if (regions.paused != null && local.any((l) => l.phase == RegionPhase.downloading || l.phase == RegionPhase.paused))
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: statusText(context, [Part(regions.paused!, Tone.warn)], maxLines: 3)),
           SettingsGroup(
             rows: [
               if (local.isEmpty) const SettingsRow(title: 'Nothing downloaded yet', status: [Part('Pick a region under Downloads')]),
-              for (final l in local)
-                SettingsRow(
-                  key: ValueKey('local-${l.id}'),
-                  title: l.name,
-                  statusWidget: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      statusText(context, switch (l.phase) {
-                        RegionPhase.ready => [
-                          Part('${formatBytes(l.bytes)} · ${partsWords(l)}'),
-                          if (regions.missesPlaces(l)) ...const [Part(' · '), Part('Places not downloaded', Tone.warn)],
-                        ],
-                        _ => localParts(regions, l),
-                      }),
-                      if (l.phase == RegionPhase.downloading || l.phase == RegionPhase.paused) ...[
-                        const SizedBox(height: 6),
-                        LinearProgressIndicator(value: l.fraction),
-                      ],
-                    ],
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Update ${l.name}',
-                        icon: Icon(Icons.refresh, color: k.secondary),
-                        // A download that stopped carries on with Update, as its line says.
-                        onPressed: l.phase == RegionPhase.ready || l.phase == RegionPhase.failed ? () => _update(context, l) : null,
-                      ),
-                      IconButton(
-                        tooltip: 'Delete ${l.name}',
-                        icon: Icon(Icons.delete_outline, color: k.secondary),
-                        onPressed: () => _delete(context, l),
-                      ),
-                    ],
-                  ),
-                ),
+              for (final l in local) RegionRow(regions: regions, region: l),
             ],
           ),
-          if (local.length > 1) const NoteText('Largest first. A part two regions share is kept once.'),
+          if (local.isNotEmpty) const NoteText('Tap a region to open it. Press and hold for Carry on, Check for update and Delete.'),
           if (regions.offroadPacks case final packs when packs.isNotEmpty)
             SettingsGroup(
               label: 'Off-road data',
@@ -464,7 +416,7 @@ class LocalTab extends StatelessWidget {
                   SettingsRow(
                     key: ValueKey('offroad-pack-${p.name}'),
                     title: p.name,
-                    status: [Part('${p.done ? formatBytes(p.bytes) : 'Downloading'} · used by ${p.usedBy.join(', ')}')],
+                    status: [Part('${p.done ? formatBytes(p.bytes) : (p.bytes == 0 ? 'Waiting' : 'Downloading')} · used by ${p.usedBy.join(', ')}')],
                   ),
               ],
             ),
@@ -500,7 +452,7 @@ class _UpdatesTabState extends State<UpdatesTab> {
         say(context, e.message, action: anyway == null ? null : SnackBarAction(label: 'Download anyway', onPressed: () => _run(anyway)));
       }
     } catch (e) {
-      if (mounted) say(context, '$e');
+      if (mounted) say(context, downloadProblemWords(e, what: 'update'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

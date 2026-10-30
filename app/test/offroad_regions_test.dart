@@ -7,7 +7,7 @@ import 'package:cache/maps/ui/format.dart';
 import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
-import 'package:cache/regions/ui/region_sheet.dart';
+import 'package:cache/regions/ui/region_actions.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -141,9 +141,15 @@ void main() {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
       await tester.pump(const Duration(milliseconds: 50));
     }
-    expect(find.byKey(const ValueKey('part-offroad')), findsOneWidget);
-    expect(find.text('Off-road'), findsOneWidget);
-    expect(find.text('About ${formatBytes((300 << 20) + terrain.bytes)}'), findsOneWidget);
+    // One pop-up: the parts, with off-road among them, and the size from the catalogue (nothing worked out on the phone).
+    expect(find.text('Download Twin Falls County?'), findsOneWidget);
+    expect(find.textContaining('off-road'), findsOneWidget);
+    final offer = regions.offer(county);
+    expect(offer.offroad, isTrue);
+    expect(offer.bytes, isNotNull);
+    expect(find.text(formatBytes(offer.bytes!)), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+    await tester.pump();
 
     await tester.runAsync(() async {
       await regions.download(county, routing: true, map: false, offroad: true, anyway: true);
@@ -172,22 +178,18 @@ void main() {
     final second = (await tester.runAsync(() => regions.plan(idahoState)))!;
     expect(second.offroad!.packsOnPhone, isTrue);
     expect(second.offroad!.downloadBytes, second.offroad!.packs.single.elevation.bytes, reason: 'no pack bytes');
-    // the region's sheet and the download pop-up say so
-    await tester.pumpWidget(const SizedBox()); // a fresh app: the sheet opened above is not under this one
-    await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => showRegionSheet(c, regions, idahoState), child: const Text('open')))));
+    // the catalogue's off-road size for it leaves the pack out, and the download pop-up says so
+    final cost = regions.costOf(idahoState);
+    expect(cost.offroadShared, isTrue);
+    expect(cost.offroad, idahoState.sizes!.offroadTerrain, reason: 'only its terrain heights');
+    await tester.pumpWidget(const SizedBox()); // a fresh app: the pop-up opened above is not under this one
+    await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => openRegionOffer(c, regions, idahoState), child: const Text('open')))));
     await tester.tap(find.text('open'));
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-    expect(find.descendant(of: find.byKey(const ValueKey('part-offroad')), matching: find.textContaining('Already on this phone')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('region-download')));
     for (var i = 0; i < 6; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
       await tester.pump(const Duration(milliseconds: 50));
     }
-    expect(find.text('Off-road'), findsWidgets);
-    expect(find.descendant(of: find.byType(AlertDialog), matching: find.text('Already on this phone')), findsOneWidget);
+    expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('already on this phone')), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pump();
     await tester.runAsync(() => regions.download(idahoState, routing: false, map: false, offroad: true, anyway: true));
