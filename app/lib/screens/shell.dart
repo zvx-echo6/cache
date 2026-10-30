@@ -18,7 +18,7 @@ import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../nav/nav_state.dart';
-import '../regions/ui/region_sheet.dart';
+import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
 import '../search/app_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
@@ -171,7 +171,7 @@ class _ShellState extends State<Shell> {
     addLibrary: (context) => showAddToLibrary(context, widget.browse),
   );
 
-  /// "Get your area": the region sheet for where the phone is, when the catalogue knows it; else the regions to choose from.
+  /// "Get your area": the Regions sheet for where the phone is; without a position, the regions to search.
   void _getArea(BuildContext context) {
     final regions = widget.hub.regions;
     if (regions == null) {
@@ -179,9 +179,8 @@ class _ShellState extends State<Shell> {
       return;
     }
     final here = _here;
-    final rec = here == null ? null : regions.catalogue.regionAt(here.lat, here.lon);
-    if (rec != null) {
-      showRegionSheet(context, regions, rec);
+    if (here != null) {
+      showRegionsSheet(context, regions, lat: here.lat, lon: here.lon);
     } else {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
     }

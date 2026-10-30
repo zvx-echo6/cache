@@ -287,6 +287,28 @@ class RegionCatalogue {
     return best;
   }
 
+  /// The regions of the read shards whose box holds the point, smallest first (at most [limit]): what the Regions sheet lists for
+  /// the place on the map.
+  List<RegionRecord> regionsAt(double lat, double lon, {Set<String> kinds = const {'region', 'sub_state', 'valley', 'metro', 'county'}, int limit = 8}) {
+    final out = [
+      for (final s in _shards.values)
+        for (final r in s.records.values)
+          if (kinds.contains(r.kind) && (r.bounds?.contains(lat, lon) ?? false)) r,
+    ]..sort((a, b) => (a.areaKm2 ?? double.infinity).compareTo(b.areaKm2 ?? double.infinity));
+    return out.take(limit).toList();
+  }
+
+  /// Reads the shards of the countries whose box holds the point (so [regionsAt] knows their regions). Boxes overlap near borders:
+  /// a shard that cannot be read is left out, the others still count.
+  Future<void> readShardAt(double lat, double lon) async {
+    for (final c in (await index()).countries) {
+      if (!(c.record.bounds?.contains(lat, lon) ?? false) || _shards.containsKey(c.shard)) continue;
+      try {
+        await shard(c.shard);
+      } catch (_) {}
+    }
+  }
+
   /// The text of [name]: the copy on the phone while it is younger than [maxAge], else fetched (and kept), else the old copy.
   Future<String> _text(String name, {String? url}) async {
     final f = File('${(await dir()).path}/$name');

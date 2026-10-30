@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../maps/ui/format.dart';
-import '../../settings/data_policy.dart';
+import '../../screens/download_confirm.dart';
 import '../../theme.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
@@ -37,7 +37,6 @@ class _RegionSheetState extends State<RegionSheet> {
   bool _map = true;
   bool _places = true;
   bool _starting = false;
-  bool _blockedByMobile = false;
   String? _error;
 
   RegionsState get r => widget.regions;
@@ -82,29 +81,30 @@ class _RegionSheetState extends State<RegionSheet> {
         (_places && _canPlaces ? part(p.places!) : 0);
   }
 
-  Future<void> _start({bool anyway = false}) async {
+  /// The download pop-up, then the parts picked start: now, or once on Wi-Fi.
+  Future<void> _start() async {
+    final dir = await r.supportDir();
+    if (!mounted) return;
+    final choice = await askToDownload(
+      context,
+      title: 'Download ${widget.region.name}?',
+      lines: [DownloadLine(widget.region.name, _total)],
+      dir: dir.path,
+      policy: r.policy,
+    );
+    if (choice == DownloadChoice.cancel || !mounted) return;
     setState(() {
       _starting = true;
-      _blockedByMobile = false;
       _error = null;
     });
     try {
-      await r.download(
-        widget.region,
-        routing: _routing && _canRouting,
-        map: _map && _canMap,
-        places: _places && _canPlaces,
-        anyway: anyway,
-      );
-      if (mounted) Navigator.pop(context);
-    } on MobileDataBlocked catch (e) {
-      if (mounted) {
-        setState(() {
-          _starting = false;
-          _blockedByMobile = true;
-          _error = e.message;
-        });
+      final routing = _routing && _canRouting, map = _map && _canMap, places = _places && _canPlaces;
+      if (choice == DownloadChoice.now) {
+        await r.download(widget.region, routing: routing, map: map, places: places, anyway: true);
+      } else {
+        await r.downloadOnWifi(widget.region, routing: routing, map: map, places: places);
       }
+      if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -214,17 +214,11 @@ class _RegionSheetState extends State<RegionSheet> {
                   Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _blockedByMobile
-                        ? FilledButton(
-                            key: const ValueKey('download-anyway'),
-                            onPressed: () => _start(anyway: true),
-                            child: const Text('Download anyway'),
-                          )
-                        : FilledButton(
-                            key: const ValueKey('region-download'),
-                            onPressed: p != null && !_starting && _picked ? () => _start() : null,
-                            child: const Text('Download'),
-                          ),
+                    child: FilledButton(
+                      key: const ValueKey('region-download'),
+                      onPressed: p != null && !_starting && _picked ? _start : null,
+                      child: const Text('Download'),
+                    ),
                   ),
                 ],
               ),

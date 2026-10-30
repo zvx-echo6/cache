@@ -51,6 +51,8 @@ release notes).
 - Ask: tap the model name for the model and the memory it takes, Switch model, Unload and Manage models
 - Library: the Cache guide comes with the app, so its setup help is there from the first start with no download; it cannot be deleted
 - Library: a library file compressed with gzip can be added (from a file or a link) like an uncompressed one, and the blank template is saved compressed
+- Regions: one sheet lists the regions where the map is, smallest first, each with its size and a download button or "On this phone"; Select (or press and hold) picks several for one download
+- Regions: on mobile data with Mobile data downloads off, Wait for Wi-Fi starts a region by itself once on Wi-Fi
 
 ### Fixed
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat

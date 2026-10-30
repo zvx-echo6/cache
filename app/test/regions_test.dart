@@ -7,6 +7,7 @@ import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/search_panel.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:cache/screens/settings/deps.dart';
@@ -149,6 +150,10 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('region-download')));
     await r.settle(tester);
+    // The one download pop-up: the region and its size.
+    expect(find.text('Download Twin Falls County?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-download')));
+    await r.settle(tester);
     expect(r.core.added.single['id'], _county);
     expect(r.core.added.single['geometry'], isA<Map<String, dynamic>>());
     expect(r.s.engine.areasOf('basemap').single.label, 'Twin Falls County');
@@ -209,9 +214,10 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('region-download')));
     await r.settle(tester);
-    expect(find.text(const MobileDataBlocked().message), findsOneWidget);
+    // The pop-up says so and offers Wait for Wi-Fi first.
+    expect(find.byKey(const ValueKey('download-mobile')), findsOneWidget);
     expect(r.core.added, isEmpty, reason: 'nothing starts before the person says so');
-    await tester.tap(find.byKey(const ValueKey('download-anyway')));
+    await tester.tap(find.byKey(const ValueKey('download-now')));
     await r.settle(tester);
     expect(r.core.added, hasLength(1));
     expect(r.core.regions[_county]!['state'], 'paused');
@@ -356,6 +362,8 @@ void main() {
       await tester.pump();
 
       await tester.tap(find.byKey(const ValueKey('region-download')));
+      await r.settle(tester);
+      await tester.tap(find.byKey(const ValueKey('confirm-download')));
       await r.settle(tester);
       expect(r.core.added.single['parts'], ['places', 'routing']);
       expect(r.regions.regionOf(_county)!.hasPlaces, isTrue);
@@ -517,6 +525,35 @@ void main() {
       nav.dispose();
       await r.dispose(tester);
     });
+  });
+
+  testWidgets('the Regions sheet: the regions at a place with their sizes; Select ticks several and one Download goes through the pop-up', (tester) async {
+    final r = await _Rig.boot(tester);
+    final b = r.county.bounds!;
+    await r.s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(
+      onPressed: () => showRegionsSheet(c, r.regions, lat: (b.south + b.north) / 2, lon: (b.west + b.east) / 2),
+      child: const Text('open'),
+    ))));
+    await tester.tap(find.text('open'));
+    await r.settle(tester);
+    expect(find.text('Regions'), findsOneWidget);
+    expect(find.text('Each region has routing, map and places.'), findsOneWidget);
+    expect(find.text('Twin Falls County'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing, reason: 'no tick boxes until Select');
+    expect(find.byTooltip('Download Twin Falls County'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('regions-select')));
+    await tester.pump();
+    expect(find.byType(Checkbox), findsWidgets);
+    await tester.tap(find.byKey(const ValueKey('region-$_county')));
+    await tester.pump();
+    expect(find.textContaining('Download 1 ·'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('regions-download-picked')));
+    await r.settle(tester);
+    expect(find.text('Download Twin Falls County?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-download')));
+    await r.settle(tester);
+    expect(r.core.added.single['id'], _county);
+    await r.dispose(tester);
   });
 
   testWidgets('the search field does not take the focus back when the region sheet closes', (tester) async {

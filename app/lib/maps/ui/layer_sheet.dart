@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../location/location_service.dart';
 import '../../regions/regions_state.dart';
+import '../../regions/ui/regions_list_sheet.dart';
 import '../../regions/ui/regions_screen.dart';
 import '../../theme.dart';
 import '../layers/layer_def.dart';
@@ -58,7 +59,14 @@ class LayerSheet extends StatelessWidget {
                 FilledButton.icon(
                   key: const ValueKey('download-region'),
                   onPressed: () {
-                    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions!)));
+                    // The regions at the middle of the map, in the Regions sheet; with no map view yet, the list to search.
+                    final v = maps.viewBounds;
+                    if (v == null) {
+                      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions!)));
+                    } else {
+                      Navigator.pop(context);
+                      showRegionsSheet(context, regions!, lat: (v.south + v.north) / 2, lon: (v.west + v.east) / 2);
+                    }
                   },
                   icon: const Icon(Icons.download),
                   label: const Text('Download a region'),
