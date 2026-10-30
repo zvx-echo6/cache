@@ -46,7 +46,7 @@ pub fn normalize(p: &ParamDef, v: &Value) -> std::result::Result<Value, String> 
                 Value::Number(n) => n.to_string(),
                 _ => return Err(format!("{v} is not one of the choices")),
             };
-            if !p.choices.iter().any(|c| *c == s) {
+            if !p.choices.contains(&s) {
                 return Err(format!("{s:?} is not one of {}", p.choices.join(", ")));
             }
             Value::String(s)

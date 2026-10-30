@@ -288,7 +288,7 @@ fn web_search_is_offered_only_with_a_key_and_online() {
     // a key but offline, online but no key, online but no provider: still absent
     assert_eq!(c.set_web(Some("kagi"), Some(KEY), 0), 0);
     assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
-    assert_eq!(c.content("web_search", json!({"query": "x"})).contains("not_set_up"), true);
+    assert!(c.content("web_search", json!({"query": "x"})).contains("not_set_up"));
     assert_eq!(c.set_web(Some("kagi"), None, 1), 0);
     assert_eq!(c.schema_names(), ["search", "read", "calculate"]);
     assert_eq!(c.set_web(None, Some(KEY), 1), 0);
@@ -1012,7 +1012,7 @@ fn a_restored_conversation_continues_byte_for_byte_like_one_that_never_stopped()
         assert_eq!(replies, base, "replies differ when the conversation is restored after step {k}");
         let export: Value = serde_json::from_str(&export.unwrap()).unwrap();
         assert_eq!(export["format"], 1);
-        assert_eq!(export["next_n"], match k { 0 => 3, 1 => 4, 2 | 3 | 4 => 6, _ => 7 });
+        assert_eq!(export["next_n"], match k { 0 => 3, 1 => 4, 2..=4 => 6, _ => 7 });
         assert_eq!(export["web_hits"].as_object().unwrap().len(), if k >= 2 { 2 } else { 0 }, "step {k}");
     }
 }

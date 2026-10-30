@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -143,6 +144,9 @@ class FakeLiveCore implements LiveCore {
   final List<String> deleted = [];
   bool fetchedNew = true;
 
+  /// While set, cs_live_get waits for it: the core busy with something else (it answers one call at a time).
+  Completer<void>? busy;
+
   @override
   Future<void> deleteSavedPlace(String key) async {
     deleted.add(key);
@@ -171,6 +175,7 @@ class FakeLiveCore implements LiveCore {
 
   @override
   Future<Map<String, dynamic>> get(Map<String, dynamic> request) async {
+    await busy?.future;
     final s = stored['${request['source']}'];
     if (s == null) throw const CacheSearchException('not_found', 'nothing downloaded');
     return s;

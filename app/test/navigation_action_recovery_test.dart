@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'chat_fakes.dart';
 import 'nav_fakes.dart';
 import 'navigation_action_test.dart' show ActionHost, navigate;
+import 'support/act_core_stand_in.dart';
 
 class BlockAnswer implements ModelBackend {
   final entered = Completer<void>();
@@ -73,7 +74,7 @@ void main() {
       final a = action();
       final backend = BlockAnswer();
       final chat =
-          ChatController(tools: const [], newHost: (_) => ActionHost([a]))
+          ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => ActionHost([a]))
             ..attachStore(store)
             ..setBackend(backend);
       final sending = chat.send('Navigate');
@@ -81,7 +82,7 @@ void main() {
       final id = chat.activeId!;
       expect(chat.busy, isTrue);
       final reopened = ConversationStore.open(path);
-      final restored = ChatController(tools: const [])
+      final restored = ChatController(actCore: const ActCoreStandIn(), tools: const [])
         ..attachStore(reopened)
         ..openConversation(id);
       expect(
@@ -117,7 +118,7 @@ void main() {
           (_) => navigate(),
           (_) => say('Old answer'),
         ]);
-        final chat = ChatController(tools: const [], newHost: (_) => host)
+        final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => host)
           ..attachStore(store)
           ..setBackend(backend);
         final sending = chat.send('Old question');
@@ -168,7 +169,7 @@ void main() {
         (_) => say('Hello'),
       ]);
       final chat =
-          ChatController(tools: const [], newHost: (_) => ActionHost([]))
+          ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => ActionHost([]))
             ..attachStore(store)
             ..setBackend(backend);
       await chat.send('Unavailable route');

@@ -2,7 +2,8 @@
 //!
 //! Road routing is Valhalla (the C shim, tiles from the installed map region: one tiles.tar, or a folder of tiles such as the
 //! downloaded regions', see [`TileStream`]); off-road legs are the off-road
-//! router (`cache_offroad`, the pack and the elevation file). `schema()` is built from what is installed:
+//! router (`cache_offroad`: the downloaded region packs with the map's elevation layer, or one pack and an elevation file).
+//! `schema()` is built from what is installed:
 //! nothing without the Valhalla tiles and the shim library; the `to_type` enum from the places pack's categories
 //! (TOOLS.md's list while no places pack is installed). The result is AIDA's navigate contract (build.rs). Off-road
 //! legs come back inside the route when an end is away from the roads and the off-road pack and elevation exist;
@@ -17,6 +18,7 @@ mod config;
 pub mod map;
 mod resolve;
 
+pub use cache_offroad::{ElevationSource, ElevationTiles, TileElevation};
 pub use config::{NavigateCfg, OffroadCfg, ValhallaCfg};
 pub use resolve::parse_latlon;
 
@@ -26,13 +28,16 @@ use cache_offroad::pack::PackSource;
 use cache_offroad::router::{Boundary, RouteOptions};
 use cache_offroad::shim::{config_for_tile_dir, config_for_tiles, ShimValhalla};
 use cache_offroad::valhalla::Valhalla;
-use cache_offroad::{ElevationSource, PmtilesElevation, SqlitePack};
+use cache_offroad::{PmtilesElevation, SqlitePack};
 use cache_tool::places::PlaceSource;
 use cache_tool::{Tool, ToolCtx, ToolError, ToolOutput};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
+
+/// The nearest place of a category as a route end: the place, how it was matched, and the two candidate lists.
+type NearestEnd = (resolve::Resolved, &'static str, Vec<Value>, Vec<Value>);
 
 /// Where a places pack plugs into the tool (shared with the handle, so it can be set after the tool is registered).
 pub type PlaceSlot = Arc<RwLock<Option<Arc<dyn PlaceSource>>>>;
@@ -99,8 +104,40 @@ fn newest_file(dir: &Path) -> Option<SystemTime> {
 const AGE_RECHECK: Duration = Duration::from_secs(60);
 
 pub(crate) struct OffroadData {
-    pack: SqlitePack,
-    elevation: PmtilesElevation,
+    /// The packs: the desktop form's one, or every downloaded region pack.
+    packs: Vec<SqlitePack>,
+    elevation: Arc<dyn ElevationSource>,
+    /// The pack files it was opened on (it opens again when they change: a region downloaded or removed).
+    files: Vec<std::path::PathBuf>,
+}
+
+impl OffroadData {
+    /// The pack a trip routes on: the first that covers both ends, else one that covers an end, else the first. With one pack
+    /// (the desktop form, or one region downloaded) that is always it.
+    fn pack_for(&self, req: &NavigateRequest) -> &SqlitePack {
+        let (a, b) = (req.from.route_point(), req.to.route_point());
+        self.packs
+            .iter()
+            .find(|p| p.covers(a.0, a.1) && p.covers(b.0, b.1))
+            .or_else(|| self.packs.iter().find(|p| p.covers(a.0, a.1) || p.covers(b.0, b.1)))
+            .unwrap_or(&self.packs[0])
+    }
+}
+
+/// The region packs in `dir`: `<build>/<region>/offroad.sqlite`, sorted. A pack is only ever moved in whole (the app downloads
+/// it under another name and renames it once its checksum matches), so every file of that name is complete.
+fn region_packs(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for build in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        for region in std::fs::read_dir(build.path()).into_iter().flatten().flatten() {
+            let f = region.path().join("offroad.sqlite");
+            if f.is_file() {
+                out.push(f);
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The routing engine behind both the `navigate` tool and the map's route call: the Valhalla shim and the off-road pack,
@@ -112,6 +149,8 @@ pub struct NavCore {
     /// The router, and the tiles it was started on (it starts again when they move).
     valhalla: Mutex<Option<(Arc<dyn Valhalla>, String)>>,
     offroad: Mutex<Option<Arc<OffroadData>>>,
+    /// Elevation for the region packs (the map layer engine's elevation layer, plugged in by cache_search).
+    elevation: RwLock<Option<Arc<dyn ElevationSource>>>,
     /// Tests inject a Valhalla and skip the file checks.
     injected: bool,
     tool_routes: Mutex<std::collections::VecDeque<Value>>,
@@ -242,10 +281,6 @@ impl NavigateTool {
         self.core.valhalla()
     }
 
-    fn offroad(&self) -> Result<Option<Arc<OffroadData>>, ToolError> {
-        self.core.offroad()
-    }
-
     fn to_types(&self) -> Vec<String> {
         self.place_source().and_then(|p| p.categories()).unwrap_or_else(|| DEFAULT_TO_TYPES.iter().map(|s| s.to_string()).collect())
     }
@@ -270,6 +305,7 @@ impl NavCore {
             places,
             valhalla: Mutex::new(None),
             offroad: Mutex::new(None),
+            elevation: RwLock::new(None),
             injected: false,
             tool_routes: Mutex::new(Default::default()),
             stream: RwLock::new(None),
@@ -284,6 +320,7 @@ impl NavCore {
             places,
             valhalla: Mutex::new(Some((valhalla, String::new()))),
             offroad: Mutex::new(None),
+            elevation: RwLock::new(None),
             injected: true,
             tool_routes: Mutex::new(Default::default()),
             stream: RwLock::new(None),
@@ -292,6 +329,12 @@ impl NavCore {
     }
 
     /// Plug in (or take out) where a folder of tiles is filled from; see [`TileStream`].
+    /// Where the region packs read elevation from (z12 Mapterhorn tiles). Without it the region packs are not used.
+    pub fn set_elevation(&self, elevation: Option<Arc<dyn ElevationSource>>) {
+        *self.elevation.write().unwrap_or_else(|e| e.into_inner()) = elevation;
+        *lock(&self.offroad) = None;
+    }
+
     pub fn set_stream(&self, stream: Option<Arc<dyn TileStream>>) {
         *self.stream.write().unwrap_or_else(|e| e.into_inner()) = stream;
     }
@@ -344,11 +387,21 @@ impl NavCore {
         self.tiles_path().map(|t| Path::new(&t).is_dir()).unwrap_or(false)
     }
 
-    fn offroad_installed(&self) -> bool {
+    /// The desktop form: one pack and a local elevation file, both there.
+    fn offroad_files(&self) -> bool {
         match &self.cfg.offroad {
-            Some(o) => Path::new(&o.pack).is_file() && Path::new(&o.elevation).is_file(),
+            Some(o) => !o.pack.is_empty() && Path::new(&o.pack).is_file() && Path::new(&o.elevation).is_file(),
             None => false,
         }
+    }
+
+    /// The downloaded region packs, when elevation is plugged in; empty otherwise.
+    fn offroad_region_packs(&self) -> Vec<std::path::PathBuf> {
+        let Some(dir) = self.cfg.offroad.as_ref().and_then(|o| o.dir.as_deref()) else { return Vec::new() };
+        if self.elevation.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+            return Vec::new();
+        }
+        region_packs(Path::new(dir))
     }
 
     pub(crate) fn valhalla(&self) -> Result<Arc<dyn Valhalla>, ToolError> {
@@ -374,20 +427,36 @@ impl NavCore {
         Ok(shim)
     }
 
-    /// The off-road pack and elevation, opened on first use; None while either file is missing.
+    /// The off-road packs and elevation, opened on first use and again when the downloaded packs change; None while there are
+    /// none (the desktop form: while either file is missing).
     pub(crate) fn offroad(&self) -> Result<Option<Arc<OffroadData>>, ToolError> {
         let mut g = lock(&self.offroad);
-        if let Some(o) = &*g {
-            return Ok(Some(o.clone()));
+        let open_err = |e: cache_offroad::pack::PackError| err(ToolError::NOT_SET_UP, format!("the off-road pack could not be opened: {e}"));
+        if self.offroad_files() {
+            if let Some(o) = &*g {
+                return Ok(Some(o.clone()));
+            }
+            let o = self.cfg.offroad.as_ref().expect("checked above");
+            let pack = SqlitePack::open(Path::new(&o.pack)).map_err(open_err)?;
+            let elevation =
+                PmtilesElevation::open(Path::new(&o.elevation)).map_err(|e| err(ToolError::NOT_SET_UP, format!("the elevation file could not be opened: {e}")))?;
+            let d = Arc::new(OffroadData { packs: vec![pack], elevation: Arc::new(elevation), files: vec![o.pack.clone().into()] });
+            *g = Some(d.clone());
+            return Ok(Some(d));
         }
-        if !self.offroad_installed() {
+        let files = self.offroad_region_packs();
+        if files.is_empty() {
+            *g = None;
             return Ok(None);
         }
-        let o = self.cfg.offroad.as_ref().expect("checked above");
-        let pack = SqlitePack::open(Path::new(&o.pack)).map_err(|e| err(ToolError::NOT_SET_UP, format!("the off-road pack could not be opened: {e}")))?;
-        let elevation =
-            PmtilesElevation::open(Path::new(&o.elevation)).map_err(|e| err(ToolError::NOT_SET_UP, format!("the elevation file could not be opened: {e}")))?;
-        let d = Arc::new(OffroadData { pack, elevation });
+        if let Some(o) = &*g {
+            if o.files == files {
+                return Ok(Some(o.clone()));
+            }
+        }
+        let elevation = self.elevation.read().unwrap_or_else(|e| e.into_inner()).clone().expect("checked by offroad_region_packs");
+        let packs = files.iter().map(|f| SqlitePack::open(f)).collect::<Result<Vec<_>, _>>().map_err(open_err)?;
+        let d = Arc::new(OffroadData { packs, elevation, files });
         *g = Some(d.clone());
         Ok(Some(d))
     }
@@ -411,7 +480,7 @@ impl NavCore {
         let valhalla = self.valhalla()?;
         let (no_pack, no_elev) = (NoPack, NoElevation);
         let (pack, elev): (&dyn PackSource, &dyn ElevationSource) = match &have_offroad {
-            Some(o) => (&o.pack, &o.elevation),
+            Some(o) => (o.pack_for(&req), &*o.elevation),
             None => (&no_pack, &no_elev),
         };
         let mut nav = Navigator::new(pack, elev, &*valhalla);
@@ -583,7 +652,7 @@ impl NavigateTool {
     /// routing ranked the candidates, whatever the travel mode, or `"distance"` when no candidate could be routed and the
     /// straight-line order stood: navi's `_rank` values), the warnings (a list, empty when there are none), and the others
     /// (at most 2, with `drive_min`).
-    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, &'static str, Vec<Value>, Vec<Value>), ToolError> {
+    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<NearestEnd, ToolError> {
         let not_set_up = || err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone");
         let src = self.place_source().ok_or_else(not_set_up)?;
         let cats = src.categories().ok_or_else(not_set_up)?;
@@ -664,5 +733,59 @@ impl Args {
             _ => {}
         }
         Ok(Args { from: s("from")?, to, to_type, mode, near: s("near")?, land_access })
+    }
+}
+
+#[cfg(test)]
+mod region_pack_tests {
+    use super::*;
+
+    struct Flat;
+    impl ElevationSource for Flat {
+        fn read_elevation(&self, _: i64, _: i64, rows: usize, cols: usize) -> Result<Vec<f32>, cache_offroad::elevation::ElevError> {
+            Ok(vec![0.0; rows * cols])
+        }
+    }
+
+    fn core(dir: &Path) -> NavCore {
+        let cfg = NavigateCfg {
+            valhalla: None,
+            offroad: Some(OffroadCfg { pack: String::new(), elevation: String::new(), dir: Some(dir.to_string_lossy().into_owned()), max_cells: None }),
+        };
+        NavCore::new(cfg, Default::default())
+    }
+
+    #[test]
+    fn region_packs_are_the_complete_files_two_folders_down_sorted() {
+        let dir = std::env::temp_dir().join(format!("cs-nav-packs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for p in ["offroad-2026-10/utah/offroad.sqlite", "offroad-2026-10/idaho/offroad.sqlite", "offroad-2026-10/nevada/.offroad.sqlite.part", "offroad.sqlite"] {
+            let f = dir.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, b"x").unwrap();
+        }
+        let got: Vec<String> = region_packs(&dir).iter().map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(got, ["offroad-2026-10/idaho/offroad.sqlite", "offroad-2026-10/utah/offroad.sqlite"]);
+        assert!(region_packs(&dir.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_packs_or_no_elevation_is_no_off_road_data() {
+        let dir = std::env::temp_dir().join(format!("cs-nav-nopacks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = core(&dir);
+        // nothing downloaded: no off-road data, as when nothing was configured
+        assert!(c.offroad().unwrap().is_none());
+        c.set_elevation(Some(Arc::new(Flat)));
+        assert!(c.offroad().unwrap().is_none());
+        // a pack but no elevation: still none
+        let f = dir.join("b/r/offroad.sqlite");
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, b"not a pack").unwrap();
+        c.set_elevation(None);
+        assert!(c.offroad().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

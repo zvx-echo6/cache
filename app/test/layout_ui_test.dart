@@ -20,12 +20,15 @@ import 'package:cache/video/video_state.dart';
 import 'package:cache_search/cache_search.dart' show MapPlace;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' show MapLibrePlatform;
 
 import 'browse/fakes.dart';
 import 'nav_fakes.dart';
+import 'navigation_camera_test.dart' show NoSurface;
 import 'support/settings_rig.dart';
 import 'support/test_layer_engine.dart';
 import 'video_fake.dart';
+import 'support/act_core_stand_in.dart';
 
 class _NoSource implements PositionSource {
   @override
@@ -78,7 +81,7 @@ class Rig {
     layout = LayoutState(settingsDirOverride: dir);
     app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
     store = ConversationStore.memory();
-    chat = ChatController(tools: const [])..attachStore(store);
+    chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..attachStore(store);
     sources = FakeSources(Directory('${dir.path}/zims')..createSync());
     browse = BrowseState(sources: sources, policy: testPolicy(), settingsDirOverride: dir, phoneLanguage: 'en');
     video = VideoState(dirOverride: Directory('${dir.path}/videos'), nativeFactory: fakeVideoNative, tokens: MemoryTokenStore());
@@ -255,6 +258,22 @@ void main() {
     }
     // Videos is on screen: its own screen title, and the bar shows it is under Modules (it is not pinned)
     expect(find.text('Saved on this phone'), findsOneWidget);
+    await r.stop(tester);
+  });
+
+  testWidgets('"Draw your own area instead" asked from Home opens the Maps tab for the drawing', (tester) async {
+    final before = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = () => NoSurface();
+    addTearDown(() => MapLibrePlatform.createInstance = before);
+    final r = Rig();
+    await r.start(tester);
+    NavigationBar bar() => tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(bar().selectedIndex, 0, reason: 'Home');
+    // The Regions sheet, opened from Set up Cache on Home, asks the map for a drawn area and closes.
+    r.maps.requestDraw();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(bar().selectedIndex, 2, reason: 'the Maps tab, where the area is drawn');
     await r.stop(tester);
   });
 

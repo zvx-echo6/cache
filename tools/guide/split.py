@@ -20,6 +20,15 @@ def chapter_key(path):
     return (int(m.group(1)) if m else 10**6, path.name)
 
 
+# An app link in the reader, [words](cache://...): the library keeps only the words, so the assistant never sees an app address.
+APP_LINK = re.compile(r'\[([^\]]*)\]\(cache://[^)]*\)')
+
+
+def strip_app_links(text):
+    """[text](cache://...) becomes text; every other link stays as it is."""
+    return APP_LINK.sub(lambda m: m.group(1), text)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--chapters', default=str(pathlib.Path(__file__).resolve().parents[2] / 'docs' / 'guide'))
@@ -42,13 +51,16 @@ def main():
                 if chap is None:
                     print(f'{f.name}: section before the chapter heading', file=sys.stderr)
                     return 1
+                if 'cache://' in ln or 'cache://' in chap:
+                    print(f'{f.name}: a heading holds an app link (titles never do): {ln}', file=sys.stderr)
+                    return 1
                 cur = [ln[3:].strip(), []]
                 secs.append(cur)
                 continue
             if cur is not None:
                 cur[1].append(ln)
         for h, body in secs:
-            text = '\n'.join(body).strip('\n')
+            text = strip_app_links('\n'.join(body)).strip('\n')
             title = 'Cache guide: %s: %s' % (chap, h)
             fn = re.sub(r'[/\\?*"<>|]', '-', 'Cache guide - %s - %s.txt' % (chap, h))
             man.append({'file': fn, 'title': title, 'source': f.name, 'section': h, 'chapter': chap, 'body': text})

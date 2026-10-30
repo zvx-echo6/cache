@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../browse/browse_screen.dart' show LetterIcon;
@@ -23,7 +25,7 @@ Future<void> showRegionsSheet(BuildContext context, RegionsState regions, {requi
 }
 
 /// What downloading a region adds: the parts not on the phone yet that can be downloaded here, and their size.
-typedef RegionParts = ({int bytes, bool routing, bool map, bool places});
+typedef RegionParts = ({int bytes, bool routing, bool map, bool places, bool offroad});
 
 /// The parts of [r] still to download, from its [plan].
 RegionParts regionParts(RegionsState regions, RegionRecord r, RegionPlan plan) {
@@ -31,11 +33,16 @@ RegionParts regionParts(RegionsState regions, RegionRecord r, RegionPlan plan) {
   final routing = !(here?.hasRouting ?? false) && plan.routing != null;
   final map = !(here?.hasMap ?? false) && plan.mapAllowed.isNotEmpty;
   final places = !(here?.hasPlaces ?? false) && plan.places != null;
+  final offroad = !(here?.hasOffroad ?? false) && plan.offroadAllowed;
   return (
-    bytes: (routing ? plan.routing!.downloadBytes : 0) + (map ? plan.mapBytes : 0) + (places ? plan.places!.downloadBytes : 0),
+    bytes: (routing ? plan.routing!.downloadBytes : 0) +
+        (map ? plan.mapBytes : 0) +
+        (places ? plan.places!.downloadBytes : 0) +
+        (offroad ? plan.offroad!.downloadBytes : 0),
     routing: routing,
     map: map,
     places: places,
+    offroad: offroad,
   );
 }
 
@@ -71,15 +78,24 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
       final list = r.catalogue.regionsAt(widget.lat, widget.lon);
       if (!mounted) return;
       setState(() => _list = list);
-      for (final rec in list) {
-        r.plan(rec).then((p) {
-          if (mounted) setState(() => _plans[rec.id] = p);
-        }).catchError((Object _) {
-          if (mounted) setState(() => _plans[rec.id] = null);
-        });
-      }
+      unawaited(_planAll(list));
     } catch (_) {
       if (mounted) setState(() => _error = "Couldn't read the list of regions. It needs a connection the first time.");
+    }
+  }
+
+  /// The sizes, one region after another in the list's order (smallest first): asked all at once they shared the network and
+  /// the core, so every row waited for the biggest one; one at a time, each row shows its size as soon as it is known.
+  Future<void> _planAll(List<RegionRecord> list) async {
+    for (final rec in list) {
+      if (!mounted) return;
+      RegionPlan? p;
+      try {
+        p = await r.plan(rec);
+      } catch (_) {
+        p = null;
+      }
+      if (mounted) setState(() => _plans[rec.id] = p);
     }
   }
 
@@ -106,16 +122,20 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     final choice = await askToDownload(
       context,
       title: todo.length == 1 ? 'Download ${todo.single.$1.name}?' : 'Download ${todo.length} regions?',
-      lines: [for (final t in todo) DownloadLine(t.$1.name, t.$2.bytes)],
+      lines: [
+        for (final t in todo) DownloadLine(t.$1.name, t.$2.bytes),
+        if (todo.any((t) => t.$2.offroad && (_plans[t.$1.id]?.offroad?.packsOnPhone ?? false)))
+          const DownloadLine('Off-road', 0, note: 'Already on this phone'),
+      ],
       dir: dir.path,
       policy: r.policy,
     );
     if (choice == DownloadChoice.cancel) return;
     for (final (rec, p) in todo) {
       if (choice == DownloadChoice.now) {
-        await r.download(rec, routing: p.routing, map: p.map, places: p.places, anyway: true);
+        await r.download(rec, routing: p.routing, map: p.map, places: p.places, offroad: p.offroad, anyway: true);
       } else {
-        await r.downloadOnWifi(rec, routing: p.routing, map: p.map, places: p.places);
+        await r.downloadOnWifi(rec, routing: p.routing, map: p.map, places: p.places, offroad: p.offroad);
       }
     }
     if (mounted) {
@@ -169,7 +189,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                         ),
                     ],
                   ),
-                  Text('Each region has routing, map and places.', style: TextStyle(fontSize: 12, color: k.secondary)),
+                  Text('Each region has routing, map, places and off-road.', style: TextStyle(fontSize: 12, color: k.secondary)),
                   const SizedBox(height: 8),
                   if (_error != null)
                     Text(_error!, style: TextStyle(fontSize: 13, color: k.warning))
@@ -182,6 +202,19 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                       child: ListView(
                         shrinkWrap: true,
                         children: [for (final rec in list) _row(k, rec)],
+                      ),
+                    ),
+                  if (!_selecting)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: const ValueKey('regions-draw'),
+                        // The map draws the rectangle, then the same region sheet and download pop-up open for it.
+                        onPressed: () {
+                          Navigator.pop(context);
+                          r.maps.requestDraw();
+                        },
+                        child: const Text('Draw your own area instead'),
                       ),
                     ),
                   if (_selecting) ...[

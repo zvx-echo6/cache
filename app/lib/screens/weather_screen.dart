@@ -31,6 +31,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
   List<WatchPlace>? _places;
   String? _placeId;
   Future<List<SourceView>>? _view;
+  List<SourceView>? _kept;
   int _seenRevision = -1;
 
   WeatherState get w => widget.weather;
@@ -90,6 +91,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
       }
       final p = places.where((p) => p.id == _placeId).firstOrNull;
       _view = p == null ? null : w.viewFor(p);
+      // What was last shown shows at once, with its age; the core's answer replaces it when it comes.
+      _kept = p == null ? null : w.keptViewFor(p);
     });
   }
 
@@ -131,6 +134,10 @@ class _WeatherScreenState extends State<WeatherScreen> {
                       : _empty(context, 'Weather is off.', 'Get the forecast, weather alerts and wildfires for where you are.')
                 else if (places == null)
                   const SizedBox.shrink()
+                else if (places.isEmpty && w.waitingForPosition)
+                  // "Where I am" is watched and the phone does not know where it is yet: weather is on, so this is not the
+                  // "Turn on weather" page (which read as the settings), it is what Home's card says.
+                  _empty(context, 'Waiting for your position.', 'The forecast and alerts for where you are show here once the phone knows where it is.', offerTurnOn: false)
                 else if (places.isEmpty)
                   widget.turnOn == null
                       ? _empty(context, 'No place is being watched.', 'Choose places under Settings > Weather and alerts > Places.')
@@ -156,8 +163,8 @@ class _WeatherScreenState extends State<WeatherScreen> {
                   FutureBuilder<List<SourceView>>(
                     future: _view,
                     builder: (context, snap) {
-                      if (!snap.hasData) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
-                      final views = snap.data!;
+                      final views = snap.data ?? _kept;
+                      if (views == null) return const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()));
                       final forecast = [for (final v in views) if (v.group == LiveGroup.forecast) v];
                       final alerts = [for (final v in views) if (v.group == LiveGroup.alerts) v];
                       return Column(
@@ -208,7 +215,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
     );
   }
 
-  Widget _empty(BuildContext context, String a, String b) {
+  Widget _empty(BuildContext context, String a, String b, {bool offerTurnOn = true}) {
     final k = context.t;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 8),
@@ -217,7 +224,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
           Text(a, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.text)),
           const SizedBox(height: 6),
           Text(b, textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: k.secondary)),
-          if (widget.turnOn case final t?) ...[
+          if (widget.turnOn case final t? when offerTurnOn) ...[
             const SizedBox(height: 16),
             WeatherTurnOnButtons(turnOn: t),
           ],

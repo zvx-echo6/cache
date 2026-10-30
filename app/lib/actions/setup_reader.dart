@@ -86,6 +86,7 @@ SetupDeps setupDepsFrom({
         LocationAccess.denied => 'not allowed',
         LocationAccess.blocked => "not allowed (only the phone's settings can change it)",
       }),
+      SetupItem('Use my location', location.enabled ? 'on' : 'off'),
       SetupItem('Position', location.fix == null ? 'not known' : 'known now'),
     ],
   );

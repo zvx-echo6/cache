@@ -209,6 +209,12 @@ class SearchCore {
   /// The checks and place resolution of an act call, kept with a confirm card (cs_act_resolve).
   Future<Map<String, dynamic>> actResolve(String action, Map<String, dynamic> fields) => _map('actResolve', {'action': action, 'fields': fields});
 
+  /// One op of the Notebook (cs_notebook; cache_search.h lists the ops and their answers).
+  Future<Map<String, dynamic>> notebook(String op, [Map<String, dynamic> args = const {}]) => _map('notebook', {'op': op, 'args': args});
+
+  /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
+  Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
+
   /// The function schemas of the tools available now (cs_tool_schemas).
   Future<List<Map<String, dynamic>>> toolSchemas() async =>
       [for (final t in await _call('toolSchemas') as List) (t as Map).cast<String, dynamic>()];
@@ -457,10 +463,10 @@ void _workerMain(List<dynamic> init) {
           final f = convs[a['conv']]!.format([for (final r in a['results'] as List) (r as Map).cast<String, dynamic>()]);
           result = {
             'tool_message': f.toolMessage,
-            'ids': [for (final i in f.ids) {'n': i.n, 'address': i.address, 'title': i.title}],
+            'ids': [for (final i in f.ids) i.toJson()],
           };
         case 'convIds':
-          result = [for (final i in convs[a['conv']]!.ids()) {'n': i.n, 'address': i.address, 'title': i.title}];
+          result = [for (final i in convs[a['conv']]!.ids()) i.toJson()];
         case 'convImport':
           final c = ConversationNumbers.import(native ?? (native = factory()), a['json'] as String);
           final key = nextKey++;
@@ -472,7 +478,7 @@ void _workerMain(List<dynamic> init) {
           final o = eng().tool(convs[a['conv']]!, a['name'] as String, (a['args'] as Map).cast<String, dynamic>(), now: a['now'] as String);
           result = {
             'content': o.content,
-            'ids': [for (final i in o.ids) {'n': i.n, 'address': i.address, 'title': i.title}],
+            'ids': [for (final i in o.ids) i.toJson()],
           };
         case 'setLocation':
           eng().setLocation(a['lat'] as double, a['lon'] as double, accuracyM: a['accuracy'] as double, fixedAt: a['fixedAt'] as String);
@@ -492,6 +498,10 @@ void _workerMain(List<dynamic> init) {
           result = eng().actFinish(convs[a['conv']]!, a['run_id'] as String, (a['reply'] as Map).cast<String, dynamic>());
         case 'convActOutcome':
           result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
+        case 'notebook':
+          result = eng().notebook(a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
+        case 'userLayers':
+          result = eng().userLayers(a['call'] as String, a['arg'] as String?);
         case 'placesList':
           result = eng().placesList();
         case 'placeSave':

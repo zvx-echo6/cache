@@ -67,16 +67,17 @@ Widget _list(List<Widget> children) => ListView(
 List<Part> localParts(RegionsState regions, LocalRegion? l) {
   if (l == null) return const [];
   return switch (l.phase) {
-    RegionPhase.downloading => [Part('Downloading ${(l.fraction * 100).toStringAsFixed(0)}%')],
-    RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn)],
-    RegionPhase.failed => [Part(l.error ?? 'Could not be downloaded', Tone.danger)],
+    // Each part on its own: a part that is ready works while the others download.
+    RegionPhase.downloading => [Part(l.partsLine)],
+    RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn), Part(' · ${l.partsLine}')],
+    RegionPhase.failed => [Part(l.partsLine, Tone.danger)],
     RegionPhase.ready => [const Part('On this phone', Tone.ok), Part(' · ${formatBytes(l.bytes)}')],
   };
 }
 
 /// The parts a region has on the phone, in order: "Road routing, map and places".
 String partsWords(LocalRegion l) {
-  final parts = [if (l.hasRouting) 'road routing', if (l.hasMap) 'map', if (l.hasPlaces) 'places'];
+  final parts = [if (l.hasRouting) 'road routing', if (l.hasMap) 'map', if (l.hasPlaces) 'places', if (l.hasOffroad) 'off-road'];
   if (parts.isEmpty) return '';
   final words = parts.length == 1 ? parts.single : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
   return words[0].toUpperCase() + words.substring(1);
@@ -375,7 +376,7 @@ class LocalTab extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${l.name}?'),
-        content: const Text('Its road routing, map and places are removed from this phone. Parts another region uses stay.'),
+        content: const Text('Its road routing, map, places and off-road data are removed from this phone. Parts another region uses stay.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
@@ -425,7 +426,7 @@ class LocalTab extends StatelessWidget {
                       statusText(context, switch (l.phase) {
                         RegionPhase.ready => [
                           Part('${formatBytes(l.bytes)} · ${partsWords(l)}'),
-                          if (regions.missesPlaces(l)) const Part(' · Places not downloaded', Tone.warn),
+                          if (regions.missesPlaces(l)) ...const [Part(' · '), Part('Places not downloaded', Tone.warn)],
                         ],
                         _ => localParts(regions, l),
                       }),
@@ -441,7 +442,8 @@ class LocalTab extends StatelessWidget {
                       IconButton(
                         tooltip: 'Update ${l.name}',
                         icon: Icon(Icons.refresh, color: k.secondary),
-                        onPressed: l.phase == RegionPhase.ready ? () => _update(context, l) : null,
+                        // A download that stopped carries on with Update, as its line says.
+                        onPressed: l.phase == RegionPhase.ready || l.phase == RegionPhase.failed ? () => _update(context, l) : null,
                       ),
                       IconButton(
                         tooltip: 'Delete ${l.name}',
@@ -454,6 +456,19 @@ class LocalTab extends StatelessWidget {
             ],
           ),
           if (local.length > 1) const NoteText('Largest first. A part two regions share is kept once.'),
+          if (regions.offroadPacks case final packs when packs.isNotEmpty)
+            SettingsGroup(
+              label: 'Off-road data',
+              rows: [
+                for (final p in packs)
+                  SettingsRow(
+                    key: ValueKey('offroad-pack-${p.name}'),
+                    title: p.name,
+                    status: [Part('${p.done ? formatBytes(p.bytes) : 'Downloading'} · used by ${p.usedBy.join(', ')}')],
+                  ),
+              ],
+            ),
+          if (regions.offroadPacks.isNotEmpty) const NoteText('Each state\'s off-road data is downloaded once and kept while a region that uses it is on this phone.'),
         ]);
       },
     );

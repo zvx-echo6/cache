@@ -24,5 +24,5 @@ pub mod directions;
 pub mod navigate;
 pub mod offroad_legs;
 
-pub use elevation::{ElevationSource, PmtilesElevation};
+pub use elevation::{ElevationSource, ElevationTiles, PmtilesElevation, TileElevation};
 pub use navigate::{NavigateRequest, Navigator, TravelMode, Waypoint};

@@ -91,11 +91,11 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('About: the version and build come from the installed app', (tester) async {
+  testWidgets('About: the version comes from the installed app, whole', (tester) async {
     final r = await SettingsRig.create(tester);
-    await r.show(tester, AboutPage(openUrl: (u) async {}, version: () async => '1.0.0 (build 4)'));
+    await r.show(tester, AboutPage(openUrl: (u) async {}, version: () async => versionLabel('1.0.27', '27')));
     await tester.pump();
-    expect(find.text('1.0.0 (build 4)'), findsOneWidget);
+    expect(find.text('1.0.27'), findsOneWidget);
     await r.dispose(tester);
   });
 

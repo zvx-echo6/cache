@@ -4,7 +4,8 @@
 usage: verify.py --cs cs.exe --config CONFIG.json --manifest MANIFEST.json --embed-lib cache_llama.dll
                  --embed-model bge-m3-Q8_0.gguf --embed-sha256 SHA [--library-id cache-guide]
 
-Checks: the entry count equals the number of sections; every section reads back byte-identical with its exact title;
+Checks: the entry count equals the number of sections; every section reads back byte-identical with its exact title, and
+with no app link (cache://) left in it;
 and a set of questions return the expected section in the top 3 (rank printed). Exits 1 if any check fails.
 """
 import argparse
@@ -49,6 +50,10 @@ for m in man:
     ok += same
     if not same:
         print('TEXT DIFF', m['title'])
+    # The reader's app links (cache://) are stripped to their words by split.py: none may reach the stored text.
+    if 'cache://' in r['text'] or 'cache://' in r['title']:
+        fail += 1
+        print('APP LINK IN STORED TEXT', m['title'])
     if r['title'] != m['title']:
         tbad += 1
         print('TITLE DIFF', repr(r['title']), repr(m['title']))

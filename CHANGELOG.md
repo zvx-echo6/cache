@@ -7,6 +7,25 @@ release notes).
 ## Unreleased
 
 ### New
+- Library: open the Cache guide and read it like a book, with chapters, links between sections, links that open the part of Cache a section is about, and search; a guide citation in Ask and the guide buttons on Set up Cache open the exact section
+- Notebooks: keep several notebooks, starting with a Journal; make more from Journal, Log, Notes or Places, or from 16 starter logs
+- Notebooks: an entry can have a title, text, a date, a place, photos, attached documents and the notebook's own fields
+- Notebooks: type Markdown in any entry and it formats as you type (headings, bold, lists, checkboxes, quotes, code, links, tables); "?" shows how; tap a checkbox's box to tick it
+- Places notebook: your saved places, with "Where I am" and your downloaded regions, each place with its own marker colour; tap the marker to show or hide it on the map
+- Places: one screen to add or edit a place: search an address, place or coordinates, or tap the map; name, colour, notes, photos, and weather and alerts
+- Places: each place's alerts can follow your alert setting, have their own distance and kinds (which pop up whatever Pop up for says), or be off
+- Maps: press and hold the map for a ring: To here, From here, Add stop (while a route is shown), Save and Measure; Save opens your notebooks (most used first) and makes an entry at that spot; the centre opens the spot's coordinates
+- Maps: Measure draws a line from the held spot; each tap adds a point, with the running total, Undo and Done
+- Directions: start from a spot you hold on the map, and add up to 10 stops on the way
+- Notebooks: keep them in an Obsidian vault or a Logseq graph you pick on the phone (classic Markdown graphs both ways, Logseq 2 by export); changes made in both places are merged and only the same words changed twice are asked about (Notebooks > Connections)
+- Maps: add places from a KML, KMZ, GPX or GeoJSON file as a Places notebook, and repeater lists from a RepeaterBook KML or CHIRP CSV, under My layers
+- Notebooks: notebook sync keeps your notebooks and their photos the same on your linked devices (tick Notebooks in Sharing and sync); changes made on two devices are merged, and only the same words changed on both are asked about; private items stay on the device unless you include them (Notebooks > Connections)
+- Logs: quick add with your last values filled in, "Last done" and "Due again", and a Home card that logs in two taps
+- Notebooks: search across all notebooks, and delete any entry (with Undo) or a whole notebook
+- Maps: notebooks with places show their pins, each notebook a layer under My layers
+- Assistant: can add a journal entry or an entry to one of your logs after you confirm on a card
+- Regions include off-road: the off-road data of the state or province the region is in (checked against its published checksum) and its terrain heights, with their size in the download pop-up; off-road directions work wherever a region with off-road is on the phone
+- Ask: a source from a video transcript opens the video at the moment it cites (libraries map `fields.time` and `fields.link`)
 - Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; it goes away by itself when all four are done
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search
@@ -53,8 +72,23 @@ release notes).
 - Library: a library file compressed with gzip can be added (from a file or a link) like an uncompressed one, and the blank template is saved compressed
 - Regions: one sheet lists the regions where the map is, smallest first, each with its size and a download button or "On this phone"; Select (or press and hold) picks several for one download
 - Regions: on mobile data with Mobile data downloads off, Wait for Wi-Fi starts a region by itself once on Wi-Fi
+- Settings > Cache model and web search: the Use my location switch (the same as in Ask); when the phone blocks location it says so and opens the phone's settings
+- Alerts: a fire within 10 mi of a watched place, and an evacuation order, are serious and pop up under Serious only; farther fires are listed in Weather
+- Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
+- Regions: the sizes no longer hold up the map, the Library and the reader's pictures while they are worked out; each region's size shows as soon as it is known, and sizes already worked out show at once
+- Regions: "Draw your own area instead" from Home's Set up Cache opens the map to draw the area
+- Library: the guide that comes with Cache is labelled "Built in", and a library still opening when Cache starts no longer stays on "Opening"
+- About shows the full version, 1.0.27; the version number now matches the build on iPhone and Android
+- Weather: the forecast and alerts on the phone show at once, with their age, while newer ones are read
+- Weather: while "Where I am" waits for the position, the Weather screen says so instead of offering to turn weather on
+- Regions: a download stopped because Cache was closed (iPhone stops it in the background) carries on when you tap Get your area or Update, after Cache starts again
+- Regions: each part of a region (map, directions, places, off-road) works as soon as it is saved, and downloads from where you are outwards; the region's line says where each part stands, and Set up says "Not offline yet" until all of it is saved
+- Regions: a region downloads the terrain heights for its own area, and a state's off-road data is downloaded once for all its regions ("Already on this phone"); Storage > Regions lists it
+- Library: "Opening" is now "Getting ready"
+- Weather: fires show how far away they are on Home again
+- Ask: Try again after Cache's search could not start starts it again, instead of failing the same way
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
 - Turn-by-turn: the arrive time shows instead of "--", and on Android the spoken directions can find the phone's text-to-speech
 - Directions: starting navigation no longer asks to allow notifications and waits on the answer before finding your position; notifications are asked for when you turn on weather and alerts
@@ -84,8 +118,11 @@ release notes).
 - iPhone: the Hugging Face file list shows whether each file fits your phone
 - Map search: street and town names in addresses are no longer shown in capitals (North State Street, Hurricane)
 - Maps: BLM roads and trails and Forest Service trails draw in their own colours and dashes
+- Ask: a question asked while Cache is starting shows Starting… and is answered with Cache's search once it is up; if search cannot start, it says so with Try again instead of answering without it
 
 ### Changed
+- Maps: a layer no longer has a download of its own; Draw your own area instead, in the Regions sheet, draws an area on the map and downloads it as a region through the same sheet and pop-up
+- Storage: Clean up also removes damaged off-road data (a file whose size or checksum does not match what was published), so it can be downloaded again
 - Weather, alerts and other small updates always use any connection; the Mobile data downloads switch in Storage is for big downloads only
 
 ## 1.0.0 (iOS build 22) - 2026-10-28

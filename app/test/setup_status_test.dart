@@ -36,27 +36,23 @@ void main() {
     expect(reg.rejected, isEmpty);
   });
 
-  for (final row in ['act-048', 'act-116']) {
-    test('the host reply matches the captures ($row)', () async {
-      final fixture = parityJson('setup-status-$row.json') as Map<String, dynamic>;
-      final calls = fixture['calls'] as List;
-      expect(calls, isNotEmpty);
-      for (final c in calls) {
-        final args = jsonDecode(((c as Map)['tool_call'] as Map)['function']['arguments'] as String) as Map;
-        final area = (args['fields'] as Map?)?['area'] as String?;
-        // The host reply exactly as the harness gave it to cs_act_finish: area-filtered, addresses kept.
-        final hostReply = (c['host_reply'] as Map).cast<String, dynamic>();
-        final expected = (hostReply['result'] as Map).cast<String, dynamic>();
-        final by = {
-          for (final s in expected['sections'] as List) ((s as Map)['address'] as String).split('/').last: _items(s['items']),
-        };
-        final deps = _deps(by);
-        final reg = ActionRegistry()
-          ..publish('app', [kSetupStatusDefinition], {
-            'app.setup_status': (f) => runSetupStatus(deps, f, now: () => _at(expected['checked_at'] as String)),
-          });
+  // S11 after the UI simplification (setup-status-v1030.json): each row's host replies as the harness gave them to cs_act_finish,
+  // for every part and filtered to connection and to location.
+  for (final row in (parityJson('setup-status-v1030.json') as List).cast<Map<String, dynamic>>()) {
+    test('the host reply matches the capture (${row['row']})', () async {
+      final all = (row['host_reply_all'] as Map).cast<String, dynamic>();
+      final by = {
+        for (final s in all['sections'] as List) ((s as Map)['address'] as String).split('/').last: _items(s['items']),
+      };
+      final deps = _deps(by);
+      final reg = ActionRegistry()
+        ..publish('app', [kSetupStatusDefinition], {
+          'app.setup_status': (f) => runSetupStatus(deps, f, now: () => _at(all['checked_at'] as String)),
+        });
+      for (final (area, key) in [(null, 'host_reply_all'), ('connection', 'host_reply_area_connection'), ('location', 'host_reply_area_location')]) {
+        final expected = {'ok': true, 'result': row[key]};
         final run = await reg.run('app.setup_status', {'area': ?area});
-        expect(jsonEncode(CoreToolHost.finishReply(run)), jsonEncode(hostReply));
+        expect(jsonEncode(CoreToolHost.finishReply(run)), jsonEncode(expected), reason: key);
       }
     });
   }
@@ -69,7 +65,7 @@ void main() {
     final one = await runSetupStatus(deps, {'area': 'web_search'}, now: () => DateTime(2026, 10, 29, 14, 30));
     expect(read, ['web_search']);
     expect(jsonEncode(one),
-        '{"checked_at":"2026-10-29 14:30","sections":[{"address":"app:setup/web_search","title":"Web search","items":[{"label":"Kagi key","value":"not set"}],"guide":"Cache guide: 3. Settings, page by page: Web search with Kagi"}]}');
+        '{"checked_at":"2026-10-29 14:30","sections":[{"address":"app:setup/web_search","title":"Web search","items":[{"label":"Kagi key","value":"not set"}],"guide":"Cache guide: 4. Services and keys: Web search with Kagi"}]}');
     read.clear();
     final all = await runSetupStatus(deps, {}, now: () => DateTime(2026, 10, 29, 14, 30));
     expect(read, [for (final a in kSetupAreas) a.id]);
@@ -78,14 +74,14 @@ void main() {
 
   test('parts, titles and guide pointers are the spec\'s', () {
     expect([for (final a in kSetupAreas) (a.id, a.title, a.guide)], [
-      ('connection', 'Connection', 'Cache guide: 3. Settings, page by page: Mobile data'),
+      ('connection', 'Connection', 'Cache guide: 1. Getting started: Downloads, Wi-Fi and mobile data'),
       ('regions', 'Regions', 'Cache guide: 1. Getting started: Download a region'),
-      ('libraries', 'Libraries', 'Cache guide: 3. Settings, page by page: Libraries page'),
-      ('live_data', 'Live data', 'Cache guide: 3. Settings, page by page: Weather and alerts'),
-      ('web_search', 'Web search', 'Cache guide: 3. Settings, page by page: Web search with Kagi'),
-      ('places', 'Place details', 'Cache guide: 2. Using Cache: The place card and saving a place'),
+      ('libraries', 'Libraries', 'Cache guide: 1. Getting started: Add to your Library'),
+      ('live_data', 'Live data', 'Cache guide: 1. Getting started: Turn on weather and alerts'),
+      ('web_search', 'Web search', 'Cache guide: 4. Services and keys: Web search with Kagi'),
+      ('places', 'Place details', 'Cache guide: 5. Notebooks: The Places notebook'),
       ('models', 'Models', 'Cache guide: 1. Getting started: Choose a model'),
-      ('location', 'Location', 'Cache guide: 3. Settings, page by page: Notifications and location'),
+      ('location', 'Location', 'Cache guide: 1. Getting started: Let Cache use your location'),
     ]);
     expect((kSetupStatusDefinition['fields'] as Map)['area']['enum'], [for (final a in kSetupAreas) a.id]);
   });

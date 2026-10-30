@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/location/location_service.dart';
+import 'package:cache/maps/geo.dart';
+import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/ui/format.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -10,16 +13,21 @@ import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
+import 'package:cache/screens/maps_screen.dart';
 import 'package:cache/screens/settings/deps.dart';
 import 'package:cache/screens/settings/maps_page.dart';
 import 'package:cache/search/core_config.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/hub.dart';
+import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' show MapLibreMap, MapLibrePlatform;
 
+import 'location_service_test.dart' show FakeSource;
 import 'nav_fakes.dart';
+import 'navigation_camera_test.dart' show NoSurface;
 import 'support/regions_fake.dart';
 import 'support/settings_rig.dart';
 
@@ -173,8 +181,14 @@ void main() {
     await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
     await tester.pump();
     expect(find.text('Twin Falls County'), findsOneWidget);
-    expect(find.textContaining('Downloading'), findsOneWidget);
+    // each part on its own line of state, not one percentage for the whole region
+    expect(find.textContaining(RegExp(r'^Map (ready|\d+%) · Directions \d+%$')), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    // with no position known, everything downloads from the region's centre outwards
+    final b = r.county.bounds!;
+    final centre = [(b.south + b.north) / 2, (b.west + b.east) / 2];
+    expect(r.core.added.single['near'], centre);
+    expect(r.s.engine.nearOf['Twin Falls County'], (lat: centre[0], lon: centre[1]));
 
     r.core.finish(_county);
     await tester.runAsync(() async {
@@ -233,8 +247,32 @@ void main() {
     await tester.pump();
     expect(r.core.regions[_county]!['state'], 'downloading');
     expect(find.textContaining('Paused'), findsNothing);
-    expect(find.textContaining('Downloading'), findsOneWidget);
+    expect(find.textContaining('Directions'), findsOneWidget);
     await r.dispose(tester);
+  });
+
+  testWidgets('a region downloads from where the phone is; each part says where it stands', (tester) async {
+    final rig = await SettingsRig.create(tester);
+    final s = RegionsState(
+      policy: rig.policy,
+      supportDir: () async => rig.dir,
+      catalogue: RegionCatalogue(dir: () async => rig.dir),
+      maps: rig.maps,
+      position: () => (lat: 42.56, lon: -114.46),
+    );
+    const county = RegionRecord(id: 'c', name: 'C', kind: 'county', bbox: [-115.0, 42.0, -114.0, 43.0]);
+    expect(s.nearFor(county), (lat: 42.56, lon: -114.46));
+    final l = LocalRegion(
+      id: 'c',
+      name: 'C',
+      routing: {'state': 'downloading', 'bytes': 100, 'done_bytes': 40},
+      places: {'state': 'ready', 'bytes': 10, 'done_bytes': 10},
+      areas: [DownloadedArea(id: 'a', layerId: 'basemap', bounds: const GeoBounds(south: 42, west: -115, north: 43, east: -114), label: 'C', minZoom: 0, maxZoom: 14, totalTiles: 10, doneTiles: 10, phase: AreaPhase.done)],
+      offroad: const [OffroadPackState(name: 'Idaho', bytes: 1000, doneBytes: 0, done: false)],
+    );
+    expect(l.partsLine, 'Map ready · Directions 40% · Places ready · Off-road waiting');
+    s.dispose();
+    await rig.dispose(tester);
   });
 
   testWidgets('Local lists what is on the phone, largest first', (tester) async {
@@ -303,7 +341,6 @@ void main() {
       storage: r.s.storage,
       weather: r.s.weather,
       regions: r.regions,
-      locationAccess: r.s.access,
     );
     final deps = SettingsDeps(
       app: r.s.app,
@@ -421,7 +458,7 @@ void main() {
 
       await tester.tap(find.byTooltip('Delete Twin Falls County'));
       await tester.pumpAndSettle();
-      expect(find.text('Its road routing, map and places are removed from this phone. Parts another region uses stay.'), findsOneWidget);
+      expect(find.text('Its road routing, map, places and off-road data are removed from this phone. Parts another region uses stay.'), findsOneWidget);
       await tester.tap(find.text('Keep'));
       await tester.pumpAndSettle();
       await r.dispose(tester);
@@ -537,7 +574,7 @@ void main() {
     await tester.tap(find.text('open'));
     await r.settle(tester);
     expect(find.text('Regions'), findsOneWidget);
-    expect(find.text('Each region has routing, map and places.'), findsOneWidget);
+    expect(find.text('Each region has routing, map, places and off-road.'), findsOneWidget);
     expect(find.text('Twin Falls County'), findsOneWidget);
     expect(find.byType(Checkbox), findsNothing, reason: 'no tick boxes until Select');
     expect(find.byTooltip('Download Twin Falls County'), findsOneWidget);
@@ -553,6 +590,74 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await r.settle(tester);
     expect(r.core.added.single['id'], _county);
+    await r.dispose(tester);
+  });
+
+  testWidgets('Draw your own area instead: the map draws, then the drawn area downloads as a region through the same sheet', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() => r.catalogue.readShardAt(42.55, -114.4));
+    await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
+    await tester.tap(find.text('open'));
+    await r.settle(tester);
+    await tester.tap(find.byKey(const ValueKey('regions-draw')));
+    await r.settle(tester);
+    expect(r.s.maps.drawRequest, isTrue, reason: 'the map is asked to draw');
+    // what the map does with the rectangle: a region record of it, downloaded like any other
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.5, north: 42.6, east: -114.3), at: DateTime(2026, 10, 30));
+    expect((drawn.name, regionKindLabel(drawn.kind)), ('Drawn area', 'Drawn on the map'));
+    final g = (await tester.runAsync(() => r.catalogue.geometry(drawn)))!;
+    expect(g, {
+      'type': 'Polygon',
+      'coordinates': [
+        [[-114.5, 42.5], [-114.3, 42.5], [-114.3, 42.6], [-114.5, 42.6], [-114.5, 42.5]],
+      ],
+    });
+    await tester.runAsync(() => r.regions.download(drawn, routing: true, map: true, anyway: true));
+    await r.settle(tester);
+    expect(r.core.added.single['geometry'], g);
+    expect(r.s.engine.areasOf('basemap').single.label, 'Drawn area');
+    await r.dispose(tester);
+  });
+
+  testWidgets('Draw your own area from Home: the map, built only now, opens drawing; the drawn area goes to the same sheet', (tester) async {
+    final r = await _Rig.boot(tester);
+    final before = MapLibrePlatform.createInstance;
+    MapLibrePlatform.createInstance = () => NoSurface();
+    addTearDown(() => MapLibrePlatform.createInstance = before);
+    final location = LocationService(source: FakeSource(), settingsDirOverride: r.s.dir);
+    final nav = NavState(
+      backend: FakeBackend(),
+      location: location,
+      speaker: FakeSpeaker(),
+      positionSource: FakeNavPosition(),
+      fmt: const Fmt(UnitSystem.imperial),
+    );
+    await tester.runAsync(() => r.catalogue.readShardAt(42.55, -114.4));
+    // Home's "Get your area": the Regions sheet over Home, with no map on screen yet.
+    await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
+    await tester.tap(find.text('open'));
+    await r.settle(tester);
+    await tester.tap(find.byKey(const ValueKey('regions-draw')));
+    await r.settle(tester);
+    expect(find.text('Draw your own area instead'), findsNothing, reason: 'the sheet closed');
+    // The shell opens the Maps tab for the request; the map screen is built then, after the request was made.
+    await r.s.show(tester, MapsScreen(
+      location: location,
+      maps: r.s.maps,
+      nav: nav,
+      themeId: CacheThemeId.dark,
+      regions: r.regions,
+      glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf',
+    ));
+    for (var i = 0; i < 100 && find.byType(MapLibreMap).evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+    }
+    expect(find.text('Drag on the map to draw the area to download'), findsOneWidget, reason: 'the request was not lost');
+    expect(r.s.maps.drawRequest, isFalse, reason: 'taken once');
+    expect(find.text('Use this area'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    nav.dispose();
     await r.dispose(tester);
   });
 

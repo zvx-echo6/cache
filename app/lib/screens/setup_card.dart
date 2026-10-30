@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../actions/setup_status.dart' show kSetupAreas;
 import '../app_state.dart';
 import '../browse/browse_state.dart';
 import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
@@ -58,6 +59,7 @@ class SetupCache {
     required this.getArea,
     required this.turnOnWeather,
     required this.addLibrary,
+    this.openGuide,
   });
 
   final AppState app;
@@ -73,6 +75,14 @@ class SetupCache {
   final void Function(BuildContext) getArea;
   final void Function(BuildContext) turnOnWeather;
   final void Function(BuildContext) addLibrary;
+
+  /// Opens the guide at a section (its title); null leaves the guide buttons out.
+  final void Function(BuildContext, String title)? openGuide;
+
+  /// The guide section for each line: the same pointers the assistant's setup check gives (kSetupAreas).
+  static final List<String> guideTitles = [
+    for (final id in ['models', 'regions', 'live_data', 'libraries']) kSetupAreas.firstWhere((a) => a.id == id).guide,
+  ];
 
   ModelDownloads? get downloads => modelDownloads ?? ModelDownloads.shared;
 
@@ -94,6 +104,15 @@ class SetupCache {
     return const SetupLine(SetupPhase.todo);
   }
 
+  /// The region whose download stopped (Cache was closed while it ran, or a part failed) while no region is ready: tapping "Get your
+  /// area" carries it on.
+  LocalRegion? get stoppedRegion {
+    final withRouting = [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting) l];
+    if (withRouting.any((l) => l.phase == RegionPhase.ready)) return null;
+    final going = withRouting.firstOrNull;
+    return going?.phase == RegionPhase.failed ? going : null;
+  }
+
   /// A region with its road routing on the phone is done; one with road routing on its way runs.
   SetupLine get areaLine {
     final withRouting = [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting) l];
@@ -107,8 +126,10 @@ class SetupCache {
     if (going == null) return const SetupLine(SetupPhase.todo);
     return switch (going.phase) {
       RegionPhase.paused => SetupLine(SetupPhase.running, detail: '${going.name} · ${regions!.paused ?? 'paused'}', fraction: going.fraction),
-      RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · ${going.error ?? 'could not be downloaded'}'),
-      _ => SetupLine(SetupPhase.running, detail: '${going.name} · downloading${_percent(going.fraction)}', fraction: going.fraction),
+      // The part's own words ("Tap Update to continue") point at a button that is not on this card, and do not fit its line.
+      RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · Stopped. Tap to carry on'),
+      // Parts work as they are saved, but the area is not offline until every part is.
+      _ => SetupLine(SetupPhase.running, detail: '${going.name} · Not offline yet${_percent(going.fraction)}', fraction: going.fraction),
     };
   }
 
@@ -205,6 +226,7 @@ class SetupCard extends StatelessWidget {
               reason: _reasons[i],
               line: s.lines[i],
               onTap: () => actions[i](context),
+              onGuide: setup.openGuide == null ? null : () => setup.openGuide!(context, SetupCache.guideTitles[i]),
             ),
         ],
       ),
@@ -213,12 +235,15 @@ class SetupCard extends StatelessWidget {
 }
 
 class _SetupRow extends StatelessWidget {
-  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap});
+  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap, this.onGuide});
 
   final String title;
   final String reason;
   final SetupLine line;
   final VoidCallback onTap;
+
+  /// Opens this line's section of the guide.
+  final VoidCallback? onGuide;
 
   @override
   Widget build(BuildContext context) {
@@ -269,6 +294,13 @@ class _SetupRow extends StatelessWidget {
               ],
             ),
           ),
+          if (onGuide != null)
+            IconButton(
+              key: ValueKey('${key is ValueKey<String> ? (key as ValueKey<String>).value : title}-guide'),
+              tooltip: 'How to: $title',
+              icon: Icon(Icons.help_outline, size: 20, color: k.secondary),
+              onPressed: onGuide,
+            ),
           if (!line.done) ...[
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: k.secondary),

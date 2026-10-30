@@ -28,11 +28,27 @@ const String kPositionHeading = 'position-heading';
 /// The sources the screen updates with the route being looked at or followed, and with the chosen place and the search results.
 const String kRouteSource = 'cache-route';
 const String kPinSource = 'cache-pin';
+
+/// The entries with a place of the notebooks shown on the map ("My layers"), one point each, with `entry` and `notebook` ids.
+const String kNotebookSource = 'cache-notebook';
 const String kRouteAlt = 'route-alt';
 const String kRouteCasing = 'route-casing';
 const String kRouteRoad = 'route-road';
 const String kRouteFollow = 'route-follow';
 const String kRouteOffroad = 'route-offroad';
+const String kNotebookPins = 'notebook-pins';
+
+/// The user's own map data that is not a notebook pin: repeater lists' repeaters and the lines and areas of files imported into
+/// Places notebooks.
+const String kUserSource = 'cache-user';
+const String kUserAreas = 'user-areas';
+const String kUserLines = 'user-lines';
+const String kUserRepeaters = 'user-repeaters';
+
+/// A distance being measured (the ring's Measure): its line and its points.
+const String kMeasureSource = 'cache-measure';
+const String kMeasureLine = 'measure-line';
+const String kMeasurePoints = 'measure-points';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
@@ -174,6 +190,18 @@ Map<String, dynamic> buildMapStyle({
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
   sources[kPinSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  sources[kNotebookSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  sources[kUserSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  sources[kMeasureSource] = {
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
@@ -402,6 +430,55 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p) => [
         'paint': {'line-color': p.css('routeOffroad'), 'line-width': 6, 'line-dasharray': [2, 1.2]},
       },
       {
+        'id': kUserAreas,
+        'type': 'fill',
+        'source': kUserSource,
+        'filter': ['==', ['geometry-type'], 'Polygon'],
+        'paint': {'fill-color': p.css('routeOffroad'), 'fill-opacity': 0.18, 'fill-outline-color': p.css('routeOffroad')},
+      },
+      {
+        'id': kUserLines,
+        'type': 'line',
+        'source': kUserSource,
+        'filter': ['==', ['geometry-type'], 'LineString'],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {'line-color': p.css('routeOffroad'), 'line-width': 3, 'line-dasharray': [2, 1]},
+      },
+      {
+        'id': kUserRepeaters,
+        'type': 'circle',
+        'source': kUserSource,
+        'filter': ['==', ['geometry-type'], 'Point'],
+        'paint': {'circle-radius': 5, 'circle-color': p.css('routeCasing'), 'circle-stroke-width': 2, 'circle-stroke-color': p.css('route')},
+      },
+      {
+        'id': kNotebookPins,
+        'type': 'circle',
+        'source': kNotebookSource,
+        'paint': {
+          'circle-radius': 6,
+          'circle-color': p.css('routeCasing'),
+          'circle-stroke-width': 3,
+          // A place's own marker colour (Places notebooks), else the pin colour.
+          'circle-stroke-color': ['to-color', ['get', 'color'], p.css('pin')],
+        },
+      },
+      {
+        'id': kMeasureLine,
+        'type': 'line',
+        'source': kMeasureSource,
+        'filter': ['==', ['geometry-type'], 'LineString'],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {'line-color': p.css('route'), 'line-width': 3, 'line-dasharray': [3, 1.5]},
+      },
+      {
+        'id': kMeasurePoints,
+        'type': 'circle',
+        'source': kMeasureSource,
+        'filter': ['==', ['geometry-type'], 'Point'],
+        'paint': {'circle-radius': 5, 'circle-color': p.css('route'), 'circle-stroke-width': 2, 'circle-stroke-color': p.css('routeCasing')},
+      },
+      {
         'id': kPinResults,
         'type': 'circle',
         'source': kPinSource,
@@ -484,6 +561,12 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     kRouteRoad,
     kRouteFollow,
     kRouteOffroad,
+    kUserAreas,
+    kUserLines,
+    kUserRepeaters,
+    kNotebookPins,
+    kMeasureLine,
+    kMeasurePoints,
     kPinResults,
     kPinSelected,
     kPositionAccuracyFill,

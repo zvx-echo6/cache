@@ -195,6 +195,23 @@ fn a_compressed_library_adds_like_an_uncompressed_one() {
     assert!(start("unpack_library", json!({"snapshot_path": junk.to_str().unwrap(), "dir": dir.to_str().unwrap()})).is_null());
 }
 
+/// The guide that ships in the app (app/assets/guide, gzip-compressed) adds like any library: it is the Cache guide, with entries.
+#[test]
+fn the_bundled_guide_adds_through_the_compressed_import() {
+    let t = TempDir::new("guide");
+    let guide = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../app/assets/guide/cache-guide.cache-library");
+    assert!(libadd::is_gzip(&guide).unwrap(), "the bundled guide is compressed");
+    let dir = t.path("libraries/cache-guide/shard");
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    let p = run("unpack_library", json!({"snapshot_path": guide.to_str().unwrap(), "dir": dir.to_str().unwrap()}));
+    assert_eq!(p["state"], "done", "{p}");
+    let d = &p["detail"];
+    assert_eq!(d["settings_source"], "archive");
+    assert_eq!(d["resolved"]["library_id"], "cache-guide");
+    assert_eq!(d["resolved"]["version"], "2026-10-30b");
+    assert!(d["docs"].as_u64().unwrap() > 50, "{d}");
+}
+
 #[test]
 fn blank_template_adds_back_as_an_empty_ready_library() {
     let t = TempDir::new("roundtrip");

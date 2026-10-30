@@ -6,22 +6,29 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
+import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
 import '../browse/reader_screen.dart';
 import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
+import '../guide/app_links.dart';
+import '../guide/guide_book.dart';
+import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../nav/nav_state.dart';
+import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
 import '../search/app_search_providers.dart';
+import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
+import '../settings/data_policy.dart' show MobileDataBlocked;
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
@@ -32,11 +39,22 @@ import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
 import 'download_confirm.dart' show openStorageForSpace;
+import '../notebook/notebook_model.dart';
+import 'notebooks/notebook_screen.dart';
+import 'notebooks/notebooks_screen.dart';
+import 'notebooks/quick_add_sheet.dart';
+import 'settings/about_pages.dart' show AboutPage;
+import 'settings/appearance_page.dart';
+import 'settings/assistant_page.dart';
+import 'settings/maps_page.dart';
+import 'settings/notifications_page.dart';
+import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
 import 'settings_screen.dart';
 import 'setup_card.dart';
+import 'videos/video_nav.dart';
 import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
@@ -57,6 +75,7 @@ class Shell extends StatefulWidget {
     required this.nav,
     required this.layout,
     required this.hub,
+    this.notebooks,
   });
 
   final AppState app;
@@ -70,6 +89,9 @@ class Shell extends StatefulWidget {
   final NavState nav;
   final LayoutState layout;
   final SettingsHub hub;
+
+  /// Notebooks (null: the module shows that it is not available).
+  final NotebookDeps? notebooks;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -95,6 +117,9 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
+    widget.maps.addListener(_onMaps);
+    openAppPlace = _goToPlace;
+    appPlaceScreen = _placeScreen;
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
@@ -105,8 +130,17 @@ class _ShellState extends State<Shell> {
     _goModule(ModuleId.weather);
   }
 
+  /// "Draw your own area instead" in the Regions sheet asks the map for a drawn area; from Home (Set up Cache's "Get your area")
+  /// the map is not on screen, so the request went nowhere: the Maps tab is opened for it.
+  void _onMaps() {
+    if (widget.maps.drawRequest && _module != ModuleId.maps && mounted) _goModule(ModuleId.maps);
+  }
+
   @override
   void dispose() {
+    widget.maps.removeListener(_onMaps);
+    if (openAppPlace == _goToPlace) openAppPlace = null;
+    if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
@@ -142,9 +176,61 @@ class _ShellState extends State<Shell> {
   }
 
   void _openSource(String address) {
+    // A citation of the guide opens the guide's reader at that section.
+    if (address.startsWith('lib:$kGuideLibrary/')) {
+      unawaited(_openGuideAt(address));
+      return;
+    }
     _goModule(ModuleId.library);
     widget.browse.openAddress(address);
   }
+
+  Future<void> _openGuideAt(String address) async {
+    final book = await GuideBook.load();
+    if (!mounted) return;
+    await openGuide(context, title: book.byAddress(address)?.title, book: book);
+  }
+
+  /// The screen a guide link (cache://) opens over the reader; null for a place this phone does not have.
+  Widget? _placeScreen(AppPlace p) {
+    final regions = widget.hub.regions;
+    final nb = widget.notebooks;
+    final d = _settingsDeps;
+    return switch (p) {
+      AppPlace.home => _home(),
+      AppPlace.ask => _moduleScreen(ModuleId.ask),
+      AppPlace.maps => _moduleScreen(ModuleId.maps),
+      AppPlace.regions => regions == null ? null : RegionsScreen(regions: regions),
+      AppPlace.library => _moduleScreen(ModuleId.library),
+      AppPlace.addToLibrary => AddToLibraryScreen(browse: widget.browse),
+      AppPlace.notebooks => nb == null ? null : NotebooksScreen(deps: nb),
+      AppPlace.placesNotebook => switch ((nb, nb?.notebook.notebooks.where((n) => n.isPlaces).firstOrNull)) {
+          (final deps?, final n?) => NotebookScreen(deps: deps, notebookId: n.id),
+          _ => null,
+        },
+      AppPlace.settings => SettingsScreen(deps: d),
+      AppPlace.assistantSettings => AssistantPage(deps: d),
+      AppPlace.mapsSettings => MapsPage(deps: d),
+      AppPlace.weatherSettings => WeatherPage(deps: d),
+      AppPlace.notifications => NotificationsPage(deps: d),
+      AppPlace.storage => StoragePage(deps: d),
+      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!),
+      AppPlace.appearance => AppearancePage(app: widget.app),
+      AppPlace.credits => const AboutPage(),
+      AppPlace.models => ModelsScreen(app: widget.app),
+      AppPlace.drawArea => null,
+    };
+  }
+
+  /// A guide link that does not open over the reader: drawing an area happens on the map.
+  void _goToPlace(AppPlace p) {
+    if (p != AppPlace.drawArea) return;
+    _goModule(ModuleId.maps);
+    widget.maps.requestDraw();
+  }
+
+  /// A video citation: the player at the cited moment (the saved copy when there is one).
+  void _openVideo(String link, double time) => openVideoCitation(context, widget.video, video: link, offsetS: time);
 
   SettingsDeps get _settingsDeps => SettingsDeps(
     app: widget.app,
@@ -169,6 +255,7 @@ class _ShellState extends State<Shell> {
     getArea: _getArea,
     turnOnWeather: (context) => turnOnWeather(context, _weatherTurnOn),
     addLibrary: (context) => showAddToLibrary(context, widget.browse),
+    openGuide: (context, title) => openGuide(context, title: title),
   );
 
   /// "Get your area": the Regions sheet for where the phone is; without a position, the regions to search.
@@ -178,11 +265,33 @@ class _ShellState extends State<Shell> {
       _say('Regions are not available on this phone');
       return;
     }
+    // A download that stopped (on iPhone, Cache was closed or put away while it ran) is carried on, not offered again.
+    if (_setup.stoppedRegion case final stopped?) {
+      unawaited(_carryOn(regions, stopped));
+      return;
+    }
     final here = _here;
     if (here != null) {
       showRegionsSheet(context, regions, lat: here.lat, lon: here.lon);
     } else {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
+    }
+  }
+
+  Future<void> _carryOn(RegionsState regions, LocalRegion l, {bool anyway = false}) async {
+    final m = ScaffoldMessenger.of(context);
+    try {
+      await regions.updateRegion(l.id, anyway: anyway);
+      m.hideCurrentSnackBar();
+      m.showSnackBar(SnackBar(content: Text('Carrying on with ${l.name}')));
+    } on MobileDataBlocked catch (e) {
+      m.hideCurrentSnackBar();
+      m.showSnackBar(SnackBar(
+        content: Text(e.message),
+        action: SnackBarAction(label: 'Download anyway', onPressed: () => _carryOn(regions, l, anyway: true)),
+      ));
+    } catch (e) {
+      _say('$e');
     }
   }
 
@@ -216,6 +325,25 @@ class _ShellState extends State<Shell> {
         _goModule(ModuleId.maps);
       },
     ),
+    if (widget.notebooks case final nb?) ...[
+      NotebooksSearchProvider(
+        notebook: nb.notebook,
+        openNotebook: (n) {
+          _goModule(ModuleId.notebooks);
+          Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: nb, notebookId: n.id)));
+        },
+        openEntry: (n, e) => openNotebookEntry(context, nb, n, e),
+      ),
+      NotebookPlacesSearchProvider(
+        notebook: nb.notebook,
+        here: () => switch (widget.location.fix) {
+          final f? => (lat: f.lat, lon: f.lon),
+          null => null,
+        },
+        distance: widget.nav.fmt.distance,
+        open: (n, e) => openNotebookEntry(context, nb, n, e),
+      ),
+    ],
   ]);
 
   /// Enter in Home's search: a new chat that asks exactly what was typed.
@@ -290,7 +418,45 @@ class _ShellState extends State<Shell> {
         }
         widget.chat.openConversation(id);
         _goModule(ModuleId.ask);
+      case ShortcutKind.notebook:
+        _openNotebook(s);
     }
+  }
+
+  /// A notebook pin's Open: the entry in its editor (a log entry in its quick add sheet).
+  void _openEntry(NbEntry e) {
+    final deps = widget.notebooks;
+    final book = deps?.notebook.notebook(e.notebookId);
+    if (deps == null || book == null) return;
+    openNotebookEntry(context, deps, book, e);
+  }
+
+  /// The map's ring menu: a new entry of [book] at a held spot.
+  void _newEntryAt(Notebook book, NbPlace at) {
+    final deps = widget.notebooks;
+    if (deps != null) newNotebookEntryAt(context, deps, book, at);
+  }
+
+  /// A notebook's Home card: a log's opens its quick add over Home (tap, Save); any other opens the notebook. A notebook that
+  /// was deleted drops its card.
+  Future<void> _openNotebook(Shortcut s) async {
+    final deps = widget.notebooks;
+    final id = s.notebookId;
+    if (deps == null || id == null) return;
+    await deps.notebook.start();
+    final n = deps.notebook.notebook(id);
+    if (!mounted) return;
+    if (n == null) {
+      widget.layout.removeShortcut(s);
+      _say('That notebook is gone');
+      return;
+    }
+    if (n.isLog && s.data['log'] == true) {
+      showQuickAdd(context, notebook: deps.notebook, log: n, places: deps.places, now: deps.now);
+      return;
+    }
+    _goModule(ModuleId.notebooks);
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: id)));
   }
 
   /// "Turn on weather": the location, and the map's place search and saved places for "Choose a place instead".
@@ -307,13 +473,26 @@ class _ShellState extends State<Shell> {
   };
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this phone'))) : NotebooksScreen(deps: widget.notebooks!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
+
+  Widget _home() => HomeScreen(
+    layout: widget.layout,
+    weather: widget.hub.weather,
+    onOpenWeather: () => _goModule(ModuleId.weather),
+    turnOn: _weatherTurnOn,
+    setup: _setup,
+    search: _search,
+    onAsk: _askFromHome,
+    onOpenSettings: _openSettings,
+    onOpenShortcut: _openShortcut,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -338,17 +517,7 @@ class _ShellState extends State<Shell> {
           body: IndexedStack(
             index: show,
             children: [
-              HomeScreen(
-                layout: layout,
-                weather: widget.hub.weather,
-                onOpenWeather: () => _goModule(ModuleId.weather),
-                turnOn: _weatherTurnOn,
-                setup: _setup,
-                search: _search,
-                onAsk: _askFromHome,
-                onOpenSettings: _openSettings,
-                onOpenShortcut: _openShortcut,
-              ),
+              _home(),
               ModulesScreen(layout: layout, app: widget.app, onOpen: _goModule),
               for (final m in ModuleId.values) _built.contains(m) ? _moduleScreen(m) : const SizedBox.shrink(),
             ],

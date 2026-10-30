@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import '../net/fetch.dart' show kUserAgent;
 
-import '../browse/opds.dart' show cacheUserAgent;
 
 /// A model repository on Hugging Face.
 class HfModel {
@@ -50,7 +50,7 @@ class HfHub {
   final HttpClient Function() _client;
 
   static HttpClient _defaultClient() => HttpClient()
-    ..userAgent = cacheUserAgent
+    ..userAgent = kUserAgent
     ..connectionTimeout = const Duration(seconds: 20);
 
   Future<Object?> _getJson(Uri u) async {

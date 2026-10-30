@@ -1,11 +1,9 @@
 import 'package:cache/screens/settings/catalogues_page.dart';
-import 'package:cache/screens/settings/places_page.dart';
 import 'package:cache/screens/settings/source_page.dart';
 import 'package:cache/screens/settings/weather_page.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/curated.dart';
-import 'package:cache/weather/places.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,7 +50,8 @@ void main() {
       expect(find.text('3 more'), findsOneWidget);
       // Weather alerts and fires have their own icons.
       expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
-      expect(find.text('Where I am'), findsOneWidget, reason: 'the Places summary');
+      expect(find.text('Where I am'), findsNothing, reason: 'the places are the Places notebook now');
+      expect(find.text('Watch these places'), findsNothing);
       expect(find.text('Advanced'), findsNothing);
       await r.dispose(tester);
     });
@@ -143,15 +142,10 @@ void main() {
       await r.dispose(tester);
     });
 
-    testWidgets('Places and More sources open their pages', (tester) async {
+    testWidgets('More sources opens its page', (tester) async {
       tall(tester);
       final r = await SettingsRig.create(tester);
       await r.show(tester, WeatherPage(deps: r.deps));
-      await tester.tap(find.text('Places'));
-      await tester.pumpAndSettle();
-      expect(find.text('Save a place on the map to add it here.'), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
       await tester.tap(find.text('More sources'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('search-sources')), findsOneWidget);
@@ -177,71 +171,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         expect(find.text('Weather forecast (Open-Meteo)'), findsOneWidget);
-        await r.show(tester, PlacesPage(deps: r.deps), theme: theme);
-        await tester.pumpAndSettle();
-        expect(tester.takeException(), isNull);
         await r.show(tester, MoreSourcesPage(deps: r.deps), theme: theme);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         await r.dispose(tester);
       });
     }
-  });
-
-  group('Places', () {
-    testWidgets('a checklist by name: Where I am, saved places, downloaded regions; ticking is kept in the settings', (tester) async {
-      final r = await SettingsRig.create(tester);
-      r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9, label: 'Near Stanley')];
-      r.regionList = const [WatchRegion(name: 'Idaho', lat: 44.4, lon: -114.6)];
-      await r.show(tester, PlacesPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      for (final t in ['Where I am', 'Cabin', 'Idaho']) {
-        expect(find.text(t), findsOneWidget, reason: t);
-      }
-      expect(find.text('Follows the phone'), findsOneWidget);
-      expect(find.text('Near Stanley'), findsOneWidget);
-      expect(find.text('Downloaded region'), findsOneWidget);
-      expect(tester.widgetList<CheckSquare>(find.byType(CheckSquare)).map((c) => c.checked), [true, false, false]);
-      expect(r.settings.watchedPlaces, {'here'});
-      await tester.tap(find.text('Cabin'));
-      await tester.pump();
-      await tester.tap(find.text('Idaho'));
-      await tester.pump();
-      await tester.tap(find.text('Where I am'));
-      await tester.pump();
-      expect(r.settings.watchedPlaces, {'place:cabin', 'region:Idaho'});
-      await r.dispose(tester);
-    });
-  });
-
-  group('Places: remove', () {
-    testWidgets('a saved place can be removed after a confirm, and is no longer watched', (tester) async {
-      final r = await SettingsRig.create(tester);
-      r.liveCore.saved = const [SavedPlaceRecord(key: 'cabin', name: 'Cabin', lat: 44.2, lon: -114.9)];
-      r.regionList = const [WatchRegion(name: 'Idaho', lat: 44.4, lon: -114.6)];
-      r.settings.setWatched('place:cabin', true);
-      await r.show(tester, PlacesPage(deps: r.deps));
-      await tester.pumpAndSettle();
-      expect(find.byTooltip('Remove place'), findsOneWidget, reason: 'only saved places can be removed');
-      await tester.tap(find.byKey(const ValueKey('remove-place:cabin')));
-      await tester.pumpAndSettle();
-      expect(find.text('Remove Cabin?'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      expect(r.liveCore.deleted, isEmpty);
-      await tester.tap(find.byKey(const ValueKey('remove-place:cabin')));
-      await tester.pumpAndSettle();
-      await tester.runAsync(() async {
-        await tester.tap(find.byKey(const ValueKey('confirm-remove-place')));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      });
-      await tester.pumpAndSettle();
-      expect(r.liveCore.deleted, ['cabin']);
-      expect(r.settings.watchedPlaces.contains('place:cabin'), isFalse);
-      expect(find.text('Cabin'), findsNothing);
-      expect(find.text('Idaho'), findsOneWidget);
-      await r.dispose(tester);
-    });
   });
 
   group('A data source', () {

@@ -67,7 +67,7 @@ To pin a module when the bar already has three:
 2. Cache says "The bar is full (3 max)".
 3. Tap the row for the module you want to take off the bar, for example "Replace Library", or tap "Cancel".
 
-To make the icons bigger, go to "Settings" > "Appearance" and choose "Large" under "Module icons".
+To make the icons bigger, go to ["Settings" > "Appearance"](cache://settings/appearance) and choose "Large" under "Module icons".
 
 ## Select several items, and press and hold
 
@@ -150,7 +150,7 @@ If an answer is wrong, made up or harmful, you can save a report.
 That page is now called "Cache model and web search". The report holds the question, the answer and the model. It stays on your phone; nothing is sent anywhere.
 
 To see or share reports:
-1. Go to "Settings" > "Cache model and web search" > "Reported answers".
+1. Go to ["Settings" > "Cache model and web search" > "Reported answers"](cache://settings/assistant).
 2. Tap "Share" next to a report to send it yourself, or "Share all reports".
 3. Tap "Remove" to delete one.
 
@@ -172,7 +172,7 @@ To change a chat, tap and hold it in the list:
 
 To share the chat you have open, tap "Share chat" at the top of "Ask".
 
-To delete every chat at once, go to "Settings" > "Cache model and web search" > "Delete all conversations" and confirm with "Delete all". This cannot be undone.
+To delete every chat at once, go to ["Settings" > "Cache model and web search" > "Delete all conversations"](cache://settings/assistant) and confirm with "Delete all". This cannot be undone.
 
 ## Search the map
 
@@ -316,7 +316,7 @@ To save a video for offline:
 2. Pick a size. Smaller sizes save space on the phone.
 3. When it is saved, the video says "Saved on this phone" and "Play saved copy" plays it without a connection.
 
-Saved videos are under "Saved on this phone" at the top of "Videos". A stopped download can be continued with "Continue". To remove saved videos, delete them here in "Videos", or go to "Settings" > "Storage" > "Videos and weather".
+Saved videos are under "Saved on this phone" at the top of "Videos". A stopped download can be continued with "Continue". To remove saved videos, delete them here in "Videos", or go to ["Settings" > "Storage" > "Videos and weather"](cache://settings/storage).
 
 To log in (only needed for videos the site keeps behind a login):
 1. Open the instance and tap its account button ("Account and details").

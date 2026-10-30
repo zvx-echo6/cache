@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,8 +18,6 @@ import 'browse/browse_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
-import 'chat/read_tool.dart';
-import 'chat/search_tool.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
 import 'layout/layout_state.dart';
@@ -32,6 +31,20 @@ import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
+import 'notebook/notebook_publisher.dart';
+import 'notebook/notebook_model.dart';
+import 'notebook/notebook_state.dart';
+import 'notebook/places.dart';
+import 'maps/ui/place_map.dart';
+import 'notebook/media.dart' show storePhoto;
+import 'notebook/sync/connections.dart';
+import 'screens/pin_screen.dart';
+import 'settings/app_pin.dart';
+import 'maps/user_layers.dart';
+import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
+import 'screens/notebooks/notebooks_screen.dart' show NotebooksScreen;
+import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
+import 'regions/offroad_catalogue.dart';
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
@@ -51,6 +64,7 @@ import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
 import 'weather/live_core.dart';
+import 'weather/place_alerts.dart';
 import 'weather/places.dart';
 import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
@@ -133,6 +147,8 @@ class _CacheAppState extends State<CacheApp> {
       openCore: sources.whenCoreReady,
       layersConfig: () => sources.layersSection,
       policy: policy,
+      // Size estimates on a core of their own, so they never queue in front of the map, the Library and the reader.
+      openPlanner: (layers) => SearchCore.open(const [], extra: {'layers': layers}),
     ),
   );
   late final VideoState video = VideoState(policy: policy);
@@ -172,11 +188,13 @@ class _CacheAppState extends State<CacheApp> {
       final f = location.fix;
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
-    regions: () => regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+    regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
-  );
+  )..placeAlerts = placeAlerts;
+  /// Each place's own alert rule (Places notebook, the place's gear).
+  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${(await getApplicationSupportDirectory()).path}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
 
@@ -211,11 +229,10 @@ class _CacheAppState extends State<CacheApp> {
       id: 'regions',
       label: 'Regions',
       icon: Icons.map_outlined,
-      // The layer engine's tiles, the region engine's routing and places, and the legacy hand-placed packs folder.
+      // The layer engine's tiles and the region engine's routing, places and off-road.
       shared: () => {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
-        'packs': _beside(sources.zimsDir?.parent, 'packs'),
       },
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
@@ -228,6 +245,17 @@ class _CacheAppState extends State<CacheApp> {
       // Weather is fetched by each device.
       local: () => [_support('live-catalogues'), weather.liveFolder],
       list: () => videos.LibraryScreen(video: video),
+    ),
+    DataKind(
+      id: 'notebooks',
+      label: 'Notebooks',
+      icon: Icons.book_outlined,
+      // The notebooks as Markdown files with their photos, which notebook sync keeps the same on linked devices.
+      shared: () => {'notebooks': _support(kNotebookShareDir)},
+      // The notebooks themselves: their database, photos and files.
+      local: () => [_support('notebook')],
+      count: () => notebooks.notebooks.length,
+      list: () => NotebooksScreen(deps: notebookDeps),
     ),
     DataKind(
       id: 'shared',
@@ -252,7 +280,14 @@ class _CacheAppState extends State<CacheApp> {
     policy: policy,
     supportDir: getApplicationSupportDirectory,
     catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
+    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
     maps: maps,
+    // A region downloads from where the phone is, outwards.
+    position: () {
+      final f = location.fix;
+      return f == null ? null : (lat: f.lat, lon: f.lon);
+    },
     onPlacesChanged: () async {
       try {
         await sources.core?.refreshPlaces();
@@ -279,6 +314,8 @@ class _CacheAppState extends State<CacheApp> {
         _beside(app.modelsDir, '.partial'),
         if (_tempPath != null) Directory(_tempPath!),
       ],
+      // Damaged downloads: the files whose published size and SHA-256 are kept (the off-road packs).
+      manifests: () => regions.offroadManifests,
       busy: () =>
           browse.transfers.values.any((t) => t.phase != TransferPhase.failed && t.phase != TransferPhase.blockedByMobileData) ||
           modelDownloads.current != null ||
@@ -288,7 +325,10 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final LayoutState layout = LayoutState();
   late final ChatController chat = ChatController(
-    tools: [SearchTool(sources), ReadTool(sources)],
+    // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
+    tools: const [],
+    // Try again (or the next question) after the core could not start starts it again.
+    waitForCore: () async => await sources.retryCore() != null,
     newNumbering: () =>
         sources.coreReady ? CoreNumbering(sources.newConversation) : null,
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
@@ -321,7 +361,10 @@ class _CacheAppState extends State<CacheApp> {
     places: PlacesDeps(
       save: ({required name, required lat, required lon, label}) async {
         final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
-        return core.savePlace(name: name, lat: lat, lon: lon, label: label);
+        final saved = await core.savePlace(name: name, lat: lat, lon: lon, label: label);
+        // The core made its entry in the Places notebook.
+        unawaited(notebooks.reload());
+        return saved;
       },
       list: () async => (await sources.whenCoreReady() ?? (throw StateError('The search core is not available'))).savedPlaces(),
     ),
@@ -338,6 +381,76 @@ class _CacheAppState extends State<CacheApp> {
       start: nav.start,
       show: nav.requestMap,
     ),
+  );
+  // Notebooks: kept by the core (cs_notebook) in the support folder; their Log notebooks and the Journal publish act actions.
+  late final NotebookState notebooks = NotebookState(
+    backend: CoreNotebookBackend(sources.whenCoreReady),
+    mediaDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook'),
+  );
+  late final NotebookPublisher notebookActions = NotebookPublisher(registry: actionRegistry, notebook: notebooks);
+  late final PlaceChoices notebookPlaces = PlaceChoices(
+    here: () async => switch (location.fix) {
+      final f? => (lat: f.lat, lon: f.lon),
+      null => null,
+    },
+    saved: () async => [
+      for (final p in await (await sources.whenCoreReady())?.savedPlaces() ?? const [])
+        NbPlace(lat: p.lat, lon: p.lon, label: p.name, key: p.key),
+    ],
+    search: (q) async {
+      if (!nav.backend.available) return const [];
+      final f = location.fix;
+      final r = await nav.backend.search(q, near: f == null ? null : GeoPoint(f.lat, f.lon));
+      return [for (final p in r.results) NbPlace(lat: p.lat, lon: p.lon, label: p.name)];
+    },
+  );
+  late final NotebookDeps notebookDeps = NotebookDeps(
+      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: kAppLockEnabled ? appPin : null,
+      shareAvailable: () => sharing.enabled);
+  // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
+  late final NotebookConnections connections = NotebookConnections(
+    notebook: notebooks,
+    dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook-sync'),
+    shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
+    shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    storePhoto: (id, bytes) async {
+      await storePhoto(notebooks, bytes, id: id);
+    },
+  );
+  Timer? _shareSync;
+  // The optional app PIN: asked when Cache opens.
+  late final AppPin appPin = AppPin(const SecureTokenStore());
+  // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
+  late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
+    final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
+    return core.userLayers(call, arg);
+  });
+  // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
+  // and directions.
+  late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
+    watched: (id) => settings.watchedPlaces.contains(id),
+    setWatched: settings.setWatched,
+    alerts: placeAlerts,
+    placesChanged: () async {
+      await weather.placeChoices();
+      weather.positionChanged();
+      appActions.publishWatch();
+      await nav.refreshSaved();
+    },
+    alertSetting: () => switch (settings.popUpFor) {
+      PopUpFor.serious => 'Serious only, from Notifications',
+      PopUpFor.all => 'All alerts, from Notifications',
+      PopUpFor.none => 'None, from Notifications',
+    },
+    alertKinds: () => {for (final c in weather.enabledSources) c.id == 'alerts' ? 'alerts' : c.category}.where(kAlertKinds.containsKey).toList(),
+    regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
+    hereOnMap: () => location.enabled,
+    setHereOnMap: (on) => unawaited(location.setEnabled(on)),
+    map: (context, pin, onPick) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick),
+    directions: (p, name) {
+      nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+      nav.requestMap();
+    },
   );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
@@ -365,7 +478,11 @@ class _CacheAppState extends State<CacheApp> {
     sources.embedding = searchModel;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
-    _lifecycle = AppLifecycleListener(onResume: () => unawaited(weather.updateIfDue(kBackgroundEvery)));
+    _lifecycle = AppLifecycleListener(onResume: () {
+      unawaited(weather.updateIfDue(kBackgroundEvery));
+      unawaited(connections.syncAll());
+    });
+    if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
       if (mounted) setState(() => _coreDone = true);
@@ -377,22 +494,43 @@ class _CacheAppState extends State<CacheApp> {
     // switched on, and the place the background runs use is kept up to date.
     final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
     getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
-    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreReady()).then((core) async {
-      if (core == null) return;
+    // Once the core is open: at the first start, or after Try again in Ask started it again.
+    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
+      await webSearch.apply();
       await LocalAlertNotifier.instance.init();
       await weather.start();
       weather.addListener(_onWeather);
       _onWeather();
       unawaited(weather.updateIfDue(kBackgroundEvery));
       await appActions.publishAll();
+      // Notebooks are published after the app's own actions, so they are listed last.
+      await notebooks.start();
+      notebookActions.start();
+      unawaited(userLayers.reload());
+      // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
+      final before = notebooks.onChanged;
+      notebooks.onChanged = () {
+        before?.call();
+        connections.changed();
+      };
+      notebooks.privateSharing = connections;
+      unawaited(connections.syncAll());
+      _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
+        if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
+      });
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
-      if (e is PlaceSaved) appActions.publishWatch();
-      // A place removed from its card is no longer watched.
+      if (e is PlaceSaved) {
+        appActions.publishWatch();
+        unawaited(notebooks.reload());
+      }
+      // A place removed from its card is no longer watched; the core deleted its entry in the Places notebook.
       if (e is PlaceRemoved) {
         settings.forgetWatched(['place:${e.key}']);
+        unawaited(placeAlerts.forget('place:${e.key}'));
         appActions.publishWatch();
+        unawaited(notebooks.reload());
       }
     });
     location.addListener(_rememberPlace);
@@ -444,7 +582,7 @@ class _CacheAppState extends State<CacheApp> {
     final f = location.fix;
     final last = LastPlace(
       here: f == null ? null : (lat: double.parse(f.lat.toStringAsFixed(3)), lon: double.parse(f.lon.toStringAsFixed(3))),
-      regions: regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+      regions: watchRegionsOf(regions.local),
     );
     final key = jsonEncode(last.toJson());
     if (key == _lastPlaceSaved) return;
@@ -482,6 +620,8 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _shareSync?.cancel();
+    connections.dispose();
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
@@ -501,6 +641,8 @@ class _CacheAppState extends State<CacheApp> {
     webSearch.dispose();
     weather.dispose();
     sharing.dispose();
+    notebookActions.dispose();
+    notebooks.dispose();
     settings.dispose();
     _store?.close();
     super.dispose();
@@ -509,7 +651,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: app,
+      listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
         title: 'Cache',
         debugShowCheckedModeBanner: false,
@@ -531,7 +673,7 @@ class _CacheAppState extends State<CacheApp> {
             ),
           ],
         ),
-        home: Shell(
+        home: appLockAsked(appPin) ? PinLockScreen(pin: appPin) : Shell(
           app: app,
           chat: chat,
           sources: sources,
@@ -543,6 +685,7 @@ class _CacheAppState extends State<CacheApp> {
           nav: nav,
           layout: layout,
           hub: hub,
+          notebooks: notebookDeps,
         ),
       ),
     );

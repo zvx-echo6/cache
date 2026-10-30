@@ -163,6 +163,62 @@ class NavState extends ChangeNotifier {
   GeoPoint? _routeFrom;
   int _routeSeq = 0;
 
+  /// Where directions start when it is not the phone: a spot held on the map (the ring's From here). Null = the phone.
+  MapPlace? fromPlace;
+
+  /// The stops on the way, in order (the ring's Add stop, while a route is shown); the router goes through each.
+  List<MapPlace> stops = const [];
+
+  /// The most stops a route has.
+  static const int maxStops = 10;
+  final Set<int> _passedStops = {};
+
+  /// From here: directions will start at [p]. The search opens to choose where to go (or hold the map for To here).
+  void setFrom(MapPlace p) {
+    fromPlace = p;
+    stops = const [];
+    if (phase == NavPhase.previewing && selected != null) {
+      notifyListeners();
+      unawaited(_fetchRoutes());
+      return;
+    }
+    openSearch();
+    notifyListeners();
+  }
+
+  /// Directions start at the phone again.
+  void clearFrom() {
+    if (fromPlace == null) return;
+    fromPlace = null;
+    notifyListeners();
+    if (phase == NavPhase.previewing) unawaited(_fetchRoutes());
+  }
+
+  /// Add stop: [p] joins the route shown, after the stops it has. False when no route is shown or it has [maxStops].
+  Future<bool> addStop(MapPlace p) async {
+    if (phase != NavPhase.previewing || selected == null) return false;
+    if (stops.length >= maxStops) {
+      _events.add(const NavNotice('A route has at most 10 stops'));
+      return false;
+    }
+    stops = [...stops, p];
+    notifyListeners();
+    await _fetchRoutes();
+    return true;
+  }
+
+  Future<void> removeStop(int i) async {
+    if (i < 0 || i >= stops.length) return;
+    stops = [...stops]..removeAt(i);
+    notifyListeners();
+    if (phase == NavPhase.previewing) await _fetchRoutes();
+  }
+
+  List<Map<String, dynamic>> _via({bool skipPassed = false}) => [
+        for (final (i, s) in stops.indexed)
+          if (!skipPassed || !_passedStops.contains(i)) s.toEnd(),
+      ];
+
   // ---- guidance ----------------------------------------------------------------------------------------------
 
   MapProgress? progress;
@@ -442,7 +498,8 @@ class NavState extends ChangeNotifier {
 
   Future<void> _fetchRoutes() async {
     final to = selected;
-    final from = here;
+    final fromPin = fromPlace;
+    final from = fromPin == null ? here : GeoPoint(fromPin.lat, fromPin.lon);
     if (to == null) return;
     final seq = ++_routeSeq;
     routes = const [];
@@ -458,7 +515,13 @@ class NavState extends ChangeNotifier {
     _routeFrom = from;
     notifyListeners();
     try {
-      final r = await backend.route(from: {'lat': from.lat, 'lon': from.lon, 'name': 'Your location'}, to: to.toEnd(), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 2);
+      final r = await backend.route(
+          from: {'lat': from.lat, 'lon': from.lon, 'name': fromPin?.name ?? 'Your location'},
+          to: to.toEnd(),
+          via: _via(),
+          mode: mode,
+          landAccess: offroad ? landAccess : null,
+          alternatives: stops.isEmpty ? 2 : 0);
       if (seq != _routeSeq) return;
       if (!r.ok) {
         routeError = routeErrorText(r);
@@ -496,6 +559,8 @@ class NavState extends ChangeNotifier {
   void cancelDirections() {
     _routeSeq++;
     phase = NavPhase.browsing;
+    fromPlace = null;
+    stops = const [];
     routes = const [];
     routeError = null;
     routing = false;
@@ -515,6 +580,7 @@ class NavState extends ChangeNotifier {
     _sendRoute = true;
     _routeStarted = false;
     _lastReroute = null;
+    _passedStops.clear();
     _engine = GuidanceEngine(fmt: fmt, mode: r.mode, destination: r.destinationName);
     onFollow?.call(FollowMode.headingUp);
     notifyListeners();
@@ -541,6 +607,10 @@ class NavState extends ChangeNotifier {
   Future<void> _handleFix(Fix f) async {
     if (!guiding) return;
     lastFix = f;
+    // A stop the phone came within 100 m of is passed: a new route after going off it leaves it out.
+    for (final (i, s) in stops.indexed) {
+      if (_haversineM(f.lat, f.lon, s.lat, s.lon) < 100) _passedStops.add(i);
+    }
     if (_busyProgress) {
       _pendingFix = f;
       return;
@@ -597,7 +667,8 @@ class NavState extends ChangeNotifier {
     notifyListeners();
     _say('Rerouting.');
     try {
-      final r = await backend.route(from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
+      final r = await backend.route(
+          from: {'lat': f.lat, 'lon': f.lon, 'name': 'Your location'}, to: to.toEnd(), via: _via(skipPassed: true), mode: mode, landAccess: offroad ? landAccess : null, alternatives: 0);
       if (!guiding) return;
       if (r.ok) {
         routes = [r];
@@ -638,6 +709,8 @@ class NavState extends ChangeNotifier {
     await speaker.stop();
     phase = NavPhase.browsing;
     routes = const [];
+    fromPlace = null;
+    stops = const [];
     progress = null;
     arrived = false;
     rerouting = false;

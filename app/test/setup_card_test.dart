@@ -62,6 +62,7 @@ void main() {
       getArea: (_) => opened.add('area'),
       turnOnWeather: (_) => opened.add('weather'),
       addLibrary: (_) => opened.add('library'),
+      openGuide: (_, title) => opened.add(title),
     );
   }
 
@@ -135,7 +136,7 @@ void main() {
     await home(tester);
     expect(find.text('0 of 4 done'), findsOneWidget);
     expect(find.text('gemma-4-E2B-it-Q4_K_M.gguf · downloading 34%'), findsOneWidget);
-    expect(find.textContaining('Wasatch Front · downloading'), findsOneWidget);
+    expect(find.textContaining('Wasatch Front · Not offline yet'), findsOneWidget, reason: 'parts work as they land, but it is not offline yet');
     expect(find.byKey(const ValueKey('setup-progress')), findsNWidgets(2));
     final bar = tester.widget<LinearProgressIndicator>(
       find.descendant(of: row('setup-model'), matching: find.byKey(const ValueKey('setup-progress'))),
@@ -147,6 +148,42 @@ void main() {
     expect(find.text('1 of 4 done'), findsOneWidget);
     expect(tickIn('setup-area'), findsOneWidget);
     expect(find.text('Wasatch Front · directions and places · 120 MB'), findsOneWidget);
+    await r.dispose(tester);
+  });
+
+  testWidgets('a region download that stopped says what to do in a line that fits, and the line carries it on', (tester) async {
+    await rig(tester);
+    regions.onPhone = [
+      LocalRegion(
+        id: 'us-id',
+        name: 'Idaho',
+        routing: {'state': 'failed', 'bytes': 150 << 20, 'done_bytes': 40 << 20, 'error': 'stopped'},
+      ),
+    ];
+    await home(tester);
+    expect(find.text('Idaho · Stopped. Tap to carry on'), findsOneWidget, reason: 'no "Tap Update" for a button that is not here');
+    expect(find.textContaining('Tap Update'), findsNothing);
+    expect(setup.stoppedRegion?.id, 'us-id', reason: 'the shell carries this one on when the line is tapped');
+    await tester.tap(row('setup-area'));
+    await tester.pump();
+    expect(opened, ['area']);
+    regions.set([_region('ready')]);
+    expect(setup.stoppedRegion, isNull, reason: 'a region that is ready leaves nothing to carry on');
+    await r.dispose(tester);
+  });
+
+  testWidgets('each line opens its section of the guide, the same section the assistant points to', (tester) async {
+    await rig(tester);
+    await home(tester);
+    await tester.tap(find.byKey(const ValueKey('setup-area-guide')));
+    await tester.pump();
+    expect(opened, ['Cache guide: 1. Getting started: Download a region']);
+    expect(SetupCache.guideTitles, [
+      'Cache guide: 1. Getting started: Choose a model',
+      'Cache guide: 1. Getting started: Download a region',
+      'Cache guide: 1. Getting started: Turn on weather and alerts',
+      'Cache guide: 1. Getting started: Add to your Library',
+    ]);
     await r.dispose(tester);
   });
 

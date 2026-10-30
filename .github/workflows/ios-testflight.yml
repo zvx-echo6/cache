@@ -49,10 +49,16 @@ jobs:
     outputs:
       stage: ${{ steps.p.outputs.stage }}
       upload: ${{ steps.p.outputs.upload }}
+      build_name: ${{ steps.v.outputs.build_name }}
+      build_number: ${{ steps.v.outputs.build_number }}
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github
+          ref: ${{ inputs.ref || github.ref }}
+          sparse-checkout: |
+            .github
+            app/pubspec.yaml
+            packages/cache_search/ios/testflight_public.py
       - name: Validate the source reference
         env:
           SOURCE_REF: ${{ inputs.ref }}
@@ -81,6 +87,35 @@ jobs:
             done
           fi
           echo "Required configuration is present (secret values are not logged)."
+      # The version is 1.0.<build>, the build number the same on iPhone and Android: pubspec.yaml's "version: 1.0.27+27" is
+      # version 1.0.27, build 27. It is the build number TestFlight gets (not the run number), so it is checked here.
+      - name: Version and build number from pubspec.yaml
+        id: v
+        run: |
+          line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
+          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.([0-9]+))\+([0-9]+)\ *$ ]]; then
+            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<build>+<build>, found: $line"; exit 1
+          fi
+          name=${BASH_REMATCH[1]} patch=${BASH_REMATCH[2]} build=${BASH_REMATCH[3]}
+          if [[ "$patch" != "$build" ]]; then
+            echo "::error::The version's last number ($patch) must be the build number ($build), as in 1.0.27+27."; exit 1
+          fi
+          echo "build_name=$name" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build" >> "$GITHUB_OUTPUT"
+          echo "version $name, build $build"
+      - name: The build number is higher than the last TestFlight build
+        if: inputs.stage == 'all'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
+          UPLOAD: ${{ inputs.upload }}
+        run: |
+          if [[ -z "$ASC_KEY_ID" || -z "$ASC_ISSUER_ID" || -z "$ASC_KEY_P8_B64" ]]; then
+            if [[ "$UPLOAD" == true ]]; then echo "::error::The App Store Connect key is needed to check the build number"; exit 1; fi
+            echo "::warning::No App Store Connect key: the build number was not checked against TestFlight."; exit 0
+          fi
+          python3 -I packages/cache_search/ios/testflight_public.py --check-newer "${{ steps.v.outputs.build_number }}"
       - id: p
         run: |
           echo "stage=${{ inputs.stage }}" >> "$GITHUB_OUTPUT"
@@ -244,7 +279,7 @@ jobs:
           flutter pub get
           flutter test --no-pub test/core_config_test.dart test/nav_speaker_test.dart test/browse/zim_download_test.dart test/browse/storage_test.dart test/browse/reader_resources_test.dart test/video_player_screen_test.dart
           cmp ../packages/cache_search/ios/tests/offline-reader-rules.json "$RUNNER_TEMP/reader-rules.json"
-          flutter build ios --config-only --release --build-name=1.0.0 --build-number=${{ github.run_number }}
+          flutter build ios --config-only --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
           cd ios && pod install
       - name: Signing certificate and profile
         env:
@@ -281,7 +316,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -n 60
       - name: Verify the signed archive
         run: |
-          EXPECTED_BUILD_NUMBER=${{ github.run_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
       - name: Export the .ipa
         run: |
@@ -304,15 +339,15 @@ jobs:
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/ipa"
           ls -l "$RUNNER_TEMP/ipa"
-          mkdir -p "$GITHUB_WORKSPACE/out" && cp "$RUNNER_TEMP"/ipa/*.ipa "$GITHUB_WORKSPACE/out/Cache-1.0.0-${{ github.run_number }}.ipa"
+          mkdir -p "$GITHUB_WORKSPACE/out" && cp "$RUNNER_TEMP"/ipa/*.ipa "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.ipa"
       - name: Verify the actual exported IPA payload
         run: |
-          test -s out/Cache-1.0.0-${{ github.run_number }}.ipa
+          test -s out/Cache-${{ needs.plan.outputs.build_name }}.ipa
           stat -f 'IPA bytes: %z' out/*.ipa
           shasum -a 256 out/*.ipa
           mkdir "$RUNNER_TEMP/ipa-check"
           unzip -q out/*.ipa -d "$RUNNER_TEMP/ipa-check"
-          EXPECTED_BUILD_NUMBER=${{ github.run_number }} bash packages/cache_search/ios/check-app.sh \
+          EXPECTED_VERSION=${{ needs.plan.outputs.build_name }} EXPECTED_BUILD_NUMBER=${{ needs.plan.outputs.build_number }} bash packages/cache_search/ios/check-app.sh \
             "$RUNNER_TEMP/ipa-check/Payload/Runner.app"
           rm -rf "$RUNNER_TEMP/ipa-check"
       - uses: actions/upload-artifact@v4
@@ -362,4 +397,4 @@ jobs:
           WHATS_NEW_INPUT: ${{ inputs.whats_new }}
         run: |
           export WHATS_NEW="$WHATS_NEW_INPUT"
-          python3 -I packages/cache_search/ios/testflight_public.py "${{ github.run_number }}" Public
+          python3 -I packages/cache_search/ios/testflight_public.py "${{ needs.plan.outputs.build_number }}" Public

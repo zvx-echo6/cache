@@ -225,8 +225,8 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.subdirectory_arrow_left,
             title: Text.rich(
               TextSpan(children: [
-                TextSpan(text: 'Ask Cache: ', style: TextStyle(color: k.accent)),
-                TextSpan(text: text, style: TextStyle(color: k.accent, fontStyle: FontStyle.italic)),
+                TextSpan(text: 'Ask Cache:', style: TextStyle(color: k.accent)),
+                TextSpan(text: ' $text', style: TextStyle(color: k.accent, fontStyle: FontStyle.italic)),
               ]),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -266,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6),
             child: Text(
-              'Nothing here yet. Use "Add to Home" on a module, a place on the map, a Library page or a chat.',
+              'Nothing here yet. Use "Add to Home" on a module, a place on the map, a Library page, a chat or a notebook.',
               style: TextStyle(fontSize: 13, color: k.secondary),
             ),
           )
@@ -353,6 +353,7 @@ class ShortcutCard extends StatelessWidget {
       ShortcutKind.chat => const BrandTileImage(BrandTile.chat, size: 32),
       ShortcutKind.page => const BrandTileImage(BrandTile.library, size: 32),
       ShortcutKind.place => SizedBox(height: 32, width: 32, child: Icon(Icons.place_outlined, size: 26, color: k.accent)),
+      ShortcutKind.notebook => const BrandTileImage(BrandTile.journal, size: 32),
     };
     return Holdable(
         borderRadius: BorderRadius.circular(16),

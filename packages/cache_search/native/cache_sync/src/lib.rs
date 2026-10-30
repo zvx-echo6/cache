@@ -67,7 +67,8 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-fn t<T>() -> bool {
+/// `true`, for serde defaults.
+fn t() -> bool {
     true
 }
 
@@ -80,18 +81,18 @@ pub struct Config {
     #[serde(default)]
     pub name: Option<String>,
     /// Find devices on the local network.
-    #[serde(default = "t::<()>")]
+    #[serde(default = "t")]
     pub mdns: bool,
     /// Publish to and look up in the Mainline DHT.
-    #[serde(default = "t::<()>")]
+    #[serde(default = "t")]
     pub dht: bool,
     /// Publish to and look up in a lookup service: n0's by default, or `lookup_url` (an iroh-dns-server).
-    #[serde(default = "t::<()>")]
+    #[serde(default = "t")]
     pub lookup: bool,
     #[serde(default)]
     pub lookup_url: Option<String>,
     /// Relays: n0's public ones by default, the listed ones instead when given, none when `relay` is false.
-    #[serde(default = "t::<()>")]
+    #[serde(default = "t")]
     pub relay: bool,
     #[serde(default)]
     pub relay_urls: Vec<String>,

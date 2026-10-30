@@ -489,3 +489,49 @@ fn errors_with_a_place_destination_carry_its_details_but_no_note() {
     assert_eq!(j["to_matched"]["open_status"], "Open now (closes 18:00)");
     assert_eq!(keys(&j["from_matched"]), PLACE_KEYS);
 }
+
+// ---- off-road from downloaded region packs ----
+
+/// The same off-road trips through the desktop form (one pack and an elevation file) and through the region packs' form (a
+/// folder of `<build>/<region>/offroad.sqlite`, elevation through the generic z12 tile reader the map layer engine plugs into):
+/// the tool's results must be byte for byte the same. Needs the Idaho pack and elevation (OFFROAD_IDAHO_PACK,
+/// OFFROAD_IDAHO_ELEVATION); skips without them.
+#[test]
+fn region_packs_route_exactly_as_the_pack_and_elevation_file() {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| std::path::Path::new(v).is_file());
+    let (Some(pack), Some(elev)) = (env("OFFROAD_IDAHO_PACK"), env("OFFROAD_IDAHO_ELEVATION")) else {
+        eprintln!("Idaho off-road data env vars not set: skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("cs-nav-regionpacks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("offroad-2026-10/idaho")).unwrap();
+    let in_dir = dir.join("offroad-2026-10/idaho/offroad.sqlite");
+    if std::fs::hard_link(&pack, &in_dir).is_err() {
+        std::fs::copy(&pack, &in_dir).unwrap();
+    }
+    let with = |offroad: cache_navigate::OffroadCfg| {
+        let mut c = cfg();
+        c.offroad = Some(offroad);
+        NavigateTool::with_valhalla(c, Arc::new(RwLock::new(None)), Arc::new(fake()))
+    };
+    let file = with(cache_navigate::OffroadCfg { pack: pack.clone(), elevation: elev.clone(), dir: None, max_cells: None });
+    let packs = with(cache_navigate::OffroadCfg { pack: String::new(), elevation: String::new(), dir: Some(dir.to_string_lossy().into_owned()), max_cells: None });
+    let tiles = cache_offroad::pmtiles::PmTiles::open(std::path::Path::new(&elev)).unwrap();
+    packs.core().set_elevation(Some(Arc::new(cache_navigate::TileElevation::new(tiles))));
+    let from = Location { lat: 44.2211, lon: -114.9318, accuracy_m: None, fixed_at: NOW.into() };
+    let mut routed = 0;
+    for (mode, to) in [("offroad_foot", "44.2420,-114.9010"), ("offroad_vehicle", "44.2420,-114.9010"), ("offroad_foot", "44.1900,-114.9600")] {
+        for land in ["strict", "pragmatic"] {
+            let args = json!({"to": to, "mode": mode, "land_access": land});
+            let (a, b) = (run(&file, Some(&from), args.clone()), run(&packs, Some(&from), args));
+            // a route that went off-road: the pack and the elevation were both read
+            routed += a.as_ref().is_ok_and(|v| v["offroad_mi"].as_f64().is_some_and(|m| m > 0.0)) as usize;
+            let s = |r: Result<Value, ToolError>| r.map(|v| v.to_string()).unwrap_or_else(|e| e.to_json().to_string());
+            let (a, b) = (s(a), s(b));
+            assert_eq!(a, b, "{mode} {land} to {to}");
+        }
+    }
+    assert!(routed > 0, "no trip went off-road, so the off-road data was not compared");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -9,6 +9,8 @@ import 'package:cache/video/token_store.dart';
 import 'package:cache/weather/alert_notifier.dart';
 import 'package:cache/weather/alert_watch.dart';
 import 'package:cache/weather/curated.dart';
+import 'package:cache/weather/live_view.dart' show LiveItem;
+import 'package:cache/regions/regions_state.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache_search/cache_search.dart';
@@ -312,6 +314,21 @@ void main() {
       expect(h.lastPolicy['enabled_sources'], ['wfigs-incidents-near', 'wfigs-perimeters-near']);
     });
 
+    test('the core can never answer "mobile data updates are off": on mobile data the policy always allows it, with no per-source state', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      for (final downloads in [false, true, false]) {
+        h.settings.setMobileForDownloads(downloads);
+        h.probe.change(ConnectionKind.mobile);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(h.lastPolicy['metered'], true);
+        expect(h.lastPolicy['allow_metered'], true, reason: 'metered and not allowed is what makes the core say "mobile data updates are off"');
+        expect(h.lastPolicy.containsKey('states'), isFalse, reason: 'no source is put in the metered state by hand');
+        h.probe.change(ConnectionKind.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+
     test('nothing is pushed twice when nothing changed', () async {
       h = await Harness.create();
       final n = h.core.policies.length;
@@ -470,14 +487,13 @@ void main() {
         totalTiles: 1,
         phase: phase,
       );
-      final r = regionsFromAreas([
-        a('Idaho · Hillshade', 42, -117, 49, -111),
-        a('Idaho · Contours', 42, -117, 49, -111),
-        a('Home', 42.5, -113.8, 42.6, -113.7),
-        a('Montana', 44, -116, 49, -104, phase: AreaPhase.running),
-        a('This region', 1, 1, 2, 2),
+      final r = watchRegionsOf([
+        LocalRegion(id: 'us-id', name: 'Idaho', areas: [a('Idaho', 42, -117, 49, -111), a('Idaho · Hillshade', 42, -117, 49, -111)]),
+        LocalRegion(id: 'home', name: 'Home', areas: [a('a label that says nothing', 42.5, -113.8, 42.6, -113.7)]),
+        LocalRegion(id: 'us-mt', name: 'Montana', areas: [a('Montana', 44, -116, 49, -104, phase: AreaPhase.running)]),
+        LocalRegion(id: 'us-ut', name: 'Utah', routing: const {'state': 'ready'}),
       ]);
-      expect(r.map((x) => x.name), ['Home', 'Idaho']);
+      expect(r.map((x) => x.name), ['Home', 'Idaho'], reason: 'named as the region, only with a finished map');
       expect(r.last.lat, 45.5);
       expect(r.last.lon, -114);
     });
@@ -740,6 +756,24 @@ void main() {
       expect(await homeWeather(h.weather), contains('expired'));
     });
 
+    test('a fire\'s distance is read from the published "From the place" field (else "Distance"), on Home and for pop-ups', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Wildfires'), true);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '20 minutes old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/1', 'label': 'East Fork fire', 'fields': {'Size': '266 acres', 'Contained': '55%', 'From the place': '78 mi'}},
+        ],
+      };
+      final fire = (await h.weather.homeCard()).alerts.single;
+      expect(fire.detail, '78 mi · Size 266 acres · Contained 55% · NIFC WFIGS');
+      const old = LiveItem(address: 'a', label: 'b', fields: {'Distance': '38 mi S', 'Contained': '5%'});
+      expect((old.distance, old.summary, distanceMiles(old)), ('38 mi S', 'Contained 5%', 38.0));
+      const now = LiveItem(address: 'a', label: 'b', fields: {'Size': '266 acres', 'From the place': '8 mi'});
+      expect((now.distance, now.summary, distanceMiles(now)), ('8 mi', 'Size 266 acres', 8.0), reason: 'a fire within 10 mi is serious');
+    });
+
     test('Home alerts: none active, then a count with the first one', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Wildfires'), true);
@@ -829,13 +863,20 @@ void main() {
       return hh;
     }
 
-    test('Serious only (the default): a severe or extreme warning pops up; a fire or an advisory does not, and stays listed', () async {
+    test('Serious only (the default): a severe warning and a fire within 10 mi pop up; a farther fire or an advisory does not, and stays listed', () async {
       final n = FakeNotifier();
       h = await Harness.create(notifier: n);
       expect(h.settings.popUpFor, PopUpFor.serious);
       await h.weather.setRowOn(row('Wildfires'), true);
       await h.weather.setRowOn(row('Weather alerts'), true);
-      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/near', 'label': 'Rock Creek fire', 'fields': {'Distance': '8 mi SE'}},
+          {'address': 'live:wfigs-incidents-near/x/far', 'label': 'East Fork fire', 'fields': {'Distance': '38 mi S'}},
+        ],
+      };
       h.core.stored['nws-alerts-point'] = {
         'age': '1 minute old',
         'expired': false,
@@ -845,8 +886,9 @@ void main() {
         ],
       };
       await h.weather.updateNow();
-      expect(n.shown.map((a) => a.item.label), ['Red Flag Warning']);
-      expect(n.shown.single.serious, isTrue);
+      expect(n.shown.map((a) => a.item.label).toSet(), {'Red Flag Warning', 'Rock Creek fire'});
+      expect(n.shown.every((a) => a.serious), isTrue);
+      expect(await homeAlerts(h.weather), contains('2 fires'), reason: 'the farther fire is listed'); 
       expect(await homeAlerts(h.weather), contains('Wind Advisory'), reason: 'every alert is listed in Weather either way');
     });
 
@@ -912,6 +954,19 @@ void main() {
       h.settings.setPopUpFor(PopUpFor.all);
       await h.weather.updateNow();
       expect(n.shown, isEmpty);
+    });
+
+    test('serious: severe or extreme, an evacuation order always, a fire within the place\'s reach (10 mi by default)', () {
+      LiveItem item(String label, Map<String, String> f) => LiveItem(address: 'x', label: label, fields: f);
+      expect(isSerious(item('Flood Watch', {}), fire: false, severity: 'moderate'), isFalse);
+      expect(isSerious(item('Red Flag Warning', {}), fire: false, severity: 'severe'), isTrue);
+      expect(isSerious(item('Evacuation Immediate', {}), fire: false, severity: 'minor'), isTrue);
+      expect(isSerious(item('Civil message', {'Event': 'Evacuation order'}), fire: false), isTrue);
+      expect(isSerious(item('Rock Creek fire', {'Distance': '8 mi SE'}), fire: true), isTrue);
+      expect(isSerious(item('Rock Creek fire', {'Distance': '12 km SE'}), fire: true), isTrue, reason: '7.5 mi');
+      expect(isSerious(item('East Fork fire', {'Distance': '38 mi S'}), fire: true), isFalse);
+      expect(isSerious(item('East Fork fire', {'Distance': '38 mi S'}), fire: true, fireReachMiles: 50), isTrue, reason: 'a place set farther out');
+      expect(isSerious(item('Unknown fire', {}), fire: true), isFalse, reason: 'no distance: listed, not popped up');
     });
 
     test('a tapped pop-up names its place and item', () {

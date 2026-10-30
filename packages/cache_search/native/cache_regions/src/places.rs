@@ -620,7 +620,8 @@ impl Inner {
         }
         let target = st.p.updating.clone().or_else(|| st.p.build.clone())?;
         let list = r.places.get(&target)?;
-        let missing: Vec<TileRef> = list.values().filter(|t| !st.p_has(&target, &t.path) && !p.fetching(&target, &t.path)).cloned().collect();
+        let mut missing: Vec<TileRef> = list.values().filter(|t| !st.p_has(&target, &t.path) && !p.fetching(&target, &t.path)).cloned().collect();
+        crate::order_from(&mut missing, r.near);
         (!missing.is_empty()).then(|| Batch { build: target, name: r.name.clone(), tiles: missing })
     }
 

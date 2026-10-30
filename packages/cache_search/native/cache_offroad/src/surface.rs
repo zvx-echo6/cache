@@ -166,7 +166,7 @@ fn chunk_bounds(coords: &[(f64, f64)], max_points: usize, max_path_m: f64) -> Ve
     let mut start = 0;
     while start + 1 < n {
         let mut end = start + 1;
-        while end + 1 < n && end + 1 - start + 1 <= max_points && cum[end + 1] - cum[start] <= max_path_m {
+        while end + 1 < n && end + 1 - start < max_points && cum[end + 1] - cum[start] <= max_path_m {
             end += 1;
         }
         bounds.push((start, end));

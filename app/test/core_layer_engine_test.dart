@@ -16,6 +16,9 @@ class _LayersNative implements CsNative {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 
   int port = 0;
+  int scale = 1;
+  int plans = 0;
+  int planMs = 0;
   bool online = true;
   String? error;
   final Map<String, Map<String, dynamic>> user = {};
@@ -75,6 +78,8 @@ class _LayersNative implements CsNative {
   @override
   int open(String configJson) {
     port = ((jsonDecode(configJson) as Map)['test_port'] as num?)?.toInt() ?? 4321;
+    scale = ((jsonDecode(configJson) as Map)['test_scale'] as num?)?.toInt() ?? 1;
+    planMs = ((jsonDecode(configJson) as Map)['test_plan_ms'] as num?)?.toInt() ?? 0;
     return 7;
   }
 
@@ -109,12 +114,16 @@ class _LayersNative implements CsNative {
         }
         final tooBig = z > 13;
         final already = areas.isNotEmpty ? 40 : 0;
+        plans++;
+        // A plan reads the source over the network: the worker is busy for that long.
+        if (planMs > 0) sleep(Duration(milliseconds: planMs));
         return jsonEncode({
           'tiles': 100 * z,
           'tiles_to_download': 100 * z - already,
           'tiles_already': already,
           'already_bytes': already * 1000,
-          'estimated_bytes': 1000 * (100 * z - already),
+          'estimated_bytes': scale * 1000 * (100 * z - already),
+          'plans_so_far': plans,
           'ok_to_start': !tooBig,
           'problems': tooBig ? [{'code': 'limit_exceeded', 'message': 'too many tiles for one download'}] : [],
         });
@@ -142,7 +151,8 @@ class _LayersNative implements CsNative {
     final p = (jsonDecode(paramsJson) as Map).cast<String, dynamic>();
     calls.add('job:$kind:${jsonEncode({for (final e in p.entries) if (e.key != 'layers') e.key: e.value})}');
     final id = ++_job;
-    if (p['update'] != true) {
+    // A resumed download (the same area id) carries on the unfinished one.
+    if (p['update'] != true && !areas.any((a) => a['id'] == p['area'])) {
       areas.add({
         'id': p['area'],
         'name': p['name'],
@@ -204,10 +214,12 @@ void main() {
   late SearchCore core;
   late CoreLayerEngine engine;
   late HttpServer server;
+  late Directory layersDir;
   var connected = true;
 
   setUp(() async {
     connected = true;
+    layersDir = Directory.systemTemp.createTempSync('layers');
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((r) async {
       // The tile server stand-in: tiles under /layers/hillshade are on the phone, nothing else is.
@@ -217,13 +229,18 @@ void main() {
     core = await SearchCore.open(const [], extra: {'test_port': server.port}, native: _makeNative);
     engine = CoreLayerEngine(
       openCore: () async => core,
-      layersConfig: () => {'dir': '/layers'},
+      layersConfig: () => {'dir': layersDir.path},
       connected: () async => connected,
       pollEvery: const Duration(milliseconds: 20),
     );
     await engine.start();
   });
   tearDown(() async {
+    addTearDown(() {
+      try {
+        layersDir.deleteSync(recursive: true);
+      } catch (_) {}
+    });
     engine.dispose();
     await core.close();
     await server.close(force: true);
@@ -265,6 +282,46 @@ void main() {
     expect(online.problem, contains('offline'));
   });
 
+  test('estimates run on a core of their own, so the main core is never held up by them; the same one is asked once', () async {
+    final opened = <Map<String, dynamic>>[];
+    SearchCore? planner;
+    final e = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      // The planner's stand-in answers ten times the main one's bytes, so the answer says which core planned.
+      openPlanner: (layers) async {
+        opened.add(layers);
+        return planner = await SearchCore.open(const [], extra: {'layers': layers, 'test_scale': 10, 'test_plan_ms': 300}, native: _makeNative);
+      },
+    );
+    await e.start();
+    // The catalogue refresh that start begins (a changed catalogue drops the planner) is over before the estimates.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // While the slow plans run, the main core still answers at once (the map's start, the Library, the reader use it).
+    final planning = e.estimate('basemap', home);
+    await until(() => planner != null);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final watch = Stopwatch()..start();
+    await core.layers('list');
+    expect(watch.elapsedMilliseconds, lessThan(250), reason: 'the main core did not wait for the plans (3 x 300 ms)');
+    final first = await planning;
+    expect(first.bytes, 10 * 1300 * 1000, reason: 'planned on the second core');
+    expect(opened, [
+      {'dir': layersDir.path, 'online': true},
+    ], reason: 'opened once, with the layers section only');
+    final again = await Future.wait([e.estimate('basemap', home), e.estimate('basemap', home)]);
+    expect(again.map((a) => a.bytes), [first.bytes, first.bytes]);
+    expect((await planner!.layers('plan', jsonEncode({'layer': 'elevation', 'bbox': [0, 0, 1, 1], 'maxzoom': 1})))['plans_so_far'], 4,
+        reason: 'the three asks for the same area planned once (zooms 15, 14 and 13)');
+    // A changed catalogue opens the planner again, with the new definitions, and drops what was kept.
+    await e.saveDefinition(jsonEncode({'format': 1, 'id': 'mine', 'title': 'Mine', 'description': 'd', 'kind': 'raster', 'transform': 'as_is', 'license': 'l', 'attribution': 'a',
+      'source': {'type': 'xyz', 'url': 'https://m.test/{z}/{x}/{y}', 'maxzoom': 10}}));
+    await e.estimate('basemap', home);
+    expect(opened, hasLength(2));
+    e.dispose();
+  });
+
   test('a download runs as a layer_download job, shows progress, then is a finished area', () async {
     final a = await engine.download('hillshade', home, label: 'This region');
     expect(a.phase, AreaPhase.running);
@@ -297,7 +354,7 @@ void main() {
   test('a cancel that is waiting when the engine is disposed returns, and nothing notifies a listener that is gone', () async {
     final e = CoreLayerEngine(
       openCore: () async => core,
-      layersConfig: () => {'dir': '/layers'},
+      layersConfig: () => {'dir': layersDir.path},
       connected: () async => true,
       pollEvery: const Duration(milliseconds: 20),
     );
@@ -336,6 +393,29 @@ void main() {
     await until(() => a.phase != AreaPhase.running);
     expect(a.phase, AreaPhase.failed);
     expect(a.error, contains('No connection'));
+  });
+
+  test('a download cut off when the app was closed (iPhone stops it in the background) is carried on by Update after a restart', () async {
+    final a = await engine.download('hillshade', home, label: 'cut off');
+    expect(a.phase, AreaPhase.running);
+    // The app is closed mid-download: the core's list keeps it as unfinished, the shape asked for is only in the app.
+    engine.dispose();
+    final again = engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+    );
+    await again.start();
+    final stopped = again.areasOf('hillshade').single;
+    expect(stopped.phase, AreaPhase.failed);
+    expect(stopped.error, contains('Stopped before it finished'));
+    await again.update(stopped.id);
+    for (final l in ['elevation', 'hillshade', 'contours']) {
+      expect(again.areasOf(l).single.error, isNot(contains('cannot be continued')), reason: l);
+    }
+    await until(() => again.areasOf('hillshade').single.phase == AreaPhase.done);
+    expect(again.areasOf('hillshade').single.error, isNull);
   });
 
   test('definitions are saved, listed as the user\'s own, removed; the core refusing one is a format error', () async {

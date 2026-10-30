@@ -24,7 +24,7 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-10-29b';
+const String kGuideVersion = '2026-10-30b';
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
@@ -160,10 +160,32 @@ class LibrariesState extends ChangeNotifier {
     await _scan();
     notifyListeners();
     final core = await sources.whenCoreReady();
-    if (core == null) return;
+    if (core == null) {
+      // A core started again later (Try again in Ask) picks up the libraries then.
+      unawaited(sources.whenCoreOpen().then((_) => _afterCore()));
+      return;
+    }
+    await _afterCore();
+  }
+
+  Future<void> _afterCore() async {
     await sources.refresh();
     _resumeIndexes();
     await ensureGuide();
+    await _whileOpening();
+    _resumeIndexes();
+  }
+
+  /// The core opens each library on a background thread after cs_open, so the first list can show a library as still opening.
+  /// Nothing else reads the list again on its own, so the row stayed on its opening badge and its index was never resumed: the
+  /// status is read again until no library is opening (for at most ten minutes, like an add).
+  Future<void> _whileOpening() async {
+    for (var i = 0; i < 2400 && !_disposed; i++) {
+      if (!libraries.any((l) => statusOf(l)?.opening ?? false)) return;
+      await Future<void>.delayed(pollInterval);
+      if (_disposed) return;
+      await sources.reloadStatus();
+    }
   }
 
   /// True for the guide that ships in the app (it is never offered for delete).

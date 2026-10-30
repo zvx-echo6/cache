@@ -92,12 +92,12 @@ fn base_payload(i: u64) -> Value {
         "content": format!("Paragraph {i}. This text is about topic {}. Another sentence follows here.", i % 37),
         "doc_hash": format!("hash{d}"),
         "junk": i % 10 == 3,
-        "source_type": if i % 7 == 0 { "transcript" } else { "book" },
+        "source_type": if i.is_multiple_of(7) { "transcript" } else { "book" },
         "_start_page": i % 500 + 1,
         "book_author": "A. Writer",
         "replaced_by_rebuild": if i % 50 == 7 { json!(["x"]) } else { Value::Null },
     });
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         p["summary"] = json!(format!("Summary {i}. More."));
     }
     // rare words for the keyword tests: 1234 is kept, 1233 is left out (junk), 5 has a copy at 2005

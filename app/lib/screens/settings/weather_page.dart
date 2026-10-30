@@ -7,7 +7,6 @@ import '../../weather/weather_state.dart';
 import 'catalogues_page.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
-import 'places_page.dart';
 import 'source_page.dart';
 import 'widgets.dart';
 
@@ -41,7 +40,7 @@ String _sentence(String s) {
 }
 
 /// Settings > Weather and alerts: one line saying how old the data is (with a small refresh button), the sources from the catalogue
-/// (featured ones first, the rest under More sources), and the places to watch.
+/// (featured ones first, the rest under More sources). The places weather is kept for are in the Places notebook.
 class WeatherPage extends StatefulWidget {
   const WeatherPage({super.key, required this.deps});
 
@@ -54,28 +53,11 @@ class WeatherPage extends StatefulWidget {
 class _WeatherPageState extends State<WeatherPage> {
   SettingsDeps get d => widget.deps;
   WeatherState get w => d.hub.weather;
-  String _places = '';
-
   @override
   void initState() {
     super.initState();
-    w.addListener(_reloadPlaces);
-    d.hub.settings.addListener(_reloadPlaces);
-    _reloadPlaces();
     // Nothing downloaded yet (a first start with no connection until now): try once on opening.
     if (w.started && w.catalogues.isEmpty && !w.refreshingCatalogues) w.refreshCatalogues();
-  }
-
-  @override
-  void dispose() {
-    w.removeListener(_reloadPlaces);
-    d.hub.settings.removeListener(_reloadPlaces);
-    super.dispose();
-  }
-
-  Future<void> _reloadPlaces() async {
-    final s = await w.watchedSummary();
-    if (mounted && s != _places) setState(() => _places = s);
   }
 
   Future<void> _refresh() async {
@@ -117,16 +99,6 @@ class _WeatherPageState extends State<WeatherPage> {
                 ],
               ),
             ],
-            SettingsGroup(
-              label: 'Watch these places',
-              rows: [
-                SettingsRow(
-                  title: 'Places',
-                  status: [Part(_places.isEmpty ? '…' : _places)],
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlacesPage(deps: d))),
-                ),
-              ],
-            ),
           ],
         );
       },

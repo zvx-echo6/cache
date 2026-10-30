@@ -5,6 +5,10 @@ import 'action_def.dart';
 /// Runs one action with its fields as the core resolved them and returns the module's result JSON. Throws [ActionFailure].
 typedef ActionHandler = Future<Map<String, dynamic>> Function(Map<String, dynamic> fields);
 
+/// The lines a confirm card shows for a call, in the module's own words: (label, value) pairs made from the call's [fields] as the
+/// model wrote them and the core's [summary] of them (places as the user will recognise them). Null: the card shows the summary.
+typedef CardLines = List<MapEntry<String, String>>? Function(Map<String, dynamic> fields, List<MapEntry<String, String>> summary);
+
 /// Why an action could not do what it was asked; becomes the `error` of the tool result.
 class ActionFailure implements Exception {
   const ActionFailure(this.type, this.detail);
@@ -38,6 +42,7 @@ class ActionRejection {
 class ActionRegistry extends ChangeNotifier {
   final Map<String, List<ActionDef>> _modules = {};
   final Map<String, ActionHandler> _handlers = {};
+  final Map<String, CardLines> _cardLines = {};
   List<ActionRejection> _rejected = const [];
 
   /// The last rejections of each module, for the log.
@@ -55,8 +60,21 @@ class ActionRegistry extends ChangeNotifier {
     return null;
   }
 
-  /// Installs (or replaces) [module]'s actions. [handlers] are by action id; a definition without a handler is rejected.
-  List<ActionRejection> publish(String module, List<Map<String, dynamic>> defs, Map<String, ActionHandler> handlers) {
+  /// The lines of a confirm card for [action], when its module words them itself (see [CardLines]).
+  List<MapEntry<String, String>>? cardLines(String action, Map<String, dynamic> fields, List<MapEntry<String, String>> summary) {
+    final f = _cardLines[action];
+    if (f == null) return null;
+    try {
+      return f(fields, summary);
+    } catch (e) {
+      debugPrint('cache actions: card lines of $action failed ($e)');
+      return null;
+    }
+  }
+
+  /// Installs (or replaces) [module]'s actions. [handlers] are by action id; a definition without a handler is rejected. [cardLines]
+  /// (by action id) word the confirm cards of the module's change actions.
+  List<ActionRejection> publish(String module, List<Map<String, dynamic>> defs, Map<String, ActionHandler> handlers, {Map<String, CardLines> cardLines = const {}}) {
     final taken = {for (final e in _modules.entries) if (e.key != module) for (final d in e.value) d.id};
     final kept = <ActionDef>[];
     final rejected = <ActionRejection>[];
@@ -74,10 +92,12 @@ class ActionRegistry extends ChangeNotifier {
     }
     for (final d in _modules[module] ?? const <ActionDef>[]) {
       _handlers.remove(d.id);
+      _cardLines.remove(d.id);
     }
     _modules[module] = kept;
     for (final d in kept) {
       _handlers[d.id] = handlers[d.id]!;
+      if (cardLines[d.id] case final c?) _cardLines[d.id] = c;
     }
     _rejected = [..._rejected.where((r) => r.module != module), ...rejected];
     for (final r in rejected) {

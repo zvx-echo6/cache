@@ -26,7 +26,7 @@ Cache's assistant runs a language model on your phone. Nothing is downloaded for
 To open the Models screen:
 - tap the model name at the top of "Ask" and choose "Manage models", or
 - tap "Get a model" or "Choose a model" in an empty chat, or
-- go to "Settings" > "Cache model and web search" and tap the model row.
+- go to ["Settings" > "Cache model and web search"](cache://settings/assistant) and tap the model row.
 
 On the Models screen:
 1. Look under "Recommended". Each card shows the model's size and how well it fits your phone: "Fits this phone", "May be tight on this phone" or "Too big for this phone".
@@ -50,7 +50,7 @@ To free the memory the model uses, tap "Unload" next to the active model, or use
 If you want a model that is not in the "Recommended" list, you can search Hugging Face or copy a file you already have.
 
 To search Hugging Face:
-1. Open the Models screen: tap the model name at the top of "Ask" and choose "Manage models", or go to "Settings" > "Cache model and web search" and tap the model row.
+1. Open the Models screen: tap the model name at the top of "Ask" and choose "Manage models", or go to ["Settings" > "Cache model and web search"](cache://settings/assistant) and tap the model row.
 2. Tap "Search Hugging Face". The "Find a model" screen opens.
 3. Type a model name and search. Only models that come as a single .gguf file are shown.
 4. Tap a result to see its files. Each file shows its size and whether it fits this phone.
@@ -75,7 +75,7 @@ The pop-up shows:
 - a storage bar, for example "103 GB free, 100.9 GB after".
 
 Mobile data:
-1. Big downloads use Wi-Fi only, unless you turn on "Mobile data downloads" in "Settings" > "Storage".
+1. Big downloads use Wi-Fi only, unless you turn on "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
 2. On mobile data with that switch off, the pop-up says so and offers "Wait for Wi-Fi". This is the default. The download starts by itself when you are on Wi-Fi.
 3. To go ahead on mobile data this once, tap "Download now".
 4. To allow mobile data for all big downloads, turn on "Mobile data downloads".
@@ -90,14 +90,14 @@ You can leave Cache while a download runs. A stopped download picks up where it 
 
 A region download lets maps, directions and place search work without a connection. Each region has routing, map, places and off-road, all in one download.
 
-1. Open "Maps" and tap "Layers", then "Download a region". (Or go to "Settings" > "Maps" > "Regions".)
+1. Open "Maps" and tap "Layers", then "Download a region". (Or go to ["Settings" > "Maps" > "Regions"](cache://maps/regions).)
 2. The "Regions" sheet opens on the "Downloads" tab, with one list of regions. A search box ("Search regions") finds a region by name. You can also browse by country under "Countries".
 3. Each row shows the name and size. A region already on the phone shows an "On this phone" badge.
 4. To get one region, tap its download button.
 5. To get several, tap "Select" in the header, tick the regions, then tap "Download N", where N is the number you ticked. The button also shows the total size.
 6. A pop-up lists the regions with their sizes and a storage bar. If the state's off-road data is already on the phone, it has a line "Off-road" with "Already on this phone". Tap "Download".
 
-If your area is not in the list, tap "Draw your own area instead" at the bottom and drag on the map to mark it.
+If your area is not in the list, tap ["Draw your own area instead"](cache://maps/draw) at the bottom and drag on the map to mark it.
 
 A region that cannot be downloaded shows a short reason on its row in place of the download button. For example, "This region is too big to download the map in one go." or "This region has no outline yet."
 
@@ -121,7 +121,7 @@ On the "Regions" sheet the "Local" tab shows the same line for every region that
 
 Downloaded regions are listed on the "Regions" sheet.
 
-To open it: "Maps" > "Layers" > "Download a region", or "Settings" > "Maps" > "Regions".
+To open it: ["Maps" > "Layers" > "Download a region"](cache://maps/regions), or "Settings" > "Maps" > "Regions".
 
 The sheet has three tabs: "Downloads", "Local" and "Updates". The "Local" tab lists every region on this phone, largest first, with its size and the parts it has (for example road routing, map and places). A region that is still downloading shows one line for its parts: "Map", "Directions", "Places" and "Off-road", each ready, a percentage, waiting, stopped or paused. A part that is ready already works. Cache downloads from where the phone is outwards.
 - To bring one region up to date, tap its update button. A download that stopped carries on with the same button.
@@ -140,7 +140,7 @@ Updates need a connection and, by default, Wi-Fi. While places update, search ke
 
 The Library holds offline copies of Wikipedia, medical guides, survival manuals and other reference works. They come from the Kiwix catalogue and are free. Once downloaded they work with no signal.
 
-1. Open "Library" and tap "Add to Library". One screen opens.
+1. [Open "Library" and tap "Add to Library"](cache://library/add). One screen opens.
 2. To find something, type in "Search the catalogue". You can narrow the list with the language chip ("All languages") and category chips such as "Medicine" or "Preparedness".
 3. Under "Ready-made collections · free from Kiwix", each collection has its own download button and its size.
 4. Tap the download button. A pop-up shows the name, the size and a storage bar.
@@ -156,7 +156,7 @@ To add your own library or a ZIM file you already have, use "Your own library" o
 
 A library is a collection of passages that Cache searches and cites when it answers. Libraries are made outside the app. You add one from a file or from a download link someone gives you.
 
-1. Open "Library" and tap "Add to Library".
+1. [Open "Library" and tap "Add to Library"](cache://library/add).
 2. Tap "Your own library" ("From a file or a download link").
 3. Choose "From a file on this phone" and pick the file, or choose "From a download link", paste the link (it must start with https://) and tap "Download". A .zim file you already have can be added the same way.
 4. A card shows each step: downloading, unpacking, checking, building the search index, and putting it in place. "Cancel" stops it.
@@ -189,9 +189,9 @@ If you would rather not share your location, or it cannot be found:
 
 To keep a place for good, add it to the Places notebook. Each place there has its own "Weather and alerts" switch. "Where I am" is its first row, labelled "Follows the phone".
 
-More sources are in "Settings" > "Weather and alerts". The featured ones are listed first. The rest are under "More sources", with a count such as "9 more". Some need a free key; the row has a "Get key" button. Turn each source on with its switch.
+More sources are in ["Settings" > "Weather and alerts"](cache://settings/weather). The featured ones are listed first. The rest are under "More sources", with a count such as "9 more". Some need a free key; the row has a "Get key" button. Turn each source on with its switch.
 
-The first time something is switched on, Cache asks to send you notifications. You choose which alerts pop up in "Settings" > "Notifications".
+The first time something is switched on, Cache asks to send you notifications. You choose which alerts pop up in ["Settings" > "Notifications"](cache://settings/notifications).
 
 Weather and alerts need a connection to update. When you are offline, Cache shows the last data it got and how old it is.
 
@@ -200,7 +200,7 @@ Weather and alerts need a connection to update. When you are offline, Cache show
 Cache uses your location to show you on the map, give directions from where you are, answer questions about places near you, and keep weather and alerts for where you are. It uses your location whenever your phone allows it.
 
 The switch is called "Use my location". It is in two places, and it is the same switch:
-- "Settings" > "Cache model and web search": the row "Use my location".
+- ["Settings" > "Cache model and web search"](cache://settings/assistant): the row "Use my location".
 - "Ask": tap the + button to the left of the box where you type, then use "Use my location".
 
 To stop Cache using your location for your questions, turn the switch off. Cache does not ask for location in "Ask" and shows no location button there.

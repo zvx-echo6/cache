@@ -25,6 +25,7 @@ class AskScreen extends StatefulWidget {
     required this.app,
     required this.chat,
     this.onOpenSource,
+    this.onOpenVideo,
     this.onOpenNavigation,
     this.share = shareMarkdown,
     this.layout,
@@ -49,6 +50,9 @@ class AskScreen extends StatefulWidget {
 
   /// Opens the article a citation points at (a `zim:` address) in Browse.
   final void Function(String address)? onOpenSource;
+
+  /// Opens the video a citation points at, at its moment (a library point that maps a link and a time).
+  final void Function(String link, double time)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
@@ -357,6 +361,7 @@ class _AskScreenState extends State<AskScreen> {
                         : _AssistantBlock(
                             msgs[i],
                             onOpenSource: widget.onOpenSource,
+                            onOpenVideo: widget.onOpenVideo,
                             onOpenNavigation: widget.onOpenNavigation,
                             chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
@@ -471,7 +476,7 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenNavigation, this.onReport, this.chat});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenVideo, this.onOpenNavigation, this.onReport, this.chat});
 
   final ChatMessage msg;
 
@@ -479,6 +484,7 @@ class _AssistantBlock extends StatefulWidget {
   final ChatController? chat;
   final VoidCallback? onReport;
   final void Function(String address)? onOpenSource;
+  final void Function(String link, double time)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
@@ -495,6 +501,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
     final showText =
         m.phase == TurnPhase.answering || m.phase == TurnPhase.done;
     final status = switch (m.phase) {
+      TurnPhase.starting => 'Starting…',
       TurnPhase.thinking => 'Thinking…',
       TurnPhase.searching => 'Searching your sources…',
       _ => null,
@@ -508,6 +515,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
+              lines: widget.chat?.actions?.cardLines(card.action, card.fields, card.summary),
               enabled: widget.chat?.canSend ?? false,
               onDecide: (confirm) => widget.chat?.resolveConfirm(card, confirm: confirm),
             ),
@@ -559,6 +567,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             ),
           if (m.error != null)
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
+          if (m.error == kCoreDidNotStart && widget.chat != null)
+            TextButton(key: const ValueKey('ask-try-again'), onPressed: widget.chat!.retryLast, child: const Text('Try again')),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
             _sourcesRow(context, m),
           if (m.isDone && m.error == null && m.text.isNotEmpty && widget.onReport != null)
@@ -647,9 +657,9 @@ class _AssistantBlockState extends State<_AssistantBlock> {
               ),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                onTap:
-                    widget.onOpenSource != null &&
-                        isZimAddress(s.result.address)
+                onTap: s.result.isVideoMoment && widget.onOpenVideo != null
+                    ? () => widget.onOpenVideo!(s.result.link!, s.result.time!)
+                    : widget.onOpenSource != null && isZimAddress(s.result.address)
                     ? () => widget.onOpenSource!(s.result.address)
                     : null,
                 child: Padding(

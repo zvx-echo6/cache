@@ -36,6 +36,7 @@ class _RegionSheetState extends State<RegionSheet> {
   bool _routing = true;
   bool _map = true;
   bool _places = true;
+  bool _offroad = true;
   bool _starting = false;
   String? _error;
 
@@ -45,6 +46,8 @@ class _RegionSheetState extends State<RegionSheet> {
   void initState() {
     super.initState();
     _places = !(_routingHere || _mapHere);
+    // a region downloaded before off-road was part of regions shows it unticked, to add on its own
+    _offroad = !(_routingHere || _mapHere || _placesHere);
     r.plan(widget.region).then((p) {
       if (mounted) setState(() => _plan = p);
     }).catchError((Object e) {
@@ -56,18 +59,24 @@ class _RegionSheetState extends State<RegionSheet> {
   bool get _routingHere => _here?.hasRouting ?? false;
   bool get _mapHere => _here?.hasMap ?? false;
   bool get _placesHere => _here?.hasPlaces ?? false;
+  bool get _offroadHere => _here?.hasOffroad ?? false;
   bool get _canRouting => !_routingHere && _plan?.routing != null;
   bool get _canMap => !_mapHere && (_plan?.mapAllowed.isNotEmpty ?? false);
   bool get _canPlaces => !_placesHere && _plan?.places != null;
-  bool get _canAny => _canRouting || _canMap || _canPlaces;
-  bool get _picked => (_routing && _canRouting) || (_map && _canMap) || (_places && _canPlaces);
+  bool get _canOffroad => !_offroadHere && (_plan?.offroadAllowed ?? false);
+
+  /// The off-road row is shown unless no off-road pack covers the region.
+  bool get _hasOffroadRow => _offroadHere || _plan?.offroad != null || _plan?.offroadProblem != null;
+  bool get _canAny => _canRouting || _canMap || _canPlaces || _canOffroad;
+  bool get _picked => (_routing && _canRouting) || (_map && _canMap) || (_places && _canPlaces) || (_offroad && _canOffroad);
 
   int get _total {
     final p = _plan;
     if (p == null) return 0;
     return (_routing && _canRouting ? p.routing!.downloadBytes : 0) +
         (_map && _canMap ? p.mapBytes : 0) +
-        (_places && _canPlaces ? p.places!.downloadBytes : 0);
+        (_places && _canPlaces ? p.places!.downloadBytes : 0) +
+        (_offroad && _canOffroad ? p.offroad!.downloadBytes : 0);
   }
 
   /// What the picked parts already have on this phone (tiles shared with a region that is here). Local counts them in a
@@ -78,7 +87,8 @@ class _RegionSheetState extends State<RegionSheet> {
     int part(PartPlan pp) => pp.bytes > pp.downloadBytes ? pp.bytes - pp.downloadBytes : 0;
     return (_routing && _canRouting ? part(p.routing!) : 0) +
         (_map && _canMap ? p.mapBytesAlready : 0) +
-        (_places && _canPlaces ? part(p.places!) : 0);
+        (_places && _canPlaces ? part(p.places!) : 0) +
+        (_offroad && _canOffroad ? p.offroad!.bytesAlready : 0);
   }
 
   /// The download pop-up, then the parts picked start: now, or once on Wi-Fi.
@@ -88,7 +98,10 @@ class _RegionSheetState extends State<RegionSheet> {
     final choice = await askToDownload(
       context,
       title: 'Download ${widget.region.name}?',
-      lines: [DownloadLine(widget.region.name, _total)],
+      lines: [
+        DownloadLine(widget.region.name, _total),
+        if (_offroad && _canOffroad && (_plan?.offroad?.packsOnPhone ?? false)) const DownloadLine('Off-road', 0, note: 'Already on this phone'),
+      ],
       dir: dir.path,
       policy: r.policy,
     );
@@ -98,11 +111,11 @@ class _RegionSheetState extends State<RegionSheet> {
       _error = null;
     });
     try {
-      final routing = _routing && _canRouting, map = _map && _canMap, places = _places && _canPlaces;
+      final routing = _routing && _canRouting, map = _map && _canMap, places = _places && _canPlaces, offroad = _offroad && _canOffroad;
       if (choice == DownloadChoice.now) {
-        await r.download(widget.region, routing: routing, map: map, places: places, anyway: true);
+        await r.download(widget.region, routing: routing, map: map, places: places, offroad: offroad, anyway: true);
       } else {
-        await r.downloadOnWifi(widget.region, routing: routing, map: map, places: places);
+        await r.downloadOnWifi(widget.region, routing: routing, map: map, places: places, offroad: offroad);
       }
       if (mounted) Navigator.pop(context);
     } catch (e) {
@@ -122,6 +135,25 @@ class _RegionSheetState extends State<RegionSheet> {
     return [
       'About ${formatBytes(pp.downloadBytes)}',
       if (already > 0) '${formatBytes(already)} already on this phone',
+    ].join(' · ');
+  }
+
+  String _offroadLine(RegionPlan p) {
+    if (_offroadHere) return 'On this phone';
+    final o = p.offroad;
+    if (o == null) return p.offroadProblem ?? 'Not available';
+    if (!o.allowed) return o.problem ?? 'Not available';
+    // The state's pack is on the phone already (another region brought it): only this region's terrain heights are new.
+    if (o.packsOnPhone) {
+      return [
+        'Already on this phone',
+        if (o.downloadBytes > 0) 'terrain heights for this region about ${formatBytes(o.downloadBytes)}',
+      ].join(' · ');
+    }
+    return [
+      'About ${formatBytes(o.downloadBytes)}',
+      if (o.packs.length > 1) o.packs.map((x) => x.pack.name).join(', '),
+      if (o.bytesAlready > 0) '${formatBytes(o.bytesAlready)} already on this phone',
     ].join(' · ');
   }
 
@@ -186,6 +218,16 @@ class _RegionSheetState extends State<RegionSheet> {
                   value: _placesHere || (_places && _canPlaces),
                   onChanged: _canPlaces && !_starting ? (v) => setState(() => _places = v ?? false) : null,
                 ),
+                if (_hasOffroadRow)
+                  CheckboxListTile(
+                    key: const ValueKey('part-offroad'),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('Off-road'),
+                    subtitle: Text(_offroadLine(p)),
+                    value: _offroadHere || (_offroad && _canOffroad),
+                    onChanged: _canOffroad && !_starting ? (v) => setState(() => _offroad = v ?? false) : null,
+                  ),
                 const SizedBox(height: 8),
                 if (_canAny) ...[
                   Text('About ${formatBytes(_total)} to download', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text)),
@@ -195,7 +237,7 @@ class _RegionSheetState extends State<RegionSheet> {
                       key: const ValueKey('region-size-in-all'),
                       style: TextStyle(fontSize: 15, color: k.secondary),
                     ),
-                ] else if (_routingHere || _mapHere || _placesHere)
+                ] else if (_routingHere || _mapHere || _placesHere || _offroadHere)
                   Text('${region.name} is on this phone.', style: TextStyle(fontSize: 16, color: k.secondary))
                 else
                   Text('Nothing of ${region.name} can be downloaded here.', style: TextStyle(fontSize: 16, color: k.warning)),

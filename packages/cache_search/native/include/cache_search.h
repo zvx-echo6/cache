@@ -21,7 +21,7 @@
  *                    numbers "needed" and "available" (bytes)
  *   "damaged"        a library's files are incomplete; nothing was changed
  *   "not_configured" the cs_open config has no "user" section (saved places), "live" section (live data), "video"
- *                    section (videos) or "layers" section (map layers)
+ *                    section (videos), "layers" section (map layers) or "notebook" section (the Notebook)
  *   "fetch_failed"   a live-source download failed (network, HTTP status); the last good copy is kept
  *   "quota"          a live source reached its per-minute, per-day or per-month download cap
  *   "key_missing"    a live source needs an API key and the request gave none
@@ -93,6 +93,8 @@ char *cs_version(void);
  *                                                    the starter ones. Default ["https://cache.echo6.co/catalogue.json"]; [] = none
  *              "cache_max_bytes": 268435456,         optional cap of the viewed-tile cache (default 256 MiB)
  *              "online": true}                       optional, default true; false = never use the network
+ *   "notebook": {"db_path": ".../notebook/notebook.sqlite",  optional: the Notebook (cs_notebook); photos are files in
+ *                "media_dir": ".../notebook"},               media_dir/photos/<id>.jpg (thumbnails in thumbs/<id>.jpg)
  *   "min_term_coverage": 0.5       optional, default 0.5: keyword hits matching fewer than this fraction of the
  *                                  query terms are
  *                                  dropped unless that leaves fewer than k+offset results
@@ -394,6 +396,78 @@ char *cs_place_save(cs_handle *h, const char *place_json);
 
 /* Deletes the saved place and the live data downloaded for it. {"deleted":"<key>"}, or "not_found". */
 char *cs_place_delete(cs_handle *h, const char *key);
+
+/* --- Notebooks (notebook.sqlite; logic in the cache_notebook crate) ---
+ *
+ * The user keeps several notebooks, each made of one kind of entry. An entry can have a title, text, a date ("occurred_at"),
+ * a place, photos, attached files and values for the notebook's fields. A notebook's template (an id such as "journal",
+ * "log", "notes", "places" or one the user made; templates are data in the app) only sets its starting definition:
+ * {"id"?,"version"?,"author"?,"group"?,"name","due_every","shape"?,"fields":[{"fid","label","type","unit"?,"choices"?,
+ * "hidden"?}]}. "shape" is how the app lists and fills it: {"sort":"date"|"recent"|"distance"?,"quick_add":bool?}. Field
+ * types: text, number (optional unit, a label), yes_no, choice (choices, the first is the default), place, photo; at most 12
+ * visible fields; each field gets a stable "fid" ("f1", "f2", ...) when it is made, and values are stored by it, so a label
+ * rename keeps them. Once a notebook has entries a field's type cannot change; a field taken out that holds values is kept
+ * with "hidden": true. due_every: null, "day", "week", "month", "year" or "<n> days|weeks|months|years" (n 2-999).
+ * Names are unique, ignoring case. A Journal notebook (template "journal") is made the first time the database is opened;
+ * deleted, it stays deleted.
+ * "private" (an entry's own, or its notebook's) is stored only: it is what sharing, sync and export leave out by default.
+ * Private items are searched like the rest. "map": the notebook's entries with a place are drawn on the map (default true).
+ * Photos and files: the app writes media_dir/photos/<id>.jpg (and thumbs/<id>.jpg) or media_dir/files/<id> before saving the
+ * entry that names them; an entry or notebook that is deleted, or a photo or file taken out of an entry, deletes them.
+ *
+ * A place: {"lat","lon","label"?,"key"?} (key = a saved place). occurred_at: local ISO 8601 with its offset
+ * ("2026-10-25T16:12:00-06:00"); lists are by its instant, newest first.
+ * An entry: {"id","notebook_id","occurred_at","title"?,"body"?,"values":{fid: value},"place"?,
+ *            "photos":[{"id","width"?,"height"?,"bytes"?}],"files":[{"id","name","mime"?,"bytes"?}],"props"?,"draft",
+ *            "private","created","updated","rev"} (created/updated in Unix ms; rev counts changes; private = its own or its
+ *            notebook's). A value is a number, true/false, text, a place, or a list of photo ids (a photo field). "props":
+ *            {"color"?: a marker colour's name (lower-case letters), "on_map"?: false = not drawn on the map}.
+ * A notebook: {"id","template","def","private","map","template_ref","created","updated","last_used","rev","entries":n,
+ *            "files":n,"places":n,"last_entry":entry|null} (counts of entries, attached files and entries with a place;
+ *            counts and last_entry leave drafts out; last_used = when an entry was last
+ *            saved to it, null before). The saved-places notebook also has "saved_places": true.
+ *
+ * Places notebooks (template "places") and the user's map data are one store:
+ *   - The saved places (cs_places_*, what the assistant's places.list and place names read) are the entries of the
+ *     saved-places notebook: each entry is one saved place, its place's "key" the saved place's key. Saving an entry of that
+ *     notebook (not a draft; it must have a place) saves the saved place (named by the title, else the place's label); deleting
+ *     the entry deletes it and its live data. cs_place_save and cs_place_delete make, update or delete the entry. On the first
+ *     call the two are brought in step (an entry wins; a saved place without an entry gets one). That notebook is not deleted.
+ *   - Every other Places notebook is a map layer of the user's map data (cs_userlayers_list shows it with "notebook_id"),
+ *     named after the notebook, with its entries' places as points (title = name, text = notes) in entry order, private and
+ *     shown on the map as the notebook is; the tools see it exactly as an imported layer. cs_userlayer_delete refuses it.
+ *
+ * op and args_json:
+ *   "notebooks"       {}                                {"notebooks":[notebook...]}, most recently used first, then newest made
+ *   "notebook"        {"id"}                            notebook
+ *   "notebook_save"   {"id"?,"template"?,"def","private"?,"map"?,"template_ref"?}   makes a notebook (no id, or a new id;
+ *                                                     "template" required) or replaces its definition and switches (a
+ *                                                     switch left out keeps its value); fields without fid are new
+ *   "notebook_delete" {"id"}                            the notebook, its entries and their photos and files:
+ *                                                     {"deleted":"<id>","entries":n}
+ *   "entries"         {"notebook_id","limit"? (default 1000)}   {"entries":[entry...]}, drafts included
+ *   "entry"           {"id"}                            entry
+ *   "entry_save"      the whole entry: {"id"?,"notebook_id","occurred_at","title"?,"body"?,"values"?,"place"?,"photos"?,
+ *                     "files"?,"props"?,"draft"?,"private"?}. A new entry (no id, or a new id) or a replacement (rev + 1). One that is
+ *                     not a draft makes its notebook the most recently used. Returns the entry
+ *   "entry_delete"    {"id"}                            {"deleted":"<id>"}
+ *   "search"          {"query","notebook_id"?,"limit"? (default 50)}   {"hits":[{"entry","notebook","snippet"}]}: every word
+ *                                                     must match (the last also as a prefix) in a title, text, a value with its
+ *                                                     label, a place, a file name or the notebook's name; drafts are not
+ *                                                     searched. The snippet marks the matched words with U+0002 ... U+0003
+ *   "pins"            {"notebook_id"?}                  {"entries":[...]}: the entries with a place (not drafts, not
+ *                                                     "on_map": false) of the notebooks on the map, or of that one notebook
+ *   "saved_places"    {}                                the saved-places notebook (named "Places", or "Saved places" when that
+ *                                                     name is taken), made the first time
+ *   "import"          {"path","notebook_id"?,"name"?,"now"?}   a map layer file (.kml, .kmz, .gpx, .geojson, .json) into a
+ *                                                     Places notebook (that one, else a new one named "name", else the file's
+ *                                                     own layer name, else the file name; " 2" when taken): each point is an
+ *                                                     entry (name = title, notes = text, "When" = "now", default now in UTC),
+ *                                                     lines and areas stay with the notebook's map layer.
+ *                                                     {"notebook","places":n,"lines":n,"areas":n,"skipped":n}
+ * Errors: "not_configured" without a "notebook" section, "not_found", "bad_json" (the message says what is wrong),
+ * "unsupported" for an unknown op or a notebook.sqlite made by a newer Cache, "io". */
+char *cs_notebook(cs_handle *h, const char *op, const char *args_json);
 
 /* --- the user's map layers and repeater lists (user.sqlite; logic in cache_user's mapdata) ---
  *

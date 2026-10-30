@@ -1,5 +1,9 @@
 import 'dart:convert';
 
+import '../net/fetch.dart' show isFetchAllowed;
+
+export '../net/fetch.dart' show isLoopbackHost;
+
 /// Why a catalogue or a connector could not be used, in words for people.
 class CatalogueException implements Exception {
   const CatalogueException(this.message);
@@ -24,10 +28,8 @@ final RegExp _idPattern = RegExp(r'^[a-z0-9][a-z0-9_-]{0,63}$');
 
 /// Hosts a catalogue may be served from over plain HTTP: this phone itself (the app is tested against a server on the desktop through
 /// adb reverse). Everything else must be https.
-bool isLoopbackHost(String host) => host == 'localhost' || host == '127.0.0.1';
-
 /// True for an address a catalogue or definition may be fetched from: https, or http to this phone.
-bool isAllowedAddress(Uri u) => u.hasAuthority && u.host.isNotEmpty && (u.scheme == 'https' || (u.scheme == 'http' && isLoopbackHost(u.host)));
+bool isAllowedAddress(Uri u) => isFetchAllowed(u);
 
 /// One connector as the catalogue lists it, so it can be listed without downloading its definition.
 class CatalogueEntry {

@@ -82,7 +82,7 @@ class CoreToolHost implements ToolHost {
     final conv = await numbering.conversation;
     final o = await conv.tool(name, sent, now: isoWithOffset(now));
     var content = o.content;
-    var ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title)];
+    var ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title, link: i.link, time: i.time)];
     final run = name == 'act' ? hostRun(content) : null;
     if (run != null) {
       // A read or open action: the app runs it and the core's answer to the reply is what the model sees, numbered in this chat.
@@ -92,7 +92,7 @@ class CoreToolHost implements ToolHost {
           ? {'ok': false, 'error': {'type': 'unknown_action', 'detail': 'This action is not installed.'}}
           : await runAction!(run['action'] as String, fields);
       content = await conv.actFinish(run['run_id'] as String, finishReply(result));
-      ids = [for (final i in await conv.ids()) if (!before.contains(i.n)) NumberedAddress(n: i.n, address: i.address, title: i.title)];
+      ids = [for (final i in await conv.ids()) if (!before.contains(i.n)) NumberedAddress(n: i.n, address: i.address, title: i.title, link: i.link, time: i.time)];
     }
     return HostToolResult(
       content: content,

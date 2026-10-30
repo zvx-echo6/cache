@@ -3,6 +3,7 @@
 //! - `searcher_cost_one_zim`: the private bytes a kept libzim searcher costs on one ZIM (`CS_COST_ZIM` = the .zim path).
 //!   Run it once per ZIM, in a fresh process each time, so allocator state does not carry over. Prints one line.
 //! - `cluster_cache_effect`: the same kind of reading with libzim's cluster cache emptied.
+//!
 //! (The process-wide numbers for a whole config and the Wikipedia reopen cost are in `budget_measure.rs`.)
 //!
 //! Private bytes are the process's PrivateUsage (the same number as .NET's PrivateMemorySize64) on Windows; elsewhere

@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:xml/xml.dart';
 
+import '../net/fetch.dart' show kUserAgent;
+
 /// Kiwix's public catalogue, read through its documented OPDS API (library.kiwix.org, "catalog/v2").
 /// The catalogue is Atom XML: `entries` (filter with lang, category, tag, name, q, count, start),
 /// `categories` and `languages`. Nothing else is read from the web site.
@@ -11,7 +13,6 @@ const String kiwixCatalogHost = 'https://opds.library.kiwix.org';
 const String kiwixCatalogPath = '/catalog/v2';
 
 /// What the app tells a server about itself. No person, device or place.
-const String cacheUserAgent = 'Cache/0.1 (offline reader)';
 
 /// The variants Kiwix publishes, in words for people.
 String flavourLabel(String flavour) => switch (flavour) {
@@ -282,9 +283,10 @@ class CatalogException implements Exception {
 /// Fetches one address and returns the body. A function so tests can give recorded responses.
 typedef CatalogFetch = Future<String> Function(Uri url);
 
+/// Kiwix's feed keeps its own client: it follows redirects itself and says each failure in the words the guide quotes.
 Future<String> httpFetchText(Uri url) async {
   final client = HttpClient()
-    ..userAgent = cacheUserAgent
+    ..userAgent = kUserAgent
     ..connectionTimeout = const Duration(seconds: 15);
   try {
     var u = url;

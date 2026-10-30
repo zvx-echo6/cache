@@ -15,6 +15,7 @@ import '../video/token_store.dart';
 import 'alert_notifier.dart';
 import 'alert_watch.dart';
 import 'live_core.dart';
+import 'place_alerts.dart';
 import 'places.dart';
 import 'weather_state.dart';
 
@@ -115,7 +116,7 @@ Future<void> runBackgroundUpdate() async {
       regions: () => last.regions,
       notifier: LocalAlertNotifier.instance,
       told: ToldStore(File('${support.path}/alerts_told.json')),
-    );
+    )..placeAlerts = PlaceAlerts(() async => File('${support.path}/$kPlaceAlertsFile'));
     await weather.start();
     await weather.updateNow();
   } finally {

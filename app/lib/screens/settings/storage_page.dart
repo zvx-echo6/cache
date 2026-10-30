@@ -87,7 +87,7 @@ class _StoragePageState extends State<StoragePage> {
                   key: const ValueKey('clean-up'),
                   icon: Icons.cleaning_services_outlined,
                   title: clean > 0 ? 'Clean up · ${formatBytes(clean)}' : 'Clean up',
-                  status: [Part(clean > 0 ? 'Unfinished downloads and temporary files' : 'Nothing to clean up')],
+                  status: [Part(clean > 0 ? 'Unfinished downloads, damaged files and temporary files' : 'Nothing to clean up')],
                   trailing: _cleaning
                       ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.5))
                       : RowButton(label: 'Clean up', onPressed: clean > 0 ? _cleanUp : null),

@@ -1,6 +1,8 @@
 //! A frozen copy of `src/html.rs` as it was before main-content extraction (commit 4bf5219), minus its unit tests. The
 //! byte-identity test (`zim_main_text.rs`) runs it next to the current `html_to_text` on real Wikipedia pages.
 #![allow(dead_code)]
+// frozen as it was: lints that would change it are not fixed here
+#![allow(clippy::sliced_string_as_bytes)]
 
 // HTML to plain text: a small streaming stripper, plus the text-cutting helpers shared by the index,
 // search snippets and `cs_read`.

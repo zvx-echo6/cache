@@ -5,6 +5,10 @@
 //! `layer:y<n>/<item>` and `repeater:l<n>/<item>`. "Used" (the order layers are offered in, most recent first) is the last
 //! import, edit or visibility change. Visibility is map-only: hidden layers and lists still reach the assistant, and so do
 //! private ones (private means left out of sync and sharing).
+//!
+//! A Places notebook (cache_notebook) is a layer of this store too: the core keeps one layer per such notebook in step with its
+//! entries (`sync_notebook_layers`), named after the notebook, so the tools see its places exactly as they see an imported
+//! layer's points. Its lines and areas (from a file imported into the notebook) are kept here beside the points.
 
 use super::repeater::{frequency_text, Repeater};
 use super::{bad, collapse, file_kind, geojson, gpx, kml, chirp, slug, unique, utf8, Feature, FileKind, Geom, MAX_FILE_BYTES};
@@ -60,6 +64,26 @@ struct List {
     files: Vec<String>,
     private: bool,
     visible: bool,
+    /// The Places notebook this layer is kept in step with.
+    notebook: Option<String>,
+}
+
+/// A Places notebook as its layer: its name, private and map switches, and its places (name, notes, lat, lon) in entry order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotebookLayer {
+    pub notebook_id: String,
+    pub name: String,
+    pub private: bool,
+    pub visible: bool,
+    pub points: Vec<NotebookPoint>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotebookPoint {
+    pub name: String,
+    pub notes: String,
+    pub lat: f64,
+    pub lon: f64,
 }
 
 impl List {
@@ -139,6 +163,10 @@ impl MapStore {
                 name TEXT NOT NULL, notes TEXT NOT NULL, geom TEXT NOT NULL, lat REAL, lon REAL, data TEXT,
                 PRIMARY KEY(list_id, ord));",
         )?;
+        let has: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('map_lists') WHERE name='notebook_id')", [], |r| r.get(0))?;
+        if !has {
+            c.execute_batch("ALTER TABLE map_lists ADD COLUMN notebook_id TEXT;")?;
+        }
         Ok(c)
     }
 
@@ -150,7 +178,7 @@ impl MapStore {
 
     /// Every layer and list, most recently used first.
     fn lists(c: &Connection) -> Result<Vec<List>> {
-        let mut st = c.prepare("SELECT id, kind, name, files, private, visible FROM map_lists ORDER BY used_at DESC, id DESC")?;
+        let mut st = c.prepare("SELECT id, kind, name, files, private, visible, notebook_id FROM map_lists ORDER BY used_at DESC, id DESC")?;
         let rows = st.query_map([], |r| {
             let kind: String = r.get(1)?;
             let files: String = r.get(3)?;
@@ -161,6 +189,7 @@ impl MapStore {
                 files: serde_json::from_str(&files).unwrap_or_default(),
                 private: r.get::<_, i64>(4)? != 0,
                 visible: r.get::<_, i64>(5)? != 0,
+                notebook: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -214,6 +243,9 @@ impl MapStore {
             m.insert("private".into(), json!(l.private));
         }
         m.insert("visible".into(), json!(l.visible));
+        if let Some(n) = &l.notebook {
+            m.insert("notebook_id".into(), json!(n));
+        }
         match l.kind {
             Kind::Layer => {
                 let n = |f: fn(&Geom) -> bool| items.iter().filter(|(_, i)| matches!(i, Item::Shape(s) if f(&s.geom))).count();
@@ -432,9 +464,103 @@ impl MapStore {
     pub fn delete(&self, id: &str) -> Result<String> {
         let c = self.db()?;
         let l = Self::list_by_id(&c, id)?;
+        if l.notebook.is_some() {
+            return Err(bad(format!("{id} is the layer of a Places notebook: delete the notebook or its places instead")));
+        }
         c.execute("DELETE FROM map_items WHERE list_id=?1", [l.id])?;
         c.execute("DELETE FROM map_lists WHERE id=?1", [l.id])?;
         Ok(json!({"deleted": id}).to_string())
+    }
+
+    /// Keeps one layer per Places notebook in step with `books`: a layer is made for a new notebook, renamed, switched private,
+    /// shown or hidden, or given the notebook's current places, and the layer of a notebook that is gone is deleted. A layer
+    /// counts as used (offered first) only when something changed, so running this again changes nothing. Lines and areas
+    /// kept for a notebook (`add_notebook_shapes`) stay.
+    pub fn sync_notebook_layers(&self, books: &[NotebookLayer]) -> Result<()> {
+        let mut c = self.db()?;
+        let tx = c.transaction()?;
+        let lists = Self::lists(&tx)?;
+        for l in lists.iter().filter(|l| l.notebook.as_ref().is_some_and(|n| !books.iter().any(|b| &b.notebook_id == n))) {
+            tx.execute("DELETE FROM map_items WHERE list_id=?1", [l.id])?;
+            tx.execute("DELETE FROM map_lists WHERE id=?1", [l.id])?;
+        }
+        for b in books {
+            let name = collapse(&b.name);
+            let existing = lists.iter().find(|l| l.notebook.as_deref() == Some(b.notebook_id.as_str()));
+            let id = match existing {
+                Some(l) => {
+                    let mut st = tx.prepare("SELECT name, notes, lat, lon FROM map_items WHERE list_id=?1 AND lat IS NOT NULL ORDER BY ord")?;
+                    let now: Vec<NotebookPoint> = st
+                        .query_map([l.id], |r| Ok(NotebookPoint { name: r.get(0)?, notes: r.get(1)?, lat: r.get(2)?, lon: r.get(3)? }))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    if l.name == name && l.private == b.private && l.visible == b.visible && now == b.points {
+                        continue;
+                    }
+                    let used = Self::next_used(&tx)?;
+                    tx.execute(
+                        "UPDATE map_lists SET name=?1, private=?2, visible=?3, used_at=?4 WHERE id=?5",
+                        params![name, b.private as i64, b.visible as i64, used, l.id],
+                    )?;
+                    if now == b.points {
+                        continue;
+                    }
+                    l.id
+                }
+                None => {
+                    let used = Self::next_used(&tx)?;
+                    tx.execute(
+                        "INSERT INTO map_lists(kind,name,files,private,visible,used_at,created_at,notebook_id) VALUES('layer',?1,'[]',?2,?3,?4,?4,?5)",
+                        params![name, b.private as i64, b.visible as i64, used, b.notebook_id],
+                    )?;
+                    tx.last_insert_rowid()
+                }
+            };
+            // The places are items 1..n in entry order (as an imported layer's points are in file order); the lines and areas
+            // follow them.
+            let shapes: Vec<(String, String, String)> = {
+                let mut st = tx.prepare("SELECT name, notes, geom FROM map_items WHERE list_id=?1 AND lat IS NULL ORDER BY ord")?;
+                let r = st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+                r
+            };
+            tx.execute("DELETE FROM map_items WHERE list_id=?1", [id])?;
+            let mut ord = 0i64;
+            for p in &b.points {
+                ord += 1;
+                tx.execute(
+                    "INSERT INTO map_items(list_id,ord,name,notes,geom,lat,lon,data) VALUES(?1,?2,?3,?4,?5,?6,?7,NULL)",
+                    params![id, ord, p.name, p.notes, serde_json::to_string(&Geom::Point(p.lat, p.lon)).expect("geom"), p.lat, p.lon],
+                )?;
+            }
+            for (name, notes, geom) in shapes {
+                ord += 1;
+                tx.execute(
+                    "INSERT INTO map_items(list_id,ord,name,notes,geom,lat,lon,data) VALUES(?1,?2,?3,?4,?5,NULL,NULL,NULL)",
+                    params![id, ord, name, notes, geom],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Adds lines and areas to the layer of a Places notebook (from a file imported into it; points become its entries).
+    /// Returns how many were added; none when the notebook has no layer yet.
+    pub fn add_notebook_shapes(&self, notebook_id: &str, shapes: &[Feature]) -> Result<usize> {
+        let mut c = self.db()?;
+        let tx = c.transaction()?;
+        let Some(l) = Self::lists(&tx)?.into_iter().find(|l| l.notebook.as_deref() == Some(notebook_id)) else { return Ok(0) };
+        let mut ord: i64 = tx.query_row("SELECT COALESCE(MAX(ord), 0) FROM map_items WHERE list_id=?1", [l.id], |r| r.get(0))?;
+        let mut n = 0;
+        for f in shapes.iter().filter(|f| !matches!(f.geom, Geom::Point(..))) {
+            ord += 1;
+            n += 1;
+            tx.execute(
+                "INSERT INTO map_items(list_id,ord,name,notes,geom,lat,lon,data) VALUES(?1,?2,?3,?4,?5,NULL,NULL,NULL)",
+                params![l.id, ord, f.name, f.notes, serde_json::to_string(&f.geom).expect("geom")],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
     }
 
     /// `cs_userlayer_export`: `{"id","format":"kml"|"gpx","path"}` writes the file (GPX for a layer only).
@@ -877,5 +1003,63 @@ mod tests {
         assert_eq!(v(&s.list_json().unwrap()), json!({"layers": [], "repeater_lists": []}));
         assert_eq!(s.set_visible(r#"{"id":"y9","visible":true}"#).unwrap_err().code, "not_found");
         assert_eq!(s.export(r#"{"id":"y9","format":"kml","path":"x"}"#).unwrap_err().code, "not_found");
+    }
+
+    fn book(id: &str, name: &str, points: &[(&str, f64, f64)]) -> NotebookLayer {
+        NotebookLayer {
+            notebook_id: id.into(),
+            name: name.into(),
+            private: false,
+            visible: true,
+            points: points.iter().map(|(n, la, lo)| NotebookPoint { name: n.to_string(), notes: format!("{n} notes"), lat: *la, lon: *lo }).collect(),
+        }
+    }
+
+    fn used(s: &MapStore) -> Vec<(String, i64)> {
+        let c = s.db().unwrap();
+        let mut st = c.prepare("SELECT name, used_at FROM map_lists ORDER BY id").unwrap();
+        let r = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        r
+    }
+
+    #[test]
+    fn places_notebooks_are_layers_kept_in_step() {
+        let t = Tmp::new("notebooks");
+        let s = t.store();
+        let a = book("nb-a", "Caches", &[("Cache 1", 42.55, -113.79), ("Cache 2", 42.53, -113.81)]);
+        let b = book("nb-b", "Rally points", &[("North gate", 42.6, -113.7)]);
+        s.sync_notebook_layers(&[a.clone(), b.clone()]).unwrap();
+        let cats: Vec<String> = s.categories().into_iter().map(|c| c.id).collect();
+        assert_eq!(cats, ["layer_rally_points", "layer_caches"]);
+        let p = s.points("layer_caches").unwrap();
+        assert_eq!((p[1].address.as_str(), p[1].name.as_str(), p[1].kind_label.as_str()), ("layer:y1/2", "Cache 2", "Caches"));
+        assert_eq!(Value::Object(p[0].fields.clone()), json!({"notes": "Cache 1 notes"}));
+        // nothing changed: nothing moves
+        let before = used(&s);
+        s.sync_notebook_layers(&[a.clone(), b.clone()]).unwrap();
+        assert_eq!(used(&s), before);
+        // a rename and a new place move the layer first; lines and areas stay after the places
+        s.add_notebook_shapes("nb-a", &[Feature { name: "Walk".into(), notes: String::new(), geom: Geom::Line(vec![(42.5, -113.8), (42.6, -113.7)]) }]).unwrap();
+        let mut a2 = a.clone();
+        a2.name = "Cache sites".into();
+        a2.points.push(NotebookPoint { name: "Cache 3".into(), notes: String::new(), lat: 42.5, lon: -113.75 });
+        s.sync_notebook_layers(&[a2, b.clone()]).unwrap();
+        let cats: Vec<String> = s.categories().into_iter().map(|c| c.id).collect();
+        assert_eq!(cats, ["layer_cache_sites", "layer_rally_points"]);
+        let g = v(&s.get("y1").unwrap());
+        let names: Vec<&str> = g["features"].as_array().unwrap().iter().map(|f| f["properties"]["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Cache 1", "Cache 2", "Cache 3", "Walk"]);
+        let l = v(&s.list_json().unwrap());
+        assert_eq!((l["layers"][0]["notebook_id"].clone(), l["layers"][0]["lines"].clone()), (json!("nb-a"), json!(1)));
+        // owned by its notebook
+        assert_eq!(s.delete("y1").unwrap_err().code, "bad_json");
+        // a notebook that is gone takes its layer along; imported layers stay
+        import(&s, json!({"kind": "layer", "paths": [fixture("rally-points.geojson")]})).unwrap();
+        s.sync_notebook_layers(&[b]).unwrap();
+        let l = v(&s.list_json().unwrap());
+        let ids: Vec<&str> = l["layers"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["Rally Points", "Rally points"]);
+        s.sync_notebook_layers(&[]).unwrap();
+        assert_eq!(v(&s.list_json().unwrap())["layers"].as_array().unwrap().len(), 1);
     }
 }

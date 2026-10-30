@@ -626,16 +626,16 @@ mod tests {
         assert!(!lock_is_live(&d));
         // pid 1 with a wrong start time (pid reuse) is stale; with the right one it is live
         let t = proc_start_ticks(1);
-        if t.is_some() {
+        if let Some(t) = t {
             std::fs::write(
                 d.join(LOCK_FILE),
-                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t.unwrap() + 5), boot_id: None, started: 0 }).unwrap(),
+                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t + 5), boot_id: None, started: 0 }).unwrap(),
             )
             .unwrap();
             assert!(!lock_is_live(&d));
             std::fs::write(
                 d.join(LOCK_FILE),
-                serde_json::to_string(&LockInfo { pid: 1, start_ticks: t, boot_id: None, started: 0 }).unwrap(),
+                serde_json::to_string(&LockInfo { pid: 1, start_ticks: Some(t), boot_id: None, started: 0 }).unwrap(),
             )
             .unwrap();
             assert!(lock_is_live(&d));

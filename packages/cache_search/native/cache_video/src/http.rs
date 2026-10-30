@@ -76,6 +76,8 @@ fn read_json(resp: ureq::Response, what: &str) -> Result<Value> {
 
 /// A GET is repeated once when the connection itself failed (a reset, a dropped keep-alive): it changes nothing on the
 /// instance. An HTTP status is an answer and is never repeated.
+// ureq's own error type, passed through as it is to the one caller that maps it
+#[allow(clippy::result_large_err)]
 fn call_get(make: impl Fn() -> ureq::Request) -> std::result::Result<ureq::Response, ureq::Error> {
     match make().call() {
         Err(ureq::Error::Transport(_)) => {

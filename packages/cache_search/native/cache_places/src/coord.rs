@@ -81,7 +81,7 @@ pub fn usng(lat: f64, lon: f64) -> Option<String> {
     let cols: Vec<char> = col_sets[((zone - 1) % 3) as usize].chars().collect();
     let rows: Vec<char> = "ABCDEFGHJKLMNPQRSTUV".chars().collect();
     let col = cols.get((e / 100_000.0).floor() as usize - 1)?;
-    let row = rows[((n / 100_000.0).floor() as usize + if zone % 2 == 0 { 5 } else { 0 }) % 20];
+    let row = rows[((n / 100_000.0).floor() as usize + if zone.is_multiple_of(2) { 5 } else { 0 }) % 20];
     Some(format!("{zone}{band} {col}{row} {:05} {:05}", (e % 100_000.0).floor() as u64, (n % 100_000.0).floor() as u64))
 }
 
@@ -178,14 +178,14 @@ pub fn parse_usng(text: &str) -> Option<Parsed> {
     let col_ix = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"][((zone - 1) % 3) as usize].find(b[i + 1] as char)?;
     let row_ix = "ABCDEFGHJKLMNPQRSTUV".find(b[i + 2] as char)?;
     let digits = &t[i + 3..];
-    if !digits.bytes().all(|c| c.is_ascii_digit()) || digits.len() % 2 != 0 || digits.len() > 10 {
+    if !digits.bytes().all(|c| c.is_ascii_digit()) || !digits.len().is_multiple_of(2) || digits.len() > 10 {
         return None;
     }
     let half = digits.len() / 2;
     let step = 10f64.powi(5 - half as i32);
     let (de, dn) = if half == 0 { (0.0, 0.0) } else { (digits[..half].parse::<f64>().ok()? * step, digits[half..].parse::<f64>().ok()? * step) };
     let easting = (col_ix as f64 + 1.0) * 100_000.0 + de;
-    let row_base = ((row_ix + 20 - if zone % 2 == 0 { 5 } else { 0 }) % 20) as f64 * 100_000.0;
+    let row_base = ((row_ix + 20 - if zone.is_multiple_of(2) { 5 } else { 0 }) % 20) as f64 * 100_000.0;
     let south = band_ix < 10;
     let band_s = -80.0 + 8.0 * band_ix as f64;
     let band_n = if band_ix == 19 { 84.0 } else { band_s + 8.0 };
@@ -282,6 +282,7 @@ enum Tok {
 }
 
 /// `43.6,-116.2`, `43.6 -116.2`, `42°32'10"N 113°47'33"W`, `N 42 32.167 W 113 47.55`, `42.536N 113.792W`.
+#[allow(clippy::needless_late_init)] // `groups` is set by two long matches, one per way the numbers can be written
 fn parse_degrees(text: &str) -> Option<Parsed> {
     let chars: Vec<char> = text.trim().chars().collect();
     let mut toks: Vec<Tok> = Vec::new();
@@ -419,7 +420,7 @@ pub fn parse(text: &str, reference: Option<(f64, f64)>) -> Option<Parsed> {
     if t.is_empty() {
         return None;
     }
-    if t.contains('+') && !t.starts_with(|c: char| c == '+' || c == '-') {
+    if t.contains('+') && !t.starts_with(['+', '-']) {
         if let Some(p) = parse_plus_code(t, reference) {
             return Some(p);
         }

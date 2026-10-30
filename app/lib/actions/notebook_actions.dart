@@ -1,6 +1,6 @@
 /// The Notebook's actions for the act tool, made from the user's logs: a port of the training harness's notebook_actions.py, rule
-/// for rule, so the app and the captures publish the same bytes from the same logs. The Notebook module is not built yet, so
-/// nothing publishes these until it is.
+/// for rule, so the app and the captures publish the same bytes from the same logs. The Notebook module publishes them
+/// (notebook/notebook_publisher.dart).
 ///
 /// Input: the logs in the order the app wants them listed (most recently used first), each a template object as the app stores it
 /// (`{"name", "fields":[{"label","type","unit"?,"choices"?}], "private", "last_entry"?}`) plus `"locked": true` for a private log
@@ -193,14 +193,14 @@ String _description(Map log) {
   return _cut(base(name) + tail, _maxDescription);
 }
 
-Map<String, dynamic> _logAction(Map log, Set<String> takenIds) {
-  final name = log['name'] as String;
-  final id = _unique(_prefix + notebookSlug(name, _maxId - _len(_prefix), 'log'), takenIds, _maxId);
-  takenIds.add(id);
-
-  final own = <(String, Map<String, dynamic>)>[];
+/// A log's own fields as the action names them, each with the index of its log field, and the extras that follow them, cut to
+/// the 10 fields of an action.
+({List<(int, String, Map<String, dynamic>)> own, List<(String, Map<String, dynamic>)> extras}) _actionFields(Map log) {
+  final own = <(int, String, Map<String, dynamic>)>[];
   final names = <String>{};
-  for (final f in log['fields'] is List ? log['fields'] as List : const []) {
+  final fields = log['fields'] is List ? log['fields'] as List : const [];
+  for (var i = 0; i < fields.length; i++) {
+    final f = fields[i];
     if (f is! Map) continue;
     final spec = _fieldSpec(f);
     if (spec == null) continue;
@@ -213,20 +213,41 @@ Map<String, dynamic> _logAction(Map log, Set<String> takenIds) {
     }
     fname = _unique(fname, names, _maxFieldName);
     names.add(fname);
-    own.add((fname, spec));
+    own.add((i, fname, spec));
   }
   final extras = [for (final e in _extras) if (!names.contains(e.$1)) e];
-  final kept = own.take(_maxFields - extras.length);
+  return (own: own.take(_maxFields - extras.length).toList(), extras: extras);
+}
+
+Map<String, dynamic> _logAction(Map log, Set<String> takenIds) {
+  final name = log['name'] as String;
+  final id = _unique(_prefix + notebookSlug(name, _maxId - _len(_prefix), 'log'), takenIds, _maxId);
+  takenIds.add(id);
+  final (:own, :extras) = _actionFields(log);
   return {
     'id': id,
     'module': 'notebook',
     'title': _cut('Add to $name', _maxTitle),
     'description': _description(log),
     'effect': 'change',
-    'fields': {for (final (n, s) in [...kept, ...extras]) n: s},
+    'fields': {for (final (_, n, s) in own) n: s, for (final (n, s) in extras) n: s},
     'required': <String>[],
   };
 }
+
+/// The action field name of each of [log]'s fields, in the log's order: null for a field the action leaves out (a photo, or one
+/// past the 10-field cut). The tap maps the action's fields back to the log's with it.
+List<String?> notebookFieldNames(Map log) {
+  final fields = log['fields'] is List ? log['fields'] as List : const [];
+  final out = List<String?>.filled(fields.length, null);
+  for (final (i, n, _) in _actionFields(log).own) {
+    out[i] = n;
+  }
+  return out;
+}
+
+/// Whether the action for [log] has its own `place` extra (the log has no field the action names `place`).
+bool notebookHasPlaceExtra(Map log) => _actionFields(log).extras.any((e) => e.$1 == 'place');
 
 /// The Notebook's definitions for [logs]: the journal, then one action per unlocked log, at most 8.
 List<Map<String, dynamic>> notebookActions(List<Map<String, dynamic>> logs) {

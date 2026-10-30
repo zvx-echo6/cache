@@ -7,10 +7,13 @@ import '../video/format.dart';
 
 /// One thing a download brings, as the pop-up lists it: "WikiMed, medical encyclopedia  2.1 GB".
 class DownloadLine {
-  const DownloadLine(this.name, this.bytes);
+  const DownloadLine(this.name, this.bytes, {this.note});
 
   final String name;
   final int bytes;
+
+  /// Said in place of the size: a part that adds nothing ("Already on this phone").
+  final String? note;
 }
 
 /// What the person chose in the download pop-up.
@@ -112,10 +115,11 @@ Widget _small(BuildContext context, String left, String right) {
 }
 
 class _SizeLine extends StatelessWidget {
-  const _SizeLine({required this.name, required this.bytes});
+  const _SizeLine({required this.name, required this.bytes, this.note});
 
   final String name;
   final int bytes;
+  final String? note;
 
   @override
   Widget build(BuildContext context) {
@@ -126,7 +130,10 @@ class _SizeLine extends StatelessWidget {
         children: [
           Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.text))),
           const SizedBox(width: 12),
-          Text(formatBytes(bytes), style: TextStyle(fontSize: 14, color: k.text)),
+          if (note case final n?)
+            Flexible(child: Text(n, textAlign: TextAlign.end, style: TextStyle(fontSize: 14, color: k.secondary)))
+          else
+            Text(formatBytes(bytes), style: TextStyle(fontSize: 14, color: k.text)),
         ],
       ),
     );
@@ -155,7 +162,7 @@ class _DownloadDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final l in lines) _SizeLine(name: l.name, bytes: l.bytes),
+          for (final l in lines) _SizeLine(name: l.name, bytes: l.bytes, note: l.note),
           if (free != null) ...[
             const SizedBox(height: 10),
             _Bar(free: free, bytes: total, fits: fits),

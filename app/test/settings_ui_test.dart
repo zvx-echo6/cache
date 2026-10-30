@@ -6,9 +6,9 @@ import 'package:cache/screens/settings/storage_page.dart';
 import 'package:cache/screens/settings_screen.dart';
 import 'package:cache/settings/app_settings.dart';
 import 'package:cache/settings/data_policy.dart';
-import 'package:cache/settings/location_access.dart';
 import 'package:cache/settings/web_search_setup.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/version.dart';
 import 'package:cache/location/position_source.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,7 +42,7 @@ void main() {
       expect(find.textContaining('41.0 GB free'), findsOneWidget);
       expect(find.text('Off'), findsOneWidget, reason: 'Sharing and sync is not set up');
       expect(find.text('Dark'), findsOneWidget);
-      expect(find.text('1.0.0 · AGPL-3.0'), findsOneWidget);
+      expect(find.text('$kAppVersion · AGPL-3.0'), findsOneWidget);
       await r.dispose(tester);
     });
 
@@ -329,41 +329,41 @@ void main() {
       await r.dispose(tester);
     });
 
-    for (final c in [
-      (LocationAccess.always, 'Always · alerts keep working in the background'),
-      (LocationAccess.whileUsing, 'While using the app · alerts pause when Cache is closed'),
-      (LocationAccess.denied, 'Off · tap to allow'),
-      (LocationAccess.blocked, "Blocked · tap to open the phone's settings"),
-    ]) {
-      testWidgets('Location access shows the real permission: ${c.$1.name}', (tester) async {
-        final r = await SettingsRig.create(tester, locationAccess: c.$1);
-        await r.show(tester, NotificationsPage(deps: r.deps));
-        await tester.pump();
-        expect(find.text(c.$2), findsOneWidget);
-        await r.dispose(tester);
-      });
-    }
-
-    testWidgets('tapping Location access asks when it can, and opens the phone settings otherwise', (tester) async {
-      final r = await SettingsRig.create(tester, locationAccess: LocationAccess.denied, permission: LocationPermissionState.denied);
+    testWidgets('Notifications has no location row', (tester) async {
+      final r = await SettingsRig.create(tester);
       await r.show(tester, NotificationsPage(deps: r.deps));
+      expect(find.text('Location access'), findsNothing);
+      await r.dispose(tester);
+    });
+  });
+
+  group('Use my location', () {
+    testWidgets('one switch in Cache model and web search, the same as Ask\'s; it never asks', (tester) async {
+      final r = await SettingsRig.create(tester);
+      await r.show(tester, AssistantPage(deps: r.deps));
+      expect(find.text('Cache model and web search'), findsOneWidget);
+      await tester.scrollUntilVisible(find.byKey(const ValueKey('use-my-location-row')), 200);
+      expect(switchIn(tester, 'Use my location').value, isTrue);
+      await tester.runAsync(() async {
+        tester.widget<Switch>(find.descendant(of: rowWith('Use my location'), matching: find.byType(Switch))).onChanged!(false);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
       await tester.pump();
-      await tester.tap(find.text('Location access'));
-      await tester.pump();
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
-      await tester.pump();
-      expect(r.position.asked, 1);
-      expect(r.position.settingsOpened, 0);
-      // Back from the phone's settings with a different answer: the page reads it again.
-      r.access.value = LocationAccess.whileUsing;
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pump();
-      expect(find.textContaining('While using the app'), findsOneWidget);
-      await tester.tap(find.text('Location access'));
+      expect(r.location.enabled, isFalse);
+      expect(r.position.asked, 0);
+      await r.dispose(tester);
+    });
+
+    testWidgets('when the phone blocks it, the row says so and opens the phone settings', (tester) async {
+      final r = await SettingsRig.create(tester, permission: LocationPermissionState.deniedForever);
+      await tester.runAsync(r.location.init);
+      await r.show(tester, AssistantPage(deps: r.deps));
+      await tester.scrollUntilVisible(find.byKey(const ValueKey('use-my-location-row')), 200);
+      expect(find.text("Blocked in the phone's settings"), findsOneWidget);
+      await tester.tap(find.text('Phone settings'));
       await tester.pump();
       expect(r.position.settingsOpened, 1);
-      expect(r.position.asked, 1);
+      expect(r.position.asked, 0);
       await r.dispose(tester);
     });
   });
