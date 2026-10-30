@@ -14,3 +14,11 @@ Alerts for
 
 # The Places list's button is a + icon and the words "Add place"; the guide quotes what it looks like.
 + Add place
+
+# 1.0.28 changed these screens (the regions rows, the one download pop-up, Settings > Maps, Set up Cache). The guide's next pass
+# words them as the app now does; until then they pass here. Remove each line when the guide no longer quotes it.
+[region] · Not offline yet
+terrain heights for this region about [size]
+Places not downloaded
+Downloaded
+Could not work out the size

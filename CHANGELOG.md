@@ -77,6 +77,15 @@ release notes).
 - Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
+- Regions: a region's size shows at once in the Regions sheet, from the region list (only an area you draw is worked out on the phone); a region the list has no size for says "Size unknown"
+- Regions: tapping a region always opens the one download pop-up: download, carry on with what stopped, or add off-road; a region partly on the phone is never "Can't be downloaded here"
+- Regions: a region's row says which parts are not ready yet and labels its bar; tap it for the region's page (each part, its state and its fix), press and hold for Carry on, Check for update and Delete
+- Regions: anything that stopped or failed has its fix next to it (Carry on, Try again, Delete); messages say what happened and what to do, never the core's own text
+- Regions: Update on a region no longer fails with "a download needs bbox"; a download stopped in an older build carries on
+- Maps: map downloads made layer by layer by earlier builds join the region they are in (or list as one area), and duplicates are removed; Settings > Maps shows one line per region; hillshade and contour lines download their elevation once
+- Home: "Hide" on Set up Cache, with Undo; Edit Home brings it back
+- Weather: a condition that starts a line starts with a capital ("Rain")
+- Library: the Cache guide reads better: short paragraphs, labels as chips, links in the text, Previous and Next, contents with sections, search with the words around each match and "Ask Cache instead"
 - Regions: the sizes no longer hold up the map, the Library and the reader's pictures while they are worked out; each region's size shows as soon as it is known, and sizes already worked out show at once
 - Regions: "Draw your own area instead" from Home's Set up Cache opens the map to draw the area
 - Library: the guide that comes with Cache is labelled "Built in", and a library still opening when Cache starts no longer stays on "Opening"
