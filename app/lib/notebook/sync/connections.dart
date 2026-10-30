@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../files.dart';
 import '../notebook_state.dart';
 import 'folder.dart';
+import 'folder_access.dart';
 import 'formats.dart';
 import 'sync_engine.dart';
 
@@ -17,22 +18,27 @@ const String kNotebookShareDir = 'notebook-share';
 /// folder (kind share, id `share`). Private items go to Obsidian and Logseq (decided 2026-10-29); notebook sync leaves private
 /// notebooks out unless each one's "Include in sync and sharing" is on.
 class SyncTargetConfig {
-  const SyncTargetConfig({required this.id, required this.kind, required this.path, this.paused = false});
+  const SyncTargetConfig({required this.id, required this.kind, required this.path, this.paused = false, this.display});
 
   final String id;
   final SyncKind kind;
   final String path;
   final bool paused;
 
-  SyncTargetConfig copyWith({bool? paused}) => SyncTargetConfig(id: id, kind: kind, path: path, paused: paused ?? this.paused);
+  /// The folder's name as the picker gave it (the path is a URI or a bookmark on phones).
+  final String? display;
 
-  Map<String, dynamic> toJson() => {'id': id, 'kind': kind.name, 'path': path, 'paused': paused};
+  String get name => display ?? (path.split(RegExp(r'[\\/]')).where((p) => p.isNotEmpty).lastOrNull ?? path);
+
+  SyncTargetConfig copyWith({bool? paused}) => SyncTargetConfig(id: id, kind: kind, path: path, paused: paused ?? this.paused, display: display);
+
+  Map<String, dynamic> toJson() => {'id': id, 'kind': kind.name, 'path': path, 'paused': paused, 'display': ?display};
 
   static SyncTargetConfig? fromJson(Object? j) {
     if (j is! Map || j['path'] is! String) return null;
     final kind = SyncKind.values.where((k) => k.name == j['kind']).firstOrNull;
     if (kind == null) return null;
-    return SyncTargetConfig(id: '${j['id']}', kind: kind, path: j['path'] as String, paused: j['paused'] == true);
+    return SyncTargetConfig(id: '${j['id']}', kind: kind, path: j['path'] as String, paused: j['paused'] == true, display: j['display'] as String?);
   }
 }
 
@@ -117,19 +123,24 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     await writeStringAtomic(f, jsonEncode({'targets': [for (final t in _targets) t.toJson()], 'private_included': [..._privateBooks]..sort()}));
   }
 
-  SyncFolder _folder(String path) => folderFor?.call(path) ?? IoFolder(path);
+  Future<SyncFolder> _folder(String path) async => folderFor?.call(path) ?? await openSyncFolder(path);
 
   /// Connects a folder for [kind]. Null when connected, else what is wrong ("Cache can write to Markdown graphs only.").
-  Future<String?> connect(SyncKind kind, String path) async {
+  Future<String?> connect(SyncKind kind, String path, {String? display}) async {
     await init();
-    final folder = _folder(path);
+    final SyncFolder folder;
+    try {
+      folder = await _folder(path);
+    } catch (_) {
+      return "Can't reach the folder.";
+    }
     if (!await folder.reachable()) return "Can't reach the folder.";
     if (kind == SyncKind.logseq || kind == SyncKind.logseqExport) {
       final cfg = readLogseqConfig(await folder.readText('logseq/config.edn'));
       if (cfg.org) return 'Cache can write to Markdown graphs only.';
     }
     final id = kind == SyncKind.obsidian ? 'obsidian' : 'logseq';
-    _targets = [for (final t in _targets) if (t.id != id) t, SyncTargetConfig(id: id, kind: kind, path: path)];
+    _targets = [for (final t in _targets) if (t.id != id) t, SyncTargetConfig(id: id, kind: kind, path: path, display: display)];
     await _saveTargets();
     notifyListeners();
     unawaited(syncAll());
@@ -167,7 +178,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   }
 
   Future<NotebookSync> _engine(SyncTargetConfig t) async {
-    final folder = _folder(t.path);
+    final folder = await _folder(t.path);
     ({String format, String dir, bool org})? ls;
     if (t.kind == SyncKind.logseq || t.kind == SyncKind.logseqExport) ls = readLogseqConfig(await folder.readText('logseq/config.edn'));
     final e = NotebookSync(

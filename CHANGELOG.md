@@ -16,6 +16,7 @@ release notes).
 - Maps: press and hold the map for a ring: To here, From here, Add stop (while a route is shown), Save and Measure; Save opens your notebooks (most used first) and makes an entry at that spot; the centre opens the spot's coordinates
 - Maps: Measure draws a line from the held spot; each tap adds a point, with the running total, Undo and Done
 - Directions: start from a spot you hold on the map, and add up to 10 stops on the way
+- Notebooks: keep them in an Obsidian vault or a Logseq graph you pick on the phone (classic Markdown graphs both ways, Logseq 2 by export); changes made in both places are merged and only the same words changed twice are asked about (Notebooks > Connections)
 - Maps: add places from a KML, KMZ, GPX or GeoJSON file as a Places notebook, and repeater lists from a RepeaterBook KML or CHIRP CSV, under My layers
 - Notebooks: notebook sync keeps your notebooks and their photos the same on your linked devices (tick Notebooks in Sharing and sync); changes made on two devices are merged, and only the same words changed on both are asked about; private items stay on the device unless you include them (Notebooks > Connections)
 - Optional app PIN: Cache asks for it when it opens (Notebooks > App PIN)

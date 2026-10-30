@@ -1,19 +1,17 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../notebook/sync/connections.dart';
+import '../../notebook/sync/folder_access.dart';
 import '../../notebook/sync/sync_engine.dart';
 import '../../theme.dart';
 
-/// Chooses a folder; null when none was chosen (tests give their own).
-typedef PickFolder = Future<String?> Function();
-
-Future<String?> _pickFolder() => FilePicker.getDirectoryPath();
+/// Chooses a folder: its stored form and name, or null when none was chosen (tests give their own).
+typedef PickFolder = Future<({String path, String display})?> Function();
 
 /// Notebooks > Connections: Obsidian and Logseq folders, and notebook sync between your devices. Each says once what it does,
 /// its status line, and the changes that need a decision.
 class ConnectionsScreen extends StatelessWidget {
-  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = _pickFolder, this.shareAvailable = false, this.folders = false});
+  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true});
 
   final NotebookConnections connections;
   final PickFolder pickFolder;
@@ -21,8 +19,8 @@ class ConnectionsScreen extends StatelessWidget {
   /// Sharing and sync is set up on this phone (notebook sync is ticked there, as Notebooks).
   final bool shareAvailable;
 
-  /// Obsidian and Logseq folders can be connected: Cache can keep reading and writing a folder the person chooses. Not yet on
-  /// phones (that needs the system's folder access, which this build does not have), so the two rows are left out there.
+  /// Obsidian and Logseq folders can be connected (Cache keeps access to a folder the person chooses: SAF on Android, a
+  /// security-scoped bookmark on iOS).
   final bool folders;
 
   Future<void> _connect(BuildContext context, SyncKind kind) async {
@@ -57,9 +55,9 @@ class ConnectionsScreen extends StatelessWidget {
       if (pick == null) return;
       k = pick;
     }
-    final path = await pickFolder();
-    if (path == null) return;
-    final err = await connections.connect(k, path);
+    final picked = await pickFolder();
+    if (picked == null) return;
+    final err = await connections.connect(k, picked.path, display: picked.display);
     if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
   }
 
@@ -161,7 +159,7 @@ class ConnectionsScreen extends StatelessWidget {
           if (target != null) ...[
             const SizedBox(height: 6),
             Text(
-              [target.path.split(RegExp(r'[\\/]')).where((p) => p.isNotEmpty).lastOrNull ?? target.path, if (target.kind == SyncKind.logseqExport) 'export only'].join(' · '),
+              [target.name, if (target.kind == SyncKind.logseqExport) 'export only'].join(' · '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 14, color: k.text),

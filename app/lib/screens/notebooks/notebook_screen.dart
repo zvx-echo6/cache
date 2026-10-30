@@ -27,7 +27,6 @@ class NotebookDeps {
     this.connections,
     this.pin,
     this.shareAvailable,
-    this.folders = false,
     this.now = DateTime.now,
   });
 
@@ -52,9 +51,6 @@ class NotebookDeps {
 
   /// Sharing and sync is set up (notebook sync can run).
   final bool Function()? shareAvailable;
-
-  /// Obsidian and Logseq folders can be connected on this device (see [ConnectionsScreen.folders]).
-  final bool folders;
 
   final DateTime Function() now;
 }

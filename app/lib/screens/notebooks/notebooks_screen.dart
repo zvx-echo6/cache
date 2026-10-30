@@ -95,7 +95,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
               onSelected: (c) {
                 final d = widget.deps;
                 Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false, folders: d.folders),
+                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false),
                 ));
               },
               itemBuilder: (_) => [

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/sync/folder.dart';
+import 'package:cache/notebook/sync/folder_access.dart';
 import 'package:cache/notebook/sync/formats.dart';
 import 'package:cache/notebook/sync/merge.dart';
 import 'package:cache/notebook/sync/sync_engine.dart';
@@ -394,10 +395,11 @@ void main() {
       final dir = Directory.systemTemp.createTempSync('cache-conn-');
       final c = NotebookConnections(notebook: nb, dir: () async => dir, folderFor: (_) => mem);
       await tester.runAsync(c.init);
-      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c)));
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c, folders: false)));
       expect(find.text('Obsidian'), findsNothing);
       expect(find.text('Your other devices'), findsOneWidget);
-      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c, folders: true, pickFolder: () async => '/vault')));
+      await tester.pumpWidget(MaterialApp(
+          theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c, pickFolder: () async => (path: 'content://tree/primary%3ADocuments%2FVault', display: 'Vault'))));
       expect(find.text('Obsidian'), findsOneWidget);
       expect(find.text('Logseq'), findsOneWidget);
       await tester.runAsync(() async {
@@ -405,8 +407,10 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 300));
       });
       await tester.pumpAndSettle();
-      expect(c.target(SyncKind.obsidian)?.path, '/vault');
+      expect(c.target(SyncKind.obsidian)?.path, 'content://tree/primary%3ADocuments%2FVault');
+      expect(find.text('Vault'), findsOneWidget);
       expect(find.byKey(const ValueKey('status-obsidian')), findsOneWidget);
+      expect(SafFolder.treeName('content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FVault'), 'Vault');
     });
 
     testWidgets('a private notebook\'s edit page offers "Include in sync and sharing", off by default', (tester) async {

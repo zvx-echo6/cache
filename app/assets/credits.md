@@ -157,6 +157,8 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - qr 3.0.2: BSD-3-Clause (Copyright 2014, the Dart QR project authors. All rights reserved.)
 - qr_flutter 4.1.0: BSD-3-Clause (Copyright (c) 2020, Luke Freeman. All rights reserved.)
 - record_use 0.6.0: BSD-3-Clause (Copyright 2024, the Dart project authors.)
+- saf_stream 4.0.3: BSD-3-Clause (Copyright (c) 2023, Mgenware. All rights reserved.)
+- saf_util 3.1.1: BSD-3-Clause (Copyright (c) 2023, Mgenware. All rights reserved.)
 - share_plus 13.3.1: BSD-3-Clause (Copyright 2017, the Flutter project authors. All rights reserved.)
 - share_plus_platform_interface 7.2.0: BSD-3-Clause (Copyright 2017 The Chromium Authors. All rights reserved.)
 - source_span 1.10.2: BSD-3-Clause (Copyright 2014, the Dart project authors.)

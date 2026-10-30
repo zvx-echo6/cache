@@ -68,6 +68,11 @@ dependencies:
   # Notebook photos are re-encoded on the phone (upright, at most 2048 px, no EXIF) and get a thumbnail. Already used by
   # tool/brand_assets.dart; moved from the dev dependencies.
   image: ^4.5.4
+  # Notebooks > Connections on Android: lasting access to a folder the person picks (an Obsidian vault, a Logseq graph) through
+  # the Storage Access Framework: pick, list, make folders, rename, delete (saf_util) and read and write files (saf_stream).
+  # Both BSD-3-Clause; approved 2026-10-30. Pinned (published 2026-09-30 and 2026-10-21).
+  saf_util: 3.1.1
+  saf_stream: 4.0.3
 
 dev_dependencies:
   flutter_test:
