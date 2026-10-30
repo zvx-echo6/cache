@@ -1,0 +1,287 @@
+# Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to a Google Play testing track (for review).
+# Manual trigger only. It builds the branch it is started on.
+#
+# Signing: the upload key (PKCS12 keystore, alias "upload") lives only in the Actions secrets ANDROID_UPLOAD_KEYSTORE_B64,
+# ANDROID_UPLOAD_STORE_PASSWORD, ANDROID_UPLOAD_KEY_PASSWORD and ANDROID_UPLOAD_KEY_ALIAS. It is decoded into the runner's temp
+# folder for the build, named in app/android/key.properties (as on the release desktop), and removed afterwards; it is never
+# uploaded as an artifact. PLAY_SERVICE_ACCOUNT_JSON is the Google Play Developer API service account (upload).
+#
+# Native parts:
+#   routing  Valhalla 3.7.0 + the C shim, libvalhalla_shim.so for arm64-v8a (cached; the app finds it in its native library folder)
+#   app      flutter build appbundle: Gradle builds the Rust search core with cargo-ndk (arm64-v8a, with libzim) and llama.cpp
+#            with the NDK (arm64-v8a, x86_64); Rust, libzim and Gradle are cached
+#   play     upload to Play, only the new release on the track, status completed, release notes, commit
+name: Android Play
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: Release notes (en-US, at most 500 characters)
+        type: string
+        required: true
+      track:
+        description: Play track
+        type: string
+        default: alpha
+
+concurrency:
+  group: android-play
+  cancel-in-progress: false
+
+env:
+  PACKAGE_NAME: com.happylittlellc.cache
+  FLUTTER_VERSION: 3.44.8
+  NDK_VERSION: 28.2.13676358
+  CARGO_NDK_VERSION: 4.1.2
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build_name: ${{ steps.v.outputs.build_name }}
+      build_number: ${{ steps.v.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            app/pubspec.yaml
+            app/android/play_release.py
+      - name: Check signing and upload configuration
+        env:
+          ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          ANDROID_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          for key in ANDROID_UPLOAD_KEYSTORE_B64 ANDROID_UPLOAD_STORE_PASSWORD ANDROID_UPLOAD_KEY_PASSWORD ANDROID_UPLOAD_KEY_ALIAS PLAY_SERVICE_ACCOUNT_JSON; do
+            if [[ -z "${!key}" ]]; then echo "::error::Missing required secret: $key"; exit 1; fi
+          done
+          echo "Required configuration is present (secret values are not logged)."
+      - name: Release notes and track
+        env:
+          NOTES: ${{ inputs.release_notes }}
+          TRACK: ${{ inputs.track }}
+        run: |
+          python3 -I - <<'PY'
+          import os, sys
+          notes, track = os.environ["NOTES"].strip(), os.environ["TRACK"].strip()
+          if not notes: sys.exit("::error::The release notes are empty")
+          if len(notes) > 500: sys.exit(f"::error::The release notes are {len(notes)} characters; Play allows at most 500")
+          import re
+          if not re.fullmatch(r"[A-Za-z0-9:_-]+", track): sys.exit(f"::error::Not a track name: {track}")
+          print(f"track {track}, release notes {len(notes)} characters")
+          PY
+      # The version is 1.0.<build>, the build number the same on iPhone and Android: pubspec.yaml's "version: 1.0.27+27" is
+      # version 1.0.27, versionCode 27. It is the versionCode Play gets (not the run number), so it is checked here.
+      - name: Version and versionCode from pubspec.yaml
+        id: v
+        run: |
+          line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
+          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.([0-9]+))\+([0-9]+)\ *$ ]]; then
+            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<build>+<build>, found: $line"; exit 1
+          fi
+          name=${BASH_REMATCH[1]} patch=${BASH_REMATCH[2]} build=${BASH_REMATCH[3]}
+          if [[ "$patch" != "$build" ]]; then
+            echo "::error::The version's last number ($patch) must be the build number ($build), as in 1.0.27+27."; exit 1
+          fi
+          echo "build_name=$name" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build" >> "$GITHUB_OUTPUT"
+          echo "version $name, versionCode $build"
+      - name: The versionCode is higher than every one on Play
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: python3 -I app/android/play_release.py --check-newer "${{ steps.v.outputs.build_number }}"
+
+  routing:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          command -v ninja > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ninja-build; }
+      - name: Native toolchain identity
+        id: toolchain
+        run: |
+          echo "id=$( { cat "$ANDROID_NDK_HOME/source.properties"; cmake --version; ninja --version; uname -m; lsb_release -rs; } | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Finished library cache
+        id: out
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/routing-out
+          key: routing-android-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}
+      - name: Free disk space
+        if: steps.out.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: Valhalla source and dependency cache
+        id: routing-cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/valhalla/downloads
+            ~/.cache/vcpkg/archives
+          key: valhalla-android-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/vcpkg.json', 'packages/valhalla/triplets/**') }}
+      - name: Build Valhalla and the shim
+        if: steps.out.outputs.cache-hit != 'true'
+        run: bash packages/valhalla/scripts/build-android.sh "$RUNNER_TEMP/valhalla" "$RUNNER_TEMP/routing-out"
+      - name: Save Valhalla dependencies
+        if: always() && steps.out.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/valhalla/downloads
+            ~/.cache/vcpkg/archives
+          key: ${{ steps.routing-cache.outputs.cache-primary-key }}
+      - run: cat "$RUNNER_TEMP/routing-out/valhalla-build.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-routing
+          path: ${{ runner.temp }}/routing-out/libvalhalla_shim.so
+          retention-days: 2
+
+  app:
+    needs: [plan, routing]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+          # libzim is fetched by Gradle into a folder outside the repository (fetch-libzim.sh refuses one inside it).
+          echo "CACHE_LIBZIM_BUILD_DIR=$RUNNER_TEMP/libzim" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-routing
+          path: app/android/app/src/main/jniLibs/arm64-v8a
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: Rust for Android
+        id: rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+          echo "id=$( { rustc -vV; cat "$ANDROID_NDK_HOME/source.properties"; } | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      - name: cargo-ndk cache
+        id: cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK_VERSION }}-${{ steps.rust.outputs.id }}
+      - name: Install cargo-ndk
+        if: steps.cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-android-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-android-
+      - name: Cargo target cache
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-android-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-android-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: libzim download cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/libzim
+          key: libzim-android-9.8.2-1
+      - name: Upload key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/upload.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > app/android/key.properties
+          keytool -list -v -keystore "$RUNNER_TEMP/upload.jks" -storetype PKCS12 -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" 2>/dev/null \
+            | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f' > "$RUNNER_TEMP/upload-cert.sha256"
+          test -s "$RUNNER_TEMP/upload-cert.sha256" || { echo "::error::The upload keystore did not open with the store password and alias"; exit 1; }
+          echo "upload certificate SHA-256: $(cat "$RUNNER_TEMP/upload-cert.sha256")"
+      - name: Build the App Bundle
+        working-directory: app
+        run: |
+          flutter --version
+          flutter pub get
+          flutter build appbundle --release --build-name=${{ needs.plan.outputs.build_name }} --build-number=${{ needs.plan.outputs.build_number }}
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp build/app/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/out/Cache-${{ needs.plan.outputs.build_name }}.aab"
+      - name: Verify the signed bundle
+        run: |
+          aab="out/Cache-${{ needs.plan.outputs.build_name }}.aab"
+          ls -l "$aab"; sha256sum "$aab"
+          unzip -l "$aab" | grep 'base/lib/' | awk '{print $1, $4}'
+          for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do
+            unzip -l "$aab" "base/lib/arm64-v8a/$lib" > /dev/null || { echo "::error::$lib is missing from base/lib/arm64-v8a"; exit 1; }
+          done
+          signer=$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')
+          if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then
+            echo "::error::The bundle is not signed with the upload key (signer $signer)"; exit 1
+          fi
+          echo "signed with the upload key"
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/upload-cert.sha256" app/android/key.properties
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cache-aab
+          path: out/*.aab
+          retention-days: 14
+
+  play:
+    needs: [plan, app]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: app/android/play_release.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: Cache-aab
+          path: out
+      - name: Upload to Google Play
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          TRACK: ${{ inputs.track }}
+        run: |
+          python3 -I app/android/play_release.py "out/Cache-${{ needs.plan.outputs.build_name }}.aab" \
+            "${{ needs.plan.outputs.build_number }}" "${{ needs.plan.outputs.build_name }}" "$(printf '%s' "$TRACK" | tr -d '[:space:]')"
