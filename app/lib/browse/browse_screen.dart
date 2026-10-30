@@ -258,7 +258,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     final Widget? badge = switch (phase) {
       LibraryPhase.indexing => RowBadge(s.indexFraction(l) == null ? 'Building index' : 'Building index ${(s.indexFraction(l)! * 100).toStringAsFixed(0)}%', color: k.secondary),
       LibraryPhase.failed => RowBadge("Can't be opened", color: k.warning),
-      LibraryPhase.opening => RowBadge('Opening', color: k.secondary),
+      LibraryPhase.opening => RowBadge('Getting ready', color: k.secondary),
       _ => null,
     };
     final n = s.docsOf(l);

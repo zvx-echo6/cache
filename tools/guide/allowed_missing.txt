@@ -14,3 +14,6 @@ Alerts for
 
 # The Places list's button is a + icon and the words "Add place"; the guide quotes what it looks like.
 + Add place
+
+# The Library badge "Opening" is "Getting ready" since 1.0.27; the guide still says "Opening" until it is rebuilt. Remove this then.
+Opening

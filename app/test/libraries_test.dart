@@ -390,7 +390,7 @@ void main() {
       await setUpLibs();
       await libs.whenIdle();
       final l = libs.libraries.single;
-      expect(libs.statusOf(l)!.opening, isFalse, reason: 'nothing else reads the list again; the row must not stay on Opening');
+      expect(libs.statusOf(l)!.opening, isFalse, reason: 'nothing else reads the list again; the row must not stay on Getting ready');
       expect(libs.phaseOf(l), LibraryPhase.ready, reason: 'the index left unfinished is built once the library is open');
     });
 
@@ -534,7 +534,7 @@ void main() {
       await tester.pump();
       expect(find.textContaining('Built in · 3 entries'), findsOneWidget, reason: 'the guide is not one of the person\'s own');
       expect(find.textContaining('Your own · 2 entries'), findsOneWidget);
-      expect(find.text('Opening'), findsNothing);
+      expect(find.text('Getting ready'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
       browse.dispose();
     });
