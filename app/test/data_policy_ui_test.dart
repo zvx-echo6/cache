@@ -3,7 +3,6 @@ import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/browse/opds.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/layers/layer_def.dart';
-import 'package:cache/maps/ui/download_sheet.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/video/video_state.dart';
 import 'package:flutter/material.dart';
@@ -14,29 +13,6 @@ import 'video_fake.dart';
 
 void main() {
   group('a download on mobile data is blocked until the person says "Download anyway"', () {
-    testWidgets('map areas: the sheet says why, and the button starts it', (tester) async {
-      final r = await SettingsRig.create(tester, connection: ConnectionKind.mobile);
-      final def = r.maps.catalogueLayers.firstWhere((l) => l.id == 'hillshade');
-      r.maps.viewBounds = const GeoBounds(south: 42.50, west: -113.80, north: 42.60, east: -113.66);
-      await r.show(
-        tester,
-        Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => showDownloadConfirm(c, r.maps, def, r.maps.viewBounds!, 'This region'), child: const Text('open')))),
-      );
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Download')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.textContaining('mobile data downloads are off'), findsOneWidget);
-      expect(r.engine.areasOf(def.id), isEmpty, reason: 'nothing started');
-      await tester.tap(find.byKey(const ValueKey('download-anyway')));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(r.engine.areasOf(def.id), hasLength(1));
-      await tester.pump(const Duration(milliseconds: 100));
-      await r.dispose(tester);
-    });
-
     testWidgets('map areas: updating a downloaded area is blocked too, with the same way out', (tester) async {
       final r = await SettingsRig.create(tester, connection: ConnectionKind.wifi);
       final def = r.maps.catalogueLayers.firstWhere((l) => l.id == 'hillshade');

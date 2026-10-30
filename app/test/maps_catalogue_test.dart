@@ -74,7 +74,7 @@ void main() {
     expect(done(), isTrue, reason: 'timed out');
   }
 
-  testWidgets('the catalogue lists every layer with title, description, licence, coverage and a Download button', (tester) async {
+  testWidgets('the catalogue lists every layer with title, description, licence and coverage, and no download of its own', (tester) async {
     await boot(tester, () => CatalogueScreen(maps: maps));
     await tester.pump();
     for (final l in maps.catalogueLayers.take(2)) {
@@ -84,8 +84,8 @@ void main() {
     }
     
     expect(find.text('Worldwide'), findsWidgets);
-    expect(find.text('Download'), findsWidgets);
-    // The satellite layer is online only: no Download button, and it says so.
+    expect(find.text('Download'), findsNothing, reason: 'a layer is kept offline by downloading a region');
+    // The satellite layer is online only, and it says so.
     expect(find.text('Online only'), findsOneWidget);
     // Storage used is on the screen.
     expect(find.textContaining('Layers use 0 B on this phone'), findsOneWidget);
@@ -94,68 +94,6 @@ void main() {
     await tester.tap(find.text('Advanced'));
     await tester.pumpAndSettle();
     expect(find.text('Add a layer definition'), findsOneWidget);
-  });
-
-  testWidgets('download: choose an area, see tiles and size first, then progress, update and delete', (tester) async {
-    await boot(tester, () => CatalogueScreen(maps: maps));
-    // Hillshade is the second card; its Download button is the second one.
-    await tester.tap(find.byKey(const Key('download-hillshade')));
-    await tester.pumpAndSettle();
-    expect(find.text('Download Hillshade'), findsOneWidget);
-    expect(find.text('Which area?'), findsOneWidget);
-    expect(find.text('This region'), findsOneWidget);
-    expect(find.text('Draw an area'), findsOneWidget);
-
-    await tester.tap(find.text('This region'));
-    await tester.pumpAndSettle();
-    // The cost is on screen before anything is downloaded.
-    expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining(' tiles')), findsOneWidget);
-    expect(find.textContaining('About '), findsOneWidget);
-    expect(maps.engine.areasOf('hillshade'), isEmpty);
-
-    await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Download')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(maps.engine.areasOf('hillshade'), hasLength(1));
-    final area = maps.engine.areasOf('hillshade').single;
-    await settle(tester, () => area.phase == AreaPhase.done);
-    await tester.pump();
-    expect(find.text('This region'), findsOneWidget, reason: 'the area is listed on the layer');
-    expect(find.textContaining('KB'), findsWidgets);
-    expect(find.textContaining('on this phone'), findsWidgets);
-
-    // Update and delete are offered on a finished area.
-    expect(find.byTooltip('Update'), findsOneWidget);
-    await tester.tap(find.byTooltip('Delete'));
-    await tester.pumpAndSettle();
-    expect(find.text('Delete This region?'), findsOneWidget);
-    await tester.tap(find.text('Delete'));
-    await tester.pumpAndSettle();
-    expect(maps.engine.areasOf('hillshade'), isEmpty);
-    expect(find.byTooltip('Delete'), findsNothing);
-  });
-
-  testWidgets('a layer cut for regions is one card; its download names the cut that covers the area', (tester) async {
-    await boot(tester, () => CatalogueScreen(maps: maps));
-    expect(find.text('BLM roads and trails'), findsOneWidget, reason: 'one card for the global and the Idaho cut');
-    expect(find.text('Base map (OpenFreeMap)'), findsNothing, reason: 'off by default');
-    await tester.tap(find.byKey(const Key('download-blm-routes')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('This region'));
-    await tester.pumpAndSettle();
-    // The area is in Idaho: the Idaho cut is the one that downloads, and the sheet says so.
-    expect(find.textContaining('This region · '), findsOneWidget);
-    expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining('118')), findsOneWidget);
-    expect(find.descendant(of: find.byType(BottomSheet), matching: find.textContaining(' tiles')), findsOneWidget);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    // Elsewhere in the United States the broad cut is used and nothing extra is said.
-    maps.viewBounds = const GeoBounds(south: 39.0, west: -105.1, north: 39.2, east: -104.9);
-    await tester.tap(find.byKey(const Key('download-blm-routes')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('This region'));
-    await tester.pumpAndSettle();
-    expect(find.text('This region'), findsOneWidget);
   });
 
   testWidgets('Advanced lists every definition with a switch; the base map from OpenFreeMap is off until switched on', (tester) async {
@@ -172,26 +110,21 @@ void main() {
     expect(tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, 'Base map (OpenFreeMap)')).value, isTrue);
   });
 
-  testWidgets('an area that is too big says so and does not offer the download', (tester) async {
+  testWidgets('a layer has no download of its own (regions keep it offline); an area from before lists with update and delete', (tester) async {
     await boot(tester, () => CatalogueScreen(maps: maps));
-    // Too big for one download and outside the area the US map covers.
-    maps.viewBounds = const GeoBounds(south: 40, west: -5, north: 55, east: 20);
-    await tester.tap(find.byKey(const Key('download-basemap')));
+    expect(find.byKey(const Key('download-hillshade')), findsNothing);
+    expect(find.text('Draw an area'), findsNothing);
+    final area = (await tester.runAsync(() => maps.engine.download('hillshade', maps.viewBounds!, label: 'Home')))!;
+    await settle(tester, () => area.phase == AreaPhase.done);
+    await tester.pump();
+    expect(find.text('Home'), findsOneWidget, reason: 'the area is listed on the layer');
+    expect(find.byTooltip('Update'), findsOneWidget);
+    await tester.tap(find.byTooltip('Delete'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('This region'));
+    expect(find.text('Delete Home?'), findsOneWidget);
+    await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('too big'), findsOneWidget);
-    final button = tester.widget<FilledButton>(find.descendant(of: find.byType(BottomSheet), matching: find.byType(FilledButton)));
-    expect(button.onPressed, isNull);
-  });
-
-  testWidgets('Draw an area hands over to the map', (tester) async {
-    await boot(tester, () => CatalogueScreen(maps: maps));
-    await tester.tap(find.byKey(const Key('download-hillshade')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Draw an area'));
-    await tester.pumpAndSettle();
-    expect(maps.drawRequest, 'hillshade');
+    expect(maps.engine.areasOf('hillshade'), isEmpty);
   });
 
   testWidgets('Advanced: a layer definition can be added and edited, and bad ones are refused', (tester) async {

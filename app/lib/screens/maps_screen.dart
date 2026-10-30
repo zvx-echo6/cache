@@ -14,7 +14,8 @@ import '../maps/maps_state.dart';
 import '../maps/palette/map_palette.dart';
 import '../maps/style/style_generator.dart';
 import '../maps/ui/area_draw.dart';
-import '../maps/ui/download_sheet.dart';
+import '../regions/region_catalogue.dart';
+import '../regions/ui/region_sheet.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
@@ -65,7 +66,8 @@ class _MapsScreenState extends State<MapsScreen> {
   double? _lastHeading;
   Offset? _downAt;
 
-  String? _drawFor;
+  /// Drawing an area to download as a region.
+  bool _drawing = false;
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(onResume: () => maps.recheckNetwork());
 
   MapsState get maps => widget.maps;
@@ -135,10 +137,9 @@ class _MapsScreenState extends State<MapsScreen> {
     if (!mounted) return;
     _tryFirstStyle();
     if (_initialStyle != null && _key != _appliedKey) _scheduleRestyle();
-    final want = maps.drawRequest;
-    if (want != null && _drawFor == null) {
+    if (maps.drawRequest && !_drawing) {
       maps.clearDrawRequest();
-      setState(() => _drawFor = want);
+      setState(() => _drawing = widget.regions != null);
     }
     setState(() {});
   }
@@ -430,8 +431,8 @@ class _MapsScreenState extends State<MapsScreen> {
 
   Future<void> _useDrawn(Rect r) async {
     final c = _controller;
-    final layerId = _drawFor;
-    if (c == null || layerId == null) return;
+    final regions = widget.regions;
+    if (c == null || regions == null) return;
     final ratio = MediaQuery.devicePixelRatioOf(context);
     // Screen points to degrees; the corners of a turned map give the box that holds the whole rectangle.
     final corners = <LatLng>[];
@@ -441,13 +442,10 @@ class _MapsScreenState extends State<MapsScreen> {
     final lats = corners.map((e) => e.latitude);
     final lons = corners.map((e) => e.longitude);
     final area = GeoBounds(south: lats.reduce(math.min), west: lons.reduce(math.min), north: lats.reduce(math.max), east: lons.reduce(math.max));
-    final def = maps.engine.layer(layerId);
     if (!mounted) return;
-    setState(() => _drawFor = null);
-    if (def != null) {
-      // The catalogue screen was closed to draw; its progress shows when it is opened again from Layers.
-      await showDownloadConfirm(context, maps, def, area, 'Drawn area');
-    }
+    setState(() => _drawing = false);
+    // The same region sheet and download pop-up as a region from the list.
+    await showRegionSheet(context, regions, RegionRecord.drawn(area));
   }
 
   // ---- credits ------------------------------------------------------------------------------------------
@@ -547,8 +545,7 @@ class _MapsScreenState extends State<MapsScreen> {
   Widget _mapStack(BuildContext context, String style, CacheTokens k) {
     final fix = location.fix;
     final follow = maps.follow;
-    final drawing = _drawFor != null;
-    final drawDef = drawing ? maps.engine.layer(_drawFor!) : null;
+    final drawing = _drawing;
     return Stack(
       children: [
         Positioned.fill(
@@ -594,9 +591,8 @@ class _MapsScreenState extends State<MapsScreen> {
         ],
         if (drawing)
           AreaDrawOverlay(
-            layerTitle: drawDef?.title ?? 'this layer',
             onUse: _useDrawn,
-            onCancel: () => setState(() => _drawFor = null),
+            onCancel: () => setState(() => _drawing = false),
           ),
       ],
     );

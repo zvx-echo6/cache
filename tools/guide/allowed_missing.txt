@@ -48,6 +48,3 @@ You already have a notebook with this name.
 # Catalogue source titles: the app shows them from the published connector catalogue, so they are data, not app text.
 Idaho 511 winter road conditions
 Traffic flow at the place (TomTom)
-
-# app-batch, not built yet: the region download with a drawn area (round item 5). Remove when it is.
-Draw your own area instead

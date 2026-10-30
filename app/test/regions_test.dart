@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/maps/geo.dart';
 import 'package:cache/maps/ui/format.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -552,6 +553,32 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await r.settle(tester);
     expect(r.core.added.single['id'], _county);
+    await r.dispose(tester);
+  });
+
+  testWidgets('Draw your own area instead: the map draws, then the drawn area downloads as a region through the same sheet', (tester) async {
+    final r = await _Rig.boot(tester);
+    await tester.runAsync(() => r.catalogue.readShardAt(42.55, -114.4));
+    await r.s.show(tester, Builder(builder: (c) => TextButton(onPressed: () => showRegionsSheet(c, r.regions, lat: 42.55, lon: -114.4), child: const Text('open'))));
+    await tester.tap(find.text('open'));
+    await r.settle(tester);
+    await tester.tap(find.byKey(const ValueKey('regions-draw')));
+    await r.settle(tester);
+    expect(r.s.maps.drawRequest, isTrue, reason: 'the map is asked to draw');
+    // what the map does with the rectangle: a region record of it, downloaded like any other
+    final drawn = RegionRecord.drawn(const GeoBounds(south: 42.5, west: -114.5, north: 42.6, east: -114.3), at: DateTime(2026, 10, 30));
+    expect((drawn.name, regionKindLabel(drawn.kind)), ('Drawn area', 'Drawn on the map'));
+    final g = (await tester.runAsync(() => r.catalogue.geometry(drawn)))!;
+    expect(g, {
+      'type': 'Polygon',
+      'coordinates': [
+        [[-114.5, 42.5], [-114.3, 42.5], [-114.3, 42.6], [-114.5, 42.6], [-114.5, 42.5]],
+      ],
+    });
+    await tester.runAsync(() => r.regions.download(drawn, routing: true, map: true, anyway: true));
+    await r.settle(tester);
+    expect(r.core.added.single['geometry'], g);
+    expect(r.s.engine.areasOf('basemap').single.label, 'Drawn area');
     await r.dispose(tester);
   });
 

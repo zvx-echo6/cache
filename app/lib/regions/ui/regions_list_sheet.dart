@@ -189,6 +189,19 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                         children: [for (final rec in list) _row(k, rec)],
                       ),
                     ),
+                  if (!_selecting)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: const ValueKey('regions-draw'),
+                        // The map draws the rectangle, then the same region sheet and download pop-up open for it.
+                        onPressed: () {
+                          Navigator.pop(context);
+                          r.maps.requestDraw();
+                        },
+                        child: const Text('Draw your own area instead'),
+                      ),
+                    ),
                   if (_selecting) ...[
                     const SizedBox(height: 8),
                     Align(

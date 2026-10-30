@@ -11,6 +11,9 @@ import '../weather/catalogue_store.dart' show FetchBytes, NetworkProblem, fetchB
 /// (`<iso>.json` and `<iso>.search.json`), `search-global.json` and `polygons/<id>.geojson`.
 const String kRegionCatalogueBase = '$kDataBaseUrl/regions/';
 
+/// The kind of a region drawn on the map rather than taken from the catalogue.
+const String kDrawnRegionKind = 'drawn';
+
 /// One region of the catalogue, at any scale: a country, a state, several states, part of a state, a valley, a metro area, a
 /// county or a city. Regions overlap freely; [parents] are every region it sits in.
 class RegionRecord {
@@ -47,6 +50,16 @@ class RegionRecord {
 
   /// The ISO 3166-1 code of the country it is in ("US").
   final String? country;
+
+  /// An area drawn on the map ("Draw your own area instead"): a rectangle, downloaded like any region.
+  factory RegionRecord.drawn(GeoBounds b, {DateTime? at}) => RegionRecord(
+    id: 'drawn-${(at ?? DateTime.now()).millisecondsSinceEpoch}',
+    name: 'Drawn area',
+    kind: kDrawnRegionKind,
+    bbox: [b.west, b.south, b.east, b.north],
+  );
+
+  bool get isDrawn => kind == kDrawnRegionKind;
 
   factory RegionRecord.fromJson(Map<String, dynamic> j) => RegionRecord(
     id: j['id'] as String,
@@ -253,8 +266,17 @@ class RegionCatalogue {
     return _search[id] = await Isolate.run(() => RegionHit.parseList(text, shard: id));
   }
 
-  /// The region's outline as a GeoJSON geometry (a Polygon or MultiPolygon).
+  /// The region's outline as a GeoJSON geometry (a Polygon or MultiPolygon). A drawn area's is its rectangle.
   Future<Map<String, dynamic>> geometry(RegionRecord r) async {
+    final b = r.bbox;
+    if (r.isDrawn && b != null) {
+      return {
+        'type': 'Polygon',
+        'coordinates': [
+          [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]],
+        ],
+      };
+    }
     final known = _geometry[r.id];
     if (known != null) return known;
     return _geometry[r.id] = await _readGeometry(r);
@@ -374,6 +396,7 @@ String regionKindLabel(String kind, {String? country}) => switch (kind) {
   'metro' || 'metro_alias' => 'Metro area',
   'county' => 'County',
   'locality' => 'City or town',
+  kDrawnRegionKind => 'Drawn on the map',
   _ => 'Region',
 };
 

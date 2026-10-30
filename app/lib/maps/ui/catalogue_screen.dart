@@ -5,7 +5,6 @@ import '../../theme.dart';
 import '../layers/layer_def.dart';
 import '../layers/layer_engine.dart';
 import '../maps_state.dart';
-import 'download_sheet.dart';
 import 'format.dart';
 
 /// "Get more layers": every layer in the catalogue with what it is, its licence, where it covers, and a
@@ -72,18 +71,8 @@ class _LayerCard extends StatelessWidget {
             _fact(context, Icons.gavel, def.licence),
             if (def.onlineOnly) _fact(context, Icons.cloud_outlined, 'Online only'),
             if (stored > 0) _fact(context, Icons.sd_storage_outlined, '${formatBytes(stored)} on this phone'),
+            // A layer is kept offline by downloading a region (every region has its map); areas from before are still listed here.
             for (final a in areas) _AreaRow(engine: engine, area: a),
-            const SizedBox(height: 8),
-            if (!def.onlineOnly)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  key: Key('download-${def.id}'),
-                  onPressed: () => showAreaChoice(context, maps, def),
-                  icon: const Icon(Icons.download),
-                  label: const Text('Download'),
-                ),
-              ),
           ],
         ),
       ),
