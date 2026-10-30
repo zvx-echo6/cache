@@ -18,7 +18,7 @@ Private notebooks are left out of sync and sharing by default. See the section P
 
 ## Make a notebook
 
-1. Open "Notebooks" and tap "New notebook".
+1. [Open "Notebooks"](cache://notebooks) and tap "New notebook".
 2. Under "Start from", choose a template: "Journal", "Log", "Notes" or "Places". Each one says what it is for.
 3. To start a log that is already set up, choose one under "Starter logs" instead.
 4. Give the notebook a name. You cannot use the same name as another notebook: Cache says "You already have a notebook with this name."
@@ -87,7 +87,7 @@ To find a note later, use "Search" on the Notebooks screen, or the search box on
 
 Saved places live in the Places notebook. They used to be under Weather settings. They are not there any more.
 
-To open it, open "Notebooks" and tap "Places".
+To open it, [open "Notebooks" and tap "Places"](cache://notebooks/places).
 
 The first row is always "Where I am", labelled "Follows the phone". It is fixed: you cannot delete it or move it. It has its own "Weather and alerts" switch with a gear, and its own marker toggle, like any other place.
 
@@ -95,7 +95,7 @@ The rows after it are your places, each with its own marker colour:
 - Tap a place's marker (or the marker of "Where I am") to show or hide it on the map. A hidden place shows an outlined marker with a slash through it.
 - Tap a place to open it.
 - Press and hold a place to edit it.
-- Tap "+ Add place" to add one.
+- Tap "Add place" (a plus icon and the words) to add one.
 
 Each row says a little about the place, for example whether weather is on and how many photos it has.
 
@@ -107,7 +107,7 @@ For the form that adds and edits a place, see the section Add or edit a place.
 
 Add place and Edit place are the same full screen.
 
-To add a place, open the Places notebook and tap "+ Add place". To edit one, press and hold it in the list.
+To add a place, open the Places notebook and tap "Add place" (a plus icon and the words). To edit one, press and hold it in the list.
 
 The screen has, from the top:
 1. A map, with a search box. Search for an address, a place or coordinates. Tap the map to move the pin.
@@ -120,7 +120,7 @@ The screen has, from the top:
 8. "Save". When you edit, there is also "Delete place", which asks you to confirm.
 
 The gear opens "Alerts for" this place with three choices:
-- "Same as your alert setting": follows "Settings" > "Notifications". This is the default.
+- "Same as your alert setting": follows ["Settings" > "Notifications"](cache://settings/notifications). This is the default.
 - "Custom for this place": opens "How far out" and the kinds you want, such as fires, earthquakes and river levels. What a Custom place picks, within its distance, pops up even when "Pop up for" is "Serious only" or "None". It is silent in quiet hours unless it is serious.
 - "Off": no alerts for this place.
 

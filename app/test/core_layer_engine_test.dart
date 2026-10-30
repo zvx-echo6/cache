@@ -418,6 +418,28 @@ void main() {
     expect(again.areasOf('hillshade').single.error, isNull);
   });
 
+  test('a download stopped in an older build, with no shape kept by the app, carries on from the shape the core stored', () async {
+    // 1.0.27 said "This download cannot be continued. Delete it and start again." and offered nothing else; the core keeps the
+    // shape of every unfinished area, so the app asks it to carry on by the area alone.
+    final a = await engine.download('hillshade', home, label: 'Idaho');
+    expect(a.phase, AreaPhase.running);
+    engine.dispose();
+    File('${layersDir.path}/unfinished-downloads.json').deleteSync();
+    final again = engine = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': layersDir.path},
+      connected: () async => true,
+      pollEvery: const Duration(milliseconds: 20),
+    );
+    await again.start();
+    final stopped = again.areasOf('hillshade').single;
+    expect(stopped.phase, AreaPhase.failed);
+    await again.update(stopped.id);
+    expect(stopped.error, isNull);
+    expect(stopped.phase, AreaPhase.running);
+    await until(() => again.areasOf('hillshade').single.phase == AreaPhase.done);
+  });
+
   test('definitions are saved, listed as the user\'s own, removed; the core refusing one is a format error', () async {
     await engine.saveDefinition(jsonEncode({'id': 'mine', 'title': 'My layer', 'kind': 'raster', 'source': {'url': 'https://example.com/{z}/{x}/{y}.png'}}));
     expect(engine.layer('mine'), isNotNull);

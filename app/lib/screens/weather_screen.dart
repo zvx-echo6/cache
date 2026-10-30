@@ -5,6 +5,7 @@ import '../theme.dart';
 import '../weather/live_view.dart';
 import '../weather/places.dart';
 import '../weather/weather_state.dart';
+import '../weather/words.dart' show lineStart;
 import 'weather_turn_on.dart';
 
 /// The Weather module: for each watched place, the forecast day by day and everything that is happening near it (warnings,
@@ -297,7 +298,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (head.isNotEmpty) Text(head.join(' · '), style: TextStyle(fontSize: 15, color: k.text)),
+        if (head.isNotEmpty) Text(lineStart(head.join(' · ')), style: TextStyle(fontSize: 15, color: k.text)),
         if (rest.isNotEmpty) Text(rest.join(' · '), style: TextStyle(fontSize: 13, height: 1.35, color: k.secondary)),
       ],
     );

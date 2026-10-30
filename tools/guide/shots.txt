@@ -1,0 +1,25 @@
+# Guide screenshots: one id per line, then " | " and the screen state it shows. In a chapter: ![caption](shot:<id>), on a line of
+# its own. The reader shows app/assets/guide/shots/<id>.png with the caption under it (the caption is also its screen-reader
+# text). split.py takes the whole markup out, so the assistant never sees it. The pictures are made by the golden tests in
+# app/test/guide_shots/ (sample data, light theme): flutter test --update-goldens test/guide_shots, then tool/guide_shots.dart.
+# Ask for a new id here; ci_check.py fails on an id a chapter uses that has no line here or no picture.
+home-setup-card | Home with the "Set up Cache" card: a model chosen, the area downloading, weather on, no library yet
+regions-sheet | The Regions sheet for a place in Idaho: counties, a city, a valley and the state, with sizes; "Draw your own area instead"
+region-row | Regions > Local: one region downloading, its bar labelled with the part and percentage
+region-detail | A region's own page: each part (map, directions, places, off-road) with its state and what can be done
+download-popup-new | The download pop-up for a region not on the phone: its parts, the size and the phone's storage
+download-popup-carry-on | The download pop-up for a region partly on the phone: "Carry on" and adding off-road
+settings | Settings, the top page
+settings-storage | Settings > Storage: what uses the phone's space, with "Clean up"
+settings-maps | Settings > Maps: one line per region, the layers and Advanced
+weather | Weather and alerts for a saved place: the forecast, an alert and a fire nearby
+library | Library: the libraries on the phone, the built-in Cache guide first
+library-add | Library > Add: a library from the list, a file or a download link
+guide-reader | The Cache guide open at a section: short paragraphs, labels as chips, a link into the app, Previous and Next
+notebooks | Notebooks: the list of notebooks
+notebook-entry | A notebook entry open for editing
+places-list | Places: the saved places, with Where I am first
+places-edit | A saved place open for editing: name, position and its weather and alerts
+map-ring | The map with the ring open on a point: From here, Add stop, Measure
+ask | Ask: a question answered with its sources
+ask-plus-menu | Ask with the + menu open (Use my location, the sources and the rest)

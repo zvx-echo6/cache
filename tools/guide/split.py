@@ -5,7 +5,8 @@ usage: split.py [--chapters DIR] --out MANIFEST.json
 
 DIR defaults to docs/guide in this repo. The manifest is a JSON list, in reading order, of
 {file, title, source, section, chapter, body}. `title` is "Cache guide: <chapter heading>: <section heading>" (the
-same rule as guide_titles.py); `body` is the section text without its heading. Exits 1 on a duplicate title.
+same rule as guide_titles.py); `body` is the section text without its heading, with the reader's app links ([words](cache://...)) cut to their words and
+its screenshots (![caption](shot:<id>)) taken out, caption and all. Exits 1 on a duplicate title or a screenshot left in.
 """
 import argparse
 import collections
@@ -27,6 +28,31 @@ APP_LINK = re.compile(r'\[([^\]]*)\]\(cache://[^)]*\)')
 def strip_app_links(text):
     """[text](cache://...) becomes text; every other link stays as it is."""
     return APP_LINK.sub(lambda m: m.group(1), text)
+
+
+# A screenshot in the reader, ![caption](shot:<id>): the reader shows the picture with its caption under it. The library keeps
+# neither, so the assistant never sees a picture's markup or its caption.
+SHOT = re.compile(r' ?!\[[^\]]*\]\(shot:[^)]*\)')
+SHOT_LINE = re.compile(r'^\s*(?:!\[[^\]]*\]\(shot:[^)]*\)\s*)+$')
+
+
+def strip_shots(lines):
+    """Lines that hold only screenshots go, with one blank line next to them (so the text reads as if they were never
+    there); a screenshot inside a line of text goes on its own."""
+    out = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if SHOT_LINE.match(ln):
+            if out and out[-1].strip() == '' and i + 1 < len(lines) and lines[i + 1].strip() == '':
+                i += 1  # the blank line after it
+            elif not out and i + 1 < len(lines) and lines[i + 1].strip() == '':
+                i += 1
+            i += 1
+            continue
+        out.append(SHOT.sub('', ln))
+        i += 1
+    return out
 
 
 def main():
@@ -60,7 +86,10 @@ def main():
             if cur is not None:
                 cur[1].append(ln)
         for h, body in secs:
-            text = strip_app_links('\n'.join(body)).strip('\n')
+            text = strip_app_links('\n'.join(strip_shots(body))).strip('\n')
+            if 'shot:' in text and re.search(r'\]\(shot:', text):
+                print(f'{f.name}: a screenshot that split.py could not take out, in "{h}"', file=sys.stderr)
+                return 1
             title = 'Cache guide: %s: %s' % (chap, h)
             fn = re.sub(r'[/\\?*"<>|]', '-', 'Cache guide - %s - %s.txt' % (chap, h))
             man.append({'file': fn, 'title': title, 'source': f.name, 'section': h, 'chapter': chap, 'body': text})

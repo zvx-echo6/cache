@@ -449,6 +449,8 @@ Weather and alerts always update. If weather is old, see Weather status messages
 
 When the phone is low on space, downloads refuse or stop. The pop-up says how much more is needed, for example "Needs 28 GB more. Cache always leaves 20 GB for the phone." Cache keeps 10% of storage free, at least 5 GB and at most 20 GB, and you can't change that.
 
+![The Storage page](shot:settings-storage)
+
 To free space:
 1. Tap "Free up space" in the pop-up, or go to ["Settings" > "Storage"](cache://settings/storage).
 2. Tap "Clean up" first. It never touches what you saved.
@@ -460,6 +462,8 @@ Then continue the download.
 ## A download stopped
 
 Most downloads continue where they stopped. Fix the cause first: the connection dropped, mobile data is off, the phone is full, or Cache was closed.
+
+![A region that stopped](shot:region-row)
 
 - Models: download the same file again on the Models screen.
 - Regions: they continue by themselves, or tap the region's update button on the "Local" tab.

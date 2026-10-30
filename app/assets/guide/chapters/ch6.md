@@ -9,7 +9,7 @@ These messages mean a part of Cache could not start on this phone. The rest of C
 - "Layers are not available on this device": the map could not start. Close Cache and open it again.
 - "Videos are not available on this device": the video part could not start. Close Cache and open it again.
 - "Road routing downloads are not available: [reason]": regions cannot be downloaded right now. Close Cache and open it again; check your connection.
-- "Sharing could not start: [reason]": tap "Try again" in "Settings" > "Sharing and sync". If it keeps failing, close Cache and open it again.
+- "Sharing could not start: [reason]": tap "Try again" in ["Settings" > "Sharing and sync"](cache://settings/sharing). If it keeps failing, close Cache and open it again.
 - "Sharing is not set up": go to "Settings" > "Sharing and sync" and tap "Set up sharing".
 
 If one of these keeps coming back after a restart, note the exact words. They help whoever supports your copy of Cache.
@@ -18,6 +18,7 @@ If one of these keeps coming back after a restart, note the exact words. They he
 
 On the "Weather and alerts" card:
 - "Not set up yet": no weather source is on. Tap "Turn on weather".
+- "Waiting for your position": "Where I am" is watched and the phone does not know where it is yet. Wait, or go outdoors for a GPS fix. The card fills in when the position is known.
 - "forecast expired, needs a connection": the forecast is too old to show. Connect, open "Weather" and tap "Update now".
 - "no forecast yet": open "Weather" and tap "Update now".
 - "No alerts known, data expired": the alert data is too old to trust. Connect and update. Until then, Cache cannot tell you about new alerts.
@@ -51,7 +52,7 @@ Shortcuts:
 
 ## Location messages in Ask
 
-Cache uses your location in "Ask" whenever the phone allows it. It does not ask. The "Use my location" switch is in the + menu to the left of the box where you type, and in "Settings" > "Cache model and web search". It is the same switch.
+Cache uses your location in "Ask" whenever the phone allows it. It does not ask. The "Use my location" switch is in the + menu to the left of the box where you type, and in ["Settings" > "Cache model and web search"](cache://settings/assistant). It is the same switch.
 
 - "Use my location" is greyed out with "Blocked in the phone's settings": location is blocked for Cache. In the + menu tap "Open the phone's settings" and allow it. In "Settings" > "Cache model and web search" the row has a "Phone settings" button.
 - It is greyed out with "The phone's location is switched off": tap "Open the phone's settings" (or "Phone settings" in "Settings") and turn location on.
@@ -114,7 +115,7 @@ In "Add to Library":
 
 ## Kiwix catalogue messages
 
-In "Library" > "Add to Library", when the catalogue cannot load:
+In ["Library" > "Add to Library"](cache://library/add), when the catalogue cannot load:
 - "Cannot reach the Kiwix library. Check the connection.": connect and tap "Try again".
 - "Cannot make a secure connection to the Kiwix library.": the network may be blocking it, or the phone's date may be wrong. Try another network.
 - "The Kiwix library took too long to answer.": try again later.
@@ -124,7 +125,7 @@ In "Library" > "Add to Library", when the catalogue cannot load:
 
 Seen while a Library item downloads. After most of these, tap "Try again"; a stopped download continues where it left off.
 
-- "Not enough free space: [size] needed, [size] free.": free space in "Settings" > "Storage", or pick a smaller version ("Mini" or "No pictures").
+- "Not enough free space: [size] needed, [size] free.": free space in ["Settings" > "Storage"](cache://settings/storage), or pick a smaller version ("Mini" or "No pictures").
 - "The device is out of space. Free some and try again."
 - "The download stopped early ([a] of [b]). Try again to continue."
 - "The file did not match its published checksum, so it was thrown away. Try again.": the file was damaged on the way.
@@ -150,7 +151,7 @@ The assistant may say the sources are still being indexed, or that no sources ha
 
 ## Your own library messages
 
-On the "Your own library" screen ("Library" > "Add to Library" > "Your own library"):
+On the "Your own library" screen (["Library" > "Add to Library" > "Your own library"](cache://library/add)):
 - "Use a link that starts with https://": paste a full https link.
 - "This file isn't a Cache library.": pick a .cache-library file or a library snapshot.
 - "This is an empty library template. Fill it with your own entries first (see the README inside).": you added the blank template. Fill it first.
@@ -163,7 +164,7 @@ On the "Your own library" screen ("Library" > "Add to Library" > "Your own libra
 - "The new copy could not be opened, so the library was kept as it was.": the update failed; the old copy still works.
 - "Could not make the template: [reason]": try again.
 
-States: "Opening", "Waiting to index", "Building index", "Not available". Steps while adding: "Checking…", "Putting it in place…" and percentages for downloading, unpacking and indexing.
+States: "Getting ready", "Waiting to index", "Building index", "Not available". Steps while adding: "Checking…", "Putting it in place…" and percentages for downloading, unpacking and indexing.
 
 Adding the same link again continues a download that was cut off.
 
@@ -181,7 +182,7 @@ In "Maps":
 - "Could not get a position yet. Try again outdoors."
 - "No position yet.": wait a moment and try again.
 
-In the layer definition editor ("Settings" > "Maps" > "Advanced"):
+In the layer definition editor (["Settings" > "Maps" > "Advanced"](cache://settings/maps)):
 - "A layer needs an id of lower-case letters, digits, - and _", "A layer needs a title", "A layer definition is a JSON object": fix the definition and tap "Save".
 
 ## Map search messages
@@ -213,7 +214,7 @@ During guidance:
 
 ## Region list and region sheet messages
 
-On the "Regions" sheet ("Maps" > "Layers" > "Download a region", or "Settings" > "Maps" > "Regions"). It has the tabs "Downloads", "Local" and "Updates":
+On the "Regions" sheet (["Maps" > "Layers" > "Download a region"](cache://maps/regions), or "Settings" > "Maps" > "Regions"). It has the tabs "Downloads", "Local" and "Updates":
 - "The list of regions needs a connection the first time. After that it works offline.": connect and tap "Try again".
 - "This country's regions need a connection the first time." or "Search needs a connection the first time.": connect once.
 - "This region could not be read. Connect and try again."
@@ -226,13 +227,13 @@ On the "Regions" sheet ("Maps" > "Layers" > "Download a region", or "Settings" >
 
 ## Region downloads paused or failed
 
-On the "Regions" sheet, "Local" tab, a region may show:
+On the "Regions" sheet, "Local" tab, a region that is downloading shows one line with its parts: "Map", "Directions", "Places" and "Off-road". Each part says ready, a percentage, waiting, stopped or paused. A part that says ready already works. A region may also show:
 - "Paused: no connection." or "Paused: no network it may use": connect, or use Wi-Fi. It carries on by itself.
-- "Paused: mobile data is switched off for downloads. Connect to Wi-Fi to carry on.": connect to Wi-Fi, or turn on "Mobile data downloads" in "Settings" > "Storage".
+- "Paused: mobile data is switched off for downloads. Connect to Wi-Fi to carry on.": connect to Wi-Fi, or turn on "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
 - "Paused: [region] needs [size], [size] is free and [size] is kept free": Cache keeps some space free for the phone. Delete things you do not need ("Settings" > "Storage"), and it carries on.
 - "Paused: [reason]; trying again shortly": wait; it tries again by itself.
 - "Paused: could not move to [build]: [reason]" or "Paused: could not move places to [build]: [reason]": an update could not be put in place. Check free space; tap the region's update button again.
-- "Could not be downloaded": tap the region's update button to try again.
+- A part that says stopped: tap the region's update button to carry on. If Cache was closed during the download, tap "Get your area" in the Set up card ("[region] · Stopped. Tap to carry on") and Cache says "Carrying on with [region]".
 - "Places not downloaded": the region was downloaded before places were part of regions. Update it.
 
 Other texts you may see on a part:
@@ -242,9 +243,9 @@ Other texts you may see on a part:
 
 ## Weather status messages
 
-The line at the top of "Settings" > "Weather and alerts" says how fresh the data is, for example "Updated 1 hour ago". When the data is old it turns into a warning, for example "Updated 3 days ago". Tap the small refresh button next to it to fetch again.
+The line at the top of ["Settings" > "Weather and alerts"](cache://settings/weather) says how fresh the data is, for example "Updated 1 hour ago". When the data is old it turns into a warning, for example "Updated 3 days ago". Tap the small refresh button next to it to fetch again.
 
-The box at the top of "Weather" says the same, and has an "Update now" button.
+The box at the top of "Weather" says the same, and has an "Update now" button. What is already on the phone shows at once, with its age, while newer data is read.
 
 - "Nothing is switched on yet." on "Weather", or "Nothing switched on yet" in settings: turn on a source, or tap "Turn on weather".
 - "Not updated yet": tap the refresh button, or "Update now" in "Weather".
@@ -252,6 +253,7 @@ The box at the top of "Weather" says the same, and has an "Update now" button.
 - "Updates when you tap Update now, and when you ask the assistant": Cache could not schedule background updates. Tap "Update now" when you need fresh data.
 
 On the "Weather" screen:
+- "Waiting for your position." with "The forecast and alerts for where you are show here once the phone knows where it is.": nothing is wrong. Wait for the phone to find where it is.
 - "Not downloaded yet. Update now to get it.": tap "Update now".
 - "Expired · [age] · needs a connection for more": old data. Connect and update.
 - "Every day of this forecast has passed." or "No forecast.": update when you are online.
@@ -259,11 +261,12 @@ On the "Weather" screen:
 
 ## Update messages
 
-After you tap "Update now" in "Weather", or the refresh button in "Settings" > "Weather and alerts", a short message says how it went.
+After you tap "Update now" in "Weather", or the refresh button in ["Settings" > "Weather and alerts"](cache://settings/weather), a short message says how it went.
 
 - "Updated" or "Already up to date": all good.
 - "Already updating": an update is running. Wait for it.
 - "Switch on a source to update it.": nothing is on. Turn on a source.
+- "Waiting for your position.": "Where I am" is watched and the phone does not know where it is yet. Try again in a moment.
 - "No place is being watched.": open the Places notebook and turn on "Weather and alerts" for a place, or for "Where I am".
 - "No connection. Update when you are online."
 - "Updated, but [problem]": most sources updated; one did not.
@@ -296,7 +299,7 @@ To keep a place for good, add it to the Places notebook.
 
 ## Data source messages
 
-On a source's page (tap its row in "Settings" > "Weather and alerts"):
+On a source's page (tap its row in ["Settings" > "Weather and alerts"](cache://settings/weather)):
 - "Data" "Out of date": the stored data is old. Update when online.
 - "Last update" "Nothing downloaded yet": tap "Update now" on the "Weather" screen.
 - "This source is no longer in the catalogue.": its catalogue dropped it.
@@ -315,7 +318,7 @@ Texts from the data engine, shown as a source's "Last problem" or in the status:
 
 ## Web search key messages
 
-In the "Web search" sheet ("Settings" > "Cache model and web search" > "Set up" next to "Search service"):
+In the "Web search" sheet (["Settings" > "Cache model and web search" > "Set up"](cache://settings/assistant) next to "Search service"):
 - "Paste your key first.": the field is empty.
 - "Kagi didn't accept this key. Check you copied all of it.": copy the whole key again.
 - "Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.": add credit in your Kagi account.
@@ -330,7 +333,7 @@ In the "Web search" sheet ("Settings" > "Cache model and web search" > "Set up" 
 
 ## Data source key messages
 
-In the key sheet you open with "Get key" on a source's row ("Settings" > "Weather and alerts"). [Provider] is the company that gives the key.
+In the key sheet you open with "Get key" on a source's row (["Settings" > "Weather and alerts"](cache://settings/weather)). [Provider] is the company that gives the key.
 
 - "Paste your key first.": the field is empty.
 - "[Provider] didn't accept this key. Check you copied all of it.": copy the whole key again.
@@ -347,7 +350,7 @@ In the key sheet you open with "Get key" on a source's row ("Settings" > "Weathe
 
 ## Catalogue messages
 
-In "Settings" > "Weather and alerts" > "More sources" > "Add sources from a link" (at the bottom of the list):
+In ["Settings" > "Weather and alerts" > "More sources" > "Add sources from a link"](cache://settings/weather) (at the bottom of the list):
 - "Enter an address that starts with https://": paste the full link.
 - "No connection. Connect to add a catalogue."
 - "Couldn't check that link. Try again."
@@ -363,9 +366,9 @@ In "Settings" > "Weather and alerts" > "More sources" > "Add sources from a link
 
 ## Notification messages
 
-In "Settings" > "Notifications":
+In ["Settings" > "Notifications"](cache://settings/notifications):
 - "No pop-ups at all?": you chose "None" under "Pop up for". Cache will not interrupt you for anything, not even an evacuation order. Tap "Keep pop-ups" to go back, or "Turn off" to confirm. Alerts are still listed in "Weather".
-- Location is not set here. The "Use my location" row is in "Settings" > "Cache model and web search". When the phone blocks location for Cache, that row says so and links to the phone's settings.
+- Location is not set here. The "Use my location" row is in ["Settings" > "Cache model and web search"](cache://settings/assistant). When the phone blocks location for Cache, that row says so and links to the phone's settings.
 
 If alerts do not pop up, check three things: "Pop up for" is not "None", your phone allows notifications for Cache, and it is not inside your quiet hours. Serious alerts still ring in quiet hours.
 
@@ -394,8 +397,8 @@ Downloading and playing:
 
 ## Sharing and sync messages
 
-In "Settings" > "Sharing and sync":
-- "Paused: no network it may use": connect to Wi-Fi, or turn on "Mobile data downloads" in "Settings" > "Storage".
+In ["Settings" > "Sharing and sync"](cache://settings/sharing):
+- "Paused: no network it may use": connect to Wi-Fi, or turn on "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
 - "Local network only": Cache can reach devices on the same Wi-Fi only right now.
 - "Not reachable": the other device is off, asleep, closed or offline. Open Cache on it.
 - "Connected through a relay" or "Connected directly": linked and working.
@@ -412,14 +415,14 @@ If a kind says the other device's files are bigger than the space you have, Cach
 
 ## Storage messages
 
-In "Settings" > "Storage":
+In ["Settings" > "Storage"](cache://settings/storage):
 - "Measuring…": Cache is adding up the space. Wait a moment.
 - "free space unknown": the phone did not say. Downloads still check before they start.
 - "Wait for the downloads to finish, then clean up.": "Clean up" does not run while a download is going. Wait, then try again.
 - "Nothing to clean up": no unfinished downloads, damaged files or temporary files.
 - "Freed [size]": "Clean up" finished.
 
-In "Settings" > "Credits and licences" > "Credits":
+In ["Settings" > "Credits and licences" > "Credits"](cache://settings/credits):
 - "Couldn't load the credits.": close and reopen Cache.
 
 ## Notebook messages
@@ -457,7 +460,7 @@ If something says it needs a connection, it will work again once you are online.
 
 ## Mobile data: why a download did not start
 
-Cache has one mobile data switch. It is "Mobile data downloads" in "Settings" > "Storage".
+Cache has one mobile data switch. It is "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
 
 - Off (at first): big downloads wait for Wi-Fi. This covers models, regions, Library items, libraries, videos and sharing between your devices.
 - On: big downloads also use mobile data.
@@ -478,7 +481,7 @@ Changes apply at once, even to a download already running.
 When the phone is low on space, downloads stop or refuse to start. The pop-up says how much more is needed, for example "Needs 28 GB more. Cache always leaves 20 GB for the phone." Its button is "Free up space". Cache keeps 10% of storage free for the phone, at least 5 GB and at most 20 GB. This is on purpose, and you cannot change it.
 
 To free space:
-1. Tap "Free up space" in the pop-up, or go to "Settings" > "Storage".
+1. Tap "Free up space" in the pop-up, or go to ["Settings" > "Storage"](cache://settings/storage).
 2. Tap "Clean up" first. It removes unfinished downloads, damaged files and temporary files. It never touches what you saved.
 3. Open the row that uses the most: "Library", "Models", "Regions", "Notebooks" or "Videos and weather".
 4. Remove items you do not need. Each removal asks you to confirm and shows what it frees.
