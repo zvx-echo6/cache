@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../notebook/markdown_text.dart';
 import '../../notebook/media.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
@@ -11,11 +12,11 @@ import '../../theme.dart';
 import 'field_inputs.dart';
 import 'quick_add_sheet.dart' show deleteWithUndo;
 
-/// The entry editor, the same for every notebook (UX 2.2): [x] the date (tap to change) [Done]; a title; the text; then only
-/// what applies: the notebook's fields when it has some, the checklist once the entry has one, photos, the documents once
-/// something is attached, the place, Private. Saves as you type: a new entry is an unfinished draft until Done; [x] keeps it.
+/// The entry editor, the same for every notebook (UX 2.2): [x] the date (tap to change) [Done]; a title; the text (Markdown,
+/// formatted as it is typed; a checklist is `- [ ]` lines in it); then only what applies: the notebook's fields when it has
+/// some, photos, the documents once something is attached, the place, Private. Saves as you type: a new entry is an unfinished draft until Done; [x] keeps it.
 class EntryEditor extends StatefulWidget {
-  const EntryEditor({super.key, required this.notebook, required this.book, required this.places, this.entry, this.now = DateTime.now});
+  const EntryEditor({super.key, required this.notebook, required this.book, required this.places, this.entry, this.at, this.now = DateTime.now});
 
   final NotebookState notebook;
   final Notebook book;
@@ -23,6 +24,9 @@ class EntryEditor extends StatefulWidget {
 
   /// The entry to edit (a draft is continued); null makes a new one.
   final NbEntry? entry;
+
+  /// A new entry's place (a spot held on the map); null starts at Here where the notebook is on the map.
+  final NbPlace? at;
   final DateTime Function() now;
 
   @override
@@ -35,12 +39,11 @@ class _EntryEditorState extends State<EntryEditor> {
   late DateTime _when = widget.entry?.when ?? widget.now();
   late String? _occurredAt = widget.entry?.occurredAt;
   late final TextEditingController _title = TextEditingController(text: widget.entry?.title ?? '');
-  late final TextEditingController _text;
-  late List<CheckItem> _checks;
+  late final MarkdownController _text = MarkdownController(text: widget.entry?.body ?? '');
   late final Map<String, Object?> _values = {...?widget.entry?.values};
   late List<NbPhoto> _photos = [...?widget.entry?.photos];
   late List<NbFile> _files = [...?widget.entry?.files];
-  late NbPlace? _place = widget.entry?.place;
+  late NbPlace? _place = widget.entry?.place ?? widget.at;
   late bool _private = widget.entry?.private ?? false;
   bool _placePending = false;
   final List<NbPhoto> _addedPhotos = [];
@@ -55,10 +58,7 @@ class _EntryEditorState extends State<EntryEditor> {
   @override
   void initState() {
     super.initState();
-    final (text, checks) = splitChecklist(widget.entry?.body);
-    _text = TextEditingController(text: text);
-    _checks = checks;
-    if (_isNew && widget.book.map) {
+    if (_isNew && widget.book.map && widget.at == null) {
       _placePending = true;
       widget.places.herePlace().then((p) {
         if (!mounted) return;
@@ -80,7 +80,7 @@ class _EntryEditorState extends State<EntryEditor> {
     super.dispose();
   }
 
-  bool get _empty => _title.text.trim().isEmpty && _text.text.trim().isEmpty && _checks.isEmpty && _photos.isEmpty && _files.isEmpty && _values.values.every((v) => v == null);
+  bool get _empty => _title.text.trim().isEmpty && _text.text.trim().isEmpty && _photos.isEmpty && _files.isEmpty && _values.values.every((v) => v == null);
 
   void _changed() {
     _dirty = true;
@@ -96,7 +96,7 @@ class _EntryEditorState extends State<EntryEditor> {
     if (_empty && _id == null) return;
     final run = () async {
       try {
-        final body = joinChecklist(_text.text, _checks);
+        final body = _text.text.trim();
         final saved = await widget.notebook.saveEntry(
           id: _id,
           notebookId: widget.book.id,
@@ -209,6 +209,7 @@ class _EntryEditorState extends State<EntryEditor> {
               decoration: const InputDecoration(hintText: 'Title (optional)', border: InputBorder.none),
               onChanged: (_) => _changed(),
             ),
+            Align(alignment: Alignment.centerRight, child: const MarkdownHelpButton()),
             TextField(
               key: const ValueKey('editor-text'),
               controller: _text,
@@ -231,20 +232,6 @@ class _EntryEditorState extends State<EntryEditor> {
                   _changed();
                 },
               ),
-            if (_checks.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text('Checklist', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
-              for (var i = 0; i < _checks.length; i++) _checkRow(i),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  key: const ValueKey('check-add'),
-                  onPressed: () => setState(() => _checks = [..._checks, const CheckItem('')]),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add item'),
-                ),
-              ),
-            ],
             if (_photos.isNotEmpty) ...[
               const SizedBox(height: 12),
               PhotoStrip(
@@ -301,13 +288,6 @@ class _EntryEditorState extends State<EntryEditor> {
                     label: const Text('Add photo'),
                   ),
                 OutlinedButton.icon(key: const ValueKey('attach-file'), onPressed: _attach, icon: const Icon(Icons.attach_file), label: const Text('Attach file')),
-                if (_checks.isEmpty)
-                  OutlinedButton.icon(
-                    key: const ValueKey('add-checklist'),
-                    onPressed: () => setState(() => _checks = [const CheckItem('')]),
-                    icon: const Icon(Icons.checklist),
-                    label: const Text('Add checklist'),
-                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -336,41 +316,6 @@ class _EntryEditorState extends State<EntryEditor> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _checkRow(int i) {
-    final c = _checks[i];
-    return Row(
-      key: ValueKey('check-$i'),
-      children: [
-        Checkbox(
-          value: c.done,
-          onChanged: (v) {
-            _checks = [..._checks]..[i] = CheckItem(c.text, done: v == true);
-            _changed();
-          },
-        ),
-        Expanded(
-          child: TextFormField(
-            initialValue: c.text,
-            autofocus: c.text.isEmpty,
-            decoration: const InputDecoration(border: InputBorder.none, hintText: 'Item'),
-            onChanged: (v) {
-              _checks = [..._checks]..[i] = CheckItem(v, done: c.done);
-              _changed();
-            },
-          ),
-        ),
-        IconButton(
-          tooltip: 'Remove item',
-          icon: const Icon(Icons.close, size: 20),
-          onPressed: () {
-            _checks = [..._checks]..removeAt(i);
-            _changed();
-          },
-        ),
-      ],
     );
   }
 }

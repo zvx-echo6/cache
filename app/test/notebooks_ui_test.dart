@@ -178,7 +178,7 @@ void main() {
     expect(r.store.entries, isEmpty);
   });
 
-  testWidgets('a Notes entry shows its checklist and documents; the row counts them', (tester) async {
+  testWidgets('a Notes entry shows its checklist (Markdown) and documents; the row counts them', (tester) async {
     final r = _Rig();
     await r.nb.start();
     final notes = await r.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Family plan', fields: [], sort: NotebookSort.recent), map: false);
@@ -196,10 +196,14 @@ void main() {
     expect(find.text('Tue 27 Oct · 1 of 2 done · 1 document · Private'), findsOneWidget);
     await tester.tap(find.text('Medical info: Dad'));
     await tester.pumpAndSettle();
-    expect(find.text('Checklist'), findsOneWidget);
+    // the checklist is Markdown in the text, formatted as typed (no separate checklist or formatting buttons)
+    final text = tester.widget<TextField>(find.byKey(const ValueKey('editor-text'))).controller!.text;
+    expect(text, 'Blood type O+.\n\n- [x] 30-day supply in go-bag\n- [ ] Spare glasses');
+    expect(find.text('Checklist'), findsNothing);
+    expect(find.byKey(const ValueKey('add-checklist')), findsNothing);
+    expect(find.byKey(const ValueKey('markdown-help')), findsOneWidget);
     expect(find.text('Documents'), findsOneWidget);
     expect(find.text('Prescription.pdf'), findsOneWidget);
-    expect(find.byKey(const ValueKey('add-checklist')), findsNothing, reason: 'the entry already has one');
     expect(find.textContaining('Place:'), findsOneWidget);
   });
 

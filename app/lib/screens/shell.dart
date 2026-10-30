@@ -32,7 +32,6 @@ import 'maps_screen.dart';
 import 'models_screen.dart';
 import 'placeholder_screen.dart';
 import '../notebook/notebook_model.dart';
-import 'notebooks/entry_editor.dart';
 import 'notebooks/notebook_screen.dart';
 import 'notebooks/notebooks_screen.dart';
 import 'notebooks/quick_add_sheet.dart';
@@ -285,13 +284,13 @@ class _ShellState extends State<Shell> {
     final deps = widget.notebooks;
     final book = deps?.notebook.notebook(e.notebookId);
     if (deps == null || book == null) return;
-    if (book.isLog) {
-      showQuickAdd(context, notebook: deps.notebook, log: book, places: deps.places, entry: e, now: deps.now);
-      return;
-    }
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => EntryEditor(notebook: deps.notebook, book: book, places: deps.places, entry: e, now: deps.now),
-    ));
+    openNotebookEntry(context, deps, book, e);
+  }
+
+  /// The map's ring menu: a new entry of [book] at a held spot.
+  void _newEntryAt(Notebook book, NbPlace at) {
+    final deps = widget.notebooks;
+    if (deps != null) newNotebookEntryAt(context, deps, book, at);
   }
 
   /// A notebook's Home card: a log's opens its quick add over Home (tap, Save); any other opens the notebook. A notebook that
@@ -332,7 +331,7 @@ class _ShellState extends State<Shell> {
   Widget _moduleScreen(ModuleId m) => switch (m) {
         ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.notebooks => widget.notebooks == null ? const PlaceholderScreen(title: 'Notebooks', message: 'Notebooks are not available on this phone') : NotebooksScreen(deps: widget.notebooks!),

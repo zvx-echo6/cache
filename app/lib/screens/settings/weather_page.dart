@@ -7,7 +7,6 @@ import '../../weather/weather_state.dart';
 import 'data_sources_page.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
-import 'places_page.dart';
 import 'widgets.dart';
 
 /// Opens the Add a key sheet for [c] and says so when the key was saved. [replace] is for a key that is already there.
@@ -39,7 +38,8 @@ String _sentence(String s) {
   return '${t[0].toUpperCase()}${t.substring(1)}.';
 }
 
-/// Settings > Weather and alerts: how old the data is and why, the switches, the places to watch, and Advanced (all data sources).
+/// Settings > Weather and alerts: how old the data is and why, the switches, and Advanced (all data sources). The places weather
+/// is kept for are in the Places notebook.
 class WeatherPage extends StatefulWidget {
   const WeatherPage({super.key, required this.deps});
 
@@ -52,28 +52,11 @@ class WeatherPage extends StatefulWidget {
 class _WeatherPageState extends State<WeatherPage> {
   SettingsDeps get d => widget.deps;
   WeatherState get w => d.hub.weather;
-  String _places = '';
-
   @override
   void initState() {
     super.initState();
-    w.addListener(_reloadPlaces);
-    d.hub.settings.addListener(_reloadPlaces);
-    _reloadPlaces();
     // Nothing downloaded yet (a first start with no connection until now): try once on opening.
     if (w.started && w.catalogues.isEmpty && !w.refreshingCatalogues) w.refreshCatalogues();
-  }
-
-  @override
-  void dispose() {
-    w.removeListener(_reloadPlaces);
-    d.hub.settings.removeListener(_reloadPlaces);
-    super.dispose();
-  }
-
-  Future<void> _reloadPlaces() async {
-    final s = await w.watchedSummary();
-    if (mounted && s != _places) setState(() => _places = s);
   }
 
   Future<void> _update({bool anyway = false}) async {
@@ -128,16 +111,6 @@ class _WeatherPageState extends State<WeatherPage> {
             StatusBox(status: w.status(), updating: w.updating, onUpdate: _update),
             if (free.isNotEmpty) SettingsGroup(label: 'Free', rows: [for (final r in free) _row(context, r)]),
             if (keyed.isNotEmpty) SettingsGroup(label: 'Needs your own key (free)', rows: [for (final r in keyed) _row(context, r)]),
-            SettingsGroup(
-              label: 'Watch these places',
-              rows: [
-                SettingsRow(
-                  title: 'Places',
-                  status: [Part(_places.isEmpty ? '…' : _places)],
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlacesPage(deps: d))),
-                ),
-              ],
-            ),
             AdvancedRow(
               status: 'All data sources, more',
               onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => DataSourcesPage(deps: d))),

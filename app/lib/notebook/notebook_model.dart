@@ -228,6 +228,7 @@ class NbEntry {
     this.created = 0,
     this.updated = 0,
     this.rev = 0,
+    this.props = const {},
   });
 
   final String id;
@@ -249,6 +250,15 @@ class NbEntry {
   final int updated;
   final int rev;
 
+  /// The app's own properties of the entry: a place's marker colour (`color`) and whether it is drawn on the map (`on_map`).
+  final Map<String, dynamic> props;
+
+  /// The marker colour's name, when one was chosen.
+  String? get color => props['color'] is String ? props['color'] as String : null;
+
+  /// Drawn on the map (true unless switched off).
+  bool get onMap => props['on_map'] != false;
+
   /// The wall-clock time the entry was written for, in the offset it was written in.
   DateTime get when => wallClock(occurredAt);
 
@@ -267,6 +277,7 @@ class NbEntry {
         created: (j['created'] as num?)?.toInt() ?? 0,
         updated: (j['updated'] as num?)?.toInt() ?? 0,
         rev: (j['rev'] as num?)?.toInt() ?? 0,
+        props: j['props'] is Map ? (j['props'] as Map).cast<String, dynamic>() : const {},
       );
 }
 
@@ -285,6 +296,7 @@ class Notebook {
     this.fileCount = 0,
     this.placeCount = 0,
     this.lastEntry,
+    this.savedPlaces = false,
   });
 
   final String id;
@@ -310,6 +322,12 @@ class Notebook {
   final int placeCount;
   final NbEntry? lastEntry;
 
+  /// The Places notebook that holds the saved places (each entry is a saved place, with weather and alerts).
+  final bool savedPlaces;
+
+  /// Made from the Places template: listed with coloured markers, and each place is edited on the place screen.
+  bool get isPlaces => template == 'places';
+
   String get name => def.name;
 
   /// A log: entries made from the fields with quick add, "Last done" and "Due again".
@@ -328,6 +346,7 @@ class Notebook {
         fileCount: (j['files'] as num?)?.toInt() ?? 0,
         placeCount: (j['places'] as num?)?.toInt() ?? 0,
         lastEntry: j['last_entry'] is Map ? NbEntry.fromJson(j['last_entry'] as Map) : null,
+        savedPlaces: j['saved_places'] == true,
       );
 }
 

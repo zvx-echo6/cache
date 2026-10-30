@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../notebook/markdown_text.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
@@ -46,7 +47,7 @@ class QuickAddSheet extends StatefulWidget {
 class _QuickAddSheetState extends State<QuickAddSheet> {
   late DateTime? _when = widget.entry?.when;
   late final Map<String, Object?> _values = {};
-  late final TextEditingController _notes = TextEditingController(text: widget.entry?.body ?? '');
+  late final MarkdownController _notes = MarkdownController(text: widget.entry?.body ?? '');
   bool _saving = false;
   String? _error;
 
@@ -193,7 +194,7 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
                 minLines: 1,
                 maxLines: 4,
                 textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(labelText: 'Notes', hintText: 'optional'),
+                decoration: const InputDecoration(labelText: 'Notes', hintText: 'optional', suffixIcon: MarkdownHelpButton()),
               ),
               if (_error != null)
                 Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!, style: TextStyle(color: k.emergency))),

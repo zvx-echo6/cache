@@ -18,6 +18,8 @@ import '../maps/ui/download_sheet.dart';
 import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
+import '../maps/ui/ring_menu.dart';
+import '../maps/user_layers.dart';
 import '../nav/nav_geojson.dart';
 import '../notebook/notebook_map.dart';
 import '../notebook/notebook_model.dart';
@@ -35,13 +37,19 @@ import '../theme.dart';
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers});
 
   /// Notebooks whose entries have places: drawn as pins and listed under "My layers"; null leaves them out.
   final NotebookState? notebooks;
 
   /// A notebook pin's Open.
   final void Function(NbEntry entry)? onOpenEntry;
+
+  /// Repeater lists and the lines and areas of imported files: drawn, and listed under "My layers"; null leaves them out.
+  final UserLayersState? userLayers;
+
+  /// The ring menu's Save: a new entry of [book] at [at], in that notebook's full entry form.
+  final void Function(Notebook book, NbPlace at)? onNewEntryAt;
 
   final LocationService location;
   final MapsState maps;
@@ -94,6 +102,8 @@ class _MapsScreenState extends State<MapsScreen> {
     location.addListener(_onLocation);
     nav.addListener(_onNav);
     widget.notebooks?.addListener(_pushNotebooks);
+    widget.notebooks?.addListener(_notebooksChanged);
+    widget.userLayers?.addListener(_pushUser);
     _lifecycle;
     final c = maps.savedCamera;
     if (c != null) {
@@ -117,6 +127,8 @@ class _MapsScreenState extends State<MapsScreen> {
     location.removeListener(_onLocation);
     nav.removeListener(_onNav);
     widget.notebooks?.removeListener(_pushNotebooks);
+    widget.notebooks?.removeListener(_notebooksChanged);
+    widget.userLayers?.removeListener(_pushUser);
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
     super.dispose();
@@ -202,6 +214,8 @@ class _MapsScreenState extends State<MapsScreen> {
     await _pushNav();
     _notebookSig = -1;
     await _pushNotebooks();
+    _userSig = -1;
+    await _pushUser();
     _onNav(); // A route may have been loaded before this screen/listener existed.
     _afterCameraSettles();
   }
@@ -379,6 +393,28 @@ class _MapsScreenState extends State<MapsScreen> {
     } catch (_) {}
   }
 
+  int _userSig = -1;
+  int _notebookSeen = -1;
+
+  /// A notebook's change can change its layer (a file's lines and areas, its map switch): the user layers are read again.
+  void _notebooksChanged() {
+    final nb = widget.notebooks;
+    if (nb == null || nb.revision == _notebookSeen) return;
+    _notebookSeen = nb.revision;
+    widget.userLayers?.reload();
+  }
+
+  /// Repeater lists and imported lines and areas follow their switches.
+  Future<void> _pushUser() async {
+    final u = widget.userLayers;
+    final c = _controller;
+    if (u == null || c == null || !_styleReady || u.revision == _userSig) return;
+    _userSig = u.revision;
+    try {
+      await c.setGeoJsonSource(kUserSource, await u.mapGeoJson());
+    } catch (_) {}
+  }
+
   /// A tap on a notebook pin opens its card; true when there was one.
   Future<bool> _tapNotebookPin(math.Point<double> point) async {
     final c = _controller;
@@ -464,10 +500,117 @@ class _MapsScreenState extends State<MapsScreen> {
     }
   }
 
+  // ---- the ring menu (press and hold on the map) --------------------------------------------------------------
+
+  _Ring? _ring;
+
   void _onMapLongPress(math.Point<double> point, LatLng at) {
     if (nav.phase != NavPhase.browsing) return;
     HapticFeedback.mediumImpact();
-    nav.dropPin(at.latitude, at.longitude);
+    final ring = _Ring(at: _downAt ?? MediaQuery.sizeOf(context).center(Offset.zero), lat: at.latitude, lon: at.longitude);
+    setState(() => _ring = ring);
+    _nameRing(ring);
+  }
+
+  /// The ring's centre names the spot: the nearest town as the core describes coordinates, when it can.
+  Future<void> _nameRing(_Ring ring) async {
+    try {
+      final r = await nav.backend.search('${ring.lat.toStringAsFixed(6)},${ring.lon.toStringAsFixed(6)}', near: nav.here, limit: 1, meaning: false);
+      final c = r.results.where((x) => x.isCoordinates).firstOrNull;
+      if (c != null && c.address.isNotEmpty && mounted && identical(_ring, ring)) setState(() => ring.name = c.address);
+    } catch (_) {}
+  }
+
+  static IconData _bookIcon(Notebook n) => switch (n.template) {
+        'places' => Icons.place_outlined,
+        'journal' => Icons.edit_note,
+        'notes' => Icons.sticky_note_2_outlined,
+        _ => n.isLog ? Icons.event_available_outlined : Icons.book_outlined,
+      };
+
+  /// The ring's wedges: To here, Save (the Notebooks book icon); after Save, the notebooks, most used first, paged by More.
+  List<RingItem> _ringItems(_Ring r) {
+    if (!r.notebooks) {
+      return [
+        const RingItem(id: 'to', label: 'To here', icon: Icons.near_me_outlined),
+        if (widget.notebooks != null && widget.onNewEntryAt != null) const RingItem(id: 'save', label: 'Save', icon: Icons.book_outlined),
+      ];
+    }
+    final all = [for (final n in widget.notebooks?.notebooks ?? const <Notebook>[]) RingItem(id: n.id, label: n.name, icon: _bookIcon(n))];
+    return ringPage(all, r.page);
+  }
+
+  int _ringPageCount() => ringPages([for (final n in widget.notebooks?.notebooks ?? const <Notebook>[]) RingItem(id: n.id, label: n.name, icon: Icons.book)]);
+
+  void _ringPick(RingItem item) {
+    final r = _ring;
+    if (r == null) return;
+    switch (item.id) {
+      case 'to':
+        setState(() => _ring = null);
+        nav.openDirections(MapPlace.pin(r.lat, r.lon, name: r.name ?? pinName(r.lat, r.lon), formats: {'decimal': formatDecimal(r.lat, r.lon)}));
+      case 'save':
+        widget.notebooks?.start();
+        setState(() {
+          r.notebooks = true;
+          r.page = 0;
+        });
+      case kRingMore:
+        setState(() => r.page = (r.page + 1) % _ringPageCount());
+      default:
+        final book = widget.notebooks?.notebook(item.id);
+        setState(() => _ring = null);
+        if (book != null) widget.onNewEntryAt?.call(book, NbPlace(lat: r.lat, lon: r.lon, label: r.name));
+    }
+  }
+
+  void _ringBack() {
+    final r = _ring;
+    if (r == null) return;
+    setState(() {
+      if (!r.notebooks) {
+        _ring = null;
+      } else if (r.page > 0) {
+        r.page--;
+      } else {
+        r.notebooks = false;
+      }
+    });
+  }
+
+  Widget _ringOverlay(BuildContext context, _Ring r, CacheTokens k) {
+    const size = 232.0;
+    final screen = MediaQuery.sizeOf(context);
+    final left = (r.at.dx - size / 2).clamp(8.0, math.max(8.0, screen.width - size - 8)).toDouble();
+    final top = (r.at.dy - size / 2).clamp(80.0, math.max(80.0, screen.height - size - 8)).toDouble();
+    final pages = r.notebooks ? _ringPageCount() : 1;
+    final centre = r.notebooks
+        ? Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.undo, size: 16, color: k.text), const SizedBox(width: 4), Text('Back', style: TextStyle(fontSize: 14, color: k.text))]),
+              if (pages > 1) Text('${r.page + 1} of $pages', style: TextStyle(fontSize: 12, color: k.secondary)),
+            ],
+          )
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(r.name ?? 'Here', maxLines: 2, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.text)),
+              Text(formatDecimal(r.lat, r.lon).replaceAll(', ', ',\n'), textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: k.secondary)),
+            ],
+          );
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          Positioned.fill(child: GestureDetector(key: const ValueKey('ring-dismiss'), behavior: HitTestBehavior.opaque, onTap: () => setState(() => _ring = null))),
+          Positioned(
+            left: left,
+            top: top,
+            child: RingMenu(key: const ValueKey('ring-menu'), size: size, items: _ringItems(r), onPick: _ringPick, centre: centre, onCentre: _ringBack),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The polite ask shown before the system prompt (never on launch, only when the user taps for location).
@@ -701,6 +844,7 @@ class _MapsScreenState extends State<MapsScreen> {
           _topLayer(context, fix, follow),
           _bottomLayer(context),
         ],
+        if (_ring != null && !drawing) _ringOverlay(context, _ring!, k),
         if (drawing)
           AreaDrawOverlay(
             layerTitle: drawDef?.title ?? 'this layer',
@@ -754,7 +898,7 @@ class _MapsScreenState extends State<MapsScreen> {
           MapButton(
             icon: Icons.layers_outlined,
             tooltip: 'Layers',
-            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions, notebooks: widget.notebooks),
+            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions, notebooks: widget.notebooks, userLayers: widget.userLayers),
           ),
         if (!nav.guiding) const SizedBox(height: 12),
         MapButton(
@@ -848,4 +992,18 @@ class _MapsScreenState extends State<MapsScreen> {
       ),
     );
   }
+}
+
+/// A press and hold on the map: where (on screen and on the map), the spot's name once known, and which ring shows.
+class _Ring {
+  _Ring({required this.at, required this.lat, required this.lon});
+
+  final Offset at;
+  final double lat;
+  final double lon;
+  String? name;
+
+  /// The notebook ring (after Save), and its page.
+  bool notebooks = false;
+  int page = 0;
 }

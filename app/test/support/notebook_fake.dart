@@ -47,11 +47,35 @@ class FakeNotebookBackend implements NotebookBackend {
         'pins' => {
             'entries': [
               for (final e in _byTime(entries))
-                if (e['draft'] != true && e['place'] != null && (a['notebook_id'] == null ? _nb(e['notebook_id'] as String)['map'] == true : e['notebook_id'] == a['notebook_id'])) _entryJson(e),
+                if (e['draft'] != true && e['place'] != null && (e['props'] as Map?)?['on_map'] != false &&
+                    (a['notebook_id'] == null ? _nb(e['notebook_id'] as String)['map'] == true : e['notebook_id'] == a['notebook_id']))
+                  _entryJson(e),
             ],
           },
+        'saved_places' => _nbJson(_savedPlaces()),
+        'import' => _import(a),
         _ => throw CacheSearchException('unsupported', 'unknown notebook op $op'),
       };
+
+  /// The points the next `import` reads (name, lat, lon, notes), standing in for the file.
+  List<Map<String, dynamic>> importPoints = const [];
+
+  Map<String, dynamic> _savedPlaces() {
+    final have = notebooks.where((n) => n['saved_places'] == true).firstOrNull;
+    if (have != null) return have;
+    final n = _save({'template': 'places', 'def': {'name': 'Places', 'due_every': null, 'shape': {'sort': 'distance'}, 'fields': []}});
+    n['saved_places'] = true;
+    return n;
+  }
+
+  Map<String, dynamic> _import(Map<String, dynamic> a) {
+    final id = a['notebook_id'] as String? ??
+        _save({'template': 'places', 'def': {'name': 'Imported places', 'due_every': null, 'shape': {'sort': 'distance'}, 'fields': []}})['id'] as String;
+    for (final p in importPoints) {
+      _saveEntry({'notebook_id': id, 'occurred_at': a['now'], 'title': p['name'], 'body': p['notes'], 'place': {'lat': p['lat'], 'lon': p['lon']}});
+    }
+    return {'notebook': _nbJson(_nb(id)), 'places': importPoints.length, 'lines': 0, 'areas': 0, 'skipped': 0};
+  }
 
   Map<String, dynamic> _nb(String id) =>
       notebooks.firstWhere((n) => n['id'] == id, orElse: () => throw CacheSearchException('not_found', 'no notebook with id "$id"'));
@@ -180,7 +204,7 @@ class FakeNotebookBackend implements NotebookBackend {
       if (a['title'] != null) 'title': a['title'],
       if (a['body'] != null) 'body': a['body'],
       'values': values,
-      if (a['place'] != null) 'place': a['place'],
+      if (a['place'] != null) 'place': _keyed(nb, a, old),
       'photos': a['photos'] ?? const [],
       'files': a['files'] ?? const [],
       'draft': a['draft'] == true,
@@ -188,11 +212,21 @@ class FakeNotebookBackend implements NotebookBackend {
       'created': old?['created'] ?? now,
       'updated': now,
       'rev': ((old?['rev'] as int?) ?? 0) + 1,
+      if (a['props'] != null) 'props': a['props'],
     };
     if (old != null) entries.remove(old);
     entries.add(e);
     if (e['draft'] != true) nb['last_used'] = now;
     return e;
+  }
+
+  /// A place of the saved-places notebook keeps its key (a moved pin comes back without it) or gets one from its title, as the
+  /// core gives it.
+  Map<String, dynamic> _keyed(Map<String, dynamic> nb, Map<String, dynamic> a, Map<String, dynamic>? old) {
+    final p = (a['place'] as Map).cast<String, dynamic>();
+    if (nb['saved_places'] != true || a['draft'] == true) return p;
+    final key = (old?['place'] as Map?)?['key'] ?? p['key'] ?? '${a['title'] ?? 'place'}'.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+    return {...p, 'key': key};
   }
 
   Map<String, dynamic> _deleteEntry(String id) {

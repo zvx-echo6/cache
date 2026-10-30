@@ -20,6 +20,7 @@ import 'live_folder.dart';
 import 'alert_notifier.dart';
 import 'alert_watch.dart';
 import 'live_view.dart';
+import 'place_alerts.dart';
 import 'places.dart';
 import 'words.dart';
 
@@ -129,6 +130,9 @@ class WeatherState extends ChangeNotifier {
 
   /// What has been told about already, so a pop-up is never repeated; null with [notifier].
   final ToldStore? told;
+
+  /// Each place's own alert rule (the Places notebook's gear); null = every place follows the alert setting.
+  PlaceAlerts? placeAlerts;
 
   /// True once background updates are scheduled (the status line says how updates happen).
   bool backgroundUpdates = false;
@@ -884,7 +888,8 @@ class WeatherState extends ChangeNotifier {
     for (final p in await watchedPlaces()) {
       byPlace[p] = await viewFor(p);
     }
-    final fresh = pickNewAlerts(byPlace, await t.read());
+    await placeAlerts?.load();
+    final fresh = pickNewAlerts(byPlace, await t.read(), rules: placeAlerts?.ruleFor);
     if (fresh.isEmpty) return 0;
     var shown = 0;
     for (final a in fresh) {

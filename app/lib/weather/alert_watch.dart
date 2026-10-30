@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'live_view.dart';
+import 'place_alerts.dart';
 import 'places.dart';
 
 /// Something happening near a watched place that the person has not been told about yet.
@@ -50,16 +51,26 @@ bool raisesAlerts(SourceView v) => v.source.category == 'alerts' || v.source.cat
 
 /// The items in [views] (grouped by place) that have not been told about before ([told] holds their addresses), at most one fire
 /// source per place (incidents and perimeters describe the same fires: the source with the most items speaks for them).
-List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String> told) {
+/// [rules] gives a place's own alert rule (Places notebook, the place's gear): off pops up nothing for it, custom pops up the
+/// chosen kinds within its distance; the default follows [raisesAlerts].
+List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String> told, {PlaceAlertRule Function(String placeId)? rules}) {
   final out = <NewAlert>[];
   for (final e in views.entries) {
     final place = e.key;
-    final counted = [for (final v in e.value) if (raisesAlerts(v) && !v.missing && !v.expired) v];
+    final rule = rules?.call(place.id) ?? PlaceAlertRule.same;
+    if (rule.mode == PlaceAlertMode.off) continue;
+    final custom = rule.mode == PlaceAlertMode.custom;
+    bool counts(SourceView v) => custom ? rule.kinds.contains(v.source.category == 'other' && v.source.id == 'alerts' ? 'alerts' : v.source.category) : raisesAlerts(v);
+    final counted = [for (final v in e.value) if (counts(v) && !v.missing && !v.expired) v];
     final fires = [for (final v in counted) if (v.source.category == 'fire') v]..sort((a, b) => b.active.length.compareTo(a.active.length));
     final speaking = [for (final v in counted) if (v.source.category != 'fire') v, if (fires.isNotEmpty) fires.first];
     for (final v in speaking) {
       for (final i in v.active) {
         if (told.contains(i.address)) continue;
+        if (custom) {
+          final mi = milesIn(i.distance);
+          if (mi != null && mi > rule.miles) continue;
+        }
         final severity = i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;
         out.add(NewAlert(item: i, source: v.source.id, place: place, extreme: severity == 'extreme'));
       }

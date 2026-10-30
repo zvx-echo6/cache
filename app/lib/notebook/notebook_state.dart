@@ -72,6 +72,26 @@ class NotebookState extends ChangeNotifier {
     return null;
   }
 
+  /// The Places notebook of the saved places, once the core made it (see [ensureSavedPlaces]).
+  Notebook? get savedPlaces {
+    for (final n in _notebooks) {
+      if (n.savedPlaces) return n;
+    }
+    return null;
+  }
+
+  /// The saved places' notebook, made by the core the first time.
+  Future<Notebook> ensureSavedPlaces() async {
+    final have = savedPlaces;
+    if (have != null) return have;
+    return _change(() async => Notebook.fromJson(await backend.call('saved_places')));
+  }
+
+  /// Reads a map layer file (KML, KMZ, GPX, GeoJSON) into a Places notebook ([notebookId], else a new one named after the
+  /// file): its points become places. The core's answer: `{"notebook","places","lines","areas","skipped"}`.
+  Future<Map<String, dynamic>> importPlaces(String path, {String? notebookId, required String now}) =>
+      _change(() => backend.call('import', {'path': path, 'notebook_id': ?notebookId, 'now': now}));
+
   /// The notebook `notebook.add_journal_entry` writes to: the most recently used one of the Journal template.
   Notebook? get journal {
     for (final n in _notebooks) {
@@ -160,6 +180,7 @@ class NotebookState extends ChangeNotifier {
     List<NbFile> files = const [],
     bool draft = false,
     bool private = false,
+    Map<String, dynamic> props = const {},
   }) =>
       _change(() async => NbEntry.fromJson(await backend.call('entry_save', {
             'id': ?id,
@@ -173,6 +194,7 @@ class NotebookState extends ChangeNotifier {
             'files': [for (final f in files) f.toJson()],
             'draft': draft,
             'private': private,
+            if (props.isNotEmpty) 'props': props,
           })));
 
   final Set<String> _hidden = {};

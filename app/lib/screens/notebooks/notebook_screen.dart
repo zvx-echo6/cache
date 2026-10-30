@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../layout/layout_state.dart';
+import '../../maps/user_layers.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
@@ -10,11 +11,19 @@ import 'entry_editor.dart';
 import 'field_inputs.dart';
 import 'notebook_editor.dart';
 import 'notebook_search_screen.dart';
+import 'places_screen.dart';
 import 'quick_add_sheet.dart';
 
 /// What the Notebooks screens need besides the store: places, Home shortcuts and the map.
 class NotebookDeps {
-  const NotebookDeps({required this.notebook, required this.places, this.layout, this.now = DateTime.now});
+  const NotebookDeps({
+    required this.notebook,
+    required this.places,
+    this.layout,
+    this.placesDeps,
+    this.userLayers,
+    this.now = DateTime.now,
+  });
 
   final NotebookState notebook;
   final PlaceChoices places;
@@ -22,7 +31,38 @@ class NotebookDeps {
   /// Home's shortcuts ("Add to Home"); null leaves it out.
   final LayoutState? layout;
 
+  /// The Places notebooks' weather and alert switches, map and directions; null leaves them out.
+  final PlaceNotebookDeps? placesDeps;
+
+  /// The user's repeater lists and the lines and areas kept with Places notebooks (the same store as the places); null leaves
+  /// them out.
+  final UserLayersState? userLayers;
+
   final DateTime Function() now;
+}
+
+/// Opens one entry where it is edited: a log's in its quick add sheet, a place on its place screen, any other in the entry
+/// editor.
+void openNotebookEntry(BuildContext context, NotebookDeps deps, Notebook book, NbEntry e) {
+  if (book.isLog && !e.draft) {
+    showQuickAdd(context, notebook: deps.notebook, log: book, places: deps.places, entry: e, now: deps.now);
+  } else if (book.isPlaces) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceView(deps: deps, book: book, entryId: e.id)));
+  } else {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => EntryEditor(notebook: deps.notebook, book: book, places: deps.places, entry: e, now: deps.now),
+    ));
+  }
+}
+
+/// The map's ring menu picked [book] at [at]: that notebook's full entry form at that spot (a place on the place screen, any
+/// other entry, a log's too, in the entry editor).
+void newNotebookEntryAt(BuildContext context, NotebookDeps deps, Notebook book, NbPlace at) {
+  Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => book.isPlaces
+        ? PlaceForm(deps: deps, book: book, at: at)
+        : EntryEditor(notebook: deps.notebook, book: book, places: deps.places, at: at, now: deps.now),
+  ));
 }
 
 /// One notebook, whatever its template: its entries listed the way its shape says (by date, last changed, or nearest first).
@@ -119,6 +159,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
   Widget build(BuildContext context) {
     final book = nb.notebook(widget.notebookId);
     if (book == null) return Scaffold(appBar: AppBar(), body: const Center(child: Text('This notebook is gone')));
+    if (book.isPlaces) return PlacesNotebookScreen(deps: widget.deps, notebookId: book.id);
     final k = context.t;
     final now = widget.deps.now();
     final all = [for (final e in _entries ?? const <NbEntry>[]) if (!nb.isHidden(e.id)) e];

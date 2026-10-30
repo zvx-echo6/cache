@@ -5,9 +5,7 @@ import 'package:flutter/material.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../theme.dart';
-import 'entry_editor.dart';
 import 'notebook_screen.dart';
-import 'quick_add_sheet.dart';
 
 /// Search across every notebook (or one, [notebookId]): results grouped by notebook, each with its snippet (the matched words in
 /// bold) and date. The same keyword search the core keeps for Notebooks.
@@ -57,13 +55,7 @@ class _NotebookSearchScreenState extends State<NotebookSearchScreen> {
     final nb = widget.deps.notebook;
     final book = nb.notebook(h.entry.notebookId);
     if (book == null) return;
-    if (book.isLog) {
-      showQuickAdd(context, notebook: nb, log: book, places: widget.deps.places, entry: h.entry, now: widget.deps.now);
-    } else {
-      Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => EntryEditor(notebook: nb, book: book, places: widget.deps.places, entry: h.entry, now: widget.deps.now),
-      ));
-    }
+    openNotebookEntry(context, widget.deps, book, h.entry);
   }
 
   @override

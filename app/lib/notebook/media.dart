@@ -38,11 +38,11 @@ String newMediaId() {
   return (photo: img.encodeJpg(im, quality: 85), thumb: img.encodeJpg(thumb, quality: 80), width: im.width, height: im.height);
 }
 
-/// Stores [bytes] as a photo in the Notebook's media folder.
-Future<NbPhoto?> storePhoto(NotebookState nb, Uint8List bytes) async {
+/// Stores [bytes] as a photo in the Notebook's media folder (under [id] when given: a photo that came by sync keeps its id).
+Future<NbPhoto?> storePhoto(NotebookState nb, Uint8List bytes, {String? id}) async {
   final out = await Isolate.run(() => encodePhoto(bytes));
   if (out == null) return null;
-  final id = newMediaId();
+  id ??= newMediaId();
   final f = await nb.photoFile(id);
   final t = await nb.thumbFile(id);
   await f.parent.create(recursive: true);
@@ -69,6 +69,34 @@ Future<NbFile?> addFile(NotebookState nb) async {
     await dest.parent.create(recursive: true);
     await File(picked.path!).copy(dest.path);
     return NbFile(id: id, name: picked.name, bytes: await dest.length());
+  } finally {
+    try {
+      await FilePicker.clearTemporaryFiles();
+    } catch (_) {}
+  }
+}
+
+/// Lets the person choose a file and runs [use] on it while the picker's copy exists (it is cleared after); null when nothing
+/// was chosen. Any file can be chosen: the core says when it is not one it reads.
+Future<T?> withPickedFile<T>(Future<T> Function(String path, String name) use) async {
+  final picked = await FilePicker.pickFile();
+  if (picked == null || picked.path == null) return null;
+  try {
+    return await use(picked.path!, picked.name);
+  } finally {
+    try {
+      await FilePicker.clearTemporaryFiles();
+    } catch (_) {}
+  }
+}
+
+/// Like [withPickedFile] with one or more files (a repeater list can be a KML and a CSV together).
+Future<T?> withPickedFiles<T>(Future<T> Function(List<String> paths) use) async {
+  final picked = await FilePicker.pickFiles();
+  final paths = [for (final f in picked) ?f.path];
+  if (paths.isEmpty) return null;
+  try {
+    return await use(paths);
   } finally {
     try {
       await FilePicker.clearTemporaryFiles();

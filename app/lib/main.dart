@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show GeoPoint;
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -37,7 +37,10 @@ import 'notebook/notebook_publisher.dart';
 import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
 import 'notebook/places.dart';
+import 'maps/ui/place_map.dart';
+import 'maps/user_layers.dart';
 import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
+import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
@@ -56,6 +59,7 @@ import 'weather/alert_notifier.dart';
 import 'weather/alert_watch.dart';
 import 'weather/background.dart';
 import 'weather/live_core.dart';
+import 'weather/place_alerts.dart';
 import 'weather/places.dart';
 import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
@@ -163,7 +167,9 @@ class _CacheAppState extends State<CacheApp> {
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
-  );
+  )..placeAlerts = placeAlerts;
+  /// Each place's own alert rule (Places notebook, the place's gear).
+  late final PlaceAlerts placeAlerts = PlaceAlerts(() async => File('${(await getApplicationSupportDirectory()).path}/$kPlaceAlertsFile'));
   /// The app's support folder, read at start (the alert memory and the last place live there).
   String? _supportPath;
   // Sharing and sync: Cache's own folders, each with a fixed id so the same kind of thing on linked devices is one shared folder.
@@ -250,7 +256,10 @@ class _CacheAppState extends State<CacheApp> {
     places: PlacesDeps(
       save: ({required name, required lat, required lon, label}) async {
         final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
-        return core.savePlace(name: name, lat: lat, lon: lon, label: label);
+        final saved = await core.savePlace(name: name, lat: lat, lon: lon, label: label);
+        // The core made its entry in the Places notebook.
+        unawaited(notebooks.reload());
+        return saved;
       },
       list: () async => (await sources.whenCoreReady() ?? (throw StateError('The search core is not available'))).savedPlaces(),
     ),
@@ -290,7 +299,35 @@ class _CacheAppState extends State<CacheApp> {
       return [for (final p in r.results) NbPlace(lat: p.lat, lon: p.lon, label: p.name)];
     },
   );
-  late final NotebookDeps notebookDeps = NotebookDeps(notebook: notebooks, places: notebookPlaces, layout: layout);
+  late final NotebookDeps notebookDeps =
+      NotebookDeps(notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers);
+
+  // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
+  late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
+    final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
+    return core.userLayers(call, arg);
+  });
+  // The Places notebooks: the saved places' weather and alert switches (watched-place ids), each place's alert rule, the place map
+  // and directions.
+  late final PlaceNotebookDeps placeNotebookDeps = PlaceNotebookDeps(
+    watched: (id) => settings.watchedPlaces.contains(id),
+    setWatched: settings.setWatched,
+    alerts: placeAlerts,
+    placesChanged: () async {
+      await weather.placeChoices();
+      weather.positionChanged();
+      appActions.publishWatch();
+      await nav.refreshSaved();
+    },
+    alertSetting: () => settings.alertPopups ? 'Pop-ups as set in Notifications' : 'Pop-ups are off in Notifications',
+    alertKinds: () => {for (final c in weather.enabledSources) c.id == 'alerts' ? 'alerts' : c.category}.where(kAlertKinds.containsKey).toList(),
+    regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
+    map: (context, pin, onPick) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick),
+    directions: (p, name) {
+      nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
+      nav.requestMap();
+    },
+  );
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
   late final NavState nav = NavState(
@@ -339,14 +376,21 @@ class _CacheAppState extends State<CacheApp> {
       // Notebooks are published after the app's own actions, so they are listed last.
       await notebooks.start();
       notebookActions.start();
+      unawaited(userLayers.reload());
+
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
-      if (e is PlaceSaved) appActions.publishWatch();
-      // A place removed from its card is no longer watched.
+      if (e is PlaceSaved) {
+        appActions.publishWatch();
+        unawaited(notebooks.reload());
+      }
+      // A place removed from its card is no longer watched; the core deleted its entry in the Places notebook.
       if (e is PlaceRemoved) {
         settings.forgetWatched(['place:${e.key}']);
+        unawaited(placeAlerts.forget('place:${e.key}'));
         appActions.publishWatch();
+        unawaited(notebooks.reload());
       }
     });
     location.addListener(_rememberPlace);
