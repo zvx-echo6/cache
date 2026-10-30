@@ -13,6 +13,7 @@ import 'package:cache/screens/models_screen.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/act_core_stand_in.dart';
 
 /// Records what would be downloaded instead of downloading it.
 class _RecordingDownloads extends ModelDownloads {
@@ -185,7 +186,7 @@ void main() {
     final saved = jsonDecode(File('${dir.path}/settings.json').readAsStringSync()) as Map;
     expect(saved['lastModel'], isNull, reason: 'the next start does not load it again');
 
-    await show(tester, AskScreen(app: app, chat: ChatController(tools: const [])));
+    await show(tester, AskScreen(app: app, chat: ChatController(actCore: const ActCoreStandIn(), tools: const [])));
     expect(find.text('No model'), findsWidgets);
     expect(find.text('Choose a model at the top to start.'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Choose a model'), findsOneWidget);
@@ -195,7 +196,7 @@ void main() {
     File('${app.modelsDir!.path}/gemma-4-E2B-it-Q4_K_M.gguf').writeAsBytesSync(List.filled(2048, 1));
     await tester.runAsync(app.init);
     app.active = app.models.single;
-    await show(tester, AskScreen(app: app, chat: ChatController(tools: const [])));
+    await show(tester, AskScreen(app: app, chat: ChatController(actCore: const ActCoreStandIn(), tools: const [])));
     expect(find.byIcon(Icons.keyboard_arrow_down), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('model-name')));
     await tester.pumpAndSettle();
@@ -208,7 +209,7 @@ void main() {
   });
 
   testWidgets('empty Ask: "Get a model" when none is downloaded, and it opens Models', (tester) async {
-    await show(tester, AskScreen(app: app, chat: ChatController(tools: const [])));
+    await show(tester, AskScreen(app: app, chat: ChatController(actCore: const ActCoreStandIn(), tools: const [])));
     expect(find.widgetWithText(FilledButton, 'Get a model'), findsOneWidget);
     await tester.runAsync(() async {
       await tester.tap(find.byKey(const ValueKey('ask-open-models')));

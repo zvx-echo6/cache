@@ -54,7 +54,7 @@ void main() {
     expect(isoWithOffset(DateTime(2026, 10, 26, 9, 5, 7)), matches(RegExp(r'^2026-10-26T09:05:07[+-]\d\d:\d\d$')));
   });
 
-  test('core config points at the packs that are there', () {
+  test('core config points at the region downloads, never a hand-placed packs folder', () {
     final dir = Directory.systemTemp.createTempSync('cfg');
     try {
       final files = Directory('${dir.path}/files')..createSync();
@@ -65,9 +65,9 @@ void main() {
       File('${files.path}/packs/idaho/places.sqlite').writeAsStringSync('');
       File('${files.path}/packs/idaho/valhalla/tiles.tar').writeAsStringSync('');
       final c = buildCoreExtras(filesDir: files, supportDir: support);
-      expect(((c['places'] as Map)['packs'] as List).single, endsWith('places.sqlite'));
+      expect((c['places'] as Map)['packs'], isEmpty, reason: 'hand-placed packs are not read: places come from regions');
       expect(((c['routing'] as Map)['valhalla'] as Map)['shim'], 'libvalhalla_shim.so');
-      expect((c['routing'] as Map).containsKey('offroad'), isFalse);
+      expect((c['routing'] as Map)['offroad'], {'dir': '${support.path}/regions/offroad'});
       expect((c['live'] as Map)['sources_dir'], '${files.path}/live-defs');
     } finally {
       dir.deleteSync(recursive: true);

@@ -26,6 +26,7 @@ import 'nav_fakes.dart';
 import 'support/settings_rig.dart';
 import 'support/test_layer_engine.dart';
 import 'video_fake.dart';
+import 'support/act_core_stand_in.dart';
 
 class _NoSource implements PositionSource {
   @override
@@ -78,7 +79,7 @@ class Rig {
     layout = LayoutState(settingsDirOverride: dir);
     app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
     store = ConversationStore.memory();
-    chat = ChatController(tools: const [])..attachStore(store);
+    chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..attachStore(store);
     sources = FakeSources(Directory('${dir.path}/zims')..createSync());
     browse = BrowseState(sources: sources, policy: testPolicy(), settingsDirOverride: dir, phoneLanguage: 'en');
     video = VideoState(dirOverride: Directory('${dir.path}/videos'), nativeFactory: fakeVideoNative, tokens: MemoryTokenStore());

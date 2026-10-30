@@ -17,6 +17,9 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
 use tantivy::{DocAddress, DocSet, Searcher, TantivyDocument, Term};
 
+/// A keyword hit: its score, where it is in the index, and its key.
+type ScoredDoc = (f32, DocAddress, String);
+
 /// Reciprocal rank fusion constant.
 pub const RRF_K: f64 = 60.0;
 
@@ -408,7 +411,7 @@ pub(crate) fn top_deterministic(
     q: &dyn Query,
     limit: usize,
     key_field: Field,
-) -> tantivy::Result<(Vec<(f32, DocAddress, String)>, usize)> {
+) -> tantivy::Result<(Vec<ScoredDoc>, usize)> {
     let limit = limit.max(1);
     let mut l = limit;
     loop {
@@ -434,6 +437,7 @@ pub(crate) fn top_deterministic(
 impl Handle {
     pub fn search(&mut self, query: &str, options_json: Option<&str>) -> Result<String> {
         self.poll_opening();
+        self.last_cites.clear();
         let opts: Opts = match options_json.map(str::trim) {
             None | Some("") | Some("null") => serde_json::from_str("{}")?,
             Some(s) => serde_json::from_str(s)?,
@@ -551,10 +555,7 @@ impl Handle {
             }
             let used = match &opts.query_vector {
                 Some(q) if l.accepts_vector(&q.model, q.vector.len()) => {
-                    match l.dense_search(&q.vector, need, base, snippet_chars) {
-                        Ok(h) => Some(h),
-                        Err(_) => None,
-                    }
+                    l.dense_search(&q.vector, need, base, snippet_chars).ok()
                 }
                 _ => None,
             };
@@ -571,7 +572,7 @@ impl Handle {
         // the keyword list and each library's vector list, one entry per address (a point found by both is
         // taken from the vector list, which carries its payload).
         let order: Vec<Entry> = if libs.is_empty() {
-            merged.iter().map(|m| entry_of(m)).collect()
+            merged.iter().map(entry_of).collect()
         } else {
             let mut by_addr: HashMap<String, Entry> = HashMap::new();
             let mut rank_lists: Vec<Vec<(String, f32)>> = Vec::new();
@@ -598,7 +599,7 @@ impl Handle {
         // are read from the shard payload as they are reached, so only the hits that can be shown are read.
         enum Shown {
             Zim(usize, usize),
-            Lib(usize, LibHit),
+            Lib(usize, Box<LibHit>),
         }
         let mut seen: HashSet<String> = HashSet::new();
         let mut shown: Vec<Shown> = Vec::new();
@@ -611,7 +612,7 @@ impl Handle {
                 Entry::Lib(li, hi) => {
                     let h = &libs[li].1[hi];
                     if seen.insert(h.key.clone()) {
-                        shown.push(Shown::Lib(libs[li].0, h.clone()));
+                        shown.push(Shown::Lib(libs[li].0, Box::new(h.clone())));
                     }
                 }
                 Entry::LibKw(ki, hi) => {
@@ -625,7 +626,7 @@ impl Handle {
                     };
                     if let Some(h) = hit {
                         if seen.insert(h.key.clone()) {
-                            shown.push(Shown::Lib(src_i, h));
+                            shown.push(Shown::Lib(src_i, Box::new(h)));
                         }
                     }
                 }
@@ -639,6 +640,9 @@ impl Handle {
             let (m_si, hi) = match e {
                 Shown::Lib(src_i, h) => {
                     let Source::Library(l) = &self.sources[src_i] else { continue };
+                    if !h.cite.is_empty() {
+                        self.last_cites.push((h.address.clone(), h.cite.clone()));
+                    }
                     results.push(json!({
                         "address": h.address,
                         "title": h.title,

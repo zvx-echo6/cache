@@ -23,6 +23,8 @@ release notes).
 - Notebooks: search across all notebooks, and delete any entry (with Undo) or a whole notebook
 - Maps: notebooks with places show their pins, each notebook a layer under My layers
 - Assistant: can add a journal entry or an entry to one of your logs after you confirm on a card
+- Regions include off-road: the off-road data of the state or province the region is in (checked against its published checksum) and its terrain heights, with their size in the download pop-up; off-road directions work wherever a region with off-road is on the phone
+- Ask: a source from a video transcript opens the video at the moment it cites (libraries map `fields.time` and `fields.link`)
 - Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; it goes away by itself when all four are done
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search
@@ -74,6 +76,7 @@ release notes).
 - Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
+- Ask: Try again after Cache's search could not start starts it again, instead of failing the same way
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
 - Turn-by-turn: the arrive time shows instead of "--", and on Android the spoken directions can find the phone's text-to-speech
 - Directions: starting navigation no longer asks to allow notifications and waits on the answer before finding your position; notifications are asked for when you turn on weather and alerts
@@ -103,8 +106,11 @@ release notes).
 - iPhone: the Hugging Face file list shows whether each file fits your phone
 - Map search: street and town names in addresses are no longer shown in capitals (North State Street, Hurricane)
 - Maps: BLM roads and trails and Forest Service trails draw in their own colours and dashes
+- Ask: a question asked while Cache is starting shows Starting… and is answered with Cache's search once it is up; if search cannot start, it says so with Try again instead of answering without it
 
 ### Changed
+- Maps: a layer no longer has a download of its own; Draw your own area instead, in the Regions sheet, draws an area on the map and downloads it as a region through the same sheet and pop-up
+- Storage: Clean up also removes damaged off-road data (a file whose size or checksum does not match what was published), so it can be downloaded again
 - Weather, alerts and other small updates always use any connection; the Mobile data downloads switch in Storage is for big downloads only
 
 ## 1.0.0 (iOS build 22) - 2026-10-28

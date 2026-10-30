@@ -76,7 +76,7 @@ List<Part> localParts(RegionsState regions, LocalRegion? l) {
 
 /// The parts a region has on the phone, in order: "Road routing, map and places".
 String partsWords(LocalRegion l) {
-  final parts = [if (l.hasRouting) 'road routing', if (l.hasMap) 'map', if (l.hasPlaces) 'places'];
+  final parts = [if (l.hasRouting) 'road routing', if (l.hasMap) 'map', if (l.hasPlaces) 'places', if (l.hasOffroad) 'off-road'];
   if (parts.isEmpty) return '';
   final words = parts.length == 1 ? parts.single : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
   return words[0].toUpperCase() + words.substring(1);
@@ -375,7 +375,7 @@ class LocalTab extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${l.name}?'),
-        content: const Text('Its road routing, map and places are removed from this phone. Parts another region uses stay.'),
+        content: const Text('Its road routing, map, places and off-road data are removed from this phone. Parts another region uses stay.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
@@ -425,7 +425,7 @@ class LocalTab extends StatelessWidget {
                       statusText(context, switch (l.phase) {
                         RegionPhase.ready => [
                           Part('${formatBytes(l.bytes)} · ${partsWords(l)}'),
-                          if (regions.missesPlaces(l)) const Part(' · Places not downloaded', Tone.warn),
+                          if (regions.missesPlaces(l)) ...const [Part(' · '), Part('Places not downloaded', Tone.warn)],
                         ],
                         _ => localParts(regions, l),
                       }),

@@ -199,14 +199,26 @@ class CoreSourceError {
 
 /// One number of the conversation's id map.
 class ConversationId {
-  const ConversationId({required this.n, required this.address, required this.title});
+  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time});
 
-  factory ConversationId.fromJson(Map<String, dynamic> j) =>
-      ConversationId(n: j['n'] as int, address: j['address'] as String, title: (j['title'] ?? '') as String);
+  factory ConversationId.fromJson(Map<String, dynamic> j) => ConversationId(
+        n: j['n'] as int,
+        address: j['address'] as String,
+        title: (j['title'] ?? '') as String,
+        link: j['link'] as String?,
+        time: (j['time'] as num?)?.toDouble(),
+      );
 
   final int n;
   final String address;
   final String title;
+
+  /// Where the citation opens, when its library maps it: a link (a video's address), and the moment in it in seconds.
+  /// Kept beside the numbering; never part of what the model reads.
+  final String? link;
+  final double? time;
+
+  Map<String, dynamic> toJson() => {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time};
 }
 
 /// What cs_format returns: the exact tool message and the id map so far.

@@ -463,10 +463,10 @@ void _workerMain(List<dynamic> init) {
           final f = convs[a['conv']]!.format([for (final r in a['results'] as List) (r as Map).cast<String, dynamic>()]);
           result = {
             'tool_message': f.toolMessage,
-            'ids': [for (final i in f.ids) {'n': i.n, 'address': i.address, 'title': i.title}],
+            'ids': [for (final i in f.ids) i.toJson()],
           };
         case 'convIds':
-          result = [for (final i in convs[a['conv']]!.ids()) {'n': i.n, 'address': i.address, 'title': i.title}];
+          result = [for (final i in convs[a['conv']]!.ids()) i.toJson()];
         case 'convImport':
           final c = ConversationNumbers.import(native ?? (native = factory()), a['json'] as String);
           final key = nextKey++;
@@ -478,7 +478,7 @@ void _workerMain(List<dynamic> init) {
           final o = eng().tool(convs[a['conv']]!, a['name'] as String, (a['args'] as Map).cast<String, dynamic>(), now: a['now'] as String);
           result = {
             'content': o.content,
-            'ids': [for (final i in o.ids) {'n': i.n, 'address': i.address, 'title': i.title}],
+            'ids': [for (final i in o.ids) i.toJson()],
           };
         case 'setLocation':
           eng().setLocation(a['lat'] as double, a['lon'] as double, accuracyM: a['accuracy'] as double, fixedAt: a['fixedAt'] as String);

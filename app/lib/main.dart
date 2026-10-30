@@ -18,8 +18,6 @@ import 'browse/browse_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
-import 'chat/read_tool.dart';
-import 'chat/search_tool.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
 import 'layout/layout_state.dart';
@@ -46,6 +44,7 @@ import 'maps/user_layers.dart';
 import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
 import 'screens/notebooks/notebooks_screen.dart' show NotebooksScreen;
 import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
+import 'regions/offroad_catalogue.dart';
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
@@ -187,7 +186,7 @@ class _CacheAppState extends State<CacheApp> {
       final f = location.fix;
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
-    regions: () => regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+    regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
@@ -228,11 +227,10 @@ class _CacheAppState extends State<CacheApp> {
       id: 'regions',
       label: 'Regions',
       icon: Icons.map_outlined,
-      // The layer engine's tiles, the region engine's routing and places, and the legacy hand-placed packs folder.
+      // The layer engine's tiles and the region engine's routing, places and off-road.
       shared: () => {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
-        'packs': _beside(sources.zimsDir?.parent, 'packs'),
       },
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
@@ -280,6 +278,8 @@ class _CacheAppState extends State<CacheApp> {
     policy: policy,
     supportDir: getApplicationSupportDirectory,
     catalogue: RegionCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
+    // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
+    offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
     maps: maps,
     onPlacesChanged: () async {
       try {
@@ -307,6 +307,8 @@ class _CacheAppState extends State<CacheApp> {
         _beside(app.modelsDir, '.partial'),
         if (_tempPath != null) Directory(_tempPath!),
       ],
+      // Damaged downloads: the files whose published size and SHA-256 are kept (the off-road packs).
+      manifests: () => regions.offroadManifests,
       busy: () =>
           browse.transfers.values.any((t) => t.phase != TransferPhase.failed && t.phase != TransferPhase.blockedByMobileData) ||
           modelDownloads.current != null ||
@@ -316,7 +318,10 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final LayoutState layout = LayoutState();
   late final ChatController chat = ChatController(
-    tools: [SearchTool(sources), ReadTool(sources)],
+    // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
+    tools: const [],
+    // Try again (or the next question) after the core could not start starts it again.
+    waitForCore: () async => await sources.retryCore() != null,
     newNumbering: () =>
         sources.coreReady ? CoreNumbering(sources.newConversation) : null,
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
@@ -482,8 +487,9 @@ class _CacheAppState extends State<CacheApp> {
     // switched on, and the place the background runs use is kept up to date.
     final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
     getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
-    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreReady()).then((core) async {
-      if (core == null) return;
+    // Once the core is open: at the first start, or after Try again in Ask started it again.
+    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
+      await webSearch.apply();
       await LocalAlertNotifier.instance.init();
       await weather.start();
       weather.addListener(_onWeather);
@@ -569,7 +575,7 @@ class _CacheAppState extends State<CacheApp> {
     final f = location.fix;
     final last = LastPlace(
       here: f == null ? null : (lat: double.parse(f.lat.toStringAsFixed(3)), lon: double.parse(f.lon.toStringAsFixed(3))),
-      regions: regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+      regions: watchRegionsOf(regions.local),
     );
     final key = jsonEncode(last.toJson());
     if (key == _lastPlaceSaved) return;

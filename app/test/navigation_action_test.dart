@@ -19,6 +19,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'chat_fakes.dart';
 import 'nav_fakes.dart';
+import 'support/act_core_stand_in.dart';
 
 class ActionHost implements ToolHost {
   ActionHost(this.actions);
@@ -175,7 +176,7 @@ void main() {
         },
       ]);
       final host = ActionHost([a]);
-      final chat = ChatController(tools: const [], newHost: (_) => host)
+      final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => host)
         ..attachStore(store)
         ..setBackend(backend);
       await chat.send('Take me there');
@@ -201,7 +202,7 @@ void main() {
       chat.newChat();
       store.close();
       final reopened = ConversationStore.open(path);
-      final restored = ChatController(tools: const [])
+      final restored = ChatController(actCore: const ActCoreStandIn(), tools: const [])
         ..attachStore(reopened)
         ..openConversation(id);
       expect(
@@ -235,7 +236,7 @@ void main() {
       db.userVersion = 1;
       db.close();
       store = ConversationStore.open(path);
-      final chat = ChatController(tools: const [])
+      final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])
         ..attachStore(store)
         ..openConversation(id);
       expect(chat.messages.single.text, 'Old reply');
@@ -269,7 +270,7 @@ void main() {
     'button is independent of prose/citations; missing snapshot shows unavailable',
     (tester) async {
       final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
-      final chat = ChatController(tools: const []);
+      final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
       chat.messages.addAll([
         ChatMessage.assistant()
           ..phase = TurnPhase.done
@@ -309,7 +310,7 @@ void main() {
       final semantics = tester.ensureSemantics();
 
       final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
-      final chat = ChatController(tools: const []);
+      final chat = ChatController(actCore: const ActCoreStandIn(), tools: const []);
       const first =
           'Hôpital → 家 with a very long destination name across several lines';
       const second =
@@ -373,7 +374,7 @@ void main() {
         (_) => navigate(),
         (_) => say('Same route again, uncited'),
       ]);
-      final chat = ChatController(tools: const [], newHost: (_) => host)
+      final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newHost: (_) => host)
         ..attachStore(store)
         ..setBackend(backend);
       await chat.send('First navigation');

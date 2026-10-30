@@ -443,6 +443,8 @@ impl Inner {
     /// A stream-cache use stamp: now, but always after the one before (two uses in the same millisecond keep their order).
     fn tick(&self) -> u64 {
         let now = now_ms();
+        // `try_update` is the new name, too new for every toolchain the app is built with.
+        #[allow(deprecated)]
         let prev = self.tick.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| Some(t.max(now.saturating_sub(1)) + 1)).unwrap_or(0);
         prev.max(now.saturating_sub(1)) + 1
     }

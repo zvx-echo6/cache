@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -65,6 +66,21 @@ class _IndexNative implements CsNative {
 }
 
 CsNative _makeIndexNative() => _IndexNative();
+
+/// A core that does not open while the file its config names in "fail_while" exists (the worker isolate cannot share memory
+/// with the test, so the switch is a file).
+class _FlakyNative extends _IndexNative {
+  @override
+  int open(String configJson) {
+    if (File((jsonDecode(configJson) as Map)['fail_while'] as String).existsSync()) return 0;
+    return super.open(configJson);
+  }
+
+  @override
+  String? lastError(int handle) => jsonEncode({'code': 'internal', 'message': 'the core could not open'});
+}
+
+CsNative _makeFlakyNative() => _FlakyNative();
 
 void main() {
   late Directory tmp;
@@ -163,6 +179,39 @@ void main() {
       expect(names(), ['w.zim']);
       expect(elsewhere.existsSync(), isFalse);
     });
+  });
+
+  test('a core that could not start is started again by retryCore (Try again), and what waits on it then goes on', () async {
+    final failing = File('${tmp.path}/fail')..writeAsStringSync('');
+    final s = SourcesState(
+      zimsDirOverride: zims,
+      indexesDirOverride: Directory('${tmp.path}/indexes'),
+      nativeFactory: _makeFlakyNative,
+      coreExtras: {'fail_while': failing.path},
+    );
+    addTearDown(s.dispose);
+    var opened = false;
+    unawaited(s.whenCoreOpen().then((_) => opened = true));
+    await s.init();
+    expect(s.coreReady, isFalse);
+    expect(s.unavailable, 'the core could not open');
+    expect(await s.whenCoreReady(), isNull);
+    // still failing: Try again fails again, and says so
+    expect(await s.retryCore(), isNull);
+    expect(opened, isFalse);
+    // the cause is gone: Try again opens it, and everything waiting on the core sees it
+    failing.deleteSync();
+    final again = s.retryCore();
+    expect(identical(s.retryCore(), again), isTrue, reason: 'a second tap shares the start that is running');
+    final core = await again;
+    expect(core, isNotNull);
+    expect(s.coreReady, isTrue);
+    expect(s.unavailable, isNull);
+    expect(await s.whenCoreReady(), same(core));
+    await Future<void>.delayed(Duration.zero);
+    expect(opened, isTrue);
+    expect(await s.retryCore(), same(core), reason: 'an open core is not started again');
+    await s.refresh(); // the list the retry reads in the background, done before the state goes
   });
 
   test('the index of a ZIM that is gone is deleted, but not one a job is still building, nor other folders', () async {

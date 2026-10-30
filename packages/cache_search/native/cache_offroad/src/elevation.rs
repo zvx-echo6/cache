@@ -50,23 +50,31 @@ pub fn decode_terrarium_webp(bytes: &[u8]) -> Result<Vec<u32>, ElevError> {
     Ok((0..(w * h) as usize).map(|i| ((buf[i * ch] as u32) << 16) | ((buf[i * ch + 1] as u32) << 8) | buf[i * ch + 2] as u32).collect())
 }
 
-/// Elevation from a local PMTiles file of Mapterhorn-format tiles (z12, 512 px, Terrarium WebP).
-pub struct PmtilesElevation {
-    pm: PmTiles,
-    cache: Mutex<VecDeque<((i64, i64), Arc<Vec<f32>>)>>,
+/// Where z12 elevation tiles come from: the Mapterhorn tile at (x, y) as its bytes (lossless Terrarium WebP, uncompressed),
+/// `None` where there is none.
+pub trait ElevationTiles: Send + Sync {
+    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, String>;
 }
 
-impl PmtilesElevation {
-    pub fn open(path: &Path) -> Result<PmtilesElevation, ElevError> {
-        let pm = PmTiles::open(path).map_err(ElevError::Msg)?;
-        if pm.tile_type != 4 {
-            return Err(ElevError::Msg(format!("{}: tile type {} is not WebP", path.display(), pm.tile_type)));
-        }
-        Ok(PmtilesElevation { pm, cache: Mutex::new(VecDeque::new()) })
+impl ElevationTiles for PmTiles {
+    fn z12(&self, x: u64, y: u64) -> Result<Option<Vec<u8>>, String> {
+        self.get_decompressed(ZOOM, x, y)
     }
+}
 
-    pub fn tile_count(&self) -> usize {
-        self.pm.tile_count()
+/// A decoded elevation tile's place: (x, y).
+type TileKey = (i64, i64);
+
+/// Elevation from z12 Mapterhorn-format tiles (512 px, Terrarium WebP), wherever they are kept: a local PMTiles file
+/// ([`PmtilesElevation`]) or the map layer engine's elevation layer (cache_search). The tiles decode the same way from either.
+pub struct TileElevation<T> {
+    tiles: T,
+    cache: Mutex<VecDeque<(TileKey, Arc<Vec<f32>>)>>,
+}
+
+impl<T: ElevationTiles> TileElevation<T> {
+    pub fn new(tiles: T) -> TileElevation<T> {
+        TileElevation { tiles, cache: Mutex::new(VecDeque::new()) }
     }
 
     fn tile(&self, tx: i64, ty: i64) -> Result<Option<Arc<Vec<f32>>>, ElevError> {
@@ -76,7 +84,7 @@ impl PmtilesElevation {
         if let Some((_, t)) = self.cache.lock().unwrap().iter().find(|(k, _)| *k == (tx, ty)) {
             return Ok(Some(t.clone()));
         }
-        let Some(bytes) = self.pm.get_decompressed(ZOOM, tx as u64, ty as u64).map_err(ElevError::Msg)? else { return Ok(None) };
+        let Some(bytes) = self.tiles.z12(tx as u64, ty as u64).map_err(ElevError::Msg)? else { return Ok(None) };
         let q = decode_terrarium_webp(&bytes)?;
         let t = Arc::new(q.iter().map(|&v| terrarium_f32(v)).collect::<Vec<f32>>());
         let mut c = self.cache.lock().unwrap();
@@ -88,7 +96,30 @@ impl PmtilesElevation {
     }
 }
 
+/// Elevation from a local PMTiles file of Mapterhorn-format tiles (z12, 512 px, Terrarium WebP): desktop tests and the CLI.
+pub struct PmtilesElevation(TileElevation<PmTiles>);
+
+impl PmtilesElevation {
+    pub fn open(path: &Path) -> Result<PmtilesElevation, ElevError> {
+        let pm = PmTiles::open(path).map_err(ElevError::Msg)?;
+        if pm.tile_type != 4 {
+            return Err(ElevError::Msg(format!("{}: tile type {} is not WebP", path.display(), pm.tile_type)));
+        }
+        Ok(PmtilesElevation(TileElevation::new(pm)))
+    }
+
+    pub fn tile_count(&self) -> usize {
+        self.0.tiles.tile_count()
+    }
+}
+
 impl ElevationSource for PmtilesElevation {
+    fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Result<Vec<f32>, ElevError> {
+        self.0.read_elevation(row0, col0, rows, cols)
+    }
+}
+
+impl<T: ElevationTiles> ElevationSource for TileElevation<T> {
     fn read_elevation(&self, row0: i64, col0: i64, rows: usize, cols: usize) -> Result<Vec<f32>, ElevError> {
         let mut out = vec![f32::NAN; rows * cols];
         if rows == 0 || cols == 0 {
@@ -113,7 +144,7 @@ impl ElevationSource for PmtilesElevation {
         let tiles: Vec<(i64, i64, Option<Vec<f32>>)> = keys
             .into_par_iter()
             .map(|(tx, ty)| -> Result<_, ElevError> {
-                let Some(bytes) = self.pm.get_decompressed(ZOOM, tx as u64, ty as u64).map_err(ElevError::Msg)? else {
+                let Some(bytes) = self.tiles.z12(tx as u64, ty as u64).map_err(ElevError::Msg)? else {
                     return Ok((tx, ty, None));
                 };
                 let q = decode_terrarium_webp(&bytes)?;

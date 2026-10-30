@@ -88,7 +88,7 @@ pub fn valid_duration(s: &str) -> bool {
     }
 }
 
-fn check_value<'a>(f: &FieldDef, v: &'a Value) -> Result<(), ToolError> {
+fn check_value(f: &FieldDef, v: &Value) -> Result<(), ToolError> {
     let n = &f.name;
     match &f.kind {
         Kind::Str { max_length, choices } => {

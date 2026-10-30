@@ -64,5 +64,23 @@
   "bytes": 1311,
   "sha256": "bf2922e6ee06959fd41d88ef735316bf3fa7ea25c127a4e25e7da8b78e71ce51",
   "what": "Ask about this: the seeded live_data call (arguments = json.dumps(args, ensure_ascii=False), default separators) and its result"
+ },
+ {
+  "file": "MANIFEST.json",
+  "bytes": 2800,
+  "sha256": "0038a5f2a008eb9ad3e0921f146bf9418e6402bc819c92f3327745d5da6700b2",
+  "what": "this list"
+ },
+ {
+  "file": "userdata-golden.json",
+  "bytes": 19309,
+  "sha256": "31efe101eaf473c1c696080fd87fa5507e6799b3b3e89395b1c1d4c3d6894687",
+  "what": "S12/S13 + saved places: recorded tool calls and tool messages (layer nearby, repeater nearby, navigate/locate to a layer point, places.list, places.save) and the nearby/navigate/locate declarations as recorded"
+ },
+ {
+  "file": "setup-status-v1030.json",
+  "bytes": 7494,
+  "sha256": "5c1a9b626d89eb2ce9833ff70df594e75135037fdcf4d412882d3e0863dd26b7",
+  "what": "S11 after the UI simplification: host replies (all sections, and filtered to connection / location) from the harness's default_setup_reply with the 2026-10-30 guide titles and labels"
  }
 ]

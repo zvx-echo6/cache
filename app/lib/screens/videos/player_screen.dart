@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import '../../theme.dart';
 import '../../video/format.dart';
 import 'widgets.dart';
+import '../../net/fetch.dart';
 
 /// Plays a [VideoTarget]: a saved file (no network) or a stream, starting at the target's offset. Captions come
 /// from the saved VTT files, or from [captionUrls] when streaming.
@@ -86,15 +87,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
       if (!t.isLocal && widget.captionUrls.isNotEmpty) {
         _captionLabel = widget.captionUrls.first.label;
-        final client = HttpClient();
-        try {
-          final req = await client.getUrl(Uri.parse(widget.captionUrls.first.url));
-          final res = await req.close();
-          final body = await res.transform(const SystemEncoding().decoder).join();
-          return WebVTTCaptionFile(body);
-        } finally {
-          client.close();
-        }
+        return WebVTTCaptionFile(await fetchText(Uri.parse(widget.captionUrls.first.url), httpsOnly: false));
       }
     } catch (_) {}
     return null;

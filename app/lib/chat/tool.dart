@@ -2,13 +2,20 @@ import 'navigation_action.dart';
 
 /// One thing a tool found.
 class SourceResult {
-  const SourceResult({required this.title, required this.snippet, required this.address});
+  const SourceResult({required this.title, required this.snippet, required this.address, this.link, this.time});
 
   final String title;
   final String snippet;
 
   /// Local address of the content (for later: where a citation opens).
   final String address;
+
+  /// Where a library point's citation opens, when its library maps it: a link (a video), and the moment in seconds.
+  final String? link;
+  final double? time;
+
+  /// A video moment: tapping it opens the player at [time].
+  bool get isVideoMoment => link != null && time != null;
 }
 
 /// A tool result with its conversation-wide number.
@@ -56,11 +63,15 @@ abstract class ResultNumbering {
 }
 
 class NumberedAddress {
-  const NumberedAddress({required this.n, required this.address, required this.title});
+  const NumberedAddress({required this.n, required this.address, required this.title, this.link, this.time});
 
   final int n;
   final String address;
   final String title;
+
+  /// See [SourceResult.link].
+  final String? link;
+  final double? time;
 }
 
 /// The tools run by the search core (cs_tool_schemas, cs_tool): every installed tool is offered to the model and

@@ -24,7 +24,7 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-10-29b';
+const String kGuideVersion = '2026-10-30b';
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
@@ -160,7 +160,15 @@ class LibrariesState extends ChangeNotifier {
     await _scan();
     notifyListeners();
     final core = await sources.whenCoreReady();
-    if (core == null) return;
+    if (core == null) {
+      // A core started again later (Try again in Ask) picks up the libraries then.
+      unawaited(sources.whenCoreOpen().then((_) => _afterCore()));
+      return;
+    }
+    await _afterCore();
+  }
+
+  Future<void> _afterCore() async {
     await sources.refresh();
     _resumeIndexes();
     await ensureGuide();

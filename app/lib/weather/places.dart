@@ -1,4 +1,5 @@
 import '../maps/layers/layer_def.dart';
+import '../regions/regions_state.dart' show LocalRegion;
 
 enum PlaceKind { here, saved, region }
 
@@ -31,17 +32,16 @@ class WatchRegion {
   final double lon;
 }
 
-/// The regions downloaded on the phone: the finished map areas, one per name (the part of the label before " · "), at the middle of
-/// all the areas of that name.
-List<WatchRegion> regionsFromAreas(Iterable<DownloadedArea> areas) {
+/// The regions on the phone that weather can watch: those whose map is downloaded, one per region name (regions of the same name are
+/// one), at the middle of all their map areas. Read from the regions list itself, never from the map areas' labels.
+List<WatchRegion> watchRegionsOf(Iterable<LocalRegion> regions) {
   final byName = <String, List<DownloadedArea>>{};
-  for (final a in areas) {
-    if (a.phase != AreaPhase.done) continue;
-    byName.putIfAbsent(a.label.split(' · ').first, () => []).add(a);
+  for (final r in regions) {
+    final done = [for (final a in r.areas) if (a.phase == AreaPhase.done) a];
+    if (done.isNotEmpty) byName.putIfAbsent(r.name, () => []).addAll(done);
   }
   final out = <WatchRegion>[];
   for (final e in byName.entries) {
-    if (e.key == 'This region') continue;
     var s = 90.0, n = -90.0, w = 180.0, ea = -180.0;
     for (final a in e.value) {
       if (a.bounds.south < s) s = a.bounds.south;

@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'chat_fakes.dart';
 import 'package:cache/chat/tool.dart' show NumberedAddress;
 import 'location_service_test.dart' show FakeSource;
+import 'support/act_core_stand_in.dart';
 
 class PendingNumbering extends MemoryNumbering {
   PendingNumbering() : super([]);
@@ -60,7 +61,7 @@ void main() {
   }
 
   ChatController controller(ChatLocation bridge, ScriptedBackend backend) =>
-      ChatController(tools: const [], prepareTurn: bridge.prepare, locationKnown: () => bridge.known)
+      ChatController(actCore: const ActCoreStandIn(), tools: const [], prepareTurn: bridge.prepare, locationKnown: () => bridge.known)
         ..setBackend(backend);
 
   String prompt(Map<String, dynamic> request) => ((request['messages'] as List).first as Map)['content'] as String;
@@ -107,7 +108,7 @@ void main() {
 
   test('unexpected optional preparation failure cannot block ordinary chat', () async {
     final backend = ScriptedBackend([(_) => say('Hello')]);
-    final chat = ChatController(tools: const [], prepareTurn: (_) async {
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], prepareTurn: (_) async {
       throw StateError('optional location unavailable');
     })..setBackend(backend);
     await chat.send('hello');
@@ -221,7 +222,7 @@ void main() {
     test('$action while numbering sync is pending cannot start backend', () async {
       final numbering = PendingNumbering();
       final backend = ScriptedBackend([(_) => say('Hello')]);
-      final chat = ChatController(tools: const [], newNumbering: () => numbering)..setBackend(backend);
+      final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], newNumbering: () => numbering)..setBackend(backend);
       final sending = chat.send('old');
       await Future<void>.delayed(Duration.zero);
       if (action == 'stop') { chat.stop(); } else { chat.newChat(); }
@@ -237,7 +238,7 @@ void main() {
     final store = ConversationStore.memory();
     addTearDown(store.close);
     final backend = ScriptedBackend([(_) => say('Hello')]);
-    final chat = ChatController(tools: const [], prepareTurn: (_) async { preparations++; })
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], prepareTurn: (_) async { preparations++; })
       ..attachStore(store)..setBackend(backend);
     await chat.send('first');
     await chat.whenIdle();
@@ -254,7 +255,7 @@ void main() {
     final source = SettingsSource()..next = fresh();
     final (location, bridge) = (await tester.runAsync(() => setup(source)))!;
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
-        home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location, chatLocation: bridge)));
+        home: AskScreen(app: AppState(), chat: ChatController(actCore: const ActCoreStandIn(), tools: const []), location: location, chatLocation: bridge)));
     expect(find.text('Use my location'), findsNothing);
     expect(find.text('Location ready'), findsNothing);
     expect(source.prompts, 0);
@@ -279,7 +280,7 @@ void main() {
     final source = SettingsSource()..state = LocationPermissionState.deniedForever;
     final (location, _) = (await tester.runAsync(() => setup(source)))!;
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark),
-        home: AskScreen(app: AppState(), chat: ChatController(tools: const []), location: location)));
+        home: AskScreen(app: AppState(), chat: ChatController(actCore: const ActCoreStandIn(), tools: const []), location: location)));
     await tester.tap(find.byKey(const ValueKey('ask-plus')));
     await tester.pumpAndSettle();
     final sw = tester.widget<SwitchListTile>(find.byKey(const ValueKey('use-my-location')));

@@ -307,7 +307,7 @@ fn perp(p: (i32, i32), a: (i32, i32), b: (i32, i32)) -> f64 {
     (cx * cx + cy * cy).sqrt()
 }
 
-fn dp(pts: &[(i32, i32)], tol: f64, keep: &mut Vec<bool>, lo: usize, hi: usize) {
+fn dp(pts: &[(i32, i32)], tol: f64, keep: &mut [bool], lo: usize, hi: usize) {
     let mut stack = vec![(lo, hi)];
     while let Some((lo, hi)) = stack.pop() {
         if hi <= lo + 1 {

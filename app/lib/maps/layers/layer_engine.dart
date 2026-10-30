@@ -47,12 +47,13 @@ abstract class LayerEngine extends ChangeNotifier {
   /// downloaded or was cached from an earlier view.
   Future<bool> hasTiles(String layerId, GeoBounds view, int zoom);
 
-  /// The cost of downloading [area], before anything is downloaded.
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area);
+  /// The cost of downloading [area], before anything is downloaded. [zoom]: that zoom only (the off-road router's z12 elevation),
+  /// never a lower one when the area is large; otherwise the layer's zooms, as deep as one download allows.
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom});
 
-  /// Starts the download; progress shows in [areasOf].
+  /// Starts the download; progress shows in [areasOf]. [zoom] as for [estimate].
   /// Throws a MobileDataBlocked (lib/settings/data_policy.dart) when the phone is on mobile data and downloads on mobile data are off, unless [anyway].
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false});
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom});
 
   /// Downloaded and downloading areas of a layer.
   List<DownloadedArea> areasOf(String layerId);

@@ -30,7 +30,7 @@ class CoreNumbering implements ResultNumbering {
 
   @override
   Future<List<NumberedAddress>> ids() async => [
-        for (final i in await (await _c).ids()) NumberedAddress(n: i.n, address: i.address, title: i.title),
+        for (final i in await (await _c).ids()) NumberedAddress(n: i.n, address: i.address, title: i.title, link: i.link, time: i.time),
       ];
 
   @override

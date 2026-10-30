@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import '../net/fetch.dart' as net;
 import 'catalogue.dart';
 import 'connector.dart';
 
@@ -18,37 +19,20 @@ class NetworkProblem extends CatalogueException {
   const NetworkProblem(super.message);
 }
 
-/// The real fetch: HTTPS (or this phone), a short timeout, a size cap, no key or cookie.
+/// The real fetch (net/fetch.dart: HTTPS or this phone, timeouts, a size cap, no key or cookie), its failures said as weather says them.
 Future<List<int>> fetchBytes(Uri url, {int maxBytes = 4 * 1024 * 1024}) async {
-  if (!isAllowedAddress(url)) throw const NetworkProblem('Cache only reads https addresses.');
-  final client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 15)
-    ..userAgent = 'Cache (connectors)';
   try {
-    final req = await client.getUrl(url).timeout(const Duration(seconds: 20));
-    final res = await req.close().timeout(const Duration(seconds: 30));
-    if (res.statusCode != 200) {
-      await res.drain<void>();
-      throw NetworkProblem('${url.host} answered with an error (HTTP ${res.statusCode}).');
-    }
-    final out = <int>[];
-    await for (final chunk in res.timeout(const Duration(seconds: 30))) {
-      out.addAll(chunk);
-      if (out.length > maxBytes) throw const NetworkProblem('The file is larger than expected.');
-    }
-    return out;
-  } on NetworkProblem {
-    rethrow;
-  } on TimeoutException {
-    throw NetworkProblem("Couldn't reach ${url.host}.");
-  } on SocketException {
-    throw NetworkProblem("Couldn't reach ${url.host}. Check your connection.");
-  } on HandshakeException {
-    throw NetworkProblem("Couldn't make a secure connection to ${url.host}.");
-  } on HttpException {
-    throw NetworkProblem("Couldn't read from ${url.host}.");
-  } finally {
-    client.close(force: true);
+    return await net.fetchBytes(url, maxBytes: maxBytes);
+  } on net.FetchException catch (e) {
+    throw NetworkProblem(switch (e.failure) {
+      net.FetchFailure.notAllowed => 'Cache only reads https addresses.',
+      net.FetchFailure.status => '${url.host} answered with an error (HTTP ${e.status}).',
+      net.FetchFailure.tooLarge => 'The file is larger than expected.',
+      net.FetchFailure.timedOut => "Couldn't reach ${url.host}.",
+      net.FetchFailure.unreachable => "Couldn't reach ${url.host}. Check your connection.",
+      net.FetchFailure.insecure => "Couldn't make a secure connection to ${url.host}.",
+      net.FetchFailure.unreadable => "Couldn't read from ${url.host}.",
+    });
   }
 }
 

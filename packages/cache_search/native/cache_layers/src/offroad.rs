@@ -66,7 +66,7 @@ impl DownloadedTerrain {
     }
 
     fn dims(bbox: [f64; 4], cell_m: f64) -> Result<(usize, usize)> {
-        if !(cell_m > 0.0) || bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
+        if cell_m.is_nan() || cell_m <= 0.0 || bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
             return Err(Error::bad_json("a box [west, south, east, north] and a cell size above 0 are needed"));
         }
         let mid = ((bbox[1] + bbox[3]) / 2.0).to_radians();
@@ -82,7 +82,7 @@ impl DownloadedTerrain {
     /// The highest zoom, at most `max_z`, whose pixels are no bigger than `cell_m` (or `max_z`).
     fn pick_zoom(lat: f64, tile_px: f64, cell_m: f64, max_z: u8) -> u8 {
         for z in 0..=max_z {
-            let m_per_px = 156_543.03392 * lat.to_radians().cos() / (1u64 << z) as f64 * 256.0 / tile_px;
+            let m_per_px = 156_543.033_92 * lat.to_radians().cos() / (1u64 << z) as f64 * 256.0 / tile_px;
             if m_per_px <= cell_m {
                 return z;
             }
@@ -122,12 +122,12 @@ impl DownloadedTerrain {
                 let lon = bbox[0] + (c as f64 + 0.5) / cols as f64 * (bbox[2] - bbox[0]);
                 let tx = (lon + 180.0) / 360.0 * n;
                 let (xi, yi) = (tx.floor().clamp(0.0, n - 1.0) as u32, ty.floor().clamp(0.0, n - 1.0) as u32);
-                if !cache.contains_key(&(xi, yi)) {
+                if let std::collections::hash_map::Entry::Vacant(e) = cache.entry((xi, yi)) {
                     let t = match self.inner.downloaded_tile(&base, z, xi, yi)? {
                         Some(b) => Some(decode_tile(&b)?),
                         None => None,
                     };
-                    cache.insert((xi, yi), t);
+                    e.insert(t);
                 }
                 match cache.get(&(xi, yi)).and_then(|t| t.as_ref()) {
                     Some(t) => {

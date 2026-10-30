@@ -208,7 +208,7 @@ fn fetch_file(url: &str, part: &Path, expected: Option<u64>, resumable: bool, re
             return Ok(Fetched::Cancelled);
         }
         let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
-        if !resumable || expected.map_or(false, |e| have > e) {
+        if !resumable || expected.is_some_and(|e| have > e) {
             have = 0;
         }
         if expected == Some(have) && have > 0 {
@@ -528,7 +528,7 @@ impl Video {
     /// The absolute-path form of a downloaded video's manifest (what the player and the library link need).
     pub fn downloaded(&self, instance_id: &str, uuid: &str) -> Result<Option<Value>> {
         let dir = self.video_dir(instance_id, uuid)?;
-        Ok(self.manifest(instance_id, uuid)?.filter(|m| m["file"].as_str().map_or(false, |f| dir.join(f).is_file())).map(|m| abs_manifest(&dir, &m)))
+        Ok(self.manifest(instance_id, uuid)?.filter(|m| m["file"].as_str().is_some_and(|f| dir.join(f).is_file())).map(|m| abs_manifest(&dir, &m)))
     }
 
     /// Every downloaded video (newest first) and the bytes they take.

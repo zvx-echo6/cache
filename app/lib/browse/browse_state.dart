@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -14,6 +13,7 @@ import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
 import 'zim_download.dart';
+import '../net/fetch.dart';
 
 enum TransferPhase {
   /// Waiting for Wi-Fi: the phone is on mobile data and mobile data downloads are off. It starts by itself on Wi-Fi.
@@ -521,25 +521,9 @@ class BrowseState extends ChangeNotifier {
 }
 
 Future<Uint8List?> _fetchIcon(Uri url) async {
-  final client = HttpClient()
-    ..userAgent = cacheUserAgent
-    ..connectionTimeout = const Duration(seconds: 10);
   try {
-    final req = await client.getUrl(url);
-    final res = await req.close().timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) {
-      await res.drain<void>();
-      return null;
-    }
-    final b = BytesBuilder(copy: false);
-    await for (final c in res) {
-      b.add(c);
-      if (b.length > 512 * 1024) return null;
-    }
-    return b.takeBytes();
+    return Uint8List.fromList(await fetchBytes(url, maxBytes: 512 * 1024, httpsOnly: false, timeout: const Duration(seconds: 15)));
   } catch (_) {
     return null;
-  } finally {
-    client.close(force: true);
   }
 }

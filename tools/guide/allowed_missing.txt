@@ -1,0 +1,16 @@
+# Guide labels that are not in this branch's app yet, one per line. ci_check.py lets these pass.
+#
+# Catalogue source titles: the app shows them from the published connector catalogue, so they are data, not app text.
+Idaho 511 winter road conditions
+Traffic flow at the place (TomTom)
+
+# Notebook template names: the app shows them from assets/notebook/templates.json (data, like the catalogue titles above).
+Log
+
+# Text the app composes at run time: "Alerts for <place name>" (the per-place alert sheet) and "<page> of <pages>" (the
+# notebook ring's centre). The guide quotes them as the person sees them.
+Alerts for
+2 of 3
+
+# The Places list's button is a + icon and the words "Add place"; the guide quotes what it looks like.
++ Add place

@@ -37,13 +37,15 @@ class Conversation {
 
 /// A cited result as the answer showed it: its number, and the address it opens.
 class StoredCitation {
-  const StoredCitation({required this.n, required this.title, required this.snippet, required this.address});
+  const StoredCitation({required this.n, required this.title, required this.snippet, required this.address, this.link, this.time});
 
   factory StoredCitation.fromJson(Map<String, dynamic> j) => StoredCitation(
         n: j['n'] as int,
         title: (j['title'] ?? '') as String,
         snippet: (j['snippet'] ?? '') as String,
         address: (j['address'] ?? '') as String,
+        link: j['link'] as String?,
+        time: (j['time'] as num?)?.toDouble(),
       );
 
   final int n;
@@ -51,7 +53,11 @@ class StoredCitation {
   final String snippet;
   final String address;
 
-  Map<String, dynamic> toJson() => {'n': n, 'title': title, 'snippet': snippet, 'address': address};
+  /// Where the citation opens (a video and the moment in it), when known.
+  final String? link;
+  final double? time;
+
+  Map<String, dynamic> toJson() => {'n': n, 'title': title, 'snippet': snippet, 'address': address, 'link': ?link, 'time': ?time};
 }
 
 /// Prompt size, answer size and time of one answer.

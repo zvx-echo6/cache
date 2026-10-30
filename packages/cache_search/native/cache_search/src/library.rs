@@ -4,6 +4,7 @@
 //! keyword lists (the library's own scored text index, or the device Tantivy index built by `index_library`)
 //! and reading a point.
 
+use crate::conv::Cite;
 use crate::error::{Error, Result};
 use crate::html;
 use crate::index::{self, IndexState};
@@ -57,6 +58,9 @@ pub struct Fields {
     pub source_type: Option<String>,
     pub author: Option<String>,
     pub link: Option<String>,
+    /// Where in the source the entry starts, in seconds (a video or audio transcript point). With `link`, a citation of
+    /// the entry opens the recording at that moment. Kept beside the conversation's numbering, never in the model's text.
+    pub time: Option<String>,
     pub document: Option<String>,
 }
 
@@ -142,7 +146,7 @@ impl LibrarySettings {
             "fields": {
                 "title": f.title, "title_fallback": f.title_fallback, "text": f.text, "summary": f.summary,
                 "page": f.page, "source_type": f.source_type, "author": f.author, "link": f.link,
-                "document": f.document,
+                "time": f.time, "document": f.document,
             },
             "leave_out": self.leave_out.iter().map(|r| match r {
                 Rule::Equals(field, v) => json!({"field": field, "equals": v}),
@@ -157,15 +161,13 @@ impl LibrarySettings {
         })
     }
 
-    /// The payload fields the core reads: text, title(s), summary, page, source_type, author, document and the
-    /// fields the leave-out rules look at.
+    /// The payload fields the core reads: text, title(s), summary, page, source_type, author, link, time, document and
+    /// the fields the leave-out rules look at.
     pub fn payload_fields(&self) -> Vec<String> {
         let f = &self.fields;
         let mut v: Vec<String> = vec![f.text.clone()];
-        for x in [&f.title, &f.title_fallback, &f.summary, &f.page, &f.source_type, &f.author, &f.document] {
-            if let Some(n) = x {
-                v.push(n.clone());
-            }
+        for n in [&f.title, &f.title_fallback, &f.summary, &f.page, &f.source_type, &f.author, &f.link, &f.time, &f.document].into_iter().flatten() {
+            v.push(n.clone());
         }
         for r in &self.leave_out {
             v.push(r.field().to_string());
@@ -237,6 +239,7 @@ impl LibrarySettings {
             source_type: opt_str(fo, "source_type", "fields")?,
             author: opt_str(fo, "author", "fields")?,
             link: opt_str(fo, "link", "fields")?,
+            time: opt_str(fo, "time", "fields")?,
             document: opt_str(fo, "document", "fields")?,
         };
         let mut leave_out = Vec::new();
@@ -504,6 +507,7 @@ fn guess_settings(shard: &Shard, path: &Path) -> Result<LibrarySettings> {
             source_type: only("source_type"),
             author: only("book_author"),
             link: None,
+            time: None,
             document: only("doc_hash"),
         },
         leave_out: Vec::new(),
@@ -762,6 +766,8 @@ pub struct LibHit {
     /// The key duplicates collapse on: document value + title when a document field is mapped and set,
     /// else title + snippet.
     pub key: String,
+    /// Where a citation of the point opens (the mapped `link` and `time`); kept beside the numbering, never in results.
+    pub cite: Cite,
 }
 
 /// A keyword hit of a library before its fields are built. `hit` is set when the source already returned the
@@ -842,6 +848,18 @@ impl LibSlot {
         html::snippet_from_text(&src, max)
     }
 
+    /// The point's mapped link and time (seconds: a number, or text that is one; not negative).
+    fn cite(&self, p: &Map<String, Value>) -> Cite {
+        let f = &self.settings.fields;
+        let time = f.time.as_ref().and_then(|n| get_path(p, n)).and_then(|v| match v {
+            Value::Number(n) => Some(n.clone()),
+            Value::String(s) => s.trim().parse::<serde_json::Number>().ok(),
+            _ => None,
+        });
+        let time = time.filter(|n| n.as_f64().is_some_and(|t| t.is_finite() && t >= 0.0));
+        Cite { link: self.text_field(p, &f.link), time }
+    }
+
     fn address(&self, id: &PointId) -> String {
         format!("lib:{}/{}", self.settings.library_id, id)
     }
@@ -854,7 +872,7 @@ impl LibSlot {
             Some(d) => format!("d\u{1}{d}\u{1}{title}"),
             None => format!("t\u{1}{title}\u{1}{snippet}"),
         };
-        LibHit { address: self.address(id), score, title, snippet, page: self.page_value(p), key }
+        LibHit { address: self.address(id), score, title, snippet, page: self.page_value(p), key, cite: self.cite(p) }
     }
 
     /// The hit for a point found by the keyword index, read from the shard payload. `None` when the point is
@@ -924,8 +942,7 @@ impl LibSlot {
             } else {
                 NamedQuery::new(VectorInternal::Dense(vector.to_vec()), name.clone())
             };
-            let mut params = SearchParams::default();
-            params.hnsw_ef = Some(HNSW_EF);
+            let params = SearchParams { hnsw_ef: Some(HNSW_EF), ..Default::default() };
             QueryRequestBuilder::new(width)
                 .query(ScoringQuery::Vector(QueryEnum::Nearest(nq)))
                 .params(params)

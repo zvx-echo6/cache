@@ -6,9 +6,8 @@ import 'map_widgets.dart';
 /// Drawn over the map while the user draws an area for a download: drag a rectangle, then use it or cancel.
 /// It reports the rectangle in screen points; the map screen turns the corners into a geographic area.
 class AreaDrawOverlay extends StatefulWidget {
-  const AreaDrawOverlay({super.key, required this.layerTitle, required this.onUse, required this.onCancel});
+  const AreaDrawOverlay({super.key, required this.onUse, required this.onCancel});
 
-  final String layerTitle;
   final void Function(Rect screenRect) onUse;
   final VoidCallback onCancel;
 
@@ -52,7 +51,7 @@ class _AreaDrawOverlayState extends State<AreaDrawOverlay> {
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: mapPanel(context, radius: 16),
                 child: Text(
-                  _rect == null ? 'Drag on the map to draw the area for ${widget.layerTitle}' : 'Drag again to change it',
+                  _rect == null ? 'Drag on the map to draw the area to download' : 'Drag again to change it',
                   style: TextStyle(fontSize: 16, color: k.text),
                 ),
               ),

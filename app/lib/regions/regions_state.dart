@@ -5,11 +5,14 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../browse/zim_download.dart';
 import '../files.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../search/core_config.dart';
+import '../settings/damaged_files.dart';
 import '../settings/data_policy.dart';
+import 'offroad_catalogue.dart';
 import 'region_catalogue.dart';
 import 'regions_core.dart';
 
@@ -44,9 +47,43 @@ class MapLayerPlan {
   final AreaEstimate estimate;
 }
 
-/// What a region would cost, part by part, before anything is downloaded. A part that cannot be worked out says why.
+/// One off-road pack a region needs, whether it is on the phone, and the z12 elevation over its box (the layer engine's estimate).
+class OffroadPackPlan {
+  const OffroadPackPlan(this.pack, {required this.onPhone, required this.elevation});
+
+  final OffroadPack pack;
+  final bool onPhone;
+  final AreaEstimate elevation;
+}
+
+/// What a region's off-road part costs: its packs (usually one: the state or province it is in) and their terrain heights.
+class OffroadPlan {
+  const OffroadPlan(this.packs);
+
+  final List<OffroadPackPlan> packs;
+
+  /// Every pack's elevation can be downloaded (the size could be worked out).
+  bool get allowed => packs.every((p) => p.elevation.allowed);
+  String? get problem => packs.map((p) => p.elevation.problem).whereType<String>().firstOrNull;
+
+  /// Only what is not on the phone yet.
+  int get downloadBytes => packs.fold(0, (s, p) => s + (p.onPhone ? 0 : p.pack.bytes) + p.elevation.bytes);
+  int get bytesAlready => packs.fold(0, (s, p) => s + (p.onPhone ? p.pack.bytes : 0) + p.elevation.bytesAlready);
+}
+
+/// What a region would cost, part by part, before anything is downloaded. A part that cannot be worked out says why. No
+/// [offroad] and no [offroadProblem]: no off-road pack covers the region, so it has no off-road part.
 class RegionPlan {
-  const RegionPlan({this.routing, this.routingProblem, this.places, this.placesProblem, this.map = const [], this.mapProblem});
+  const RegionPlan({
+    this.routing,
+    this.routingProblem,
+    this.places,
+    this.placesProblem,
+    this.map = const [],
+    this.mapProblem,
+    this.offroad,
+    this.offroadProblem,
+  });
 
   final PartPlan? routing;
   final String? routingProblem;
@@ -54,6 +91,11 @@ class RegionPlan {
   final String? placesProblem;
   final List<MapLayerPlan> map;
   final String? mapProblem;
+  final OffroadPlan? offroad;
+  final String? offroadProblem;
+
+  /// The off-road part can be downloaded.
+  bool get offroadAllowed => offroad != null && offroad!.allowed;
 
   /// The map layers that can be downloaded for this box.
   List<MapLayerPlan> get mapAllowed => [for (final m in map) if (m.estimate.allowed) m];
@@ -88,6 +130,17 @@ String regionPartWords(RegionPart part, String? code, String message) {
 /// What one region holds on this phone.
 enum RegionPhase { downloading, ready, paused, failed }
 
+/// One off-road pack of a region on this phone: on the phone ([done]), downloading, or stopped with an [error].
+class OffroadPackState {
+  const OffroadPackState({required this.name, required this.bytes, required this.doneBytes, required this.done, this.error});
+
+  final String name;
+  final int bytes;
+  final int doneBytes;
+  final bool done;
+  final String? error;
+}
+
 /// A region on this phone: its road routing and its places (from the core's status) and its map areas (from the layer engine).
 class LocalRegion {
   LocalRegion({
@@ -98,10 +151,18 @@ class LocalRegion {
     this.areas = const [],
     this.wantsRouting = false,
     this.wantsPlaces = false,
+    this.offroad = const [],
+    this.terrain = const [],
   });
 
   final String id;
   final String name;
+
+  /// The region's off-road packs: on the phone, downloading or failed.
+  final List<OffroadPackState> offroad;
+
+  /// The terrain heights its off-road packs read (z12 elevation areas).
+  final List<DownloadedArea> terrain;
 
   /// The core's status of this region's road routing part, or null when the region has none.
   final Map<String, dynamic>? routing;
@@ -119,6 +180,7 @@ class LocalRegion {
   bool get hasRouting => wantsRouting || routing != null;
   bool get hasPlaces => wantsPlaces || places != null;
   bool get hasMap => areas.isNotEmpty;
+  bool get hasOffroad => offroad.isNotEmpty;
 
   String? get routingState => routing?['state'] as String?;
   String? get placesState => places?['state'] as String?;
@@ -133,14 +195,21 @@ class LocalRegion {
 
   int get mapBytes => areas.fold(0, (s, a) => s + a.bytes);
 
+  int get offroadBytes => offroad.fold(0, (s, p) => s + p.doneBytes) + terrain.fold(0, (s, a) => s + a.bytes);
+
   /// What it uses on the phone (a tile two regions need is counted in both, but kept once).
-  int get bytes => routingBytes + placesBytes + mapBytes;
+  int get bytes => routingBytes + placesBytes + mapBytes + offroadBytes;
 
   RegionPhase get phase {
     final states = [routingState, placesState];
-    if (states.contains('failed') || areas.any((a) => a.phase == AreaPhase.failed)) return RegionPhase.failed;
+    final all = [...areas, ...terrain];
+    if (states.contains('failed') || all.any((a) => a.phase == AreaPhase.failed) || offroad.any((p) => p.error != null)) {
+      return RegionPhase.failed;
+    }
     if (states.contains('paused')) return RegionPhase.paused;
-    if (states.contains('downloading') || areas.any((a) => a.phase == AreaPhase.running)) return RegionPhase.downloading;
+    if (states.contains('downloading') || all.any((a) => a.phase == AreaPhase.running) || offroad.any((p) => !p.done)) {
+      return RegionPhase.downloading;
+    }
     if ((wantsRouting && routing == null) || (wantsPlaces && places == null)) return RegionPhase.downloading;
     return RegionPhase.ready;
   }
@@ -151,7 +220,10 @@ class LocalRegion {
       return e is String && e.isNotEmpty ? regionPartWords(which, p?['code'] as String?, e) : null;
     }
 
-    return part(RegionPart.routing, routing) ?? part(RegionPart.places, places) ?? areas.where((a) => a.error != null).map((a) => a.error).firstOrNull;
+    return part(RegionPart.routing, routing) ??
+        part(RegionPart.places, places) ??
+        [...areas, ...terrain].where((a) => a.error != null).map((a) => a.error).firstOrNull ??
+        offroad.map((p) => p.error).whereType<String>().firstOrNull;
   }
 
   /// 0..1: the mean of the parts (road routing and places by bytes, the map by tiles).
@@ -166,10 +238,15 @@ class LocalRegion {
         parts.add(0);
       }
     }
-    if (areas.isNotEmpty) {
-      final total = areas.fold(0, (s, a) => s + a.totalTiles);
-      final done = areas.fold(0, (s, a) => s + a.doneTiles);
+    for (final list in [areas, terrain]) {
+      if (list.isEmpty) continue;
+      final total = list.fold(0, (s, a) => s + a.totalTiles);
+      final done = list.fold(0, (s, a) => s + a.doneTiles);
       parts.add(total == 0 ? 1 : done / total);
+    }
+    if (offroad.isNotEmpty) {
+      final total = offroad.fold(0, (s, p) => s + p.bytes);
+      parts.add(total == 0 ? 1 : offroad.fold(0, (s, p) => s + p.doneBytes) / total);
     }
     if (parts.isEmpty) return 0;
     return (parts.reduce((a, b) => a + b) / parts.length).clamp(0, 1).toDouble();
@@ -199,7 +276,10 @@ class RegionsState extends ChangeNotifier {
     this.baseUrl = kRoutingBaseUrl,
     this.placesBaseUrl = kPlacesBaseUrl,
     this.onPlacesChanged,
-  }) : _opener = opener ?? openRealRegions;
+    this.offroadCatalogue,
+    ZimDownloader? packDownloader,
+  }) : _opener = opener ?? openRealRegions,
+       _packDownloader = packDownloader ?? ZimDownloader();
 
   final DataPolicy policy;
   final Future<Directory> Function() supportDir;
@@ -208,6 +288,13 @@ class RegionsState extends ChangeNotifier {
   final RegionsOpener _opener;
   final String baseUrl;
   final String placesBaseUrl;
+
+  /// The published off-road packs; null: regions have no off-road part.
+  final OffroadCatalogue? offroadCatalogue;
+  final ZimDownloader _packDownloader;
+
+  /// Off-road packs downloading or stopped, by their path under the off-road folder.
+  final Map<String, _PackRun> _packRuns = {};
 
   /// Called when the places on the phone changed (a tile was merged or removed, or a new build switched in: the core's
   /// `places.generation`), so the search core reads them again and an open search runs again.
@@ -249,6 +336,9 @@ class RegionsState extends ChangeNotifier {
       }
     } catch (_) {}
     try {
+      _offroadPath = (await offroadDir()).path;
+    } catch (_) {}
+    try {
       final support = await supportDir();
       _core = await _opener(regionsConfig(support, routingBaseUrl: baseUrl, placesBaseUrl: placesBaseUrl));
     } catch (e) {
@@ -279,11 +369,12 @@ class RegionsState extends ChangeNotifier {
     final kind = _kind = await policy.probe.current();
     final ok = _networkOk = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
     await _core?.call('set_policy', {'network': ok});
+    if (ok) unawaited(_resumePacks());
     if (ok && _waiting.isNotEmpty) {
       final go = List.of(_waiting);
       _waiting.clear();
       for (final w in go) {
-        await download(w.$1, routing: w.$2, map: w.$3, places: w.$4);
+        await download(w.$1, routing: w.$2, map: w.$3, places: w.$4, offroad: w.$5);
       }
     }
     notifyListeners();
@@ -291,17 +382,17 @@ class RegionsState extends ChangeNotifier {
 
   /// Regions the person chose to download once on Wi-Fi ("Wait for Wi-Fi"), with the parts picked; they start when the connection
   /// allows it (kept while the app runs).
-  final List<(RegionRecord, bool, bool, bool)> _waiting = [];
+  final List<(RegionRecord, bool, bool, bool, bool)> _waiting = [];
 
   /// The ids of the regions waiting for Wi-Fi.
   Set<String> get waitingIds => {for (final w in _waiting) w.$1.id};
 
   /// Downloads [r] once on Wi-Fi: now if the connection already allows it, else when it does.
-  Future<void> downloadOnWifi(RegionRecord r, {required bool routing, required bool map, bool places = false}) async {
-    if (!await policy.blocksDownload()) return download(r, routing: routing, map: map, places: places);
+  Future<void> downloadOnWifi(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false}) async {
+    if (!await policy.blocksDownload()) return download(r, routing: routing, map: map, places: places, offroad: offroad);
     _waiting
       ..removeWhere((w) => w.$1.id == r.id)
-      ..add((r, routing, map, places));
+      ..add((r, routing, map, places, offroad));
     notifyListeners();
   }
 
@@ -433,7 +524,44 @@ class RegionsState extends ChangeNotifier {
       areas: k == null ? const [] : _areasOf(k),
       wantsRouting: k?.routing ?? false,
       wantsPlaces: k?.places ?? false,
+      offroad: k == null ? const [] : [for (final p in k.offroad) _packState(p)],
+      terrain: k == null ? const [] : _terrainOf(k),
     );
+  }
+
+  List<DownloadedArea> _terrainOf(_Kept k) => [for (final a in maps.engine.areasOf(kOffroadElevationLayer)) if (k.terrain.contains(a.id)) a];
+
+  OffroadPackState _packState(_KeptPack p) {
+    final run = _packRuns[p.path];
+    final done = run == null && _packOnPhone(p.path);
+    return OffroadPackState(
+      name: p.name,
+      bytes: p.bytes,
+      doneBytes: done ? p.bytes : (run?.done ?? 0),
+      done: done,
+      error: run?.error ?? (run == null && !done ? 'Off-road data stopped downloading. Update the region to carry on.' : null),
+    );
+  }
+
+  /// The folder the off-road packs are kept in, `<build>/<id>/offroad.sqlite` (the router reads every pack in it).
+  Future<Directory> offroadDir() async => Directory('${(await supportDir()).path}/regions/offroad');
+  String? _offroadPath;
+
+  /// The off-road packs on the phone and what they must be (the catalogue's size and SHA-256), for Storage's damaged-file check.
+  List<FileManifest> get offroadManifests {
+    final dir = _offroadPath;
+    if (dir == null) return const [];
+    final seen = <String>{};
+    return [
+      for (final k in _kept.values)
+        for (final p in k.offroad)
+          if (_packRuns[p.path] == null && seen.add(p.path)) FileManifest('$dir/${p.path}', bytes: p.bytes, sha256: p.sha256),
+    ];
+  }
+
+  bool _packOnPhone(String path) {
+    final dir = _offroadPath;
+    return dir != null && File('$dir/$path').existsSync();
   }
 
   /// The map areas of the regions, for the Updates tab.
@@ -465,6 +593,7 @@ class RegionsState extends ChangeNotifier {
         routingProblem = placesProblem = _needsConnection;
       }
     }
+    final (offroad, offroadProblem) = await _offroadPlan(r);
     RegionPlan done({List<MapLayerPlan> map = const [], String? mapProblem}) => RegionPlan(
       routing: routing,
       routingProblem: routingProblem,
@@ -472,6 +601,8 @@ class RegionsState extends ChangeNotifier {
       placesProblem: placesProblem,
       map: map,
       mapProblem: mapProblem,
+      offroad: offroad,
+      offroadProblem: offroadProblem,
     );
     final bounds = r.bounds;
     if (bounds == null) return done(mapProblem: 'This region has no outline yet.');
@@ -493,6 +624,35 @@ class RegionsState extends ChangeNotifier {
     return done(map: map, mapProblem: mapProblem);
   }
 
+  /// The off-road part of [r]: the packs that cover it and the terrain heights over each pack's box. Nothing (and no problem)
+  /// when no pack covers it.
+  Future<(OffroadPlan?, String?)> _offroadPlan(RegionRecord r) async {
+    final cat = offroadCatalogue;
+    final bounds = r.bounds;
+    if (cat == null || bounds == null) return (null, null);
+    final List<OffroadPack> all;
+    try {
+      all = await cat.packs();
+    } catch (_) {
+      return (null, _needsConnection);
+    }
+    final packs = packsCovering(all, bounds);
+    if (packs.isEmpty) return (null, null);
+    _offroadPath ??= (await offroadDir()).path;
+    if (maps.engine.layer(kOffroadElevationLayer) == null) return (null, 'Off-road needs the Elevation map layer, which is not installed.');
+    final out = <OffroadPackPlan>[];
+    for (final p in packs) {
+      AreaEstimate e;
+      try {
+        e = await maps.engine.estimate(kOffroadElevationLayer, p.bounds, zoom: kOffroadElevationZoom);
+      } catch (_) {
+        e = const AreaEstimate(tiles: 0, bytes: 0, maxZoom: kOffroadElevationZoom, allowed: false, problem: 'Could not work out the size of the terrain heights.');
+      }
+      out.add(OffroadPackPlan(p, onPhone: _packOnPhone(p.relativePath()), elevation: e));
+    }
+    return (OffroadPlan(out), null);
+  }
+
   /// One part's entry of the core's plan: its cost, or why it cannot be worked out. Nothing when the part is not there.
   static (PartPlan?, String?) _partPlan(RegionPart part, Object? e) {
     if (e is! Map) return (null, null);
@@ -505,7 +665,7 @@ class RegionsState extends ChangeNotifier {
 
   /// Starts downloading the parts of [r] that were picked. Throws [MobileDataBlocked] before anything starts when the phone is on
   /// mobile data and downloads may not use it, unless [anyway].
-  Future<void> download(RegionRecord r, {required bool routing, required bool map, bool places = false, bool anyway = false}) async {
+  Future<void> download(RegionRecord r, {required bool routing, required bool map, bool places = false, bool offroad = false, bool anyway = false}) async {
     await policy.checkDownload(anyway: anyway);
     places = places && placesAvailable;
     final k = _kept[r.id] ??= _Kept(id: r.id, name: r.name);
@@ -535,10 +695,86 @@ class RegionsState extends ChangeNotifier {
         }
       }
     }
-    if (!k.routing && !k.places && k.areas.isEmpty) _kept.remove(r.id);
+    if (offroad) await _addOffroad(k, r, anyway: anyway);
+    if (!k.routing && !k.places && k.areas.isEmpty && k.offroad.isEmpty) _kept.remove(r.id);
     await _save();
     await refresh();
     notifyListeners();
+  }
+
+  /// The off-road packs that cover [r], each checked against its published SHA-256, and their terrain heights (z12 elevation over
+  /// the pack's box, kept once for the regions that share the pack).
+  Future<void> _addOffroad(_Kept k, RegionRecord r, {required bool anyway}) async {
+    final (plan, _) = await _offroadPlan(r);
+    if (plan == null || !plan.allowed) return;
+    for (final pp in plan.packs) {
+      final p = pp.pack;
+      final path = p.relativePath();
+      if (!k.offroad.any((x) => x.path == path)) {
+        k.offroad.add(_KeptPack(path: path, name: p.name, url: p.url, bytes: p.bytes, sha256: p.sha256));
+      }
+      final label = 'Off-road terrain for ${p.name}';
+      final have = [
+        for (final a in maps.engine.areasOf(kOffroadElevationLayer))
+          if (a.label == label && a.phase != AreaPhase.failed) a.id,
+      ].firstOrNull;
+      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, p.bounds, label: label, anyway: anyway, zoom: kOffroadElevationZoom)).id;
+      if (!k.terrain.contains(area)) k.terrain.add(area);
+      unawaited(_fetchPack(k.offroad.firstWhere((x) => x.path == path)));
+    }
+  }
+
+  /// Downloads one pack into the off-road folder: under a hidden name, checked against its SHA-256 (a file that does not match is
+  /// thrown away), then renamed into place, so the router only ever sees whole packs.
+  Future<void> _fetchPack(_KeptPack p) async {
+    final dir = (await offroadDir()).path;
+    _offroadPath = dir;
+    final dest = File('$dir/${p.path}');
+    if (_packRuns[p.path]?.running ?? false) return;
+    if (await dest.exists()) {
+      _packRuns.remove(p.path);
+      return;
+    }
+    final run = _packRuns[p.path] = _PackRun();
+    notifyListeners();
+    try {
+      await dest.parent.create(recursive: true);
+      await _packDownloader.download(
+        url: Uri.parse(p.url),
+        part: File('${dest.parent.path}/.offroad.sqlite.part'),
+        expectedSha256: p.sha256,
+        cancel: run.cancel,
+        onProgress: (done, total) {
+          run.done = done;
+          final now = DateTime.now();
+          if (now.difference(run.told) > const Duration(milliseconds: 500)) {
+            run.told = now;
+            notifyListeners();
+          }
+        },
+      );
+      await File('${dest.parent.path}/.offroad.sqlite.part').rename(dest.path);
+      _packRuns.remove(p.path);
+    } catch (e) {
+      if (run.cancel.isCancelled) {
+        _packRuns.remove(p.path);
+      } else {
+        run
+          ..running = false
+          ..error = e is DownloadException ? e.message : "Off-road data couldn't be downloaded. Try again later.";
+      }
+    }
+    notifyListeners();
+  }
+
+  /// The packs kept regions want that are not on the phone and not downloading: started again (on a connection downloads may use).
+  Future<void> _resumePacks() async {
+    _offroadPath ??= (await offroadDir()).path;
+    for (final k in _kept.values) {
+      for (final p in k.offroad) {
+        if (!_packOnPhone(p.path) && !(_packRuns[p.path]?.running ?? false)) unawaited(_fetchPack(p));
+      }
+    }
   }
 
   /// Removes the region. Tiles another region still needs stay (the core and the layer engine keep shared tiles once).
@@ -547,6 +783,20 @@ class RegionsState extends ChangeNotifier {
     if ((k?.routing ?? false) || (k?.places ?? false) || _statusOf(id) != null) await _core?.call('remove', {'id': id});
     for (final a in k?.areas ?? const <String>[]) {
       await maps.engine.delete(a);
+    }
+    // off-road packs and their terrain heights stay while another region uses them
+    for (final a in k?.terrain ?? const <String>[]) {
+      if (!_kept.values.any((o) => o.terrain.contains(a))) await maps.engine.delete(a);
+    }
+    for (final p in k?.offroad ?? const <_KeptPack>[]) {
+      if (_kept.values.any((o) => o.offroad.any((x) => x.path == p.path))) continue;
+      _packRuns.remove(p.path)?.cancel.cancel();
+      final dir = (await offroadDir()).path;
+      for (final f in [File('$dir/${p.path}'), File('${File('$dir/${p.path}').parent.path}/.offroad.sqlite.part')]) {
+        try {
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
     }
     await _save();
     await refresh();
@@ -570,6 +820,9 @@ class RegionsState extends ChangeNotifier {
       await _core?.call('update', {'component': 'places'});
     }
     if (l != null && missesPlaces(l)) await _addPlaces(l);
+    for (final p in k?.offroad ?? const <_KeptPack>[]) {
+      if (_packRuns[p.path]?.running != true) unawaited(_fetchPack(p));
+    }
     for (final a in k?.areas ?? const <String>[]) {
       await maps.engine.update(a, anyway: anyway);
     }
@@ -635,7 +888,10 @@ class RegionsState extends ChangeNotifier {
 
 /// What the app remembers of one region: its name and the parts it asked for.
 class _Kept {
-  _Kept({required this.id, required this.name, this.routing = false, this.places = false, List<String>? areas}) : areas = areas ?? [];
+  _Kept({required this.id, required this.name, this.routing = false, this.places = false, List<String>? areas, List<_KeptPack>? offroad, List<String>? terrain})
+    : areas = areas ?? [],
+      offroad = offroad ?? [],
+      terrain = terrain ?? [];
 
   final String id;
   final String name;
@@ -643,7 +899,18 @@ class _Kept {
   bool places;
   final List<String> areas;
 
-  Map<String, dynamic> toJson() => {'name': name, 'routing': routing, 'places': places, 'areas': areas};
+  /// Its off-road packs and the terrain-height areas they read.
+  final List<_KeptPack> offroad;
+  final List<String> terrain;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'routing': routing,
+    'places': places,
+    'areas': areas,
+    if (offroad.isNotEmpty) 'offroad': [for (final p in offroad) p.toJson()],
+    if (terrain.isNotEmpty) 'terrain': terrain,
+  };
 
   factory _Kept.fromJson(String id, Map<String, dynamic> j) => _Kept(
     id: id,
@@ -651,5 +918,40 @@ class _Kept {
     routing: j['routing'] == true,
     places: j['places'] == true,
     areas: [for (final a in (j['areas'] as List? ?? const [])) a as String],
+    offroad: [
+      for (final p in (j['offroad'] as List? ?? const []))
+        if (p is Map) _KeptPack.fromJson(p.cast<String, dynamic>()),
+    ],
+    terrain: [for (final a in (j['terrain'] as List? ?? const [])) a as String],
   );
+}
+
+/// An off-road pack a region downloads: where it goes, where it comes from, and the size and SHA-256 it must have.
+class _KeptPack {
+  const _KeptPack({required this.path, required this.name, required this.url, required this.bytes, required this.sha256});
+
+  final String path;
+  final String name;
+  final String url;
+  final int bytes;
+  final String sha256;
+
+  Map<String, dynamic> toJson() => {'path': path, 'name': name, 'url': url, 'bytes': bytes, 'sha256': sha256};
+
+  factory _KeptPack.fromJson(Map<String, dynamic> j) => _KeptPack(
+    path: j['path'] as String? ?? '',
+    name: j['name'] as String? ?? '',
+    url: j['url'] as String? ?? '',
+    bytes: (j['bytes'] as num?)?.toInt() ?? 0,
+    sha256: j['sha256'] as String? ?? '',
+  );
+}
+
+/// One pack download: how far it got, and why it stopped.
+class _PackRun {
+  final CancelToken cancel = CancelToken();
+  bool running = true;
+  int done = 0;
+  String? error;
+  DateTime told = DateTime.fromMillisecondsSinceEpoch(0);
 }

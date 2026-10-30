@@ -30,8 +30,17 @@ pub struct CogFile {
     lon0: f64,
     lat0: f64,
     pub palette: Option<Vec<u8>>, // 256 * RGB
-    blocks: Mutex<HashMap<(usize, usize), Arc<Vec<u8>>>>,
+    blocks: Mutex<BlockCache>,
 }
+
+/// Decoded blocks by (level, block index).
+type BlockCache = HashMap<(usize, usize), Arc<Vec<u8>>>;
+/// The files opened so far, by grid cell.
+type Slots = HashMap<(i32, i32), Arc<Mutex<Slot>>>;
+/// Opens a file by its address (the test hook in place of HTTP).
+type Opener = Box<dyn Fn(&str) -> Box<dyn RangeSource> + Send + Sync>;
+/// The files a tile touches, by grid cell: the file, the level read and the blocks needed.
+type Touched = HashMap<(i32, i32), (Arc<CogFile>, usize, std::collections::HashSet<usize>)>;
 
 struct Rd<'a> {
     b: &'a [u8],
@@ -67,7 +76,7 @@ fn type_size(t: u16) -> usize {
         3 | 8 => 2,
         4 | 9 | 11 => 4,
         5 | 10 | 12 => 8,
-        16 | 17 | 18 => 8,
+        16..=18 => 8,
         _ => 1,
     }
 }
@@ -342,8 +351,8 @@ pub struct CogSet {
     template: String,
     grid: f64,
     gate: Arc<crate::http::Gate>,
-    files: Mutex<HashMap<(i32, i32), Arc<Mutex<Slot>>>>,
-    local: Option<Box<dyn Fn(&str) -> Box<dyn RangeSource> + Send + Sync>>,
+    files: Mutex<Slots>,
+    local: Option<Opener>,
 }
 
 /// What is known of one cell's file. The header and tile index of a file are read once (by one caller; the others
@@ -368,7 +377,7 @@ impl CogSet {
     }
 
     /// Test hook: open files through `f(url)` instead of HTTP.
-    pub fn with_opener(mut self, f: Box<dyn Fn(&str) -> Box<dyn RangeSource> + Send + Sync>) -> CogSet {
+    pub fn with_opener(mut self, f: Opener) -> CogSet {
         self.local = Some(f);
         self
     }
@@ -425,7 +434,7 @@ impl CogSet {
         let lon_of = |pxl: u32| (x as f64 + (pxl as f64 + 0.5) / size as f64) / n * 360.0 - 180.0;
         // Pass 1: which files and which of their blocks does the tile touch? Read them all together first, so a tile
         // costs one range read per file (more only if its blocks are far apart in the file), not one per block.
-        let mut touched: HashMap<(i32, i32), (Arc<CogFile>, usize, std::collections::HashSet<usize>)> = HashMap::new();
+        let mut touched: Touched = HashMap::new();
         let mut cur: Option<(i32, i32)> = None;
         for py in 0..size {
             let lat = lat_of(py);
@@ -434,10 +443,10 @@ impl CogSet {
                 let key = ((lat / self.grid).floor() as i32, (lon / self.grid).floor() as i32);
                 if cur != Some(key) {
                     cur = Some(key);
-                    if !touched.contains_key(&key) {
+                    if let std::collections::hash_map::Entry::Vacant(e) = touched.entry(key) {
                         if let Some(f) = self.file(lat, lon)? {
                             let lvl = f.level_for(deg_per_px);
-                            touched.insert(key, (f, lvl, Default::default()));
+                            e.insert((f, lvl, Default::default()));
                         }
                     }
                 }

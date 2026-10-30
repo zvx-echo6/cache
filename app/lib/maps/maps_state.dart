@@ -75,8 +75,9 @@ class MapsState extends ChangeNotifier {
   /// What the map shows right now (set by the map screen), for "This region" downloads.
   GeoBounds? viewBounds;
 
-  /// Set by the catalogue to ask the map screen for a drawn area for this layer; the screen clears it.
-  String? drawRequest;
+  /// Set by the Regions sheet ("Draw your own area instead") to ask the map screen for a drawn area to download as a region; the
+  /// screen clears it.
+  bool drawRequest = false;
 
   /// Set when the catalogue has no base map to draw (the first start, before the catalogue was ever fetched, with no
   /// connection). The map screen says so instead of showing a blank map.
@@ -308,12 +309,12 @@ class MapsState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void requestDraw(String layerId) {
-    drawRequest = layerId;
+  void requestDraw() {
+    drawRequest = true;
     notifyListeners();
   }
 
-  void clearDrawRequest() => drawRequest = null;
+  void clearDrawRequest() => drawRequest = false;
 
   void rememberCamera(double lat, double lon, double zoom) {
     savedCamera = SavedCamera(lat, lon, zoom);

@@ -173,7 +173,7 @@ fn parse_field(name: &str, spec: &Value) -> Result<FieldDef, Bad> {
             let max_length = match spec.get("maxLength") {
                 None | Some(Value::Null) => DEFAULT_MAX_LENGTH,
                 Some(v) => match v.as_u64() {
-                    Some(n) if n >= 1 && n <= 1_000_000 => n as usize,
+                    Some(n) if (1..=1_000_000).contains(&n) => n as usize,
                     _ => return Err(bad_field(name, "bad_limit", format!("{name}: maxLength must be a whole number from 1"))),
                 },
             };

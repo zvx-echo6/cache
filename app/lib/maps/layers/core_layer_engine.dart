@@ -360,13 +360,14 @@ class CoreLayerEngine extends LayerEngine {
   }
 
   @override
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area) async {
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) async {
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final entry = _entries[layerId];
     if (def.onlineOnly || entry?['downloadable'] == false) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: "This layer's terms do not allow keeping it offline.");
     }
     final bbox = [area.west, area.south, area.east, area.north];
+    if (zoom != null) return _estimateAt(layerId, bbox, zoom);
     final top = def.maxZoom;
     final floor = (top - 5).clamp(def.minZoom, top);
     Map<String, dynamic>? last;
@@ -396,6 +397,24 @@ class CoreLayerEngine extends LayerEngine {
         problem ?? 'This area is too big for one download. Zoom in or draw a smaller area.');
   }
 
+  /// One zoom only: no lower zoom to fall back to, so the per-download cap does not apply (the download pop-up still checks the
+  /// space).
+  Future<AreaEstimate> _estimateAt(String layerId, List<double> bbox, int zoom) async {
+    final Map<String, dynamic> plan;
+    try {
+      plan = await _core!.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom}));
+    } on CacheSearchException catch (e) {
+      final problem = e.code == 'offline' ? 'The size is worked out from the source, which needs a connection.' : e.message;
+      return AreaEstimate(tiles: 0, bytes: 0, maxZoom: zoom, allowed: false, problem: problem);
+    }
+    final problems = [for (final p in (plan['problems'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
+    if (problems.any((p) => p['code'] == 'no_space')) {
+      return _estimateOf(plan, zoom, false, 'There is not enough free space on this phone for this download.');
+    }
+    final ok = plan['ok_to_start'] == true;
+    return _estimateOf(plan, zoom, ok, ok ? null : (problems.isNotEmpty ? problems.first['message'] as String? : null) ?? 'This area is too big for one download.');
+  }
+
   AreaEstimate _estimateOf(Map<String, dynamic> plan, int zoom, bool allowed, String? problem) => AreaEstimate(
         tiles: (plan['tiles_to_download'] as num?)?.toInt() ?? 0,
         bytes: (plan['estimated_bytes'] as num?)?.toInt() ?? 0,
@@ -407,28 +426,29 @@ class CoreLayerEngine extends LayerEngine {
       );
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
-    final est = await estimate(layerId, area);
+    final est = await estimate(layerId, area, zoom: zoom);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');
     final id = 'a${DateTime.now().millisecondsSinceEpoch}';
+    final minZoom = zoom ?? def.minZoom;
     final a = DownloadedArea(
       id: id,
       layerId: layerId,
       bounds: area,
       label: label,
-      minZoom: def.minZoom,
+      minZoom: minZoom,
       maxZoom: est.maxZoom,
       totalTiles: est.tiles,
     );
-    _saved[id] = _Saved(area, def.minZoom, est.maxZoom);
+    _saved[id] = _Saved(area, minZoom, est.maxZoom);
     await _start(a, {
       'layer': layerId,
       'area': id,
       'name': label,
       'bbox': [area.west, area.south, area.east, area.north],
-      'minzoom': def.minZoom,
+      'minzoom': minZoom,
       'maxzoom': est.maxZoom,
     }, update: false);
     return a;

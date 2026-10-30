@@ -8,6 +8,9 @@ use cache_user::UserStore;
 use cache_video::{Video, VideoCfg};
 use serde::Deserialize;
 
+/// Embeds a search query: the model id and the vector, or None when it cannot.
+type QueryEmbedder = dyn Fn(&str) -> Option<(String, Vec<f32>)>;
+
 /// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite"}`.
 #[derive(Debug, Deserialize)]
 pub struct UserCfg {
@@ -154,7 +157,34 @@ impl crate::handle::Handle {
     }
 }
 
+/// The map layer engine's elevation layer (the starter `elevation`: Mapterhorn's tiles) as the off-road router's z12 elevation.
+pub const ELEVATION_LAYER: &str = "elevation";
+
+/// z12 elevation tiles from the layer engine: its downloaded areas and the tiles viewed before, never the network (a route is
+/// worked out from what is on the phone, as it was from an elevation file).
+struct LayerElevationTiles(std::sync::Arc<cache_layers::core::Inner>);
+
+impl cache_navigate::ElevationTiles for LayerElevationTiles {
+    fn z12(&self, x: u64, y: u64) -> std::result::Result<Option<Vec<u8>>, String> {
+        match self.0.tile_local(ELEVATION_LAYER, 12, x as u32, y as u32) {
+            Ok(Some(cache_layers::core::TileOut::Tile { bytes, .. })) => Ok(Some(bytes)),
+            Ok(_) => Ok(None),
+            // no elevation layer installed: no elevation, as with no file
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(e.message),
+        }
+    }
+}
+
 impl Ext {
+    /// The navigate tool's region packs read elevation from the map's elevation layer, when both are configured.
+    pub fn plug_elevation(&self) {
+        if let (Some(nav), Some(l)) = (&self.nav, &self.layers) {
+            let source = cache_navigate::TileElevation::new(LayerElevationTiles(l.inner.clone()));
+            nav.set_elevation(Some(std::sync::Arc::new(source)));
+        }
+    }
+
     /// Apply the `regions` section; absent keeps what was set before. The engine is the process's one for that folder
     /// (`cache_regions::Regions::open_shared`), so the app's `cs_regions_open` on the same folder shares it.
     pub fn configure_regions(&mut self, regions: Option<cache_regions::Config>) -> Result<()> {
@@ -454,7 +484,7 @@ impl crate::handle::Handle {
         if let Some((lat, lon)) = opts.near.filter(|&n| cache_places::coord::parse(&query, Some(n)).is_none()) {
             opts.prepared = core.feed.prepare(lat, lon, cache_places::feed::SEARCH_PREPARE_WAIT);
         }
-        let embed: Option<&dyn Fn(&str) -> Option<(String, Vec<f32>)>> = self.embedder.as_deref().map(|f| f as _);
+        let embed: Option<&QueryEmbedder> = self.embedder.as_deref().map(|f| f as _);
         let v = core.search(&query, &opts, embed).map_err(map_err)?;
         Ok(v.to_string())
     }

@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
-import '../browse/opds.dart' show cacheUserAgent;
+import '../net/fetch.dart';
 import 'hf_hub.dart';
 
 /// Where the list of recommended models is published, so it can change without an app release.
@@ -160,18 +159,6 @@ class RecommendedModels extends ChangeNotifier {
   /// No model tuned for Cache is in the list yet.
   bool get noneTuned => !models.any((m) => m.kind == RecommendationKind.tunedForCache);
 
-  static Future<String> _fetchPublished() async {
-    final c = HttpClient()
-      ..userAgent = cacheUserAgent
-      ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final req = await c.getUrl(Uri.parse(kRecommendedModelsUrl));
-      final res = await req.close().timeout(const Duration(seconds: 20));
-      final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 20));
-      if (res.statusCode != 200) throw HttpException('answered ${res.statusCode}');
-      return body;
-    } finally {
-      c.close(force: true);
-    }
-  }
+  static Future<String> _fetchPublished() => fetchText(Uri.parse(kRecommendedModelsUrl));
+
 }

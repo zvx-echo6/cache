@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import 'chat_fakes.dart';
+import 'support/act_core_stand_in.dart';
 
 String _prompt(Map<String, dynamic> request) => ((request['messages'] as List).first as Map)['content'] as String;
 
@@ -18,7 +19,7 @@ String _fixed(String prompt) => [for (final l in prompt.split('\n')) if (!l.star
 void main() {
   test('voice mode is per conversation: set before the first question, on every request, and a new chat is text', () async {
     final backend = ScriptedBackend([(_) => say('Hello')]);
-    final chat = ChatController(tools: const [])..setBackend(backend);
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])..setBackend(backend);
     expect(chat.voice, isFalse);
     await chat.send('hi');
     expect(_prompt(backend.requests.last), isNot(contains(kVoiceLine)));
@@ -42,7 +43,7 @@ void main() {
     final store = ConversationStore.memory();
     addTearDown(store.close);
     final backend = ScriptedBackend([(_) => say('Hello')]);
-    final chat = ChatController(tools: const [])
+    final chat = ChatController(actCore: const ActCoreStandIn(), tools: const [])
       ..attachStore(store)
       ..setBackend(backend);
     await chat.send('typed');
@@ -68,7 +69,7 @@ void main() {
 
     var store = ConversationStore.open(path);
     var backend = ScriptedBackend([(_) => say('Hello')]);
-    var chat = ChatController(tools: const [], locationKnown: () => true)
+    var chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], locationKnown: () => true)
       ..attachStore(store)
       ..setBackend(backend);
     chat.setVoice(true);
@@ -88,7 +89,7 @@ void main() {
     store = ConversationStore.open(path);
     addTearDown(store.close);
     backend = ScriptedBackend([(_) => say('Again')]);
-    chat = ChatController(tools: const [], locationKnown: () => true)
+    chat = ChatController(actCore: const ActCoreStandIn(), tools: const [], locationKnown: () => true)
       ..attachStore(store)
       ..setBackend(backend);
     for (final (id, voice, before) in [(voiceId, true, voicePrompt), (textId, false, textPrompt), (voiceId, true, voicePrompt)]) {

@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'chat_fakes.dart';
+import 'support/act_core_stand_in.dart';
 
 /// Plays the core's act tool for a change action: the call comes back as needs_confirmation, c1, c2, ...
 class FakeAct extends TextTool {
@@ -321,7 +322,7 @@ void main() {
     expect(sent.last['role'], 'tool');
     expect(sent.last['tool_call_id'], 'call_1');
     expect(jsonDecode(sent.last['content'] as String), {'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}});
-    final reopened = ChatController(tools: [FakeAct()], actions: h.registry)
+    final reopened = ChatController(actCore: const ActCoreStandIn(), tools: [FakeAct()], actions: h.registry)
       ..attachStore(h.store)
       ..openConversation(h.chat.activeId!);
     expect(reopened.messages[1].confirms.single.state, ConfirmState.done);
@@ -337,7 +338,7 @@ void main() {
     expect(jsonDecode(transcript[2]['content'] as String)['status'], 'needs_confirmation');
     expect(jsonDecode(transcript[4]['content'] as String)['status'], 'done');
 
-    final reopened = ChatController(tools: [FakeAct()], actions: h.registry)..attachStore(h.store);
+    final reopened = ChatController(actCore: const ActCoreStandIn(), tools: [FakeAct()], actions: h.registry)..attachStore(h.store);
     reopened.openConversation(id);
     expect([for (final m in reopened.messages) m.text], [
       'Save 44.21,-114.93 as Elk camp',
@@ -353,7 +354,7 @@ void main() {
     final h = Harness();
     await h.chat.send('Save 44.21,-114.93 as Elk camp');
     final id = h.chat.activeId!;
-    final reopened = ChatController(tools: [FakeAct()], actions: h.registry)
+    final reopened = ChatController(actCore: const ActCoreStandIn(), tools: [FakeAct()], actions: h.registry)
       ..attachStore(h.store)
       ..setBackend(h.backend)
       ..openConversation(id);

@@ -76,6 +76,7 @@ Unknown keys are ignored, so a newer file still opens in an older Cache.
 | `fields.source_type` | | What kind of source the entry came from (book, transcript, ...). |
 | `fields.author` | | The author. |
 | `fields.link` | | A web address for the entry. |
+| `fields.time` | | Where the entry starts in its source, in seconds (a number, or text that is one): for a video or audio transcript. With `fields.link` set to the video's address, tapping a citation of the entry in Ask opens the video at that moment (the saved copy when there is one). The assistant never sees the link or the time; they are kept beside the citation. |
 | `fields.document` | | The field that names the source document; search results from the same document with the same title are shown once. |
 | `leave_out` | no | Entries never shown or indexed: rules `{"field": ..., "equals": value}` or `{"field": ..., "is_set": true}`; an entry matching any rule is left out. |
 | `embedding.vector` | no ("") | The dense vector's name; "" is the unnamed default vector. |

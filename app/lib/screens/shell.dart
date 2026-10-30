@@ -42,6 +42,7 @@ import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
 import 'settings_screen.dart';
 import 'setup_card.dart';
+import 'videos/video_nav.dart';
 import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
@@ -154,6 +155,9 @@ class _ShellState extends State<Shell> {
     _goModule(ModuleId.library);
     widget.browse.openAddress(address);
   }
+
+  /// A video citation: the player at the cited moment (the saved copy when there is one).
+  void _openVideo(String link, double time) => openVideoCitation(context, widget.video, video: link, offsetS: time);
 
   SettingsDeps get _settingsDeps => SettingsDeps(
     app: widget.app,
@@ -373,7 +377,7 @@ class _ShellState extends State<Shell> {
   };
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers),
         ModuleId.videos => VideosScreen(video: widget.video),

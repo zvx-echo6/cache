@@ -74,7 +74,7 @@ fn local(name: &[u8]) -> String {
 }
 
 fn add(members: &mut Map<String, Value>, key: String, v: Value, always_array: &[String]) {
-    let force = always_array.iter().any(|a| *a == key);
+    let force = always_array.contains(&key);
     match members.get_mut(&key) {
         Some(Value::Array(a)) => a.push(v),
         Some(old) => {

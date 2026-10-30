@@ -24,7 +24,14 @@ const Map<String, dynamic> _kAnswerNow = {
   'content': 'Answer now from the tool results above. No more tools are available.',
 };
 
-enum TurnPhase { thinking, searching, answering, done }
+enum TurnPhase {
+  /// The search core is still starting; the question waits for it (it is never answered without the core's tools).
+  starting,
+  thinking,
+  searching,
+  answering,
+  done,
+}
 
 /// What the UI needs while an answer is being produced.
 class TurnUpdate {
@@ -267,7 +274,7 @@ class ToolLoop {
         // One line per call for logcat (no arguments or text): which tool ran and which [n] it gave.
         debugPrint('cache tool ${call.name}: new ids ${[for (final i in r.ids) i.n]}, ${r.content.length} chars');
         for (final id in r.ids) {
-          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address)));
+          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time)));
         }
         if (r.navigationActions.isNotEmpty) onNavigationActions?.call(r.navigationActions);
         return r.content;
@@ -305,7 +312,7 @@ class ToolLoop {
     for (final id in await numbering.ids()) {
       _results.putIfAbsent(
         id.n,
-        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address)),
+        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address, link: id.link, time: id.time)),
       );
     }
   }

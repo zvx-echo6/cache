@@ -241,6 +241,7 @@ pub enum OffroadGap {
     /// No off-road data on the phone for the end (none installed, or the end is outside it).
     NotDownloaded,
     /// No off-road data exists for the area (unreachable until the tiled off-road data, which knows its empty cells).
+    #[allow(dead_code)] // its reason and words are fixed now; the tiled off-road data will report it
     NoData,
     /// The data covers the end, but the off-road router found no way to it (or the area was too large).
     NoWayFound,
