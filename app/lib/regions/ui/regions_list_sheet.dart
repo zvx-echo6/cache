@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../browse/browse_screen.dart' show LetterIcon;
@@ -76,15 +78,24 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
       final list = r.catalogue.regionsAt(widget.lat, widget.lon);
       if (!mounted) return;
       setState(() => _list = list);
-      for (final rec in list) {
-        r.plan(rec).then((p) {
-          if (mounted) setState(() => _plans[rec.id] = p);
-        }).catchError((Object _) {
-          if (mounted) setState(() => _plans[rec.id] = null);
-        });
-      }
+      unawaited(_planAll(list));
     } catch (_) {
       if (mounted) setState(() => _error = "Couldn't read the list of regions. It needs a connection the first time.");
+    }
+  }
+
+  /// The sizes, one region after another in the list's order (smallest first): asked all at once they shared the network and
+  /// the core, so every row waited for the biggest one; one at a time, each row shows its size as soon as it is known.
+  Future<void> _planAll(List<RegionRecord> list) async {
+    for (final rec in list) {
+      if (!mounted) return;
+      RegionPlan? p;
+      try {
+        p = await r.plan(rec);
+      } catch (_) {
+        p = null;
+      }
+      if (mounted) setState(() => _plans[rec.id] = p);
     }
   }
 

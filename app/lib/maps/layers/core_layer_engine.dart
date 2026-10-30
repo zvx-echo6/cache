@@ -23,6 +23,8 @@ class CoreLayerEngine extends LayerEngine {
     this.pollEvery = const Duration(milliseconds: 600),
     this.maxDownloadBytes = 800 * 1024 * 1024,
     this.policy,
+    this.openPlanner,
+    this.estimateFor = const Duration(minutes: 10),
   }) : _connected = connected ?? _platformConnected;
 
   /// The search core once it is open (null when it could not open).
@@ -40,7 +42,20 @@ class CoreLayerEngine extends LayerEngine {
   /// A download bigger than this is not offered; the estimate steps down to less detail until it fits.
   final int maxDownloadBytes;
 
+  /// Opens a second core for size estimates only, with [layersConfig] as its one section (no sources). A plan reads the layer's
+  /// source over the network (a PMTiles directory, sample tiles) and can take minutes for a state, and the main core answers one
+  /// call at a time: the Regions sheet's estimates held up the map's start, the Library's status and every page and picture of
+  /// the reader behind them. The second core plans on its own worker, so nothing waits for them. Null: the main core plans.
+  final Future<SearchCore?> Function(Map<String, dynamic> layersConfig)? openPlanner;
+
+  /// How long an estimate is kept: the same layer, box and zooms are asked again for every region of a state (each region's
+  /// off-road part is its state's pack), and every time the Regions sheet opens.
+  final Duration estimateFor;
+
   SearchCore? _core;
+  Future<SearchCore?>? _planner;
+  final Map<Future<SearchCore?>, int> _planning = {};
+  final Map<String, ({DateTime at, Future<AreaEstimate> estimate})> _estimates = {};
   int _port = 0;
   bool _ready = false;
   bool _online = true;
@@ -118,6 +133,7 @@ class CoreLayerEngine extends LayerEngine {
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    _dropPlanner();
     // Nothing will look at the running downloads again, so nobody may wait for them (a cancel in progress returns).
     for (final r in _running.values) {
       if (!r.done.isCompleted) r.done.complete();
@@ -189,6 +205,7 @@ class CoreLayerEngine extends LayerEngine {
     _lastRefresh = DateTime.now();
     try {
       await core.layers('refresh');
+      _dropPlanner();
       await _reload();
       notifyListeners();
     } catch (e) {
@@ -204,6 +221,7 @@ class CoreLayerEngine extends LayerEngine {
     } on CacheSearchException catch (e) {
       throw FormatException(e.message);
     }
+    _dropPlanner();
     await _reload();
     notifyListeners();
   }
@@ -214,6 +232,7 @@ class CoreLayerEngine extends LayerEngine {
   @override
   Future<void> removeDefinition(String id) async {
     await _core!.layers('remove', id);
+    _dropPlanner();
     await _reload();
     notifyListeners();
   }
@@ -359,15 +378,72 @@ class CoreLayerEngine extends LayerEngine {
     return total + _cacheBytes.toInt();
   }
 
+  // ---- estimates ----------------------------------------------------------------------------------------
+
+  /// Runs [plan] on the core that plans: the second core once it is open, else (offline, none given, or it could not open) the
+  /// main one.
+  Future<T> _onPlanner<T>(Future<T> Function(SearchCore core) plan) async {
+    final open = openPlanner;
+    if (open == null || !_online) return plan(_core!);
+    final pf = _planner ??= open({...layersConfig(), 'online': true}).catchError((Object e) {
+      debugPrint('Layer size planner: $e');
+      return null;
+    });
+    _planning[pf] = (_planning[pf] ?? 0) + 1;
+    try {
+      return await plan(await pf ?? _core!);
+    } finally {
+      final left = _planning[pf]! - 1;
+      if (left > 0) {
+        _planning[pf] = left;
+      } else {
+        _planning.remove(pf);
+        // One dropped while this estimate ran is closed once nothing plans on it.
+        if (!identical(pf, _planner)) _closePlanner(pf);
+      }
+    }
+  }
+
+  /// The definitions or the downloaded tiles changed: the second core is opened again with them, and no estimate is kept. The old
+  /// one is closed when the estimates running on it have ended.
+  void _dropPlanner() {
+    _estimates.clear();
+    final p = _planner;
+    _planner = null;
+    if (p != null && !_planning.containsKey(p)) _closePlanner(p);
+  }
+
+  static void _closePlanner(Future<SearchCore?> p) => p.then((c) => c?.close()).catchError((_) {});
+
   @override
-  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) async {
+  Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom}) {
+    final key = '$layerId ${area.west} ${area.south} ${area.east} ${area.north} $zoom $_online';
+    final kept = _estimates[key];
+    if (kept != null && DateTime.now().difference(kept.at) < estimateFor) return kept.estimate;
+    final f = _estimate(layerId, area, zoom: zoom);
+    _estimates[key] = (at: DateTime.now(), estimate: f);
+    // A failure (no connection, the source did not answer) is not kept: the next ask tries again.
+    void forget() {
+      if (identical(_estimates[key]?.estimate, f)) _estimates.remove(key);
+    }
+    f.then((e) {
+      if (!e.allowed && e.tiles == 0) forget();
+    }, onError: (Object _) => forget());
+    return f;
+  }
+
+  Future<AreaEstimate> _estimate(String layerId, GeoBounds area, {int? zoom}) async {
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final entry = _entries[layerId];
     if (def.onlineOnly || entry?['downloadable'] == false) {
       return const AreaEstimate(tiles: 0, bytes: 0, maxZoom: 0, allowed: false, problem: "This layer's terms do not allow keeping it offline.");
     }
     final bbox = [area.west, area.south, area.east, area.north];
-    if (zoom != null) return _estimateAt(layerId, bbox, zoom);
+    return _onPlanner((core) => zoom != null ? _estimateAt(core, layerId, bbox, zoom) : _stepDown(core, def, layerId, bbox));
+  }
+
+  /// The most detail that fits: the layer's top zoom first, then one less at a time, at most five steps down.
+  Future<AreaEstimate> _stepDown(SearchCore core, LayerDef def, String layerId, List<double> bbox) async {
     final top = def.maxZoom;
     final floor = (top - 5).clamp(def.minZoom, top);
     Map<String, dynamic>? last;
@@ -375,7 +451,7 @@ class CoreLayerEngine extends LayerEngine {
     for (var z = top; z >= floor; z--) {
       final Map<String, dynamic> plan;
       try {
-        plan = await _core!.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': def.minZoom, 'maxzoom': z}));
+        plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': def.minZoom, 'maxzoom': z}));
       } on CacheSearchException catch (e) {
         if (e.code == 'offline') {
           return AreaEstimate(tiles: 0, bytes: 0, maxZoom: z, allowed: false, problem: 'The size is worked out from the source, which needs a connection.');
@@ -399,10 +475,10 @@ class CoreLayerEngine extends LayerEngine {
 
   /// One zoom only: no lower zoom to fall back to, so the per-download cap does not apply (the download pop-up still checks the
   /// space).
-  Future<AreaEstimate> _estimateAt(String layerId, List<double> bbox, int zoom) async {
+  Future<AreaEstimate> _estimateAt(SearchCore core, String layerId, List<double> bbox, int zoom) async {
     final Map<String, dynamic> plan;
     try {
-      plan = await _core!.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom}));
+      plan = await core.layers('plan', jsonEncode({'layer': layerId, 'bbox': bbox, 'minzoom': zoom, 'maxzoom': zoom}));
     } on CacheSearchException catch (e) {
       final problem = e.code == 'offline' ? 'The size is worked out from the source, which needs a connection.' : e.message;
       return AreaEstimate(tiles: 0, bytes: 0, maxZoom: zoom, allowed: false, problem: problem);
@@ -456,6 +532,7 @@ class CoreLayerEngine extends LayerEngine {
 
   Future<void> _start(DownloadedArea a, Map<String, dynamic> request, {required bool update}) async {
     final core = _core!;
+    _estimates.clear();
     final job = await core.startJob('layer_download', {'layers': layersConfig(), ...request});
     a
       ..phase = AreaPhase.running
@@ -537,6 +614,8 @@ class CoreLayerEngine extends LayerEngine {
       reload = true;
     }
     if (reload) {
+      // Tiles were added or removed: the second core reads the stores afresh.
+      _dropPlanner();
       try {
         await _reload();
       } catch (_) {}
@@ -582,6 +661,7 @@ class CoreLayerEngine extends LayerEngine {
     final layer = _areaLayer[areaId] ?? _areas.values.where((a) => a.id == areaId).firstOrNull?.layerId;
     if (layer == null) return;
     await _core!.layers('delete', jsonEncode({'layer': layer, 'area': areaId}));
+    _dropPlanner();
     _areas.removeWhere((k, a) => a.id == areaId);
     await _reload();
     notifyListeners();

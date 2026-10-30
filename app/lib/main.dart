@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -147,6 +147,8 @@ class _CacheAppState extends State<CacheApp> {
       openCore: sources.whenCoreReady,
       layersConfig: () => sources.layersSection,
       policy: policy,
+      // Size estimates on a core of their own, so they never queue in front of the map, the Library and the reader.
+      openPlanner: (layers) => SearchCore.open(const [], extra: {'layers': layers}),
     ),
   );
   late final VideoState video = VideoState(policy: policy);

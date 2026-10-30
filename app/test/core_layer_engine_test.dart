@@ -16,6 +16,9 @@ class _LayersNative implements CsNative {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 
   int port = 0;
+  int scale = 1;
+  int plans = 0;
+  int planMs = 0;
   bool online = true;
   String? error;
   final Map<String, Map<String, dynamic>> user = {};
@@ -75,6 +78,8 @@ class _LayersNative implements CsNative {
   @override
   int open(String configJson) {
     port = ((jsonDecode(configJson) as Map)['test_port'] as num?)?.toInt() ?? 4321;
+    scale = ((jsonDecode(configJson) as Map)['test_scale'] as num?)?.toInt() ?? 1;
+    planMs = ((jsonDecode(configJson) as Map)['test_plan_ms'] as num?)?.toInt() ?? 0;
     return 7;
   }
 
@@ -109,12 +114,16 @@ class _LayersNative implements CsNative {
         }
         final tooBig = z > 13;
         final already = areas.isNotEmpty ? 40 : 0;
+        plans++;
+        // A plan reads the source over the network: the worker is busy for that long.
+        if (planMs > 0) sleep(Duration(milliseconds: planMs));
         return jsonEncode({
           'tiles': 100 * z,
           'tiles_to_download': 100 * z - already,
           'tiles_already': already,
           'already_bytes': already * 1000,
-          'estimated_bytes': 1000 * (100 * z - already),
+          'estimated_bytes': scale * 1000 * (100 * z - already),
+          'plans_so_far': plans,
           'ok_to_start': !tooBig,
           'problems': tooBig ? [{'code': 'limit_exceeded', 'message': 'too many tiles for one download'}] : [],
         });
@@ -263,6 +272,46 @@ void main() {
     final online = await engine.estimate('esri', home);
     expect(online.allowed, isFalse);
     expect(online.problem, contains('offline'));
+  });
+
+  test('estimates run on a core of their own, so the main core is never held up by them; the same one is asked once', () async {
+    final opened = <Map<String, dynamic>>[];
+    SearchCore? planner;
+    final e = CoreLayerEngine(
+      openCore: () async => core,
+      layersConfig: () => {'dir': '/layers'},
+      connected: () async => true,
+      // The planner's stand-in answers ten times the main one's bytes, so the answer says which core planned.
+      openPlanner: (layers) async {
+        opened.add(layers);
+        return planner = await SearchCore.open(const [], extra: {'layers': layers, 'test_scale': 10, 'test_plan_ms': 300}, native: _makeNative);
+      },
+    );
+    await e.start();
+    // The catalogue refresh that start begins (a changed catalogue drops the planner) is over before the estimates.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // While the slow plans run, the main core still answers at once (the map's start, the Library, the reader use it).
+    final planning = e.estimate('basemap', home);
+    await until(() => planner != null);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final watch = Stopwatch()..start();
+    await core.layers('list');
+    expect(watch.elapsedMilliseconds, lessThan(250), reason: 'the main core did not wait for the plans (3 x 300 ms)');
+    final first = await planning;
+    expect(first.bytes, 10 * 1300 * 1000, reason: 'planned on the second core');
+    expect(opened, [
+      {'dir': '/layers', 'online': true},
+    ], reason: 'opened once, with the layers section only');
+    final again = await Future.wait([e.estimate('basemap', home), e.estimate('basemap', home)]);
+    expect(again.map((a) => a.bytes), [first.bytes, first.bytes]);
+    expect((await planner!.layers('plan', jsonEncode({'layer': 'elevation', 'bbox': [0, 0, 1, 1], 'maxzoom': 1})))['plans_so_far'], 4,
+        reason: 'the three asks for the same area planned once (zooms 15, 14 and 13)');
+    // A changed catalogue opens the planner again, with the new definitions, and drops what was kept.
+    await e.saveDefinition(jsonEncode({'format': 1, 'id': 'mine', 'title': 'Mine', 'description': 'd', 'kind': 'raster', 'transform': 'as_is', 'license': 'l', 'attribution': 'a',
+      'source': {'type': 'xyz', 'url': 'https://m.test/{z}/{x}/{y}', 'maxzoom': 10}}));
+    await e.estimate('basemap', home);
+    expect(opened, hasLength(2));
+    e.dispose();
   });
 
   test('a download runs as a layer_download job, shows progress, then is a finished area', () async {
