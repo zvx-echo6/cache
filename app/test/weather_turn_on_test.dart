@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/layout/layout_state.dart';
@@ -105,6 +106,51 @@ void main() {
     }
     expect(r.settings.watchedPlaces, contains('here'));
     expect(find.text('No place is being watched.'), findsNothing);
+    await r.dispose(tester);
+  });
+
+  testWidgets('Weather shows what is on the phone at once, with its age, while the core is busy; the core\'s answer follows', (tester) async {
+    final r = await SettingsRig.create(tester);
+    await tester.runAsync(() => r.weather.setRowOn(WeatherTurnOn.rows.first, true));
+    final fetched = r.clock.subtract(const Duration(minutes: 50));
+    r.liveCore.stored['openmeteo-forecast'] = {
+      'fetched_at': fetched.toIso8601String(),
+      'age': 'less than a minute old',
+      'expired': false,
+      'items': [
+        {'address': 'live:openmeteo-forecast/x/now', 'label': 'Now', 'fields': {'Temperature': '43 °F', 'Conditions': 'overcast'}},
+      ],
+    };
+    // Home's card read it once (as at every start).
+    await tester.runAsync(() async {
+      final here = (await r.weather.watchedPlaces()).first;
+      await r.weather.viewFor(here);
+    });
+    // Now the core is held up (a weather update, map sizes): the screen must not wait for it.
+    r.liveCore.busy = Completer<void>();
+    await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r)));
+    for (var i = 0; i < 10; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(find.byType(CircularProgressIndicator), findsNothing, reason: 'nothing to wait for: the forecast is on the phone');
+    expect(find.textContaining('43 °F'), findsWidgets);
+    expect(find.textContaining('50 minutes old'), findsWidgets, reason: 'the age as of now, not as of the last read');
+    r.liveCore.busy!.complete();
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump();
+    expect(find.textContaining('43 °F'), findsWidgets);
+    await r.dispose(tester);
+  });
+
+  testWidgets('Weather while "Where I am" waits for the position says so, and does not offer to turn weather on', (tester) async {
+    final r = await SettingsRig.create(tester);
+    await tester.runAsync(() => r.weather.setRowOn(WeatherTurnOn.rows.first, true));
+    r.here = null;
+    await r.show(tester, WeatherScreen(weather: r.weather, turnOn: turnOn(r), onOpenSettings: () {}));
+    await tester.pumpAndSettle();
+    expect(find.text('Waiting for your position.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('weather-turn-on')), findsNothing, reason: 'weather is on');
     await r.dispose(tester);
   });
 

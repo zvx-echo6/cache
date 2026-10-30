@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
+import '../actions/setup_status.dart' show setupAge;
 import '../chat/system_prompt.dart' show isoWithOffset;
 import '../files.dart';
 import '../settings/app_settings.dart';
@@ -410,6 +411,7 @@ class WeatherState extends ChangeNotifier {
     }
     _catalogues = _store!.loadAll();
     _readStatus();
+    _readShown();
     await _readKeys();
     _kind = await policy.probe.current();
     if (_kind != ConnectionKind.none) _lastOnlineAt = _now();
@@ -885,26 +887,75 @@ class WeatherState extends ChangeNotifier {
   /// is exactly what the assistant would get.
   Future<List<SourceView>> viewFor(WatchPlace p) async {
     final out = <SourceView>[];
+    var kept = false;
     for (final c in enabledSources) {
       try {
         final g = await core.get({'source': c.id, 'place': placeRequest(p), 'now': isoWithOffset(_now())});
-        final le = g['last_error'];
-        out.add(SourceView(
-          source: c,
-          place: p,
-          items: [for (final i in (g['items'] as List? ?? const [])) if (i is Map) LiveItem.fromJson(i.cast<String, dynamic>())],
-          age: g['age'] as String?,
-          fetchedAt: g['fetched_at'] as String?,
-          expired: g['expired'] == true,
-          error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
-        ));
+        _shown['${c.id} ${p.id}'] = g;
+        kept = true;
+        out.add(_viewOf(c, p, g));
       } on CacheSearchException catch (e) {
         out.add(SourceView(source: c, place: p, missing: true, error: e.code == 'not_found' ? null : (_sourceErrors[c.id] ?? e.message)));
       } catch (_) {
         out.add(SourceView(source: c, place: p, missing: true, error: _sourceErrors[c.id]));
       }
     }
+    if (kept) _saveShown();
     return out;
+  }
+
+  SourceView _viewOf(Connector c, WatchPlace p, Map<String, dynamic> g, {bool kept = false}) {
+    final le = g['last_error'];
+    final fetched = DateTime.tryParse('${g['fetched_at']}');
+    return SourceView(
+      source: c,
+      place: p,
+      items: [for (final i in (g['items'] as List? ?? const [])) if (i is Map) LiveItem.fromJson(i.cast<String, dynamic>())],
+      // A kept answer's age is worked out again: it is older now than when the core said it.
+      age: kept && fetched != null ? setupAge(_now().difference(fetched)) : g['age'] as String?,
+      fetchedAt: g['fetched_at'] as String?,
+      expired: g['expired'] == true,
+      error: le is Map ? '${le['message']}' : _sourceErrors[c.id],
+    );
+  }
+
+  /// The last answer the core gave for each source and place, also kept in a file: the core answers one call at a time, and while
+  /// it downloads (a weather update, map sizes, a library) the Weather screen waited minutes for what is already on the phone.
+  final Map<String, Map<String, dynamic>> _shown = {};
+
+  /// What [viewFor] last gave for [p], at once and without the core, with each copy's age as of now; null when nothing is kept.
+  List<SourceView>? keptViewFor(WatchPlace p) {
+    final out = [
+      for (final c in enabledSources)
+        if (_shown['${c.id} ${p.id}'] case final g?) _viewOf(c, p, g, kept: true),
+    ];
+    return out.isEmpty ? null : out;
+  }
+
+  File? get _shownFile {
+    final d = _store?.root;
+    return d == null ? null : File('${d.path}/last-shown.json');
+  }
+
+  void _readShown() {
+    try {
+      final f = _shownFile;
+      if (f == null || !f.existsSync()) return;
+      final j = jsonDecode(f.readAsStringSync());
+      if (j is! Map) return;
+      for (final e in j.entries) {
+        if (e.value is Map) _shown.putIfAbsent(e.key as String, () => (e.value as Map).cast<String, dynamic>());
+      }
+    } catch (_) {}
+  }
+
+  void _saveShown() {
+    try {
+      final f = _shownFile;
+      if (f == null) return;
+      f.parent.createSync(recursive: true);
+      writeStringAtomicSync(f, jsonEncode(_shown));
+    } catch (_) {}
   }
 
   /// Pops up what is new near the watched places (warnings and fires; see [pickNewAlerts]) as the person's "Pop up for" says, silent in
