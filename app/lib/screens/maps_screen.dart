@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:cache_search/cache_search.dart' show MapRoute;
+import 'package:cache_search/cache_search.dart' show MapPlace, MapRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -19,6 +19,10 @@ import '../maps/ui/layer_sheet.dart';
 import '../maps/ui/map_assets.dart';
 import '../maps/ui/map_widgets.dart';
 import '../nav/nav_geojson.dart';
+import '../notebook/notebook_map.dart';
+import '../notebook/notebook_model.dart';
+import '../notebook/notebook_state.dart';
+import '../notebook/notebook_text.dart';
 import '../nav/nav_state.dart';
 import '../nav/ui/guidance_panels.dart';
 import '../nav/ui/place_card.dart';
@@ -31,7 +35,13 @@ import '../theme.dart';
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry});
+
+  /// Notebooks whose entries have places: drawn as pins and listed under "My layers"; null leaves them out.
+  final NotebookState? notebooks;
+
+  /// A notebook pin's Open.
+  final void Function(NbEntry entry)? onOpenEntry;
 
   final LocationService location;
   final MapsState maps;
@@ -83,6 +93,7 @@ class _MapsScreenState extends State<MapsScreen> {
     maps.addListener(_onMaps);
     location.addListener(_onLocation);
     nav.addListener(_onNav);
+    widget.notebooks?.addListener(_pushNotebooks);
     _lifecycle;
     final c = maps.savedCamera;
     if (c != null) {
@@ -105,6 +116,7 @@ class _MapsScreenState extends State<MapsScreen> {
     maps.removeListener(_onMaps);
     location.removeListener(_onLocation);
     nav.removeListener(_onNav);
+    widget.notebooks?.removeListener(_pushNotebooks);
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
     super.dispose();
@@ -188,6 +200,8 @@ class _MapsScreenState extends State<MapsScreen> {
     await _pushPosition();
     _navSig = null;
     await _pushNav();
+    _notebookSig = -1;
+    await _pushNotebooks();
     _onNav(); // A route may have been loaded before this screen/listener existed.
     _afterCameraSettles();
   }
@@ -347,7 +361,102 @@ class _MapsScreenState extends State<MapsScreen> {
     } catch (_) {}
   }
 
-  void _onMapTap(math.Point<double> point, LatLng at) {
+  // ---- notebook pins -------------------------------------------------------------------------------------
+
+  int _notebookSig = -1;
+  List<NbEntry> _pins = const [];
+
+  /// The notebooks' pins follow their entries and map switches.
+  Future<void> _pushNotebooks() async {
+    final nb = widget.notebooks;
+    final c = _controller;
+    if (nb == null || c == null || !_styleReady || nb.revision == _notebookSig) return;
+    _notebookSig = nb.revision;
+    try {
+      await nb.start();
+      _pins = await nb.pins();
+      await c.setGeoJsonSource(kNotebookSource, notebookPinsGeoJson(_pins));
+    } catch (_) {}
+  }
+
+  /// A tap on a notebook pin opens its card; true when there was one.
+  Future<bool> _tapNotebookPin(math.Point<double> point) async {
+    final c = _controller;
+    if (c == null || widget.notebooks == null || _pins.isEmpty) return false;
+    try {
+      final hits = await c.queryRenderedFeatures(point, [kNotebookPins], null);
+      for (final h in hits) {
+        final props = h is Map ? h['properties'] : null;
+        final id = props is Map ? props['entry'] : null;
+        final e = _pins.where((p) => p.id == id).firstOrNull;
+        if (e != null) {
+          if (mounted) _notebookCard(e);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  void _notebookCard(NbEntry e) {
+    final book = widget.notebooks?.notebook(e.notebookId);
+    final place = e.place!;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(entryTitle(e), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: ctx.t.text)),
+              Text([?book?.name, dayText(e.when, now: DateTime.now()), place.display].join(' · '), style: TextStyle(fontSize: 15, color: ctx.t.secondary)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (widget.onOpenEntry != null)
+                    FilledButton(
+                      key: const ValueKey('pin-open'),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        widget.onOpenEntry!(e);
+                      },
+                      child: const Text('Open'),
+                    ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    key: const ValueKey('pin-directions'),
+                    onPressed: nav.phase != NavPhase.browsing
+                        ? null
+                        : () {
+                            Navigator.pop(ctx);
+                            nav.select(MapPlace(
+                              id: 'notebook:${e.id}',
+                              type: 'place',
+                              name: entryTitle(e),
+                              kind: book?.name ?? '',
+                              address: place.label ?? '',
+                              lat: place.lat,
+                              lon: place.lon,
+                              matched: '',
+                              formats: const {},
+                            ));
+                          },
+                    child: const Text('Directions'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onMapTap(math.Point<double> point, LatLng at) async {
+    if (!nav.searchOpen && await _tapNotebookPin(point)) return;
     if (nav.searchOpen) {
       nav.closeSearch(clear: false);
     } else if (nav.phase == NavPhase.browsing && nav.selected != null) {
@@ -645,7 +754,7 @@ class _MapsScreenState extends State<MapsScreen> {
           MapButton(
             icon: Icons.layers_outlined,
             tooltip: 'Layers',
-            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions),
+            onPressed: () => showLayerSheet(context, maps, location, regions: widget.regions, notebooks: widget.notebooks),
           ),
         if (!nav.guiding) const SizedBox(height: 12),
         MapButton(

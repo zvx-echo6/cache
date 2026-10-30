@@ -28,11 +28,15 @@ const String kPositionHeading = 'position-heading';
 /// The sources the screen updates with the route being looked at or followed, and with the chosen place and the search results.
 const String kRouteSource = 'cache-route';
 const String kPinSource = 'cache-pin';
+
+/// The entries with a place of the notebooks shown on the map ("My layers"), one point each, with `entry` and `notebook` ids.
+const String kNotebookSource = 'cache-notebook';
 const String kRouteAlt = 'route-alt';
 const String kRouteCasing = 'route-casing';
 const String kRouteRoad = 'route-road';
 const String kRouteFollow = 'route-follow';
 const String kRouteOffroad = 'route-offroad';
+const String kNotebookPins = 'notebook-pins';
 const String kPinResults = 'pin-results';
 const String kPinSelected = 'pin-selected';
 
@@ -174,6 +178,10 @@ Map<String, dynamic> buildMapStyle({
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
   sources[kPinSource] = {
+    'type': 'geojson',
+    'data': {'type': 'FeatureCollection', 'features': <Object>[]},
+  };
+  sources[kNotebookSource] = {
     'type': 'geojson',
     'data': {'type': 'FeatureCollection', 'features': <Object>[]},
   };
@@ -402,6 +410,17 @@ List<Map<String, dynamic>> _routeLayers(MapPalette p) => [
         'paint': {'line-color': p.css('routeOffroad'), 'line-width': 6, 'line-dasharray': [2, 1.2]},
       },
       {
+        'id': kNotebookPins,
+        'type': 'circle',
+        'source': kNotebookSource,
+        'paint': {
+          'circle-radius': 6,
+          'circle-color': p.css('routeCasing'),
+          'circle-stroke-width': 3,
+          'circle-stroke-color': p.css('pin'),
+        },
+      },
+      {
         'id': kPinResults,
         'type': 'circle',
         'source': kPinSource,
@@ -484,6 +503,7 @@ List<String> expectedLayerIds(Map<String, dynamic> omtTemplate, List<StyleLayerU
     kRouteRoad,
     kRouteFollow,
     kRouteOffroad,
+    kNotebookPins,
     kPinResults,
     kPinSelected,
     kPositionAccuracyFill,

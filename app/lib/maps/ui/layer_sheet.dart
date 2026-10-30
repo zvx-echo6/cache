@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../location/location_service.dart';
+import '../../notebook/notebook_map.dart';
+import '../../notebook/notebook_state.dart';
 import '../../regions/regions_state.dart';
 import '../../regions/ui/regions_screen.dart';
 import '../../theme.dart';
@@ -9,18 +11,18 @@ import '../maps_state.dart';
 import 'catalogue_screen.dart';
 
 /// The layer button's sheet: every layer on or off, opacity for overlays, and "Get more layers".
-Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location, {RegionsState? regions}) {
+Future<void> showLayerSheet(BuildContext context, MapsState maps, LocationService location, {RegionsState? regions, NotebookState? notebooks}) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
     isScrollControlled: true,
     constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
-    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions),
+    builder: (ctx) => LayerSheet(maps: maps, location: location, regions: regions, notebooks: notebooks),
   );
 }
 
 class LayerSheet extends StatelessWidget {
-  const LayerSheet({super.key, required this.maps, required this.location, this.regions});
+  const LayerSheet({super.key, required this.maps, required this.location, this.regions, this.notebooks});
 
   final MapsState maps;
   final LocationService location;
@@ -28,11 +30,14 @@ class LayerSheet extends StatelessWidget {
   /// Regions and downloads; the sheet offers "Download a region" when it is there.
   final RegionsState? regions;
 
+  /// The notebooks with places, listed under "My layers" by their own names, each with its map switch.
+  final NotebookState? notebooks;
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
     return ListenableBuilder(
-      listenable: Listenable.merge([maps, location]),
+      listenable: Listenable.merge([maps, location, ?notebooks]),
       builder: (context, _) {
         final base = [for (final l in maps.catalogueLayers) if (l.isBase) l];
         final overlays = [for (final l in maps.catalogueLayers) if (!l.isBase) l];
@@ -46,6 +51,18 @@ class LayerSheet extends StatelessWidget {
               for (final l in base) _row(context, l),
               if (overlays.isNotEmpty) const Divider(height: 24),
               for (final l in overlays) _row(context, l),
+              if (notebooks case final nb? when myLayers(nb.notebooks).isNotEmpty) ...[
+                const Divider(height: 24),
+                Text('MY LAYERS', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: k.secondary)),
+                for (final n in myLayers(nb.notebooks))
+                  SwitchListTile(
+                    key: ValueKey('my-layer-${n.id}'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(n.name, style: const TextStyle(fontSize: 17)),
+                    value: n.map,
+                    onChanged: (v) => nb.setOnMap(n, v),
+                  ),
+              ],
               const Divider(height: 24),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
