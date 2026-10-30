@@ -10,6 +10,7 @@ import 'package:cache/notebook/sync/merge.dart';
 import 'package:cache/notebook/sync/sync_engine.dart';
 import 'package:cache/notebook/sync/connections.dart';
 import 'package:cache/screens/notebooks/connections_screen.dart';
+import 'package:cache/screens/notebooks/notebook_editor.dart';
 import 'package:cache/screens/pin_screen.dart';
 import 'package:cache/settings/app_pin.dart';
 import 'package:cache/theme.dart';
@@ -322,18 +323,21 @@ void main() {
   });
 
   group('notebook sync between devices', () {
-    test('private items stay home unless chosen; a second device makes the notebook and its entries', () async {
+    test('private notebooks stay home unless included; a second device makes the notebook and its entries', () async {
       final one = _Rig(SyncKind.share, includePrivate: false);
-      final j = await one.journal();
+      await one.journal();
       final log = await one.nb.saveNotebook(
           template: 'log',
           def: const NotebookDef(name: 'Generator test', fields: [LogField(label: 'Run time', type: FieldType.number, unit: 'min')], quickAdd: true, sort: NotebookSort.recent));
       await one.nb.saveEntry(notebookId: log.id, occurredAt: '2026-10-25T16:12:00-06:00', values: {'f1': 20}, body: 'Oil fine.');
-      await one.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Private', body: 'x', private: true);
+      final meds = await one.nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Medical', fields: [], sort: NotebookSort.recent), private: true);
+      await one.nb.saveEntry(notebookId: meds.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Private', body: 'x');
       await one.engine.run();
       expect(one.folder.text.keys.where((k) => k.endsWith('.md')).length, 1);
       final books = jsonDecode(one.folder.text['.cache/notebooks.json']!) as Map;
-      expect([for (final n in books['notebooks'] as List) (n as Map)['def']['name']], containsAll(['Journal', 'Generator test']));
+      final names = [for (final n in books['notebooks'] as List) (n as Map)['def']['name']];
+      expect(names, containsAll(['Journal', 'Generator test']));
+      expect(names, isNot(contains('Medical')));
       // the other device, with this folder
       final two = _Rig(SyncKind.share, includePrivate: false);
       await two.nb.start();
@@ -345,8 +349,8 @@ void main() {
       final e = (await two.nb.entries(made.id)).single;
       expect(e.values, {'f1': 20});
       expect(e.body, 'Oil fine.');
-      // with private items chosen, the private entry goes too
-      final again = NotebookSync(notebook: one.nb, kind: SyncKind.share, folder: one.folder, stateFile: one.state, includePrivate: true);
+      // a private notebook with "Include in sync and sharing" goes too
+      final again = NotebookSync(notebook: one.nb, kind: SyncKind.share, folder: one.folder, stateFile: one.state, includePrivate: false, privateBooks: {meds.id});
       await again.run();
       expect(one.folder.text.keys.where((k) => k.endsWith('.md')).length, 2);
     });
@@ -405,6 +409,26 @@ void main() {
       expect(find.byKey(const ValueKey('status-obsidian')), findsOneWidget);
     });
 
+    testWidgets('a private notebook\'s edit page offers "Include in sync and sharing", off by default', (tester) async {
+      final store = FakeNotebookBackend();
+      final nb = fakeNotebook(store)..privateSharing = _Included();
+      await tester.runAsync(nb.start);
+      final notes = await tester.runAsync(() => nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Medical', fields: [], sort: NotebookSort.recent)));
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: NotebookEditor(notebook: nb, existing: notes)));
+      expect(find.byKey(const ValueKey('notebook-include')), findsNothing, reason: 'not private');
+      await tester.tap(find.byKey(const ValueKey('notebook-private')));
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(find.byKey(const ValueKey('notebook-include'))).value, isFalse);
+      await tester.tap(find.byKey(const ValueKey('notebook-include')));
+      await tester.pump();
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('notebook-save')));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect((nb.privateSharing! as _Included).ids, {notes!.id});
+    });
+
     testWidgets('the lock screen: the right PIN opens Cache, a wrong one says so', (tester) async {
       final store = MemoryTokenStore();
       final pin = AppPin(store, iterations: 10);
@@ -432,4 +456,20 @@ void main() {
       expect(pin.locked, isFalse);
     });
   });
+}
+
+class _Included implements PrivateSharing {
+  final Set<String> ids = {};
+
+  @override
+  bool included(String notebookId) => ids.contains(notebookId);
+
+  @override
+  Future<void> setIncluded(String notebookId, bool on) async {
+    if (on) {
+      ids.add(notebookId);
+    } else {
+      ids.remove(notebookId);
+    }
+  }
 }

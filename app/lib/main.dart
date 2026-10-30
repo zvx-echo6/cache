@@ -341,6 +341,8 @@ class _CacheAppState extends State<CacheApp> {
     alertSetting: () => settings.alertPopups ? 'Pop-ups as set in Notifications' : 'Pop-ups are off in Notifications',
     alertKinds: () => {for (final c in weather.enabledSources) c.id == 'alerts' ? 'alerts' : c.category}.where(kAlertKinds.containsKey).toList(),
     regions: () async => [for (final p in await weather.placeChoices()) if (p.kind == PlaceKind.region) (id: p.id, name: p.name)],
+    hereOnMap: () => location.enabled,
+    setHereOnMap: (on) => unawaited(location.setEnabled(on)),
     map: (context, pin, onPick) => PlaceMap(maps: maps, themeId: app.theme, pin: pin, onPick: onPick),
     directions: (p, name) {
       nav.openDirections(MapPlace(id: 'place:${p.lat},${p.lon}', type: 'place', name: name, kind: '', address: p.label ?? '', lat: p.lat, lon: p.lon, matched: '', formats: const {}));
@@ -406,6 +408,7 @@ class _CacheAppState extends State<CacheApp> {
         before?.call();
         connections.changed();
       };
+      notebooks.privateSharing = connections;
       unawaited(connections.syncAll());
       _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
         if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());

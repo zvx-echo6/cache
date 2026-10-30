@@ -104,19 +104,12 @@ class ConnectionsScreen extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     shareAvailable
-                        ? 'Notebooks, with their photos, stay the same on the devices you linked in Sharing and sync when Notebooks is ticked there.'
+                        ? 'Notebooks, with their photos, stay the same on the devices you linked in Sharing and sync when Notebooks is ticked there. '
+                            'Private notebooks stay on this device unless their "Include in sync and sharing" is on.'
                         : 'Link your devices in Settings > Sharing and sync and tick Notebooks to keep your notebooks the same on all of them.',
                     style: TextStyle(fontSize: 14, color: k.secondary),
                   ),
                   if (connections.status('share') case final s?) Padding(padding: const EdgeInsets.only(top: 6), child: Text(s, style: TextStyle(fontSize: 14, color: k.text))),
-                  SwitchListTile(
-                    key: const ValueKey('share-private'),
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Include private items'),
-                    subtitle: Text('Off: private entries and notebooks stay on this device.', style: TextStyle(fontSize: 13, color: k.secondary)),
-                    value: connections.shareIncludesPrivate,
-                    onChanged: shareAvailable ? connections.setShareIncludesPrivate : null,
-                  ),
                   for (final c in connections.conflicts('share')) _conflict(context, 'share', c),
                 ],
               ),

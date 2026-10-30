@@ -14,35 +14,32 @@ import 'sync_engine.dart';
 const String kNotebookShareDir = 'notebook-share';
 
 /// One connected folder: an Obsidian vault, a Logseq graph (two-way, or export-only for Logseq 2.x), or notebook sync's own
-/// folder (kind share, id `share`).
+/// folder (kind share, id `share`). Private items go to Obsidian and Logseq (decided 2026-10-29); notebook sync leaves private
+/// notebooks out unless each one's "Include in sync and sharing" is on.
 class SyncTargetConfig {
-  const SyncTargetConfig({required this.id, required this.kind, required this.path, this.paused = false, this.includePrivate = true});
+  const SyncTargetConfig({required this.id, required this.kind, required this.path, this.paused = false});
 
   final String id;
   final SyncKind kind;
   final String path;
   final bool paused;
 
-  /// Private items go to this folder. Obsidian and Logseq: always (decided 2026-10-29). Notebook sync: only when chosen.
-  final bool includePrivate;
+  SyncTargetConfig copyWith({bool? paused}) => SyncTargetConfig(id: id, kind: kind, path: path, paused: paused ?? this.paused);
 
-  SyncTargetConfig copyWith({bool? paused, bool? includePrivate}) =>
-      SyncTargetConfig(id: id, kind: kind, path: path, paused: paused ?? this.paused, includePrivate: includePrivate ?? this.includePrivate);
-
-  Map<String, dynamic> toJson() => {'id': id, 'kind': kind.name, 'path': path, 'paused': paused, 'include_private': includePrivate};
+  Map<String, dynamic> toJson() => {'id': id, 'kind': kind.name, 'path': path, 'paused': paused};
 
   static SyncTargetConfig? fromJson(Object? j) {
     if (j is! Map || j['path'] is! String) return null;
     final kind = SyncKind.values.where((k) => k.name == j['kind']).firstOrNull;
     if (kind == null) return null;
-    return SyncTargetConfig(id: '${j['id']}', kind: kind, path: j['path'] as String, paused: j['paused'] == true, includePrivate: j['include_private'] != false);
+    return SyncTargetConfig(id: '${j['id']}', kind: kind, path: j['path'] as String, paused: j['paused'] == true);
   }
 }
 
 /// The notebooks' connections: the folders they are kept in step with, when they sync (on opening Notebooks, 2 s after a
 /// change, when Cache comes back to the screen; never in the background), their status lines and the decisions they wait for.
 /// Errors never block Notebooks.
-class NotebookConnections extends ChangeNotifier {
+class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   NotebookConnections({required this.notebook, required this.dir, this.shareFolder, this.shareOn, this.storePhoto, this.folderFor});
 
   final NotebookState notebook;
@@ -80,8 +77,20 @@ class NotebookConnections extends ChangeNotifier {
   /// Entries changed in both places whose changes were merged in the last run (told, not asked).
   List<String> merged(String id) => _merged[id] ?? const [];
 
-  /// Notebook sync leaves private items out unless this is on.
-  bool get shareIncludesPrivate => _targets.where((t) => t.kind == SyncKind.share).firstOrNull?.includePrivate ?? false;
+  Set<String> _privateBooks = {};
+
+  /// Notebook sync leaves private notebooks out unless the notebook's "Include in sync and sharing" is on.
+  @override
+  bool included(String notebookId) => _privateBooks.contains(notebookId);
+
+  @override
+  Future<void> setIncluded(String notebookId, bool on) async {
+    await init();
+    on ? _privateBooks.add(notebookId) : _privateBooks.remove(notebookId);
+    await _saveTargets();
+    notifyListeners();
+    unawaited(syncAll());
+  }
 
   Future<File> _targetsFile() async => File('${(await dir()).path}/targets.json');
 
@@ -92,7 +101,9 @@ class NotebookConnections extends ChangeNotifier {
       final f = await _targetsFile();
       if (await f.exists()) {
         final j = jsonDecode(await f.readAsString());
-        _targets = [for (final t in (j is List ? j : const [])) ?SyncTargetConfig.fromJson(t)];
+        final list = j is Map ? j['targets'] : j;
+        _targets = [for (final t in (list is List ? list : const [])) ?SyncTargetConfig.fromJson(t)];
+        if (j is Map && j['private_included'] is List) _privateBooks = {for (final x in j['private_included'] as List) '$x'};
       }
     } catch (e) {
       debugPrint('cache notebook connections: $e');
@@ -103,7 +114,7 @@ class NotebookConnections extends ChangeNotifier {
   Future<void> _saveTargets() async {
     final f = await _targetsFile();
     await f.parent.create(recursive: true);
-    await writeStringAtomic(f, jsonEncode([for (final t in _targets) t.toJson()]));
+    await writeStringAtomic(f, jsonEncode({'targets': [for (final t in _targets) t.toJson()], 'private_included': [..._privateBooks]..sort()}));
   }
 
   SyncFolder _folder(String path) => folderFor?.call(path) ?? IoFolder(path);
@@ -145,23 +156,12 @@ class NotebookConnections extends ChangeNotifier {
     if (!paused) unawaited(syncAll());
   }
 
-  /// Notebook sync: include private items (off by default).
-  Future<void> setShareIncludesPrivate(bool on) async {
-    await init();
-    final share = _shareTarget();
-    if (share == null) return;
-    _targets = [for (final t in _targets) if (t.kind != SyncKind.share) t, share.copyWith(includePrivate: on)];
-    await _saveTargets();
-    notifyListeners();
-    unawaited(syncAll());
-  }
-
   SyncTargetConfig? _shareTarget() {
     final have = _targets.where((t) => t.kind == SyncKind.share).firstOrNull;
     if (have != null) return have;
     final d = shareFolder?.call();
     if (d == null) return null;
-    final t = SyncTargetConfig(id: 'share', kind: SyncKind.share, path: d.path, includePrivate: false);
+    final t = SyncTargetConfig(id: 'share', kind: SyncKind.share, path: d.path);
     _targets = [..._targets, t];
     return t;
   }
@@ -175,7 +175,8 @@ class NotebookConnections extends ChangeNotifier {
       kind: t.kind,
       folder: folder,
       stateFile: File('${(await dir()).path}/${t.id}.json'),
-      includePrivate: t.includePrivate,
+      includePrivate: t.kind != SyncKind.share,
+      privateBooks: t.kind == SyncKind.share ? {..._privateBooks} : const {},
       logseqConfig: ls,
     );
     final sp = storePhoto;

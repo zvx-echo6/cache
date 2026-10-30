@@ -37,6 +37,8 @@ class PlaceNotebookDeps {
     this.map,
     this.directions,
     this.regions,
+    this.hereOnMap,
+    this.setHereOnMap,
   });
 
   final bool Function(String placeId) watched;
@@ -59,6 +61,10 @@ class PlaceNotebookDeps {
 
   /// The downloaded regions weather can be kept for (watched-place id `region:<name>`), listed after "Where I am".
   final Future<List<({String id, String name})>> Function()? regions;
+
+  /// "Where I am" on the map (the position dot), and its marker's toggle.
+  final bool Function()? hereOnMap;
+  final void Function(bool on)? setHereOnMap;
 }
 
 /// The watched-place id of a saved place's entry.
@@ -253,13 +259,31 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
     );
   }
 
-  /// "Where I am": the phone's position, with its weather and alerts.
+  /// "Where I am": the fixed first row (the phone's position, never deleted or moved), with its marker toggle (the position on
+  /// the map) and its weather and alerts.
   Widget _whereIAm(CacheTokens k) {
     final p = pd!;
     final on = p.watched('here');
+    final shown = p.hereOnMap?.call() ?? true;
     return _Card(
       key: const ValueKey('place-here'),
-      leading: SizedBox(width: 44, height: 44, child: Icon(Icons.my_location, color: k.accent, semanticLabel: 'Where I am')),
+      leading: Semantics(
+        button: true,
+        toggled: shown,
+        label: 'Where I am marker, ${shown ? 'shown on the map' : 'hidden on the map'}',
+        excludeSemantics: true,
+        child: InkResponse(
+          key: const ValueKey('marker-here'),
+          radius: 24,
+          onTap: p.setHereOnMap == null
+              ? null
+              : () {
+                  HapticFeedback.selectionClick();
+                  setState(() => p.setHereOnMap!(!shown));
+                },
+          child: SizedBox(width: 44, height: 44, child: Icon(shown ? Icons.my_location : Icons.location_disabled_outlined, color: k.accent)),
+        ),
+      ),
       title: 'Where I am',
       detail: 'Follows the phone · weather ${on ? 'on' : 'off'}',
       onTap: () => showWeatherSheet(context, p, placeId: 'here', name: 'Where I am').then((_) => setState(() {})),

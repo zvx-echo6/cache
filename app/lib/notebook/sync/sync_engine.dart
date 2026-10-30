@@ -87,6 +87,7 @@ class NotebookSync {
     required this.folder,
     required this.stateFile,
     this.includePrivate = true,
+    this.privateBooks = const {},
     this.logseqConfig,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
@@ -98,6 +99,9 @@ class NotebookSync {
 
   /// Private items go to the folder (Obsidian and Logseq: yes; notebook sync: only when the person chose to include them).
   final bool includePrivate;
+
+  /// Private notebooks that go to the folder anyway (their "Include in sync and sharing").
+  final Set<String> privateBooks;
 
   /// A Logseq graph's `logseq/config.edn` (read once when it is connected).
   final ({String format, String dir, bool org})? logseqConfig;
@@ -182,7 +186,7 @@ class NotebookSync {
 
   String _render(EntryDoc d) => _logseq ? renderLogseq(d) : renderObsidian(d);
 
-  bool _included(Notebook n, NbEntry e) => !e.draft && (includePrivate || !e.private);
+  bool _included(Notebook n, NbEntry e) => !e.draft && (includePrivate || !e.private || privateBooks.contains(n.id));
 
   // ---- the folder ----
 
@@ -598,7 +602,7 @@ class NotebookSync {
   Future<void> _writeBooks(List<Notebook> books) async {
     final list = [
       for (final n in books)
-        if (includePrivate || !n.private)
+        if (includePrivate || !n.private || privateBooks.contains(n.id))
           {'id': n.id, 'template': n.template, 'def': n.def.toJson(), 'private': n.private, 'map': n.map, if (n.savedPlaces) 'saved_places': true, 'props': _fieldProps(n)},
     ];
     final text = '${const JsonEncoder.withIndent(' ').convert({'format': 'cache-notebooks', 'version': 1, 'notebooks': list})}\n';

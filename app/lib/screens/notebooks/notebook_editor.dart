@@ -28,6 +28,7 @@ class _NotebookEditorState extends State<NotebookEditor> {
   late String? _due = _start.dueEvery;
   late bool _private = widget.existing?.private ?? widget.template!.private;
   late bool _map = widget.existing?.map ?? widget.template!.map;
+  late bool _shared = widget.existing == null ? false : widget.notebook.privateSharing?.included(widget.existing!.id) ?? false;
   bool _saving = false;
   String? _error;
 
@@ -58,7 +59,7 @@ class _NotebookEditorState extends State<NotebookEditor> {
     final def = _start.copyWith(name: _name.text.trim(), fields: _fields, dueEvery: _due, clearDue: _due == null);
     try {
       final e = widget.existing;
-      await widget.notebook.saveNotebook(
+      final saved = await widget.notebook.saveNotebook(
         id: e?.id,
         template: e == null ? widget.template!.template : null,
         def: def,
@@ -66,6 +67,8 @@ class _NotebookEditorState extends State<NotebookEditor> {
         map: _map,
         templateRef: e == null ? widget.template!.ref : null,
       );
+      final ps = widget.notebook.privateSharing;
+      if (ps != null && ps.included(saved.id) != (_private && _shared)) await ps.setIncluded(saved.id, _private && _shared);
       if (mounted) Navigator.of(context).maybePop(true);
     } catch (e) {
       if (mounted) {
@@ -235,6 +238,15 @@ class _NotebookEditorState extends State<NotebookEditor> {
             value: _private,
             onChanged: (v) => setState(() => _private = v),
           ),
+          if (_private && widget.notebook.privateSharing != null)
+            SwitchListTile(
+              key: const ValueKey('notebook-include'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Include in sync and sharing'),
+              subtitle: Text('Its entries go to your linked devices too.', style: TextStyle(fontSize: 14, color: k.secondary)),
+              value: _shared,
+              onChanged: (v) => setState(() => _shared = v),
+            ),
           if ((widget.existing?.placeCount ?? 0) > 0)
             SwitchListTile(
               key: const ValueKey('notebook-map'),

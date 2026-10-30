@@ -46,7 +46,10 @@ class _Rig {
         alertSetting: () => 'Serious only, from Notifications',
         alertKinds: () => const ['alerts', 'fire', 'earthquakes', 'hydrology'],
         regions: () async => const [(id: 'region:Idaho', name: 'Idaho')],
+        hereOnMap: () => hereShown,
+        setHereOnMap: (on) => hereShown = on,
       );
+  bool hereShown = true;
   NotebookDeps get deps => NotebookDeps(notebook: nb, places: _places, placesDeps: pd, now: () => _now);
 
   Future<Notebook> saved() async {
@@ -88,6 +91,11 @@ void main() {
       expect(find.text('Rally point 1'), findsOneWidget);
       expect(find.textContaining('weather off'), findsNWidgets(3), reason: 'the region and both places are not watched yet');
       expect(find.byIcon(Icons.location_off_outlined), findsNothing);
+      // Where I am: a fixed first row with its own marker toggle (no delete)
+      await tester.tap(find.byKey(const ValueKey('marker-here')));
+      await tester.pumpAndSettle();
+      expect(r.hereShown, isFalse);
+      expect(find.byIcon(Icons.location_disabled_outlined), findsOneWidget);
       final home = r.store.entries.firstWhere((e) => e['title'] == 'Home');
       await tester.tap(find.byKey(ValueKey('marker-${home['id']}')));
       await tester.pumpAndSettle();

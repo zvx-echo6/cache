@@ -34,6 +34,13 @@ class NbHit {
   final String snippet;
 }
 
+/// Which private notebooks go to sync and sharing anyway (each private notebook's "Include in sync and sharing", off by
+/// default). Kept by notebook sync's connections.
+abstract class PrivateSharing {
+  bool included(String notebookId);
+  Future<void> setIncluded(String notebookId, bool on);
+}
+
 /// What the Notebooks screens show: the notebooks, most recently used first. Every change goes through the core and the list is
 /// read again; [revision] counts the changes (an open notebook reads its entries again), and [onChanged] runs after each one.
 class NotebookState extends ChangeNotifier {
@@ -46,6 +53,9 @@ class NotebookState extends ChangeNotifier {
 
   /// After every change that went through.
   VoidCallback? onChanged;
+
+  /// Private notebooks included in sync and sharing; null where there is no sync.
+  PrivateSharing? privateSharing;
 
   List<Notebook> _notebooks = const [];
   bool _loading = true;
