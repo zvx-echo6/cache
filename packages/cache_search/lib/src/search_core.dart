@@ -212,6 +212,9 @@ class SearchCore {
   /// One op of the Notebook (cs_notebook; cache_search.h lists the ops and their answers).
   Future<Map<String, dynamic>> notebook(String op, [Map<String, dynamic> args = const {}]) => _map('notebook', {'op': op, 'args': args});
 
+  /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
+  Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
+
   /// The function schemas of the tools available now (cs_tool_schemas).
   Future<List<Map<String, dynamic>>> toolSchemas() async =>
       [for (final t in await _call('toolSchemas') as List) (t as Map).cast<String, dynamic>()];
@@ -497,6 +500,8 @@ void _workerMain(List<dynamic> init) {
           result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
         case 'notebook':
           result = eng().notebook(a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
+        case 'userLayers':
+          result = eng().userLayers(a['call'] as String, a['arg'] as String?);
         case 'placesList':
           result = eng().placesList();
         case 'placeSave':

@@ -207,6 +207,19 @@ class SearchEngine {
     return _object(_ok(n.notebook(_h, op, jsonEncode(args))));
   }
 
+  // ---- the user's map layers and repeater lists (cs_userlayer*) ----
+
+  /// One of the user-layer calls: `import` ([arg] = import JSON), `list`, `get` (id), `set_visible` (JSON), `delete` (id),
+  /// `export` (JSON); the answer as JSON (an object).
+  Map<String, dynamic> userLayers(String call, [String? arg]) {
+    final n = native is CsUserLayersNative ? native as CsUserLayersNative : null;
+    if (n == null || !n.hasUserLayers) throw const CacheSearchException('unsupported', 'This build of the core has no map layers of your own yet');
+    if (!const {'import', 'list', 'get', 'set_visible', 'delete', 'export'}.contains(call)) {
+      throw CacheSearchException('bad_json', 'unknown user-layer call $call');
+    }
+    return _object(_ok(n.userLayers(_h, call, arg)));
+  }
+
   List<SavedPlaceRecord> savedPlaces() => [
         for (final p in (_object(_ok(_saved.placesList(_h)))['places'] as List? ?? const []))
           SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),
