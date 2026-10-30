@@ -12,9 +12,12 @@ String fieldLabel(String name) {
 /// What an action the assistant asked for will do, and the two buttons that decide it: the action's title and Cancel. Once decided
 /// it shows the outcome instead of the buttons.
 class ConfirmCardView extends StatelessWidget {
-  const ConfirmCardView({super.key, required this.card, required this.onDecide, this.enabled = true});
+  const ConfirmCardView({super.key, required this.card, required this.onDecide, this.enabled = true, this.lines});
 
   final ConfirmCard card;
+
+  /// The lines in the module's own words (labels as the user named them); null shows the core's summary by field name.
+  final List<MapEntry<String, String>>? lines;
 
   /// True to run the action, false to cancel it.
   final void Function(bool confirm) onDecide;
@@ -43,10 +46,10 @@ class ConfirmCardView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(card.title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: k.text)),
-          for (final e in card.summary)
+          for (final e in lines ?? [for (final s in card.summary) MapEntry(fieldLabel(s.key), s.value)])
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text('${fieldLabel(e.key)}: ${e.value}', style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary)),
+              child: Text('${e.key}: ${e.value}', style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary)),
             ),
           const SizedBox(height: 4),
           if (outcome == null)

@@ -434,6 +434,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
           for (final card in m.confirms)
             ConfirmCardView(
               card: card,
+              lines: widget.chat?.actions?.cardLines(card.action, card.fields, card.summary),
               enabled: widget.chat?.canSend ?? false,
               onDecide: (confirm) => widget.chat?.resolveConfirm(card, confirm: confirm),
             ),
