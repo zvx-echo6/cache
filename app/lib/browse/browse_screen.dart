@@ -115,9 +115,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   Future<void> _openGuideBook(LibraryItem l) async {
     final book = await GuideBook.load();
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => GuideReaderScreen(book: book, menu: (ctx) async => showLibraryMenu(ctx, _libraryActions(l))),
-    ));
+    await Navigator.of(context).push(guideContentsRoute(book, menu: (ctx) async => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
   void _openLibrary(LibraryItem l) {

@@ -112,6 +112,8 @@ flutter:
     - assets/credits.md
     # The guide's chapters for the reader (copies of docs/guide/ch*.md, which the guide library is built from; a test keeps them equal).
     - assets/guide/chapters/
+    # The guide's screenshots (made by test_shots/guide_shots_test.dart; tools/guide/shots.txt lists them).
+    - assets/guide/shots/
     # The setup guide library (gzip-compressed .cache-library), installed on first launch and always present.
     - assets/guide/cache-guide.cache-library
     # The recommended models built into the app (a copy of docs/models-recommended.json; a test keeps them equal).

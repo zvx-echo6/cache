@@ -91,31 +91,128 @@ void main() {
 
   group('the reader', () {
     Future<void> show(WidgetTester tester, Widget page) async {
-      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: page));
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: page));
       await tester.pumpAndSettle();
     }
 
     tearDown(() {
       appPlaceScreen = null;
       openAppPlace = null;
+      askCacheInstead = null;
     });
 
-    testWidgets('chapters, then a chapter with its sections; search finds a section and opens it there', (tester) async {
+    testWidgets('contents: chapters open to their sections; a section opens on its own page', (tester) async {
       await show(tester, GuideReaderScreen(book: book));
+      final list = find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)).first;
       expect(find.text('Cache guide'), findsOneWidget);
-      expect(find.text(book.chapters.first.heading), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('guide-chapter-1')));
+      final first = book.chapters.first.sections.first;
+      expect(find.byKey(ValueKey('guide-toc-${first.slug}')), findsOneWidget, reason: 'the first chapter starts open');
+      final second = book.chapters[1];
+      expect(find.byKey(ValueKey('guide-toc-${second.sections.first.slug}')), findsNothing);
+      await tester.scrollUntilVisible(find.byKey(const ValueKey('guide-chapter-2')), 300, scrollable: list);
+      await tester.tap(find.byKey(const ValueKey('guide-chapter-2')));
       await tester.pumpAndSettle();
-      expect(find.byKey(ValueKey('guide-section-${book.chapters.first.sections.first.slug}')), findsOneWidget);
-      await tester.pageBack();
+      await tester.scrollUntilVisible(find.byKey(ValueKey('guide-toc-${second.sections.first.slug}')), 200, scrollable: list);
+      await tester.tap(find.byKey(ValueKey('guide-toc-${second.sections.first.slug}')));
       await tester.pumpAndSettle();
+      expect(find.byKey(ValueKey('guide-section-${second.sections.first.slug}')), findsOneWidget);
+      expect(find.text('1 of ${second.sections.length}'), findsOneWidget);
+    });
+
+    testWidgets('a section page: Previous, where it is in its chapter, Next; search and contents in the top bar', (tester) async {
+      final c = book.chapters.first;
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: GuideReaderScreen(book: book)));
+      await tester.tap(find.byKey(ValueKey('guide-toc-${c.sections[1].slug}')));
+      await tester.pumpAndSettle();
+      expect(find.text('2 of ${c.sections.length}'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('guide-next')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(ValueKey('guide-section-${c.sections[2].slug}')), findsOneWidget);
+      expect(find.text('3 of ${c.sections.length}'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('guide-previous')));
+      await tester.pumpAndSettle();
+      expect(find.text('2 of ${c.sections.length}'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('guide-section-contents')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('guide-search')), findsOneWidget, reason: 'back on the contents');
+      expect(find.byType(GuideSectionScreen), findsNothing);
+    });
+
+    testWidgets('search: one line per match with the words around it; nothing found offers Ask Cache instead', (tester) async {
+      String? asked;
+      askCacheInstead = (q) => asked = q;
+      await show(tester, GuideReaderScreen(book: book));
       await tester.enterText(find.byKey(const ValueKey('guide-search')), 'kagi');
       await tester.pump();
       final kagi = book.byTitle('Cache guide: 4. Services and keys: Web search with Kagi')!;
       await tester.tap(find.byKey(ValueKey('guide-hit-${kagi.slug}')));
       await tester.pumpAndSettle();
-      expect(find.text(kagi.chapter.heading), findsOneWidget);
-      expect(find.byKey(ValueKey('guide-section-${kagi.slug}')).hitTestable(), findsOneWidget, reason: 'opened at the section');
+      expect(find.byKey(ValueKey('guide-section-${kagi.slug}')), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('guide-search')), 'zzqx nothing like this');
+      await tester.pump();
+      expect(find.byKey(const ValueKey('guide-no-hits')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('guide-ask-instead')));
+      expect(asked, 'zzqx nothing like this');
+    });
+
+    test('a search line shows the words around the match, without Markdown', () {
+      final b = GuideBook.parse(['# 9. Test\n\n## Space\n\nOpen [Storage](cache://settings/storage) and tap "Clean up" to free storage on the phone.\n']);
+      final line = guideSnippet(b.sections.single, 'storage')!;
+      expect(line.map((p) => p.$1).join(), 'Open Storage and tap Clean up to free storage on the phone.');
+      expect([for (final p in line) if (p.$2) p.$1], ['Storage', 'storage']);
+    });
+
+    test('quoted labels are marked as labels, never inside code', () {
+      final b = GuideBook.parse(['# 9. Test\n\n## A\n\nx\n']);
+      expect(guideMarkdown(b, 'Tap "Set up Cache" on "Home".'), 'Tap ~~Set up Cache~~ on ~~Home~~.');
+      expect(guideMarkdown(b, 'Type `"quoted"` then "Save".'), 'Type `"quoted"` then ~~Save~~.');
+      expect(guideMarkdown(b, '```\n"left alone"\n```'), '```\n"left alone"\n```');
+      expect(guideMarkdown(b, 'A quote " with spaces " stays.'), 'A quote " with spaces " stays.');
+      expect(guideMarkdown(b, 'Go to ["Settings" > "Storage"](cache://settings/storage).'), 'Go to [Settings > Storage](cache://settings/storage).');
+    });
+
+    testWidgets('labels show without their quotes, as bold chips in the line; links are underlined in the text', (tester) async {
+      final b = GuideBook.parse(['# 9. Test\n\n## Labels\n\nOn "Home", open [the "Storage" page](cache://settings/storage).\n']);
+      await show(tester, GuideSectionScreen(book: b, section: b.sections.single));
+      final spans = <InlineSpan>[];
+      for (final rt in tester.widgetList<RichText>(find.byType(RichText))) {
+        rt.text.visitChildren((s) {
+          spans.add(s);
+          return true;
+        });
+      }
+      final text = spans.whereType<TextSpan>().map((s) => s.text ?? '').join();
+      expect(text, isNot(contains('"')));
+      expect(spans.whereType<WidgetSpan>(), hasLength(1), reason: 'Home is a chip in the line');
+      final chip = tester.widget<Text>(find.text('Home'));
+      expect(chip.style?.fontWeight, FontWeight.w600);
+      // A label inside a link stays part of the link: its words, one tap.
+      final link = spans.whereType<TextSpan>().firstWhere((s) => (s.text ?? '').contains('the Storage page'));
+      expect(link.style?.decoration, TextDecoration.underline);
+    });
+
+    testWidgets('a screenshot shows its picture with the caption under it, and the caption is what a screen reader says', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final b = GuideBook.parse(['# 9. Test\n\n## Shots\n\nBefore.\n\n![The Regions sheet](shot:regions-sheet)\n\nAfter.\n']);
+      await show(tester, GuideSectionScreen(book: b, section: b.sections.single));
+      expect(find.byKey(const ValueKey('guide-shot-regions-sheet')), findsOneWidget);
+      expect(find.text('The Regions sheet'), findsOneWidget);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pumpAndSettle();
+      expect(find.bySemanticsLabel('The Regions sheet'), findsOneWidget, reason: 'read once, as the picture');
+      semantics.dispose();
+    });
+
+    test('every screenshot a chapter shows is bundled', () {
+      final ids = {
+        for (final c in _chapters())
+          for (final m in RegExp(r'!\[[^\]]*\]\(shot:([^)]*)\)').allMatches(c)) m.group(1)!,
+      };
+      for (final id in ids) {
+        expect(File('$kGuideShotsDir/$id.png').existsSync(), isTrue, reason: 'assets/guide/shots/$id.png');
+      }
     });
 
     testWidgets('an app link opens that screen over the guide; Back to the guide returns to the same place', (tester) async {
@@ -124,12 +221,13 @@ void main() {
         opened++;
         return p == AppPlace.storage ? const Scaffold(body: Center(child: Text('Storage screen'))) : null;
       };
-      final storage = book.byTitle('Cache guide: 3. Settings, page by page: Storage')!;
-      await show(tester, GuideChapterScreen(book: book, chapter: storage.chapter, section: storage));
-      final page = tester.state<GuideChapterScreenState>(find.byType(GuideChapterScreen));
+      final b = GuideBook.parse(['# 9. Test\n\n## Long\n\n${'A line of text.\n\n' * 60}Open [Storage](cache://settings/storage).\n']);
+      await show(tester, GuideSectionScreen(book: b, section: b.sections.single));
+      final page = tester.state<GuideSectionScreenState>(find.byType(GuideSectionScreen));
+      await tester.scrollUntilVisible(find.textContaining('Storage', findRichText: true), 300);
       final at = page.scroll.offset;
-      expect(at, greaterThan(0), reason: 'opened at the Storage section, down the chapter');
-      _tapLink(tester, '"Settings" > "Storage"');
+      expect(at, greaterThan(0));
+      _tapLink(tester, 'Storage');
       await tester.pumpAndSettle();
       expect(opened, 1);
       expect(find.text('Storage screen'), findsOneWidget);
@@ -137,12 +235,12 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('back-to-guide')));
       await tester.pumpAndSettle();
       expect(find.text('Storage screen'), findsNothing);
-      expect(page.scroll.offset, at, reason: 'the same chapter, scrolled to the same place');
+      expect(page.scroll.offset, at, reason: 'the same section, scrolled to the same place');
     });
 
     testWidgets('a link to a place this version does not have says so, and nothing breaks', (tester) async {
       final b = GuideBook.parse(['# 9. Test\n\n## Somewhere\n\nGo to [Nowhere](cache://no/such/place).\n']);
-      await show(tester, GuideChapterScreen(book: b, chapter: b.chapters.single));
+      await show(tester, GuideSectionScreen(book: b, section: b.sections.single));
       _tapLink(tester, 'Nowhere');
       await tester.pump();
       expect(find.text(kUnknownAppLink), findsOneWidget);
