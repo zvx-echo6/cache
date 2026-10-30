@@ -135,7 +135,7 @@ void main() {
     await home(tester);
     expect(find.text('0 of 4 done'), findsOneWidget);
     expect(find.text('gemma-4-E2B-it-Q4_K_M.gguf · downloading 34%'), findsOneWidget);
-    expect(find.textContaining('Wasatch Front · downloading'), findsOneWidget);
+    expect(find.textContaining('Wasatch Front · Not offline yet'), findsOneWidget, reason: 'parts work as they land, but it is not offline yet');
     expect(find.byKey(const ValueKey('setup-progress')), findsNWidgets(2));
     final bar = tester.widget<LinearProgressIndicator>(
       find.descendant(of: row('setup-model'), matching: find.byKey(const ValueKey('setup-progress'))),

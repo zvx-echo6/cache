@@ -39,6 +39,27 @@ pub struct AreaReq {
     /// Re-download an existing area (same shape and zooms) at the layer's newest version.
     #[serde(default)]
     pub update: bool,
+    /// `[lat, lon]`: the tiles are fetched from here outwards (the phone's position, else the area's centre), each zoom from
+    /// the coarsest, so what is near is on the phone first. Not part of the area's shape.
+    #[serde(default)]
+    pub near: Option<[f64; 2]>,
+}
+
+/// `tiles` (`(id, z, x, y)`) by zoom, coarsest first, then by distance from `near` (`[lat, lon]`); stable, so tiles at the
+/// same distance keep their order.
+pub fn order_from(tiles: &mut [(u64, u8, u32, u32)], near: [f64; 2]) {
+    let [lat, lon] = near;
+    if !lat.is_finite() || !lon.is_finite() {
+        return;
+    }
+    tiles.sort_by(|a, b| {
+        let d = |t: &(u64, u8, u32, u32)| {
+            let (cx, cy) = (lon_to_x(lon, t.1), lat_to_y(lat, t.1));
+            let (dx, dy) = (t.2 as f64 + 0.5 - cx, t.3 as f64 + 0.5 - cy);
+            dx * dx + dy * dy
+        };
+        a.1.cmp(&b.1).then(d(a).total_cmp(&d(b)))
+    });
 }
 
 const MAX_ENUMERATED: u64 = 6_000_000;
@@ -235,7 +256,7 @@ impl Shape {
     }
 
     pub fn tiles(&self) -> Result<Vec<(u64, u8, u32, u32)>> {
-        AreaReq { layer: String::new(), name: None, area: None, bbox: Some(self.bbox), polygon: self.polygon.clone(), minzoom: None, maxzoom: None, update: false }.tiles(self.minzoom, self.maxzoom)
+        AreaReq { layer: String::new(), name: None, area: None, bbox: Some(self.bbox), polygon: self.polygon.clone(), minzoom: None, maxzoom: None, update: false, near: None }.tiles(self.minzoom, self.maxzoom)
     }
 }
 
@@ -532,7 +553,10 @@ impl Inner {
             store.staging_keep_only(&ver)?;
         }
         // staged tiles of this version from an interrupted update are kept
-        let todo: Vec<(u64, u8, u32, u32)> = if updating { p.need.iter().filter(|t| !store.staging_has(t.1, t.2, t.3, &ver).unwrap_or(false)).copied().collect() } else { p.need.clone() };
+        let mut todo: Vec<(u64, u8, u32, u32)> = if updating { p.need.iter().filter(|t| !store.staging_has(t.1, t.2, t.3, &ver).unwrap_or(false)).copied().collect() } else { p.need.clone() };
+        if let Some(near) = req.near {
+            order_from(&mut todo, near);
+        }
         let skipped = total - todo.len() as u64;
         let batch = if reader.is_some() { 256 } else { 48 };
         let workers = p.base.max_parallel().clamp(1, 8);
@@ -684,5 +708,31 @@ impl Inner {
         store.compact();
         let after = std::fs::metadata(self.store_path(&base.id)).map(|m| m.len()).unwrap_or(0);
         Ok(json!({"layer": base.id, "removed": removed, "tiles_removed": tiles_removed, "tiles_kept": kept, "freed_bytes": freed, "file_bytes_before": before, "file_bytes_after": after}))
+    }
+}
+
+#[cfg(test)]
+mod near_tests {
+    use super::*;
+
+    #[test]
+    fn tiles_come_by_zoom_then_from_near_outwards() {
+        let req: AreaReq = serde_json::from_str(r#"{"layer":"x","bbox":[-114.62,42.49,-113.93,42.85],"minzoom":10,"maxzoom":12,"near":[42.75,-113.95]}"#).unwrap();
+        let mut tiles = req.tiles(10, 12).unwrap();
+        let before = tiles.len();
+        order_from(&mut tiles, req.near.unwrap());
+        assert_eq!(tiles.len(), before);
+        // coarsest zoom first
+        assert!(tiles.windows(2).all(|w| w[0].1 <= w[1].1));
+        // within a zoom, the first tile holds the near point and distances never shrink
+        let z12: Vec<_> = tiles.iter().filter(|t| t.1 == 12).collect();
+        let (nx, ny) = (lon_to_x(-113.95, 12).floor() as u32, lat_to_y(42.75, 12).floor() as u32);
+        assert_eq!((z12[0].2, z12[0].3), (nx, ny));
+        let d = |t: &(u64, u8, u32, u32)| (t.2 as f64 + 0.5 - lon_to_x(-113.95, 12)).powi(2) + (t.3 as f64 + 0.5 - lat_to_y(42.75, 12)).powi(2);
+        assert!(z12.windows(2).all(|w| d(w[0]) <= d(w[1])));
+        // "near" is not part of the shape: a request without it covers the same tiles
+        let plain: AreaReq = serde_json::from_str(r#"{"layer":"x","bbox":[-114.62,42.49,-113.93,42.85]}"#).unwrap();
+        assert_eq!(plain.near, None);
+        assert_eq!(plain.tiles(10, 12).unwrap().len(), before);
     }
 }

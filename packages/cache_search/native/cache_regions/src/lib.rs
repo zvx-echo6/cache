@@ -171,6 +171,35 @@ struct Region {
     parts: Vec<String>,
     places: BTreeMap<String, BTreeMap<String, TileRef>>,
     places_error: Option<String>,
+    /// `[lat, lon]` the tiles are downloaded from, outwards (the phone's position when it was added, else the region's
+    /// centre), so what is near is on the phone first.
+    near: Option<[f64; 2]>,
+}
+
+/// `tiles` nearest `near` (`[lat, lon]`) first, by their centres; stable, and a path that is not a tile's keeps its place.
+pub(crate) fn order_from(tiles: &mut [TileRef], near: Option<[f64; 2]>) {
+    let Some([lat, lon]) = near.filter(|[a, o]| a.is_finite() && o.is_finite()) else { return };
+    let d = |t: &TileRef| match geo::parse_tile_path(&t.path) {
+        Some((level, id)) => {
+            let r = geo::tile_rect(level, id);
+            let (clat, clon) = ((r[1] + r[3]) / 2.0, (r[0] + r[2]) / 2.0);
+            let k = lat.to_radians().cos();
+            ((clon - lon) * k).powi(2) + (clat - lat).powi(2)
+        }
+        None => f64::INFINITY,
+    };
+    tiles.sort_by(|a, b| d(a).total_cmp(&d(b)));
+}
+
+/// The "near" argument: `[lat, lon]` or `{"lat","lon"}`; None when it is missing or not a position.
+fn near_arg(args: &Value) -> Option<[f64; 2]> {
+    let v = args.get("near")?;
+    let (lat, lon) = match v {
+        Value::Array(a) if a.len() == 2 => (a[0].as_f64()?, a[1].as_f64()?),
+        Value::Object(_) => (v.get("lat")?.as_f64()?, v.get("lon")?.as_f64()?),
+        _ => return None,
+    };
+    ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)).then_some([lat, lon])
 }
 
 impl Region {
@@ -749,7 +778,8 @@ impl Inner {
             }
             let (Some(target), None) = (&target, &r.error) else { continue };
             let Some(list) = r.lists.get(target) else { continue };
-            let missing: Vec<TileRef> = list.values().filter(|t| !present.contains(&t.path)).cloned().collect();
+            let mut missing: Vec<TileRef> = list.values().filter(|t| !present.contains(&t.path)).cloned().collect();
+            order_from(&mut missing, r.near);
             if !missing.is_empty() {
                 batch = Some(Next::Batch(Batch { build: target.clone(), name: r.name.clone(), tiles: missing }));
                 break;
@@ -1071,13 +1101,15 @@ impl Inner {
         // The places lists stay until the places part has worked out the new ones (so no tile goes in between).
         let places = pos.map(|i| st.regions[i].places.clone()).unwrap_or_default();
         let places_error = pos.and_then(|i| st.regions[i].places_error.clone());
-        let region = Region { id: id.clone(), name, geometry, added, error: None, lists, parts: parts.clone(), places, places_error };
+        // Added again without a position: the one it had stays.
+        let near = near_arg(args).or_else(|| pos.and_then(|i| st.regions[i].near));
+        let region = Region { id: id.clone(), name, geometry, added, error: None, lists, parts: parts.clone(), places, places_error, near };
         {
             let mut db = self.db();
             let tx = db.transaction()?;
             tx.execute(
-                "INSERT OR REPLACE INTO regions(id, name, geometry, added, error, parts, places_error) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
-                params![region.id, region.name, region.geometry, region.added as i64, json!(region.parts).to_string(), region.places_error],
+                "INSERT OR REPLACE INTO regions(id, name, geometry, added, error, parts, places_error, near) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+                params![region.id, region.name, region.geometry, region.added as i64, json!(region.parts).to_string(), region.places_error, region.near.map(|n| json!(n).to_string())],
             )?;
             tx.execute("DELETE FROM region_tiles2 WHERE region = ?1 AND component = 'routing'", params![id])?;
             {
@@ -1404,6 +1436,9 @@ fn migrate(db: &mut Connection) -> Result<()> {
     if !cols.iter().any(|c| c == "places_error") {
         tx.execute_batch("ALTER TABLE regions ADD COLUMN places_error TEXT;")?;
     }
+    if !cols.iter().any(|c| c == "near") {
+        tx.execute_batch("ALTER TABLE regions ADD COLUMN near TEXT;")?;
+    }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS region_tiles2(region TEXT NOT NULL, component TEXT NOT NULL, build TEXT NOT NULL, path TEXT NOT NULL,
                                                   bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, gz INTEGER NOT NULL,
@@ -1459,7 +1494,7 @@ impl Regions {
             ..State::default()
         };
         {
-            let mut q = db.prepare("SELECT id, name, geometry, added, error, parts, places_error FROM regions ORDER BY added, id")?;
+            let mut q = db.prepare("SELECT id, name, geometry, added, error, parts, places_error, near FROM regions ORDER BY added, id")?;
             let rows = q.query_map([], |r| {
                 let parts: String = r.get(5)?;
                 let parts: Vec<String> = serde_json::from_str(&parts).unwrap_or_else(|_| vec![ROUTING.to_string()]);
@@ -1473,6 +1508,7 @@ impl Regions {
                     parts,
                     places: BTreeMap::new(),
                     places_error: r.get(6)?,
+                    near: r.get::<_, Option<String>>(7)?.and_then(|n| serde_json::from_str::<[f64; 2]>(&n).ok()),
                 })
             })?;
             for r in rows {
@@ -1683,5 +1719,35 @@ impl Regions {
 impl Drop for Regions {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod near_order_tests {
+    use super::*;
+
+    fn t(level: u8, lon: f64, lat: f64) -> TileRef {
+        TileRef { path: geo::tile_path(level, geo::tile_id(level, lon, lat)), bytes: 1, sha256: String::new(), gz: 1 }
+    }
+
+    #[test]
+    fn tiles_are_downloaded_from_near_outwards() {
+        // Twin Falls County's level 2 tiles, in path order, and the phone at Twin Falls
+        let mut tiles = vec![t(2, -114.9, 42.1), t(2, -114.1, 42.8), t(2, -114.5, 42.5), t(2, -114.4, 42.6)];
+        order_from(&mut tiles, Some([42.56, -114.46]));
+        assert_eq!(tiles[0].path, t(2, -114.5, 42.5).path, "the tile the phone is in comes first");
+        assert_eq!(tiles[3].path, t(2, -114.9, 42.1).path, "the farthest last");
+        // no position: the order is left as it was
+        let before: Vec<String> = tiles.iter().map(|x| x.path.clone()).collect();
+        order_from(&mut tiles, None);
+        assert_eq!(tiles.iter().map(|x| x.path.clone()).collect::<Vec<_>>(), before);
+    }
+
+    #[test]
+    fn near_is_a_position_or_nothing() {
+        assert_eq!(near_arg(&json!({"near": [42.5, -114.4]})), Some([42.5, -114.4]));
+        assert_eq!(near_arg(&json!({"near": {"lat": 42.5, "lon": -114.4}})), Some([42.5, -114.4]));
+        assert_eq!(near_arg(&json!({"near": [142.5, -114.4]})), None);
+        assert_eq!(near_arg(&json!({})), None);
     }
 }

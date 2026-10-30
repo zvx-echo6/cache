@@ -535,7 +535,7 @@ class CoreLayerEngine extends LayerEngine {
       );
 
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near}) async {
     await policy?.checkDownload(anyway: anyway);
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom);
@@ -560,6 +560,7 @@ class CoreLayerEngine extends LayerEngine {
       'bbox': [area.west, area.south, area.east, area.north],
       'minzoom': minZoom,
       'maxzoom': est.maxZoom,
+      if (near != null) 'near': [near.lat, near.lon],
     }, update: false);
     return a;
   }

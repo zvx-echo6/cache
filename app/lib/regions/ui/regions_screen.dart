@@ -67,9 +67,10 @@ Widget _list(List<Widget> children) => ListView(
 List<Part> localParts(RegionsState regions, LocalRegion? l) {
   if (l == null) return const [];
   return switch (l.phase) {
-    RegionPhase.downloading => [Part('Downloading ${(l.fraction * 100).toStringAsFixed(0)}%')],
-    RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn)],
-    RegionPhase.failed => [Part(l.error ?? 'Could not be downloaded', Tone.danger)],
+    // Each part on its own: a part that is ready works while the others download.
+    RegionPhase.downloading => [Part(l.partsLine)],
+    RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn), Part(' · ${l.partsLine}')],
+    RegionPhase.failed => [Part(l.partsLine, Tone.danger)],
     RegionPhase.ready => [const Part('On this phone', Tone.ok), Part(' · ${formatBytes(l.bytes)}')],
   };
 }

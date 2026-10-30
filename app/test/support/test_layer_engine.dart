@@ -133,9 +133,13 @@ class TestLayerEngine extends LayerEngine {
   @override
   List<DownloadedArea> areasOf(String layerId) => [for (final a in _areas) if (a.layerId == layerId) a];
 
+  /// Where each download (by label) was asked to start from.
+  final Map<String, ({double lat, double lon})?> nearOf = {};
+
   @override
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom}) async {
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near}) async {
     await policy?.checkDownload(anyway: anyway);
+    nearOf[label] = near;
     final def = layer(layerId) ?? (throw StateError('Unknown layer'));
     final est = await estimate(layerId, area, zoom: zoom);
     if (!est.allowed) throw StateError(est.problem ?? 'This area cannot be downloaded');

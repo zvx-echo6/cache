@@ -51,9 +51,10 @@ abstract class LayerEngine extends ChangeNotifier {
   /// never a lower one when the area is large; otherwise the layer's zooms, as deep as one download allows.
   Future<AreaEstimate> estimate(String layerId, GeoBounds area, {int? zoom});
 
-  /// Starts the download; progress shows in [areasOf]. [zoom] as for [estimate].
+  /// Starts the download; progress shows in [areasOf]. [zoom] as for [estimate]. [near]: the tiles come from there outwards
+  /// (each zoom from the coarsest), so what is near is on the phone first.
   /// Throws a MobileDataBlocked (lib/settings/data_policy.dart) when the phone is on mobile data and downloads on mobile data are off, unless [anyway].
-  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom});
+  Future<DownloadedArea> download(String layerId, GeoBounds area, {required String label, bool anyway = false, int? zoom, ({double lat, double lon})? near});
 
   /// Downloaded and downloading areas of a layer.
   List<DownloadedArea> areasOf(String layerId);

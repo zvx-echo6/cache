@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/geo.dart';
+import 'package:cache/maps/layers/layer_def.dart';
 import 'package:cache/maps/ui/format.dart';
 import 'package:cache/maps/ui/layer_sheet.dart';
 import 'package:cache/nav/nav_state.dart';
@@ -180,8 +181,14 @@ void main() {
     await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
     await tester.pump();
     expect(find.text('Twin Falls County'), findsOneWidget);
-    expect(find.textContaining('Downloading'), findsOneWidget);
+    // each part on its own line of state, not one percentage for the whole region
+    expect(find.textContaining(RegExp(r'^Map (ready|\d+%) · Directions \d+%$')), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    // with no position known, everything downloads from the region's centre outwards
+    final b = r.county.bounds!;
+    final centre = [(b.south + b.north) / 2, (b.west + b.east) / 2];
+    expect(r.core.added.single['near'], centre);
+    expect(r.s.engine.nearOf['Twin Falls County'], (lat: centre[0], lon: centre[1]));
 
     r.core.finish(_county);
     await tester.runAsync(() async {
@@ -240,8 +247,32 @@ void main() {
     await tester.pump();
     expect(r.core.regions[_county]!['state'], 'downloading');
     expect(find.textContaining('Paused'), findsNothing);
-    expect(find.textContaining('Downloading'), findsOneWidget);
+    expect(find.textContaining('Directions'), findsOneWidget);
     await r.dispose(tester);
+  });
+
+  testWidgets('a region downloads from where the phone is; each part says where it stands', (tester) async {
+    final rig = await SettingsRig.create(tester);
+    final s = RegionsState(
+      policy: rig.policy,
+      supportDir: () async => rig.dir,
+      catalogue: RegionCatalogue(dir: () async => rig.dir),
+      maps: rig.maps,
+      position: () => (lat: 42.56, lon: -114.46),
+    );
+    const county = RegionRecord(id: 'c', name: 'C', kind: 'county', bbox: [-115.0, 42.0, -114.0, 43.0]);
+    expect(s.nearFor(county), (lat: 42.56, lon: -114.46));
+    final l = LocalRegion(
+      id: 'c',
+      name: 'C',
+      routing: {'state': 'downloading', 'bytes': 100, 'done_bytes': 40},
+      places: {'state': 'ready', 'bytes': 10, 'done_bytes': 10},
+      areas: [DownloadedArea(id: 'a', layerId: 'basemap', bounds: const GeoBounds(south: 42, west: -115, north: 43, east: -114), label: 'C', minZoom: 0, maxZoom: 14, totalTiles: 10, doneTiles: 10, phase: AreaPhase.done)],
+      offroad: const [OffroadPackState(name: 'Idaho', bytes: 1000, doneBytes: 0, done: false)],
+    );
+    expect(l.partsLine, 'Map ready · Directions 40% · Places ready · Off-road waiting');
+    s.dispose();
+    await rig.dispose(tester);
   });
 
   testWidgets('Local lists what is on the phone, largest first', (tester) async {

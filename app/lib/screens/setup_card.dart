@@ -118,7 +118,8 @@ class SetupCache {
       RegionPhase.paused => SetupLine(SetupPhase.running, detail: '${going.name} · ${regions!.paused ?? 'paused'}', fraction: going.fraction),
       // The part's own words ("Tap Update to continue") point at a button that is not on this card, and do not fit its line.
       RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · Stopped. Tap to carry on'),
-      _ => SetupLine(SetupPhase.running, detail: '${going.name} · downloading${_percent(going.fraction)}', fraction: going.fraction),
+      // Parts work as they are saved, but the area is not offline until every part is.
+      _ => SetupLine(SetupPhase.running, detail: '${going.name} · Not offline yet${_percent(going.fraction)}', fraction: going.fraction),
     };
   }
 

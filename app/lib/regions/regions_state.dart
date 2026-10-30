@@ -265,6 +265,43 @@ class LocalRegion {
     return (parts.reduce((a, b) => a + b) / parts.length).clamp(0, 1).toDouble();
   }
 
+  /// Each part of the region and where it stands, in one short line: "Map ready · Directions 40% · Off-road waiting". A part is
+  /// used the moment its tiles are saved, so a part that is ready works while the others download.
+  String get partsLine {
+    String pct(num done, num total) => '${total <= 0 ? 0 : (done / total * 100).clamp(0, 99).floor()}%';
+    String? core(Map<String, dynamic>? p, bool wanted) {
+      if (p == null) return wanted ? 'waiting' : null;
+      return switch (p['state']) {
+        'ready' => 'ready',
+        'failed' => 'stopped',
+        'paused' => 'paused',
+        _ => pct((p['done_bytes'] as num?) ?? 0, (p['bytes'] as num?) ?? 0),
+      };
+    }
+
+    String? tiles(List<DownloadedArea> l) {
+      if (l.isEmpty) return null;
+      if (l.any((a) => a.phase == AreaPhase.failed)) return 'stopped';
+      if (l.every((a) => a.phase == AreaPhase.done)) return 'ready';
+      return pct(l.fold(0, (s, a) => s + a.doneTiles), l.fold(0, (s, a) => s + a.totalTiles));
+    }
+
+    String? offroadState() {
+      if (offroad.isEmpty) return null;
+      if (offroad.any((p) => p.error != null) || terrain.any((a) => a.phase == AreaPhase.failed)) return 'stopped';
+      if (offroad.every((p) => p.done) && terrain.every((a) => a.phase == AreaPhase.done)) return 'ready';
+      final done = offroad.fold(0, (s, p) => s + p.doneBytes);
+      return done == 0 ? 'waiting' : pct(done, offroad.fold(0, (s, p) => s + p.bytes));
+    }
+
+    return [
+      if (tiles(areas) case final m?) 'Map $m',
+      if (core(routing, wantsRouting) case final d?) 'Directions $d',
+      if (core(places, wantsPlaces) case final p?) 'Places $p',
+      if (offroadState() case final o?) 'Off-road $o',
+    ].join(' · ');
+  }
+
   /// The newest map download's date.
   DateTime? get fetchedAt {
     DateTime? t;
@@ -291,6 +328,7 @@ class RegionsState extends ChangeNotifier {
     this.onPlacesChanged,
     this.offroadCatalogue,
     ZimDownloader? packDownloader,
+    this.position,
   }) : _opener = opener ?? openRealRegions,
        _packDownloader = packDownloader ?? ZimDownloader();
 
@@ -304,6 +342,17 @@ class RegionsState extends ChangeNotifier {
 
   /// The published off-road packs; null: regions have no off-road part.
   final OffroadCatalogue? offroadCatalogue;
+
+  /// The phone's position (null while it is not known): a region downloads from there outwards.
+  final ({double lat, double lon})? Function()? position;
+
+  /// Where [r]'s parts download from: the phone, when it is known, else the region's centre.
+  ({double lat, double lon})? nearFor(RegionRecord r) {
+    final here = position?.call();
+    if (here != null) return here;
+    final b = r.bounds;
+    return b == null ? null : (lat: (b.south + b.north) / 2, lon: (b.west + b.east) / 2);
+  }
   final ZimDownloader _packDownloader;
 
   /// Off-road packs downloading or stopped, by their path under the off-road folder.
@@ -699,6 +748,8 @@ class RegionsState extends ChangeNotifier {
     await policy.checkDownload(anyway: anyway);
     places = places && placesAvailable;
     final k = _kept[r.id] ??= _Kept(id: r.id, name: r.name);
+    // Every part comes from the phone (or the region's centre) outwards, and each tile is used as soon as it is saved.
+    final near = nearFor(r);
     if (routing || places) {
       final core = _core ?? (throw CacheSearchException('unsupported', routingUnavailable ?? 'Road routing downloads are not available.'));
       final geometry = await catalogue.geometry(r);
@@ -708,6 +759,7 @@ class RegionsState extends ChangeNotifier {
         'geometry': geometry,
         // Places first: the core downloads them before road routing, as they are small.
         if (placesAvailable) 'parts': [if (places) 'places', if (routing) 'routing'],
+        if (near != null) 'near': [near.lat, near.lon],
       });
       if (routing) k.routing = true;
       if (places) k.places = true;
@@ -720,7 +772,7 @@ class RegionsState extends ChangeNotifier {
           final def = maps.downloadDefFor(card, bounds);
           final est = await maps.engine.estimate(def.id, bounds);
           if (!est.allowed) continue;
-          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway);
+          final a = await maps.engine.download(def.id, bounds, label: r.name, anyway: anyway, near: near);
           k.areas.add(a.id);
         }
       }
@@ -751,7 +803,7 @@ class RegionsState extends ChangeNotifier {
         for (final a in maps.engine.areasOf(kOffroadElevationLayer))
           if (k.terrain.contains(a.id) && a.phase != AreaPhase.failed) a.id,
       ].firstOrNull;
-      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom)).id;
+      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom, near: nearFor(r))).id;
       if (!k.terrain.contains(area)) k.terrain.add(area);
       unawaited(_fetchPack(k.offroad.firstWhere((x) => x.path == path)));
     }

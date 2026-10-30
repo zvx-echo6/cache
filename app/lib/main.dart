@@ -283,6 +283,11 @@ class _CacheAppState extends State<CacheApp> {
     // Off-road: the published packs (offroad/current.json), each region downloads the ones that cover it.
     offroadCatalogue: OffroadCatalogue(dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/region-catalogue')),
     maps: maps,
+    // A region downloads from where the phone is, outwards.
+    position: () {
+      final f = location.fix;
+      return f == null ? null : (lat: f.lat, lon: f.lon);
+    },
     onPlacesChanged: () async {
       try {
         await sources.core?.refreshPlaces();
