@@ -714,16 +714,22 @@ class CoreLayerEngine extends LayerEngine {
     if (a == null || _running.containsKey(areaId)) return;
     final partial = a.phase == AreaPhase.failed;
     final saved = _saved[areaId];
-    if (partial && saved == null) {
-      // An unfinished download from before the app was closed: the shape was not kept.
-      a.error = 'This download cannot be continued. Delete it and start again.';
-      notifyListeners();
-      return;
-    }
+    // An unfinished download carries on with the shape it was asked for; one with no shape kept here (from before the shape was
+    // kept, or an older build) carries on with the shape the core stored for it when it started. An update names only the area:
+    // the core reads its shape.
     await _start(
       a,
       partial
-          ? {'layer': a.layerId, 'area': areaId, 'name': a.label, 'bbox': [saved!.bounds.west, saved.bounds.south, saved.bounds.east, saved.bounds.north], 'minzoom': saved.minZoom, 'maxzoom': saved.maxZoom}
+          ? {
+              'layer': a.layerId,
+              'area': areaId,
+              'name': a.label,
+              if (saved != null) ...{
+                'bbox': [saved.bounds.west, saved.bounds.south, saved.bounds.east, saved.bounds.north],
+                'minzoom': saved.minZoom,
+                'maxzoom': saved.maxZoom,
+              },
+            }
           : {'layer': a.layerId, 'area': areaId, 'update': true},
       update: !partial,
     );

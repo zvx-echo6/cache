@@ -292,10 +292,12 @@ impl Job {
         if !base.offline_allowed() {
             return Err(conv(cache_layers::Error::offline(format!("{} cannot be downloaded: it needs a connection", base.title))));
         }
-        p.req.bounds().map_err(conv)?;
-        let key = format!("{}/{}", base.id, p.req.area_id().map_err(conv)?);
+        // An update (or a resume) names the area and no shape: the shape is the stored area's. Checked on the request as asked,
+        // every update failed here with "a download needs bbox or polygon" (1.0.27: Update on a region).
+        let req = inner.resolve_request(&p.req).map_err(conv)?;
+        req.bounds().map_err(conv)?;
+        let key = format!("{}/{}", base.id, req.area_id().map_err(conv)?);
         let guard = ActiveDownload::acquire(&key)?;
-        let req = p.req;
         Self::spawn("cs-layer-download", guard, 0, move |sh| {
             let r = inner.run_download(
                 &req,

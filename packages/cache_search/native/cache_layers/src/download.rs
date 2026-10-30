@@ -282,6 +282,12 @@ struct Prepared {
 }
 
 impl Inner {
+    /// An update or resume request (`"area"` and no shape) with the stored area's shape, zooms and name filled in; any other
+    /// request as it is. A job checks the shape of what it is asked before it starts, so it takes the request through here.
+    pub fn resolve_request(&self, req: &AreaReq) -> Result<AreaReq> {
+        self.resolve_req(req)
+    }
+
     /// Fill in an update or resume from the area's stored request.
     fn resolve_req(&self, req: &AreaReq) -> Result<AreaReq> {
         let mut r = req.clone();
