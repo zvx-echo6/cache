@@ -64,6 +64,7 @@ release notes).
 - Model names show the right quantisation in more cases
 - iPhone: the Hugging Face file list shows whether each file fits your phone
 - Map search: street and town names in addresses are no longer shown in capitals (North State Street, Hurricane)
+- Maps: BLM roads and trails and Forest Service trails draw in their own colours and dashes
 
 ## 1.0.0 (iOS build 22) - 2026-10-28
 

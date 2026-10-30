@@ -23,6 +23,10 @@ enum LayerKind {
   vector,
 }
 
+/// The colour families a vector layer can name in `style_hints.role`: the one list the publisher (cache-packs) writes and the style
+/// generator draws.
+const List<String> kStyleRoles = ['public_lands', 'mvum', 'blm_routes', 'trails'];
+
 /// One entry of the layer catalogue: a definition (data, never code). The engine owns the catalogue; this
 /// is the app's view of it. It reads the catalogue's own schema (format 1: `license`, `coverage.bbox`,
 /// `source {type, url, minzoom, maxzoom, tile_format}`, `offline.allowed`, `style_hints.layers[].name`,
@@ -64,7 +68,7 @@ class LayerDef {
   final String coverage;
   final LayerKind kind;
 
-  /// For [LayerKind.vector]: which palette colour family ("public_lands", "trail", "mvum", "blm").
+  /// For [LayerKind.vector]: which palette colour family, one of [kStyleRoles] (anything else draws as public lands).
   final String styleRole;
 
   /// The vector tile layers to draw (from the definition's style hints).
@@ -160,16 +164,11 @@ class LayerDef {
     return 'Worldwide';
   }
 
-  /// The colour family of a vector layer: stated in the definition, else read from its id.
-  static String _role(Map<String, dynamic> j, String id) {
+  /// The colour family of a vector layer, as the definition states it (`style_hints.role`, one of [kStyleRoles]); empty for none.
+  static String _role(Map<String, dynamic> j) {
     final hints = j['style_hints'];
     final stated = (j['style_role'] as String?) ?? (hints is Map ? hints['role'] as String? : null);
-    if (stated != null && stated.isNotEmpty) return stated;
-    if (id.contains('mvum')) return 'mvum';
-    if (id.contains('blm')) return 'blm';
-    if (id.contains('trail')) return 'trail';
-    if (id.contains('lands')) return 'public_lands';
-    return '';
+    return stated ?? '';
   }
 
   factory LayerDef.fromJson(Map<String, dynamic> j) {
@@ -198,7 +197,7 @@ class LayerDef {
       attribution: s('attribution'),
       coverage: _words(j),
       kind: kind,
-      styleRole: kind == LayerKind.vector ? _role(j, id) : '',
+      styleRole: kind == LayerKind.vector ? _role(j) : '',
       sourceLayers: hinted.isNotEmpty ? hinted : (single.isEmpty ? const [] : [single]),
       plural: j['plural'] == true,
       minZoom: zoom('minzoom', 'min_zoom', 0),

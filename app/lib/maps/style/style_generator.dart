@@ -293,19 +293,19 @@ List<Map<String, dynamic>> _contours(MapPalette p, LayerDef d, String src, doubl
   ];
 }
 
-/// Which palette roles a vector layer uses, by its `style_role`.
+/// Which palette roles a vector layer uses, by its style role (see kStyleRoles).
 ({String fill, String line}) _roleColors(String styleRole) => switch (styleRole) {
       'mvum' => (fill: 'publicLandsFill', line: 'mvum'),
-      'blm' => (fill: 'publicLandsFill', line: 'blm'),
-      'trail' => (fill: 'publicLandsFill', line: 'trail'),
+      'blm_routes' => (fill: 'publicLandsFill', line: 'blm'),
+      'trails' => (fill: 'publicLandsFill', line: 'trail'),
       _ => (fill: 'publicLandsFill', line: 'publicLandsLine'),
     };
 
 List<Map<String, dynamic>> _vectorOverlay(MapPalette p, LayerDef d, String src, double o) {
   final colors = _roleColors(d.styleRole);
   final dash = switch (d.styleRole) {
-    'trail' => [2.0, 1.2],
-    'blm' => [4.0, 2.0],
+    'trails' => [2.0, 1.2],
+    'blm_routes' => [4.0, 2.0],
     _ => null,
   };
   final sls = d.sourceLayers.isEmpty ? [''] : d.sourceLayers;
