@@ -1192,6 +1192,17 @@
             }
           ]
         },
+        "unless": {
+          "description": "Format 3: the value is missing when this other value has one (a \"Details\" field that stands in for an absent \"Instructions\" one).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Spec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "vars": {
           "type": "object",
           "additionalProperties": {

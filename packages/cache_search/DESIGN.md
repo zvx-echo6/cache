@@ -1395,6 +1395,8 @@ then `cs live-check`.
   downloaded region), or one of its geocodes named `code` is one of the place's codes: `codes` on the place object
   (`{"SAME": ["016001"]}`) and the `place_codes` values found in the response (the county an earlier step says the point is in).
   Nothing in it knows a provider: any CAP feed is read the same way.
+* `unless` on a value: the value is missing when that other value has one (an alert's "Details", its description, only when
+  it has no instruction text for "Instructions").
 * The place object of `cs_live_fetch` may carry `area` (a GeoJSON geometry) and `codes`; they are kept with the row so a changed
   definition maps it the same way. Only `cap_area` reads them; nothing the model sees changes shape.
 

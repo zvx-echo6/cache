@@ -51,6 +51,8 @@ impl Srv {
                             "properties": {"id": id, "type": "county", "name": name, "state": st}}]}).to_string()),
                         None => (404, r#"{"title":"Not Found"}"#.to_string()),
                     }
+                } else if path == "/alerts/active" {
+                    (200, std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ipaws/nws_ffw.json")).unwrap())
                 } else if path == "/IPAWSOPEN_EAS_SERVICE/rest/feed" {
                     (200, feed.clone())
                 } else if let Some(id) = path.strip_prefix("/IPAWSOPEN_EAS_SERVICE/rest/eas/") {
@@ -161,7 +163,8 @@ fn an_evacuation_order_inside_its_polygon_with_the_items_the_model_reads() {
     assert_eq!(srv.docs_asked(), 6);
 
     let order: Vec<&String> = r["items"][0]["fields"].as_object().unwrap().keys().collect();
-    assert_eq!(order, ["Event", "Severity", "Issued by", "Area", "Expires", "Instructions"]);
+    // no CAP instruction: the description is "Details", never "Instructions"
+    assert_eq!(order, ["Event", "Severity", "Issued by", "Area", "Expires", "Details"]);
     // exactly what live_data gives the model: the generic shape, plain labels, "Issued by" as the sender wrote it
     let t = env.tool("48.80,-116.35", JULY);
     assert_eq!(
@@ -183,7 +186,7 @@ fn an_evacuation_order_inside_its_polygon_with_the_items_the_model_reads() {
                     "Issued by": "200033, Idaho State Communications Center, Idaho Office of Emergency Management",
                     "Area": "Boundary County",
                     "Expires": "2026-07-16 01:54",
-                    "Instructions": "The Boundary County Sheriff's Office has issued an immediate wildfire evacuation order for the following areas in Bonners Ferry.: Turner's Hill Road from the 3000 block to highway 95. All Holmes Rd. Addresses. All Kings row road addresses and any side roads. All Fleming Creek Road addresses and any side roads. Contact Boundary County Sheriff's Office for further information."
+                    "Details": "The Boundary County Sheriff's Office has issued an immediate wildfire evacuation order for the following areas in Bonners Ferry.: Turner's Hill Road from the 3000 block to highway 95. All Holmes Rd. Addresses. All Kings row road addresses and any side roads. All Fleming Creek Road addresses and any side roads. Contact Boundary County Sheriff's Office for further information."
                 }
             }]
         })
@@ -244,6 +247,29 @@ fn the_english_block_of_a_two_language_alert_and_an_nws_warning_relayed_by_ipaws
     assert_eq!(i["fields"]["Issued by"], "NWS Albuquerque NM");
     assert_eq!(i["fields"]["Severity"], "severe");
     assert!(i["fields"]["Instructions"].as_str().unwrap().starts_with("This is a life threatening situation."));
+    // with an instruction, the description is not shown as well
+    assert!(i["fields"].get("Details").is_none(), "{}", i["fields"]);
+}
+
+#[test]
+fn severity_and_expires_read_as_the_nws_source_writes_them() {
+    let srv = Srv::start(fixture("feed.xml"), samples());
+    let env = Env::new("as-nws", &definition(&srv.base()));
+    // the catalogue's NWS connector, beside it, on the NWS API's copy of the same warning
+    let nws = fixture("nws-alerts-point.json").replace("https://api.weather.gov", &srv.base());
+    std::fs::write(env.dir.join("sources").join("nws-alerts-point.json"), nws).unwrap();
+    let ruidoso = place("ruidoso", 33.36, -105.68);
+    let i = env.fetch(ruidoso.clone(), OCTOBER, false)["items"][0].clone();
+    let r = json!({"source": "nws-alerts-point", "place": ruidoso, "now": OCTOBER});
+    let n: Value = serde_json::from_str(&env.live.fetch(&r.to_string(), &env.places).unwrap()).unwrap();
+    let n = &n["items"][0];
+    assert_eq!(n["label"], "Flash Flood Warning");
+    for f in ["Severity", "Expires"] {
+        assert_eq!(i["fields"][f], n["fields"][f], "{f}");
+    }
+    assert_eq!(i["fields"]["Severity"], "severe");
+    assert_eq!(i["fields"]["Expires"], "2026-10-29 16:30");
+    assert_eq!(i["fields"]["Instructions"], n["fields"]["Instructions"]);
 }
 
 #[test]
@@ -278,6 +304,7 @@ fn an_older_core_format_is_refused_by_name() {
     d["format"] = json!(2);
     let e = cache_live::def::SourceDef::parse(&d.to_string()).unwrap_err().message;
     assert!(e.contains("cache_hours: needs \"format\": 3") && e.contains("cap_area: needs \"format\": 3"), "{e}");
+    assert!(e.contains("a field with unless needs \"format\": 3"), "{e}");
 }
 
 /// The catalogue's definition against the real feed, once (not part of the normal run: `cargo test -p cache_live --test ipaws --

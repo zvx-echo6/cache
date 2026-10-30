@@ -1,8 +1,8 @@
 //! Source definitions: data, never code. One JSON file per source (format reference in DESIGN.md, "Live sources").
 //!
 //! Format 2 is a superset of format 1, and format 3 of format 2: every older file reads unchanged. Format 3 adds `cache_hours`
-//! on a request (a document fetched once and reused) and `cap_area` on an item (CAP alert areas matched against the place); a
-//! definition that uses either says `"format": 3`, so an older core refuses it with a clear reason instead of misreading it.
+//! on a request (a document fetched once and reused), `cap_area` on an item (CAP alert areas matched against the place) and
+//! `unless` on a value; a definition that uses any of them says `"format": 3`, so an older core refuses it with a clear reason instead of misreading it.
 //! The JSON Schema of the format is generated from these types (feature `schema`) and committed as
 //! `packages/cache_search/schema/live-source.schema.json`.
 
@@ -485,6 +485,9 @@ pub struct Spec {
     /// A number below this (or above `max_value`) is missing: providers write -999 or -9999 for "no reading".
     pub min_value: Option<f64>,
     pub max_value: Option<f64>,
+    /// Format 3: the value is missing when this other value has one (a "Details" field that stands in for an absent
+    /// "Instructions" one).
+    pub unless: Option<Box<Spec>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -691,6 +694,9 @@ impl SourceDef {
             it.validate(&format!("items[{i}]"), &self.params, errs, id);
         }
         // format 3 features
+        if self.format < 3 && self.items.iter().any(|it| it.fields.iter().any(|f| f.unless.is_some())) {
+            bad!("items: a field with unless needs \"format\": 3");
+        }
         let keyed = self.api_key.is_some() || self.basic_auth.is_some();
         for (i, q) in self.requests().iter().enumerate() {
             let at = if self.request.steps.is_empty() { "request".to_string() } else { format!("request.steps[{i}]") };
@@ -1069,6 +1075,9 @@ impl Spec {
             for (i, a) in c.args.iter().enumerate() {
                 a.validate(&format!("{at}.calc.args[{i}]"), params, errs, id);
             }
+        }
+        if let Some(u) = &self.unless {
+            u.validate(&format!("{at}.unless"), params, errs, id);
         }
         if let Some(c) = &self.case {
             if c != "lower" && c != "upper" {

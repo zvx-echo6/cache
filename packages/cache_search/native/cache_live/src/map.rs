@@ -390,6 +390,9 @@ fn write_time(dt: DateTime<FixedOffset>, t: &TimeSpec, zone: &Zone) -> String {
 
 /// A value, written as text.
 fn eval(spec: &Spec, ctx: &Ctx) -> Option<String> {
+    if spec.unless.as_ref().is_some_and(|u| eval(u, ctx).is_some()) {
+        return None;
+    }
     // the raw value
     let (raw, base_text): (Option<Value>, Option<String>) = if !spec.first_of.is_empty() {
         (None, Some(spec.first_of.iter().find_map(|s| eval(s, ctx))?))

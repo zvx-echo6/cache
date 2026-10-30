@@ -258,14 +258,15 @@
         },
         {
           "label": "Instructions",
-          "first_of": [
-            {
-              "path": "alert.info[0].instruction"
-            },
-            {
-              "path": "alert.info[0].description"
-            }
-          ],
+          "path": "alert.info[0].instruction",
+          "max_chars": 400
+        },
+        {
+          "label": "Details",
+          "path": "alert.info[0].description",
+          "unless": {
+            "path": "alert.info[0].instruction"
+          },
           "max_chars": 400
         }
       ]
