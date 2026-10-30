@@ -385,7 +385,7 @@ void main() {
         places: {'state': 'downloading', 'bytes': 12 << 20, 'done_bytes': 2 << 20},
       ),
     ]);
-    r.app.models = [ModelEntry(path: '${r.modelsDir.path}/gemma-4-E2B-it-Q4_K_M.gguf', size: 3435973837)];
+    await _gemma(tester, r);
     final setup = SetupCache(
       app: r.app,
       weather: h.weather,
