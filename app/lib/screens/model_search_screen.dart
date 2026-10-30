@@ -4,6 +4,7 @@ import '../models/hf_hub.dart';
 import '../models/model_downloads.dart';
 import '../models/search_model.dart';
 import '../theme.dart';
+import 'download_confirm.dart';
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -209,24 +210,26 @@ class _ModelSearchScreenState extends State<ModelSearchScreen> {
   }
 }
 
-/// Downloads [f] from a model screen: asks first when the mobile-data switch stops it, and offers "Use it" when it is ready.
-Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f, {bool anyway = false}) async {
-  await d.start(f, anyway: anyway);
+/// Downloads [f] from a model screen after the download pop-up. The first chat model brings the search model along (it gives meaning
+/// search), as one more line in the same pop-up. Offers "Use it" when the model is ready.
+Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f) async {
+  final dir = d.app.modelsDir;
+  if (dir == null) return;
+  final sm = d.searchModel;
+  final withSearch = sm != null && !d.isSearchModel(f) && d.app.searchModel == null && !d.searchModelQueued;
+  final choice = await askToDownload(
+    context,
+    title: 'Download ${d.labelOf(f)}?',
+    lines: [
+      DownloadLine(d.labelOf(f), f.size),
+      if (withSearch) DownloadLine('Search model (once, for searching by meaning)', sm.size),
+    ],
+    dir: dir.path,
+    policy: d.policy,
+  );
+  if (choice == DownloadChoice.cancel || !context.mounted) return;
+  await d.start(f, anyway: choice == DownloadChoice.now);
   if (!context.mounted) return;
-  if (d.blocked != null) {
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: Text(d.blocked!.message),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Wait for Wi-Fi')),
-          TextButton(key: const ValueKey('download-anyway'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Download anyway')),
-        ],
-      ),
-    );
-    if (go == true && context.mounted) await downloadModel(context, d, f, anyway: true);
-    return;
-  }
   if (d.finished != null) {
     final finished = d.finished!;
     final m = ScaffoldMessenger.of(context);

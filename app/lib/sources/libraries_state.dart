@@ -17,7 +17,14 @@ import 'sources_state.dart';
 const String kLibrarySettingsFile = 'cache-library.json';
 
 /// The name the blank template is saved under.
-const String kLibraryTemplateName = 'cache-library-template.tar';
+const String kLibraryTemplateName = 'cache-library-template.tar.gz';
+
+/// The library id of the setup guide that ships inside the app (assets/guide): installed on first launch, always present, never
+/// offered for delete.
+const String kGuideLibraryId = 'cache-guide';
+
+/// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
+const String kGuideVersion = '2026-10-29b';
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
@@ -88,6 +95,7 @@ class LibrariesState extends ChangeNotifier {
     PickPath? pickFile,
     SaveBytes? saveBytes,
     this.pollInterval = const Duration(milliseconds: 250),
+    this.bundledGuide,
   })  : downloader = downloader ?? ZimDownloader(),
         _pickFile = pickFile ?? _pickWithPicker,
         _saveBytes = saveBytes ?? _saveWithPicker {
@@ -108,6 +116,9 @@ class LibrariesState extends ChangeNotifier {
   final PickPath _pickFile;
   final SaveBytes _saveBytes;
   final Duration pollInterval;
+
+  /// The guide library shipped in the app, as a file to add (copied out of the assets); null leaves it out (tests).
+  final Future<File?> Function()? bundledGuide;
 
   /// The libraries folder (null until [init]).
   Directory? dir;
@@ -152,6 +163,31 @@ class LibrariesState extends ChangeNotifier {
     if (core == null) return;
     await sources.refresh();
     _resumeIndexes();
+    await ensureGuide();
+  }
+
+  /// True for the guide that ships in the app (it is never offered for delete).
+  bool isGuide(LibraryItem l) => idOf(l) == kGuideLibraryId;
+
+  /// Installs the bundled guide when it is not on the phone (first launch, or after it was removed by hand) or when the app carries a
+  /// newer copy, like any library added from a file.
+  Future<void> ensureGuide() async {
+    final source = bundledGuide;
+    if (source == null || (task != null && task!.running)) return;
+    final have = libraries.where(isGuide).firstOrNull;
+    if (have != null && versionOf(have) == kGuideVersion) return;
+    final file = await source();
+    if (file == null) return;
+    try {
+      await addFile(file, confirmUpdate: (_, from, to) async => from != to, askSettings: (_) async => null);
+      // An add that only found the same copy is not a problem to show.
+      if (task != null && !task!.running) task = null;
+      notifyListeners();
+    } finally {
+      try {
+        await file.delete();
+      } catch (_) {}
+    }
   }
 
   Directory get _partialDir => Directory('${dir!.path}${Platform.pathSeparator}.partial');
@@ -348,12 +384,17 @@ class LibrariesState extends ChangeNotifier {
 
   // ---- adding
 
-  /// Lets the person pick a library file (a .cache-library archive, or a plain Qdrant snapshot) and adds it.
+  /// Lets the person pick a file and adds it: a .cache-library archive or a plain Qdrant snapshot as a library, a .zim as a ZIM
+  /// (copied in and indexed like a downloaded one), so one "From a file" adds either.
   Future<void> pickAndAdd({required ConfirmUpdate confirmUpdate, required AskSettings askSettings}) async {
     if (task != null && task!.running) return;
     final path = await _pickFile();
     if (path == null) return;
     try {
+      if (path.toLowerCase().endsWith('.zim')) {
+        await sources.addZim(File(path));
+        return;
+      }
       await addFile(File(path), confirmUpdate: confirmUpdate, askSettings: askSettings);
     } finally {
       try {
@@ -365,7 +406,7 @@ class LibrariesState extends ChangeNotifier {
   static Future<String?> _pickWithPicker() async => (await FilePicker.pickFile())?.path;
 
   static Future<bool> _saveWithPicker(String fileName, Uint8List bytes) async =>
-      await FilePicker.saveFile(fileName: fileName, bytes: bytes, mimeType: 'application/x-tar') != null;
+      await FilePicker.saveFile(fileName: fileName, bytes: bytes, mimeType: 'application/gzip') != null;
 
   static String _nameOf(String path) => path.split(RegExp(r'[\\/]')).last;
 
@@ -776,29 +817,43 @@ List<String>? tarEntryNames(File f, {int max = 16}) {
   try {
     r = f.openSync();
     final length = r.lengthSync();
-    final names = <String>[];
-    var at = 0;
-    while (names.length < max && at + 512 <= length) {
-      r.setPositionSync(at);
-      final h = r.readSync(512);
-      if (h.length < 512) break;
-      if (h.every((b) => b == 0)) break; // the end of the archive
-      // The header checksum: the sum of the header's bytes with the checksum field read as spaces.
-      var sum = 0;
-      for (var i = 0; i < 512; i++) {
-        sum += (i >= 148 && i < 156) ? 32 : h[i];
-      }
-      final stored = int.tryParse(String.fromCharCodes(h.sublist(148, 156)).replaceAll('\x00', '').trim(), radix: 8);
-      if (stored != sum) return names.isEmpty ? null : names;
-      final end = h.indexOf(0);
-      names.add(String.fromCharCodes(h.sublist(0, end < 0 || end > 100 ? 100 : end)));
-      final size = int.tryParse(String.fromCharCodes(h.sublist(124, 136)).replaceAll('\x00', '').trim(), radix: 8) ?? 0;
-      at += 512 + (size + 511) ~/ 512 * 512;
+    final magic = r.readSync(2);
+    // A compressed archive (small ones only: the template, a library file that turned out not to be one) is read unpacked.
+    if (magic.length == 2 && magic[0] == 0x1f && magic[1] == 0x8b) {
+      if (length > 32 << 20) return null;
+      final bytes = gzip.decode(f.readAsBytesSync());
+      return _tarNames((at) => at + 512 <= bytes.length ? bytes.sublist(at, at + 512) : const [], bytes.length, max);
     }
-    return names.isEmpty ? null : names;
+    final raf = r;
+    return _tarNames((at) {
+      raf.setPositionSync(at);
+      return raf.readSync(512);
+    }, length, max);
   } catch (_) {
     return null;
   } finally {
     r?.closeSync();
   }
+}
+
+List<String>? _tarNames(List<int> Function(int at) header, int length, int max) {
+  final names = <String>[];
+  var at = 0;
+  while (names.length < max && at + 512 <= length) {
+    final h = header(at);
+    if (h.length < 512) break;
+    if (h.every((b) => b == 0)) break; // the end of the archive
+    // The header checksum: the sum of the header's bytes with the checksum field read as spaces.
+    var sum = 0;
+    for (var i = 0; i < 512; i++) {
+      sum += (i >= 148 && i < 156) ? 32 : h[i];
+    }
+    final stored = int.tryParse(String.fromCharCodes(h.sublist(148, 156)).replaceAll('\x00', '').trim(), radix: 8);
+    if (stored != sum) return names.isEmpty ? null : names;
+    final end = h.indexOf(0);
+    names.add(String.fromCharCodes(h.sublist(0, end < 0 || end > 100 ? 100 : end)));
+    final size = int.tryParse(String.fromCharCodes(h.sublist(124, 136)).replaceAll('\x00', '').trim(), radix: 8) ?? 0;
+    at += 512 + (size + 511) ~/ 512 * 512;
+  }
+  return names.isEmpty ? null : names;
 }

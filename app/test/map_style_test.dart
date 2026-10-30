@@ -106,6 +106,11 @@ void main() {
         expect(layers.firstWhere((l) => l['id'] == 'background')['paint']['background-color'], p.css('land'));
         expect(layers.firstWhere((l) => l['id'] == 'water')['paint']['fill-color'], p.css('water'));
         expect(layers.firstWhere((l) => l['id'] == 'mvum-mvum_roads-line')['paint']['line-color'], p.css('mvum'));
+        // The roles the publisher writes (blm_routes, trails) draw in their own colours and dashes, not the default line.
+        final blm = layers.firstWhere((l) => l['id'] == 'blm-routes-line');
+        expect(blm['paint']['line-color'], p.css('blm'));
+        expect(blm['paint']['line-dasharray'], [4.0, 2.0]);
+        expect(layers.firstWhere((l) => l['id'] == 'usfs-trails-roads-trails-line')['paint']['line-color'], p.css('trail'));
         expect(layers.firstWhere((l) => l['id'] == 'contours-label')['paint']['text-color'], p.css('contourLabel'));
       });
     });
@@ -290,12 +295,16 @@ void main() {
       expect(b.sourceUrl, endsWith('.pmtiles'));
       expect(b.sourceType, 'pmtiles');
       expect(b.sourceLayers, ['blm_routes']);
-      expect(b.styleRole, 'blm');
+      expect(b.styleRole, 'blm_routes');
       expect(b.onlineOnly, isFalse);
       expect(def('mvum').sourceLayers, ['mvum_roads', 'mvum_trails']);
       expect(def('mvum').styleRole, 'mvum');
-      expect(def('usfs-trails-roads').styleRole, 'trail');
+      expect(def('usfs-trails-roads').styleRole, 'trails');
       expect(def('public-lands-idaho').styleRole, 'public_lands');
+      // One vocabulary: every role the published catalogue states is one the style generator draws.
+      for (final d in defs) {
+        if (d.kind == LayerKind.vector && d.styleRole.isNotEmpty) expect(kStyleRoles, contains(d.styleRole), reason: d.id);
+      }
       expect(def('blm-routes-idaho').coverage, contains('N'));
       expect(def('blm-routes-idaho').coverageBox!.west, -118.0);
       expect(def('blm-routes').coverageSize, greaterThan(def('blm-routes-idaho').coverageSize));

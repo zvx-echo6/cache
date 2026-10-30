@@ -17,9 +17,11 @@ import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
-import '../models/search_model.dart';
 import '../nav/nav_state.dart';
 import '../regions/ui/region_sheet.dart';
+import '../search/app_search.dart';
+import '../search/app_search_providers.dart';
+import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
@@ -30,13 +32,13 @@ import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
-import 'placeholder_screen.dart';
+import 'download_confirm.dart' show openStorageForSpace;
 import '../notebook/notebook_model.dart';
 import 'notebooks/notebook_screen.dart';
 import 'notebooks/notebooks_screen.dart';
 import 'notebooks/quick_add_sheet.dart';
-import 'search_model_line.dart';
 import 'settings/deps.dart';
+import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
 import 'settings_screen.dart';
 import 'setup_card.dart';
@@ -102,21 +104,9 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
-    // Once the models folder has been read: an install with a chat model and no search model is asked once to get it.
-    widget.app.addListener(_offerSearchModel);
-    _offerSearchModel();
-  }
-
-  bool _searchModelAsked = false;
-
-  void _offerSearchModel() {
-    final sm = SearchModel.shared;
-    if (_searchModelAsked || sm == null || !sm.shouldOffer) return;
-    _searchModelAsked = true;
-    widget.app.removeListener(_offerSearchModel);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) offerSearchModelOnce(context, sm);
-    });
+    // "Free up space" in any download pop-up opens Settings > Storage.
+    openStorageForSpace = (context) =>
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
   }
 
   void _openAlert(AlertFocus f) {
@@ -126,7 +116,6 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
-    widget.app.removeListener(_offerSearchModel);
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
@@ -176,12 +165,10 @@ class _ShellState extends State<Shell> {
     location: widget.location,
     hub: widget.hub,
     onOpenAsk: _openAskFromSettings,
-    setup: _setup,
   );
 
-  /// "Set up Cache" on Home and in Settings: each line opens the screen the feature uses everywhere.
+  /// "Set up Cache" on Home: each line opens the screen the feature uses everywhere.
   late final SetupCache _setup = SetupCache(
-    layout: widget.layout,
     app: widget.app,
     weather: widget.hub.weather,
     sources: widget.sources,
@@ -207,6 +194,64 @@ class _ShellState extends State<Shell> {
     } else {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
     }
+  }
+
+  /// Home's search across Cache: one provider per module (Notebooks add theirs here).
+  late final AppSearch _search = AppSearch([
+    LibrarySearchProvider(
+      sources: widget.sources,
+      openZim: (z) async {
+        final id = widget.sources.idOf(z);
+        if (id != null) _openSource(await widget.sources.zimMainPage(id));
+      },
+      openAddress: _openSource,
+    ),
+    PlacesSearchProvider(
+      backend: widget.nav.backend,
+      near: () => _here,
+      distance: widget.nav.fmt.distance,
+      open: (p) {
+        if (widget.nav.phase != NavPhase.browsing) {
+          _say('Finish or end the route first');
+          return;
+        }
+        widget.nav.select(p);
+        _goModule(ModuleId.maps);
+      },
+    ),
+    LayersSearchProvider(
+      maps: widget.maps,
+      open: (l) {
+        widget.maps.setOn(l.id, true);
+        _goModule(ModuleId.maps);
+      },
+    ),
+    if (widget.notebooks case final nb?) ...[
+      NotebooksSearchProvider(
+        notebook: nb.notebook,
+        openNotebook: (n) {
+          _goModule(ModuleId.notebooks);
+          Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: nb, notebookId: n.id)));
+        },
+        openEntry: (n, e) => openNotebookEntry(context, nb, n, e),
+      ),
+      NotebookPlacesSearchProvider(
+        notebook: nb.notebook,
+        here: () => switch (widget.location.fix) {
+          final f? => (lat: f.lat, lon: f.lon),
+          null => null,
+        },
+        distance: widget.nav.fmt.distance,
+        open: (n, e) => openNotebookEntry(context, nb, n, e),
+      ),
+    ],
+  ]);
+
+  /// Enter in Home's search: a new chat that asks exactly what was typed.
+  void _askFromHome(String text) {
+    widget.chat.newChat();
+    _goModule(ModuleId.ask);
+    widget.chat.send(text);
   }
 
   void _openSettings() {
@@ -334,7 +379,7 @@ class _ShellState extends State<Shell> {
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
-        ModuleId.notebooks => widget.notebooks == null ? const PlaceholderScreen(title: 'Notebooks', message: 'Notebooks are not available on this phone') : NotebooksScreen(deps: widget.notebooks!),
+        ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this phone'))) : NotebooksScreen(deps: widget.notebooks!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 
@@ -367,7 +412,8 @@ class _ShellState extends State<Shell> {
                 onOpenWeather: () => _goModule(ModuleId.weather),
                 turnOn: _weatherTurnOn,
                 setup: _setup,
-                onOpenAsk: () => _goModule(ModuleId.ask),
+                search: _search,
+                onAsk: _askFromHome,
                 onOpenSettings: _openSettings,
                 onOpenShortcut: _openShortcut,
               ),

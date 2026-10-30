@@ -49,29 +49,3 @@ class SearchModelLine extends StatelessWidget {
     );
   }
 }
-
-/// Asks once, on an install that already has a chat model but no search model, whether to get it. The question is marked as
-/// asked before it shows, so it never comes again; "Meaning search needs the search model" stays where it applies. True when
-/// it was shown.
-Future<bool> offerSearchModelOnce(BuildContext context, SearchModel sm) async {
-  if (!sm.shouldOffer) return false;
-  await sm.markOffered();
-  if (!context.mounted) return false;
-  final go = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Get the search model?'),
-      content: Text('Meaning search in your libraries, places and the assistant needs it. ${sm.spec.sizeLabel}.'),
-      actions: [
-        TextButton(key: const ValueKey('search-model-not-now'), onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-        TextButton(key: const ValueKey('search-model-download'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Download')),
-      ],
-    ),
-  );
-  if (go == true) {
-    unawaited(sm.ensure());
-    // The download and anything that stops it (mobile data, the connection) show on the Models screen.
-    if (context.mounted) openModels(context, sm.app);
-  }
-  return true;
-}

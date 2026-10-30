@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../theme.dart';
 import '../../weather/connector.dart';
-import '../../weather/curated.dart';
+import '../../weather/source_icon.dart';
 import '../../weather/weather_state.dart';
-import 'data_sources_page.dart';
+import 'catalogues_page.dart';
 import 'deps.dart';
 import 'key_sheet.dart';
+import 'source_page.dart';
 import 'widgets.dart';
 
 /// Opens the Add a key sheet for [c] and says so when the key was saved. [replace] is for a key that is already there.
@@ -38,8 +39,8 @@ String _sentence(String s) {
   return '${t[0].toUpperCase()}${t.substring(1)}.';
 }
 
-/// Settings > Weather and alerts: how old the data is and why, the switches, and Advanced (all data sources). The places weather
-/// is kept for are in the Places notebook.
+/// Settings > Weather and alerts: one line saying how old the data is (with a small refresh button), the sources from the catalogue
+/// (featured ones first, the rest under More sources). The places weather is kept for are in the Places notebook.
 class WeatherPage extends StatefulWidget {
   const WeatherPage({super.key, required this.deps});
 
@@ -59,38 +60,9 @@ class _WeatherPageState extends State<WeatherPage> {
     if (w.started && w.catalogues.isEmpty && !w.refreshingCatalogues) w.refreshCatalogues();
   }
 
-  Future<void> _update({bool anyway = false}) async {
-    final r = await w.updateNow(anyway: anyway, force: true);
-    if (!mounted) return;
-    say(
-      context,
-      r.words,
-      action: r.blocked != null ? SnackBarAction(label: 'Update anyway', onPressed: () => _update(anyway: true)) : null,
-    );
-  }
-
-  List<Part> _status(CuratedRow r, List<Connector> list) {
-    if (list.isEmpty) return const [Part('Not downloaded yet. Needs a connection once.', Tone.warn)];
-    final provider = list.first.provider;
-    return joinParts([
-      [Part(r.detail)],
-      if (provider.isNotEmpty) [Part(provider)],
-    ]);
-  }
-
-  Widget _row(BuildContext context, CuratedRow r) {
-    final list = w.rowSources(r);
-    final status = _status(r, list);
-    final keyed = list.isNotEmpty && list.any((c) => c.needsKey);
-    final missing = [for (final c in list) if (!w.keyReady(c)) c];
-    if (keyed && missing.isNotEmpty) {
-      return SettingsRow(
-        title: r.title,
-        status: status,
-        trailing: RowButton(label: 'Add key', onPressed: () => addKeyFor(context, d, missing.first, title: r.title)),
-      );
-    }
-    return SwitchRow(title: r.title, status: status, value: w.rowIsOn(r), onChanged: list.isEmpty ? null : (v) => w.setRowOn(r, v));
+  Future<void> _refresh() async {
+    final r = await w.updateNow(force: true);
+    if (mounted) say(context, r.words);
   }
 
   @override
@@ -98,22 +70,140 @@ class _WeatherPageState extends State<WeatherPage> {
     return ListenableBuilder(
       listenable: Listenable.merge([w, d.hub.settings]),
       builder: (context, _) {
-        bool isKeyed(CuratedRow r) {
-          final list = w.rowSources(r);
-          return list.isEmpty ? r.keyed : list.any((c) => c.needsKey);
-        }
-
-        final free = [for (final r in kCurated) if (!isKeyed(r)) r];
-        final keyed = [for (final r in kCurated) if (isKeyed(r)) r];
+        final all = w.sources;
+        final featured = [for (final c in all) if (c.featured) c];
+        final more = [for (final c in all) if (!c.featured) c];
         return SettingsPage(
           title: 'Weather and alerts',
           children: [
-            StatusBox(status: w.status(), updating: w.updating, onUpdate: _update),
-            if (free.isNotEmpty) SettingsGroup(label: 'Free', rows: [for (final r in free) _row(context, r)]),
-            if (keyed.isNotEmpty) SettingsGroup(label: 'Needs your own key (free)', rows: [for (final r in keyed) _row(context, r)]),
-            AdvancedRow(
-              status: 'All data sources, more',
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => DataSourcesPage(deps: d))),
+            StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh),
+            if (all.isEmpty)
+              NoteText(w.refreshingCatalogues
+                  ? 'Loading sources…'
+                  : (w.catalogueErrors.values.firstOrNull ?? 'No sources downloaded yet. Connect to the internet and they load by themselves.'))
+            else ...[
+              const NoteText('What Cache watches for your places. All free; some need a free key you get from the provider.'),
+              SettingsGroup(
+                rows: [
+                  for (final c in featured) SourceRow(deps: d, source: c),
+                  if (more.isNotEmpty)
+                    SettingsRow(
+                      key: const ValueKey('more-sources'),
+                      icon: Icons.add,
+                      title: 'More sources',
+                      status: [Part(more.map((c) => c.title).join(', '))],
+                      trailing: Text('${more.length} more', style: TextStyle(fontSize: 13, color: context.t.secondary)),
+                      chevron: true,
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => MoreSourcesPage(deps: d))),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// One source: what it gives and who provides it, and its switch, or "Get key" on the row while it needs a key. Tapping it opens the
+/// source's details (its key can be replaced or removed there).
+class SourceRow extends StatelessWidget {
+  const SourceRow({super.key, required this.deps, required this.source});
+
+  final SettingsDeps deps;
+  final Connector source;
+
+  @override
+  Widget build(BuildContext context) {
+    final w = deps.hub.weather;
+    final c = source;
+    final k = context.t;
+    final gives = c.description.isEmpty ? '' : '${c.description[0].toUpperCase()}${c.description.substring(1)}';
+    final status = joinParts([
+      if (gives.isNotEmpty) [Part(gives)],
+      if (c.provider.isNotEmpty) [Part(c.provider)],
+    ]);
+    return SettingsRow(
+      key: ValueKey('source-${c.id}'),
+      leading: Icon(sourceIcon(c), size: 22, color: k.secondary),
+      title: c.title,
+      status: status,
+      trailing: w.keyReady(c)
+          ? Switch(value: w.isOn(c.id), onChanged: (v) => w.setSourceOn(c, v))
+          : RowButton(key: ValueKey('get-key-${c.id}'), label: 'Get key', onPressed: () => addKeyFor(context, deps, c)),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SourcePage(deps: deps, sourceId: c.id))),
+    );
+  }
+}
+
+/// Weather and alerts > More sources: the sources that are not featured, searchable, and sources other people publish.
+class MoreSourcesPage extends StatefulWidget {
+  const MoreSourcesPage({super.key, required this.deps});
+
+  final SettingsDeps deps;
+
+  @override
+  State<MoreSourcesPage> createState() => _MoreSourcesPageState();
+}
+
+class _MoreSourcesPageState extends State<MoreSourcesPage> {
+  final _query = TextEditingController();
+  String _q = '';
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  bool _matches(Connector c) {
+    if (_q.isEmpty) return true;
+    final hay = '${c.title} ${c.provider} ${c.description} ${c.category} ${c.coverage}'.toLowerCase();
+    return _q.toLowerCase().split(RegExp(r'\s+')).every(hay.contains);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.deps;
+    final w = d.hub.weather;
+    final k = context.t;
+    return ListenableBuilder(
+      listenable: Listenable.merge([w, d.hub.settings]),
+      builder: (context, _) {
+        final more = [for (final c in w.sources) if (!c.featured) c];
+        final shown = [for (final c in more) if (_matches(c)) c];
+        final errors = w.catalogueErrors.values.toList();
+        return SettingsPage(
+          title: 'More sources',
+          children: [
+            TextField(
+              key: const ValueKey('search-sources'),
+              controller: _query,
+              onChanged: (v) => setState(() => _q = v.trim()),
+              textInputAction: TextInputAction.search,
+              style: TextStyle(fontSize: 15, color: k.text),
+              decoration: InputDecoration(
+                hintText: 'Search ${more.length} ${more.length == 1 ? 'source' : 'sources'}',
+                hintStyle: TextStyle(color: k.secondary),
+                prefixIcon: Icon(Icons.search, color: k.secondary),
+                filled: true,
+                fillColor: k.surface,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              ),
+            ),
+            if (more.isNotEmpty && shown.isEmpty) const NoteText('No source matches your search.'),
+            if (shown.isNotEmpty) SettingsGroup(rows: [for (final c in shown) SourceRow(deps: d, source: c)]),
+            if (errors.isNotEmpty) NoteText(errors.first),
+            SettingsGroup(
+              rows: [
+                SettingsRow(
+                  title: 'Add sources from a link',
+                  status: const [Part('Sources other people publish')],
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => CataloguesPage(deps: d))),
+                ),
+              ],
             ),
           ],
         );
@@ -122,51 +212,48 @@ class _WeatherPageState extends State<WeatherPage> {
   }
 }
 
-/// The line at the top: how old the data is (and why when it is stale), with Update now.
-class StatusBox extends StatelessWidget {
-  const StatusBox({super.key, required this.status, required this.updating, required this.onUpdate});
+/// The one line at the top: how old the data is, turning into a warning when it is old, with a small round refresh button.
+class StatusLine extends StatelessWidget {
+  const StatusLine({super.key, required this.status, required this.updating, required this.onRefresh});
 
   final WeatherStatus status;
   final bool updating;
-  final VoidCallback onUpdate;
+  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final dot = switch (status.tone) {
-      StatusTone.ok => k.ok,
-      StatusTone.warn => k.warning,
-      StatusTone.quiet => k.secondary,
-    };
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
-      child: Row(
-        children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(updating ? 'Updating…' : status.headline, key: const ValueKey('status-headline'), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: k.text)),
-                const SizedBox(height: 3),
-                Text(status.detail, key: const ValueKey('status-detail'), style: TextStyle(fontSize: 14, height: 1.35, color: k.secondary)),
-              ],
-            ),
+    final warn = status.tone == StatusTone.warn;
+    return Row(
+      children: [
+        if (warn) ...[Icon(Icons.warning_amber_rounded, size: 18, color: k.warning), const SizedBox(width: 6)],
+        Expanded(
+          child: Text(
+            updating ? 'Updating…' : status.headline,
+            key: const ValueKey('status-headline'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 14, color: warn ? k.warning : k.secondary),
           ),
-          const SizedBox(width: 6),
-          if (updating)
-            const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5)))
-          else
-            TextButton(
-              key: const ValueKey('update-now'),
-              onPressed: onUpdate,
-              style: TextButton.styleFrom(foregroundColor: k.accent, minimumSize: const Size(48, 48)),
-              child: const Text('Update now', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-            ),
-        ],
-      ),
+        ),
+        SizedBox(
+          width: 48,
+          height: 48,
+          child: updating
+              ? const Padding(padding: EdgeInsets.all(14), child: CircularProgressIndicator(strokeWidth: 2.5))
+              : IconButton(
+                  key: const ValueKey('weather-refresh'),
+                  tooltip: 'Refresh',
+                  onPressed: onRefresh,
+                  icon: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: k.surface),
+                    child: Icon(Icons.refresh, size: 18, color: k.text),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 }

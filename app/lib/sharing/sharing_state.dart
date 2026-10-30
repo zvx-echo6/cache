@@ -6,19 +6,8 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/foundation.dart';
 
 import '../files.dart';
+import '../settings/data_kinds.dart';
 import '../settings/data_policy.dart';
-
-/// One thing this device can share: a folder of Cache's own with a fixed id, so the same kind of thing on two linked devices is
-/// one shared folder (tick Models on both and their models are kept the same).
-class ShareKind {
-  const ShareKind(this.id, this.label, this.folder);
-
-  final String id;
-  final String label;
-
-  /// Where it lives on this device; null while that part of the app has not started.
-  final Directory? Function() folder;
-}
 
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
@@ -28,7 +17,9 @@ class SharingState extends ChangeNotifier {
 
   final DataPolicy policy;
   final Future<Directory> Function() supportDir;
-  final List<ShareKind> kinds;
+  /// The kinds that can be shared (the app's one list of kinds and folders, which Storage measures too). Each folder has a fixed share
+  /// id, so the same kind of thing on two linked devices is one shared folder (tick Models on both and their models are kept the same).
+  final List<DataKind> kinds;
   final String deviceName;
   final SyncOpener _opener;
 
@@ -139,22 +130,32 @@ class SharingState extends ChangeNotifier {
   Map<String, dynamic>? shareOf(String id) => shares.where((s) => s['id'] == id).firstOrNull;
   List<Map<String, dynamic>> offersOf(String id) => offers.where((o) => o['id'] == id).toList();
 
+  /// The shares of [k]'s folders that are set up.
+  List<Map<String, dynamic>> sharesOfKind(DataKind k) => [for (final id in k.shared().keys) ?shareOf(id)];
+
+  /// What linked devices offer for [k]'s folders.
+  List<Map<String, dynamic>> offersOfKind(DataKind k) => [for (final id in k.shared().keys) ...offersOf(id)];
+
   Future<String> linkCode() async => (await _call('link_code'))['code'] as String;
   Future<String> link(String code) async => (await _call('link', {'code': code}))['name'] as String? ?? 'the other device';
   Future<void> unlink(String peer) => _call('unlink', {'peer': peer});
   Future<void> rename(String name) => _call('set_name', {'name': name});
   Future<void> syncNow() => _call('sync_now');
 
-  /// Ticks or unticks one kind. Unticking stops sharing it; the files stay.
-  Future<void> setShared(ShareKind k, bool on) async {
+  /// Ticks or unticks one kind: every folder of it. Unticking stops sharing it; the files stay.
+  Future<void> setShared(DataKind k, bool on) async {
+    final folders = k.shared();
     if (!on) {
-      await _call('share_remove', {'id': k.id});
+      for (final id in folders.keys) {
+        if (shareOf(id) != null) await _call('share_remove', {'id': id});
+      }
       return;
     }
-    final dir = k.folder();
-    if (dir == null) throw CacheSearchException('sync', '${k.label} is not ready yet');
-    await dir.create(recursive: true);
-    await _call('share_add', {'id': k.id, 'name': k.label, 'path': dir.path});
+    if (folders.values.any((d) => d == null)) throw CacheSearchException('sync', '${k.label} is not ready yet');
+    for (final e in folders.entries) {
+      await e.value!.create(recursive: true);
+      await _call('share_add', {'id': e.key, 'name': folders.length == 1 ? k.label : '${k.label} (${e.key})', 'path': e.value!.path});
+    }
   }
 
   @override

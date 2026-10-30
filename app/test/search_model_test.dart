@@ -203,30 +203,6 @@ void main() {
       expect(sm.state, SearchModelState.ready);
     });
 
-    test('an install with a chat model is offered the search model once, and the answer is kept', () async {
-      File('${dir.path}/models/chat-Q4.gguf').writeAsBytesSync([1, 2]);
-      await app.init();
-      final sm = SearchModel(app: app, modelsDir: () async => app.modelsDir!);
-      addTearDown(sm.dispose);
-      expect(sm.shouldOffer, isTrue);
-      await sm.markOffered();
-      expect(sm.shouldOffer, isFalse);
-      final again = AppState(settingsDirOverride: dir, modelsDirOverride: Directory('${dir.path}/models'));
-      await again.init();
-      expect(again.searchModelOffered, isTrue, reason: 'read back from the settings file');
-    });
-
-    test('no offer without a chat model, nor when the search model is there', () async {
-      await app.init();
-      final sm = SearchModel(app: app, modelsDir: () async => app.modelsDir!);
-      addTearDown(sm.dispose);
-      expect(sm.shouldOffer, isFalse, reason: 'no chat model: it comes with the first one');
-      File('${dir.path}/models/chat-Q4.gguf').writeAsBytesSync([1, 2]);
-      File('${dir.path}/models/bge-m3-Q8_0.gguf').writeAsBytesSync([1, 2, 3]);
-      await app.refreshModels();
-      expect(sm.shouldOffer, isFalse);
-    });
-
     test('a library naming the search model uses the shared embedder; another model is used only when its file is here', () async {
       await app.init();
       final sm = SearchModel(app: app, modelsDir: () async => app.modelsDir!, make: _Fake.new);

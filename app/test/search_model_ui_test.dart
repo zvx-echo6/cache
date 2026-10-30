@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
@@ -5,7 +6,6 @@ import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/model_downloads.dart';
 import 'package:cache/models/search_model.dart';
 import 'package:cache/screens/model_search_screen.dart';
-import 'package:cache/screens/models_screen.dart';
 import 'package:cache/screens/search_model_line.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
@@ -59,50 +59,25 @@ void main() {
     expect(find.text('Get it'), findsNothing);
   });
 
-  testWidgets('the one-time question shows once', (tester) async {
-    // Not started from disk, so nothing is written: the flag is what is checked.
-    final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir)
-      ..started = true
-      ..models = [ModelEntry(path: '${dir.path}/chat-Q4.gguf', size: 2)];
-    final sm = SearchModel(app: app, modelsDir: () async => dir);
-    addTearDown(sm.dispose);
+  testWidgets('the first chat model brings the search model along: one more line in the same download pop-up', (tester) async {
+    final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir)..modelsDir = dir;
+    final d = ModelDownloads(app: app, searchModel: kSearchModel.file);
+    addTearDown(d.dispose);
     await tester.pumpWidget(wrap(const SizedBox()));
     final ctx = tester.element(find.byType(SizedBox));
-    final shown = offerSearchModelOnce(ctx, sm);
+    unawaited(downloadModel(ctx, d, const HfFile(repo: 'acme/Chat-GGUF', path: 'chat-Q4_K_M.gguf', size: 3 << 30)));
     await tester.pumpAndSettle();
-    expect(find.text('Get the search model?'), findsOneWidget);
-    expect(find.text('Meaning search in your libraries, places and the assistant needs it. 605 MB.'), findsOneWidget);
-    expect(find.text('Download'), findsOneWidget);
-    await tester.tap(find.text('Not now'));
+    expect(find.text('Download chat-Q4_K_M.gguf?'), findsOneWidget);
+    expect(find.text('Search model (once, for searching by meaning)'), findsOneWidget);
+    expect(find.text('605 MB'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(await shown, isTrue);
-    expect(app.searchModelOffered, isTrue);
-    expect(await offerSearchModelOnce(ctx, sm), isFalse);
-    await tester.pumpAndSettle();
-    expect(find.text('Get the search model?'), findsNothing);
-  });
-
-  testWidgets('Models: after the one-time question was answered, the search model can still be got under On this phone',
-      (tester) async {
-    final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir)
-      ..started = true
-      ..searchModelOffered = true
-      ..models = [ModelEntry(path: '${dir.path}/chat-Q4.gguf', size: 2)];
-    final sm = SearchModel(app: app, modelsDir: () async => dir);
-    final before = SearchModel.shared;
-    SearchModel.shared = sm;
-    addTearDown(() {
-      SearchModel.shared = before;
-      sm.dispose();
-    });
-    await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: ModelsScreen(app: app, memory: 8 << 30)));
-    await tester.pumpAndSettle();
-    expect(sm.shouldOffer, isFalse);
-    await tester.scrollUntilVisible(find.byKey(const ValueKey('get-search-model')), 200);
-    expect(find.text('Meaning search needs the search model.'), findsOneWidget);
+    // Once it is on the phone, a chat model comes alone.
     app.searchModel = ModelEntry(path: '${dir.path}/bge-m3-Q8_0.gguf', size: 2);
-    app.notifyListeners();
+    unawaited(downloadModel(ctx, d, const HfFile(repo: 'acme/Chat-GGUF', path: 'chat-Q4_K_M.gguf', size: 3 << 30)));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('get-search-model')), findsNothing, reason: 'gone once it is on the phone');
+    expect(find.text('Search model (once, for searching by meaning)'), findsNothing);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
   });
 }

@@ -19,7 +19,7 @@ fi
 work=$(mktemp -d /private/tmp/cache-check-app.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 xcrun nm -gU "$bin" > "$work/symbols.txt"
-for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress _cs_conversation_export _cs_conversation_import _cl_load _cl_next _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk; do
+for symbol in _cs_open _cs_version _cs_tool _cs_map_route _cs_map_progress _cs_conversation_export _cs_conversation_import _cl_load _cl_next _valhalla_shim_init _valhalla_shim_route _cache_free_bytes_on_disk _cache_total_bytes_on_disk; do
   grep -Eq " ${symbol}$" "$work/symbols.txt" || fail "missing native symbol: $symbol"
 done
 codesign --verify --deep --strict "$app"

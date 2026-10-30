@@ -11,7 +11,9 @@ import '../browse/zim_urls.dart';
 import '../history/share.dart';
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
+import '../location/position_source.dart' show LocationPermissionState;
 import '../theme.dart';
+import '../video/format.dart';
 import 'answer_reports_ui.dart';
 import 'confirm_card.dart';
 import 'history_drawer.dart';
@@ -111,52 +113,117 @@ class _AskScreenState extends State<AskScreen> {
   }
 
 
-  Future<void> _useLocation() async {
+  /// The "+" menu: the "Use my location" switch (Cache uses the location whenever the phone allows it and never asks). When the
+  /// phone blocks it, the switch is off and says why, with the way to the phone's settings.
+  Future<void> _plusMenu() async {
     final location = widget.location;
     if (location == null) return;
-    var explained = false;
-    if (!location.enabled) {
-      final enable = await _explainLocation();
-      if (!enable || !mounted) return;
-      await location.setEnabled(true);
-      explained = true;
-    }
-    final read = location.streamHeld
-        ? await location.prepareForChat(isCancelled: () => !mounted) != null
-        : await location.request(explain: explained ? () async => true : _explainLocation);
-    // "Ready" only once the core has the position, as the chip and the system prompt say.
-    final bridge = widget.chatLocation;
-    final ok = read && (bridge == null || await bridge.settled());
-    if (!mounted) return;
-    final text = ok ? 'Location ready for your next question.' : read ? 'Got your position, but the assistant could not use it yet. You can still chat.' : switch (location.problem) {
-      LocationProblem.permissionBlocked => "Location is blocked. You can allow it in your phone's settings.",
-      LocationProblem.permissionDenied => 'Cache was not allowed to use your location.',
-      LocationProblem.serviceOff => "Your phone's location is switched off.",
-      LocationProblem.off => 'Location is off.',
-      LocationProblem.noFix => 'Could not get a position yet. You can still chat.',
-      null => 'Location was not changed. You can still chat.',
-    };
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(text),
-      action: switch (location.problem) {
-        LocationProblem.permissionBlocked => SnackBarAction(label: 'Settings', onPressed: location.openAppSettings),
-        LocationProblem.serviceOff => SnackBarAction(label: 'Settings', onPressed: location.openLocationSettings),
-        _ => null,
-      },
-    ));
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => ListenableBuilder(
+        listenable: location,
+        builder: (ctx, _) {
+          final k = ctx.t;
+          final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
+          final serviceOff = location.problem == LocationProblem.serviceOff;
+          final why = blocked
+              ? "Blocked in the phone's settings"
+              : serviceOff
+              ? "The phone's location is switched off"
+              : 'Cache finds things near you';
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SwitchListTile(
+                    key: const ValueKey('use-my-location'),
+                    secondary: Icon(Icons.my_location, color: k.secondary),
+                    title: const Text('Use my location', style: TextStyle(fontSize: 15)),
+                    subtitle: Text(why, style: TextStyle(fontSize: 12, color: blocked || serviceOff ? k.warning : k.secondary)),
+                    value: location.enabled && !blocked && !serviceOff,
+                    onChanged: blocked || serviceOff ? null : location.setEnabled,
+                  ),
+                  if (blocked || serviceOff)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: blocked ? location.openAppSettings : location.openLocationSettings,
+                        child: const Text("Open the phone's settings"),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
-  Future<bool> _explainLocation() async => await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Use your location?'),
-      content: const Text('Cache uses your location to find nearby places. You can turn location off in Settings.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
-        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Continue')),
-      ],
-    ),
-  ) == true;
+  /// The model name's menu: the model and the memory it takes, Switch model, Unload (frees the memory), Manage models.
+  Future<void> _modelMenu() async {
+    final app = widget.app;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final k = ctx.t;
+        final a = app.active;
+        Widget item(String value, String label, {Color? color, String? key}) => ListTile(
+          key: key == null ? null : ValueKey(key),
+          minTileHeight: 48,
+          title: Text(label, style: TextStyle(fontSize: 15, color: color ?? k.text)),
+          onTap: () => Navigator.pop(ctx, value),
+        );
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  a == null ? 'No model loaded' : '${app.displayName(a)} · loaded · about ${formatBytes(a.size)} of memory',
+                  key: const ValueKey('model-menu-head'),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text),
+                ),
+              ),
+              if (app.models.length > 1 || (a == null && app.models.isNotEmpty)) item('switch', 'Switch model…', key: 'model-menu-switch'),
+              if (a != null) item('unload', 'Unload: free the memory', color: k.emergency, key: 'model-menu-unload'),
+              item('manage', 'Manage models', key: 'model-menu-manage'),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted) return;
+    switch (choice) {
+      case 'switch':
+        final m = await showModalBottomSheet<ModelEntry>(
+          context: context,
+          showDragHandle: true,
+          builder: (ctx) => SafeArea(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final m in app.models)
+                  if (m.path != app.active?.path && !app.isUnsupported(m))
+                    ListTile(minTileHeight: 48, title: Text(app.displayName(m)), subtitle: Text(formatBytes(m.size)), onTap: () => Navigator.pop(ctx, m)),
+              ],
+            ),
+          ),
+        );
+        if (m != null) await app.activate(m);
+      case 'unload':
+        await app.unload();
+      case 'manage':
+        _openModels();
+    }
+  }
 
   void _openModels() => openModels(context, widget.app);
 
@@ -194,7 +261,8 @@ class _AskScreenState extends State<AskScreen> {
                 ? 'No model'
                 : app.displayName(app.active!);
             return InkWell(
-              onTap: _openModels,
+              key: const ValueKey('model-name'),
+              onTap: _modelMenu,
               borderRadius: BorderRadius.circular(12),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(minHeight: 48),
@@ -206,7 +274,7 @@ class _AskScreenState extends State<AskScreen> {
                         name,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 18,
+                          fontSize: 16,
                           fontWeight: FontWeight.w600,
                           color: app.active == null && app.loading == null
                               ? k.warning
@@ -214,7 +282,7 @@ class _AskScreenState extends State<AskScreen> {
                         ),
                       ),
                     ),
-                    Icon(Icons.arrow_drop_down, color: k.secondary),
+                    Icon(Icons.keyboard_arrow_down, color: k.text),
                   ],
                 ),
               ),
@@ -298,18 +366,6 @@ class _AskScreenState extends State<AskScreen> {
               ),
             ),
 
-            if (widget.location case final location?)
-              ListenableBuilder(
-                listenable: Listenable.merge([location, widget.chatLocation]),
-                builder: (context, _) => Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: location.busy || widget.chat.busy ? null : _useLocation,
-                    icon: const Icon(Icons.my_location, size: 18),
-                    label: Text((widget.chatLocation?.known ?? false) ? 'Location ready' : 'Use my location'),
-                  ),
-                ),
-              ),
             _composer(context),
           ],
         ),
@@ -329,6 +385,24 @@ class _AskScreenState extends State<AskScreen> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (widget.location != null) ...[
+                SizedBox(
+                  width: 44,
+                  height: 52,
+                  child: IconButton(
+                    key: const ValueKey('ask-plus'),
+                    tooltip: 'More',
+                    onPressed: _plusMenu,
+                    icon: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(shape: BoxShape.circle, color: k.surface),
+                      child: Icon(Icons.add, size: 20, color: k.accent),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+              ],
               Expanded(
                 child: TextField(
                   controller: _input,

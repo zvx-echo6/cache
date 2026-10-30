@@ -10,9 +10,9 @@ import 'modules.dart';
 
 /// The blocks Home can show.
 enum HomeBlock {
-  ask('Ask box', null),
-  weather('Weather', 'Needs a connection to stay current'),
-  alerts('Alerts', 'Needs a connection to stay current'),
+  setup('Set up Cache', 'Goes away by itself once everything is set up'),
+  ask('Search box', null),
+  weather('Weather and alerts', 'Needs a connection to stay current'),
   shortcuts('Shortcuts', null);
 
   const HomeBlock(this.label, this.note);
@@ -142,13 +142,12 @@ class LayoutState extends ChangeNotifier {
   final Directory? settingsDirOverride;
 
   static const List<ModuleId> defaultPinned = [ModuleId.ask, ModuleId.maps, ModuleId.library];
-  static const List<HomeBlock> defaultBlocks = [HomeBlock.ask, HomeBlock.weather, HomeBlock.alerts, HomeBlock.shortcuts];
+  static const List<HomeBlock> defaultBlocks = [HomeBlock.setup, HomeBlock.ask, HomeBlock.weather, HomeBlock.shortcuts];
 
   List<ModuleId> _pinned = List.of(defaultPinned);
   List<HomeBlock> _order = List.of(defaultBlocks);
   final Set<HomeBlock> _off = {};
   final List<Shortcut> _shortcuts = [];
-  bool _setupHidden = false;
   File? _file;
 
   /// The modules in the bar between Home and Modules, in bar order (at most [kMaxPinned]).
@@ -163,9 +162,6 @@ class LayoutState extends ChangeNotifier {
   /// The blocks Home shows now.
   List<HomeBlock> get visibleBlocks => [for (final b in _order) if (isOn(b)) b];
   List<Shortcut> get shortcuts => List.unmodifiable(_shortcuts);
-
-  /// The person hid the "Set up Cache" card on Home (Settings > Set up Cache shows it again).
-  bool get setupHidden => _setupHidden;
 
   Future<void> init() async {
     final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
@@ -190,8 +186,9 @@ class LayoutState extends ChangeNotifier {
         final b = HomeBlock.byName(n as String?);
         if (b != null && !order.contains(b)) order.add(b);
       }
+      // A block added since the file was written takes its default place (Set up Cache goes first).
       for (final b in defaultBlocks) {
-        if (!order.contains(b)) order.add(b);
+        if (!order.contains(b)) b == HomeBlock.setup ? order.insert(0, b) : order.add(b);
       }
       _pinned = pinned;
       _order = order;
@@ -203,7 +200,8 @@ class LayoutState extends ChangeNotifier {
         final sc = Shortcut.fromJson(s);
         if (sc != null && !_shortcuts.any((x) => x.key == sc.key)) _shortcuts.add(sc);
       }
-      _setupHidden = j['setupHidden'] == true;
+      // The card could be hidden before it was a block: hidden is the block switched off.
+      if (j['setupHidden'] == true) _off.add(HomeBlock.setup);
     } catch (_) {
       // A damaged file is ignored; the defaults apply.
     }
@@ -219,7 +217,6 @@ class LayoutState extends ChangeNotifier {
         'blocks': [for (final b in _order) b.name],
         'off': [for (final b in _off) b.name],
         'shortcuts': [for (final s in _shortcuts) s.toJson()],
-        if (_setupHidden) 'setupHidden': true,
       }));
     } catch (_) {}
   }
@@ -259,12 +256,6 @@ class LayoutState extends ChangeNotifier {
     to = to.clamp(0, _order.length - 1);
     if (to == from) return;
     _order.insert(to, _order.removeAt(from));
-    _save();
-  }
-
-  void setSetupHidden(bool hidden) {
-    if (_setupHidden == hidden) return;
-    _setupHidden = hidden;
     _save();
   }
 

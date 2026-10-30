@@ -115,8 +115,6 @@ class NavState extends ChangeNotifier {
   /// Why the answer is what it is: "Searching by keywords only" when meaning search could not run, or null.
   String? searchNote;
 
-  /// The last search was by keywords only because the search model is missing ("Meaning search needs the search model").
-  bool searchNeedsModel = false;
   String? searchError;
 
   /// What places data the last search had.
@@ -208,7 +206,6 @@ class NavState extends ChangeNotifier {
       query = '';
       results = const [];
       searchNote = null;
-      searchNeedsModel = false;
       searchError = null;
       placesState = PlacesState.ok;
     }
@@ -227,7 +224,6 @@ class NavState extends ChangeNotifier {
       results = const [];
       searching = false;
       searchNote = null;
-      searchNeedsModel = false;
       searchError = null;
       placesState = PlacesState.ok;
       notifyListeners();
@@ -256,8 +252,6 @@ class NavState extends ChangeNotifier {
       results = r.results;
       searchError = null;
       final words = meaning && r.kind == 'text';
-      // No query vector came with the search: the search model is not on this phone.
-      searchNeedsModel = words && r.meaning == 'no_embedder' && r.warning == null;
       searchNote = words && (r.meaning == 'no_vectors' || r.meaning == 'model_mismatch')
           ? 'Matching words only: the meaning search is not available'
           : null;
@@ -274,7 +268,6 @@ class NavState extends ChangeNotifier {
       searchError = e is CacheSearchException ? e.message : 'Search failed';
       results = const [];
       placesState = PlacesState.ok;
-      searchNeedsModel = false;
     } finally {
       if (seq == _searchSeq) searching = false;
       notifyListeners();

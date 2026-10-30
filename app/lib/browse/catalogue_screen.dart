@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../settings/data_policy.dart';
+import '../screens/hold.dart';
+import '../screens/libraries_screen.dart';
+import '../screens/settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import 'browse_state.dart';
+import 'library_actions.dart';
 import 'opds.dart';
 
 String formatBytes(int bytes) {
@@ -29,17 +32,18 @@ const List<_Topic> _topics = [
   _Topic('Preparedness', 'preppers'),
 ];
 
-/// Kiwix's public library: filter by language and category, search, and download.
-class CatalogueScreen extends StatefulWidget {
-  const CatalogueScreen({super.key, required this.browse});
+/// Add to Library: the one screen for adding anything. Your own library (from a file or a download link), then Kiwix's ready-made
+/// collections, searchable and filtered by language and category, each with its own download button and the download pop-up.
+class AddToLibraryScreen extends StatefulWidget {
+  const AddToLibraryScreen({super.key, required this.browse});
 
   final BrowseState browse;
 
   @override
-  State<CatalogueScreen> createState() => _CatalogueScreenState();
+  State<AddToLibraryScreen> createState() => _AddToLibraryScreenState();
 }
 
-class _CatalogueScreenState extends State<CatalogueScreen> {
+class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   final TextEditingController _search = TextEditingController();
   final ScrollController _scroll = ScrollController();
   Timer? _debounce;
@@ -55,8 +59,11 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       }
     });
     _search.text = b.query;
-    b.loadFacets();
-    if (b.entries.isEmpty) b.loadFirstPage();
+    // After the first frame: the Library behind this screen listens to the same state.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      b.loadFacets();
+      if (b.entries.isEmpty) b.loadFirstPage();
+    });
   }
 
   @override
@@ -110,7 +117,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     return Scaffold(
-      appBar: AppBar(title: const Text('Kiwix library')),
+      appBar: AppBar(title: const Text('Add to Library')),
       body: ListenableBuilder(
         listenable: b,
         builder: (context, _) {
@@ -125,7 +132,7 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
                         controller: _search,
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(
-                          hintText: 'Search the library',
+                          hintText: 'Search the catalogue',
                           prefixIcon: const Icon(Icons.search),
                           suffixIcon: _search.text.isEmpty
                               ? null
@@ -206,41 +213,70 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
     ),
   );
 
-  Widget _list(BuildContext context, CacheTokens k) {
-    if (b.entries.isEmpty) {
-      if (b.loading) return const Center(child: CircularProgressIndicator());
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                b.catalogError ??
-                    'Nothing found. Try another word, language or category.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  color: b.catalogError != null ? k.emergency : k.secondary,
+  /// "Your own library", and the label over Kiwix's collections.
+  List<Widget> _head(CacheTokens k) {
+    final libraries = b.libraries;
+    return [
+      if (libraries != null) ...[
+        const GroupLabel('Your own'),
+        Material(
+          color: k.surface,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            key: const ValueKey('add-own-library'),
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibrariesScreen(libraries: libraries))),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 52),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.library_add_outlined, size: 22, color: k.text),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Your own library', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                          Text('From a file or a download link', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: k.secondary),
+                  ],
                 ),
               ),
-              if (b.catalogError != null) ...[
-                const SizedBox(height: 12),
-                OutlinedButton(
-                  onPressed: b.loadFirstPage,
-                  child: const Text('Try again'),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
+        const SizedBox(height: 6),
+      ],
+      const GroupLabel('Ready-made collections · free from Kiwix'),
+    ];
+  }
+
+  Widget _list(BuildContext context, CacheTokens k) {
+    if (b.entries.isEmpty) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+        children: [
+          ..._head(k),
+          if (b.loading)
+            const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
+          else
+            _nothing(k),
+        ],
       );
     }
+    final head = _head(k);
     return ListView.builder(
       controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      itemCount: b.entries.length + 1,
-      itemBuilder: (context, i) {
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+      itemCount: head.length + b.entries.length + 1,
+      itemBuilder: (context, j) {
+        if (j < head.length) return head[j];
+        final i = j - head.length;
         if (i == b.entries.length) {
           if (b.loading) {
             return const Padding(
@@ -254,16 +290,16 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
               child: Text(
                 b.catalogError!,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: k.emergency),
+                style: TextStyle(color: k.warning),
               ),
             );
           }
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              '${b.total} in the library',
+              '${b.total} in the catalogue',
               textAlign: TextAlign.center,
-              style: TextStyle(color: k.secondary),
+              style: TextStyle(fontSize: 12, color: k.secondary),
             ),
           );
         }
@@ -271,9 +307,29 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       },
     );
   }
+
+  /// Nothing found, or the catalogue cannot be reached (with Try again).
+  Widget _nothing(CacheTokens k) => Padding(
+    padding: const EdgeInsets.all(24),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          b.catalogError == null ? 'Nothing found. Try another word, language or category.' : "Couldn't reach the catalogue. ${b.catalogError}",
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, color: b.catalogError != null ? k.warning : k.secondary),
+        ),
+        if (b.catalogError != null) ...[
+          const SizedBox(height: 12),
+          OutlinedButton(onPressed: b.loadFirstPage, child: const Text('Try again')),
+        ],
+      ],
+    ),
+  );
 }
 
-/// One catalogue entry with its icon, description and the action that fits where it stands.
+/// One catalogue entry: its icon, name, a short description and size, and its own download button (the download pop-up follows), or
+/// "On this phone", or how its download is going.
 class EntryTile extends StatelessWidget {
   const EntryTile({super.key, required this.browse, required this.entry});
 
@@ -285,71 +341,73 @@ class EntryTile extends StatelessWidget {
     final k = context.t;
     final transfer = browse.transfers[entry.id];
     final installed = browse.installedFor(entry);
-    final installedRelease = installed == null
-        ? null
-        : browse.sources.originOf(installed)?.release;
-    final newer =
-        installed != null &&
-        installedRelease != null &&
-        installedRelease.compareTo(entry.release) < 0;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Material(
-        color: k.surface,
-        borderRadius: BorderRadius.circular(16),
+    final installedRelease = installed == null ? null : browse.sources.originOf(installed)?.release;
+    final newer = installed != null && installedRelease != null && installedRelease.compareTo(entry.release) < 0;
+    final detail = transfer == null
+        ? [if (entry.summary.isNotEmpty) entry.summary, formatBytes(entry.size)].join(' · ')
+        : switch (transfer.phase) {
+            TransferPhase.blockedByMobileData => 'Waiting for Wi-Fi',
+            TransferPhase.paused => 'Paused',
+            TransferPhase.failed => transfer.error ?? 'The download stopped',
+            TransferPhase.downloading => 'Downloading ${formatBytes(transfer.done)} of ${formatBytes(transfer.total)}',
+            _ => 'Downloading…',
+          };
+    final Widget action;
+    if (transfer != null) {
+      action = SizedBox(
+        width: 44,
+        height: 44,
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _icon(k),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          entry.title,
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                            color: k.text,
-                          ),
-                        ),
-                        if (entry.summary.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Text(
-                              entry.summary,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: k.secondary,
-                              ),
-                            ),
-                          ),
-                        const SizedBox(height: 4),
-                        Text(
-                          [
-                            entry.flavourText,
-                            entry.language,
-                            formatBytes(entry.size),
-                            entry.updated,
-                          ].where((s) => s.isNotEmpty).join(' · '),
-                          style: TextStyle(fontSize: 13, color: k.secondary),
-                        ),
-                      ],
-                    ),
+          child: CircularProgressIndicator(strokeWidth: 2.5, value: transfer.phase == TransferPhase.downloading ? transfer.fraction : null),
+        ),
+      );
+    } else if (installed != null && !newer) {
+      action = RowBadge('On this phone', color: k.ok);
+    } else {
+      action = IconButton(
+        key: ValueKey('download-${entry.id}'),
+        tooltip: newer ? 'Update ${entry.title}' : 'Download ${entry.title}',
+        onPressed: () => downloadZim(context, browse, entry, replaces: newer ? installed : null),
+        icon: Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: k.accent, width: 1.5)),
+          child: Icon(newer ? Icons.system_update_alt : Icons.download, size: 17, color: k.accent),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: k.surface,
+        borderRadius: BorderRadius.circular(14),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 52),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+            child: Row(
+              children: [
+                _icon(k),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(entry.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                      Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: transfer?.phase == TransferPhase.failed ? k.warning : k.secondary),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              _action(context, k, transfer, installed != null, newer),
-            ],
+                ),
+                const SizedBox(width: 4),
+                action,
+              ],
+            ),
           ),
         ),
       ),
@@ -358,154 +416,15 @@ class EntryTile extends StatelessWidget {
 
   Widget _icon(CacheTokens k) {
     final url = entry.iconUrl;
+    final letter = Center(child: Text(entry.title.isEmpty ? '?' : entry.title.characters.first.toUpperCase(), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: k.accent)));
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
-      child: SizedBox(
-        width: 48,
-        height: 48,
-        child: url == null
-            ? Icon(Icons.menu_book_outlined, color: k.secondary)
-            : Image.network(
-                url.toString(),
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) =>
-                    Icon(Icons.menu_book_outlined, color: k.secondary),
-              ),
+      child: Container(
+        width: 32,
+        height: 32,
+        color: k.background,
+        child: url == null ? letter : Image.network(url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
       ),
     );
-  }
-
-  Widget _action(
-    BuildContext context,
-    CacheTokens k,
-    ZimTransfer? t,
-    bool installed,
-    bool newer,
-  ) {
-    if (t != null) return TransferRow(browse: browse, transfer: t);
-    if (installed && !newer) {
-      return Row(
-        children: [
-          Icon(Icons.check_circle, size: 18, color: k.ok),
-          const SizedBox(width: 6),
-          Text('On this phone', style: TextStyle(color: k.ok)),
-        ],
-      );
-    }
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: FilledButton.icon(
-        onPressed: () => browse.download(
-          entry,
-          replaces: newer ? browse.installedFor(entry) : null,
-        ),
-        icon: Icon(newer ? Icons.system_update_alt : Icons.download),
-        label: Text(
-          newer
-              ? 'Update · ${formatBytes(entry.size)}'
-              : 'Download · ${formatBytes(entry.size)}',
-        ),
-      ),
-    );
-  }
-}
-
-/// The progress of one download, with Cancel and, when it stopped, Try again.
-class TransferRow extends StatelessWidget {
-  const TransferRow({super.key, required this.browse, required this.transfer});
-
-  final BrowseState browse;
-  final ZimTransfer transfer;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    final t = transfer;
-    final e = t.entry;
-    switch (t.phase) {
-      case TransferPhase.blockedByMobileData:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              const MobileDataBlocked().message,
-              style: TextStyle(color: k.warning, fontWeight: FontWeight.w600),
-            ),
-            Wrap(
-              children: [
-                TextButton(
-                  key: const ValueKey('download-anyway'),
-                  onPressed: () => browse.download(
-                    e,
-                    replaces: t.replaces,
-                    allowMobile: true,
-                  ),
-                  child: const Text('Download anyway'),
-                ),
-                TextButton(
-                  onPressed: () => browse.cancel(e),
-                  child: const Text('Cancel'),
-                ),
-              ],
-            ),
-          ],
-        );
-      case TransferPhase.failed:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              t.error ?? 'The download failed.',
-              style: TextStyle(color: k.emergency),
-            ),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () => browse.download(e, replaces: t.replaces),
-                  child: const Text('Try again'),
-                ),
-                TextButton(
-                  onPressed: () => browse.cancel(e),
-                  child: const Text('Discard'),
-                ),
-              ],
-            ),
-          ],
-        );
-      case TransferPhase.starting:
-      case TransferPhase.downloading:
-      case TransferPhase.verifying:
-      case TransferPhase.adding:
-        final label = switch (t.phase) {
-          TransferPhase.starting => 'Starting…',
-          TransferPhase.verifying => 'Checking the file…',
-          TransferPhase.adding => 'Adding to your sources…',
-          _ => 'Downloading ${formatBytes(t.done)} of ${formatBytes(t.total)}',
-        };
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(fontSize: 14, color: k.secondary),
-                  ),
-                ),
-                if (t.phase == TransferPhase.downloading ||
-                    t.phase == TransferPhase.starting)
-                  TextButton(
-                    onPressed: () => browse.cancel(e),
-                    child: const Text('Cancel'),
-                  ),
-              ],
-            ),
-            LinearProgressIndicator(
-              value: t.phase == TransferPhase.downloading ? t.fraction : null,
-            ),
-          ],
-        );
-    }
   }
 }

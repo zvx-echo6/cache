@@ -9,6 +9,7 @@ import 'package:cache/notebook/place_style.dart';
 import 'package:cache/notebook/places.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/places_screen.dart';
+import 'package:cache/search/notebook_search_providers.dart';
 import 'package:cache/theme.dart';
 import 'package:cache/weather/alert_watch.dart';
 import 'package:cache/weather/catalogue.dart';
@@ -389,5 +390,25 @@ void main() {
     expect(kinds, ['LineString', 'Point'], reason: 'notebook places are drawn as notebook pins, a list\'s repeaters without a position are not drawn');
     await u.importRepeaters(['/a.kml', '/a.csv']);
     expect(calls, contains('import:{"kind":"repeaters","paths":["/a.kml","/a.csv"]}'));
+  });
+
+  test('Home search: notebooks and their entries under Notebooks, places under Places', () async {
+    final r = _Rig();
+    final places = await r.saved();
+    await r.place(places, 'Rally point 1', 42.5630, -114.4610);
+    final j = r.nb.journal!;
+    await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T10:00:00-06:00', title: 'Rally drill', body: 'Practised the route.');
+    final opened = <String>[];
+    final books = NotebooksSearchProvider(notebook: r.nb, openNotebook: (n) => opened.add(n.name), openEntry: (n, e) => opened.add(e.title!), now: () => _now);
+    final spots = NotebookPlacesSearchProvider(notebook: r.nb, open: (n, e) => opened.add(e.title!), here: () => (lat: 42.56, lon: -114.46), distance: (m) => '${m.round()} m');
+    final b = await books.search('rally');
+    expect(b.map((x) => (x.title, x.module)), [('Rally drill', 'Notebooks')]);
+    expect(b.single.detail, 'Journal · Tue 27 Oct');
+    final p = await spots.search('rally');
+    expect(p.map((x) => (x.title, x.module)), [('Rally point 1', 'Places')]);
+    expect(p.single.detail, startsWith('Places · '));
+    p.single.open();
+    expect(opened, ['Rally point 1']);
+    expect((await books.search('jour')).map((x) => x.title), contains('Journal'));
   });
 }

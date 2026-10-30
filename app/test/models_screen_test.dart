@@ -128,28 +128,33 @@ void main() {
     );
     await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
     await tester.pumpAndSettle();
-    expect(find.text('Recommended'), findsOneWidget);
-    expect(find.text('A model tuned for Cache is coming. These work in the meantime.'), findsOneWidget);
+    expect(find.text('RECOMMENDED'), findsOneWidget);
+    expect(find.text('The model is the AI that answers your questions. It runs on this phone, so it works with no signal.'), findsOneWidget);
     expect(find.text('Small'), findsOneWidget);
     expect(find.text('A note about Small.'), findsOneWidget);
     expect(find.text('3.0 GB · Fits this phone', findRichText: true), findsOneWidget);
     expect(find.text('5.0 GB · May be tight on this phone', findRichText: true), findsOneWidget);
     expect(find.text('Works with Cache, not tuned'), findsNWidgets(2));
     expect(find.text('Search Hugging Face'), findsOneWidget);
-    expect(find.text('Choose a file…'), findsOneWidget);
-    expect(tester.getTopLeft(find.text('Recommended')).dy, lessThan(tester.getTopLeft(find.text('Search Hugging Face')).dy));
-    expect(tester.getTopLeft(find.text('Search Hugging Face')).dy, lessThan(tester.getTopLeft(find.text('Choose a file…')).dy));
+    expect(find.text('Choose a file'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('RECOMMENDED')).dy, lessThan(tester.getTopLeft(find.text('Search Hugging Face')).dy));
 
+    // A tap opens the download pop-up; Download starts it.
     await tester.tap(find.text('Small'));
-    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('Download small-Q4_K_M.gguf?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-download')));
+    await tester.pumpAndSettle();
     expect(d.started.map((f) => '${f.repo}/${f.path}'), ['acme/Small-GGUF/small-Q4_K_M.gguf']);
     await tester.tap(find.byKey(const ValueKey('download-recommended-big-Q4_K_M.gguf')));
-    await tester.pump();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-download')));
+    await tester.pumpAndSettle();
     expect(d.started.last.fileName, 'big-Q4_K_M.gguf');
     expect(app.active, isNull, reason: 'no model is ever chosen for the user');
   });
 
-  testWidgets('with a model tuned for Cache in the list, the "coming" line is gone', (tester) async {
+  testWidgets('a model tuned for Cache says so', (tester) async {
     ModelDownloads.shared = _RecordingDownloads(app: app);
     final recs = RecommendedModels(
       builtIn: () async => _list([_entry('Tuned', 't.gguf', _gb, kind: 'tuned_for_cache')]),
@@ -158,7 +163,6 @@ void main() {
     await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
     await tester.pumpAndSettle();
     expect(find.text('Tuned for Cache'), findsOneWidget);
-    expect(find.byKey(const ValueKey('tuned-coming')), findsNothing);
   });
 
   testWidgets('the active model can be unloaded; Ask then shows the no-model state with "Choose a model"', (tester) async {
@@ -167,7 +171,7 @@ void main() {
     app.active = app.models.single;
     final generation = app.modelGeneration;
     await show(tester, ModelsScreen(app: app, memory: 8 * _gb));
-    expect(find.text('On this phone'), findsOneWidget);
+    expect(find.text('ON THIS PHONE'), findsOneWidget);
     expect(find.textContaining('Active'), findsOneWidget);
     await tester.runAsync(() async {
       await tester.tap(find.byKey(const ValueKey('unload-model')));
@@ -187,6 +191,22 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Choose a model'), findsOneWidget);
   });
 
+  testWidgets('Ask: the model name has its arrow and opens the model, the memory it takes, Unload and Manage models', (tester) async {
+    File('${app.modelsDir!.path}/gemma-4-E2B-it-Q4_K_M.gguf').writeAsBytesSync(List.filled(2048, 1));
+    await tester.runAsync(app.init);
+    app.active = app.models.single;
+    await show(tester, AskScreen(app: app, chat: ChatController(tools: const [])));
+    expect(find.byIcon(Icons.keyboard_arrow_down), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('model-name')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('loaded · about 2 KB of memory'), findsOneWidget);
+    expect(find.text('Unload: free the memory'), findsOneWidget);
+    expect(find.text('Manage models'), findsOneWidget);
+    await tester.tap(find.text('Manage models'));
+    await tester.pumpAndSettle();
+    expect(find.text('Models'), findsOneWidget);
+  });
+
   testWidgets('empty Ask: "Get a model" when none is downloaded, and it opens Models', (tester) async {
     await show(tester, AskScreen(app: app, chat: ChatController(tools: const [])));
     expect(find.widgetWithText(FilledButton, 'Get a model'), findsOneWidget);
@@ -196,7 +216,7 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(find.text('Models'), findsOneWidget);
-    expect(find.text('Choose a file…'), findsOneWidget);
+    expect(find.text('Choose a file'), findsOneWidget);
   });
 
   testWidgets('a tap outside a text field, or a scroll, closes the keyboard; Done on a single-line field does too', (tester) async {

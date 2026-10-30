@@ -185,8 +185,6 @@ class CoreLayerEngine extends LayerEngine {
   Future<void> refreshCatalogue() async {
     final core = _core;
     if (core == null || !_online) return;
-    // A small update: skipped (quietly; the downloaded copy stays in use) on mobile data when updates on mobile data are off.
-    if (policy != null && await policy!.blocksUpdate()) return;
     if (DateTime.now().difference(_lastRefresh) < const Duration(seconds: 20)) return;
     _lastRefresh = DateTime.now();
     try {

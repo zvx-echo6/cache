@@ -2,15 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../browse/browse_state.dart';
-import '../browse/catalogue_screen.dart' show CatalogueScreen;
-import '../layout/layout_state.dart';
+import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
 import '../maps/ui/format.dart';
 import '../models/model_downloads.dart';
 import '../regions/regions_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../weather/weather_state.dart';
-import 'libraries_screen.dart';
 
 /// Where one line of "Set up Cache" stands.
 enum SetupPhase { todo, running, done }
@@ -50,7 +48,6 @@ String _percent(double? f) => f == null ? '' : ' ${(f * 100).clamp(0, 100).toStr
 /// done from the real state, never from having been tapped.
 class SetupCache {
   SetupCache({
-    required this.layout,
     required this.app,
     required this.weather,
     required this.sources,
@@ -63,8 +60,6 @@ class SetupCache {
     required this.addLibrary,
   });
 
-  /// Remembers whether the person hid the card.
-  final LayoutState layout;
   final AppState app;
   final WeatherState weather;
   final SourcesState sources;
@@ -151,62 +146,19 @@ class SetupCache {
       SetupStatus(model: modelLine, area: areaLine, weather: await weatherLine(), library: libraryLine);
 }
 
-/// "Add to Library": the Kiwix catalogue (Wikipedia, WikiMed and more) or your own library from a file or a download link.
-Future<void> showAddToLibrary(BuildContext context, BrowseState browse) => showModalBottomSheet<void>(
-  context: context,
-  showDragHandle: true,
-  builder: (ctx) {
-    final k = ctx.t;
-    final libraries = browse.libraries;
-    void open(Widget page) {
-      Navigator.pop(ctx);
-      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
-    }
+/// "Add to Library": the one Add screen (Kiwix's collections and your own library).
+Future<void> showAddToLibrary(BuildContext context, BrowseState browse) =>
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: browse)));
 
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text('Add to Library', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: k.text)),
-          ),
-          ListTile(
-            key: const ValueKey('add-from-kiwix'),
-            minTileHeight: 64,
-            leading: Icon(Icons.menu_book_outlined, color: k.text),
-            title: const Text('From the Kiwix catalogue', style: TextStyle(fontSize: 17)),
-            subtitle: const Text('Wikipedia, WikiMed and more'),
-            onTap: () => open(CatalogueScreen(browse: browse)),
-          ),
-          if (libraries != null)
-            ListTile(
-              key: const ValueKey('add-own-library'),
-              minTileHeight: 64,
-              leading: Icon(Icons.library_books_outlined, color: k.text),
-              title: const Text('Your own library', style: TextStyle(fontSize: 17)),
-              subtitle: const Text('From a file or a download link'),
-              onTap: () => open(LibrariesScreen(libraries: libraries)),
-            ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  },
-);
-
-/// The "Set up Cache" card at the top of Home: four lines, each with its button and a tick when done. It goes away when all four
-/// are done, or when the person hides it (Settings > Set up Cache brings it back). With [onHide] null (the Settings page) it has no
-/// close button and stays while everything is done.
+/// The "Set up Cache" block on Home: four lines, each with its button and a tick when done. It goes away by itself when all four are
+/// done; it is an ordinary Home block, so Edit Home can switch it off like any other.
 class SetupCard extends StatelessWidget {
-  const SetupCard({super.key, required this.setup, this.onHide});
+  const SetupCard({super.key, required this.setup});
 
   final SetupCache setup;
-  final VoidCallback? onHide;
 
   static const _titles = ['Choose a model', 'Get your area', 'Turn on weather', 'Add a library'];
-  static const _reasons = ['Needed to answer questions', 'Map, directions and places', 'Forecast and alerts', 'Wikipedia, WikiMed or your own'];
+  static const _reasons = ['The AI that answers your questions', 'Maps, directions and places for your area', 'Forecasts and alerts for your places', 'Wikipedia, medical and survival guides'];
   static const _keys = ['setup-model', 'setup-area', 'setup-weather', 'setup-library'];
 
   @override
@@ -216,9 +168,9 @@ class SetupCard extends StatelessWidget {
       future: setup.read(),
       builder: (context, snap) {
         final s = snap.data;
-        if (s == null || (onHide != null && s.allDone)) return const SizedBox.shrink();
-        // On Home it keeps the gap the blocks under it keep between them.
-        return onHide == null ? _card(context, s) : Padding(padding: const EdgeInsets.only(bottom: 16), child: _card(context, s));
+        if (s == null || s.allDone) return const SizedBox.shrink();
+        // It keeps the gap the blocks under it keep between them.
+        return Padding(padding: const EdgeInsets.only(bottom: 12), child: _card(context, s));
       },
     ),
   );
@@ -228,20 +180,23 @@ class SetupCard extends StatelessWidget {
     final actions = [setup.chooseModel, setup.getArea, setup.turnOnWeather, setup.addLibrary];
     return Container(
       key: const ValueKey('setup-card'),
-      padding: const EdgeInsets.fromLTRB(16, 12, 4, 8),
-      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(20)),
+      padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(child: Text('Set up Cache', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: k.text))),
-              Text('${s.doneCount} of ${s.lines.length} done', key: const ValueKey('setup-count'), style: TextStyle(fontSize: 14, color: k.secondary)),
-              if (onHide != null)
-                IconButton(key: const ValueKey('setup-hide'), tooltip: 'Hide setup', icon: Icon(Icons.close, color: k.secondary), onPressed: onHide)
-              else
-                const SizedBox(width: 12),
-            ],
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Row(
+              children: [
+                Expanded(child: Text('Set up Cache', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: k.text))),
+                Text('${s.doneCount} of ${s.lines.length} done', key: const ValueKey('setup-count'), style: TextStyle(fontSize: 12, color: k.secondary)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 12, top: 2),
+            child: Text('Four things make Cache useful. Each works right here.', style: TextStyle(fontSize: 12, color: k.secondary)),
           ),
           for (var i = 0; i < 4; i++)
             _SetupRow(
@@ -251,13 +206,6 @@ class SetupCard extends StatelessWidget {
               line: s.lines[i],
               onTap: () => actions[i](context),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(0, 4, 12, 4),
-            child: Text(
-              'Each step works right here. Big downloads keep going while you use the app.',
-              style: TextStyle(fontSize: 14, color: k.secondary),
-            ),
-          ),
         ],
       ),
     );
@@ -296,7 +244,7 @@ class _SetupRow extends StatelessWidget {
     };
     final running = line.phase == SetupPhase.running;
     final body = Padding(
-      padding: const EdgeInsets.fromLTRB(0, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(0, 6, 12, 6),
       child: Row(
         children: [
           mark,
@@ -305,9 +253,8 @@ class _SetupRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w500, color: k.text)),
-                const SizedBox(height: 2),
-                Text(line.detail ?? reason, style: TextStyle(fontSize: 14, color: k.secondary)),
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
+                Text(line.detail ?? reason, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
                 if (running) ...[
                   const SizedBox(height: 6),
                   LinearProgressIndicator(
@@ -329,44 +276,14 @@ class _SetupRow extends StatelessWidget {
         ],
       ),
     );
-    if (line.done) return ConstrainedBox(constraints: const BoxConstraints(minHeight: 64), child: body);
+    if (line.done) return ConstrainedBox(constraints: const BoxConstraints(minHeight: 48), child: body);
     return Semantics(
       button: true,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-        child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 64), child: body),
+        child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 48), child: body),
       ),
     );
   }
-}
-
-/// Hides the card on Home and says once where it is found again.
-void hideSetup(BuildContext context, SetupCache setup) {
-  setup.layout.setSetupHidden(true);
-  final m = ScaffoldMessenger.of(context);
-  m.hideCurrentSnackBar();
-  m.showSnackBar(const SnackBar(content: Text('You can find this again in Settings > Set up Cache.')));
-}
-
-/// Settings > Set up Cache: shows the card on Home again, and opens a page with the same card and its states.
-void openSetup(BuildContext context, SetupCache setup) {
-  setup.layout.setSetupHidden(false);
-  Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SetupPage(setup: setup)));
-}
-
-/// The page Settings > Set up Cache opens.
-class SetupPage extends StatelessWidget {
-  const SetupPage({super.key, required this.setup});
-
-  final SetupCache setup;
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Set up Cache')),
-    body: ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      children: [SetupCard(setup: setup)],
-    ),
-  );
 }

@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../browse/zim_download.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
+import '../settings/space.dart';
 import 'device_memory.dart';
 import 'hf_hub.dart';
 
@@ -50,7 +51,30 @@ enum ModelFit {
 class ModelDownloads extends ChangeNotifier {
   ModelDownloads({required this.app, this.policy, HfHub? hub, ZimDownloader? downloader, this.searchModel})
     : hub = hub ?? HfHub(),
-      _downloader = downloader ?? ZimDownloader();
+      _downloader = downloader ?? ZimDownloader(freeSpace: usableBytesOnDisk) {
+    // A download waiting for Wi-Fi starts by itself once the connection allows it.
+    _net = policy?.probe.changes.listen((_) => _startWaiting());
+    policy?.settings.addListener(_startWaiting);
+  }
+
+  StreamSubscription<ConnectionKind>? _net;
+
+  /// A chat model the person chose to download once on Wi-Fi ("Wait for Wi-Fi").
+  HfFile? waiting;
+
+  Future<void> _startWaiting() async {
+    final w = waiting;
+    if (w == null || busy || policy == null || await policy!.blocksDownload()) return;
+    waiting = null;
+    await start(w);
+  }
+
+  @override
+  void dispose() {
+    _net?.cancel();
+    policy?.settings.removeListener(_startWaiting);
+    super.dispose();
+  }
 
   /// The app's downloads (set up at start); null in tests that don't need it.
   static ModelDownloads? shared;
@@ -68,7 +92,7 @@ class ModelDownloads extends ChangeNotifier {
   /// Why the last download stopped, in words, or null.
   String? error;
 
-  /// Set when the mobile-data switch stopped the download; the screen offers "Download anyway".
+  /// Set while the download waits for Wi-Fi (mobile data downloads are off); it starts by itself on Wi-Fi.
   MobileDataBlocked? blocked;
 
   /// The last file that finished, so the screen can offer "Use this model".
@@ -153,11 +177,12 @@ class ModelDownloads extends ChangeNotifier {
     try {
       await policy?.checkDownload(anyway: anyway);
     } on MobileDataBlocked catch (b) {
-      // The search model may start on its own, with no screen to ask "Download anyway": the reason is shown as its stop.
+      // The search model may start on its own, with no screen to ask: the reason is shown as its stop.
       if (search) {
         searchModelError = b.message;
       } else {
         blocked = b;
+        waiting = f;
       }
       notifyListeners();
       return;
@@ -239,6 +264,8 @@ class ModelDownloads extends ChangeNotifier {
   /// Stops the download that runs; what waits after it is dropped too.
   void cancel() {
     queue.clear();
+    waiting = null;
+    blocked = null;
     _cancel?.cancel();
     notifyListeners();
   }

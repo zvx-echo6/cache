@@ -48,7 +48,8 @@
               "PLAN_SEASON_RSTRCT_CODE"
             ]
           }
-        ]
+        ],
+        "role": "blm_routes"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/blm-routes.md"
     },
@@ -99,7 +100,8 @@
               "PLAN_SEASON_RSTRCT_CODE"
             ]
           }
-        ]
+        ],
+        "role": "blm_routes"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/blm-routes.md"
     },
@@ -168,7 +170,8 @@
               "MOTORCYCLE_DATESOPEN"
             ]
           }
-        ]
+        ],
+        "role": "mvum"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/mvum.md",
       "extra_files": [
@@ -240,7 +243,8 @@
               "MOTORCYCLE_DATESOPEN"
             ]
           }
-        ]
+        ],
+        "role": "mvum"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/mvum.md",
       "extra_files": [
@@ -293,7 +297,8 @@
               "GIS_Acres"
             ]
           }
-        ]
+        ],
+        "role": "public_lands"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/public-lands.md"
     },
@@ -354,7 +359,8 @@
               "OPENFORUSETO"
             ]
           }
-        ]
+        ],
+        "role": "trails"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/usfs-trails-roads.md"
     },
@@ -415,7 +421,8 @@
               "OPENFORUSETO"
             ]
           }
-        ]
+        ],
+        "role": "trails"
       },
       "recipe": "https://github.com/zvx-echo6/cache-packs/blob/main/recipes/usfs-trails-roads.md"
     }

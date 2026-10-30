@@ -108,11 +108,11 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('Home: the Weather card offers "Turn on weather" while weather is off', (tester) async {
+  testWidgets('Home: the Weather and alerts card offers "Turn on weather" while weather is off', (tester) async {
     final r = await SettingsRig.create(tester);
     final layout = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(layout.init);
-    await r.show(tester, HomeScreen(layout: layout, weather: r.weather, turnOn: turnOn(r), onOpenAsk: () {}, onOpenSettings: () {}, onOpenShortcut: (_) {}));
+    await r.show(tester, HomeScreen(layout: layout, weather: r.weather, turnOn: turnOn(r), onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('weather-turn-on')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('weather-turn-on')));

@@ -7,7 +7,6 @@ import '../../maps/ui/map_widgets.dart';
 import '../../regions/regions_state.dart';
 import '../../regions/ui/region_sheet.dart';
 import '../../regions/ui/regions_screen.dart';
-import '../../screens/search_model_line.dart';
 import '../../theme.dart';
 import '../nav_state.dart';
 import '../units.dart';
@@ -202,7 +201,6 @@ class _NavSearchBarState extends State<NavSearchBar> {
             ],
           ),
         ),
-      if (nav.searchNeedsModel) const SearchModelLine(),
       if (nav.searchNote != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),

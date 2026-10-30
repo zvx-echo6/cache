@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../settings/data_policy.dart';
 import '../../theme.dart';
 import '../../weather/catalogue.dart';
 import '../../weather/catalogue_store.dart';
@@ -24,7 +23,6 @@ class _CataloguesPageState extends State<CataloguesPage> {
   LoadedCatalogue? _preview;
   String? _error;
   bool _busy = false;
-  MobileDataBlocked? _blocked;
 
   @override
   void dispose() {
@@ -32,18 +30,15 @@ class _CataloguesPageState extends State<CataloguesPage> {
     super.dispose();
   }
 
-  Future<void> _check({bool anyway = false}) async {
+  Future<void> _check() async {
     setState(() {
       _busy = true;
       _error = null;
       _preview = null;
-      _blocked = null;
     });
     try {
-      final p = await widget.deps.hub.weather.previewCatalogue(_link.text, anyway: anyway);
+      final p = await widget.deps.hub.weather.previewCatalogue(_link.text);
       if (mounted) setState(() => _preview = p);
-    } on MobileDataBlocked catch (e) {
-      if (mounted) setState(() => _blocked = e);
     } on CatalogueException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (_) {
@@ -98,9 +93,9 @@ class _CataloguesPageState extends State<CataloguesPage> {
     await w.setCatalogueUrl(r.$1 == 'default' ? null : r.$2);
   }
 
-  Future<void> _update({bool anyway = false}) async {
+  Future<void> _update() async {
     final w = widget.deps.hub.weather;
-    await w.refreshCatalogues(anyway: anyway);
+    await w.refreshCatalogues();
     if (!mounted) return;
     final errs = w.catalogueErrors;
     say(context, errs.isEmpty ? 'Sources are up to date' : errs.values.first);
@@ -218,13 +213,6 @@ class _CataloguesPageState extends State<CataloguesPage> {
               ],
             ),
             if (_error != null) Text(_error!, key: const ValueKey('link-error'), style: TextStyle(fontSize: 14, height: 1.4, color: k.emergency)),
-            if (_blocked != null)
-              Row(
-                children: [
-                  Expanded(child: Text(_blocked!.message, style: TextStyle(fontSize: 14, height: 1.4, color: k.warning))),
-                  TextButton(onPressed: () => _check(anyway: true), child: const Text('Check anyway')),
-                ],
-              ),
             if (_preview != null) _previewCard(context, _preview!),
             SettingsGroup(
               label: 'Catalogues in use',

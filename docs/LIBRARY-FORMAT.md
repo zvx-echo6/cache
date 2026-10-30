@@ -17,6 +17,14 @@ A library travels as one of:
       tar -rf my.snapshot cache-library.json
       mv my.snapshot my-library.cache-library
 
+- **Either of them gzip-compressed**: the same file run through gzip (Cache recognises the gzip magic bytes, whatever the
+  file is called). A snapshot holds preallocated Qdrant files that are mostly zeros, so a small library shrinks from tens
+  of megabytes to well under one; compress before sharing or publishing:
+
+      gzip -9 -n -c my-library.cache-library > my-library.cache-library.gz
+
+  Only the package is compressed: once added, the library is unpacked to the same folders as an uncompressed one.
+
 - **A plain shard snapshot** (`GET /collections/<name>/shards/0/snapshot` on a Qdrant server). Cache then works the
   settings out from the entries' field names and the vector size, and asks for a `cache-library.json` only when it
   cannot.
@@ -108,8 +116,8 @@ point_id = uuid.uuid5(NS, f"{doc_id}:{doc_version}:{index}")
 
 ## The blank template
 
-Library, Libraries, Get a blank library template makes a template on the device (nothing is downloaded) and saves it
-where you choose: `cache-library-template.tar`, holding
+Library, Add to Library, Your own library, Get a blank library template makes a template on the device (nothing is
+downloaded) and saves it where you choose: `cache-library-template.tar.gz`, a gzip-compressed tar holding
 
 - `blank-library.snapshot`: an empty library, one unnamed dense vector of 1024 numbers with Cosine distance (the
   bge-m3 shape), no entries;

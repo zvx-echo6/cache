@@ -4,31 +4,15 @@ import 'package:cache/app_state.dart';
 import 'package:cache/maps/geo.dart';
 import 'package:cache/screens/models_screen.dart';
 import 'package:cache/screens/settings/about_pages.dart';
-import 'package:cache/screens/settings/library_page.dart';
 import 'package:cache/screens/settings/maps_page.dart';
-import 'package:cache/screens/settings/videos_page.dart';
 import 'package:cache/version.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/settings_rig.dart';
-import 'video_fake.dart';
 
 void main() {
-  testWidgets('Library: the reading sources and getting more', (tester) async {
-    final r = await SettingsRig.create(tester);
-    await r.show(tester, LibraryPage(deps: r.deps));
-    expect(find.text('Reading sources'), findsOneWidget);
-    expect(find.text('No sources yet. Add a file or get one.'), findsOneWidget);
-    expect(find.text('Get more from the Kiwix library'), findsOneWidget);
-    expect(find.text('Advanced'), findsNothing, reason: 'nothing technical exists for the Library yet');
-    await tester.tap(find.text('Reading sources'));
-    await tester.pumpAndSettle();
-    expect(find.text('Sources'), findsOneWidget, reason: 'the existing sources screen');
-    await r.dispose(tester);
-  });
-
   testWidgets('Maps: downloaded areas, layers, and the layer definitions under Advanced', (tester) async {
     final r = await SettingsRig.create(tester);
     await r.show(tester, MapsPage(deps: r.deps));
@@ -50,21 +34,6 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets('Videos: saved videos, instances and adding one', (tester) async {
-    final r = await SettingsRig.create(tester);
-    await tester.runAsync(() => r.video.addInstance('tube.example.org'));
-    await r.show(tester, VideosPage(deps: r.deps));
-    await tester.pump();
-    expect(find.text('Saved on this phone'), findsOneWidget);
-    expect(find.text('Nothing yet'), findsOneWidget);
-    expect(find.text('Example PeerTube'), findsOneWidget);
-    expect(find.text('tube.example.org'), findsOneWidget);
-    expect(find.text('Add an instance'), findsOneWidget);
-    expect(find.text('Advanced'), findsNothing);
-    expect(VideoFakeNative.uuid, isNotEmpty);
-    await r.dispose(tester);
-  });
-
   testWidgets('Models: a model that is not in use can be deleted, after asking', (tester) async {
     final r = await SettingsRig.create(tester);
     File('${r.modelsDir.path}/other.gguf').writeAsBytesSync(List.filled(2048, 1));
@@ -73,14 +42,15 @@ void main() {
     expect(find.text('other'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('delete-model-other.gguf')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('deleted from this phone'), findsOneWidget);
-    await tester.tap(find.text('Keep'));
+    expect(find.text('Delete other?'), findsOneWidget);
+    expect(find.text('You can download it again later.'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(File('${r.modelsDir.path}/other.gguf').existsSync(), isTrue);
     await tester.tap(find.byKey(const ValueKey('delete-model-other.gguf')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async {
-      await tester.tap(find.byKey(const ValueKey('confirm-delete-model')));
+      await tester.tap(find.byKey(const ValueKey('confirm-delete')));
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
     await tester.pumpAndSettle();

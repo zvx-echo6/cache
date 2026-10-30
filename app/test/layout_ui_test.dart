@@ -283,7 +283,7 @@ void main() {
     Shortcut? opened;
     await tester.pumpWidget(MaterialApp(
       theme: buildTheme(CacheThemeId.dark),
-      home: HomeScreen(layout: layout, onOpenAsk: () {}, onOpenSettings: () {}, onOpenShortcut: (s) => opened = s),
+      home: HomeScreen(layout: layout, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (s) => opened = s),
     ));
     await tester.tap(find.text('Cassia Regional Hospital'));
     expect(opened?.place?.id, place.id);
@@ -300,11 +300,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(EditHomeScreen), findsOneWidget);
-    expect(find.text('Needs a connection to stay current'), findsNWidgets(2), reason: 'on Weather and Alerts');
+    expect(find.text('Needs a connection to stay current'), findsOneWidget, reason: 'on Weather and alerts');
     expect(find.text('Reset to default'), findsOneWidget);
 
     // Weather off
-    await tester.tap(find.widgetWithText(SwitchListTile, 'Weather'));
+    await tester.tap(find.widgetWithText(SwitchListTile, 'Weather and alerts'));
     await tester.pump();
     expect(r.layout.isOn(HomeBlock.weather), isFalse);
 
@@ -312,12 +312,13 @@ void main() {
     final handle = find.descendant(of: find.byKey(const ValueKey('block-shortcuts')), matching: find.byIcon(Icons.drag_handle));
     await tester.drag(handle, const Offset(0, -400));
     await tester.pump(const Duration(milliseconds: 400));
-    expect(r.layout.blockOrder.first, HomeBlock.shortcuts);
+    expect(r.layout.blockOrder.indexOf(HomeBlock.shortcuts), lessThan(r.layout.blockOrder.indexOf(HomeBlock.ask)));
+    final order = r.layout.blockOrder;
 
     // restart: a new LayoutState on the same folder reads the same thing
     final again = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(again.init);
-    expect(again.blockOrder.first, HomeBlock.shortcuts);
+    expect(again.blockOrder, order);
     expect(again.isOn(HomeBlock.weather), isFalse);
     again.dispose();
 
@@ -327,26 +328,26 @@ void main() {
     expect(r.layout.blockOrder, LayoutState.defaultBlocks);
     expect(r.layout.isOn(HomeBlock.weather), isTrue);
 
-    // back on Home: Weather card shows again
+    // back on Home: the Weather and alerts card shows again
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.text('Weather'), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-weather')), findsOneWidget);
     await r.stop(tester);
   });
 
   testWidgets('Home hides a block that is switched off and has a gear that opens Settings', (tester) async {
     final r = Rig();
     await r.start(tester);
-    expect(find.text('Weather'), findsOneWidget);
-    expect(find.text('Alerts'), findsOneWidget);
-    r.layout.setBlockOn(HomeBlock.alerts, false);
+    expect(find.byKey(const ValueKey('home-weather')), findsOneWidget);
+    expect(find.text('Alerts'), findsNothing, reason: 'one Weather and alerts card');
+    r.layout.setBlockOn(HomeBlock.weather, false);
     await tester.pump();
-    expect(find.text('Alerts'), findsNothing);
+    expect(find.byKey(const ValueKey('home-weather')), findsNothing);
     expect(find.byIcon(Icons.more_vert), findsNothing, reason: 'the old menu is gone');
     await tester.tap(find.byKey(const ValueKey('home-settings')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('Assistant'), findsOneWidget);
+    expect(find.text('Cache model and web search'), findsOneWidget);
     expect(find.text('Appearance'), findsOneWidget);
     expect(find.text('Sharing and sync'), findsOneWidget);
     await r.stop(tester);

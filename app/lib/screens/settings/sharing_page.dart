@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../maps/ui/format.dart';
+import '../../settings/data_kinds.dart';
 import '../../sharing/sharing_state.dart';
 import '../../theme.dart';
 import 'widgets.dart';
@@ -161,25 +162,26 @@ class _SharingPageState extends State<SharingPage> {
     return const [Part('Checking…')];
   }
 
-  List<Part> _kindStatus(ShareKind k) {
-    final sh = s.shareOf(k.id);
-    final offers = s.offersOf(k.id);
-    if (sh == null) {
+  List<Part> _kindStatus(DataKind k) {
+    final shares = s.sharesOfKind(k);
+    final offers = s.offersOfKind(k);
+    if (shares.isEmpty) {
       if (offers.isEmpty) return const [Part('Not shared', Tone.quiet)];
       return [
         for (final o in offers) Part('${o['peer_name']} has ${o['files']} files, ${formatBytes(o['bytes'] as int)}'),
         const Part(' · tick to get them'),
       ];
     }
-    final parts = [Part('${sh['files']} files · ${formatBytes(sh['bytes'] as int)}')];
-    final pending = sh['pending_files'] as int? ?? 0;
-    if (pending > 0) parts.add(Part(' · $pending to get, ${formatBytes(sh['pending_bytes'] as int)}', Tone.warn));
+    int sum(String f) => shares.fold(0, (n, sh) => n + (sh[f] as int? ?? 0));
+    final parts = [Part('${sum('files')} files · ${formatBytes(sum('bytes'))}')];
+    final pending = sum('pending_files');
+    if (pending > 0) parts.add(Part(' · $pending to get, ${formatBytes(sum('pending_bytes'))}', Tone.warn));
     return parts;
   }
 
-  Future<void> _toggle(ShareKind k, bool on) async {
+  Future<void> _toggle(DataKind k, bool on) async {
     if (on) {
-      final offered = s.offersOf(k.id).fold<int>(0, (n, o) => n + (o['bytes'] as int));
+      final offered = s.offersOfKind(k).fold<int>(0, (n, o) => n + (o['bytes'] as int));
       final free = s.status['free_bytes'] as int?;
       final reserve = s.status['reserve_bytes'] as int? ?? 0;
       if (offered > 0 && free != null && offered > free - reserve) {
@@ -250,12 +252,14 @@ class _SharingPageState extends State<SharingPage> {
               label: 'Shared with linked devices',
               rows: [
                 for (final k in s.kinds)
-                  SettingsRow(
-                    title: k.label,
-                    status: _kindStatus(k),
-                    trailing: Checkbox(value: s.shareOf(k.id) != null, onChanged: _busy ? null : (v) => _toggle(k, v ?? false)),
-                    onTap: _busy ? null : () => _toggle(k, s.shareOf(k.id) == null),
-                  ),
+                  if (k.shared().isNotEmpty)
+                    SettingsRow(
+                      key: ValueKey('share-${k.id}'),
+                      title: k.label,
+                      status: _kindStatus(k),
+                      trailing: Switch(value: s.sharesOfKind(k).isNotEmpty, onChanged: _busy ? null : (v) => _toggle(k, v)),
+                      onTap: _busy ? null : () => _toggle(k, s.sharesOfKind(k).isEmpty),
+                    ),
               ],
             ),
             if (t != null)

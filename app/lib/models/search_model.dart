@@ -136,13 +136,6 @@ class SearchModel extends ChangeNotifier implements LibraryEmbedding {
   /// Why the last download stopped, when [state] is failed.
   String? get failure => downloads?.searchModelError;
 
-  bool get offeredOnce => app.searchModelOffered;
-
-  /// Existing installs are asked once: there is a chat model, no search model, and the question was not asked before.
-  bool get shouldOffer => app.started && app.models.isNotEmpty && state == SearchModelState.missing && !offeredOnce;
-
-  Future<void> markOffered() => app.setSearchModelOffered();
-
   /// Starts the download, or queues it after the one running. Completes when it has finished or stopped.
   Future<void> ensure({bool anyway = false}) async {
     if (state == SearchModelState.ready || state == SearchModelState.downloading) return;

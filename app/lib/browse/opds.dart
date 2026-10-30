@@ -135,6 +135,7 @@ class ZimOrigin {
     this.language = '',
     this.title = '',
     this.catalogId = '',
+    this.summary = '',
   });
 
   final String name;
@@ -145,6 +146,9 @@ class ZimOrigin {
   final String language;
   final String title;
   final String catalogId;
+
+  /// The catalogue's one-line description ("Medical encyclopedia"), kept for the Library list.
+  final String summary;
 
   /// Reads Kiwix's file naming: {name}_{flavour}_{YYYY-MM}.zim, the flavour being maxi, mini, nopic or absent.
   /// Null for a file that does not follow it.
@@ -172,6 +176,7 @@ class ZimOrigin {
     language: e.language,
     title: e.title,
     catalogId: e.id,
+    summary: e.summary,
   );
 
   Map<String, dynamic> toJson() => {
@@ -181,6 +186,7 @@ class ZimOrigin {
     'language': language,
     'title': title,
     'catalogId': catalogId,
+    if (summary.isNotEmpty) 'summary': summary,
   };
 
   static ZimOrigin fromJson(Map<String, dynamic> j) => ZimOrigin(
@@ -190,6 +196,7 @@ class ZimOrigin {
     language: (j['language'] ?? '') as String,
     title: (j['title'] ?? '') as String,
     catalogId: (j['catalogId'] ?? '') as String,
+    summary: (j['summary'] ?? '') as String,
   );
 
   /// True when [e] is a later release of this same ZIM and variant.

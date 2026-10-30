@@ -7,7 +7,7 @@ import 'places.dart';
 
 /// Something happening near a watched place that the person has not been told about yet.
 class NewAlert {
-  const NewAlert({required this.item, required this.source, required this.place, required this.extreme});
+  const NewAlert({required this.item, required this.source, required this.place, required this.extreme, bool? serious}) : serious = serious ?? extreme;
 
   final LiveItem item;
   final String source;
@@ -15,6 +15,9 @@ class NewAlert {
 
   /// The source marks it extreme (NWS "Severity: extreme": evacuation orders, tornado and flash flood warnings and the like).
   final bool extreme;
+
+  /// Extreme or severe: what "Serious only" pops up, and what still rings in quiet hours.
+  final bool serious;
 
   /// What the notification carries back to the app when tapped.
   String get payload => jsonEncode({'place': place.id, 'address': item.address});
@@ -72,7 +75,7 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
           if (mi != null && mi > rule.miles) continue;
         }
         final severity = i.fields.entries.where((f) => f.key.toLowerCase() == 'severity').map((f) => f.value.toLowerCase()).firstOrNull;
-        out.add(NewAlert(item: i, source: v.source.id, place: place, extreme: severity == 'extreme'));
+        out.add(NewAlert(item: i, source: v.source.id, place: place, extreme: severity == 'extreme', serious: severity == 'extreme' || severity == 'severe'));
       }
     }
   }

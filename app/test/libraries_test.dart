@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cache/browse/browse_screen.dart' show LibraryItemScreen;
 import 'package:cache/browse/zim_download.dart';
 import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/sources/libraries_state.dart';
@@ -213,7 +214,7 @@ void main() {
   String? picked;
   final saved = <String, Uint8List>{};
 
-  Future<void> setUpLibs({bool wifi = true}) async {
+  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide}) async {
     sources = SourcesState(
       zimsDirOverride: Directory('${tmp.path}/zims'),
       indexesDirOverride: Directory('${tmp.path}/indexes'),
@@ -233,6 +234,7 @@ void main() {
         return true;
       },
       pollInterval: const Duration(milliseconds: 5),
+      bundledGuide: guide,
     );
     await sources.init();
     await libs.init();
@@ -344,6 +346,33 @@ void main() {
       expect(libs.libraries, isEmpty);
     });
 
+    test('the template written compressed (gzip) is still recognised as the template', () async {
+      await setUpLibs();
+      final f = File('${tmp.path}/cache-library-template.tar.gz')
+        ..writeAsBytesSync(gzip.encode(_tar({'README.md': utf8.encode('# Template'), 'cache-library.json': utf8.encode('{}'), 'blank-library.snapshot': List.filled(700, 1)})));
+      expect(tarEntryNames(f), ['README.md', 'cache-library.json', 'blank-library.snapshot']);
+      expect(kLibraryTemplateName, endsWith('.tar.gz'));
+    });
+
+    test('the guide that ships in the app is installed on start, kept, and installed again when it is gone', () async {
+      var copies = 0;
+      await setUpLibs(guide: () async {
+        copies++;
+        return libFile('guide-$copies.cache-library', _lib(id: kGuideLibraryId, version: kGuideVersion, title: 'Cache guide'));
+      });
+      await libs.whenIdle();
+      expect(libs.libraries.map(libs.titleOf), ['Cache guide']);
+      expect(libs.isGuide(libs.libraries.single), isTrue);
+      expect(copies, 1);
+      await libs.ensureGuide();
+      expect(copies, 1, reason: 'the same copy is there: nothing is done');
+      await libs.remove(libs.libraries.single);
+      expect(libs.libraries, isEmpty);
+      await libs.ensureGuide();
+      expect(libs.libraries.map(libs.titleOf), ['Cache guide']);
+      expect(copies, 2);
+    });
+
     test('a tar that is not a library, and a core error with internals, say so in plain words', () async {
       await setUpLibs();
       final f = File('${tmp.path}/photos.tar')..writeAsBytesSync(_tar({'a.jpg': List.filled(10, 2)}));
@@ -421,27 +450,26 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('add from a file shows the library ready with its size and entries', (tester) async {
+    testWidgets('Your own library: add from a file; the library is ready with its entries', (tester) async {
       await tester.runAsync(setUpLibs);
       picked = libFile('manuals.cache-library', _lib(docs: 1)).path;
       await pump(tester);
-      expect(find.textContaining('No libraries yet'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('add-library')));
-      await tester.pumpAndSettle();
+      expect(find.text('Your own library'), findsOneWidget);
+      expect(find.text('From a download link'), findsOneWidget);
+      expect(find.byKey(const ValueKey('library-template')), findsOneWidget, reason: 'the blank template lives here');
       await tester.tap(find.byKey(const ValueKey('add-from-file')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       await settle(tester, () => libs.libraries.isNotEmpty && libs.task == null);
-      expect(find.text('Manuals'), findsOneWidget);
-      expect(find.textContaining('Version 1 · Ready · 1 entry'), findsOneWidget);
+      expect(libs.titleOf(libs.libraries.single), 'Manuals');
+      expect(libs.versionOf(libs.libraries.single), '1');
+      expect(libs.docsOf(libs.libraries.single), 1);
     });
 
     testWidgets('add from a download link', (tester) async {
       await tester.runAsync(setUpLibs);
       downloader.files['https://example.org/manuals.cache-library'] = _lib(docs: 2);
       await pump(tester);
-      await tester.tap(find.byKey(const ValueKey('add-library')));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('add-from-link')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
@@ -450,7 +478,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       await settle(tester, () => libs.libraries.isNotEmpty && libs.task == null);
-      expect(find.textContaining('Ready · 2 entries'), findsOneWidget);
+      expect(libs.docsOf(libs.libraries.single), 2);
     });
 
     testWidgets('the same library again is offered as an update with both versions', (tester) async {
@@ -460,8 +488,6 @@ void main() {
       });
       picked = libFile('m2.cache-library', _lib(version: '2', docs: 5)).path;
       await pump(tester);
-      await tester.tap(find.byKey(const ValueKey('add-library')));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('add-from-file')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
@@ -470,24 +496,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('update-library')));
       await tester.pump();
       await settle(tester, () => libs.task == null && libs.libraries.isNotEmpty && libs.versionOf(libs.libraries.single) == '2');
-      expect(find.textContaining('Version 2 · Ready · 5 entries'), findsOneWidget);
+      expect(libs.docsOf(libs.libraries.single), 5);
       expect(libs.libraries, hasLength(1));
-    });
-
-    testWidgets('remove asks first, then deletes', (tester) async {
-      await tester.runAsync(() async {
-        await setUpLibs();
-        await libs.addFile(libFile('m.cache-library', _lib()), confirmUpdate: never, askSettings: noSettings);
-      });
-      await pump(tester);
-      await tester.tap(find.byTooltip('Remove'));
-      await tester.pumpAndSettle();
-      expect(find.text('Remove Manuals?'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('remove-library')));
-      await tester.pump();
-      await settle(tester, () => libs.libraries.isEmpty);
-      expect(find.text('Manuals'), findsNothing);
-      expect(find.textContaining('No libraries yet'), findsOneWidget);
     });
 
     testWidgets('the template action saves the blank template', (tester) async {
@@ -500,15 +510,22 @@ void main() {
       expect(find.text('Template saved. Its README says how to fill it.'), findsOneWidget);
     });
 
-    testWidgets('a library that can only be replaced as a whole says so on its info sheet', (tester) async {
+    testWidgets('an opened library shows what it holds, says when it can only be replaced as a whole, and has the "..." menu', (tester) async {
       await tester.runAsync(() async {
         await setUpLibs();
         await libs.addFile(libFile('m.cache-library', _lib(whole: true)), confirmUpdate: never, askSettings: noSettings);
       });
-      await pump(tester);
-      await tester.tap(find.text('Manuals'));
+      var menus = 0;
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: LibraryItemScreen(libraries: libs, item: libs.libraries.single, menu: (_) async => menus++),
+      ));
       await tester.pumpAndSettle();
+      expect(find.text('Manuals'), findsOneWidget);
       expect(find.text('Whole library only'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('item-menu')));
+      await tester.pump();
+      expect(menus, 1);
     });
   });
 }
