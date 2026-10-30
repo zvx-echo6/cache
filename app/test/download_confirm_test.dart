@@ -44,19 +44,35 @@ void main() {
     expect(chosen, DownloadChoice.now);
   });
 
-  testWidgets('it does not fit: how much more is needed and why, and Free up space opens Storage', (tester) async {
+  testWidgets('it does not fit: the one Not enough space pop-up (as for regions), and Free up space opens Storage', (tester) async {
     await open(tester, (c) async => chosen = await confirmDownload(
       c,
       title: 'Download Wikipedia (full)?',
       lines: const [DownloadLine('Wikipedia (full)', 111 * _gb)],
       space: const Space(free: 103 * _gb, reserve: 20 * _gb),
     ));
-    expect(find.text('Needs 28.0 GB more. Cache always leaves 20.0 GB for the phone.'), findsOneWidget);
+    expect(find.text('Not enough space'), findsOneWidget);
+    expect(find.text('Wikipedia (full) needs 111.0 GB. You have 83.0 GB to use; Cache keeps 20.0 GB free for the phone.'), findsOneWidget);
+    expect(find.textContaining('Cache always leaves'), findsNothing, reason: 'the old line under the bar is gone');
     expect(find.byKey(const ValueKey('confirm-download')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('free-up-space')));
     await tester.pumpAndSettle();
     expect(chosen, DownloadChoice.cancel);
     expect(storageOpened, 1);
+  });
+
+  testWidgets('a model with its search model that does not fit: the same pop-up, for the download as a whole', (tester) async {
+    await open(tester, (c) async => chosen = await confirmDownload(
+      c,
+      title: 'Download Gemma 4 E2B?',
+      lines: const [DownloadLine('Gemma 4 E2B', 3 * _gb), DownloadLine('Search model (once, for searching by meaning)', 1 * _gb)],
+      space: const Space(free: 22 * _gb, reserve: 20 * _gb),
+    ));
+    expect(find.text('Not enough space'), findsOneWidget);
+    expect(find.text('This download needs 4.0 GB. You have 2.0 GB to use; Cache keeps 20.0 GB free for the phone.'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(chosen, DownloadChoice.cancel);
   });
 
   testWidgets('on mobile data with mobile data downloads off it says so, and Wait for Wi-Fi is the default', (tester) async {

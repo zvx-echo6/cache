@@ -194,13 +194,14 @@ class _DownloadDialog extends StatelessWidget {
     final fits = short == 0;
     final storage = openStorageForSpace;
     final body = TextStyle(fontSize: 15, height: 1.4, color: k.text);
-    if (!fits && said != null) {
-      // Not enough room: what it needs, what there is, and the way to make room as the button.
+    if (!fits) {
+      // Not enough room, the same for every download: what it needs, what there is, and the way to make room as the button.
       final usable = space.usable ?? 0;
+      final what = name ?? (said == null && lines.length == 1 ? lines.single.name : null);
       return AlertDialog(
         title: const Text('Not enough space'),
         content: Text(
-          '${name ?? 'This download'} needs ${formatBytes(total)}. You have ${formatBytes(usable)} to use; Cache keeps '
+          '${what ?? 'This download'} needs ${formatBytes(total)}. You have ${formatBytes(usable)} to use; Cache keeps '
           '${formatBytes(space.reserve)} free for the phone.',
           key: const ValueKey('download-short'),
           style: body,
@@ -236,14 +237,7 @@ class _DownloadDialog extends StatelessWidget {
             const SizedBox(height: 6),
             _small(context, 'Phone storage', fits ? '${formatBytes(free)} free, ${formatBytes(free - total)} after' : '${formatBytes(free)} free, needs ${formatBytes(total)}'),
           ],
-          if (!fits) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Needs ${formatBytes(short)} more. Cache always leaves ${formatBytes(space.reserve)} for the phone.',
-              key: const ValueKey('download-short'),
-              style: TextStyle(fontSize: 13, color: k.warning),
-            ),
-          ] else if (mobileBlocked) ...[
+          if (mobileBlocked) ...[
             const SizedBox(height: 8),
             Text(
               "You're on mobile data, and mobile data downloads are off. It can wait for Wi-Fi.",
@@ -254,18 +248,7 @@ class _DownloadDialog extends StatelessWidget {
         ],
       ),
       actions: [
-        if (!fits) ...[
-          TextButton(onPressed: () => Navigator.pop(context, DownloadChoice.cancel), child: const Text('Cancel')),
-          if (storage != null)
-            FilledButton(
-              key: const ValueKey('free-up-space'),
-              onPressed: () {
-                Navigator.pop(context, DownloadChoice.cancel);
-                storage(context);
-              },
-              child: const Text('Free up space'),
-            ),
-        ] else if (mobileBlocked) ...[
+        if (mobileBlocked) ...[
           TextButton(key: const ValueKey('download-now'), onPressed: () => Navigator.pop(context, DownloadChoice.now), child: const Text('Download now')),
           FilledButton(key: const ValueKey('wait-for-wifi'), onPressed: () => Navigator.pop(context, DownloadChoice.whenWifi), child: const Text('Wait for Wi-Fi')),
         ] else ...[
