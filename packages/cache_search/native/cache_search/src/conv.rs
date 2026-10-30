@@ -18,6 +18,9 @@ pub struct Conversation {
     /// Where a numbered address's citation opens (a library point's `link` and `time`), by address. Out of band: it goes
     /// to the host in the id map and is never part of a tool message.
     cites: HashMap<String, Cite>,
+    /// Spec S14: the English Wikipedia article title of a numbered place, town or route destination, by address, so that
+    /// `read` of its number opens the article. Out of band, like `cites`.
+    wiki: HashMap<String, String>,
     /// What tools count across calls (the `act` tool's confirm ids and host runs). Only `confirms` is exported.
     pub tool_state: cache_tool::ConvState,
 }
@@ -58,6 +61,9 @@ struct Export {
     /// The `act` tool's confirm cards so far; absent in an export of a conversation that had none.
     #[serde(default)]
     confirms: u32,
+    /// The places' Wikipedia titles by address; absent in an export of a conversation that showed none.
+    #[serde(default)]
+    wiki_titles: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +130,18 @@ impl Conversation {
         n.checked_sub(1).and_then(|i| self.entries.get(i))
     }
 
+    /// Remember the Wikipedia article title of the place at `address` (S14). The first one noted is kept.
+    pub fn note_wiki(&mut self, address: &str, title: &str) {
+        if !title.is_empty() {
+            self.wiki.entry(address.to_string()).or_insert_with(|| title.to_string());
+        }
+    }
+
+    /// The Wikipedia article title noted for `address`, if any.
+    pub fn wiki_title(&self, address: &str) -> Option<&str> {
+        self.wiki.get(address).map(String::as_str)
+    }
+
     /// Remember a web result. The first note for an address is the one kept.
     pub fn note_web(&mut self, address: &str, note: WebNote) {
         self.web.entry(address.to_string()).or_insert(note);
@@ -178,7 +196,9 @@ impl Conversation {
     /// address gets), `ids` (`{"n","address","title"}` in number order, with `"link"` and `"time"` when known), `web_hits` (what `web_search` showed, by
     /// `web:<url>` address in sorted order, each `{"title","snippet","fetched"}`; the snippet is what `read` falls back
     /// to), and `confirms` (the number of confirm cards the `act` tool has issued; left out while it is 0, so a conversation
-    /// that never used `act` exports as it always did). Same state, same bytes. Pending host runs are not exported.
+    /// that never used `act` exports as it always did), and `wiki_titles` (S14: the Wikipedia title of each numbered place
+    /// that showed one, by address in sorted order; left out while there is none). Same state, same bytes. Pending host
+    /// runs are not exported.
     pub fn export_json(&self) -> String {
         let ids: Vec<Value> = (0..self.entries.len()).map(|i| self.id_json(i)).collect();
         let mut hits: Vec<(&String, &WebNote)> = self.web.iter().collect();
@@ -191,6 +211,11 @@ impl Conversation {
         // only once the act tool has issued a confirm card, so a conversation without one exports as it always did
         if self.tool_state.confirms > 0 {
             out["confirms"] = json!(self.tool_state.confirms);
+        }
+        if !self.wiki.is_empty() {
+            let mut titles: Vec<(&String, &String)> = self.wiki.iter().collect();
+            titles.sort();
+            out["wiki_titles"] = Value::Object(titles.into_iter().map(|(a, t)| (a.clone(), json!(t))).collect());
         }
         out.to_string()
     }
@@ -224,6 +249,9 @@ impl Conversation {
             c.web.insert(address, WebNote { title: h.title, snippet: h.snippet, fetched: h.fetched });
         }
         c.tool_state.confirms = e.confirms;
+        for (address, title) in e.wiki_titles {
+            c.note_wiki(&address, &title);
+        }
         Ok(c)
     }
 

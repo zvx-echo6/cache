@@ -40,7 +40,7 @@ impl Tool for LocateTool {
     fn schema(&self) -> Option<Value> {
         Some(json!({"type": "function", "function": {
             "name": "locate",
-            "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\".",
+            "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\". A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
             "parameters": {"type": "object", "properties": {
                 "place": {"type": "string", "minLength": 1, "maxLength": 300,
                           "description": "Place name. Omit for the phone's current location."},
@@ -61,6 +61,8 @@ impl Tool for LocateTool {
 
         // Where: the phone, a saved place, or the best geocoder match (biased toward `near`, else toward the phone).
         let mut kind: Option<(String, String)> = None;
+        // Spec S14: a place or town from the places data shows its summary and Wikipedia title, each when it has one.
+        let mut wiki: (Option<String>, Option<String>) = (None, None);
         let (lat, lon, place_name, address, current) = match place {
             None => {
                 let c = resolve_center(ctx, &self.packs, &*self.geo, None)?;
@@ -93,6 +95,7 @@ impl Tool for LocateTool {
                         .or_else(|| self.geo.forward(name, bias, 1).into_iter().next())
                         .ok_or_else(|| err("geocode_empty", format!("no place matches {:?}", name.trim())).with("query", name.trim()))?;
                     kind = hit.kind_id.clone().zip(hit.kind_label.clone());
+                    wiki = (hit.about.clone(), hit.wikipedia.clone());
                     (hit.lat, hit.lon, hit.label, hit.address, false)
                 }
             }
@@ -125,6 +128,12 @@ impl Tool for LocateTool {
         }
         if let Some(p) = plus_code(lat, lon) {
             out.insert("plus_code".into(), json!(p));
+        }
+        if let Some(a) = wiki.0 {
+            out.insert("about".into(), json!(a));
+        }
+        if let Some(w) = wiki.1 {
+            out.insert("wikipedia".into(), json!(w));
         }
         Ok(ToolOutput::Json(Value::Object(out)))
     }

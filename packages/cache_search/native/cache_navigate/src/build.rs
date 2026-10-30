@@ -103,7 +103,8 @@ pub fn place(r: &Resolved) -> Map<String, Value> {
 }
 
 /// `place`, and for a destination (`now` given) that is a place from the places data, its phone, website and hours (null
-/// when unknown) and whether it is open at `now`. A town, saved place, address or coordinates get none of the four.
+/// when unknown) and whether it is open at `now`. A town, saved place, address or coordinates get none of the four. A
+/// destination with a summary or a Wikipedia title (a place or a town) also gets `about` and `wikipedia` (S14).
 fn place_at(r: &Resolved, now: Option<&str>) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("place_name".into(), json!(r.name));
@@ -120,6 +121,16 @@ fn place_at(r: &Resolved, now: Option<&str>) -> Map<String, Value> {
         m.insert("website".into(), json!(p.website));
         m.insert("hours".into(), json!(p.hours));
         m.insert("open_status".into(), json!(open_status(p.hours.as_deref(), now)));
+    }
+    // Spec S14: the destination's summary and Wikipedia title, each left out when it has none; never on `from_matched`
+    // or a candidate (those have no `now`).
+    if now.is_some() {
+        if let Some(a) = &r.about {
+            m.insert("about".into(), json!(a));
+        }
+        if let Some(w) = &r.wikipedia {
+            m.insert("wikipedia".into(), json!(w));
+        }
     }
     m.insert("distance_km".into(), json!(r.distance_km));
     if let Some(t) = r.er_tier {

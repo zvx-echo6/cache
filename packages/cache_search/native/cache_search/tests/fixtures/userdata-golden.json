@@ -124,7 +124,7 @@
    "type": "function",
    "function": {
     "name": "navigate",
-    "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+    "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links. to_matched may include about and wikipedia; read the result's number to open the destination's article.",
     "strict": true,
     "parameters": {
      "type": "object",
@@ -195,7 +195,7 @@
    "type": "function",
    "function": {
     "name": "nearby",
-    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there.",
+    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there. A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
     "parameters": {
      "type": "object",
      "properties": {
@@ -242,7 +242,7 @@
    "type": "function",
    "function": {
     "name": "locate",
-    "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\".",
+    "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\". A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
     "parameters": {
      "type": "object",
      "properties": {
@@ -269,7 +269,7 @@
    "type": "function",
    "function": {
     "name": "nearby",
-    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there.",
+    "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there. A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
     "parameters": {
      "type": "object",
      "properties": {

@@ -119,12 +119,25 @@ The kind comes from the result's address: `place`, `town`, `addr`, `layer` and `
 `live` "a live-data", `loc` "a location", `repeater` "a repeater", `app` "a setup"; any other result that is not a library, ZIM
 or web result (such as an `act` module's) says "an app".
 
+**A place's Wikipedia article (S14).** A nearby row, locate result or navigate result whose place shows `wikipedia` (see
+**Place summary and article**, under nearby) is the exception: `read` of its number opens that article from the phone's
+Wikipedia ZIM, in exactly the format of reading a Wikipedia search result (`[n] <article title>`, the text, `[truncated]`).
+The phone's Wikipedia is every installed ZIM whose Kiwix name (`Name` metadata) starts with `wikipedia_en` (the full one or
+a subset such as medicine), in source order; the article's path is the title with spaces written as `_`, redirects
+followed, and the first ZIM that has it is used. The conversation keeps each number's title (in its export as
+`wiki_titles`, by address).
+- None of them has the article (an older or smaller ZIM):
+  `{"ok": false, "error": {"type": "no_data", "detail": "the installed Wikipedia has no article called \"Shoshone Falls\""}}`.
+- No Wikipedia ZIM installed:
+  `{"ok": false, "error": {"type": "not_set_up", "detail": "Wikipedia is not installed on this phone; the place's summary above is all there is"}}`.
+- A place without `wikipedia` keeps the `bad_arguments` error above.
+
 ### navigate (route summary for the assistant; navigation in Maps)
 
 ```json
 {"type": "function", "function": {
   "name": "navigate",
-  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+  "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links. to_matched may include about and wikipedia; read the result's number to open the destination's article.",
   "strict": true,
   "parameters": {"type": "object", "properties": {
     "from": {"type": "string", "maxLength": 300,
@@ -336,6 +349,9 @@ Fields:
   has `phone`, `website`, `hours` (null when unknown) and `open_status` after `state`, as in nearby (**Place details**,
   under nearby). They are not on `from_matched` or `other_destination_candidates`. `hours_note` follows `map_region_age`
   when the destination has `hours`.
+- A destination (a place or a town) with a summary or a Wikipedia title has `about` then `wikipedia` on `to_matched`, after
+  `open_status` when it has one, otherwise after `state`, and before `distance_km` (**Place summary and article**, under
+  nearby). Never on `from_matched` or `other_destination_candidates`; also on the `to_matched` beside an error.
 - `warnings` appears only when there is one. Each entry is `{"code": "offroad_unavailable", "end": "from" | "to",
   "road_point": {"lat", "lon"}, "gap_m": N, "reason": R, "detail": D}`: that end is away from the road network
   (an end moved to a public road, above, is not), the route stops at `road_point`, and `gap_m` is how many metres short of the requested end it stops. `reason` and
@@ -382,7 +398,7 @@ model it can omit `from`.
 ```json
 {"type": "function", "function": {
   "name": "nearby",
-  "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there.",
+  "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there. A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
   "parameters": {"type": "object", "properties": {
     "category": {"type": "string",
                  "enum": ["emergency_room", "hospital", "urgent_care", "pharmacy", "fuel", "police", "fire_station", "campground", "trailhead", "water", "shelter"]},
@@ -414,6 +430,21 @@ On `emergency_room` rows `er_tier` follows `open_status`, as a string: `"confirm
 department listing) or `"likely"` (a hospital without one); a `"likely"` row then has the pack's `note` ("hospital,
 likely has an emergency room"). Navigate's `er_tier` is an integer instead (see navigate); both are
 as built.
+
+**Place summary and article (S14).** A place from the places data with an entry in the wiki place index has two more keys,
+each left out entirely when it has none (never `null` or `""`), as the last two keys of its row (after `open_status`, and
+after `er_tier` / `note`): `about` then `wikipedia`. Layer points and repeaters never have them.
+- `about`: the place's summary as the data build stored it in the pack's `about` column (`places_pack about`), shown as it
+  is; the app never cuts it. The build collapses white space (every run is one space, ends trimmed); a summary of at most
+  400 characters (Unicode scalar values) is stored whole. A longer one is cut by a local model at a sentence end, and the
+  cut is kept only when it is an exact prefix of the summary, at most 400 characters, ending in `.`, `!` or `?`; otherwise
+  the place has no `about`. See RECIPE.md (places_pack), "The about step".
+- `wikipedia`: the English Wikipedia article title, exactly as the pack's `wikipedia_title` column has it
+  (`"Shoshone Falls"`). `read` of the row's number opens the article (see read).
+
+Packs, tiles and the phone's merged database carry `about TEXT` as the last column of `places` and `localities`
+(`cache_places/src/schema.rs`). It was added after the first layout without a `tile_schema` change: a reader checks for it,
+and a pack or tile built before it shows no `about` (its `wikipedia` still shows).
 
 **Place details.** A place's phone, website and opening hours are shown in `nearby` rows and on navigate's `to_matched`
 (there is no separate read of a place):
@@ -531,7 +562,7 @@ same files. Private layers are shown like the rest.
 ```json
 {"type": "function", "function": {
   "name": "locate",
-  "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\".",
+  "description": "Where a place is (or where the phone is now): coordinates and the nearest town. Use for \"where am I\" or \"what are the coordinates of X\". A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
   "parameters": {"type": "object", "properties": {
     "place": {"type": "string", "minLength": 1, "maxLength": 300,
               "description": "Place name. Omit for the phone's current location."},
@@ -550,6 +581,11 @@ Result (1.0 gives latitude/longitude; 1.x adds the other formats shown):
 
 `what3words` only when it was fetched online or cached for a saved place. For a named place the result also has `kind` and `kind_label`
 right after `place_name` (`"kind": "pharmacy", "kind_label": "Pharmacy"`; a town is `town` / "Town"); the phone's own position has none. Errors: `geocode_empty`, `no_location`.
+
+A place or town from the places data with a summary or a Wikipedia title has `about` then `wikipedia` after `plus_code`
+(**Place summary and article**, under nearby; each left out when it has none):
+`{..., "plus_code": "85GVH2W2+...", "about": "Shoshone Falls is a waterfall on the Snake River in southern Idaho...", "wikipedia": "Shoshone Falls"}`.
+A saved place, a layer point and the phone's own position have neither.
 
 `place` also matches a point of the user's own map layers by its exact name (ignoring case and extra spaces), after saved
 places and before the places search, the most recently used layer first (hidden and private layers too). The result then

@@ -5,6 +5,7 @@
 //! `{"packs": ["/path/places.sqlite", ...], "merged_dir": ".../regions/places"}`. Packs are opened on demand, so a pack downloaded later is picked up
 //! without reopening the handle, and `nearby` leaves itself out of the tool schemas while no pack is installed.
 
+pub mod about;
 pub mod addr;
 pub mod address;
 pub mod coord;

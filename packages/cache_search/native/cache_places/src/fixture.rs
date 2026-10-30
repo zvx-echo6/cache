@@ -218,6 +218,8 @@ pub fn add_fixture_summaries(path: &Path) {
     }
     let (state, wp, text) = TOWN_SUMMARY;
     c.execute("UPDATE localities SET summary = ?1, wikipedia_title = ?2 WHERE name = 'Stanley' AND state = ?3", params![text, wp, state]).unwrap();
+    // `places_pack about` keeps a summary of 400 characters or fewer whole (S14)
+    c.execute_batch("UPDATE places SET about = summary WHERE summary IS NOT NULL; UPDATE localities SET about = summary WHERE summary IS NOT NULL;").unwrap();
 }
 
 /// The fixture pack with summaries and with vectors from `fake_embed`.
@@ -354,14 +356,16 @@ pub fn write_fixture_shard(path: &Path, tile: u32, build: &str) {
         *counts.entry(("kind", p.kid)).or_default() += 1;
     }
     let cell = tile_rect_l1(tile);
+    // `places_pack about` keeps a summary of 400 characters or fewer whole (S14); the towns get theirs below
+    c.execute("UPDATE places SET about = summary WHERE summary IS NOT NULL", []).unwrap();
     for (i, (name, kind, lat, lon, pop, state)) in LOCALITIES.iter().enumerate() {
         let source_id = format!("osm:n9{}", i + 1);
         if tile_id_l1(*lat, *lon) == tile {
             n_towns += 1;
             let (wp, text) = (*name == "Stanley" && *state == TOWN_SUMMARY.0).then_some((TOWN_SUMMARY.1, TOWN_SUMMARY.2)).unzip();
             c.execute(
-                "INSERT INTO localities(id, name, kind, lat, lon, population, state, country, wikipedia_title, summary, source_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'US', ?8, ?9, ?10)",
+                "INSERT INTO localities(id, name, kind, lat, lon, population, state, country, wikipedia_title, summary, source_id, about) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'US', ?8, ?9, ?10, ?9)",
                 params![n_towns, name, kind, lat, lon, pop, state, wp, text, source_id],
             )
             .unwrap();
