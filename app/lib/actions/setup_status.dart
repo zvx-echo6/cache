@@ -33,14 +33,14 @@ class SetupArea {
 
 /// In the order the reply lists them. If a guide section is renamed, its title changes here with it.
 const List<SetupArea> kSetupAreas = [
-  SetupArea('connection', 'Connection', 'Cache guide: 3. Settings, page by page: Mobile data', 'not known'),
+  SetupArea('connection', 'Connection', 'Cache guide: 1. Getting started: Downloads, Wi-Fi and mobile data', 'not known'),
   SetupArea('regions', 'Regions', 'Cache guide: 1. Getting started: Download a region', 'none installed'),
-  SetupArea('libraries', 'Libraries', 'Cache guide: 3. Settings, page by page: Libraries page', 'none installed'),
-  SetupArea('live_data', 'Live data', 'Cache guide: 3. Settings, page by page: Weather and alerts', 'no sources installed'),
-  SetupArea('web_search', 'Web search', 'Cache guide: 3. Settings, page by page: Web search with Kagi', 'not set up'),
-  SetupArea('places', 'Place details', 'Cache guide: 2. Using Cache: The place card and saving a place', 'no region with places installed'),
+  SetupArea('libraries', 'Libraries', 'Cache guide: 1. Getting started: Add to your Library', 'none installed'),
+  SetupArea('live_data', 'Live data', 'Cache guide: 1. Getting started: Turn on weather and alerts', 'no sources installed'),
+  SetupArea('web_search', 'Web search', 'Cache guide: 4. Services and keys: Web search with Kagi', 'not set up'),
+  SetupArea('places', 'Place details', 'Cache guide: 5. Notebooks: The Places notebook', 'no region with places installed'),
   SetupArea('models', 'Models', 'Cache guide: 1. Getting started: Choose a model', 'none downloaded'),
-  SetupArea('location', 'Location', 'Cache guide: 3. Settings, page by page: Notifications and location', 'not known'),
+  SetupArea('location', 'Location', 'Cache guide: 1. Getting started: Let Cache use your location', 'not known'),
 ];
 
 /// One line of a part: `{"label","value"}`.

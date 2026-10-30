@@ -90,7 +90,7 @@ void main() {
     final r = await reg.run('app.setup_status', {'area': 'web_search'});
     expect(r['status'], 'done');
     expect((r['result'] as Map)['sections'], [
-      {'address': 'app:setup/web_search', 'title': 'Web search', 'items': [{'label': 'Kagi key', 'value': 'not set'}], 'guide': 'Cache guide: 3. Settings, page by page: Web search with Kagi'},
+      {'address': 'app:setup/web_search', 'title': 'Web search', 'items': [{'label': 'Kagi key', 'value': 'not set'}], 'guide': 'Cache guide: 4. Services and keys: Web search with Kagi'},
     ]);
   });
 

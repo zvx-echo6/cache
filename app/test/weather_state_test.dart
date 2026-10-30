@@ -312,6 +312,21 @@ void main() {
       expect(h.lastPolicy['enabled_sources'], ['wfigs-incidents-near', 'wfigs-perimeters-near']);
     });
 
+    test('the core can never answer "mobile data updates are off": on mobile data the policy always allows it, with no per-source state', () async {
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      for (final downloads in [false, true, false]) {
+        h.settings.setMobileForDownloads(downloads);
+        h.probe.change(ConnectionKind.mobile);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(h.lastPolicy['metered'], true);
+        expect(h.lastPolicy['allow_metered'], true, reason: 'metered and not allowed is what makes the core say "mobile data updates are off"');
+        expect(h.lastPolicy.containsKey('states'), isFalse, reason: 'no source is put in the metered state by hand');
+        h.probe.change(ConnectionKind.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+
     test('nothing is pushed twice when nothing changed', () async {
       h = await Harness.create();
       final n = h.core.policies.length;
