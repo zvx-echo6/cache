@@ -170,6 +170,7 @@ void main() {
       expect(guideMarkdown(b, 'Type `"quoted"` then "Save".'), 'Type `"quoted"` then ~~Save~~.');
       expect(guideMarkdown(b, '```\n"left alone"\n```'), '```\n"left alone"\n```');
       expect(guideMarkdown(b, 'A quote " with spaces " stays.'), 'A quote " with spaces " stays.');
+      expect(guideMarkdown(b, 'It says "This region is too big to download the map in one go."'), 'It says **This region is too big to download the map in one go.**');
       expect(guideMarkdown(b, 'Go to ["Settings" > "Storage"](cache://settings/storage).'), 'Go to [Settings > Storage](cache://settings/storage).');
     });
 

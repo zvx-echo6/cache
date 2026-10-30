@@ -16,6 +16,9 @@ void Function(String question)? askCacheInstead;
 /// Where the guide's screenshots are bundled: `<id>.png`, made by the golden tests in test/guide_shots (tools/guide/shots.txt).
 const String kGuideShotsDir = 'assets/guide/shots';
 
+/// The longest label shown as a chip; a longer quote (a message the app shows) is bold text, which wraps with the line.
+const int kGuideChipMaxChars = 28;
+
 /// The reader's widest line of text: past this a line is too long to read comfortably (tablets, phones on their side).
 const double kGuideMaxWidth = 620;
 
@@ -72,7 +75,9 @@ String guideMarkdown(GuideBook book, String body) {
         out.write(i.isOdd ? parts[i] : parts[i].replaceAllMapped(_label, (m) {
           final t = m.group(1)!;
           // Strikethrough must not start or end with a space; such a quote is left as it is.
-          return t.trim() != t || t.contains('~') ? m.group(0)! : '~~$t~~';
+          if (t.trim() != t || t.contains('~') || t.contains('*')) return m.group(0)!;
+          // A chip does not break across lines: a long quote (a whole message the app shows) is bold text that wraps.
+          return t.length > kGuideChipMaxChars ? '**$t**' : '~~$t~~';
         }));
       }
     }
