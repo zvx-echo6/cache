@@ -101,9 +101,40 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   bool get coreReady => _core != null;
 
   final Completer<SearchCore?> _coreOpened = Completer<SearchCore?>();
+  final Completer<SearchCore> _everOpened = Completer<SearchCore>();
+  Future<SearchCore?>? _retrying;
 
-  /// The core once startup has finished (null when it could not open). The map's layer engine waits for it.
-  Future<SearchCore?> whenCoreReady() => _coreOpened.future;
+  /// The core once the latest start has finished (null when it could not open): the first start, or a [retryCore] that is
+  /// running. The map's layer engine waits for it.
+  Future<SearchCore?> whenCoreReady() {
+    final core = _core;
+    if (core != null) return Future.value(core);
+    return _retrying ?? _coreOpened.future;
+  }
+
+  /// Completes when the core opens, at the first start or at a later [retryCore]; never when it does not open. What the app
+  /// starts once the core is up waits on this, so a core opened by Try again starts it too.
+  Future<SearchCore> whenCoreOpen() => _everOpened.future;
+
+  /// Starts the core again when it could not open (Ask's Try again); a start already running is shared, and an open core is
+  /// returned as it is. Null when it still could not open.
+  Future<SearchCore?> retryCore() {
+    final core = _core;
+    if (core != null) return Future.value(core);
+    if (!_coreOpened.isCompleted) return _coreOpened.future;
+    return _retrying ??= () async {
+      try {
+        final opened = await _openCore();
+        if (opened != null) {
+          await _applyFix();
+          unawaited(refresh());
+        }
+        return opened;
+      } finally {
+        _retrying = null;
+      }
+    }();
+  }
 
   Map<String, dynamic> _extra = const {};
 
@@ -123,26 +154,36 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     await indexesDir!.create(recursive: true);
     _scan();
     notifyListeners();
+    final core = await _openCore();
+    if (!_coreOpened.isCompleted) _coreOpened.complete(core);
+    if (core == null) return;
+    await _applyFix();
+    await refresh();
+  }
+
+  /// One start of the core: null (with [unavailable] saying why) when it could not open.
+  Future<SearchCore?> _openCore() async {
+    final SearchCore core;
     try {
       final extra = _extra = coreExtras ?? await _defaultExtras();
-      _core = await SearchCore.open(
+      core = await SearchCore.open(
         _configs(),
         extra: extra,
         native: nativeFactory ?? _defaultNative,
       );
     } catch (e, stack) {
-      debugPrint('Search core startup failed: $e');
-      debugPrintStack(stackTrace: stack);
+      debugPrint('Search core startup failed: $e\n$stack');
       unavailable = e is CacheSearchException
           ? e.message
           : 'Search is not available on this device';
       notifyListeners();
-      if (!_coreOpened.isCompleted) _coreOpened.complete(null);
-      return;
+      return null;
     }
-    if (!_coreOpened.isCompleted) _coreOpened.complete(_core);
-    await _applyFix();
-    await refresh();
+    _core = core;
+    unavailable = null;
+    if (!_everOpened.isCompleted) _everOpened.complete(core);
+    notifyListeners();
+    return core;
   }
 
   static CsNative _defaultNative() => FfiCsNative.open();

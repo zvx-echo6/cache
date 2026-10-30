@@ -160,7 +160,15 @@ class LibrariesState extends ChangeNotifier {
     await _scan();
     notifyListeners();
     final core = await sources.whenCoreReady();
-    if (core == null) return;
+    if (core == null) {
+      // A core started again later (Try again in Ask) picks up the libraries then.
+      unawaited(sources.whenCoreOpen().then((_) => _afterCore()));
+      return;
+    }
+    await _afterCore();
+  }
+
+  Future<void> _afterCore() async {
     await sources.refresh();
     _resumeIndexes();
     await ensureGuide();

@@ -288,7 +288,8 @@ class _CacheAppState extends State<CacheApp> {
   late final ChatController chat = ChatController(
     // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
     tools: const [],
-    waitForCore: () async => await sources.whenCoreReady() != null,
+    // Try again (or the next question) after the core could not start starts it again.
+    waitForCore: () async => await sources.retryCore() != null,
     newNumbering: () =>
         sources.coreReady ? CoreNumbering(sources.newConversation) : null,
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
@@ -377,8 +378,9 @@ class _CacheAppState extends State<CacheApp> {
     // switched on, and the place the background runs use is kept up to date.
     final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
     getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
-    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreReady()).then((core) async {
-      if (core == null) return;
+    // Once the core is open: at the first start, or after Try again in Ask started it again.
+    settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
+      await webSearch.apply();
       await LocalAlertNotifier.instance.init();
       await weather.start();
       weather.addListener(_onWeather);
