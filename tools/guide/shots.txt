@@ -23,3 +23,56 @@ places-edit | A saved place open for editing: name, position and its weather and
 map-ring | The map with the ring open on a point: From here, Add stop, Measure
 ask | Ask: a question answered with its sources
 ask-plus-menu | Ask with the + menu open (Use my location, the sources and the rest)
+add-catalogue | Settings > Weather and alerts > More sources > Add sources from a link: the link field with "Check this link"
+ask-confirm-card | Ask with the confirm card "Add to Journal"/log with details, "Not now" and the add button
+ask-model-menu | Ask with the model name tapped: model and memory used, "Switch model...", "Unload: free the memory", "Manage models"
+ask-open-navigation | Ask: an answer with a route and the "Open navigation" button
+ask-report | Ask: the Report this answer sheet with the three reasons and "Save report"
+ask-sources | Ask: an answer with [1] citation marks and the "1 source" line expanded, one Library source with "Open the article"
+chat-list | Ask chat list: "Search chats", Pinned and Today groups, "New chat"
+chat-menu | Chat list with one chat held: Rename, Pin, Share as Markdown, Add to Home, Delete
+connections | Notebooks > Connections: the Obsidian and Logseq rows with Connect, and "Your other devices"
+directions-offroad | Directions panel with Off-road chosen: "On foot", the three land-access choices and "Start"
+directions-panel | Maps: the directions panel with Drive, Walk, Bike and Off-road, a route, distance and time, and "Start"
+edit-home | Edit Home: switches for each block and the "Reset to default" button
+guidance | Maps guiding a route: the next-turn banner, voice button and "End"
+hf-search | Find a model (Search Hugging Face): a search for a model name with a few single-file results, each with size and fit
+home | Home: search box, Weather and alerts card (50 degrees, a red warning triangle and a fire with its distance), and Shortcuts; Set up card finished
+home-search | Home with "water" typed: first row "Ask Cache: water", then results from Library, Notebooks, Places and Maps
+home-shortcut-menu | Home with a shortcut held: "Move earlier", "Move later", "Remove from Home"
+key-sheet | The key sheet opened from "Get key" on "Satellite fire hotspots": the provider link, the Key field and "Check and save"
+layers-sheet | Maps layers sheet: layer switches with their state lines, "Opacity", "Show my position", "Download a region", "Get more layers"
+library-own | Library > Add to Library > Your own library: "From a file on this phone", "From a download link" and "Get a blank library template"
+log-editor | New Log notebook: name, "Add field" with a number field "Run time" (unit min) and a yes/no field, "Due again" and "Create"
+log-quick-add | The quick add form of the Generator test log with last values filled and "Save"
+map-measure | The map measuring: dashed line with three points, the running total bar, "Undo" and "Done"
+map-notebook-ring | The map ring after Save: the notebook ring with Places, Journal and log wedges and "More"
+maps-find-me | Maps with the user's position shown and the locate ("Find me") button, a base map downloaded for Idaho
+maps-search | Maps: "Search places or coordinates" with a few results
+markdown-cheatsheet | The Markdown cheat sheet opened from "?" in an entry
+models-screen | Models: the Recommended cards (one "Fits this phone", one "Too big for this phone"), then "On this phone" with one model Active; "Search Hugging Face" and "Choose a file" below
+models-search-model-row | Models, On this phone: the line "Meaning search needs the search model." with the "Get it" button, search model missing
+modules | Modules: Ask, Library, Maps, Videos, Weather, Notebooks and Settings icons, three with a dot for the bar
+modules-hold-menu | Modules with an icon held: "Pin to bar" and "Add to Home"
+notebook-edit | Edit notebook for a Log: name, "Show on map", "Private" on and "Include in sync and sharing" off
+notebook-new | Notebooks > New notebook: "Start from" with Journal, Log, Notes and Places, then "Starter logs"
+place-alerts-sheet | The Alerts for sheet of a place: the three choices with "Custom for this place" selected and "How far out"
+place-card | Maps: a place card at the bottom with Directions, Save place, Add to Home and Close
+quiet-hours | Quiet hours: the switch, "From" 10 PM and "To" 7 AM
+regions-select | Regions sheet in Select mode: two regions ticked and the "Download 2" button with the total size
+regions-updates-tab | Regions sheet, Updates tab: "Road routing" and "Places" up to date, one map with its date, "Update all" and "Check for updates"
+settings-appearance | Settings > Appearance: the four themes and Module icons Small and Large
+settings-assistant | Settings > Cache model and web search: the model row, "Search service" with "Set up", "Search the web when online", "Use my location" and Conversations
+settings-credits | Settings > Credits and licences: Version, Licence, Source code, Credits, Open-source licences
+settings-location-blocked | Settings > Cache model and web search, Location group: "Use my location" row reading "Blocked in the phone's settings" with the "Phone settings" button
+settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
+settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row
+settings-sharing | Settings > Sharing and sync with two linked devices and the "Shared with linked devices" ticks
+settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, one with "Get key", and "More sources (9 more)"
+source-page | A data source's page: "Use this source", "Replace", "Remove the key" and the About this source facts
+storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note
+video-download | A video page with "Download" and the size choices
+video-player | The video player with the speed button showing 1x and the Full screen button
+videos-list | Videos: one added instance, "Add an instance", and "Saved on this phone" at the top
+weather-choose-place | The Choose a place sheet: "Find a town or place" with a few matching towns
+zim-reader | The reader open on a Library page with "Search this ZIM" and "Find in page", and the bottom bar Back, Forward, Main page

@@ -4,6 +4,8 @@
 
 On a fresh install, "Home" shows a "Set up Cache" card. It gets Cache ready in four steps.
 
+![Home with the Set up Cache card](shot:home-setup-card)
+
 1. Tap "Choose a model" for the AI that answers your questions.
 2. Tap "Get your area" for maps, directions and places near you.
 3. Tap "Turn on weather" for forecasts and alerts.
@@ -21,6 +23,8 @@ Nothing downloads or switches on until you tap. You can do the steps in any orde
 
 The model is the AI that answers in "Ask". You pick it, and Cache runs it on your phone.
 
+![The Models screen](shot:models-screen)
+
 1. Tap the model name at the top of "Ask" and choose "Manage models". You can also go to ["Settings" > "Cache model and web search"](cache://settings/assistant) and tap the model row.
 2. Look under "Recommended". Each card says how well it fits your phone: "Fits this phone", "May be tight on this phone" or "Too big for this phone".
 3. Pick one that fits. If you're unsure, take the smallest.
@@ -37,6 +41,8 @@ A model is about 3 to 5 GB.
 
 The search model is a small second model, 605 MB. Cache uses it to search by meaning in your libraries and places. It is not a chat model.
 
+![The search model line on the Models screen](shot:models-search-model-row)
+
 It comes with your first model. The download pop-up has the line "Search model (once, for searching by meaning)".
 
 If it is missing or its download stopped:
@@ -48,6 +54,8 @@ If it is missing or its download stopped:
 
 Unloading frees the memory a model uses. Deleting frees its storage.
 
+![The Models screen](shot:models-screen)
+
 1. Open the Models screen.
 2. Tap "Unload" next to the active model, or "Delete" next to one you don't use.
 3. For a delete, confirm in the pop-up.
@@ -57,6 +65,8 @@ You can also unload from the model name at the top of "Ask".
 ## Find a model on Hugging Face
 
 Use this when the model you want isn't under "Recommended".
+
+![The Hugging Face search](shot:hf-search)
 
 1. Open the Models screen and tap "Search Hugging Face".
 2. Type a model name. Only single-file .gguf models are shown.
@@ -70,6 +80,8 @@ Use this when the model you want isn't under "Recommended".
 
 You can copy a .gguf file from your phone into Cache.
 
+![The Models screen](shot:models-screen)
+
 1. Open the Models screen and tap "Choose a file".
 2. Pick the .gguf file. Cache copies it into its models folder.
 3. Tap the model under "On this phone" to load it.
@@ -79,6 +91,8 @@ If the model can't use tools, it is marked "Not supported: Cache needs a model t
 ## Downloads, Wi-Fi and mobile data
 
 Every big download in Cache asks you first in one pop-up. It covers models, regions and Library items.
+
+![The download pop-up](shot:download-popup-new)
 
 The pop-up shows each item's size and a storage bar, for example "103 GB free, 100.9 GB after". Tap "Download" to go ahead.
 
@@ -96,6 +110,8 @@ Weather and alerts always update, on any connection.
 ## Download a region
 
 A region lets maps, directions and place search work with no connection. One download has routing, map, places and off-road.
+
+![The Regions sheet](shot:regions-sheet)
 
 1. Open "Maps", tap "Layers", then "Download a region". You can also go to ["Settings" > "Maps" > "Regions"](cache://maps/regions).
 2. On the "Downloads" tab, find your region. Use "Search regions" or browse "Countries".
@@ -118,6 +134,8 @@ If your area isn't listed, tap ["Draw your own area instead"](cache://maps/draw)
 
 While a region downloads, its row shows each part and where it stands. Parts you can use are ready before the rest.
 
+![A region downloading, part by part](shot:region-row)
+
 The row lists "Map", "Directions", "Places" and "Off-road". Each says ready, a percentage, waiting, stopped or paused. For example: Map ready · Directions 40% · Off-road waiting.
 
 - Cache downloads from where the phone is outwards.
@@ -130,6 +148,8 @@ If a download stopped, tap the region's update button. If it stopped because Cac
 
 Off-road routing needs terrain heights and a state's off-road pack. Cache shares the pack between regions.
 
+![A region's own page](shot:region-detail)
+
 - Each region downloads its own terrain heights.
 - A state's off-road pack downloads once, for all that state's regions.
 - If the pack is already here, the pop-up has an "Off-road" line with "Already on this phone". The size line adds "terrain heights for this region about [size]".
@@ -139,6 +159,8 @@ A state's pack stays while any region that uses it is on the phone.
 ## Update or remove a region
 
 Downloaded regions are on the "Regions" sheet, "Local" tab. Open it from ["Maps" > "Layers" > "Download a region"](cache://maps/regions).
+
+![The Local tab of the Regions sheet](shot:region-row)
 
 The tab lists regions largest first, with size and parts.
 
@@ -151,6 +173,8 @@ If you remove a region, parts another region uses stay on the phone.
 ## Check for region updates
 
 The "Updates" tab shows what has newer data. Updates use Wi-Fi unless you allow mobile data.
+
+![The Updates tab of the Regions sheet](shot:regions-updates-tab)
 
 1. Open the "Regions" sheet and tap the "Updates" tab.
 2. Tap "Check for updates" to look again.
@@ -165,6 +189,8 @@ While places update, search keeps using the old places until the new ones are co
 ## Add to your Library
 
 The Library holds offline copies of Wikipedia, medical guides and survival manuals from Kiwix. They are free and work with no signal.
+
+![Add to Library](shot:library-add)
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
 2. Type in "Search the catalogue". You can narrow it with the language chip or a category chip such as "Medicine" or "Preparedness".
@@ -182,6 +208,8 @@ Versions without pictures are much smaller.
 ## Add your own library
 
 A library is a set of passages Cache searches and cites. You add one from a file or a link someone gave you.
+
+![Add to Library](shot:library-add)
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
 2. Tap "Your own library".
@@ -210,6 +238,8 @@ The new copy replaces the whole library once it opens.
 
 A blank template shows you how to build a library with your own tools.
 
+![Your own library](shot:library-own)
+
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
 2. Tap "Your own library".
 3. Tap "Get a blank library template".
@@ -221,6 +251,8 @@ A library searched by meaning uses the search model. Without it, Cache searches 
 ## Turn on weather and alerts
 
 This switches on a forecast, weather alerts and wildfires for where you are, in one tap.
+
+![The Weather screen](shot:weather)
 
 1. On "Home", find the "Weather and alerts" card. You can also open "Weather" from "Modules".
 2. Tap "Turn on weather".
@@ -236,6 +268,8 @@ This switches on "Weather forecast", "Weather alerts" and "Wildfires". The first
 
 Use this if you'd rather not share your location, or it can't be found.
 
+![Choose a place for weather](shot:weather-choose-place)
+
 1. On the "Weather" screen, tap "Choose a place instead".
 2. In "Find a town or place", type a town and tap it.
 
@@ -247,6 +281,8 @@ To keep a place for good, add it to the Places notebook. Each place has its own 
 
 More sources are in ["Settings" > "Weather and alerts"](cache://settings/weather). Featured ones come first. The rest are under "More sources", with a count such as "9 more".
 
+![The Weather and alerts settings](shot:settings-weather)
+
 1. Find the source.
 2. Turn on its switch.
 
@@ -257,6 +293,8 @@ You choose which alerts pop up in ["Settings" > "Notifications"](cache://setting
 ## Let Cache use your location
 
 Cache uses your location for the map, directions, nearby places, and weather where you are. It does this whenever your phone allows it.
+
+![The + menu in Ask](shot:ask-plus-menu)
 
 To turn it off or on:
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant). You can also tap the + button left of the box in "Ask".
@@ -271,6 +309,8 @@ Cache doesn't ask for location in "Ask" and has no location button there.
 
 When your phone blocks location, "Use my location" says why.
 
+![The Use my location row, blocked](shot:settings-location-blocked)
+
 - "Blocked in the phone's settings": location is blocked for Cache.
 - "The phone's location is switched off": the phone's own location is off.
 
@@ -281,6 +321,8 @@ To fix it:
 ## Location on the map
 
 The map has its own location controls.
+
+![The Maps screen](shot:maps-find-me)
 
 1. Open "Maps" and tap the locate button ("Find me").
 2. When Cache asks "Use your location?", tap "Continue".
