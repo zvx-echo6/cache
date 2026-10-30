@@ -5,7 +5,7 @@ usage: verify.py --cs cs.exe --config CONFIG.json --manifest MANIFEST.json --emb
                  --embed-model bge-m3-Q8_0.gguf --embed-sha256 SHA [--library-id cache-guide]
 
 Checks: the entry count equals the number of sections; every section reads back byte-identical with its exact title, and
-with no app link (cache://) left in it;
+with no app link (cache://) and no screenshot (](shot:) left in it;
 and a set of questions return the expected section in the top 3 (rank printed). Exits 1 if any check fails.
 """
 import argparse
@@ -54,6 +54,10 @@ for m in man:
     if 'cache://' in r['text'] or 'cache://' in r['title']:
         fail += 1
         print('APP LINK IN STORED TEXT', m['title'])
+    # Screenshots (![caption](shot:<id>)) are the reader's only: split.py takes them out, caption and all.
+    if re.search(r'\]\(shot:', r['text']) or 'shot:' in r['title']:
+        fail += 1
+        print('SCREENSHOT IN STORED TEXT', m['title'])
     if r['title'] != m['title']:
         tbad += 1
         print('TITLE DIFF', repr(r['title']), repr(m['title']))

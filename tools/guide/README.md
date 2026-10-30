@@ -20,3 +20,11 @@ be unique within a chapter. Quote UI labels in double quotes, exactly as the app
   that is not found and exits 1 if any are missing.
 
 Building the library: see [BUILD.md](BUILD.md).
+
+## Screenshots
+
+A section can show a picture of the screen it talks about: `![caption](shot:<id>)` on a line of its own. The reader shows
+`app/assets/guide/shots/<id>.png` with the caption under it; the caption is also what a screen reader says. The ids and the
+screen state each one shows are in [shots.txt](shots.txt). `split.py` takes the markup out, caption and all, so the library the
+assistant searches never holds it, and `verify.py` fails if any is left. `ci_check.py` fails on a screenshot with no caption, an
+id not in `shots.txt`, or an id with no picture.
