@@ -9,7 +9,7 @@ On a fresh install, "Home" shows a "Set up Cache" card. It lists four things tha
 3. "Turn on weather": forecasts and alerts for your places. Tap the row.
 4. "Add a library": Wikipedia, medical and survival references. Tap the row.
 
-A tick shows on each row when it is done. When all four are done, the card goes away by itself. Before that, "Edit Home" can hide it like any other block on Home.
+A tick shows on each row when it is done. While "Get your area" is still downloading, its row says "[region] · Not offline yet" with a percentage. If the download stopped, for example because Cache was closed, the row says "[region] · Stopped. Tap to carry on". Tap the row and Cache says "Carrying on with [region]". On mobile data with "Mobile data downloads" off, that message has a "Download anyway" button. When all four are done, the card goes away by itself. Before that, "Edit Home" can hide it like any other block on Home.
 
 You can do the four things in any order. Each one is also described on its own in this guide:
 - the model: see Choose a model;
@@ -95,15 +95,27 @@ A region download lets maps, directions and place search work without a connecti
 3. Each row shows the name and size. A region already on the phone shows an "On this phone" badge.
 4. To get one region, tap its download button.
 5. To get several, tap "Select" in the header, tick the regions, then tap "Download N", where N is the number you ticked. The button also shows the total size.
-6. A pop-up lists the regions with their sizes and a storage bar. Tap "Download".
+6. A pop-up lists the regions with their sizes and a storage bar. If the state's off-road data is already on the phone, it has a line "Off-road" with "Already on this phone". Tap "Download".
 
 If your area is not in the list, tap "Draw your own area instead" at the bottom and drag on the map to mark it.
 
 A region that cannot be downloaded shows a short reason on its row in place of the download button. For example, "This region is too big to download the map in one go." or "This region has no outline yet."
 
-The list of regions needs a connection the first time. After that it works offline. A stopped download picks up where it left off.
+The list of regions needs a connection the first time. After that it works offline. While it downloads, the row shows where each part stands. See the section Region download progress and off-road data.
 
 On mobile data with "Mobile data downloads" off, the pop-up offers "Wait for Wi-Fi". If there is not enough room, the button becomes "Free up space". See the section Downloads, Wi-Fi and mobile data.
+
+## Region download progress and off-road data
+
+A region is more than one thing to download. This section says how to read a region's row while it downloads, and how off-road data is shared.
+
+How a region downloads: Cache downloads from where the phone is outwards. Each part works as soon as it is saved, so a part that is ready can be used while the others are still downloading. While it downloads, the region's row has one line with each part and where it stands: "Map", "Directions", "Places" and "Off-road". Each part says ready, a percentage, waiting, stopped or paused. For example: Map ready · Directions 40% · Off-road waiting.
+
+Off-road data: each region downloads the terrain heights for its own area. The rest of the off-road data for a state is downloaded once and shared by all that state's regions. If it is already on the phone, the size line says "Already on this phone", then "terrain heights for this region about [size]".
+
+A stopped download picks up where it left off. A download that stopped because Cache was closed carries on when you tap "Get your area" in the Set up card, or the region's update button.
+
+On the "Regions" sheet the "Local" tab shows the same line for every region that is still downloading. To start a download, see the section Download a region.
 
 ## Keep your regions up to date
 
@@ -111,9 +123,9 @@ Downloaded regions are listed on the "Regions" sheet.
 
 To open it: "Maps" > "Layers" > "Download a region", or "Settings" > "Maps" > "Regions".
 
-The sheet has three tabs: "Downloads", "Local" and "Updates". The "Local" tab lists every region on this phone, largest first, with its size and the parts it has (for example road routing, map and places).
-- To bring one region up to date, tap its update button.
-- To remove one, tap its delete button. A pop-up shows what it frees. Tap "Delete" to confirm. Parts that another region also uses stay on the phone.
+The sheet has three tabs: "Downloads", "Local" and "Updates". The "Local" tab lists every region on this phone, largest first, with its size and the parts it has (for example road routing, map and places). A region that is still downloading shows one line for its parts: "Map", "Directions", "Places" and "Off-road", each ready, a percentage, waiting, stopped or paused. A part that is ready already works. Cache downloads from where the phone is outwards.
+- To bring one region up to date, tap its update button. A download that stopped carries on with the same button.
+- To remove one, tap its delete button. A pop-up shows what it frees. Tap "Delete" to confirm. Parts that another region also uses stay on the phone. A state's off-road data stays while a region that uses it is on the phone.
 - If a region says "Places not downloaded", it was downloaded before places were part of regions. Update it to add them.
 
 The "Updates" tab shows what has newer data:

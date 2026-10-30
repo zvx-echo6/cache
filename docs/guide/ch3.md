@@ -164,6 +164,8 @@ Below it:
 
 Tap a row to open a list of its items. Remove an item from there. A pop-up shows what it frees and asks you to confirm.
 
+The "Regions" list also has an "Off-road data" group. It has one row for each state's off-road data, with a line such as "[size] · used by [regions]". While it downloads, the size is replaced by "Downloading". A note says: "Each state's off-road data is downloaded once and kept while a region that uses it is on this phone."
+
 To free space when a download will not fit, tap "Free up space" in the download pop-up. It opens this page.
 
 ## Mobile data downloads

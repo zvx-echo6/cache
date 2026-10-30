@@ -95,7 +95,7 @@ The rows after it are your places, each with its own marker colour:
 - Tap a place's marker (or the marker of "Where I am") to show or hide it on the map. A hidden place shows an outlined marker with a slash through it.
 - Tap a place to open it.
 - Press and hold a place to edit it.
-- Tap "+ Add place" to add one.
+- Tap "Add place" (a plus icon and the words) to add one.
 
 Each row says a little about the place, for example whether weather is on and how many photos it has.
 
@@ -107,7 +107,7 @@ For the form that adds and edits a place, see the section Add or edit a place.
 
 Add place and Edit place are the same full screen.
 
-To add a place, open the Places notebook and tap "+ Add place". To edit one, press and hold it in the list.
+To add a place, open the Places notebook and tap "Add place" (a plus icon and the words). To edit one, press and hold it in the list.
 
 The screen has, from the top:
 1. A map, with a search box. Search for an address, a place or coordinates. Tap the map to move the pin.

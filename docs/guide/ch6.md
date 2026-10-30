@@ -18,6 +18,7 @@ If one of these keeps coming back after a restart, note the exact words. They he
 
 On the "Weather and alerts" card:
 - "Not set up yet": no weather source is on. Tap "Turn on weather".
+- "Waiting for your position": "Where I am" is watched and the phone does not know where it is yet. Wait, or go outdoors for a GPS fix. The card fills in when the position is known.
 - "forecast expired, needs a connection": the forecast is too old to show. Connect, open "Weather" and tap "Update now".
 - "no forecast yet": open "Weather" and tap "Update now".
 - "No alerts known, data expired": the alert data is too old to trust. Connect and update. Until then, Cache cannot tell you about new alerts.
@@ -163,7 +164,7 @@ On the "Your own library" screen ("Library" > "Add to Library" > "Your own libra
 - "The new copy could not be opened, so the library was kept as it was.": the update failed; the old copy still works.
 - "Could not make the template: [reason]": try again.
 
-States: "Opening", "Waiting to index", "Building index", "Not available". Steps while adding: "Checking…", "Putting it in place…" and percentages for downloading, unpacking and indexing.
+States: "Getting ready", "Waiting to index", "Building index", "Not available". Steps while adding: "Checking…", "Putting it in place…" and percentages for downloading, unpacking and indexing.
 
 Adding the same link again continues a download that was cut off.
 
@@ -226,13 +227,13 @@ On the "Regions" sheet ("Maps" > "Layers" > "Download a region", or "Settings" >
 
 ## Region downloads paused or failed
 
-On the "Regions" sheet, "Local" tab, a region may show:
+On the "Regions" sheet, "Local" tab, a region that is downloading shows one line with its parts: "Map", "Directions", "Places" and "Off-road". Each part says ready, a percentage, waiting, stopped or paused. A part that says ready already works. A region may also show:
 - "Paused: no connection." or "Paused: no network it may use": connect, or use Wi-Fi. It carries on by itself.
 - "Paused: mobile data is switched off for downloads. Connect to Wi-Fi to carry on.": connect to Wi-Fi, or turn on "Mobile data downloads" in "Settings" > "Storage".
 - "Paused: [region] needs [size], [size] is free and [size] is kept free": Cache keeps some space free for the phone. Delete things you do not need ("Settings" > "Storage"), and it carries on.
 - "Paused: [reason]; trying again shortly": wait; it tries again by itself.
 - "Paused: could not move to [build]: [reason]" or "Paused: could not move places to [build]: [reason]": an update could not be put in place. Check free space; tap the region's update button again.
-- "Could not be downloaded": tap the region's update button to try again.
+- A part that says stopped: tap the region's update button to carry on. If Cache was closed during the download, tap "Get your area" in the Set up card ("[region] · Stopped. Tap to carry on") and Cache says "Carrying on with [region]".
 - "Places not downloaded": the region was downloaded before places were part of regions. Update it.
 
 Other texts you may see on a part:
@@ -244,7 +245,7 @@ Other texts you may see on a part:
 
 The line at the top of "Settings" > "Weather and alerts" says how fresh the data is, for example "Updated 1 hour ago". When the data is old it turns into a warning, for example "Updated 3 days ago". Tap the small refresh button next to it to fetch again.
 
-The box at the top of "Weather" says the same, and has an "Update now" button.
+The box at the top of "Weather" says the same, and has an "Update now" button. What is already on the phone shows at once, with its age, while newer data is read.
 
 - "Nothing is switched on yet." on "Weather", or "Nothing switched on yet" in settings: turn on a source, or tap "Turn on weather".
 - "Not updated yet": tap the refresh button, or "Update now" in "Weather".
@@ -252,6 +253,7 @@ The box at the top of "Weather" says the same, and has an "Update now" button.
 - "Updates when you tap Update now, and when you ask the assistant": Cache could not schedule background updates. Tap "Update now" when you need fresh data.
 
 On the "Weather" screen:
+- "Waiting for your position." with "The forecast and alerts for where you are show here once the phone knows where it is.": nothing is wrong. Wait for the phone to find where it is.
 - "Not downloaded yet. Update now to get it.": tap "Update now".
 - "Expired · [age] · needs a connection for more": old data. Connect and update.
 - "Every day of this forecast has passed." or "No forecast.": update when you are online.
@@ -264,6 +266,7 @@ After you tap "Update now" in "Weather", or the refresh button in "Settings" > "
 - "Updated" or "Already up to date": all good.
 - "Already updating": an update is running. Wait for it.
 - "Switch on a source to update it.": nothing is on. Turn on a source.
+- "Waiting for your position.": "Where I am" is watched and the phone does not know where it is yet. Try again in a moment.
 - "No place is being watched.": open the Places notebook and turn on "Weather and alerts" for a place, or for "Where I am".
 - "No connection. Update when you are online."
 - "Updated, but [problem]": most sources updated; one did not.

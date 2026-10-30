@@ -67,12 +67,15 @@ Q = [
     ('how do I change the app to dark mode', G + '3. Settings, page by page: Appearance'),
     ("my phone is full and a download stopped", G + "6. When something doesn't work: Storage full"),
     ('obsidian vault', G + '5. Notebooks: Write notebooks to Obsidian or Logseq'),
+    ('region download stopped', G + '1. Getting started: Region download progress and off-road data', G + '1. Getting started: Download a region'),
+    ('off-road data already on this phone', G + '1. Getting started: Region download progress and off-road data'),
     ('how do I follow a route while driving', G + '2. Using Cache: Follow a route'),
 ]
-for q, exp in Q:
+for q, *exps in Q:
     out = json.loads(cs('search', '--config', a.config, '--query', q, '--k', '5', '--json', *emb))
     t = [x['title'] for x in out['results'] if x['source_id'] == a.library_id]
-    rank = t.index(exp) + 1 if exp in t else None
+    ranks = [t.index(e) + 1 for e in exps if e in t]
+    rank = min(ranks) if ranks else None
     good = rank is not None and rank <= 3
     fail += not good
     print('%-45s rank %s %s' % (q, rank, 'PASS' if good else 'FAIL'))
