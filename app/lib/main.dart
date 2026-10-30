@@ -38,6 +38,10 @@ import 'notebook/notebook_model.dart';
 import 'notebook/notebook_state.dart';
 import 'notebook/places.dart';
 import 'maps/ui/place_map.dart';
+import 'notebook/media.dart' show storePhoto;
+import 'notebook/sync/connections.dart';
+import 'screens/pin_screen.dart';
+import 'settings/app_pin.dart';
 import 'maps/user_layers.dart';
 import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
 import 'screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
@@ -183,6 +187,8 @@ class _CacheAppState extends State<CacheApp> {
       ShareKind('models', 'Models', () => app.modelsDir),
       ShareKind('videos', 'Videos', () => video.dir),
       ShareKind('shared', 'Shared folder', () => sources.zimsDir == null ? null : Directory('${sources.zimsDir!.parent.path}/Shared')),
+      // Notebooks with their photos, as Markdown files that notebook sync keeps in step with the notebooks (sync_engine.dart).
+      ShareKind('notebooks', 'Notebooks', () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir')),
     ],
   );
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
@@ -299,9 +305,22 @@ class _CacheAppState extends State<CacheApp> {
       return [for (final p in r.results) NbPlace(lat: p.lat, lon: p.lon, label: p.name)];
     },
   );
-  late final NotebookDeps notebookDeps =
-      NotebookDeps(notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers);
-
+  late final NotebookDeps notebookDeps = NotebookDeps(
+      notebook: notebooks, places: notebookPlaces, layout: layout, placesDeps: placeNotebookDeps, userLayers: userLayers, connections: connections, pin: appPin,
+      shareAvailable: () => sharing.enabled);
+  // Obsidian, Logseq and notebook sync: the folders the notebooks are kept in step with.
+  late final NotebookConnections connections = NotebookConnections(
+    notebook: notebooks,
+    dir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook-sync'),
+    shareFolder: () => _supportPath == null ? null : Directory('$_supportPath/$kNotebookShareDir'),
+    shareOn: () => sharing.running && sharing.shareOf('notebooks') != null,
+    storePhoto: (id, bytes) async {
+      await storePhoto(notebooks, bytes, id: id);
+    },
+  );
+  Timer? _shareSync;
+  // The optional app PIN: asked when Cache opens.
+  late final AppPin appPin = AppPin(const SecureTokenStore());
   // The user's repeater lists and the lines and areas of files imported into Places notebooks (cs_userlayer*).
   late final UserLayersState userLayers = UserLayersState((call, [arg]) async {
     final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));
@@ -354,7 +373,11 @@ class _CacheAppState extends State<CacheApp> {
     sources.embedding = searchModel;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
-    _lifecycle = AppLifecycleListener(onResume: () => unawaited(weather.updateIfDue(kBackgroundEvery)));
+    _lifecycle = AppLifecycleListener(onResume: () {
+      unawaited(weather.updateIfDue(kBackgroundEvery));
+      unawaited(connections.syncAll());
+    });
+    appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
       if (mounted) setState(() => _coreDone = true);
@@ -377,7 +400,16 @@ class _CacheAppState extends State<CacheApp> {
       await notebooks.start();
       notebookActions.start();
       unawaited(userLayers.reload());
-
+      // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
+      final before = notebooks.onChanged;
+      notebooks.onChanged = () {
+        before?.call();
+        connections.changed();
+      };
+      unawaited(connections.syncAll());
+      _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
+        if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
+      });
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
@@ -480,6 +512,8 @@ class _CacheAppState extends State<CacheApp> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _shareSync?.cancel();
+    connections.dispose();
     app.removeListener(_onApp);
     weather.removeListener(_onWeather);
     location.removeListener(_rememberPlace);
@@ -509,7 +543,7 @@ class _CacheAppState extends State<CacheApp> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: app,
+      listenable: Listenable.merge([app, appPin]),
       builder: (context, _) => MaterialApp(
         title: 'Cache',
         debugShowCheckedModeBanner: false,
@@ -531,7 +565,7 @@ class _CacheAppState extends State<CacheApp> {
             ),
           ],
         ),
-        home: Shell(
+        home: appPin.locked ? PinLockScreen(pin: appPin) : Shell(
           app: app,
           chat: chat,
           sources: sources,

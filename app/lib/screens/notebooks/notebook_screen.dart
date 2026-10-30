@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../layout/layout_state.dart';
 import '../../maps/user_layers.dart';
+import '../../notebook/sync/connections.dart';
+import '../../settings/app_pin.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
@@ -22,6 +24,10 @@ class NotebookDeps {
     this.layout,
     this.placesDeps,
     this.userLayers,
+    this.connections,
+    this.pin,
+    this.shareAvailable,
+    this.folders = false,
     this.now = DateTime.now,
   });
 
@@ -37,6 +43,18 @@ class NotebookDeps {
   /// The user's repeater lists and the lines and areas kept with Places notebooks (the same store as the places); null leaves
   /// them out.
   final UserLayersState? userLayers;
+
+  /// Obsidian, Logseq and notebook sync (the Notebooks menu's Connections); null leaves them out.
+  final NotebookConnections? connections;
+
+  /// The optional app PIN (the Notebooks menu's App PIN); null leaves it out.
+  final AppPin? pin;
+
+  /// Sharing and sync is set up (notebook sync can run).
+  final bool Function()? shareAvailable;
+
+  /// Obsidian and Logseq folders can be connected on this device (see [ConnectionsScreen.folders]).
+  final bool folders;
 
   final DateTime Function() now;
 }

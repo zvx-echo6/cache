@@ -5,6 +5,8 @@ import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../notebook/templates.dart';
 import '../../theme.dart';
+import '../pin_screen.dart';
+import 'connections_screen.dart';
 import 'notebook_editor.dart';
 import 'notebook_screen.dart';
 import 'notebook_search_screen.dart';
@@ -46,6 +48,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       }).catchError((_) {});
     }
     nb.start();
+    widget.deps.connections?.syncAll();
   }
 
   void _open(Notebook n) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: widget.deps, notebookId: n.id)));
@@ -86,6 +89,20 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
             icon: const Icon(Icons.search),
             onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookSearchScreen(deps: widget.deps))),
           ),
+          if (widget.deps.connections != null || widget.deps.pin != null)
+            PopupMenuButton<String>(
+              key: const ValueKey('notebooks-menu'),
+              onSelected: (c) {
+                final d = widget.deps;
+                Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => c == 'pin' ? AppPinScreen(pin: d.pin!) : ConnectionsScreen(connections: d.connections!, shareAvailable: d.shareAvailable?.call() ?? false, folders: d.folders),
+                ));
+              },
+              itemBuilder: (_) => [
+                if (widget.deps.connections != null) const PopupMenuItem(value: 'connections', child: Text('Connections')),
+                if (widget.deps.pin != null) const PopupMenuItem(value: 'pin', child: Text('App PIN')),
+              ],
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
