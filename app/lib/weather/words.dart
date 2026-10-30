@@ -32,3 +32,12 @@ String everyWords(int minutes) {
   if (minutes % 60 == 0) return minutes == 60 ? 'every hour' : 'every ${minutes ~/ 60} hours';
   return 'every ${(minutes / 60).toStringAsFixed(1)} hours';
 }
+
+/// [line] with its first letter in capitals, for a line of the screen that starts with a value as the source words it ("rain ·
+/// High 61 °F" reads "Rain · High 61 °F"). Only the screen: what the model reads keeps the source's words.
+String lineStart(String line) {
+  if (line.isEmpty) return line;
+  final first = line.runes.first;
+  final c = String.fromCharCode(first);
+  return c.toUpperCase() + line.substring(c.length);
+}

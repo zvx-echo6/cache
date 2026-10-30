@@ -10,6 +10,7 @@ import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import '../weather/weather_state.dart';
+import '../weather/words.dart' show lineStart;
 import 'setup_card.dart';
 import 'weather_turn_on.dart';
 
@@ -382,6 +383,13 @@ class ShortcutCard extends StatelessWidget {
   }
 }
 
+/// The conditions and the day's high and low as the Weather card's line starts: "Rain · High 61 °F, low 42 °F" (the source
+/// writes "rain"; the line starts with a capital).
+String homeConditionsLine(HomeWeather h) => lineStart([
+  if (h.conditions != null) h.conditions!,
+  if (h.high != null && h.low != null) 'High ${h.high}, low ${h.low}',
+].join(' · '));
+
 /// The one Weather and alerts card: a weather icon and the temperature in large type, the conditions and the day's high and low, and
 /// below them each warning (a red triangle) and fire (a flame) near the place, with one line of detail. With nothing active it
 /// says so beside a tick, never in words alone.
@@ -435,10 +443,7 @@ class _WeatherCard extends StatelessWidget {
         ],
       );
     } else {
-      final cond = [
-        if (h.conditions != null) h.conditions!,
-        if (h.high != null && h.low != null) 'High ${h.high}, low ${h.low}',
-      ].join(' · ');
+      final cond = homeConditionsLine(h);
       final where = [
         h.place,
         if (h.expired) 'forecast expired, needs a connection' else if (h.forecastMissing) 'no forecast yet' else ?h.age,
