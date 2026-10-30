@@ -231,7 +231,6 @@ class SettingsRig {
       webSearch: r.webSearch,
       storage: r.storage,
       weather: r.weather,
-      locationAccess: r.access,
       openUrl: (u) async => r.opened.add(u),
     );
     await tester.runAsync(() async {

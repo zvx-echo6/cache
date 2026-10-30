@@ -53,6 +53,7 @@ release notes).
 - Library: a library file compressed with gzip can be added (from a file or a link) like an uncompressed one, and the blank template is saved compressed
 - Regions: one sheet lists the regions where the map is, smallest first, each with its size and a download button or "On this phone"; Select (or press and hold) picks several for one download
 - Regions: on mobile data with Mobile data downloads off, Wait for Wi-Fi starts a region by itself once on Wi-Fi
+- Settings > Cache model and web search: the Use my location switch (the same as in Ask); when the phone blocks location it says so and opens the phone's settings
 
 ### Fixed
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat

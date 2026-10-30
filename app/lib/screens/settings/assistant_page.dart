@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../chat/answer_reports.dart';
+import '../../location/location_service.dart';
+import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
 import '../../video/format.dart';
 import '../answer_reports_ui.dart';
@@ -131,7 +133,7 @@ class AssistantPage extends StatelessWidget {
               ]);
         final count = deps.chat.store?.list().length ?? 0;
         return SettingsPage(
-          title: 'Assistant',
+          title: 'Cache model and web search',
           children: [
             SettingsGroup(
               label: 'Model',
@@ -169,6 +171,7 @@ class AssistantPage extends StatelessWidget {
                 ),
               ],
             ),
+            SettingsGroup(label: 'Location', rows: [UseMyLocationRow(location: deps.location)]),
             SettingsGroup(
               label: 'Conversations',
               rows: [
@@ -202,4 +205,36 @@ class AssistantPage extends StatelessWidget {
       },
     );
   }
+}
+
+/// "Use my location": Cache's own switch, the same one as the + menu in Ask. Cache uses the location whenever the phone allows it and
+/// never asks; when the phone blocks it, the row says so and opens the phone's settings.
+class UseMyLocationRow extends StatelessWidget {
+  const UseMyLocationRow({super.key, required this.location});
+
+  final LocationService location;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: location,
+    builder: (context, _) {
+      final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
+      final serviceOff = location.problem == LocationProblem.serviceOff;
+      if (blocked || serviceOff) {
+        return SettingsRow(
+          key: const ValueKey('use-my-location-row'),
+          title: 'Use my location',
+          status: [Part(blocked ? "Blocked in the phone's settings" : "The phone's location is switched off", Tone.warn)],
+          trailing: RowButton(label: 'Phone settings', onPressed: blocked ? location.openAppSettings : location.openLocationSettings),
+        );
+      }
+      return SwitchRow(
+        key: const ValueKey('use-my-location-row'),
+        title: 'Use my location',
+        status: const [Part('Cache finds things near you')],
+        value: location.enabled,
+        onChanged: location.setEnabled,
+      );
+    },
+  );
 }

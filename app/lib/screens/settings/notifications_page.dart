@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../../settings/app_settings.dart';
-import '../../settings/location_access.dart';
 import '../../theme.dart';
 import 'deps.dart';
 import 'widgets.dart';
 
-/// Settings > Notifications: the one "Pop up for" choice (Serious only, All alerts, None), quiet hours, and the location permission
-/// that keeps alerts working in the background. Every alert is listed in Weather either way.
+/// Settings > Notifications: the one "Pop up for" choice (Serious only, All alerts, None) and quiet hours. Every alert is listed in
+/// Weather either way.
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key, required this.deps});
 
@@ -17,54 +16,8 @@ class NotificationsPage extends StatefulWidget {
   State<NotificationsPage> createState() => _NotificationsPageState();
 }
 
-class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindingObserver {
-  LocationAccess? _access;
-
+class _NotificationsPageState extends State<NotificationsPage> {
   SettingsDeps get d => widget.deps;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _read();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  /// Back from the phone's settings: the permission may have changed.
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _read();
-  }
-
-  Future<void> _read() async {
-    final a = await d.hub.locationAccess.read();
-    if (mounted) setState(() => _access = a);
-  }
-
-  Future<void> _locationTapped() async {
-    switch (_access) {
-      case LocationAccess.denied:
-        if (!d.location.enabled) await d.location.setEnabled(true);
-        await d.location.request(explain: () async => true);
-        await _read();
-        if (mounted && _access == LocationAccess.denied) say(context, 'Location was not allowed. You can allow it in the phone\'s settings.');
-      case LocationAccess.always || LocationAccess.whileUsing || LocationAccess.blocked || null:
-        await d.location.openAppSettings();
-    }
-  }
-
-  List<Part> _locationStatus() => switch (_access) {
-    null => const [Part('Checking…')],
-    LocationAccess.always => const [Part('Always', Tone.ok), Part(' · alerts keep working in the background')],
-    LocationAccess.whileUsing => const [Part('While using the app', Tone.warn), Part(' · alerts pause when Cache is closed')],
-    LocationAccess.denied => const [Part('Off', Tone.warn), Part(' · tap to allow')],
-    LocationAccess.blocked => const [Part('Blocked', Tone.danger), Part(" · tap to open the phone's settings")],
-  };
 
   /// None asks once: Cache will then not interrupt even for an evacuation.
   Future<void> _choose(PopUpFor v) async {
@@ -109,12 +62,6 @@ class _NotificationsPageState extends State<NotificationsPage> with WidgetsBindi
             ],
           ),
           const NoteText('Every alert is listed in Weather either way.'),
-          SettingsGroup(
-            label: 'Location',
-            rows: [
-              SettingsRow(title: 'Location access', status: _locationStatus(), onTap: _locationTapped),
-            ],
-          ),
         ],
       ),
     );
