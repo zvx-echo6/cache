@@ -114,6 +114,11 @@ class _MapsScreenState extends State<MapsScreen> {
       _lon = c.lon;
       _zoom = c.zoom;
     }
+    // A draw asked for before this screen was first built (the Regions sheet opened from Home) starts it now.
+    if (maps.drawRequest) {
+      maps.clearDrawRequest();
+      _drawing = widget.regions != null;
+    }
     _prepare();
   }
 

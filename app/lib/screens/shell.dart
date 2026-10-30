@@ -105,6 +105,7 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
+    widget.maps.addListener(_onMaps);
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
@@ -115,8 +116,15 @@ class _ShellState extends State<Shell> {
     _goModule(ModuleId.weather);
   }
 
+  /// "Draw your own area instead" in the Regions sheet asks the map for a drawn area; from Home (Set up Cache's "Get your area")
+  /// the map is not on screen, so the request went nowhere: the Maps tab is opened for it.
+  void _onMaps() {
+    if (widget.maps.drawRequest && _module != ModuleId.maps && mounted) _goModule(ModuleId.maps);
+  }
+
   @override
   void dispose() {
+    widget.maps.removeListener(_onMaps);
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
