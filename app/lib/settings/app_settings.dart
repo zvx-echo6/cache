@@ -47,7 +47,7 @@ class QuietHours {
 
 /// Which alerts pop up: the one choice in Settings > Notifications. Every alert is listed in Weather either way.
 enum PopUpFor {
-  /// Evacuations, extreme and severe warnings (the default).
+  /// Evacuations, extreme and severe warnings, and fires near a place (the default).
   serious,
 
   /// Watches and advisories too.

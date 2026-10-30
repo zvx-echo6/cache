@@ -105,7 +105,7 @@ class _ChoiceRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final (String title, String detail, Widget glyph) = switch (choice) {
-      PopUpFor.serious => ('Serious only', 'Evacuations, extreme and severe warnings', AlertGlyph(null, text: '!!', color: k.emergency)),
+      PopUpFor.serious => ('Serious only', 'Evacuations, severe warnings, fires within 10 mi', AlertGlyph(null, text: '!!', color: k.emergency)),
       PopUpFor.all => ('All alerts', 'Adds watches and advisories', AlertGlyph(null, text: '!', color: k.warning)),
       PopUpFor.none => ('None', 'Nothing pops up', const AlertGlyph(Icons.remove)),
     };

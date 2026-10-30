@@ -9,6 +9,7 @@ import 'package:cache/video/token_store.dart';
 import 'package:cache/weather/alert_notifier.dart';
 import 'package:cache/weather/alert_watch.dart';
 import 'package:cache/weather/curated.dart';
+import 'package:cache/weather/live_view.dart' show LiveItem;
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache_search/cache_search.dart';
@@ -844,13 +845,20 @@ void main() {
       return hh;
     }
 
-    test('Serious only (the default): a severe or extreme warning pops up; a fire or an advisory does not, and stays listed', () async {
+    test('Serious only (the default): a severe warning and a fire within 10 mi pop up; a farther fire or an advisory does not, and stays listed', () async {
       final n = FakeNotifier();
       h = await Harness.create(notifier: n);
       expect(h.settings.popUpFor, PopUpFor.serious);
       await h.weather.setRowOn(row('Wildfires'), true);
       await h.weather.setRowOn(row('Weather alerts'), true);
-      h.core.stored['wfigs-incidents-near'] = fires(['East Fork fire']);
+      h.core.stored['wfigs-incidents-near'] = {
+        'age': '1 minute old',
+        'expired': false,
+        'items': [
+          {'address': 'live:wfigs-incidents-near/x/near', 'label': 'Rock Creek fire', 'fields': {'Distance': '8 mi SE'}},
+          {'address': 'live:wfigs-incidents-near/x/far', 'label': 'East Fork fire', 'fields': {'Distance': '38 mi S'}},
+        ],
+      };
       h.core.stored['nws-alerts-point'] = {
         'age': '1 minute old',
         'expired': false,
@@ -860,8 +868,9 @@ void main() {
         ],
       };
       await h.weather.updateNow();
-      expect(n.shown.map((a) => a.item.label), ['Red Flag Warning']);
-      expect(n.shown.single.serious, isTrue);
+      expect(n.shown.map((a) => a.item.label).toSet(), {'Red Flag Warning', 'Rock Creek fire'});
+      expect(n.shown.every((a) => a.serious), isTrue);
+      expect(await homeAlerts(h.weather), contains('2 fires'), reason: 'the farther fire is listed'); 
       expect(await homeAlerts(h.weather), contains('Wind Advisory'), reason: 'every alert is listed in Weather either way');
     });
 
@@ -927,6 +936,19 @@ void main() {
       h.settings.setPopUpFor(PopUpFor.all);
       await h.weather.updateNow();
       expect(n.shown, isEmpty);
+    });
+
+    test('serious: severe or extreme, an evacuation order always, a fire within the place\'s reach (10 mi by default)', () {
+      LiveItem item(String label, Map<String, String> f) => LiveItem(address: 'x', label: label, fields: f);
+      expect(isSerious(item('Flood Watch', {}), fire: false, severity: 'moderate'), isFalse);
+      expect(isSerious(item('Red Flag Warning', {}), fire: false, severity: 'severe'), isTrue);
+      expect(isSerious(item('Evacuation Immediate', {}), fire: false, severity: 'minor'), isTrue);
+      expect(isSerious(item('Civil message', {'Event': 'Evacuation order'}), fire: false), isTrue);
+      expect(isSerious(item('Rock Creek fire', {'Distance': '8 mi SE'}), fire: true), isTrue);
+      expect(isSerious(item('Rock Creek fire', {'Distance': '12 km SE'}), fire: true), isTrue, reason: '7.5 mi');
+      expect(isSerious(item('East Fork fire', {'Distance': '38 mi S'}), fire: true), isFalse);
+      expect(isSerious(item('East Fork fire', {'Distance': '38 mi S'}), fire: true, fireReachMiles: 50), isTrue, reason: 'a place set farther out');
+      expect(isSerious(item('Unknown fire', {}), fire: true), isFalse, reason: 'no distance: listed, not popped up');
     });
 
     test('a tapped pop-up names its place and item', () {
