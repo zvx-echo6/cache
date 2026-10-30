@@ -12,7 +12,7 @@ bin=$app/Runner
 plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Info.plist"; }
 [[ $(plist MinimumOSVersion) == 16.3 ]] || fail 'minimum iOS version must be 16.3'
 [[ $(plist CFBundleIdentifier) == "$BUNDLE_ID" ]] || fail 'bundle identifier mismatch'
-: "${EXPECTED_VERSION:?EXPECTED_VERSION is required (pubspec.yaml's version, e.g. 1.0.27)}"
+: "${EXPECTED_VERSION:?EXPECTED_VERSION is required: the version in pubspec.yaml, e.g. 1.0.27}"
 [[ $(plist CFBundleShortVersionString) == "$EXPECTED_VERSION" ]] || fail 'app version mismatch'
 if [[ -n ${EXPECTED_BUILD_NUMBER:-} ]]; then
   [[ $(plist CFBundleVersion) == "$EXPECTED_BUILD_NUMBER" ]] || fail 'build number mismatch'
