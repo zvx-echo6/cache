@@ -1,0 +1,1 @@
+{"id":"app.setup_status","module":"app","title":"Check setup","description":"What is set up on this phone: connection, sources, which keys are set (never the keys), regions, libraries, models.","effect":"read","fields":{"area":{"type":"string","enum":["connection","regions","libraries","live_data","web_search","places","models","location"]}},"required":[]}

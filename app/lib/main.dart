@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'actions/act_core.dart';
 import 'actions/action_registry.dart';
 import 'actions/app_actions.dart';
+import 'actions/setup_reader.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
@@ -229,6 +230,17 @@ class _CacheAppState extends State<CacheApp> {
   final ActCore actCore = const ActCoreStandIn();
   late final AppActions appActions = AppActions(
     registry: actionRegistry,
+    setup: setupDepsFrom(
+      settings: settings,
+      policy: policy,
+      regions: regions,
+      sources: sources,
+      libraries: libraries,
+      weather: weather,
+      webSearch: webSearch,
+      app: app,
+      location: location,
+    ),
     places: PlacesDeps(
       save: ({required name, required lat, required lon, label}) async {
         final core = await sources.whenCoreReady() ?? (throw StateError('The search core is not available'));

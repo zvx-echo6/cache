@@ -1,5 +1,6 @@
 import 'package:cache/actions/action_registry.dart';
 import 'package:cache/actions/app_actions.dart';
+import 'package:cache/actions/setup_status.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache_search/cache_search.dart';
@@ -19,6 +20,16 @@ class Fakes {
 
   AppActions actions(ActionRegistry reg) => AppActions(
         registry: reg,
+        setup: SetupDeps(
+          connection: () async => [const SetupItem('Network', 'Wi-Fi')],
+          regions: () async => const [],
+          libraries: () async => const [],
+          liveData: () async => const [],
+          webSearch: () async => [const SetupItem('Kagi key', 'not set')],
+          places: () async => const [],
+          models: () async => const [],
+          location: () async => const [],
+        ),
         places: PlacesDeps(
           save: ({required name, required lat, required lon, label}) async {
             final p = SavedPlaceRecord(key: 'k${saved.length + 1}', name: name, lat: lat, lon: lon, label: label);
@@ -66,12 +77,21 @@ void main() {
   test('every app action is installed, in module order', () {
     expect(reg.rejected, isEmpty);
     expect([for (final d in reg.definitions) d['id']],
-        ['places.save', 'places.list', 'weather.watch_add', 'weather.watch_remove', 'home.source_switch', 'navigation.start']);
+        ['app.setup_status', 'places.save', 'places.list', 'weather.watch_add', 'weather.watch_remove', 'home.source_switch', 'navigation.start']);
     expect(reg.definition('places.save')!.json['effect'], 'change');
     expect(reg.definition('places.list')!.json['effect'], 'read');
     expect(reg.definition('navigation.start')!.json['effect'], 'open');
     expect((reg.definition('weather.watch_add')!.json['fields'] as Map)['place']['enum'], ['Where I am', 'Home']);
     expect((reg.definition('home.source_switch')!.json['fields'] as Map)['source']['enum'], [for (final r in kCurated) sourceValue(r)]);
+  });
+
+  test('app.setup_status is listed first and answers with the setup', () async {
+    expect(reg.definitions.first, kSetupStatusDefinition);
+    final r = await reg.run('app.setup_status', {'area': 'web_search'});
+    expect(r['status'], 'done');
+    expect((r['result'] as Map)['sections'], [
+      {'address': 'app:setup/web_search', 'title': 'Web search', 'items': [{'label': 'Kagi key', 'value': 'not set'}], 'guide': 'Cache guide: 3. Settings, page by page: Web search with Kagi'},
+    ]);
   });
 
   test('places.save saves the resolved place and the watch list learns it', () async {

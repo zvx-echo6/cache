@@ -3,6 +3,7 @@ import 'package:cache_search/cache_search.dart';
 import '../weather/curated.dart';
 import '../weather/places.dart';
 import 'action_registry.dart';
+import 'setup_status.dart';
 
 /// The app state the actions use, as small calls so the handlers stay thin and can be tested without the core.
 class PlacesDeps {
@@ -53,23 +54,31 @@ String sourceValue(CuratedRow r) => r.title.toLowerCase().replaceAll(' ', '_');
 
 double _num(Map place, String key) => (place[key] as num).toDouble();
 
-/// Publishes the app's own actions into [registry]: saved places, the places watched for weather, the Weather and alerts switches and
-/// starting guidance. The watch list's places are an enum, so [publishWatch] runs again when the places change.
+/// Publishes the app's own actions into [registry]: the phone's setup (always, listed first), saved places, the places watched for
+/// weather, the Weather and alerts switches and starting guidance. The watch list's places are an enum, so [publishWatch] runs again
+/// when the places change.
 class AppActions {
-  AppActions({required this.registry, required this.places, required this.watch, required this.sources, required this.navigation});
+  AppActions({required this.registry, required this.setup, required this.places, required this.watch, required this.sources, required this.navigation});
 
   final ActionRegistry registry;
+  final SetupDeps setup;
   final PlacesDeps places;
   final WatchDeps watch;
   final SourceDeps sources;
   final NavigationDeps navigation;
 
   Future<void> publishAll() async {
+    publishSetup();
     publishPlaces();
     await publishWatch();
     publishSources();
     publishNavigation();
   }
+
+  /// `app.setup_status`, the first module so it is listed first.
+  void publishSetup() => registry.publish('app', [kSetupStatusDefinition], {
+        'app.setup_status': (f) => runSetupStatus(setup, f),
+      });
 
   void publishPlaces() => registry.publish('places', [
         {
