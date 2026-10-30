@@ -11,7 +11,7 @@ import 'core_numbering.dart';
 /// through the core's dispatch (cs_tool). It numbers sources in the chat's [CoreNumbering] conversation, which
 /// is the one saved and restored with the chat; that numbering is freed by the loop, not here.
 class CoreToolHost implements ToolHost {
-  CoreToolHost({required this.core, required this.numbering, this.lookupRoute, this.queryVector});
+  CoreToolHost({required this.core, required this.numbering, this.lookupRoute, this.queryVector, this.runAction});
 
   final SearchCore core;
   final CoreNumbering numbering;
@@ -20,6 +20,27 @@ class CoreToolHost implements ToolHost {
   /// The query vector of a `search` call, made with the app's search model (null: the search runs on keywords). It goes
   /// to the core with the call as `query_vector`, which is not one of the arguments the model gives.
   final Future<QueryVector?> Function(String query)? queryVector;
+
+  /// Runs a read or open action the core handed back from an `act` call (host_run) and returns the contract's tool result
+  /// (ActionRegistry.run: `{"ok":true,"status":"done",...,"result"}` or `{"ok":false,"status":"failed",...,"error"}`). Null: the
+  /// action fails as not installed.
+  final Future<Map<String, dynamic>> Function(String action, Map<String, dynamic> fields)? runAction;
+
+  /// The host_run of an act call's [content], or null when the core answered it itself (a confirm card or an error).
+  static Map<String, dynamic>? hostRun(String content) {
+    try {
+      final j = jsonDecode(content);
+      if (j is Map && j['ok'] == true && j['status'] == 'host_run' && j['run_id'] is String && j['action'] is String) {
+        return j.cast<String, dynamic>();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// The reply cs_act_finish takes, from the action's tool result.
+  static Map<String, dynamic> finishReply(Map<String, dynamic> run) => run['ok'] == true
+      ? {'ok': true, 'result': run['result'] ?? const <String, dynamic>{}}
+      : {'ok': false, 'error': run['error'] ?? const {'type': 'failed'}};
 
   /// The successful structured tool result is authoritative even when numbering
   /// reuses an existing n and returns no new ids. Never inspect model prose.
@@ -58,12 +79,25 @@ class CoreToolHost implements ToolHost {
       final v = await queryVector!(query);
       if (v != null) sent = {...args, 'query_vector': v.toJson()};
     }
-    final o = await (await numbering.conversation).tool(name, sent, now: isoWithOffset(now));
-    final ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title)];
+    final conv = await numbering.conversation;
+    final o = await conv.tool(name, sent, now: isoWithOffset(now));
+    var content = o.content;
+    var ids = [for (final i in o.ids) NumberedAddress(n: i.n, address: i.address, title: i.title)];
+    final run = name == 'act' ? hostRun(content) : null;
+    if (run != null) {
+      // A read or open action: the app runs it and the core's answer to the reply is what the model sees, numbered in this chat.
+      final before = {for (final i in await conv.ids()) i.n};
+      final fields = run['fields'] is Map ? (run['fields'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+      final result = runAction == null
+          ? {'ok': false, 'error': {'type': 'unknown_action', 'detail': 'This action is not installed.'}}
+          : await runAction!(run['action'] as String, fields);
+      content = await conv.actFinish(run['run_id'] as String, finishReply(result));
+      ids = [for (final i in await conv.ids()) if (!before.contains(i.n)) NumberedAddress(n: i.n, address: i.address, title: i.title)];
+    }
     return HostToolResult(
-      content: o.content,
+      content: content,
       ids: ids,
-      navigationActions: await actionsFor(name, o.content, ids, lookupRoute ?? core.mapRouteById),
+      navigationActions: await actionsFor(name, content, ids, lookupRoute ?? core.mapRouteById),
     );
   }
 

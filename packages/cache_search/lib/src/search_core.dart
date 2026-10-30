@@ -200,6 +200,15 @@ class SearchCore {
   Future<void> setWeb({String? provider, String? key, required bool online}) =>
       _call('setWeb', {'provider': provider, 'key': key, 'online': online});
 
+  /// Installs the act tool's action definitions (cs_act_set_definitions), replacing the earlier set; the install report.
+  Future<Map<String, dynamic>> actSetDefinitions(List<Map<String, dynamic>> definitions) => _map('actSetDefinitions', {'defs': definitions});
+
+  /// The modules switched off (cs_act_set_modules_off).
+  Future<void> actSetModulesOff(List<String> modules) => _call('actSetModulesOff', {'modules': modules});
+
+  /// The checks and place resolution of an act call, kept with a confirm card (cs_act_resolve).
+  Future<Map<String, dynamic>> actResolve(String action, Map<String, dynamic> fields) => _map('actResolve', {'action': action, 'fields': fields});
+
   /// The function schemas of the tools available now (cs_tool_schemas).
   Future<List<Map<String, dynamic>>> toolSchemas() async =>
       [for (final t in await _call('toolSchemas') as List) (t as Map).cast<String, dynamic>()];
@@ -275,6 +284,13 @@ class CoreConversation {
   /// as its error JSON in [ToolOutput.content], not as an exception. [now] is the local time, ISO 8601 with an offset.
   Future<ToolOutput> tool(String name, Map<String, dynamic> args, {required String now}) async => ToolOutput.fromJson(
       ((await _core._call('convTool', {'conv': _id, 'name': name, 'args': args, 'now': now})) as Map).cast<String, dynamic>());
+
+  /// The host's reply to an act call's host_run (cs_act_finish): the exact tool message for the model.
+  Future<String> actFinish(String runId, Map<String, dynamic> reply) async =>
+      (await _core._call('convActFinish', {'conv': _id, 'run_id': runId, 'reply': reply})) as String;
+
+  /// A confirm card's outcome (cs_act_outcome): the exact content of the system message for the model.
+  Future<String> actOutcome(Map<String, dynamic> outcome) async => (await _core._call('convActOutcome', {'conv': _id, 'outcome': outcome})) as String;
 
   /// The conversation's whole state as JSON (cs_conversation_export).
   Future<String> export() async => (await _core._call('convExport', {'conv': _id})) as String;
@@ -466,6 +482,16 @@ void _workerMain(List<dynamic> init) {
           eng().setWeb(provider: a['provider'] as String?, key: a['key'] as String?, online: a['online'] as bool);
         case 'toolSchemas':
           result = eng().toolSchemas();
+        case 'actSetDefinitions':
+          result = eng().actSetDefinitions([for (final d in a['defs'] as List) (d as Map).cast<String, dynamic>()]);
+        case 'actSetModulesOff':
+          eng().actSetModulesOff((a['modules'] as List).cast<String>());
+        case 'actResolve':
+          result = eng().actResolve(a['action'] as String, (a['fields'] as Map).cast<String, dynamic>());
+        case 'convActFinish':
+          result = eng().actFinish(convs[a['conv']]!, a['run_id'] as String, (a['reply'] as Map).cast<String, dynamic>());
+        case 'convActOutcome':
+          result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
         case 'placesList':
           result = eng().placesList();
         case 'placeSave':

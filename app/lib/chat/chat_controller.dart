@@ -71,7 +71,8 @@ class ChatController extends ChangeNotifier {
   /// The actions a confirm card runs; null: a tapped card fails.
   final ActionRegistry? actions;
 
-  /// Resolves a change call's fields again for the tap.
+  /// The core's act tool: installs the conversation's definitions, resolves a change call's fields for its card and writes the
+  /// outcome's message.
   final ActCore actCore;
 
   /// How a card's outcome goes into the conversation.
@@ -111,6 +112,8 @@ class ChatController extends ChangeNotifier {
   bool _preparing = false;
   bool busy = false;
   bool _voice = false;
+  List<Map<String, dynamic>> _definitions = const [];
+  int _definitionsEpoch = -1;
   Future<void>? _titleJob;
   bool _titleCancelled = false;
 
@@ -329,6 +332,7 @@ class ChatController extends ChangeNotifier {
         _loop = made;
       }
       loop = made;
+      await _installActions();
       if (store != null && convId != null) {
         try {
           store.addMessage(convId, role: 'user', content: text, message: {'role': 'user', 'content': text}, model: _modelName);
@@ -391,6 +395,30 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// The act definitions are made when a conversation starts and not changed during it (a module that republishes, such as the
+  /// Places list growing, shows up in the next conversation). The core is given them before every turn's first request, which only
+  /// reaches it when they differ from what it holds (the next conversation's, or a core opened again).
+  Future<void> _installActions() async {
+    if (_definitionsEpoch != _epoch) {
+      _definitionsEpoch = _epoch;
+      _definitions = List.unmodifiable(actions?.definitions ?? const <Map<String, dynamic>>[]);
+    }
+    try {
+      await actCore.install(_definitions);
+    } catch (e) {
+      debugPrint('cache act: definitions not installed ($e)');
+    }
+  }
+
+  Future<String> _outcomeContent(ResultNumbering? numbering, Map<String, dynamic> outcome) async {
+    try {
+      return await actCore.outcome(numbering, outcome);
+    } catch (e) {
+      debugPrint('cache act: outcome not numbered ($e)');
+      return hostEventContent(outcome);
+    }
+  }
+
   /// Shows [cards] with [reply] and asks the core for each one's machine values (cs_act_resolve) now, kept with the card.
   void _showCards(ChatMessage reply, List<ConfirmCard> cards) {
     for (final c in cards) {
@@ -441,7 +469,19 @@ class ChatController extends ChangeNotifier {
       }
     }
     card.apply(outcome);
-    final message = card.outcomeMessage(outcome, form: outcomeForm);
+    // The outcome is numbered in the chat's conversation (cs_act_outcome), so a reopened chat makes its loop now.
+    var live = epoch == _epoch ? _loop : null;
+    if (live == null && epoch == _epoch) {
+      final made = await _loopFor(convId, backend);
+      if (epoch == _epoch && _loop == null) {
+        live = _loop = made;
+      } else {
+        await made.dispose();
+      }
+    }
+    final message = outcomeForm == ActOutcomeForm.hostEvent
+        ? {'role': 'system', 'content': await _outcomeContent(live?.numbering, outcome)}
+        : card.outcomeMessage(outcome, form: outcomeForm);
     final store = _store;
     if (store != null && convId != null) {
       try {
@@ -449,7 +489,10 @@ class ChatController extends ChangeNotifier {
       } catch (_) {}
     }
     // The open chat's loop gets it now; a loop made later reads it from the stored transcript.
-    if (epoch == _epoch) _loop?.addMessage(message);
+    if (live != null && identical(live, _loop)) {
+      live.addMessage(message);
+      await live.syncNumbering();
+    }
     if (cancelled()) {
       // The chat was closed meanwhile: the outcome is kept, the follow-up is not written.
       if (epoch == _epoch) busy = false;
@@ -477,6 +520,7 @@ class ChatController extends ChangeNotifier {
       }
       loop = made;
       start = loop.messages.length;
+      await _installActions();
       loop.onConfirmations = (cards) {
         _showCards(reply, cards);
         if (epoch == _epoch) notifyListeners();

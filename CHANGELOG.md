@@ -28,6 +28,7 @@ release notes).
 - Assistant: reading a library entry shows its author and page when known
 - Import repeater lists (a RepeaterBook KML, a CHIRP CSV, or both from the same export, merged) and export them as KML for Google Earth
 - Import your own map layers from KML, KMZ, GPX or GeoJSON, and export them as KML or GPX
+- Assistant: its actions (saved places, watched places, data sources, starting navigation, checking setup) now run through the search core; anything that changes something still waits for your tap on the card
 - Assistant: can check what is set up on the phone (connection, regions, libraries, live data, web search key set or not, models, location) and points to the guide section for each, to answer setup questions; keys are never shown to it
 - Weather: "Ask about this" on an alert opens the chat with that alert's live data already looked up, so the answer starts from it
 - Assistant: a conversation can be in voice mode, where answers are kept to a few plain spoken sentences (the voice controls come later)

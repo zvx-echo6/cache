@@ -217,17 +217,17 @@ class _CacheAppState extends State<CacheApp> {
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
     newHost: (numbering) => sources.core == null || numbering is! CoreNumbering
         ? null
-        : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector),
+        : CoreToolHost(core: sources.core!, numbering: numbering, queryVector: sources.toolQueryVector, runAction: actionRegistry.run),
     numberingState: CoreNumberingState(() => sources.core),
     locationKnown: () => chatLocation.known,
     prepareTurn: chatLocation.prepare,
     actions: actionRegistry,
     actCore: actCore,
   );
-  // What the assistant can do through the act tool: each module's actions, run by the core for read and open and by a tap on a
-  // confirm card for change. The core's act hook is not in the FFI yet, so nothing is offered to the model until it is.
+  // What the assistant can do through the act tool: each module's actions, handed back by the core for read and open (host_run) and
+  // run by a tap on a confirm card for change. The chat installs a conversation's definitions in the core when it starts.
   final ActionRegistry actionRegistry = ActionRegistry();
-  final ActCore actCore = const ActCoreStandIn();
+  late final ActCore actCore = CoreActCore(() => sources.core);
   late final AppActions appActions = AppActions(
     registry: actionRegistry,
     setup: setupDepsFrom(
@@ -306,7 +306,6 @@ class _CacheAppState extends State<CacheApp> {
       weather.addListener(_onWeather);
       _onWeather();
       unawaited(weather.updateIfDue(kBackgroundEvery));
-      actionRegistry.addListener(_installActions);
       await appActions.publishAll();
     });
     // A place saved on the map joins the Places list the watch actions name.
@@ -358,10 +357,6 @@ class _CacheAppState extends State<CacheApp> {
   /// A map search waiting for its area's places keeps the regions' status read, so it runs again when they land.
   void _onNav() {
     if (nav.placesState == PlacesState.fetching) regions.watchPlaces();
-  }
-
-  void _installActions() {
-    actCore.install(actionRegistry.definitions, actionRegistry.run).catchError((_) {});
   }
 
   /// Keeps the phone's last position and the downloaded regions where a background run can read them.

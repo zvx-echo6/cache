@@ -169,6 +169,35 @@ class SearchEngine {
     return _object(_ok(n.placesRefresh(_h, jsonEncode({'packs': ?packs}))));
   }
 
+  // ---- the act tool (docs/ACTIONS.md) ----
+
+  CsActNative get _act {
+    final n = native is CsActNative ? native as CsActNative : null;
+    if (n != null && n.hasAct) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core has no act tool yet');
+  }
+
+  /// cs_act_set_definitions: installs [definitions] (module order, then each module's own), replacing the earlier set.
+  /// `{"accepted":N,"rejected":[...],"not_listed":[...]}`.
+  Map<String, dynamic> actSetDefinitions(List<Map<String, dynamic>> definitions) => _object(_ok(_act.actSetDefinitions(_h, jsonEncode(definitions))));
+
+  /// cs_act_set_modules_off: the modules switched off (their actions are left out and answer not_set_up).
+  void actSetModulesOff(List<String> modules) {
+    if (_act.actSetModulesOff(_h, jsonEncode(modules)) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// cs_act_resolve: `{"ok":true,"action","fields"}` with places as `{"lat","lon","name"?,"label"?}`, or the act call's error JSON.
+  Map<String, dynamic> actResolve(String action, Map<String, dynamic> fields) => _object(_ok(_act.actResolve(_h, action, jsonEncode(fields))));
+
+  /// cs_act_finish: the host's [reply] (`{"ok":true,"result"}` or `{"ok":false,"error"}`) to the host_run [runId] in [conv]; the
+  /// exact tool message for the model.
+  String actFinish(ConversationNumbers conv, String runId, Map<String, dynamic> reply) =>
+      _act.actFinish(conv.handle, runId, jsonEncode(reply)) ?? (throw CacheSearchException.fromJson(native.lastError(0)));
+
+  /// cs_act_outcome: what a tap on a confirm card came to; the exact content of the system message for the model.
+  String actOutcome(ConversationNumbers conv, Map<String, dynamic> outcome) =>
+      _act.actOutcome(conv.handle, jsonEncode(outcome)) ?? (throw CacheSearchException.fromJson(native.lastError(0)));
+
   List<SavedPlaceRecord> savedPlaces() => [
         for (final p in (_object(_ok(_saved.placesList(_h)))['places'] as List? ?? const []))
           SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),

@@ -1,0 +1,80 @@
+{
+ "logs": [
+  {
+   "name": "Chicken eggs",
+   "fields": [
+    {
+     "label": "Eggs",
+     "type": "number"
+    },
+    {
+     "label": "Flock",
+     "type": "text"
+    }
+   ],
+   "private": false,
+   "last_entry": {
+    "date": "2026-01-01",
+    "time": "17:22",
+    "values": {
+     "Eggs": 7,
+     "Flock": "pullets"
+    }
+   }
+  },
+  {
+   "name": "Hay bales",
+   "fields": [
+    {
+     "label": "Bales",
+     "type": "number"
+    },
+    {
+     "label": "Cutting",
+     "type": "choice",
+     "choices": [
+      "First",
+      "Second",
+      "Third"
+     ]
+    },
+    {
+     "label": "Field",
+     "type": "text"
+    }
+   ],
+   "private": false,
+   "last_entry": {
+    "date": "2026-01-01",
+    "time": "13:33",
+    "values": {
+     "Bales": 140,
+     "Cutting": "Second",
+     "Field": "river pasture"
+    }
+   }
+  },
+  {
+   "name": "Pellet bags",
+   "fields": [
+    {
+     "label": "Bags",
+     "type": "number"
+    },
+    {
+     "label": "Brand",
+     "type": "text"
+    }
+   ],
+   "private": false,
+   "last_entry": {
+    "date": "2025-12-01",
+    "time": "08:13",
+    "values": {
+     "Bags": 20,
+     "Brand": "Hot Ash"
+    }
+   }
+  }
+ ]
+}

@@ -127,6 +127,28 @@ abstract class CsPlacesNative {
   String? placesRefresh(int handle, String argsJson);
 }
 
+/// The act tool's calls (cs_act_set_definitions, cs_act_set_modules_off, cs_act_resolve, cs_act_finish, cs_act_outcome; docs/ACTIONS.md
+/// is the contract). Kept apart from [CsNative] so the fakes of the older seam do not change. [FfiCsNative] implements it; [hasAct] is
+/// false when the loaded core is older than these calls (the symbols are looked up when first used, never at load).
+abstract class CsActNative {
+  bool get hasAct;
+
+  /// Installs the action definitions (a JSON array), replacing the earlier set; the install report, or null on error.
+  String? actSetDefinitions(int handle, String defsJson);
+
+  /// The modules switched off (a JSON array of ids; null = none). 0 on success, -1 on error.
+  int actSetModulesOff(int handle, String? modulesJson);
+
+  /// The checks and place resolution of an act call, for a confirm card; [fieldsJson] null = {}. Null on error.
+  String? actResolve(int handle, String action, String? fieldsJson);
+
+  /// The host's reply to a host_run; the tool result for the model, or null on error (ask [CsNative.lastError] with handle 0).
+  String? actFinish(int conv, String runId, String replyJson);
+
+  /// What a tap on a confirm card came to; the system message's content, or null on error (handle 0).
+  String? actOutcome(int conv, String outcomeJson);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -167,7 +189,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative {
+class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -561,6 +583,52 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
         if (f == null) return null;
         return _take(f(requestJson.toNativeUtf8(allocator: a)));
       });
+
+  // ---- the act tool: looked up on first use, because an older core must still load ----
+
+  late final _HStrStr? _actSetDefinitions = _lookupHS('cs_act_set_definitions');
+  late final int Function(Pointer<Void>, Pointer<Utf8>)? _actModulesOff = _lookupSetter('cs_act_set_modules_off');
+  late final _HStrStrStr? _actResolve = _lookupHSS('cs_act_resolve');
+  late final _HStrStrStr? _actFinish = _lookupHSS('cs_act_finish');
+  late final _HStrStr? _actOutcome = _lookupHS('cs_act_outcome');
+
+  _HStrStrStr? _lookupHSS(String name) {
+    try {
+      return _lib.lookupFunction<_HStrStrStrC, _HStrStrStr>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  @override
+  bool get hasAct => _actSetDefinitions != null && _actModulesOff != null && _actResolve != null && _actFinish != null && _actOutcome != null;
+
+  @override
+  String? actSetDefinitions(int handle, String defsJson) => _callHS(_actSetDefinitions, handle, defsJson);
+
+  @override
+  int actSetModulesOff(int handle, String? modulesJson) => using((a) {
+        final f = _actModulesOff;
+        if (f == null) return -1;
+        return f(_p(handle), modulesJson == null ? nullptr : modulesJson.toNativeUtf8(allocator: a));
+      });
+
+  @override
+  String? actResolve(int handle, String action, String? fieldsJson) => using((a) {
+        final f = _actResolve;
+        if (f == null) return null;
+        return _take(f(_p(handle), action.toNativeUtf8(allocator: a), fieldsJson == null ? nullptr : fieldsJson.toNativeUtf8(allocator: a)));
+      });
+
+  @override
+  String? actFinish(int conv, String runId, String replyJson) => using((a) {
+        final f = _actFinish;
+        if (f == null) return null;
+        return _take(f(_p(conv), runId.toNativeUtf8(allocator: a), replyJson.toNativeUtf8(allocator: a)));
+      });
+
+  @override
+  String? actOutcome(int conv, String outcomeJson) => _callHS(_actOutcome, conv, outcomeJson);
 
   // The saved-places calls are bound with the rest of the core's calls above (cs_places_list, cs_place_save, cs_place_delete).
   @override

@@ -68,8 +68,26 @@ class RecordingActCore implements ActCore {
   final calls = <String>[];
   Map<String, dynamic>? answer;
 
+  final installs = <List<Map<String, dynamic>>>[];
+  final outcomes = <(ResultNumbering?, Map<String, dynamic>)>[];
+
+  /// The system message content the core gives back for an outcome.
+  String Function(Map<String, dynamic> outcome) content = hostEventContent;
+
   @override
-  Future<void> install(List<Map<String, dynamic>> definitions, Future<Map<String, dynamic>> Function(String, Map<String, dynamic>) run) async {}
+  Future<bool> install(List<Map<String, dynamic>> definitions) async {
+    installs.add(definitions);
+    return true;
+  }
+
+  @override
+  Future<void> setModulesOff(List<String> modules) async {}
+
+  @override
+  Future<String> outcome(ResultNumbering? numbering, Map<String, dynamic> outcome) async {
+    outcomes.add((numbering, outcome));
+    return content(outcome);
+  }
 
   @override
   Future<Map<String, dynamic>> actResolve(String action, Map<String, dynamic> fields) async {
@@ -249,6 +267,42 @@ void main() {
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(jsonDecode(sent.last['content'] as String)['error'],
         {'type': 'place_not_found', 'detail': 'No place found for "Elk camp".', 'field': 'place', 'query': 'Elk camp'});
+  });
+
+  test('the outcome goes back through cs_act_outcome in the chat\'s numbering, as its exact system message', () async {
+    final core = RecordingActCore()..content = (o) => 'numbered ${jsonEncode(o)}';
+    final numbering = MemoryNumbering(const []);
+    final h = Harness(core: core);
+    final chat = ChatController(tools: [FakeAct()], actions: h.registry, actCore: core, newNumbering: () => numbering)
+      ..attachStore(h.store)
+      ..setBackend(h.backend);
+    await chat.send('Save 44.21,-114.93 as Elk camp');
+    await chat.resolveConfirm(chat.messages[1].confirms.single, confirm: true);
+    expect(core.outcomes.single.$1, same(numbering));
+    expect(core.outcomes.single.$2, {'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}});
+    final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
+    expect(sent.last, {'role': 'system', 'content': 'numbered {"ok":true,"status":"done","confirm_id":"c1","action":"places.save","result":{"name":"Elk camp"}}'});
+  });
+
+  test('definitions are made when a conversation starts and kept through it; the next conversation gets the new ones', () async {
+    final core = RecordingActCore();
+    final h = Harness(core: core);
+    await h.chat.send('Save 44.21,-114.93 as Elk camp');
+    final first = core.installs.single;
+    expect([for (final d in first) d['id']], ['places.save']);
+    // A module republishes mid-conversation: the open conversation keeps its set.
+    h.registry.publish('garden', [
+      {'id': 'garden.water', 'module': 'garden', 'title': 'Water', 'description': 'Water the garden.', 'effect': 'read', 'fields': <String, dynamic>{}, 'required': <String>[]},
+    ], {'garden.water': (_) async => {}});
+    await h.chat.send('anything else?');
+    await h.chat.resolveConfirm(h.chat.messages[1].confirms.single, confirm: false);
+    expect(core.installs, hasLength(3));
+    for (final d in core.installs) {
+      expect(d, same(first));
+    }
+    h.chat.newChat();
+    await h.chat.send('a new chat');
+    expect([for (final d in core.installs.last) d['id']], ['places.save', 'garden.water']);
   });
 
   test('typed words do not confirm: the card stays open', () async {
