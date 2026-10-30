@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:xml/xml.dart';
+
+import '../net/fetch.dart';
 
 /// Kiwix's public catalogue, read through its documented OPDS API (library.kiwix.org, "catalog/v2").
 /// The catalogue is Atom XML: `entries` (filter with lang, category, tag, name, q, count, start),
@@ -11,7 +11,6 @@ const String kiwixCatalogHost = 'https://opds.library.kiwix.org';
 const String kiwixCatalogPath = '/catalog/v2';
 
 /// What the app tells a server about itself. No person, device or place.
-const String cacheUserAgent = 'Cache/0.1 (offline reader)';
 
 /// The variants Kiwix publishes, in words for people.
 String flavourLabel(String flavour) => switch (flavour) {
@@ -283,50 +282,16 @@ class CatalogException implements Exception {
 typedef CatalogFetch = Future<String> Function(Uri url);
 
 Future<String> httpFetchText(Uri url) async {
-  final client = HttpClient()
-    ..userAgent = cacheUserAgent
-    ..connectionTimeout = const Duration(seconds: 15);
   try {
-    var u = url;
-    for (var hop = 0; hop < 6; hop++) {
-      final req = await client.getUrl(u);
-      req.followRedirects = false;
-      final res = await req.close().timeout(const Duration(seconds: 30));
-      if (res.isRedirect) {
-        await res.drain<void>();
-        final loc = res.headers.value(HttpHeaders.locationHeader);
-        if (loc == null) {
-          throw const CatalogException(
-            'The library sent a redirect with no address.',
-          );
-        }
-        u = u.resolve(loc);
-        continue;
-      }
-      if (res.statusCode != 200) {
-        await res.drain<void>();
-        throw CatalogException('The library answered ${res.statusCode}.');
-      }
-      return await res
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 60));
-    }
-    throw const CatalogException('The library redirected too many times.');
-  } on SocketException {
-    throw const CatalogException(
-      'Cannot reach the Kiwix library. Check the connection.',
-    );
-  } on HandshakeException {
-    throw const CatalogException(
-      'Cannot make a secure connection to the Kiwix library.',
-    );
-  } on HttpException catch (e) {
-    throw CatalogException('The library could not be read: ${e.message}');
-  } on TimeoutException {
-    throw const CatalogException('The Kiwix library took too long to answer.');
-  } finally {
-    client.close(force: true);
+    return await fetchText(url, maxBytes: 64 * 1024 * 1024, httpsOnly: false, timeout: const Duration(seconds: 60));
+  } on FetchException catch (e) {
+    throw CatalogException(switch (e.failure) {
+      FetchFailure.status => 'The library answered ${e.status}.',
+      FetchFailure.unreachable => 'Cannot reach the Kiwix library. Check the connection.',
+      FetchFailure.insecure => 'Cannot make a secure connection to the Kiwix library.',
+      FetchFailure.timedOut => 'The Kiwix library took too long to answer.',
+      FetchFailure.tooLarge || FetchFailure.unreadable || FetchFailure.notAllowed => 'The library could not be read.',
+    });
   }
 }
 

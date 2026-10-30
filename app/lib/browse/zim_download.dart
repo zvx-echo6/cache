@@ -7,7 +7,7 @@ import 'dart:isolate';
 import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 
-import 'opds.dart';
+import '../net/fetch.dart' show kUserAgent;
 
 /// Why a download stopped, in words for people.
 class DownloadException implements Exception {
@@ -143,7 +143,7 @@ class ZimDownloader {
   final HttpClient Function() _clientFactory;
 
   static HttpClient _defaultClient() => HttpClient()
-    ..userAgent = cacheUserAgent
+    ..userAgent = kUserAgent
     ..connectionTimeout = const Duration(seconds: 20);
 
   /// Downloads [url] into [part] (a partial file from an earlier try is continued), verifies it and returns
