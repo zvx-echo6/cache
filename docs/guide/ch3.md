@@ -37,7 +37,7 @@ Go to "Settings" > "Cache model and web search".
 - "Search the web when online" lets the assistant search the web when you have a connection. It can only be turned on once a search service is set up; until then it says "Set up a search service to turn this on".
 
 "Location":
-- "Use my location" is a switch. It is the same switch as in the + menu in "Ask". When the phone blocks location for Cache, the row says so and links to the phone's settings.
+- "Use my location" is a switch. It is the same switch as in the + menu in "Ask". When the phone blocks location for Cache, the row says "Blocked in the phone's settings" (or "The phone's location is switched off") and has a "Phone settings" button that opens the phone's settings. Otherwise the line under it says "Cache finds things near you".
 
 "Conversations":
 - "Saved conversations" opens the list of chats on this phone.
@@ -126,11 +126,13 @@ Only add links from people you trust: their sources decide what is downloaded an
 Go to "Settings" > "Notifications".
 
 "Pop up for" is one choice. It decides which alerts appear as notifications:
-- "Serious only": evacuations, extreme and severe warnings. This is the default.
+- "Serious only": evacuations, severe warnings, and fires within 10 mi. This is the default.
 - "All alerts": adds watches and advisories.
 - "None": nothing pops up. Cache warns you once, "No pop-ups at all?", because it will not interrupt you for anything, not even an evacuation order. Tap "Turn off" to confirm or "Keep pop-ups" to cancel.
 
 "Quiet hours" shows the times and the words serious still ring. Tap it to change them. See the section Quiet hours.
+
+A place set to "Custom for this place" in the Places notebook overrides this. What that place picks, within its distance, pops up even when "Pop up for" is "Serious only" or "None". It is silent in quiet hours unless it is serious. "Same as your alert setting" follows "Pop up for", and "Off" silences the place.
 
 Every alert is listed in "Weather" either way.
 

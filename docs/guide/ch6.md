@@ -37,6 +37,8 @@ Shortcuts:
 
 - "Choose a model at the top to start.": no model is loaded. Tap "Choose a model" (or "Get a model"), then load one.
 - "No model" in the title: the same. Tap the title to open the model menu, then "Manage models".
+- "Starting…": Cache is still starting. Your question waits and is answered when Cache is ready.
+- "Cache's search couldn't start, so this wasn't answered.": Cache's search did not start, so Cache did not answer without it. Tap "Try again". If it keeps happening, close Cache and open it again.
 - "Thinking…" and "Searching your sources…": the assistant is working. Wait, or tap "Stop".
 - "No answer was produced.": the model gave nothing back. Ask again in other words, or start a "New chat". If it keeps happening, try a different model.
 - "The model stopped without an answer": the same; ask again.
@@ -51,8 +53,8 @@ Shortcuts:
 
 Cache uses your location in "Ask" whenever the phone allows it. It does not ask. The "Use my location" switch is in the + menu to the left of the box where you type, and in "Settings" > "Cache model and web search". It is the same switch.
 
-- "Use my location" is greyed out with "Blocked in the phone's settings": location is blocked for Cache. Tap "Open the phone's settings" and allow it.
-- It is greyed out with "The phone's location is switched off": tap "Open the phone's settings" and turn location on.
+- "Use my location" is greyed out with "Blocked in the phone's settings": location is blocked for Cache. In the + menu tap "Open the phone's settings" and allow it. In "Settings" > "Cache model and web search" the row has a "Phone settings" button.
+- It is greyed out with "The phone's location is switched off": tap "Open the phone's settings" (or "Phone settings" in "Settings") and turn location on.
 - It is on but answers about places ignore where you are: check that the switch is on, and that "Show my position" in "Maps" > "Layers" is on.
 
 If Cache cannot get a position yet, chat still works. Go outdoors or near a window and try again.

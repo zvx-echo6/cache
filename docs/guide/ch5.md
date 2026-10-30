@@ -121,7 +121,7 @@ The screen has, from the top:
 
 The gear opens "Alerts for" this place with three choices:
 - "Same as your alert setting": follows "Settings" > "Notifications". This is the default.
-- "Custom for this place": opens "How far out" and the kinds you want, such as fires, earthquakes and river levels.
+- "Custom for this place": opens "How far out" and the kinds you want, such as fires, earthquakes and river levels. What a Custom place picks, within its distance, pops up even when "Pop up for" is "Serious only" or "None". It is silent in quiet hours unless it is serious.
 - "Off": no alerts for this place.
 
 A place with "Weather and alerts" on is watched. Cache keeps weather, alerts and fires for it.
@@ -132,7 +132,10 @@ Press and hold any spot on the map. A ring menu opens around your finger. The ce
 
 The wedges are:
 - "To here": directions to this spot.
+- "From here": directions that start at this spot. The search opens so you can choose where to go. A chip says the route starts from the spot, and you can use it to go back to the phone's position. If a route is already shown, it is worked out again from this spot.
+- "Add stop": adds this spot to the route on screen, after its other stops. It is shown only while a route is shown. A route can have up to 10 stops. Each stop is listed under the destination with a button to remove it.
 - "Save": keep this spot in a notebook.
+- "Measure": draws a dashed line from this spot. Each tap on the map adds a point. A bar shows the running total in your units. "Undo" removes the last point. "Done" ends the measurement.
 
 Tap the centre of the ring to open the coordinate card for the spot. It shows the latitude and longitude, the grid reference, the Plus Code and the nearest town.
 
@@ -166,14 +169,41 @@ Cache stores your text as plain Markdown.
 A notebook or an entry can be marked "Private". Turn on "Private" in "Edit notebook", or in an entry.
 
 What Private does:
-- A private notebook is left out of sharing and sync by default. It says "Left out of sharing and sync unless you choose to include it."
+- A private notebook is left out of sync and sharing between your own devices by default. It says "Left out of sharing and sync unless you choose to include it."
 - To include a private notebook, open "Edit notebook". When the notebook is private, a switch "Include in sync and sharing" appears. It is off by default. Turn it on to include the notebook.
 
 What Private does not do:
 - It does not hide the notebook from the assistant. Once Cache is open, the assistant can read everything in your notebooks, private ones too.
 - It is not a lock. Keep a screen lock on your phone.
 
+Obsidian and Logseq folders are different. Private notebooks do go to a folder you connect. See the section Write notebooks to Obsidian or Logseq.
+
 Some starter logs, such as medication and health ones, start as private. You can switch it off.
+
+## Write notebooks to Obsidian or Logseq
+
+Cache can keep your entries as Markdown files in a folder you choose, so Obsidian or Logseq can open them.
+
+To connect a folder:
+1. Open "Notebooks", open its menu and tap "Connections".
+2. Under "Obsidian" or "Logseq", tap "Connect".
+3. For Logseq, choose "Logseq with a folder of Markdown files" (Logseq 0.10 and earlier) or "Logseq 2".
+4. Choose the folder. On Android, Cache uses Android's folder picker and keeps the permission you give it. On iPhone, Cache keeps the folder you pick as a bookmark, so it can open it again later.
+
+What happens next:
+- Obsidian: Cache keeps your entries as Markdown files in the folder. Open that folder as a vault in Obsidian. Changes in either place update the other.
+- Logseq with a folder of Markdown files: Cache keeps your entries as blocks on the journal pages of a Logseq graph. Open that folder as a graph in Logseq. Changes in either place update the other.
+- "Logseq 2": Cache writes your entries as Markdown for Logseq to import. Changes made in Logseq stay there. The row says "export only".
+- Cache writes your text as you typed it, in Markdown. Each entry's details, such as its title, date and place, go in its properties. Photos are saved in the folder too.
+- Cache can write to Markdown graphs only. If a Logseq graph is not Markdown, Cache says so.
+
+Private notebooks: entries in private notebooks are written to Obsidian and Logseq folders like all others. They carry a private mark in their properties.
+
+The row shows the folder's name and a status, such as Synced and the time, "Syncing...", "Paused." or "Can't reach the folder." The row's menu has "Sync now", "Pause" or "Resume", and "Disconnect".
+
+If an entry changes in both places, Cache shows a card. Pick "Keep Cache's version" or "Keep the file's version". The other version is kept as a copy. If a file was removed in the folder, the card offers "Keep in Cache" or "Delete here too". If Cache can't read a file, it leaves it alone and you can tap "Ignore".
+
+Your other devices are on the same "Connections" screen. See "Sharing and sync" in chapter 3.
 
 ## Ask Cache to add to a notebook
 
