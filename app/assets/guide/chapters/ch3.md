@@ -21,13 +21,13 @@ Each row has a short status line, so you can see the state without opening it. F
 - "Storage" shows how much Cache uses and how much is free on the phone.
 - "Sharing and sync" shows "Not linked yet" or which devices are linked.
 
-There is no Library page or Videos page in Settings. Open "Library" and "Videos" from "Modules" or the bar. Saved videos are removed in "Videos" itself, or in "Settings" > "Storage" > "Videos and weather".
+There is no Library page or Videos page in Settings. Open "Library" and "Videos" from "Modules" or the bar. Saved videos are removed in "Videos" itself, or in ["Settings" > "Storage" > "Videos and weather"](cache://settings/storage).
 
 A row that says "Not available" means that part of Cache could not start on this phone. Restart Cache; if it stays, see chapter 6.
 
 ## Cache model and web search
 
-Go to "Settings" > "Cache model and web search".
+Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
 
 "Model":
 - The model row shows the loaded model, "On this phone", its size and "Ready", or "No model chosen". Tap it to open the Models screen, where you download, load, unload and delete models.
@@ -48,7 +48,7 @@ To add the Kagi key, see the section Web search with Kagi in chapter 4.
 
 ## Maps
 
-Go to "Settings" > "Maps".
+Go to ["Settings" > "Maps"](cache://settings/maps).
 
 "Downloaded" lists every map area you downloaded, with its size and date, or a download in progress. If nothing is there, it says "Nothing downloaded". Tap a row to open the list of layers.
 
@@ -66,7 +66,7 @@ Most people never need "Advanced". If a layer stops working after an edit, remov
 
 ## Weather and alerts
 
-Go to "Settings" > "Weather and alerts".
+Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 At the top, one line says when the data was last updated, for example "Updated 1 hour ago". Next to it is a small round refresh button. Tap it to fetch the data again. When the data is old, the line turns into a warning, for example "Updated 3 days ago".
 
@@ -82,14 +82,14 @@ If the list says "No sources downloaded yet. Connect to the internet and they lo
 
 Which places the data is kept for is set per place, in the Places notebook. "Where I am" is its first row ("Follows the phone"). Each place has its own "Weather and alerts" switch. See the section Add or edit a place in chapter 5.
 
-You choose which alerts pop up in "Settings" > "Notifications".
+You choose which alerts pop up in ["Settings" > "Notifications"](cache://settings/notifications).
 
 ## Keys for data sources
 
 Some data sources need your own key from the provider. The key is free for the sources in the list, but you have to get it yourself. Keys go on the row of the source. There is no separate key screen.
 
 To add a key:
-1. Go to "Settings" > "Weather and alerts". Find the source. Featured sources are at the top. Others are under "More sources".
+1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather). Find the source. Featured sources are at the top. Others are under "More sources".
 2. Tap "Get key" on its row.
 3. The sheet explains what the key gives. Tap "Get a key from [provider]" to open their page.
 4. Follow their steps to get a key, then copy it.
@@ -107,7 +107,7 @@ For where to get each key, see chapter 4.
 
 Other people can publish lists of data sources (catalogues). You can add one with its link.
 
-1. Go to "Settings" > "Weather and alerts" > "More sources". At the bottom, tap "Add sources from a link".
+1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather). At the bottom, tap "Add sources from a link".
 2. Paste the link into the field and tap "Check this link".
 3. Cache downloads the list and checks every source. Nothing is added yet.
 4. Read the card: who publishes it, how many sources it adds, and any it left out with the reason.
@@ -123,7 +123,7 @@ Only add links from people you trust: their sources decide what is downloaded an
 
 ## Notifications
 
-Go to "Settings" > "Notifications".
+Go to ["Settings" > "Notifications"](cache://settings/notifications).
 
 "Pop up for" is one choice. It decides which alerts appear as notifications:
 - "Serious only": evacuations, severe warnings, and fires within 10 mi. This is the default.
@@ -140,7 +140,7 @@ Pop-ups also need your phone's permission for notifications. If you refused it, 
 
 ## Quiet hours
 
-Go to "Settings" > "Notifications" > "Quiet hours".
+Go to ["Settings" > "Notifications" > "Quiet hours"](cache://settings/notifications).
 
 1. Use the "Quiet hours" switch to turn them on or off.
 2. Tap "From" and choose when they start.
@@ -164,11 +164,13 @@ Below it:
 
 Tap a row to open a list of its items. Remove an item from there. A pop-up shows what it frees and asks you to confirm.
 
+The "Regions" list also has an "Off-road data" group. It has one row for each state's off-road data, with a line such as "[size] · used by [regions]". While it downloads, the size is replaced by "Downloading". A note says: "Each state's off-road data is downloaded once and kept while a region that uses it is on this phone."
+
 To free space when a download will not fit, tap "Free up space" in the download pop-up. It opens this page.
 
 ## Mobile data downloads
 
-Go to "Settings" > "Storage" and find the "Mobile data downloads" switch.
+Go to ["Settings" > "Storage"](cache://settings/storage) and find the "Mobile data downloads" switch.
 
 - Off (the start setting): big downloads wait for Wi-Fi. This covers models, Library items, regions, videos, libraries from a link, and sharing between your devices.
 - On: big downloads also use mobile data.
@@ -181,7 +183,7 @@ Changes apply at once, even to a download already running.
 
 ## Room kept free for the phone
 
-Go to "Settings" > "Storage" and look at "Kept free for the phone".
+Go to ["Settings" > "Storage"](cache://settings/storage) and look at "Kept free for the phone".
 
 Cache never uses the last part of your storage, so the phone keeps working. The rule is fixed:
 - It keeps 10% of total storage free.
@@ -197,7 +199,7 @@ When a download will not fit, the pop-up says how much more room is needed, for 
 Sharing links your own Cache devices so they keep the same library, maps, models and videos. Devices talk to each other directly, over Wi-Fi nearby or the internet.
 
 To set up, on each device:
-1. Go to "Settings" > "Sharing and sync".
+1. Go to ["Settings" > "Sharing and sync"](cache://settings/sharing).
 2. Tap "Set up sharing".
 
 To link two devices:
@@ -212,7 +214,7 @@ Under "Linked devices", each device shows whether it is connected, directly or t
 
 ## Sharing and sync: choose what to share
 
-After linking, go to "Settings" > "Sharing and sync" on each device and tick what to share under "Shared with linked devices":
+After linking, go to ["Settings" > "Sharing and sync"](cache://settings/sharing) on each device and tick what to share under "Shared with linked devices":
 - "Library": your ZIM files and your own libraries, together.
 - "Maps": your downloaded regions.
 - "Models": your chat models and the search model.
@@ -234,7 +236,7 @@ Private notebooks are left out of sync and sharing by default. See the section P
 
 ## Appearance
 
-Go to "Settings" > "Appearance".
+Go to ["Settings" > "Appearance"](cache://settings/appearance).
 
 "Theme":
 - "Dark": the default.
@@ -250,7 +252,7 @@ Changes apply straight away.
 
 ## Credits and licences
 
-Go to "Settings" > "Credits and licences".
+Go to ["Settings" > "Credits and licences"](cache://settings/credits).
 
 - "Version" shows which Cache you have.
 - "Licence": Cache is free software under the GNU Affero General Public License, version 3 or later.

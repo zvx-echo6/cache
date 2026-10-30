@@ -7,7 +7,7 @@ Cache is built to work on your phone, without an account and without a Cache ser
 These stay on your phone:
 - The assistant. The model runs on the phone, so your questions and its answers are worked out there.
 - Your chats. They are saved on the phone and are still there after a restart. You can share one yourself with "Share chat" or "Share as Markdown".
-- Your reported answers. "Report this answer" saves the report on the phone; nothing is sent anywhere. You can share reports yourself from "Settings" > "Cache model and web search" > "Reported answers".
+- Your reported answers. "Report this answer" saves the report on the phone; nothing is sent anywhere. You can share reports yourself from ["Settings" > "Cache model and web search" > "Reported answers"](cache://settings/assistant).
 - Your notebooks and places, Home layout and settings.
 - Your Library, libraries, maps, regions, models and saved videos.
 - Your keys, in the phone's secure storage.
@@ -19,8 +19,8 @@ The data on the phone is protected by the phone's own encryption and screen lock
 To remove things:
 - chats: "Settings" > "Cache model and web search" > "Delete all conversations", or delete one in the chat list;
 - reports: "Settings" > "Cache model and web search" > "Reported answers" > "Remove";
-- keys: "Settings" > "Cache model and web search" > "Change" > "Remove the key", and the source's page in "Settings" > "Weather and alerts" > "Remove the key";
-- downloads and everything else Cache keeps: "Settings" > "Storage".
+- keys: "Settings" > "Cache model and web search" > "Change" > "Remove the key", and the source's page in ["Settings" > "Weather and alerts" > "Remove the key"](cache://settings/weather);
+- downloads and everything else Cache keeps: ["Settings" > "Storage"](cache://settings/storage).
 
 ## What goes online, and when
 
@@ -34,13 +34,13 @@ Cache goes online only for the things below. Each talks directly to the service 
 - Lists Cache reads by itself when there is a connection: the list of regions, the list of data sources, the list of map layers and the list of recommended models.
 - Sharing and sync, only if you set it up: your own linked devices.
 
-Big downloads use mobile data only if you allow it: "Settings" > "Storage" > "Mobile data downloads".
+Big downloads use mobile data only if you allow it: ["Settings" > "Storage" > "Mobile data downloads"](cache://settings/storage).
 
-To stop data sources going online, switch them off in "Settings" > "Weather and alerts". To stop web search, turn off "Search the web when online" in "Settings" > "Cache model and web search".
+To stop data sources going online, switch them off in ["Settings" > "Weather and alerts"](cache://settings/weather). To stop web search, turn off "Search the web when online" in ["Settings" > "Cache model and web search"](cache://settings/assistant).
 
 ## Your location
 
-Cache uses your location whenever your phone allows it. In "Ask" it does not ask. Other places ask the first time you need them: "Find me" in "Maps", or "Turn on weather". Cache asks only for permission while you use the app. The switch "Use my location" is in "Settings" > "Cache model and web search", and in the + menu in "Ask".
+Cache uses your location whenever your phone allows it. In "Ask" it does not ask. Other places ask the first time you need them: "Find me" in "Maps", or "Turn on weather". Cache asks only for permission while you use the app. The switch "Use my location" is in ["Settings" > "Cache model and web search"](cache://settings/assistant), and in the + menu in "Ask".
 
 What it is used for:
 - showing you on the map and following you during directions;
@@ -61,8 +61,8 @@ To limit this:
 
 Cache stores keys and logins in the phone's secure storage (Android Keystore or iOS Keychain).
 
-- Kagi key (web search): entered in "Settings" > "Cache model and web search". After saving, the key is never shown again.
-- Data source keys: entered on the source's row in "Settings" > "Weather and alerts". Keys stay on this phone, in its secure storage. They are never shown again.
+- Kagi key (web search): entered in ["Settings" > "Cache model and web search"](cache://settings/assistant). After saving, the key is never shown again.
+- Data source keys: entered on the source's row in ["Settings" > "Weather and alerts"](cache://settings/weather). Keys stay on this phone, in its secure storage. They are never shown again.
 - PeerTube logins: your password is not kept. Cache keeps only the login the site gives back, so you stay logged in.
 
 When you save a key, Cache checks it once with a real search or download, so the provider sees that one request.
@@ -98,13 +98,13 @@ You can mark a notebook, or an entry, "Private". In "Notebooks", "Private" means
 - A private notebook is not sent to your other devices, and is not synced, unless you include it. To include it, open "Edit notebook". When the notebook is private, a switch "Include in sync and sharing" appears. It is off by default.
 - Once Cache is open, the assistant can read everything in your notebooks, including private ones, to answer you. It does this on your phone. It is not sent anywhere to do so.
 - Private is not encryption or a lock. The data is protected by the phone's own encryption and screen lock. Keep a screen lock on the phone.
-- Obsidian and Logseq folders are an exception to being left out. If you connect a folder in "Notebooks" > "Connections", entries in private notebooks are written to it too, with a private mark in their properties. The folder is on your phone or in the storage you chose. Once they are in the folder, any app that can open that folder can read them as plain Markdown.
+- Obsidian and Logseq folders are an exception to being left out. If you connect a folder in ["Notebooks" > "Connections"](cache://notebooks), entries in private notebooks are written to it too, with a private mark in their properties. The folder is on your phone or in the storage you chose. Once they are in the folder, any app that can open that folder can read them as plain Markdown.
 
 Starter logs for health, such as medication or blood pressure, start as private. You can switch it off.
 
 ## Sharing and sync
 
-Sharing is off until you tap "Set up sharing" in "Settings" > "Sharing and sync".
+Sharing is off until you tap "Set up sharing" in ["Settings" > "Sharing and sync"](cache://settings/sharing).
 
 When it is on:
 - It links only your own devices, and only by a link code you copy from one device to the other. A code works once, for 15 minutes.
@@ -119,4 +119,4 @@ To stop sharing a kind, untick it. The files stay on this device.
 
 To stop a device connecting, tap it under "Linked devices" and tap "Unlink". Files already here stay.
 
-Sharing follows "Mobile data downloads" in "Settings" > "Storage".
+Sharing follows "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
