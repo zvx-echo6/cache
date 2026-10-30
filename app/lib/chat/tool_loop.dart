@@ -70,7 +70,16 @@ class ToolLoop {
       _results[r.id] = r;
     }
     _nextId = _results.keys.fold(0, (a, b) => b > a ? b : a) + 1;
+    for (final m in history) {
+      for (final c in m['tool_calls'] is List ? m['tool_calls'] as List : const []) {
+        final n = c is Map ? _callNumber.firstMatch('${c['id']}') : null;
+        final k = n == null ? 0 : int.parse(n.group(1)!);
+        if (k >= _nextCall) _nextCall = k + 1;
+      }
+    }
   }
+
+  static final _callNumber = RegExp(r'^call_(\d+)$');
 
   final ModelBackend backend;
 
@@ -94,6 +103,10 @@ class ToolLoop {
   final List<Map<String, dynamic>> _messages = [];
   final Map<int, NumberedResult> _results = {};
   int _nextId = 1;
+
+  /// Tool-call ids are one sequence per conversation, call_1, call_2, ... in the order the calls are made, across turns, as in the
+  /// training captures (the model's parser numbers each message from call_0, so the loop gives the ids).
+  int _nextCall = 1;
   bool _stopped = false;
 
   /// Every result returned in this conversation, by ID.
@@ -146,10 +159,14 @@ class ToolLoop {
 
   String _clean(String s) => checkCitations(s, _results.keys.toSet()).text;
 
-  Stream<TurnUpdate> ask(String userText) {
+  /// Asks [userText]. With [seed], the turn starts with that tool call (its arguments as JSON text) and its real result, as if the
+  /// model had made it (Ask about this); the seed is not one of the turn's tool rounds.
+  Stream<TurnUpdate> ask(String userText, {({String name, String arguments})? seed}) {
     _messages.add({'role': 'user', 'content': userText});
-    return _turn();
+    return _turn(seed: seed);
   }
+
+  ToolCall _numbered(String name, String arguments) => ToolCall(id: 'call_${_nextCall++}', name: name, arguments: arguments);
 
   /// Adds a message the host writes (the outcome of a confirm card) to the conversation.
   void addMessage(Map<String, dynamic> message) => _messages.add(message);
@@ -157,7 +174,7 @@ class ToolLoop {
   /// Lets the model answer the conversation as it stands (its short follow-up after [addMessage]), as after a question.
   Stream<TurnUpdate> resume() => _turn();
 
-  Stream<TurnUpdate> _turn() async* {
+  Stream<TurnUpdate> _turn({({String name, String arguments})? seed}) async* {
     _stopped = false;
     var rounds = 0;
     var promptTokens = 0, generatedTokens = 0;
@@ -167,6 +184,12 @@ class ToolLoop {
       if (host != null) {
         _hostSchemas = await host!.schemas();
         debugPrint('cache tools offered: ${[for (final t in _hostSchemas) (t['function'] as Map?)?['name']]}');
+      }
+      if (seed != null) {
+        yield const TurnUpdate(phase: TurnPhase.searching);
+        final call = _numbered(seed.name, seed.arguments);
+        _messages.add({'role': 'assistant', 'content': null, 'tool_calls': [call.toJson()]});
+        await _addResult(call);
       }
       while (true) {
         final allowTools = rounds < kMaxToolRounds && _schemas.isNotEmpty && !finalAnswer;
@@ -199,15 +222,11 @@ class ToolLoop {
             continue;
           }
         } else if (last.hasToolCalls && !_stopped) {
-          _messages.add(last.toMessage());
+          final calls = [for (final c in last.toolCalls) _numbered(c.name, c.arguments)];
+          _messages.add({...last.toMessage(), 'tool_calls': [for (final c in calls) c.toJson()]});
           yield const TurnUpdate(phase: TurnPhase.searching);
-          for (final call in last.toolCalls) {
-            final content = await _runCall(call);
-            _messages.add({'role': 'tool', 'tool_call_id': call.id, 'content': content});
-            if (call.name == 'act') {
-              final card = ConfirmCard.fromResult(call.id, call.argumentsMap, content);
-              if (card != null) onConfirmations?.call([card]);
-            }
+          for (final call in calls) {
+            await _addResult(call);
           }
           rounds++;
           continue;
@@ -226,6 +245,16 @@ class ToolLoop {
       }
     } catch (e) {
       yield TurnUpdate(phase: TurnPhase.done, error: e.toString().replaceFirst('Bad state: ', ''));
+    }
+  }
+
+  /// Runs [call] and adds its tool message; an `act` call that needs a tap shows its confirm card.
+  Future<void> _addResult(ToolCall call) async {
+    final content = await _runCall(call);
+    _messages.add({'role': 'tool', 'tool_call_id': call.id, 'content': content});
+    if (call.name == 'act') {
+      final card = ConfirmCard.fromResult(call.id, call.argumentsMap, content);
+      if (card != null) onConfirmations?.call([card]);
     }
   }
 

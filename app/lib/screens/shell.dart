@@ -8,6 +8,7 @@ import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
 import '../browse/reader_screen.dart';
 import '../browse/zim_urls.dart';
+import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
@@ -211,11 +212,11 @@ class _ShellState extends State<Shell> {
     _goModule(ModuleId.ask);
   }
 
-  /// "Ask about this" on the Weather screen: a new chat that asks the question straight away.
-  void _askAbout(String question) {
+  /// "Ask about this" on the Weather screen: a new chat that asks the question straight away, seeded with the item's live data.
+  void _askAbout(AskAbout about) {
     widget.chat.newChat();
     _goModule(ModuleId.ask);
-    widget.chat.send(question);
+    widget.chat.send(about.question, seed: about);
   }
 
   void _openWeatherSettings() {

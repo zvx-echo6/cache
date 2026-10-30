@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../chat/ask_about.dart';
 import '../theme.dart';
 import '../weather/live_view.dart';
 import '../weather/places.dart';
@@ -16,8 +17,8 @@ class WeatherScreen extends StatefulWidget {
   /// "Turn on weather" and "Choose a place instead" in the empty states; without it they only point to Settings.
   final WeatherTurnOn? turnOn;
 
-  /// Starts a new chat with this question (Ask about this).
-  final void Function(String question)? onAsk;
+  /// Starts a new chat about this item (Ask about this).
+  final void Function(AskAbout about)? onAsk;
 
   /// Opens Settings > Weather and alerts.
   final VoidCallback? onOpenSettings;
@@ -386,9 +387,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                   key: const ValueKey('ask-about-this'),
                   onPressed: () {
                     Navigator.pop(ctx);
-                    widget.onAsk!(
-                      'Tell me about this ${v.source.title.toLowerCase()} item near ${v.place.name}: ${i.label}. What does it mean for me, and what should I do?',
-                    );
+                    widget.onAsk!(AskAbout(sourceTitle: v.source.title, sourceId: v.source.id, place: v.place.name, label: i.label));
                   },
                   icon: const Icon(Icons.chat_bubble_outline),
                   label: const Text('Ask about this'),

@@ -101,7 +101,7 @@ void main() {
       // The second request carried the tool message in the agreed form.
       final toolMsg = (backend.requests[1]['messages'] as List).last as Map;
       expect(toolMsg['role'], 'tool');
-      expect(toolMsg['tool_call_id'], 'c1');
+      expect(toolMsg['tool_call_id'], 'call_1', reason: 'the loop numbers calls per conversation');
       expect(toolMsg['content'], '[1] WikiMed: Burn — Cool the burn.\n[2] Manual p.142 — Seek help.');
       expect(backend.requests[0]['tools'], isNotNull);
       expect((backend.requests[0]['messages'] as List).first['role'], 'system');

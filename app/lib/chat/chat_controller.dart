@@ -7,6 +7,7 @@ import '../history/conversation_store.dart';
 import '../history/markdown_export.dart';
 import '../history/titles.dart';
 import '../search/numbering_state.dart';
+import 'ask_about.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
 import 'system_prompt.dart';
@@ -273,7 +274,9 @@ class ChatController extends ChangeNotifier {
     return loop;
   }
 
-  Future<void> send(String text) async {
+  /// Asks [text]. [seed] (Ask about this, in a new chat) starts the turn with its live_data call and that call's real result; it
+  /// needs the core's tools, and without them the question goes alone.
+  Future<void> send(String text, {AskAbout? seed}) async {
     text = text.trim();
     final backend = _backend;
     if (text.isEmpty || backend == null || busy) return;
@@ -357,7 +360,8 @@ class ChatController extends ChangeNotifier {
         }
         if (epoch == _epoch) notifyListeners();
       };
-      await for (final u in loop.ask(text)) {
+      final seeded = seed == null || loop.host == null ? null : (name: seed.toolName, arguments: spacedJson(seed.arguments));
+      await for (final u in loop.ask(text, seed: seeded)) {
         if (epoch != _epoch) return; // chat was reset meanwhile
         last = u;
         reply

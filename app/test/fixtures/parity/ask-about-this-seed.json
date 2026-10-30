@@ -1,0 +1,26 @@
+{
+ "row": "gen-live-081",
+ "seed": {
+  "source": "nws-alerts-point",
+  "place": "Pocatello"
+ },
+ "seeded_message": {
+  "role": "assistant",
+  "content": null,
+  "tool_calls": [
+   {
+    "id": "call_1",
+    "type": "function",
+    "function": {
+     "name": "live_data",
+     "arguments": "{\"source\": \"nws-alerts-point\", \"place\": \"Pocatello\"}"
+    }
+   }
+  ]
+ },
+ "seeded_result": {
+  "role": "tool",
+  "tool_call_id": "call_1",
+  "content": "{\"ok\":true,\"source\":{\"id\":\"nws-alerts-point\",\"title\":\"Weather alerts (NWS, by point)\",\"provider\":\"NWS\"},\"place\":\"Pocatello\",\"fetched_at\":\"2026-10-29T03:50:39-06:00\",\"valid_until\":\"2026-10-29T09:50:39-06:00\",\"age\":\"4 minutes old\",\"expired\":false,\"items\":[{\"n\":1,\"label\":\"Freeze Warning\",\"time\":\"2026-10-29T03:14:00-06:00\",\"fields\":{\"Severity\":\"moderate\",\"Urgency\":\"expected\",\"Area\":\"Upper Snake River Plain; Pocatello and Chubbuck\",\"Expires\":\"2026-10-29 12:00\",\"Headline\":\"Freeze Warning issued October 29 at 3:14AM MDT until October 29 at 12:00PM MDT by NWS Pocatello ID\",\"Instructions\":\"Sub-freezing temperatures will kill crops and other sensitive vegetation. Protect or bring in plants, and drain or insulate exposed outdoor pipes and irrigation systems. Bring pets indoors.\"}}]}"
+ }
+}

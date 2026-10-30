@@ -139,7 +139,7 @@ void main() {
     await h.chat.send('Save 44.21,-114.93 as Elk camp');
     final c = h.chat.messages[1].confirms.single;
     expect(c.confirmId, 'c1');
-    expect(c.toolCallId, 't1');
+    expect(c.toolCallId, 'call_1');
     expect(c.title, 'Save a place');
     expect(c.summary.map((e) => '${e.key}=${e.value}'), ['name=Elk camp', 'place=44.21000, -114.93000 (12 mi NE of Stanley)']);
     expect(c.state, ConfirmState.open);
@@ -265,7 +265,7 @@ void main() {
     await h.chat.resolveConfirm(h.chat.messages[1].confirms.single, confirm: true);
     final sent = (h.backend.requests.last['messages'] as List).cast<Map<String, dynamic>>();
     expect(sent.last['role'], 'tool');
-    expect(sent.last['tool_call_id'], 't1');
+    expect(sent.last['tool_call_id'], 'call_1');
     expect(jsonDecode(sent.last['content'] as String), {'ok': true, 'status': 'done', 'confirm_id': 'c1', 'action': 'places.save', 'result': {'name': 'Elk camp'}});
     final reopened = ChatController(tools: [FakeAct()], actions: h.registry)
       ..attachStore(h.store)
