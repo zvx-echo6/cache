@@ -1,6 +1,6 @@
 # Guide labels that are not in this branch's app yet, one per line. ci_check.py lets these pass.
 #
-# Notebook branch (Notebooks, the Places notebook, the map's ring menu, App lock): remove this block when notebook merges.
+# Notebook branch (Notebooks, the Places notebook, the map's ring menu and its tools, App lock, sync with Obsidian and Logseq): remove this block when notebook merges.
 + Add place
 2 of 3
 Add entry
@@ -44,6 +44,23 @@ Unfinished entry · Tue 4:12 PM
 Unit
 Write an entry
 You already have a notebook with this name.
+Add stop
+Measure
+Connections
+Connect
+Disconnect
+Obsidian
+Logseq
+Logseq 2
+Logseq with a folder of Markdown files
+export only
+Can't reach the folder.
+Paused.
+Syncing...
+Keep Cache's version
+Keep the file's version
+Keep in Cache
+Ignore
 
 # Catalogue source titles: the app shows them from the published connector catalogue, so they are data, not app text.
 Idaho 511 winter road conditions
