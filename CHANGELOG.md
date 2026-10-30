@@ -76,6 +76,10 @@ release notes).
 - Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
+- Regions: the sizes no longer hold up the map, the Library and the reader's pictures while they are worked out; each region's size shows as soon as it is known, and sizes already worked out show at once
+- Regions: "Draw your own area instead" from Home's Set up Cache opens the map to draw the area
+- Library: the guide that comes with Cache is labelled "Built in", and a library still opening when Cache starts no longer stays on "Opening"
+- About shows the full version, 1.0.27; the version number now matches the build on iPhone and Android
 - Ask: Try again after Cache's search could not start starts it again, instead of failing the same way
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
 - Turn-by-turn: the arrive time shows instead of "--", and on Android the spoken directions can find the phone's text-to-speech
