@@ -149,6 +149,15 @@ abstract class CsActNative {
   String? actOutcome(int conv, String outcomeJson);
 }
 
+/// The Notebook (cs_notebook; cache_search.h lists its ops). Kept apart from [CsNative] so the fakes of the older seam do not change.
+/// [FfiCsNative] implements it; [hasNotebook] is false when the loaded core is older than the call (looked up when first used).
+abstract class CsNotebookNative {
+  bool get hasNotebook;
+
+  /// One op with its arguments (a JSON object; null = {}); the answer, or null on error (ask [CsNative.lastError]).
+  String? notebook(int handle, String op, String? argsJson);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -189,7 +198,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative {
+class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -629,6 +638,20 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
 
   @override
   String? actOutcome(int conv, String outcomeJson) => _callHS(_actOutcome, conv, outcomeJson);
+
+  // ---- the Notebook: looked up on first use, because an older core must still load ----
+
+  late final _HStrStrStr? _notebook = _lookupHSS('cs_notebook');
+
+  @override
+  bool get hasNotebook => _notebook != null;
+
+  @override
+  String? notebook(int handle, String op, String? argsJson) => using((a) {
+        final f = _notebook;
+        if (f == null) return null;
+        return _take(f(_p(handle), op.toNativeUtf8(allocator: a), argsJson == null ? nullptr : argsJson.toNativeUtf8(allocator: a)));
+      });
 
   // The saved-places calls are bound with the rest of the core's calls above (cs_places_list, cs_place_save, cs_place_delete).
   @override

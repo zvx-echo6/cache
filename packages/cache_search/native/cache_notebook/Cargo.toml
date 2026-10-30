@@ -1,0 +1,13 @@
+[package]
+name = "cache_notebook"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's Notebook in notebook.sqlite: Journal entries, logs (their definitions are data) and log entries, with keyword search"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+# Entry, log and photo ids (UUIDv4); uuid is already in the lockfile.
+uuid = { version = "1", features = ["v4"] }

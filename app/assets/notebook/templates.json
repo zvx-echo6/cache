@@ -1,0 +1,6 @@
+{"format":"cache-notebook-templates","version":1,"templates":[
+{"id":"journal","version":1,"author":"Cache","name":"Journal","description":"Dated entries: what happened, thoughts, notes. Sorted by date.","icon":"circle","due_every":null,"shape":{"sort":"date"},"fields":[]},
+{"id":"log","version":1,"author":"Cache","name":"Log","description":"Something you do again and again, with fields like run time or gallons. Quick add, last done, due again.","icon":"diamond","due_every":null,"shape":{"sort":"recent","quick_add":true},"fields":[]},
+{"id":"notes","version":1,"author":"Cache","name":"Notes","description":"Plans, checklists and lists you keep updating. Attach scans, photos and PDFs.","icon":"square","due_every":null,"shape":{"sort":"recent"},"fields":[]},
+{"id":"places","version":1,"author":"Cache","name":"Places","description":"A list of places with notes and photos: rally points, caches, water sources. Shows on the map.","icon":"triangle","due_every":null,"shape":{"sort":"distance"},"fields":[]}
+]}

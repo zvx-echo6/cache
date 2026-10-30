@@ -209,6 +209,9 @@ class SearchCore {
   /// The checks and place resolution of an act call, kept with a confirm card (cs_act_resolve).
   Future<Map<String, dynamic>> actResolve(String action, Map<String, dynamic> fields) => _map('actResolve', {'action': action, 'fields': fields});
 
+  /// One op of the Notebook (cs_notebook; cache_search.h lists the ops and their answers).
+  Future<Map<String, dynamic>> notebook(String op, [Map<String, dynamic> args = const {}]) => _map('notebook', {'op': op, 'args': args});
+
   /// The function schemas of the tools available now (cs_tool_schemas).
   Future<List<Map<String, dynamic>>> toolSchemas() async =>
       [for (final t in await _call('toolSchemas') as List) (t as Map).cast<String, dynamic>()];
@@ -492,6 +495,8 @@ void _workerMain(List<dynamic> init) {
           result = eng().actFinish(convs[a['conv']]!, a['run_id'] as String, (a['reply'] as Map).cast<String, dynamic>());
         case 'convActOutcome':
           result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
+        case 'notebook':
+          result = eng().notebook(a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
         case 'placesList':
           result = eng().placesList();
         case 'placeSave':

@@ -39,6 +39,8 @@ cache_sync = { path = "../cache_sync" }
 # Road tiles by region (downloads, the stream cache for routes planned online, updates): cs_regions_*, and the navigate
 # tool's tile folder and stream from the "regions" section of the config.
 cache_regions = { path = "../cache_regions" }
+# The Notebook (Journal and Logbook) in notebook.sqlite, from the "notebook" section of the config: cs_notebook.
+cache_notebook = { path = "../cache_notebook" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "1"

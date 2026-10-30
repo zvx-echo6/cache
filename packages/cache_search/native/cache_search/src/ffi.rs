@@ -576,6 +576,19 @@ pub unsafe extern "C" fn cs_userlayer_export(h: *mut Handle, export_json: *const
     with_handle(h, ptr::null_mut(), |h| out_string(h.ext.userlayer_export(arg_str(export_json, "export_json")?)?))
 }
 
+// ---- the Notebook (logic in cache_notebook; see ext.rs) ----
+
+/// # Safety
+/// `h` NULL or live; `op` and `args_json` NULL or NUL-terminated (`args_json` NULL = `{}`).
+#[no_mangle]
+pub unsafe extern "C" fn cs_notebook(h: *mut Handle, op: *const c_char, args_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let op = arg_str(op, "op")?;
+        let args = if args_json.is_null() { None } else { Some(arg_str(args_json, "args_json")?) };
+        out_string(h.ext.notebook(op, args)?)
+    })
+}
+
 // ---- saved places and live data (logic in cache_user / cache_live; see ext.rs) ----
 
 /// # Safety
@@ -1067,6 +1080,7 @@ mod tests {
             assert!(cs_tool_schemas(ptr::null_mut()).is_null());
             assert!(cs_tool(ptr::null_mut(), ptr::null_mut(), ptr::null(), ptr::null(), ptr::null()).is_null());
             assert!(cs_places_list(ptr::null_mut()).is_null());
+            assert!(cs_notebook(ptr::null_mut(), ptr::null(), ptr::null()).is_null());
             assert!(cs_place_save(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_place_delete(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_userlayers_import(ptr::null_mut(), ptr::null()).is_null());

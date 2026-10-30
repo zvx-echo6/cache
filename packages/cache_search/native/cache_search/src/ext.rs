@@ -34,6 +34,8 @@ pub struct Ext {
     pub routes: cache_navigate::map::RouteStore,
     /// The regions engine from the `regions` section: the same one `cs_regions_open` gives for that folder.
     pub regions: Option<std::sync::Arc<cache_regions::Regions>>,
+    /// Notebooks from the `notebook` section (`cs_notebook`).
+    pub notebook: Option<cache_notebook::Notebook>,
 }
 
 /// The regions engine as the navigate tool's tile stream: its folder is the one to route on, and a route's tiles are fetched
@@ -217,6 +219,24 @@ impl Ext {
             }
         }
         Ok(())
+    }
+
+    /// Apply the `notebook` section; absent keeps what was set before, and the same paths keep the open database.
+    pub fn configure_notebook(&mut self, cfg: Option<cache_notebook::NotebookCfg>) {
+        if let Some(c) = cfg {
+            if self.notebook.as_ref().map(|n| n.cfg() != &c).unwrap_or(true) {
+                self.notebook = Some(cache_notebook::Notebook::new(c));
+            }
+        }
+    }
+
+    /// `cs_notebook`: one op of Notebooks (cache_search.h lists them).
+    pub fn notebook(&self, op: &str, args_json: Option<&str>) -> Result<String> {
+        let nb = self
+            .notebook
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorCode::NotConfigured, "Notebooks need \"notebook\": {\"db_path\", \"media_dir\"} in the cs_open config"))?;
+        nb.call(op, args_json).map_err(|e| Error::new(ErrorCode::from_str_code(e.code), e.message))
     }
 
     fn layers(&self) -> Result<&cache_layers::Layers> {

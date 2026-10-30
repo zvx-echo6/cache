@@ -50,6 +50,9 @@ struct Config {
     /// Map layers: see ext.rs and DESIGN-LAYERS.md.
     #[serde(default)]
     layers: Option<cache_layers::LayersCfg>,
+    /// The notebooks' database and media folder (cs_notebook; see ext.rs).
+    #[serde(default)]
+    notebook: Option<cache_notebook::NotebookCfg>,
     #[serde(default = "default_snippet_chars")]
     snippet_chars: u32,
     #[serde(default = "default_candidates")]
@@ -470,6 +473,7 @@ impl Handle {
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
         self.ext.plug_regions();
         self.ext.configure_layers(cfg.layers)?;
+        self.ext.configure_notebook(cfg.notebook);
         Ok(())
     }
 
