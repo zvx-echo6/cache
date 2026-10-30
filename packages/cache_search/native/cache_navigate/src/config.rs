@@ -48,7 +48,7 @@ pub fn region_from_path(tiles: &str) -> String {
         d => d,
     };
     let name = dir.and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    name.split(|c| c == '-' || c == '_' || c == ' ')
+    name.split(['-', '_', ' '])
         .filter(|w| !w.is_empty())
         .map(|w| {
             let mut c = w.chars();

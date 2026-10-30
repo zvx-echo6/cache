@@ -403,6 +403,7 @@ pub fn inflate_cost_multiplier(mult: &mut Vec<f32>, rows: usize, cols: usize) {
 // ---- corridor mask ---------------------------------------------------------------------------
 
 /// True where a cell lies OUTSIDE the great-circle corridor (`_corridor_mask`).
+#[allow(clippy::too_many_arguments)] // the grid and corridor numbers of navi's `_corridor_mask`, one for one
 pub fn corridor_mask(
     rows: usize, cols: usize, origin_lat: f64, origin_lon: f64, ps_lat: f64, ps_lon: f64,
     line: ((f64, f64), (f64, f64)), pad_km: f64, endpoint_pad_km: f64,

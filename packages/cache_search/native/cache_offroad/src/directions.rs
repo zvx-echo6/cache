@@ -16,6 +16,12 @@ use crate::snap::{plan_end, route_planned, EndPlan};
 use crate::valhalla::{decode_polyline6, encode_polyline6, Maneuver, Valhalla, ValhallaError};
 use serde_json::{json, Value};
 
+/// A road piece of a route: its steps, its points, its maneuvers and its length.
+type RoadPiece = (Vec<Step>, Vec<(f64, f64)>, Vec<Maneuver>, f64);
+
+/// An off-road piece of a route: its steps, its points and its length.
+type OffroadPiece = (Vec<Step>, Vec<(f64, f64)>, f64);
+
 pub const DEFAULT_OFFROAD_SNAP_M: f64 = 150.0;
 pub const DEFAULT_MERGE_BEARING_DEG: f64 = 60.0;
 pub const DEFAULT_MIN_LEG_M: f64 = 150.0;
@@ -362,7 +368,7 @@ impl Env<'_> {
         let mut raw_m = 0.0;
         for (n, piece) in pieces.iter().enumerate() {
             let is_last = n == pieces.len() - 1;
-            let mut got: Option<(Vec<Step>, Vec<(f64, f64)>, Vec<Maneuver>, f64)> = None;
+            let mut got: Option<RoadPiece> = None;
             if let PieceKind::Road { start, end } = &piece.kind {
                 let costing = if piece.mode == "vehicle" || piece.mode == "4w" { "auto" } else if piece.mode == "foot" { "pedestrian" } else if piece.mode == "2w" { "bicycle" } else { "auto" };
                 match self.valhalla_route(*start, *end, costing) {
@@ -417,7 +423,7 @@ impl Env<'_> {
         }
     }
 
-    fn last_mile(&self, a: (f64, f64), b: (f64, f64), req: &DirectionsRequest, after_road: bool, from_cat: Option<&String>, to_cat: Option<&String>) -> ADirResult<(Vec<Step>, Vec<(f64, f64)>, f64)> {
+    fn last_mile(&self, a: (f64, f64), b: (f64, f64), req: &DirectionsRequest, after_road: bool, from_cat: Option<&String>, to_cat: Option<&String>) -> ADirResult<OffroadPiece> {
         let result = self.run_offroad_router(a, b, req, from_cat, to_cat).map_err(|e| Self::offroad_error(&e))?;
         let mut pieces = pieces_from_result(&result);
         if after_road {

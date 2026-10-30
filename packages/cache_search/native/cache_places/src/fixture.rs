@@ -232,10 +232,13 @@ pub fn write_fixture_pack_with_vectors(path: &Path) {
 /// The build name the fixture's tiles and common file carry.
 pub const FIXTURE_BUILD: &str = "na-places-2026-10-13";
 
+/// A street of the fixture: name, suffix, town, postcode and its house numbers with their points.
+type FixtureStreet = (&'static str, Option<&'static str>, &'static str, &'static str, Vec<(String, f64, f64)>);
+
 /// The fixture's streets with house numbers: (street as the source writes it, the expanded form or None, locality,
 /// postcode, house numbers with their points). Overland Ave and W 10th St are in Burley's tile; Baseline Rd is cut by the
 /// tile edge at 113 degrees west, so half of it is in each of two tiles (a street a reader has to join).
-fn streets() -> Vec<(&'static str, Option<&'static str>, &'static str, &'static str, Vec<(String, f64, f64)>)> {
+fn streets() -> Vec<FixtureStreet> {
     // Overland Ave runs north-south: even numbers on the west side every 10, odd on the east, plus the Walgreens door
     // (1414, an exact match) and a lettered number. 1414 is the only even number between 1410 and 1420.
     let mut overland: Vec<(String, f64, f64)> = Vec::new();

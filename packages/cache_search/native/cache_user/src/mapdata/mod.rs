@@ -173,7 +173,7 @@ pub fn unique(name: &str, taken: &[String], limit: usize) -> String {
         let suffix = format!("_{i}");
         let keep: String = name.chars().take(limit.saturating_sub(suffix.len())).collect();
         let c = format!("{}{suffix}", keep.trim_end_matches('_'));
-        if !taken.iter().any(|t| *t == c) {
+        if !taken.contains(&c) {
             return c;
         }
         i += 1;

@@ -118,9 +118,10 @@ pub enum ToolOutput {
 pub struct ToolError {
     pub code: String,
     pub detail: String,
-    pub extra: Map<String, Value>,
+    /// Boxed, like [top], so a `Result<_, ToolError>` stays small (clippy's result_large_err); the JSON is the same.
+    pub extra: Box<Map<String, Value>>,
     /// Fields beside `error` at the top level of the result (navigate attaches `from_matched` and `to_matched`).
-    pub top: Map<String, Value>,
+    pub top: Box<Map<String, Value>>,
 }
 
 impl ToolError {
@@ -139,7 +140,7 @@ impl ToolError {
     pub const BAD_RESPONSE: &'static str = "bad_response";
 
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        ToolError { code: code.into(), detail: detail.into(), extra: Map::new(), top: Map::new() }
+        ToolError { code: code.into(), detail: detail.into(), extra: Box::default(), top: Box::default() }
     }
 
     /// Adds an extra field after the existing ones.
@@ -162,13 +163,13 @@ impl ToolError {
         if !self.detail.is_empty() {
             err.insert("detail".into(), Value::String(self.detail.clone()));
         }
-        for (k, v) in &self.extra {
+        for (k, v) in self.extra.iter() {
             err.insert(k.clone(), v.clone());
         }
         let mut out = Map::new();
         out.insert("ok".into(), Value::Bool(false));
         out.insert("error".into(), Value::Object(err));
-        for (k, v) in &self.top {
+        for (k, v) in self.top.iter() {
             out.insert(k.clone(), v.clone());
         }
         Value::Object(out)

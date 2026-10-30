@@ -271,7 +271,7 @@ impl Run {
         }
         let mut out = Vec::new();
         for (lab, ln) in runs {
-            out.extend(std::iter::repeat(lab).take(ln));
+            out.extend(std::iter::repeat_n(lab, ln));
         }
         out
     }
@@ -493,6 +493,7 @@ pub fn follow_runs(trail: &[u8], lat: &[f64], lon: &[f64], min_leg_m: f64) -> Ve
     out.into_iter().map(|o| (o[0], o[1], o[2] as u8)).collect()
 }
 
+#[allow(clippy::needless_range_loop)] // `k` indexes the points and their running distance together
 fn name_samples(lat: &[f64], cum: &[f64]) -> Vec<usize> {
     let mut idx = vec![0usize];
     let mut nxt = FOLLOW_SAMPLE_M;
@@ -518,7 +519,7 @@ fn majority_name(names: &[Option<String>]) -> Option<String> {
     }
     let mut best: Option<(&str, usize)> = None;
     for (k, c) in &votes {
-        if best.map_or(true, |b| *c > b.1) {
+        if best.is_none_or(|b| *c > b.1) {
             best = Some((k, *c));
         }
     }

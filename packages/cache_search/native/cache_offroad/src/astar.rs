@@ -2,6 +2,10 @@
 //! (with `_speed_kmh` and `_movement_edge_time`), and the single-mode `astar_multigoal` that the
 //! navi tests use as the foot-parity oracle. State planes are f32 (g) / i32 (parent) like navi's.
 
+// A line-by-line port: the negated float comparisons keep navi's NaN behaviour (a NaN is never "less than"), and the index loops
+// keep its shape so the two can be read side by side.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop)]
+
 pub const SLOPE_PENALTY_SCALE: f64 = 10.0;
 pub const SLOPE_PENALTY_CAP: f64 = 1e6;
 const INF: f64 = f64::INFINITY;
@@ -19,12 +23,7 @@ pub fn speed_kmh(signed_grade: f64, speed_function_id: i64, base_speed_kmh: f64,
         if denom < 0.1 {
             denom = 0.1;
         }
-        let mut rel = 1.0 / denom;
-        if rel < 0.05 {
-            rel = 0.05;
-        } else if rel > 1.5 {
-            rel = 1.5;
-        }
+        let rel = (1.0 / denom).clamp(0.05, 1.5);
         base_speed_kmh * rel
     } else {
         let mut v = base_speed_kmh * (1.0 - signed_grade.abs() / max_grade);

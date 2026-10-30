@@ -125,6 +125,7 @@ pub fn feature_access(f: &MvumFeature, mode_idx: usize, check_date: Option<(u32,
     a
 }
 
+#[allow(clippy::too_many_arguments)] // a grid, its size, two cells and a value: the plain Bresenham signature
 fn draw_line(grid: &mut [u8], rows: i64, cols: i64, r1: i64, c1: i64, r2: i64, c2: i64, value: u8) {
     let dr = (r2 - r1).abs();
     let dc = (c2 - c1).abs();
@@ -156,6 +157,7 @@ fn draw_line(grid: &mut [u8], rows: i64, cols: i64, r1: i64, c1: i64, r2: i64, c
 
 /// Rasterize the features for the three motorized modes (mtb, atv, vehicle) onto the query grid.
 /// `check_date` = None reproduces the cached path navi's Auto uses (no seasonal check).
+#[allow(clippy::needless_range_loop)] // `mi` is the mode index into the feature's access and the three grids
 pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(u32, u32)>) -> [Vec<u8>; 3] {
     let (rows, cols) = (meta.rows as i64, meta.cols as i64);
     let n = meta.rows * meta.cols;

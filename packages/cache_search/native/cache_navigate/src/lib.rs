@@ -34,6 +34,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+/// The nearest place of a category as a route end: the place, how it was matched, and the two candidate lists.
+type NearestEnd = (resolve::Resolved, &'static str, Vec<Value>, Vec<Value>);
+
 /// Where a places pack plugs into the tool (shared with the handle, so it can be set after the tool is registered).
 pub type PlaceSlot = Arc<RwLock<Option<Arc<dyn PlaceSource>>>>;
 
@@ -240,10 +243,6 @@ impl NavigateTool {
 
     fn valhalla(&self) -> Result<Arc<dyn Valhalla>, ToolError> {
         self.core.valhalla()
-    }
-
-    fn offroad(&self) -> Result<Option<Arc<OffroadData>>, ToolError> {
-        self.core.offroad()
     }
 
     fn to_types(&self) -> Vec<String> {
@@ -583,7 +582,7 @@ impl NavigateTool {
     /// routing ranked the candidates, whatever the travel mode, or `"distance"` when no candidate could be routed and the
     /// straight-line order stood: navi's `_rank` values), the warnings (a list, empty when there are none), and the others
     /// (at most 2, with `drive_min`).
-    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<(resolve::Resolved, &'static str, Vec<Value>, Vec<Value>), ToolError> {
+    fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<NearestEnd, ToolError> {
         let not_set_up = || err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone");
         let src = self.place_source().ok_or_else(not_set_up)?;
         let cats = src.categories().ok_or_else(not_set_up)?;

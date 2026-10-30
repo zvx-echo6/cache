@@ -129,7 +129,7 @@ fn definitions_install_with_a_report_and_the_tool_appears_after_calculate() {
     let schemas: Value = serde_json::from_str(&take(unsafe { cs_tool_schemas(f.h) }).unwrap()).unwrap();
     let d = schemas[3]["function"]["description"].as_str().unwrap();
     assert!(d.starts_with("Do something in one of the app's modules."), "{d}");
-    assert!(d.contains("\nplaces.save(name:string, place:place, note:string) - Save a place") == false, "required fields carry a star: {d}");
+    assert!(!d.contains("\nplaces.save(name:string, place:place, note:string) - Save a place"), "required fields carry a star: {d}");
     assert!(d.contains("\nplaces.save(name:string*, place:place*, note:string) - Save a place to the user's saved places. (confirm)\n"), "{d}");
     assert!(d.ends_with("\nbook.add(address:string*, name:string) - Add a contact. (confirm)"), "{d}");
     // a definition list that is not an array is refused, and nothing changes
@@ -355,7 +355,7 @@ fn confirm_ids_continue_after_an_export_and_import_and_pending_runs_do_not() {
     assert_eq!(e, r#"{"format":1,"next_n":1,"ids":[],"web_hits":{},"confirms":2}"#);
     let c2 = unsafe { cs_conversation_import(cstr(&e).as_ptr()) };
     assert!(!c2.is_null());
-    assert_eq!(f.tool(c2, "act", json!({"action": "home.source_switch", "fields": {"source": "weather", "on": true}}))["content"].as_str().unwrap().contains(r#""confirm_id":"c3""#), true);
+    assert!(f.tool(c2, "act", json!({"action": "home.source_switch", "fields": {"source": "weather", "on": true}}))["content"].as_str().unwrap().contains(r#""confirm_id":"c3""#));
     // the run that was pending before the export is not in the copy
     assert!(f.finish(c2, "r1", json!({"ok": true, "result": {}})).is_none());
     assert_eq!(thread_error()["code"], "not_found");

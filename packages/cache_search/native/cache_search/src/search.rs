@@ -17,6 +17,9 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
 use tantivy::{DocAddress, DocSet, Searcher, TantivyDocument, Term};
 
+/// A keyword hit: its score, where it is in the index, and its key.
+type ScoredDoc = (f32, DocAddress, String);
+
 /// Reciprocal rank fusion constant.
 pub const RRF_K: f64 = 60.0;
 
@@ -408,7 +411,7 @@ pub(crate) fn top_deterministic(
     q: &dyn Query,
     limit: usize,
     key_field: Field,
-) -> tantivy::Result<(Vec<(f32, DocAddress, String)>, usize)> {
+) -> tantivy::Result<(Vec<ScoredDoc>, usize)> {
     let limit = limit.max(1);
     let mut l = limit;
     loop {
@@ -551,10 +554,7 @@ impl Handle {
             }
             let used = match &opts.query_vector {
                 Some(q) if l.accepts_vector(&q.model, q.vector.len()) => {
-                    match l.dense_search(&q.vector, need, base, snippet_chars) {
-                        Ok(h) => Some(h),
-                        Err(_) => None,
-                    }
+                    l.dense_search(&q.vector, need, base, snippet_chars).ok()
                 }
                 _ => None,
             };
@@ -571,7 +571,7 @@ impl Handle {
         // the keyword list and each library's vector list, one entry per address (a point found by both is
         // taken from the vector list, which carries its payload).
         let order: Vec<Entry> = if libs.is_empty() {
-            merged.iter().map(|m| entry_of(m)).collect()
+            merged.iter().map(entry_of).collect()
         } else {
             let mut by_addr: HashMap<String, Entry> = HashMap::new();
             let mut rank_lists: Vec<Vec<(String, f32)>> = Vec::new();

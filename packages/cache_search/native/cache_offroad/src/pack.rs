@@ -185,6 +185,7 @@ impl SqlitePack {
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)] // a window of one layer: its corner, size, fill and decoder
     fn read_window<T: Copy + Send + Sync>(
         &self, layer: Layer, row0: i64, col0: i64, rows: usize, cols: usize, fill: T,
         dec: &(dyn Fn(&[u8]) -> PResult<Vec<T>> + Sync),

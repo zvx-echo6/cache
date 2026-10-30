@@ -162,10 +162,8 @@ impl LibrarySettings {
     pub fn payload_fields(&self) -> Vec<String> {
         let f = &self.fields;
         let mut v: Vec<String> = vec![f.text.clone()];
-        for x in [&f.title, &f.title_fallback, &f.summary, &f.page, &f.source_type, &f.author, &f.document] {
-            if let Some(n) = x {
-                v.push(n.clone());
-            }
+        for n in [&f.title, &f.title_fallback, &f.summary, &f.page, &f.source_type, &f.author, &f.document].into_iter().flatten() {
+            v.push(n.clone());
         }
         for r in &self.leave_out {
             v.push(r.field().to_string());
@@ -924,8 +922,7 @@ impl LibSlot {
             } else {
                 NamedQuery::new(VectorInternal::Dense(vector.to_vec()), name.clone())
             };
-            let mut params = SearchParams::default();
-            params.hnsw_ef = Some(HNSW_EF);
+            let params = SearchParams { hnsw_ef: Some(HNSW_EF), ..Default::default() };
             QueryRequestBuilder::new(width)
                 .query(ScoringQuery::Vector(QueryEnum::Nearest(nq)))
                 .params(params)

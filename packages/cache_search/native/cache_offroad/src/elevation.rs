@@ -51,9 +51,12 @@ pub fn decode_terrarium_webp(bytes: &[u8]) -> Result<Vec<u32>, ElevError> {
 }
 
 /// Elevation from a local PMTiles file of Mapterhorn-format tiles (z12, 512 px, Terrarium WebP).
+/// A decoded elevation tile's place: (x, y).
+type TileKey = (i64, i64);
+
 pub struct PmtilesElevation {
     pm: PmTiles,
-    cache: Mutex<VecDeque<((i64, i64), Arc<Vec<f32>>)>>,
+    cache: Mutex<VecDeque<(TileKey, Arc<Vec<f32>>)>>,
 }
 
 impl PmtilesElevation {

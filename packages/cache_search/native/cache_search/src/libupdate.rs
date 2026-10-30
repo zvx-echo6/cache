@@ -564,6 +564,7 @@ fn sync_dir(_dir: &Path) -> Result<()> {
 /// 3. the library opens read-only (the open that search uses, with the cheap scroll profile; it is not counted by
 ///    `shard_open_count` and it keeps nothing open) and the open finds every listed segment (the open drops a
 ///    segment whose files are gone without an error, so the count is compared).
+///
 /// It cannot tell a library with the right contents from one with other contents; only that it is whole enough to
 /// be opened.
 pub fn library_is_complete(library: &Path) -> bool {
@@ -583,6 +584,7 @@ pub fn has_leftovers(library: &Path) -> bool {
 /// - `<library>.cs-old` and no `library` (a crash between the two renames): `.cs-old` is renamed back to `library`;
 /// - `<library>.cs-old` with a `library` that is not complete (the swap finished but the new library is
 ///   unusable): `library` is deleted and `.cs-old` renamed back.
+///
 /// The caller must own the library (no open handle in this process, no update running); this cannot know about
 /// other processes.
 pub fn recover_leftovers(library: &Path) -> Result<Vec<String>> {

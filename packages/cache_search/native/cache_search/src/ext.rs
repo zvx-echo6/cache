@@ -8,6 +8,9 @@ use cache_user::UserStore;
 use cache_video::{Video, VideoCfg};
 use serde::Deserialize;
 
+/// Embeds a search query: the model id and the vector, or None when it cannot.
+type QueryEmbedder = dyn Fn(&str) -> Option<(String, Vec<f32>)>;
+
 /// The `user` section of the `cs_open` config: `{"db_path": ".../user.sqlite"}`.
 #[derive(Debug, Deserialize)]
 pub struct UserCfg {
@@ -436,7 +439,7 @@ impl crate::handle::Handle {
         if let Some((lat, lon)) = opts.near.filter(|&n| cache_places::coord::parse(&query, Some(n)).is_none()) {
             opts.prepared = core.feed.prepare(lat, lon, cache_places::feed::SEARCH_PREPARE_WAIT);
         }
-        let embed: Option<&dyn Fn(&str) -> Option<(String, Vec<f32>)>> = self.embedder.as_deref().map(|f| f as _);
+        let embed: Option<&QueryEmbedder> = self.embedder.as_deref().map(|f| f as _);
         let v = core.search(&query, &opts, embed).map_err(map_err)?;
         Ok(v.to_string())
     }

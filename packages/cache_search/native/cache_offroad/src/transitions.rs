@@ -108,7 +108,7 @@ pub fn road_terminus_transitions(
     meta: &GridMeta, trail_grid: &[u8], elevation: Option<&[f32]>,
 ) -> Vec<Tup> {
     let (rows, cols) = (meta.rows, meta.cols);
-    let offnet = |i: usize| trail_grid[i] == 0 && elevation.map_or(true, |e| e[i].is_finite());
+    let offnet = |i: usize| trail_grid[i] == 0 && elevation.is_none_or(|e| e[i].is_finite());
     let mut out = Vec::new();
     let pairs = [(Mode::Foot, Mode::Vehicle)];
     for r in 0..rows {
