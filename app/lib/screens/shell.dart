@@ -6,12 +6,16 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
+import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
 import '../browse/reader_screen.dart';
 import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
+import '../guide/app_links.dart';
+import '../guide/guide_book.dart';
+import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
@@ -39,6 +43,12 @@ import '../notebook/notebook_model.dart';
 import 'notebooks/notebook_screen.dart';
 import 'notebooks/notebooks_screen.dart';
 import 'notebooks/quick_add_sheet.dart';
+import 'settings/about_pages.dart' show AboutPage;
+import 'settings/appearance_page.dart';
+import 'settings/assistant_page.dart';
+import 'settings/maps_page.dart';
+import 'settings/notifications_page.dart';
+import 'settings/sharing_page.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
@@ -108,6 +118,8 @@ class _ShellState extends State<Shell> {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
     widget.maps.addListener(_onMaps);
+    openAppPlace = _goToPlace;
+    appPlaceScreen = _placeScreen;
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
@@ -127,6 +139,8 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     widget.maps.removeListener(_onMaps);
+    if (openAppPlace == _goToPlace) openAppPlace = null;
+    if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();
@@ -162,8 +176,57 @@ class _ShellState extends State<Shell> {
   }
 
   void _openSource(String address) {
+    // A citation of the guide opens the guide's reader at that section.
+    if (address.startsWith('lib:$kGuideLibrary/')) {
+      unawaited(_openGuideAt(address));
+      return;
+    }
     _goModule(ModuleId.library);
     widget.browse.openAddress(address);
+  }
+
+  Future<void> _openGuideAt(String address) async {
+    final book = await GuideBook.load();
+    if (!mounted) return;
+    await openGuide(context, title: book.byAddress(address)?.title, book: book);
+  }
+
+  /// The screen a guide link (cache://) opens over the reader; null for a place this phone does not have.
+  Widget? _placeScreen(AppPlace p) {
+    final regions = widget.hub.regions;
+    final nb = widget.notebooks;
+    final d = _settingsDeps;
+    return switch (p) {
+      AppPlace.home => _home(),
+      AppPlace.ask => _moduleScreen(ModuleId.ask),
+      AppPlace.maps => _moduleScreen(ModuleId.maps),
+      AppPlace.regions => regions == null ? null : RegionsScreen(regions: regions),
+      AppPlace.library => _moduleScreen(ModuleId.library),
+      AppPlace.addToLibrary => AddToLibraryScreen(browse: widget.browse),
+      AppPlace.notebooks => nb == null ? null : NotebooksScreen(deps: nb),
+      AppPlace.placesNotebook => switch ((nb, nb?.notebook.notebooks.where((n) => n.isPlaces).firstOrNull)) {
+          (final deps?, final n?) => NotebookScreen(deps: deps, notebookId: n.id),
+          _ => null,
+        },
+      AppPlace.settings => SettingsScreen(deps: d),
+      AppPlace.assistantSettings => AssistantPage(deps: d),
+      AppPlace.mapsSettings => MapsPage(deps: d),
+      AppPlace.weatherSettings => WeatherPage(deps: d),
+      AppPlace.notifications => NotificationsPage(deps: d),
+      AppPlace.storage => StoragePage(deps: d),
+      AppPlace.sharing => widget.hub.sharing == null ? null : SharingPage(sharing: widget.hub.sharing!),
+      AppPlace.appearance => AppearancePage(app: widget.app),
+      AppPlace.credits => const AboutPage(),
+      AppPlace.models => ModelsScreen(app: widget.app),
+      AppPlace.drawArea => null,
+    };
+  }
+
+  /// A guide link that does not open over the reader: drawing an area happens on the map.
+  void _goToPlace(AppPlace p) {
+    if (p != AppPlace.drawArea) return;
+    _goModule(ModuleId.maps);
+    widget.maps.requestDraw();
   }
 
   /// A video citation: the player at the cited moment (the saved copy when there is one).
@@ -192,6 +255,7 @@ class _ShellState extends State<Shell> {
     getArea: _getArea,
     turnOnWeather: (context) => turnOnWeather(context, _weatherTurnOn),
     addLibrary: (context) => showAddToLibrary(context, widget.browse),
+    openGuide: (context, title) => openGuide(context, title: title),
   );
 
   /// "Get your area": the Regions sheet for where the phone is; without a position, the regions to search.
@@ -418,6 +482,18 @@ class _ShellState extends State<Shell> {
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 
+  Widget _home() => HomeScreen(
+    layout: widget.layout,
+    weather: widget.hub.weather,
+    onOpenWeather: () => _goModule(ModuleId.weather),
+    turnOn: _weatherTurnOn,
+    setup: _setup,
+    search: _search,
+    onAsk: _askFromHome,
+    onOpenSettings: _openSettings,
+    onOpenShortcut: _openShortcut,
+  );
+
   @override
   Widget build(BuildContext context) {
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
@@ -441,17 +517,7 @@ class _ShellState extends State<Shell> {
           body: IndexedStack(
             index: show,
             children: [
-              HomeScreen(
-                layout: layout,
-                weather: widget.hub.weather,
-                onOpenWeather: () => _goModule(ModuleId.weather),
-                turnOn: _weatherTurnOn,
-                setup: _setup,
-                search: _search,
-                onAsk: _askFromHome,
-                onOpenSettings: _openSettings,
-                onOpenShortcut: _openShortcut,
-              ),
+              _home(),
               ModulesScreen(layout: layout, app: widget.app, onOpen: _goModule),
               for (final m in ModuleId.values) _built.contains(m) ? _moduleScreen(m) : const SizedBox.shrink(),
             ],

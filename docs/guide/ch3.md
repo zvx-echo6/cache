@@ -152,7 +152,7 @@ Quiet hours do not change what is listed in "Weather". Every alert is listed the
 
 ## Storage
 
-Go to "Settings" > "Storage".
+Go to ["Settings" > "Storage"](cache://settings/storage).
 
 The top shows a usage bar and a line such as "118 GB used by Cache · 103 GB free on the phone".
 

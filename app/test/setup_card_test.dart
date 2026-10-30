@@ -62,6 +62,7 @@ void main() {
       getArea: (_) => opened.add('area'),
       turnOnWeather: (_) => opened.add('weather'),
       addLibrary: (_) => opened.add('library'),
+      openGuide: (_, title) => opened.add(title),
     );
   }
 
@@ -168,6 +169,21 @@ void main() {
     expect(opened, ['area']);
     regions.set([_region('ready')]);
     expect(setup.stoppedRegion, isNull, reason: 'a region that is ready leaves nothing to carry on');
+    await r.dispose(tester);
+  });
+
+  testWidgets('each line opens its section of the guide, the same section the assistant points to', (tester) async {
+    await rig(tester);
+    await home(tester);
+    await tester.tap(find.byKey(const ValueKey('setup-area-guide')));
+    await tester.pump();
+    expect(opened, ['Cache guide: 1. Getting started: Download a region']);
+    expect(SetupCache.guideTitles, [
+      'Cache guide: 1. Getting started: Choose a model',
+      'Cache guide: 1. Getting started: Download a region',
+      'Cache guide: 1. Getting started: Turn on weather and alerts',
+      'Cache guide: 1. Getting started: Add to your Library',
+    ]);
     await r.dispose(tester);
   });
 

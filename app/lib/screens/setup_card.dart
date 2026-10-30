@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../actions/setup_status.dart' show kSetupAreas;
 import '../app_state.dart';
 import '../browse/browse_state.dart';
 import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
@@ -58,6 +59,7 @@ class SetupCache {
     required this.getArea,
     required this.turnOnWeather,
     required this.addLibrary,
+    this.openGuide,
   });
 
   final AppState app;
@@ -73,6 +75,14 @@ class SetupCache {
   final void Function(BuildContext) getArea;
   final void Function(BuildContext) turnOnWeather;
   final void Function(BuildContext) addLibrary;
+
+  /// Opens the guide at a section (its title); null leaves the guide buttons out.
+  final void Function(BuildContext, String title)? openGuide;
+
+  /// The guide section for each line: the same pointers the assistant's setup check gives (kSetupAreas).
+  static final List<String> guideTitles = [
+    for (final id in ['models', 'regions', 'live_data', 'libraries']) kSetupAreas.firstWhere((a) => a.id == id).guide,
+  ];
 
   ModelDownloads? get downloads => modelDownloads ?? ModelDownloads.shared;
 
@@ -216,6 +226,7 @@ class SetupCard extends StatelessWidget {
               reason: _reasons[i],
               line: s.lines[i],
               onTap: () => actions[i](context),
+              onGuide: setup.openGuide == null ? null : () => setup.openGuide!(context, SetupCache.guideTitles[i]),
             ),
         ],
       ),
@@ -224,12 +235,15 @@ class SetupCard extends StatelessWidget {
 }
 
 class _SetupRow extends StatelessWidget {
-  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap});
+  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap, this.onGuide});
 
   final String title;
   final String reason;
   final SetupLine line;
   final VoidCallback onTap;
+
+  /// Opens this line's section of the guide.
+  final VoidCallback? onGuide;
 
   @override
   Widget build(BuildContext context) {
@@ -280,6 +294,13 @@ class _SetupRow extends StatelessWidget {
               ],
             ),
           ),
+          if (onGuide != null)
+            IconButton(
+              key: ValueKey('${key is ValueKey<String> ? (key as ValueKey<String>).value : title}-guide'),
+              tooltip: 'How to: $title',
+              icon: Icon(Icons.help_outline, size: 20, color: k.secondary),
+              onPressed: onGuide,
+            ),
           if (!line.done) ...[
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: k.secondary),

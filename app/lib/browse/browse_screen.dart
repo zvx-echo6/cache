@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../guide/guide_book.dart';
+import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' as modules show addToHome;
 import '../screens/hold.dart';
@@ -107,6 +109,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
         ),
       ),
     );
+  }
+
+  /// The guide that ships in the app opens as a book: its chapters, links and search, with the library's usual menu.
+  Future<void> _openGuideBook(LibraryItem l) async {
+    final book = await GuideBook.load();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => GuideReaderScreen(book: book, menu: (ctx) async => showLibraryMenu(ctx, _libraryActions(l))),
+    ));
   }
 
   void _openLibrary(LibraryItem l) {
@@ -269,7 +280,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
       // The guide ships inside the app; every other library is one the person added.
       detail: [s.isGuide(l) ? 'Built in' : 'Your own', if (n > 0) '$n ${n == 1 ? 'entry' : 'entries'}', formatBytes(l.size)].join(' · '),
       badge: badge,
-      onTap: () => _openLibrary(l),
+      onTap: () => s.isGuide(l) ? _openGuideBook(l) : _openLibrary(l),
       onHold: () => showLibraryMenu(context, _libraryActions(l)),
     );
   }
