@@ -4,6 +4,8 @@
 
 Kagi lets the assistant search the web when you're online. Without it, Cache answers from your offline sources and says when it can't search the web.
 
+![Cache model and web search](shot:settings-assistant)
+
 Kagi is paid. You need your own key. It costs $12 for every 1,000 searches (Kagi's API pricing page, checked 2026-10-29).
 
 To get a key:

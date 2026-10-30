@@ -8,6 +8,8 @@
 - "Notes": plans, checklists and lists you keep updating.
 - "Places": places with notes and photos, shown on the map.
 
+![The Notebooks list](shot:notebooks)
+
 A fresh install has a Journal.
 
 Open "Notebooks" from "Modules". It lists your notebooks and how many entries each has. "Log again" shows the logs you used last. "Search" looks across all notebooks.
@@ -15,6 +17,8 @@ Open "Notebooks" from "Modules". It lists your notebooks and how many entries ea
 ## Make a notebook
 
 Make a new notebook from a template.
+
+![New notebook](shot:notebook-new)
 
 1. [Open "Notebooks"](cache://notebooks) and tap "New notebook".
 2. Under "Start from", choose "Journal", "Log", "Notes" or "Places". Or pick a ready-made log under "Starter logs".
@@ -30,9 +34,13 @@ Make a new notebook from a template.
 3. Tap "Delete notebook" to remove it. A pop-up says how many entries go with it. This can't be undone.
 4. Tap "Add to Home" to put it on "Home".
 
+![Edit notebook](shot:notebook-edit)
+
 ## Journal
 
 A Journal keeps dated entries: what happened, where, and what you did.
+
+![A Journal entry](shot:notebook-entry)
 
 1. Open the Journal and tap "New entry". When it's empty the button says "Write an entry".
 2. Optional: type a "Title (optional)".
@@ -54,6 +62,8 @@ To delete an entry, open it and choose "Delete". Tap "Undo" on "Entry deleted" t
 
 A Log is for something you do again and again, such as a generator test or a blood pressure reading. Every entry has the same fields.
 
+![Making a log](shot:log-editor)
+
 1. Open "Notebooks" and tap "New notebook".
 2. Choose "Log" under "Start from", or a ready-made one under "Starter logs".
 3. Tap "Add field" for each thing to record.
@@ -70,6 +80,8 @@ When, text, place and photos are always there.
 2. Change what's different. Number, choice and yes or no start from your last entry.
 3. Tap "Save". Cache says Saved to and the log's name, with "Undo".
 
+![Adding a log entry](shot:log-quick-add)
+
 The top of a log shows when it was "LAST DONE".
 
 - Once a log has entries, you can't change a field's type. Use "Hide field" to stop showing one. Its old values are kept.
@@ -77,6 +89,8 @@ The top of a log shows when it was "LAST DONE".
 ## Notes
 
 A Notes notebook is for plans, checklists and lists you keep updating.
+
+![A note being edited](shot:notebook-entry)
 
 1. Open the notebook and tap "New entry".
 2. Optional: type a "Title (optional)".
@@ -89,6 +103,8 @@ To find a note later, use "Search" on the Notebooks screen, or the Home search b
 ## The Places notebook
 
 The Places notebook holds your saved places and shows them on the map.
+
+![The Places notebook](shot:places-list)
 
 1. [Open "Notebooks" and tap "Places"](cache://notebooks/places).
 2. Tap a place to open it. Press and hold one to edit it.
@@ -103,6 +119,8 @@ You can also save a place from the map. Press and hold the map and choose "Save"
 ## Add or edit a place
 
 Add place and Edit place are the same screen.
+
+![Editing a place](shot:places-edit)
 
 1. In the Places notebook, tap "Add place". To edit, press and hold a place.
 2. Search an address, place or coordinates, or tap the map to move the pin.
@@ -119,6 +137,8 @@ When editing, "Delete place" asks you to confirm.
 
 When "Weather and alerts" is on, a gear appears. It opens "Alerts for" this place.
 
+![A place's alert choices](shot:place-alerts-sheet)
+
 - "Same as your alert setting": follows ["Settings" > "Notifications"](cache://settings/notifications). This is the default.
 - "Custom for this place": set "How far out" and the kinds, such as fires, earthquakes and river levels. These pop up even when "Pop up for" is "Serious only" or "None". They're silent in quiet hours unless serious.
 - "Off": no alerts for this place.
@@ -128,6 +148,8 @@ A place with "Weather and alerts" on is watched. Cache keeps weather, alerts and
 ## The map ring menu
 
 Press and hold any spot on the map to open a ring. The centre shows the place name and coordinates. Tap outside to close it.
+
+![The ring menu](shot:map-ring)
 
 The wedges are:
 - "To here": directions to the spot.
@@ -162,6 +184,8 @@ A route can have up to 10 stops. Each is listed under the destination with a rem
 3. Read the running total in the bar, in your units.
 4. Tap "Done" to end.
 
+![Measuring on the map](shot:map-measure)
+
 "Undo" removes the last point.
 
 ## Save a spot to a notebook
@@ -169,11 +193,15 @@ A route can have up to 10 stops. Each is listed under the destination with a rem
 1. Press and hold the map and choose "Save". The ring shows your notebooks, most used first.
 2. Tap a notebook. Its entry form opens at that spot. For "Places" it is the Add place screen with the pin there.
 
+![The notebook ring](shot:map-notebook-ring)
+
 The ring holds at most six wedges: five notebooks and "More". "More" turns to the next page, for example "2 of 3". Tap the back arrow in the centre to go back.
 
 ## Write with Markdown
 
 Notebook entries are written in Markdown. There are no formatting buttons. You type marks and the text formats as you type.
+
+![The Markdown cheat sheet](shot:markdown-cheatsheet)
 
 - Headings: start a line with `#` and a space.
 - Bold: two asterisks round the words. Italic: one. Strikethrough: two tildes.
@@ -190,6 +218,8 @@ Tap the small "?" in the editor for a one-screen cheat sheet.
 ## Private notebooks
 
 Mark a notebook or entry "Private" to leave it out of sync and sharing.
+
+![Edit notebook](shot:notebook-edit)
 
 1. Open the notebook and tap "Edit notebook".
 2. Turn on "Private". You can also set it on an entry.
@@ -209,6 +239,8 @@ Some starter logs, such as medication and health, start private. You can switch 
 ## Write notebooks to Obsidian or Logseq
 
 Cache can keep your entries as Markdown files in a folder, for Obsidian or Logseq to open.
+
+![Connections](shot:connections)
 
 1. Open "Notebooks", open its menu and tap "Connections".
 2. Under "Obsidian" or "Logseq", tap "Connect".
@@ -242,6 +274,8 @@ Your other devices are on the same "Connections" screen. See Sharing and sync: c
 ## Ask Cache to add to a notebook
 
 You can tell Cache to log something in "Ask", for example: add a generator test, 20 minutes, under load. It can add to your Journal and log notebooks.
+
+![The confirm card](shot:ask-confirm-card)
 
 1. Ask in plain words.
 2. Read the card Cache shows. It says "Add to Journal", or Add to and the log's name, with the details.

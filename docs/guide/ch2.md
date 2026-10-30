@@ -4,6 +4,8 @@
 
 "Home" is the first screen. It gives you weather, alerts and shortcuts at a glance.
 
+![The Home screen](shot:home)
+
 From the top it shows:
 - the search box, "Search Cache or ask anything";
 - the "Set up Cache" card, on a fresh install until it is done;
@@ -21,6 +23,8 @@ The "Weather and alerts" card shows the temperature and any active alerts. A red
 
 The search box finds things on your phone, or starts a chat.
 
+![Home search results](shot:home-search)
+
 1. Tap "Search Cache or ask anything" and type.
 2. Read the list. It searches your Library, Notebooks, Places and addresses, and Maps layers. Best match is first.
 3. Tap a row to open it. Each row shows where it comes from.
@@ -32,6 +36,8 @@ If nothing matches, "Nothing found" shows under that row. Cache doesn't guess or
 ## Edit Home
 
 You choose which blocks Home shows and in what order.
+
+![The Edit Home screen](shot:edit-home)
 
 1. On "Home", scroll down and tap "Edit Home".
 2. Use a block's switch to show or hide it.
@@ -48,16 +54,22 @@ A shortcut puts something you use often on "Home". Use "Add to Home" on:
 - a Library page: "More" > "Add to Home" in the reader;
 - a chat: tap and hold it in the chat list.
 
+![A module's options](shot:modules-hold-menu)
+
 ## Move or remove a shortcut
 
 1. On "Home", tap and hold the shortcut.
 2. Choose "Move earlier", "Move later" or "Remove from Home".
+
+![A shortcut's options](shot:home-shortcut-menu)
 
 - If a shortcut says "That chat is gone" or "That page is not on this phone any more", remove it.
 
 ## The bar and Modules
 
 The bar at the bottom starts with "Home" and ends with "Modules". Between them are up to three modules you pin. At first they are "Ask", "Maps" and "Library".
+
+![The Modules screen](shot:modules)
 
 "Modules" lists every module: "Ask", "Library", "Maps", "Videos", "Weather", "Notebooks" and "Settings". A dot under a name means it is on the bar.
 
@@ -72,6 +84,8 @@ For bigger icons, go to ["Settings" > "Appearance"](cache://settings/appearance)
 ## Select several items, and press and hold
 
 Lists have no tick boxes until you ask for them.
+
+![Regions with Select on](shot:regions-select)
 
 To use an item's menu:
 1. Press and hold the item. You feel a short buzz and it lifts.
@@ -90,6 +104,8 @@ Delete always asks first. The pop-up shows what it frees and says "You can downl
 
 "Ask" answers questions using your phone's sources. It runs on your phone.
 
+![The Ask screen](shot:ask)
+
 1. Open "Ask" from the bar. You can also type in the Home search box and tap "Ask Cache:".
 2. If the title says "No model", tap it and choose a model first.
 3. Type in "Ask anything" and tap "Send".
@@ -106,6 +122,8 @@ To start fresh, tap "New chat".
 
 Cache uses your location in "Ask" whenever your phone allows it. It never asks.
 
+![The + menu in Ask](shot:ask-plus-menu)
+
 To turn it off for your questions:
 1. Tap the + button left of the box where you type.
 2. Turn off "Use my location".
@@ -116,6 +134,8 @@ To turn it off for your questions:
 
 When the assistant works out a route, the answer has an "Open navigation" button.
 
+![An answer with Open navigation](shot:ask-open-navigation)
+
 1. Tap "Open navigation". The route opens in "Maps".
 2. Tap "Start" to be guided.
 
@@ -125,6 +145,8 @@ When the assistant works out a route, the answer has an "Open navigation" button
 ## Switch or unload the model in Ask
 
 The model name at the top of "Ask" is a menu.
+
+![The model menu in Ask](shot:ask-model-menu)
 
 1. Tap the model name.
 2. Choose one:
@@ -140,6 +162,8 @@ The menu also shows how much memory the model uses.
 
 Answers show where they came from.
 
+![An answer with its sources](shot:ask-sources)
+
 - Numbers like [1] point to a source.
 - A line under the answer says how many sources, for example "1 source". Tap it for the list.
 - Each source shows its number, title and a short passage.
@@ -154,6 +178,8 @@ The assistant can be wrong, even with sources. For anything about your safety, r
 ## Report this answer
 
 Use this when an answer is wrong, made up or harmful.
+
+![The report sheet](shot:ask-report)
 
 1. Under the answer, tap "Report this answer".
 2. Choose "Offensive or harmful", "Wrong or made up" or "Something else".
@@ -174,6 +200,8 @@ Cache says "Report saved on this phone. Find it in Settings > Assistant." That p
 
 Every chat is saved on your phone, even after a restart.
 
+![The chat list](shot:chat-list)
+
 1. Tap "Chats" at the top left of "Ask".
 2. Type in "Search chats" to find one by its words.
 3. Tap a chat to open it. Tap "New chat" to start another.
@@ -190,6 +218,8 @@ Chats are grouped as "Pinned", "Today", "Yesterday", "Previous 7 days" and then 
    - "Add to Home";
    - "Delete".
 
+![A chat's options](shot:chat-menu)
+
 After a delete, tap "Undo" on "Chat deleted" to bring it back.
 
 To share the open chat, tap "Share chat" at the top of "Ask".
@@ -199,6 +229,8 @@ To delete all chats, go to ["Settings" > "Cache model and web search" > "Delete 
 ## Search the map
 
 Search finds a place, town, address or coordinates.
+
+![Map search results](shot:maps-search)
 
 1. Open "Maps".
 2. Tap "Search places or coordinates" and type.
@@ -214,6 +246,8 @@ The locate button ("Find me") moves the map to you. Tap it again to turn the map
 
 Tap a search result or a place to open its card at the bottom of "Maps".
 
+![A place card](shot:place-card)
+
 The card has:
 - "Directions": a route from where you are;
 - "Save place": keeps it in your Places notebook;
@@ -225,6 +259,8 @@ Press and hold on the map for the ring menu. It has "Add stop" and "Measure". Se
 ## Get directions
 
 Directions plan a route from where you are to a place.
+
+![The directions panel](shot:directions-panel)
 
 1. In "Maps", open a place's card. Or press and hold the map and choose "To here".
 2. Tap "Directions".
@@ -241,6 +277,8 @@ Road directions work offline if the region is downloaded.
 ## Off-road directions
 
 Off-road plans a route away from roads.
+
+![Off-road directions](shot:directions-offroad)
 
 1. Open a place's card and tap "Directions".
 2. Tap "Off-road".
@@ -261,6 +299,8 @@ Changing a choice plans the route again. Choices reset on restart: "Drive", then
 
 After "Start", Cache guides you turn by turn.
 
+![Following a route](shot:guidance)
+
 - The banner shows the next turn.
 - "Rerouting" means you left the route.
 - Near the end it says "Arriving", then "You have arrived".
@@ -276,6 +316,8 @@ Guidance keeps running with the screen locked. On Android a "Cache navigation" n
 
 The "Layers" button on the right of "Maps" opens the layers sheet.
 
+![The layers sheet](shot:layers-sheet)
+
 - Switch a layer on or off. Its line says "Downloaded for offline", "Streams when online" or "Needs a connection".
 - Use "Opacity" for a layer laid over the map.
 - "Show my position" turns your dot on or off.
@@ -289,6 +331,8 @@ Layers stream while you're online and keep what you viewed. To keep a whole area
 ## Library
 
 "Library" is one list of everything you keep for offline reading.
+
+![The Library](shot:library)
 
 Each row has an icon, name, description and size. A badge shows only when something needs attention:
 - "Update ready";
@@ -308,6 +352,8 @@ The built-in guide has no "Delete". Anything else asks first and shows what it f
 
 The reader opens a Library item.
 
+![The reader](shot:zim-reader)
+
 - "Search this ZIM" searches inside the open work.
 - "Find in page" finds words, with "Previous" and "Next".
 - "Back", "Forward" and "Main page" are at the bottom.
@@ -319,6 +365,8 @@ The reader opens a Library item.
 ## Videos
 
 "Videos" plays videos from PeerTube sites. Open it from "Modules".
+
+![The Videos screen](shot:videos-list)
 
 To add a site:
 1. Tap "Add an instance".
@@ -338,11 +386,15 @@ In the player:
 - Tap the screen to show the controls.
 - Back, or "Leave full screen", leaves full screen.
 
+![The video player](shot:video-player)
+
 ## Save a video for offline
 
 1. On the video, tap "Download".
 2. Pick a size. Smaller sizes save space.
 3. When it says "Saved on this phone", tap "Play saved copy" to watch with no connection.
+
+![Saving a video](shot:video-download)
 
 Saved videos are under "Saved on this phone" at the top of "Videos".
 
@@ -363,6 +415,8 @@ The same sheet has "Log out" and "Remove this instance".
 ## Weather
 
 "Weather" shows the forecast and alerts for the places you watch. Open it from "Modules", or tap the "Weather and alerts" card on "Home".
+
+![The Weather screen](shot:weather)
 
 - What's already on the phone shows at once, with its age.
 - When you open Cache and the last update is over 30 minutes old, it updates.
