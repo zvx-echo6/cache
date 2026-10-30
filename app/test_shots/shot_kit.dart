@@ -27,6 +27,8 @@ Future<void> loadShotFonts() async {
 
   await family('Roboto', (n) => n.startsWith('roboto-') && n.endsWith('.ttf'));
   await family('MaterialIcons', (n) => n.startsWith('materialicons'));
+  // The phone draws code and links in its own monospace font; the test machine has none, so they are drawn in Roboto.
+  await family('monospace', (n) => n == 'roboto-regular.ttf' || n == 'roboto-bold.ttf' || n == 'roboto-italic.ttf');
   _fonts = true;
 }
 
@@ -54,6 +56,11 @@ ThemeData shotTheme() {
     dialogTheme: t.dialogTheme.copyWith(titleTextStyle: r(t.dialogTheme.titleTextStyle), contentTextStyle: r(t.dialogTheme.contentTextStyle)),
     // A test draws an elevation shadow as a hard black edge; the phone draws it soft. The pictures leave it out.
     snackBarTheme: t.snackBarTheme.copyWith(contentTextStyle: r(t.snackBarTheme.contentTextStyle), elevation: 0),
+    listTileTheme: t.listTileTheme.copyWith(
+      titleTextStyle: r(t.listTileTheme.titleTextStyle),
+      subtitleTextStyle: r(t.listTileTheme.subtitleTextStyle),
+      leadingAndTrailingTextStyle: r(t.listTileTheme.leadingAndTrailingTextStyle),
+    ),
     filledButtonTheme: FilledButtonThemeData(style: b(t.filledButtonTheme.style)),
     outlinedButtonTheme: OutlinedButtonThemeData(style: b(t.outlinedButtonTheme.style)),
     textButtonTheme: TextButtonThemeData(style: b(t.textButtonTheme.style)),

@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Full-size golden pictures (the guide uses the resized copies in assets/guide/shots)
+/test_shots/guide/
+/test_shots/owner/

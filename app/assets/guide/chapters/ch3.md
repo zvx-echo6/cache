@@ -4,6 +4,8 @@
 
 Settings has eight rows, each with a one-line status.
 
+![The Settings page](shot:settings)
+
 1. Tap the gear at the top right of "Home", or open "Settings" from "Modules".
 2. Pick a row:
    - "Cache model and web search"
@@ -24,6 +26,8 @@ There is no Library or Videos page here. Open them from "Modules".
 ## Cache model and web search
 
 This page sets your model, web search, location and chats.
+
+![Cache model and web search](shot:settings-assistant)
 
 1. Go to ["Settings" > "Cache model and web search"](cache://settings/assistant).
 2. Use a row:
@@ -52,6 +56,8 @@ On ["Settings" > "Cache model and web search"](cache://settings/assistant), "Con
 
 This page shows your map downloads and layers.
 
+![Settings, Maps](shot:settings-maps)
+
 1. Go to ["Settings" > "Maps"](cache://settings/maps).
 2. Use a row:
    - "Downloaded": each area, with size and date. Tap one to open the layer list. It says "Nothing downloaded" if empty.
@@ -62,6 +68,8 @@ This page shows your map downloads and layers.
 ## Layer definitions (Advanced)
 
 A layer definition says how a map layer is drawn and where it comes from.
+
+![Layer definitions](shot:settings-maps-advanced)
 
 1. Go to ["Settings" > "Maps"](cache://settings/maps) and tap "Advanced" ("Layer definitions and source addresses").
 2. Use the page:
@@ -75,6 +83,8 @@ A layer definition says how a map layer is drawn and where it comes from.
 ## Weather and alerts
 
 This page turns weather sources on and off.
+
+![The Weather and alerts settings](shot:settings-weather)
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. If data is old, the line warns, for example "Updated 3 days ago".
@@ -94,6 +104,8 @@ Which places the data covers is set in the Places notebook (chapter 5).
 
 Some sources need your own free key from the provider. The key goes on the source's row.
 
+![The key sheet](shot:key-sheet)
+
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather) and find the source.
 2. Tap "Get key" on its row.
 3. Tap "Get a key from [provider]" and follow their steps.
@@ -112,11 +124,15 @@ Keys stay on this phone, in secure storage. They are never shown again and are n
 2. Tap the source's row to open its page.
 3. Tap "Replace" for a new key, or "Remove the key".
 
+![A source's page](shot:source-page)
+
 - Removing a key turns off every source that uses it.
 
 ## Add sources from a link
 
 Other people can publish lists of data sources, called catalogues. You can add one by its link.
+
+![Add sources from a link](shot:add-catalogue)
 
 1. Go to ["Settings" > "Weather and alerts" > "More sources"](cache://settings/weather).
 2. At the bottom, tap "Add sources from a link".
@@ -138,6 +154,8 @@ New sources stay off until you switch them on. Only add links from people you tr
 
 This page decides which alerts pop up.
 
+![The Notifications page](shot:settings-notifications)
+
 1. Go to ["Settings" > "Notifications"](cache://settings/notifications).
 2. Under "Pop up for", choose one:
    - "Serious only": evacuations, severe warnings, and fires within 10 mi. This is the default.
@@ -154,6 +172,8 @@ Every alert is listed in "Weather" either way.
 
 Quiet hours make alerts arrive silently. Serious ones still ring.
 
+![Quiet hours](shot:quiet-hours)
+
 1. Go to ["Settings" > "Notifications" > "Quiet hours"](cache://settings/notifications).
 2. Turn on the "Quiet hours" switch.
 3. Tap "From" and choose the start.
@@ -164,6 +184,8 @@ Quiet hours don't change what "Weather" lists.
 ## Storage
 
 This page shows what Cache uses and lets you free space.
+
+![The Storage page](shot:settings-storage)
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
 2. Read the usage bar and the line such as "118 GB used by Cache · 103 GB free on the phone".
@@ -178,6 +200,8 @@ The page also has "Clean up", "Mobile data downloads" and "Kept free for the pho
 
 "Clean up" removes unfinished downloads, damaged files and temporary files. It never touches what you saved.
 
+![The Storage page](shot:settings-storage)
+
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
 2. Tap "Clean up". It shows how much it will free.
 
@@ -188,11 +212,15 @@ The page also has "Clean up", "Mobile data downloads" and "Kept free for the pho
 
 Open "Regions" in ["Settings" > "Storage"](cache://settings/storage) to see an "Off-road data" group. It has a row for each state, such as "[size] · used by [regions]". It says "Downloading" while it runs.
 
+![Storage, Regions](shot:storage-regions)
+
 A note explains: "Each state's off-road data is downloaded once and kept while a region that uses it is on this phone."
 
 ## Mobile data downloads
 
 This switch decides whether big downloads may use mobile data.
+
+![The Storage page](shot:settings-storage)
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
 2. Find "Mobile data downloads".
@@ -217,6 +245,8 @@ The row "Kept free for the phone" shows "10% of storage, 5 to 20 GB" and the cur
 
 Sharing keeps your own Cache devices the same. They talk to each other directly.
 
+![Sharing and sync](shot:settings-sharing)
+
 1. On each device, go to ["Settings" > "Sharing and sync"](cache://settings/sharing).
 2. Tap "Set up sharing".
 3. On the first device, tap "Show my link code". It works once, for 15 minutes.
@@ -232,6 +262,8 @@ Under "Linked devices", each device shows whether it is connected directly or th
 ## Sharing and sync: choose what to share
 
 After linking, pick what to share.
+
+![Sharing and sync](shot:settings-sharing)
 
 1. On each device, go to ["Settings" > "Sharing and sync"](cache://settings/sharing).
 2. Under "Shared with linked devices", tick:
@@ -255,6 +287,8 @@ Unticking stops sharing. The files stay. Files whose names start with a dot are 
 
 Appearance changes how Cache looks. Changes apply straight away.
 
+![The Appearance page](shot:settings-appearance)
+
 1. Go to ["Settings" > "Appearance"](cache://settings/appearance).
 2. Under "Theme", choose:
    - "Dark": the default;
@@ -266,6 +300,8 @@ Appearance changes how Cache looks. Changes apply straight away.
 ## Credits and licences
 
 This page says what Cache is and what it is built on.
+
+![Credits and licences](shot:settings-credits)
 
 1. Go to ["Settings" > "Credits and licences"](cache://settings/credits).
 2. Read:
