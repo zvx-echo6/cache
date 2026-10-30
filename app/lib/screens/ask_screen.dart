@@ -495,6 +495,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
     final showText =
         m.phase == TurnPhase.answering || m.phase == TurnPhase.done;
     final status = switch (m.phase) {
+      TurnPhase.starting => 'Starting…',
       TurnPhase.thinking => 'Thinking…',
       TurnPhase.searching => 'Searching your sources…',
       _ => null,
@@ -559,6 +560,8 @@ class _AssistantBlockState extends State<_AssistantBlock> {
             ),
           if (m.error != null)
             Text(m.error!, style: TextStyle(fontSize: 16, color: k.emergency)),
+          if (m.error == kCoreDidNotStart && widget.chat != null)
+            TextButton(key: const ValueKey('ask-try-again'), onPressed: widget.chat!.retryLast, child: const Text('Try again')),
           if (m.isDone && m.error == null && m.text.isNotEmpty)
             _sourcesRow(context, m),
           if (m.isDone && m.error == null && m.text.isNotEmpty && widget.onReport != null)

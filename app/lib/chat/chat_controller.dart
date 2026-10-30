@@ -52,6 +52,9 @@ class ChatMessage {
   bool get streaming => !isDone;
 }
 
+/// The answer when the search core could not start: the question is never answered without its tools.
+const String kCoreDidNotStart = "Cache's search couldn't start, so this wasn't answered.";
+
 /// The Ask conversation and the list of past ones. Lives above the tabs so it survives switching between
 /// them. The open conversation is kept in the [ConversationStore] as it goes; a new chat is stored with its
 /// first question.
@@ -64,6 +67,7 @@ class ChatController extends ChangeNotifier {
     this.prepareTurn,
     this.numberingState,
     this.actions,
+    this.waitForCore,
     this.actCore = const ActCoreStandIn(),
     this.outcomeForm = kActOutcomeForm,
   });
@@ -86,6 +90,11 @@ class ChatController extends ChangeNotifier {
 
   /// Whether the phone's location is known right now, for the system prompt.
   final bool Function()? locationKnown;
+
+  /// Waits for the search core: true once it is open, false when it could not start. A question asked before then shows
+  /// "Starting…" and waits, so the model only ever gets the core's tools; if the core does not start, the answer is an error with
+  /// Try again. Null: nothing to wait for.
+  final Future<bool> Function()? waitForCore;
 
   /// Optional shared preparation before each inference, including restored chats.
   /// Cancellation must prevent late preparation from starting model generation.
@@ -281,6 +290,16 @@ class ChatController extends ChangeNotifier {
     return loop;
   }
 
+  /// Asks the last question again in place of its failed answer (Try again).
+  Future<void> retryLast() async {
+    if (busy || messages.length < 2 || messages.last.isUser || messages.last.error == null) return;
+    final question = messages[messages.length - 2];
+    if (!question.isUser) return;
+    messages.removeRange(messages.length - 2, messages.length);
+    notifyListeners();
+    await send(question.text);
+  }
+
   /// Asks [text]. [seed] (Ask about this, in a new chat) starts the turn with its live_data call and that call's real result; it
   /// needs the core's tools, and without them the question goes alone.
   Future<void> send(String text, {AskAbout? seed}) async {
@@ -315,6 +334,15 @@ class ChatController extends ChangeNotifier {
         if (identical(_turn, turn)) _preparing = false;
       }
       if (cancelled()) return;
+      if (waitForCore != null && _loop == null) {
+        reply.phase = TurnPhase.starting;
+        notifyListeners();
+        final ok = await waitForCore!();
+        if (cancelled()) return;
+        if (!ok) throw StateError(kCoreDidNotStart);
+        reply.phase = TurnPhase.thinking;
+        notifyListeners();
+      }
       final store = _store;
       convId = _activeId;
       if (store != null && convId == null) {

@@ -24,7 +24,14 @@ const Map<String, dynamic> _kAnswerNow = {
   'content': 'Answer now from the tool results above. No more tools are available.',
 };
 
-enum TurnPhase { thinking, searching, answering, done }
+enum TurnPhase {
+  /// The search core is still starting; the question waits for it (it is never answered without the core's tools).
+  starting,
+  thinking,
+  searching,
+  answering,
+  done,
+}
 
 /// What the UI needs while an answer is being produced.
 class TurnUpdate {

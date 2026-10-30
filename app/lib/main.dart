@@ -17,8 +17,6 @@ import 'browse/browse_state.dart';
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
-import 'chat/read_tool.dart';
-import 'chat/search_tool.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
 import 'layout/layout_state.dart';
@@ -288,7 +286,9 @@ class _CacheAppState extends State<CacheApp> {
   );
   late final LayoutState layout = LayoutState();
   late final ChatController chat = ChatController(
-    tools: [SearchTool(sources), ReadTool(sources)],
+    // No Dart tools: the model only ever gets the core's. A question asked while the core starts waits for it.
+    tools: const [],
+    waitForCore: () async => await sources.whenCoreReady() != null,
     newNumbering: () =>
         sources.coreReady ? CoreNumbering(sources.newConversation) : null,
     // Once the core is open every tool it has installed is offered and runs through its dispatch (cs_tool).
