@@ -30,9 +30,10 @@ enum HomeBlock {
   }
 }
 
-enum ShortcutKind { module, place, page, chat }
+enum ShortcutKind { module, place, page, chat, notebook }
 
-/// One card in Home's Shortcuts: a way straight to a module, a saved place, a Library page or a chat.
+/// One card in Home's Shortcuts: a way straight to a module, a saved place, a Library page, a chat or a notebook (a log's card
+/// opens its quick add over Home).
 class Shortcut {
   const Shortcut({required this.kind, required this.title, this.subtitle = '', required this.data});
 
@@ -61,6 +62,14 @@ class Shortcut {
   factory Shortcut.chat({required int id, required String title}) =>
       Shortcut(kind: ShortcutKind.chat, title: title, subtitle: 'Chat', data: {'id': id});
 
+  /// A notebook; [log] makes it `Log: <name>`, which opens the log's quick add.
+  factory Shortcut.notebook({required String id, required String name, bool log = false}) => Shortcut(
+        kind: ShortcutKind.notebook,
+        title: log ? 'Log: $name' : name,
+        subtitle: log ? 'Quick add' : 'Notebook',
+        data: {'id': id, 'log': log},
+      );
+
   final ShortcutKind kind;
   final String title;
   final String subtitle;
@@ -72,11 +81,13 @@ class Shortcut {
         ShortcutKind.place => 'place:${data['id']}',
         ShortcutKind.page => 'page:${data['address']}',
         ShortcutKind.chat => 'chat:${data['id']}',
+        ShortcutKind.notebook => 'notebook:${data['id']}',
       };
 
   ModuleId? get module => kind == ShortcutKind.module ? ModuleId.byName(data['module'] as String?) : null;
   String? get address => kind == ShortcutKind.page ? data['address'] as String? : null;
   int? get chatId => kind == ShortcutKind.chat ? (data['id'] as num?)?.toInt() : null;
+  String? get notebookId => kind == ShortcutKind.notebook && data['id'] is String ? data['id'] as String : null;
 
   MapPlace? get place {
     if (kind != ShortcutKind.place) return null;
@@ -117,6 +128,7 @@ class Shortcut {
     if (kind == ShortcutKind.place && s.place == null) return null;
     if (kind == ShortcutKind.page && s.address == null) return null;
     if (kind == ShortcutKind.chat && s.chatId == null) return null;
+    if (kind == ShortcutKind.notebook && s.notebookId == null) return null;
     return s;
   }
 }

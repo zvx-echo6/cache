@@ -7,6 +7,12 @@ release notes).
 ## Unreleased
 
 ### New
+- Notebooks: keep several notebooks, starting with a Journal; make more from Journal, Log, Notes or Places, or from 16 starter logs
+- Notebooks: an entry can have a title, text, a date, a place, photos, attached documents, a checklist and the notebook's own fields
+- Logs: quick add with your last values filled in, "Last done" and "Due again", and a Home card that logs in two taps
+- Notebooks: search across all notebooks, and delete any entry (with Undo) or a whole notebook
+- Maps: notebooks with places show their pins, each notebook a layer under My layers
+- Assistant: can add a journal entry or an entry to one of your logs after you confirm on a card
 - Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; hide it, and find it again in Settings > Set up Cache
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search

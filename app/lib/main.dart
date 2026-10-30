@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache_search/cache_search.dart' show GeoPoint;
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -32,6 +33,11 @@ import 'nav/nav_position.dart';
 import 'nav/nav_state.dart';
 import 'nav/speaker.dart';
 import 'nav/units.dart';
+import 'notebook/notebook_publisher.dart';
+import 'notebook/notebook_model.dart';
+import 'notebook/notebook_state.dart';
+import 'notebook/places.dart';
+import 'screens/notebooks/notebook_screen.dart' show NotebookDeps;
 import 'regions/region_catalogue.dart';
 import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
@@ -262,6 +268,29 @@ class _CacheAppState extends State<CacheApp> {
       show: nav.requestMap,
     ),
   );
+  // Notebooks: kept by the core (cs_notebook) in the support folder; their Log notebooks and the Journal publish act actions.
+  late final NotebookState notebooks = NotebookState(
+    backend: CoreNotebookBackend(sources.whenCoreReady),
+    mediaDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/notebook'),
+  );
+  late final NotebookPublisher notebookActions = NotebookPublisher(registry: actionRegistry, notebook: notebooks);
+  late final PlaceChoices notebookPlaces = PlaceChoices(
+    here: () async => switch (location.fix) {
+      final f? => (lat: f.lat, lon: f.lon),
+      null => null,
+    },
+    saved: () async => [
+      for (final p in await (await sources.whenCoreReady())?.savedPlaces() ?? const [])
+        NbPlace(lat: p.lat, lon: p.lon, label: p.name, key: p.key),
+    ],
+    search: (q) async {
+      if (!nav.backend.available) return const [];
+      final f = location.fix;
+      final r = await nav.backend.search(q, near: f == null ? null : GeoPoint(f.lat, f.lon));
+      return [for (final p in r.results) NbPlace(lat: p.lat, lon: p.lon, label: p.name)];
+    },
+  );
+  late final NotebookDeps notebookDeps = NotebookDeps(notebook: notebooks, places: notebookPlaces, layout: layout);
   // The map's search, routes and turn-by-turn guidance: on the core when it has them, on recorded answers for screenshots
   // (--dart-define=CACHE_NAV_DEMO=<folder>), never both.
   late final NavState nav = NavState(
@@ -307,6 +336,9 @@ class _CacheAppState extends State<CacheApp> {
       _onWeather();
       unawaited(weather.updateIfDue(kBackgroundEvery));
       await appActions.publishAll();
+      // Notebooks are published after the app's own actions, so they are listed last.
+      await notebooks.start();
+      notebookActions.start();
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
@@ -423,6 +455,8 @@ class _CacheAppState extends State<CacheApp> {
     webSearch.dispose();
     weather.dispose();
     sharing.dispose();
+    notebookActions.dispose();
+    notebooks.dispose();
     settings.dispose();
     _store?.close();
     super.dispose();
@@ -465,6 +499,7 @@ class _CacheAppState extends State<CacheApp> {
           nav: nav,
           layout: layout,
           hub: hub,
+          notebooks: notebookDeps,
         ),
       ),
     );

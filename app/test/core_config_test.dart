@@ -87,6 +87,7 @@ void main() {
       expect((routing['valhalla'] as Map)['shim'], '/lib/libvalhalla_shim.so');
       expect((routing['offroad'] as Map).keys, ['pack', 'elevation']);
       expect((c['user'] as Map)['db_path'], endsWith('user.sqlite'));
+      expect(c['notebook'], {'db_path': '${support.path}/notebook/notebook.sqlite', 'media_dir': '${support.path}/notebook'});
     });
 
     test('off-road needs both files; with no tiles.tar the router is still configured, on the region engine\'s folder', () {

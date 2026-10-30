@@ -68,6 +68,7 @@ void main() {
     layout.addShortcut(Shortcut.place(hospital));
     layout.addShortcut(Shortcut.page(address: 'zim:0f4c0b5e-1111-4222-8333-444455556666/A/Burn', title: 'Burn', library: 'Medical'));
     layout.addShortcut(Shortcut.chat(id: 7, title: 'Treating burns'));
+    layout.addShortcut(Shortcut.notebook(id: 'nb-1', name: 'Generator test', log: true));
 
     final again = await open();
     expect(again.pinned, [ModuleId.ask, ModuleId.maps, ModuleId.videos]);
@@ -79,6 +80,7 @@ void main() {
     expect((p.id, p.name, p.lat, p.lon, p.kind, p.address), (hospital.id, hospital.name, 42.5, -113.5, 'Hospital', hospital.address));
     expect(again.shortcuts[2].address, 'zim:0f4c0b5e-1111-4222-8333-444455556666/A/Burn');
     expect(again.shortcuts[3].chatId, 7);
+    expect((again.shortcuts[4].notebookId, again.shortcuts[4].title, again.shortcuts[4].data['log']), ('nb-1', 'Log: Generator test', true));
     again.dispose();
   });
 

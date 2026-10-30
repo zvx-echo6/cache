@@ -77,10 +77,16 @@ Map<String, dynamic> buildCoreExtras({
       'valhalla': {'tiles': tiles ?? '', 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
       if (offroadPack != null) 'offroad': {'pack': offroadPack, 'elevation': elevation},
     },
+    // Notebooks: their database and the folder of their photos and attached files.
+    'notebook': notebookConfig(supportDir),
     // The region engine (cs_open's regions section): where it keeps its tiles and where it fetches road routing and places from.
     'regions': regionsConfig(supportDir, routingBaseUrl: regionsBaseUrl, placesBaseUrl: placesBaseUrl),
   };
 }
+
+/// The Notebooks section of cs_open: notebook.sqlite and its media folder (photos/, thumbs/, files/).
+Map<String, String> notebookConfig(Directory supportDir) =>
+    {'db_path': '${supportDir.path}/notebook/notebook.sqlite', 'media_dir': '${supportDir.path}/notebook'};
 
 /// The region engine's config, the same for the search core and the regions screen (one engine per folder in the process).
 Map<String, Object?> regionsConfig(Directory supportDir, {String routingBaseUrl = kRoutingBaseUrl, String placesBaseUrl = kPlacesBaseUrl}) =>

@@ -30,6 +30,12 @@ import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
+import 'placeholder_screen.dart';
+import '../notebook/notebook_model.dart';
+import 'notebooks/entry_editor.dart';
+import 'notebooks/notebook_screen.dart';
+import 'notebooks/notebooks_screen.dart';
+import 'notebooks/quick_add_sheet.dart';
 import 'search_model_line.dart';
 import 'settings/deps.dart';
 import 'settings/weather_page.dart';
@@ -55,6 +61,7 @@ class Shell extends StatefulWidget {
     required this.nav,
     required this.layout,
     required this.hub,
+    this.notebooks,
   });
 
   final AppState app;
@@ -68,6 +75,9 @@ class Shell extends StatefulWidget {
   final NavState nav;
   final LayoutState layout;
   final SettingsHub hub;
+
+  /// Notebooks (null: the module shows that it is not available).
+  final NotebookDeps? notebooks;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -265,7 +275,45 @@ class _ShellState extends State<Shell> {
         }
         widget.chat.openConversation(id);
         _goModule(ModuleId.ask);
+      case ShortcutKind.notebook:
+        _openNotebook(s);
     }
+  }
+
+  /// A notebook pin's Open: the entry in its editor (a log entry in its quick add sheet).
+  void _openEntry(NbEntry e) {
+    final deps = widget.notebooks;
+    final book = deps?.notebook.notebook(e.notebookId);
+    if (deps == null || book == null) return;
+    if (book.isLog) {
+      showQuickAdd(context, notebook: deps.notebook, log: book, places: deps.places, entry: e, now: deps.now);
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => EntryEditor(notebook: deps.notebook, book: book, places: deps.places, entry: e, now: deps.now),
+    ));
+  }
+
+  /// A notebook's Home card: a log's opens its quick add over Home (tap, Save); any other opens the notebook. A notebook that
+  /// was deleted drops its card.
+  Future<void> _openNotebook(Shortcut s) async {
+    final deps = widget.notebooks;
+    final id = s.notebookId;
+    if (deps == null || id == null) return;
+    await deps.notebook.start();
+    final n = deps.notebook.notebook(id);
+    if (!mounted) return;
+    if (n == null) {
+      widget.layout.removeShortcut(s);
+      _say('That notebook is gone');
+      return;
+    }
+    if (n.isLog && s.data['log'] == true) {
+      showQuickAdd(context, notebook: deps.notebook, log: n, places: deps.places, now: deps.now);
+      return;
+    }
+    _goModule(ModuleId.notebooks);
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: deps, notebookId: id)));
   }
 
   /// "Turn on weather": the location, and the map's place search and saved places for "Choose a place instead".
@@ -284,9 +332,10 @@ class _ShellState extends State<Shell> {
   Widget _moduleScreen(ModuleId m) => switch (m) {
         ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        ModuleId.notebooks => widget.notebooks == null ? const PlaceholderScreen(title: 'Notebooks', message: 'Notebooks are not available on this phone') : NotebooksScreen(deps: widget.notebooks!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 

@@ -129,7 +129,7 @@ class HomeScreen extends StatelessWidget {
         const SizedBox(height: 12),
         if (items.isEmpty)
           Text(
-            'Nothing here yet. Use "Add to Home" on a module, a place on the map, a Library page or a chat.',
+            'Nothing here yet. Use "Add to Home" on a module, a place on the map, a Library page, a chat or a notebook.',
             style: TextStyle(fontSize: 16, color: k.secondary),
           )
         else
@@ -215,6 +215,7 @@ class ShortcutCard extends StatelessWidget {
       ShortcutKind.chat => const BrandTileImage(BrandTile.chat, size: 48),
       ShortcutKind.page => const BrandTileImage(BrandTile.library, size: 48),
       ShortcutKind.place => SizedBox(height: 48, width: 48, child: Icon(Icons.place_outlined, size: 34, color: k.accent)),
+      ShortcutKind.notebook => const BrandTileImage(BrandTile.journal, size: 48),
     };
     return Material(
       color: k.surface,
