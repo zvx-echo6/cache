@@ -4,11 +4,12 @@
 Usage: play_release.py --check-newer <versionCode>        (fails unless it is higher than every versionCode already on Play)
        play_release.py <app-release.aab> <versionCode> <version name> <track>
 Environment: PLAY_SERVICE_ACCOUNT_JSON (the service account key, JSON), PACKAGE_NAME, and RELEASE_NOTES (en-US, at most 500
-characters) for an upload.
+characters) and RELEASE_STATUS ("completed", the default: sent for review; or "draft") for an upload.
 
-An upload opens an edit, uploads the bundle, puts only the new release on the track with status "completed" (sent for review)
-and the release notes, and commits the edit. The store listing is not touched. Any API error fails the run, and the edit is
-deleted when a step fails, so nothing half-done is left on Play. Standard library and openssl only: nothing to install.
+An upload opens an edit, uploads the bundle, puts the new release on the track with that status and the release notes (with
+"completed" it is the only release on the track; a "draft" leaves the track's live releases as they are), and commits the edit.
+The store listing is not touched. Any API error fails the run, and the edit is deleted when a step fails, so nothing half-done
+is left on Play. Standard library and openssl only: nothing to install.
 """
 
 import base64
@@ -107,7 +108,7 @@ def check_newer(play: Play, code: int):
     print(f"versionCode {code} is higher than {top}")
 
 
-def upload(play: Play, aab: str, code: int, name: str, track: str, notes: str):
+def upload(play: Play, aab: str, code: int, name: str, track: str, notes: str, status: str):
     edit = play.call("POST", "/edits", {})["id"]
     print("edit opened")
     try:
@@ -121,12 +122,18 @@ def upload(play: Play, aab: str, code: int, name: str, track: str, notes: str):
         print(f"bundle uploaded: versionCode {got}, sha256 {up.get('sha256', '')}")
         if got != code:
             raise PlayError(f"Play read versionCode {got} from the bundle, expected {code}")
-        release = {"name": f"{name} ({code})", "versionCodes": [str(code)], "status": "completed",
+        release = {"name": f"{name} ({code})", "versionCodes": [str(code)], "status": status,
                    "releaseNotes": [{"language": "en-US", "text": notes}]}
-        tr = play.call("PUT", f"/edits/{edit}/tracks/{track}", {"track": track, "releases": [release]})
+        # completed: only the new release on the track (it replaces what was there). draft: the track's live releases stay as they
+        # are (a draft goes nowhere until it is rolled out), an older draft is replaced.
+        keep = []
+        if status == "draft":
+            keep = [r for r in play.call("GET", f"/edits/{edit}/tracks/{track}").get("releases", []) if r.get("status") != "draft"]
+        tr = play.call("PUT", f"/edits/{edit}/tracks/{track}", {"track": track, "releases": keep + [release]})
         rels = [(r.get("name"), r.get("status"), r.get("versionCodes")) for r in tr.get("releases", [])]
         print(f"track {track}: {rels}")
-        if rels != [(release["name"], "completed", [str(code)])]:
+        mine = [x for x in rels if x[2] == [str(code)]]
+        if mine != [(release["name"], status, [str(code)])] or (status == "completed" and len(rels) != 1):
             raise PlayError(f"track {track} did not take the release as sent: {rels}")
         play.call("POST", f"/edits/{edit}:commit")
         print("edit committed")
@@ -157,7 +164,10 @@ def main(argv):
             raise PlayError("RELEASE_NOTES is empty")
         if len(notes) > 500:
             raise PlayError(f"the release notes are {len(notes)} characters; Play allows at most 500")
-        upload(Play(package), aab, code, name, track, notes)
+        status = os.environ.get("RELEASE_STATUS", "").strip() or "completed"
+        if status not in ("completed", "draft"):
+            raise PlayError(f"RELEASE_STATUS must be completed or draft, not {status}")
+        upload(Play(package), aab, code, name, track, notes, status)
         return 0
     except PlayError as e:
         print(f"::error::{e}")

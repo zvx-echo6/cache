@@ -1,4 +1,5 @@
-# Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to a Google Play testing track (for review).
+# Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to a Google Play testing track (for review,
+# or as a draft with status: draft).
 # Manual trigger only. It builds the branch it is started on.
 #
 # Signing: the upload key (PKCS12 keystore, alias "upload") lives only in the Actions secrets ANDROID_UPLOAD_KEYSTORE_B64,
@@ -10,7 +11,7 @@
 #   routing  Valhalla 3.7.0 + the C shim, libvalhalla_shim.so for arm64-v8a (cached; the app finds it in its native library folder)
 #   app      flutter build appbundle: Gradle builds the Rust search core with cargo-ndk (arm64-v8a, with libzim) and llama.cpp
 #            with the NDK (arm64-v8a, x86_64); Rust, libzim and Gradle are cached
-#   play     upload to Play, only the new release on the track, status completed, release notes, commit
+#   play     upload to Play, only the new release on the track, with the chosen status and the release notes, commit
 name: Android Play
 
 on:
@@ -24,6 +25,11 @@ on:
         description: Play track
         type: string
         default: alpha
+      status:
+        description: Release status (completed = sent for review; draft = uploaded, not sent)
+        type: choice
+        options: [completed, draft]
+        default: completed
   # Only so GitHub lists this workflow while it is not on the default branch (a manual run needs that): a push builds nothing.
   push:
     branches: [android-play]
@@ -286,6 +292,7 @@ jobs:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
           TRACK: ${{ inputs.track }}
+          RELEASE_STATUS: ${{ inputs.status }}
         run: |
           python3 -I app/android/play_release.py "out/Cache-${{ needs.plan.outputs.build_name }}.aab" \
             "${{ needs.plan.outputs.build_number }}" "${{ needs.plan.outputs.build_name }}" "$(printf '%s' "$TRACK" | tr -d '[:space:]')"
