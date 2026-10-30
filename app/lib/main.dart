@@ -171,7 +171,7 @@ class _CacheAppState extends State<CacheApp> {
       final f = location.fix;
       return f == null ? null : (lat: f.lat, lon: f.lon);
     },
-    regions: () => regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+    regions: () => watchRegionsOf(regions.local),
     notifier: LocalAlertNotifier.instance,
     onPlacesChanged: () => appActions.publishWatch(),
     told: ToldStore.lazy(() async => File('${(await getApplicationSupportDirectory()).path}/alerts_told.json')),
@@ -451,7 +451,7 @@ class _CacheAppState extends State<CacheApp> {
     final f = location.fix;
     final last = LastPlace(
       here: f == null ? null : (lat: double.parse(f.lat.toStringAsFixed(3)), lon: double.parse(f.lon.toStringAsFixed(3))),
-      regions: regionsFromAreas([for (final l in maps.catalogueLayers) ...maps.areasOfCard(l)]),
+      regions: watchRegionsOf(regions.local),
     );
     final key = jsonEncode(last.toJson());
     if (key == _lastPlaceSaved) return;

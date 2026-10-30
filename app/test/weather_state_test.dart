@@ -10,6 +10,7 @@ import 'package:cache/weather/alert_notifier.dart';
 import 'package:cache/weather/alert_watch.dart';
 import 'package:cache/weather/curated.dart';
 import 'package:cache/weather/live_view.dart' show LiveItem;
+import 'package:cache/regions/regions_state.dart';
 import 'package:cache/weather/places.dart';
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache_search/cache_search.dart';
@@ -486,14 +487,13 @@ void main() {
         totalTiles: 1,
         phase: phase,
       );
-      final r = regionsFromAreas([
-        a('Idaho · Hillshade', 42, -117, 49, -111),
-        a('Idaho · Contours', 42, -117, 49, -111),
-        a('Home', 42.5, -113.8, 42.6, -113.7),
-        a('Montana', 44, -116, 49, -104, phase: AreaPhase.running),
-        a('This region', 1, 1, 2, 2),
+      final r = watchRegionsOf([
+        LocalRegion(id: 'us-id', name: 'Idaho', areas: [a('Idaho', 42, -117, 49, -111), a('Idaho · Hillshade', 42, -117, 49, -111)]),
+        LocalRegion(id: 'home', name: 'Home', areas: [a('a label that says nothing', 42.5, -113.8, 42.6, -113.7)]),
+        LocalRegion(id: 'us-mt', name: 'Montana', areas: [a('Montana', 44, -116, 49, -104, phase: AreaPhase.running)]),
+        LocalRegion(id: 'us-ut', name: 'Utah', routing: const {'state': 'ready'}),
       ]);
-      expect(r.map((x) => x.name), ['Home', 'Idaho']);
+      expect(r.map((x) => x.name), ['Home', 'Idaho'], reason: 'named as the region, only with a finished map');
       expect(r.last.lat, 45.5);
       expect(r.last.lon, -114);
     });
