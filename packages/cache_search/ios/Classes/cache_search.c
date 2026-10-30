@@ -47,3 +47,31 @@ int64_t cache_free_bytes_on_disk(const char *path) {
     }
     return (int64_t)(available * fragment_size);
 }
+
+// The size of the storage holding path (kCFURLVolumeTotalCapacityKey, else statvfs), for the space Cache leaves the phone
+// (10% of it, 5 to 20 GB). Dart resolves it like cache_free_bytes_on_disk; -1 when it cannot be read.
+__attribute__((used, visibility("default")))
+int64_t cache_total_bytes_on_disk(const char *path) {
+    if (path == NULL || path[0] == '\0') return -1;
+
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8 *)path, (CFIndex)strlen(path), false);
+    if (url != NULL) {
+        CFTypeRef value = NULL;
+        int64_t bytes = -1;
+        if (CFURLCopyResourcePropertyForKey(url, kCFURLVolumeTotalCapacityKey, &value, NULL) && value != NULL) {
+            if (CFGetTypeID(value) != CFNumberGetTypeID() || !CFNumberGetValue((CFNumberRef)value, kCFNumberSInt64Type, &bytes)) {
+                bytes = -1;
+            }
+        }
+        if (value != NULL) CFRelease(value);
+        CFRelease(url);
+        if (bytes > 0) return bytes;
+    }
+
+    struct statvfs fs;
+    if (statvfs(path, &fs) != 0) return -1;
+    const uint64_t blocks = (uint64_t)fs.f_blocks;
+    const uint64_t fragment_size = (uint64_t)fs.f_frsize;
+    if (fragment_size == 0 || blocks > INT64_MAX / fragment_size) return -1;
+    return (int64_t)(blocks * fragment_size);
+}
