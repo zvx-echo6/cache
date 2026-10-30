@@ -98,7 +98,10 @@ class _RegionSheetState extends State<RegionSheet> {
     final choice = await askToDownload(
       context,
       title: 'Download ${widget.region.name}?',
-      lines: [DownloadLine(widget.region.name, _total)],
+      lines: [
+        DownloadLine(widget.region.name, _total),
+        if (_offroad && _canOffroad && (_plan?.offroad?.packsOnPhone ?? false)) const DownloadLine('Off-road', 0, note: 'Already on this phone'),
+      ],
       dir: dir.path,
       policy: r.policy,
     );
@@ -140,6 +143,13 @@ class _RegionSheetState extends State<RegionSheet> {
     final o = p.offroad;
     if (o == null) return p.offroadProblem ?? 'Not available';
     if (!o.allowed) return o.problem ?? 'Not available';
+    // The state's pack is on the phone already (another region brought it): only this region's terrain heights are new.
+    if (o.packsOnPhone) {
+      return [
+        'Already on this phone',
+        if (o.downloadBytes > 0) 'terrain heights for this region about ${formatBytes(o.downloadBytes)}',
+      ].join(' · ');
+    }
     return [
       'About ${formatBytes(o.downloadBytes)}',
       if (o.packs.length > 1) o.packs.map((x) => x.pack.name).join(', '),

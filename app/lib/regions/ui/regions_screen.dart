@@ -441,7 +441,8 @@ class LocalTab extends StatelessWidget {
                       IconButton(
                         tooltip: 'Update ${l.name}',
                         icon: Icon(Icons.refresh, color: k.secondary),
-                        onPressed: l.phase == RegionPhase.ready ? () => _update(context, l) : null,
+                        // A download that stopped carries on with Update, as its line says.
+                        onPressed: l.phase == RegionPhase.ready || l.phase == RegionPhase.failed ? () => _update(context, l) : null,
                       ),
                       IconButton(
                         tooltip: 'Delete ${l.name}',
@@ -454,6 +455,19 @@ class LocalTab extends StatelessWidget {
             ],
           ),
           if (local.length > 1) const NoteText('Largest first. A part two regions share is kept once.'),
+          if (regions.offroadPacks case final packs when packs.isNotEmpty)
+            SettingsGroup(
+              label: 'Off-road data',
+              rows: [
+                for (final p in packs)
+                  SettingsRow(
+                    key: ValueKey('offroad-pack-${p.name}'),
+                    title: p.name,
+                    status: [Part('${p.done ? formatBytes(p.bytes) : 'Downloading'} · used by ${p.usedBy.join(', ')}')],
+                  ),
+              ],
+            ),
+          if (regions.offroadPacks.isNotEmpty) const NoteText('Each state\'s off-road data is downloaded once and kept while a region that uses it is on this phone.'),
         ]);
       },
     );

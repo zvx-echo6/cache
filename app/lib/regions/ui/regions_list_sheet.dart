@@ -122,7 +122,11 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     final choice = await askToDownload(
       context,
       title: todo.length == 1 ? 'Download ${todo.single.$1.name}?' : 'Download ${todo.length} regions?',
-      lines: [for (final t in todo) DownloadLine(t.$1.name, t.$2.bytes)],
+      lines: [
+        for (final t in todo) DownloadLine(t.$1.name, t.$2.bytes),
+        if (todo.any((t) => t.$2.offroad && (_plans[t.$1.id]?.offroad?.packsOnPhone ?? false)))
+          const DownloadLine('Off-road', 0, note: 'Already on this phone'),
+      ],
       dir: dir.path,
       policy: r.policy,
     );

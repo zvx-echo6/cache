@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../browse/zim_download.dart';
 import '../files.dart';
+import '../maps/geo.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../search/core_config.dart';
@@ -47,7 +48,8 @@ class MapLayerPlan {
   final AreaEstimate estimate;
 }
 
-/// One off-road pack a region needs, whether it is on the phone, and the z12 elevation over its box (the layer engine's estimate).
+/// One off-road pack a region needs, whether it is on the phone (or on its way for another region), and the z12 elevation over the
+/// part of the region it covers (the layer engine's estimate: only the tiles not on the phone yet).
 class OffroadPackPlan {
   const OffroadPackPlan(this.pack, {required this.onPhone, required this.elevation});
 
@@ -66,10 +68,21 @@ class OffroadPlan {
   bool get allowed => packs.every((p) => p.elevation.allowed);
   String? get problem => packs.map((p) => p.elevation.problem).whereType<String>().firstOrNull;
 
+  /// Every pack is on the phone already (another region brought it): the packs add nothing.
+  bool get packsOnPhone => packs.every((p) => p.onPhone);
+
   /// Only what is not on the phone yet.
   int get downloadBytes => packs.fold(0, (s, p) => s + (p.onPhone ? 0 : p.pack.bytes) + p.elevation.bytes);
   int get bytesAlready => packs.fold(0, (s, p) => s + (p.onPhone ? p.pack.bytes : 0) + p.elevation.bytesAlready);
 }
+
+/// The box the off-road terrain heights of a region are downloaded for: the region's box where the pack covers it.
+GeoBounds terrainBox(GeoBounds region, GeoBounds pack) => GeoBounds(
+  south: region.south > pack.south ? region.south : pack.south,
+  west: region.west > pack.west ? region.west : pack.west,
+  north: region.north < pack.north ? region.north : pack.north,
+  east: region.east < pack.east ? region.east : pack.east,
+);
 
 /// What a region would cost, part by part, before anything is downloaded. A part that cannot be worked out says why. No
 /// [offroad] and no [offroadProblem]: no off-road pack covers the region, so it has no off-road part.
@@ -559,6 +572,23 @@ class RegionsState extends ChangeNotifier {
     ];
   }
 
+  /// A region on the phone has [path] among its packs (on the phone, or downloading for it).
+  bool _packKept(String path) => _kept.values.any((k) => k.offroad.any((x) => x.path == path));
+
+  /// The off-road packs on the phone or on their way, each with its size and the regions that use it (Storage > Regions lists
+  /// them: a pack stays while one of them is on the phone).
+  List<({String name, int bytes, bool done, List<String> usedBy})> get offroadPacks {
+    final byPath = <String, ({String name, int bytes, bool done, List<String> usedBy})>{};
+    for (final k in _kept.values) {
+      for (final p in k.offroad) {
+        final st = _packState(p);
+        final had = byPath[p.path];
+        byPath[p.path] = (name: p.name, bytes: st.done ? p.bytes : st.doneBytes, done: st.done, usedBy: [...?had?.usedBy, k.name]);
+      }
+    }
+    return byPath.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+  }
+
   bool _packOnPhone(String path) {
     final dir = _offroadPath;
     return dir != null && File('$dir/$path').existsSync();
@@ -624,8 +654,8 @@ class RegionsState extends ChangeNotifier {
     return done(map: map, mapProblem: mapProblem);
   }
 
-  /// The off-road part of [r]: the packs that cover it and the terrain heights over each pack's box. Nothing (and no problem)
-  /// when no pack covers it.
+  /// The off-road part of [r]: the packs that cover it (one pack is downloaded once, whichever region brings it) and the terrain
+  /// heights over the region itself, where a pack covers it. Nothing (and no problem) when no pack covers it.
   Future<(OffroadPlan?, String?)> _offroadPlan(RegionRecord r) async {
     final cat = offroadCatalogue;
     final bounds = r.bounds;
@@ -644,11 +674,11 @@ class RegionsState extends ChangeNotifier {
     for (final p in packs) {
       AreaEstimate e;
       try {
-        e = await maps.engine.estimate(kOffroadElevationLayer, p.bounds, zoom: kOffroadElevationZoom);
+        e = await maps.engine.estimate(kOffroadElevationLayer, terrainBox(bounds, p.bounds), zoom: kOffroadElevationZoom);
       } catch (_) {
         e = const AreaEstimate(tiles: 0, bytes: 0, maxZoom: kOffroadElevationZoom, allowed: false, problem: 'Could not work out the size of the terrain heights.');
       }
-      out.add(OffroadPackPlan(p, onPhone: _packOnPhone(p.relativePath()), elevation: e));
+      out.add(OffroadPackPlan(p, onPhone: _packOnPhone(p.relativePath()) || _packKept(p.relativePath()), elevation: e));
     }
     return (OffroadPlan(out), null);
   }
@@ -702,8 +732,8 @@ class RegionsState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The off-road packs that cover [r], each checked against its published SHA-256, and their terrain heights (z12 elevation over
-  /// the pack's box, kept once for the regions that share the pack).
+  /// The off-road packs that cover [r], each checked against its published SHA-256 (a pack already on the phone is not downloaded
+  /// again), and the terrain heights over the region (z12 elevation over the part of the region the pack covers).
   Future<void> _addOffroad(_Kept k, RegionRecord r, {required bool anyway}) async {
     final (plan, _) = await _offroadPlan(r);
     if (plan == null || !plan.allowed) return;
@@ -713,12 +743,15 @@ class RegionsState extends ChangeNotifier {
       if (!k.offroad.any((x) => x.path == path)) {
         k.offroad.add(_KeptPack(path: path, name: p.name, url: p.url, bytes: p.bytes, sha256: p.sha256));
       }
-      final label = 'Off-road terrain for ${p.name}';
+      // The terrain heights of the region itself (where the pack covers it), not the whole pack: tiles that two regions share are
+      // kept once by the layer engine.
+      final box = terrainBox(r.bounds!, p.bounds);
+      final label = 'Off-road terrain for ${r.name}';
       final have = [
         for (final a in maps.engine.areasOf(kOffroadElevationLayer))
-          if (a.label == label && a.phase != AreaPhase.failed) a.id,
+          if (k.terrain.contains(a.id) && a.phase != AreaPhase.failed) a.id,
       ].firstOrNull;
-      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, p.bounds, label: label, anyway: anyway, zoom: kOffroadElevationZoom)).id;
+      final area = have ?? (await maps.engine.download(kOffroadElevationLayer, box, label: label, anyway: anyway, zoom: kOffroadElevationZoom)).id;
       if (!k.terrain.contains(area)) k.terrain.add(area);
       unawaited(_fetchPack(k.offroad.firstWhere((x) => x.path == path)));
     }

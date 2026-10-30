@@ -7,6 +7,7 @@ import 'package:cache/maps/ui/format.dart';
 import 'package:cache/regions/offroad_catalogue.dart';
 import 'package:cache/regions/region_catalogue.dart';
 import 'package:cache/regions/regions_state.dart';
+import 'package:cache/regions/ui/region_sheet.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -117,10 +118,15 @@ void main() {
       await catalogue.geometry(county);
     });
     final idaho = parseOffroadCatalogue(_catalogue([_idaho])).single;
-    final terrain = (await tester.runAsync(() => s.engine.estimate(kOffroadElevationLayer, idaho.bounds, zoom: 12)))!;
+    // The terrain heights are the region's own (where the pack covers it), not the whole state's.
+    final countyBox = terrainBox(county.bounds!, idaho.bounds);
+    final terrain = (await tester.runAsync(() => s.engine.estimate(kOffroadElevationLayer, countyBox, zoom: 12)))!;
+    final wholeState = (await tester.runAsync(() => s.engine.estimate(kOffroadElevationLayer, idaho.bounds, zoom: 12)))!;
+    expect(terrain.bytes, lessThan(wholeState.bytes));
     final plan = (await tester.runAsync(() => regions.plan(county)))!;
     expect(plan.offroad!.packs.map((p) => p.pack.id), ['idaho']);
-    expect(plan.offroad!.downloadBytes, (300 << 20) + terrain.bytes, reason: 'the pack and its z12 terrain heights');
+    expect(plan.offroad!.packsOnPhone, isFalse);
+    expect(plan.offroad!.downloadBytes, (300 << 20) + terrain.bytes, reason: 'the pack and the county\'s z12 terrain heights');
 
     await s.show(tester, RegionsScreen(regions: regions));
     await tester.runAsync(() async {
@@ -148,9 +154,10 @@ void main() {
     final file = File('${s.dir.path}/regions/offroad/offroad-2026-10/idaho/offroad.sqlite');
     expect(file.existsSync(), isTrue);
     expect(File('${file.parent.path}/.offroad.sqlite.part').existsSync(), isFalse);
-    // the terrain heights: z12 only, over the pack's box
+    // the terrain heights: z12 only, over the county
     final area = s.engine.areasOf(kOffroadElevationLayer).single;
-    expect((area.label, area.minZoom, area.maxZoom), ('Off-road terrain for Idaho', 12, 12));
+    expect((area.label, area.minZoom, area.maxZoom), ('Off-road terrain for Twin Falls County', 12, 12));
+    expect([area.bounds.west, area.bounds.south, area.bounds.east, area.bounds.north], [countyBox.west, countyBox.south, countyBox.east, countyBox.north]);
     final l = regions.regionOf(_county)!;
     expect(l.hasOffroad, isTrue);
     expect(partsWords(l), 'Road routing and off-road');
@@ -161,12 +168,43 @@ void main() {
       await catalogue.geometry(us['us-id']!);
       return us['us-id']!;
     }))!;
+    // a second region in the pack: the pack adds nothing ("Already on this phone"), only its own terrain heights are new
+    final second = (await tester.runAsync(() => regions.plan(idahoState)))!;
+    expect(second.offroad!.packsOnPhone, isTrue);
+    expect(second.offroad!.downloadBytes, second.offroad!.packs.single.elevation.bytes, reason: 'no pack bytes');
+    // the region's sheet and the download pop-up say so
+    await tester.pumpWidget(const SizedBox()); // a fresh app: the sheet opened above is not under this one
+    await s.show(tester, Scaffold(body: Builder(builder: (c) => TextButton(onPressed: () => showRegionSheet(c, regions, idahoState), child: const Text('open')))));
+    await tester.tap(find.text('open'));
+    for (var i = 0; i < 12; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(find.descendant(of: find.byKey(const ValueKey('part-offroad')), matching: find.textContaining('Already on this phone')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('region-download')));
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(find.text('Off-road'), findsWidgets);
+    expect(find.descendant(of: find.byType(AlertDialog), matching: find.text('Already on this phone')), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
+    await tester.pump();
     await tester.runAsync(() => regions.download(idahoState, routing: false, map: false, offroad: true, anyway: true));
-    expect(packs.fetched, hasLength(1));
-    expect(s.engine.areasOf(kOffroadElevationLayer), hasLength(1));
+    expect(packs.fetched, hasLength(1), reason: 'the pack is downloaded once');
+    expect(s.engine.areasOf(kOffroadElevationLayer), hasLength(2), reason: 'each region its own terrain heights');
+    // Storage > Regions lists the pack once, with the regions that use it
+    expect(regions.offroadPacks.map((p) => p.name), ['Idaho']);
+    expect(regions.offroadPacks.single.usedBy, unorderedEquals(['Twin Falls County', 'Idaho']));
+    await tester.pumpWidget(const SizedBox());
+    await s.show(tester, Scaffold(body: LocalTab(regions: regions)));
+    await tester.pump();
+    expect(find.text('OFF-ROAD DATA'), findsOneWidget, reason: 'the group, under the regions');
+    expect(find.descendant(of: find.byKey(const ValueKey('offroad-pack-Idaho')), matching: find.textContaining('used by ', findRichText: true)), findsOneWidget);
     // removing one keeps what the other uses; removing both removes the pack
     await tester.runAsync(() => regions.remove(_county));
-    expect(file.existsSync(), isTrue);
+    expect(file.existsSync(), isTrue, reason: 'Idaho still uses the pack');
+    expect(regions.offroadPacks.single.usedBy, ['Idaho']);
     await tester.runAsync(() => regions.remove('us-id'));
     expect(file.existsSync(), isFalse);
 
