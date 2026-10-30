@@ -107,6 +107,7 @@ class CoreLayerEngine extends LayerEngine {
         return;
       }
       _online = await _connected();
+      await _loadSaved();
       final s = await core.layers('server', jsonEncode({'online': _online}));
       _port = (s['port'] as num).toInt();
       await _reload();
@@ -353,8 +354,40 @@ class CoreLayerEngine extends LayerEngine {
   String _key(String layer, String area) => '$layer/$area';
 
   /// What was asked for, kept to carry on a download that stopped (the core's list does not hold the shape of an
-  /// unfinished one).
+  /// unfinished one). Kept in a file beside the tiles too: on iPhone the system stops a download that runs while Cache is in the
+  /// background, and Update must carry it on after Cache starts again.
   final Map<String, _Saved> _saved = {};
+
+  File? get _savedFile {
+    final dir = layersConfig()['dir'];
+    return dir is String && dir.isNotEmpty ? File('$dir/unfinished-downloads.json') : null;
+  }
+
+  Future<void> _loadSaved() async {
+    final f = _savedFile;
+    try {
+      if (f == null || !await f.exists()) return;
+      final j = jsonDecode(await f.readAsString());
+      if (j is! Map) return;
+      for (final e in j.entries) {
+        final s = _Saved.fromJson(e.value);
+        if (s != null) _saved.putIfAbsent(e.key as String, () => s);
+      }
+    } catch (e) {
+      debugPrint('Unfinished downloads: $e');
+    }
+  }
+
+  Future<void> _storeSaved() async {
+    final f = _savedFile;
+    if (f == null) return;
+    try {
+      await f.parent.create(recursive: true);
+      await f.writeAsString(jsonEncode({for (final e in _saved.entries) e.key: e.value.toJson()}));
+    } catch (e) {
+      debugPrint('Unfinished downloads: $e');
+    }
+  }
 
   static DateTime? _date(Object? v) {
     if (v is String) return DateTime.tryParse(v);
@@ -519,6 +552,7 @@ class CoreLayerEngine extends LayerEngine {
       totalTiles: est.tiles,
     );
     _saved[id] = _Saved(area, minZoom, est.maxZoom);
+    await _storeSaved();
     await _start(a, {
       'layer': layerId,
       'area': id,
@@ -595,6 +629,10 @@ class CoreLayerEngine extends LayerEngine {
         await r.job.free();
       } catch (_) {}
       if (_disposed) return;
+      if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
+        // Finished, or a first download cancelled: nothing is left to carry on.
+        if (_saved.remove(a.id) != null) await _storeSaved();
+      }
       switch (p.state) {
         case JobState.done:
           a.error = null;
@@ -661,6 +699,7 @@ class CoreLayerEngine extends LayerEngine {
     final layer = _areaLayer[areaId] ?? _areas.values.where((a) => a.id == areaId).firstOrNull?.layerId;
     if (layer == null) return;
     await _core!.layers('delete', jsonEncode({'layer': layer, 'area': areaId}));
+    if (_saved.remove(areaId) != null) await _storeSaved();
     _dropPlanner();
     _areas.removeWhere((k, a) => a.id == areaId);
     await _reload();
@@ -705,4 +744,14 @@ class _Saved {
   final GeoBounds bounds;
   final int minZoom;
   final int maxZoom;
+
+  Map<String, dynamic> toJson() => {'bbox': [bounds.west, bounds.south, bounds.east, bounds.north], 'minzoom': minZoom, 'maxzoom': maxZoom};
+
+  static _Saved? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final b = j['bbox'], lo = j['minzoom'], hi = j['maxzoom'];
+    if (b is! List || b.length != 4 || b.any((v) => v is! num) || lo is! int || hi is! int) return null;
+    final v = [for (final x in b) (x as num).toDouble()];
+    return _Saved(GeoBounds(south: v[1], west: v[0], north: v[3], east: v[2]), lo, hi);
+  }
 }

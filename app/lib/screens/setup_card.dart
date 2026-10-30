@@ -94,6 +94,15 @@ class SetupCache {
     return const SetupLine(SetupPhase.todo);
   }
 
+  /// The region whose download stopped (Cache was closed while it ran, or a part failed) while no region is ready: tapping "Get your
+  /// area" carries it on.
+  LocalRegion? get stoppedRegion {
+    final withRouting = [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting) l];
+    if (withRouting.any((l) => l.phase == RegionPhase.ready)) return null;
+    final going = withRouting.firstOrNull;
+    return going?.phase == RegionPhase.failed ? going : null;
+  }
+
   /// A region with its road routing on the phone is done; one with road routing on its way runs.
   SetupLine get areaLine {
     final withRouting = [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting) l];
@@ -107,7 +116,8 @@ class SetupCache {
     if (going == null) return const SetupLine(SetupPhase.todo);
     return switch (going.phase) {
       RegionPhase.paused => SetupLine(SetupPhase.running, detail: '${going.name} · ${regions!.paused ?? 'paused'}', fraction: going.fraction),
-      RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · ${going.error ?? 'could not be downloaded'}'),
+      // The part's own words ("Tap Update to continue") point at a button that is not on this card, and do not fit its line.
+      RegionPhase.failed => SetupLine(SetupPhase.todo, detail: '${going.name} · Stopped. Tap to carry on'),
       _ => SetupLine(SetupPhase.running, detail: '${going.name} · downloading${_percent(going.fraction)}', fraction: going.fraction),
     };
   }

@@ -18,11 +18,13 @@ import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../nav/nav_state.dart';
+import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
 import '../search/app_search.dart';
 import '../search/app_search_providers.dart';
 import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
+import '../settings/data_policy.dart' show MobileDataBlocked;
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
@@ -199,11 +201,33 @@ class _ShellState extends State<Shell> {
       _say('Regions are not available on this phone');
       return;
     }
+    // A download that stopped (on iPhone, Cache was closed or put away while it ran) is carried on, not offered again.
+    if (_setup.stoppedRegion case final stopped?) {
+      unawaited(_carryOn(regions, stopped));
+      return;
+    }
     final here = _here;
     if (here != null) {
       showRegionsSheet(context, regions, lat: here.lat, lon: here.lon);
     } else {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
+    }
+  }
+
+  Future<void> _carryOn(RegionsState regions, LocalRegion l, {bool anyway = false}) async {
+    final m = ScaffoldMessenger.of(context);
+    try {
+      await regions.updateRegion(l.id, anyway: anyway);
+      m.hideCurrentSnackBar();
+      m.showSnackBar(SnackBar(content: Text('Carrying on with ${l.name}')));
+    } on MobileDataBlocked catch (e) {
+      m.hideCurrentSnackBar();
+      m.showSnackBar(SnackBar(
+        content: Text(e.message),
+        action: SnackBarAction(label: 'Download anyway', onPressed: () => _carryOn(regions, l, anyway: true)),
+      ));
+    } catch (e) {
+      _say('$e');
     }
   }
 

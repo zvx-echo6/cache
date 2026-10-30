@@ -150,6 +150,27 @@ void main() {
     await r.dispose(tester);
   });
 
+  testWidgets('a region download that stopped says what to do in a line that fits, and the line carries it on', (tester) async {
+    await rig(tester);
+    regions.onPhone = [
+      LocalRegion(
+        id: 'us-id',
+        name: 'Idaho',
+        routing: {'state': 'failed', 'bytes': 150 << 20, 'done_bytes': 40 << 20, 'error': 'stopped'},
+      ),
+    ];
+    await home(tester);
+    expect(find.text('Idaho · Stopped. Tap to carry on'), findsOneWidget, reason: 'no "Tap Update" for a button that is not here');
+    expect(find.textContaining('Tap Update'), findsNothing);
+    expect(setup.stoppedRegion?.id, 'us-id', reason: 'the shell carries this one on when the line is tapped');
+    await tester.tap(row('setup-area'));
+    await tester.pump();
+    expect(opened, ['area']);
+    regions.set([_region('ready')]);
+    expect(setup.stoppedRegion, isNull, reason: 'a region that is ready leaves nothing to carry on');
+    await r.dispose(tester);
+  });
+
   testWidgets('all done: the card goes away by itself', (tester) async {
     await rig(tester);
     model();
