@@ -6,6 +6,7 @@ import '../version.dart';
 import '../theme.dart';
 import '../video/format.dart';
 import 'settings/about_pages.dart';
+import 'setup_card.dart';
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
 import 'settings/deps.dart';
@@ -18,7 +19,7 @@ import 'settings/videos_page.dart';
 import 'settings/weather_page.dart';
 import 'settings/widgets.dart';
 
-/// Settings: ten rows in three groups, each saying its current state, each opening one page.
+/// Settings: ten rows in three groups, each saying its current state, each opening one page, and "Set up Cache" first.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.deps});
 
@@ -152,6 +153,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
           children: [
+            if (d.setup case final setup?) ...[
+              SettingsGroup(
+                rows: [
+                  ListenableBuilder(
+                    listenable: setup.changes,
+                    builder: (context, _) => FutureBuilder<SetupStatus>(
+                      future: setup.read(),
+                      builder: (context, snap) => SettingsRow(
+                        key: const ValueKey('settings-setup'),
+                        icon: Icons.checklist,
+                        title: 'Set up Cache',
+                        status: [Part(snap.data == null ? '…' : '${snap.data!.doneCount} of ${snap.data!.lines.length} done')],
+                        onTap: () => openSetup(context, setup),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+            ],
             SettingsGroup(
               rows: [
                 SettingsRow(icon: Icons.lightbulb_outline, title: 'Assistant', status: _assistant(), onTap: () => _open(AssistantPage(deps: d))),

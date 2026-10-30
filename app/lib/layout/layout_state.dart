@@ -136,6 +136,7 @@ class LayoutState extends ChangeNotifier {
   List<HomeBlock> _order = List.of(defaultBlocks);
   final Set<HomeBlock> _off = {};
   final List<Shortcut> _shortcuts = [];
+  bool _setupHidden = false;
   File? _file;
 
   /// The modules in the bar between Home and Modules, in bar order (at most [kMaxPinned]).
@@ -150,6 +151,9 @@ class LayoutState extends ChangeNotifier {
   /// The blocks Home shows now.
   List<HomeBlock> get visibleBlocks => [for (final b in _order) if (isOn(b)) b];
   List<Shortcut> get shortcuts => List.unmodifiable(_shortcuts);
+
+  /// The person hid the "Set up Cache" card on Home (Settings > Set up Cache shows it again).
+  bool get setupHidden => _setupHidden;
 
   Future<void> init() async {
     final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
@@ -187,6 +191,7 @@ class LayoutState extends ChangeNotifier {
         final sc = Shortcut.fromJson(s);
         if (sc != null && !_shortcuts.any((x) => x.key == sc.key)) _shortcuts.add(sc);
       }
+      _setupHidden = j['setupHidden'] == true;
     } catch (_) {
       // A damaged file is ignored; the defaults apply.
     }
@@ -202,6 +207,7 @@ class LayoutState extends ChangeNotifier {
         'blocks': [for (final b in _order) b.name],
         'off': [for (final b in _off) b.name],
         'shortcuts': [for (final s in _shortcuts) s.toJson()],
+        if (_setupHidden) 'setupHidden': true,
       }));
     } catch (_) {}
   }
@@ -241,6 +247,12 @@ class LayoutState extends ChangeNotifier {
     to = to.clamp(0, _order.length - 1);
     if (to == from) return;
     _order.insert(to, _order.removeAt(from));
+    _save();
+  }
+
+  void setSetupHidden(bool hidden) {
+    if (_setupHidden == hidden) return;
+    _setupHidden = hidden;
     _save();
   }
 

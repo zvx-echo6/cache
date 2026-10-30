@@ -5,10 +5,11 @@ import '../layout/edit_home_screen.dart';
 import '../layout/layout_state.dart';
 import '../theme.dart';
 import '../weather/weather_state.dart';
+import 'setup_card.dart';
 import 'weather_turn_on.dart';
 
-/// Home: the blocks the person chose, in the order they chose (Ask box, Weather, Alerts, Shortcuts by default), a gear
-/// for Settings at the top right, and "Edit Home" at the bottom.
+/// Home: "Set up Cache" at the top until it is done or hidden, the blocks the person chose, in the order they chose (Ask box,
+/// Weather, Alerts, Shortcuts by default), a gear for Settings at the top right, and "Edit Home" at the bottom.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({
     super.key,
@@ -19,7 +20,11 @@ class HomeScreen extends StatelessWidget {
     this.weather,
     this.onOpenWeather,
     this.turnOn,
+    this.setup,
   });
+
+  /// The "Set up Cache" card; null leaves it out.
+  final SetupCache? setup;
 
   /// "Turn on weather" on the Weather card while weather is not set up.
   final WeatherTurnOn? turnOn;
@@ -58,6 +63,7 @@ class HomeScreen extends StatelessWidget {
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
+            if (setup case final s? when !layout.setupHidden) SetupCard(setup: s, onHide: () => hideSetup(context, s)),
             for (final b in layout.visibleBlocks) ...[
               switch (b) {
                 HomeBlock.ask => _askBox(k),

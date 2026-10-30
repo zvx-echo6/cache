@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; hide it, and find it again in Settings > Set up Cache
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search
 - Map search says when places for the area are missing or on their way, and offers the region

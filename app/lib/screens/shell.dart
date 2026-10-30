@@ -18,6 +18,8 @@ import '../location/location_service.dart';
 import '../maps/maps_state.dart';
 import '../models/search_model.dart';
 import '../nav/nav_state.dart';
+import '../regions/ui/region_sheet.dart';
+import '../regions/ui/regions_screen.dart';
 import '../settings/hub.dart';
 import '../sources/sources_state.dart';
 import '../video/video_state.dart';
@@ -26,10 +28,12 @@ import '../weather/alert_watch.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
+import 'models_screen.dart';
 import 'search_model_line.dart';
 import 'settings/deps.dart';
 import 'settings/weather_page.dart';
 import 'settings_screen.dart';
+import 'setup_card.dart';
 import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
@@ -162,7 +166,38 @@ class _ShellState extends State<Shell> {
     location: widget.location,
     hub: widget.hub,
     onOpenAsk: _openAskFromSettings,
+    setup: _setup,
   );
+
+  /// "Set up Cache" on Home and in Settings: each line opens the screen the feature uses everywhere.
+  late final SetupCache _setup = SetupCache(
+    layout: widget.layout,
+    app: widget.app,
+    weather: widget.hub.weather,
+    sources: widget.sources,
+    regions: widget.hub.regions,
+    browse: widget.browse,
+    chooseModel: (context) => openModels(context, widget.app),
+    getArea: _getArea,
+    turnOnWeather: (context) => turnOnWeather(context, _weatherTurnOn),
+    addLibrary: (context) => showAddToLibrary(context, widget.browse),
+  );
+
+  /// "Get your area": the region sheet for where the phone is, when the catalogue knows it; else the regions to choose from.
+  void _getArea(BuildContext context) {
+    final regions = widget.hub.regions;
+    if (regions == null) {
+      _say('Regions are not available on this phone');
+      return;
+    }
+    final here = _here;
+    final rec = here == null ? null : regions.catalogue.regionAt(here.lat, here.lon);
+    if (rec != null) {
+      showRegionSheet(context, regions, rec);
+    } else {
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionsScreen(regions: regions, initialTab: 0)));
+    }
+  }
 
   void _openSettings() {
     Navigator.of(context).push(
@@ -282,6 +317,7 @@ class _ShellState extends State<Shell> {
                 weather: widget.hub.weather,
                 onOpenWeather: () => _goModule(ModuleId.weather),
                 turnOn: _weatherTurnOn,
+                setup: _setup,
                 onOpenAsk: () => _goModule(ModuleId.ask),
                 onOpenSettings: _openSettings,
                 onOpenShortcut: _openShortcut,
