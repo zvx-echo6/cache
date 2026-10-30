@@ -109,6 +109,7 @@ class ChatController extends ChangeNotifier {
   Object? _turn;
   bool _preparing = false;
   bool busy = false;
+  bool _voice = false;
   Future<void>? _titleJob;
   bool _titleCancelled = false;
 
@@ -139,6 +140,16 @@ class ChatController extends ChangeNotifier {
 
   bool get canSend => _backend != null && !busy;
 
+  /// The open conversation is in voice mode (started in voice or switched to it): every request's system prompt carries the voice
+  /// line while it is on. A new chat starts in text.
+  bool get voice => _voice;
+
+  void setVoice(bool on) {
+    if (_voice == on) return;
+    _voice = on;
+    notifyListeners();
+  }
+
   /// Lets go of the loop. While an answer is being stored the loop is still needed; [send] frees it then.
   void _dropLoop() {
     final loop = _loop;
@@ -155,6 +166,7 @@ class ChatController extends ChangeNotifier {
     _preparing = false;
     messages.clear();
     _activeId = null;
+    _voice = false;
     busy = false;
     notifyListeners();
   }
@@ -253,7 +265,7 @@ class ChatController extends ChangeNotifier {
       tools: tools,
       numbering: numbering,
       host: newHost?.call(numbering),
-      systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false),
+      systemPrompt: () => buildSystemPrompt(now: DateTime.now(), locationKnown: locationKnown?.call() ?? false, voice: _voice),
       history: history,
       knownResults: cited.values,
     );

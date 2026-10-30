@@ -28,6 +28,7 @@ release notes).
 - Assistant: reading a library entry shows its author and page when known
 - Import repeater lists (a RepeaterBook KML, a CHIRP CSV, or both from the same export, merged) and export them as KML for Google Earth
 - Import your own map layers from KML, KMZ, GPX or GeoJSON, and export them as KML or GPX
+- Assistant: a conversation can be in voice mode, where answers are kept to a few plain spoken sentences (the voice controls come later)
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed

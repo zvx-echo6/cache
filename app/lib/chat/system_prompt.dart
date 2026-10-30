@@ -1,6 +1,10 @@
+/// Appended after the last line while the conversation is in voice mode (project decision, 2026-10-29).
+const String kVoiceLine = 'The user is talking to you by voice and will hear your answer read aloud: keep it short, two to four plain '
+    'spoken sentences, with no tables, lists, headings or links. Keep the citation numbers; they are not read aloud.';
+
 /// The system prompt, built for each turn (the approved template): the local date and time and whether the phone's
-/// location is known change from one turn to the next.
-String buildSystemPrompt({required DateTime now, required bool locationKnown}) {
+/// location is known change from one turn to the next. [voice]: the conversation is in voice mode, and [kVoiceLine] ends it.
+String buildSystemPrompt({required DateTime now, required bool locationKnown, bool voice = false}) {
   const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   String two(int n) => n.toString().padLeft(2, '0');
   final date = '${now.year.toString().padLeft(4, '0')}-${two(now.month)}-${two(now.day)}';
@@ -20,6 +24,7 @@ String buildSystemPrompt({required DateTime now, required bool locationKnown}) {
         'If a tool says its data has expired or was never downloaded, say plainly that you need to go online for more.',
     'For small talk or feelings, just talk; no tools needed. '
         'Be calm, warm and supportive, especially when the person is stressed or alone, and give complete, practical answers.',
+    if (voice) kVoiceLine,
   ].join('\n');
 }
 

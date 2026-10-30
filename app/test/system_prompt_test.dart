@@ -3,6 +3,8 @@ import 'package:cache/search/core_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'dart:io';
 
+import 'support/parity_fixtures.dart';
+
 void main() {
   test('the system prompt is the approved template, built per turn', () {
     final p = buildSystemPrompt(now: DateTime(2026, 10, 26, 9, 5), locationKnown: true);
@@ -20,6 +22,32 @@ void main() {
   test('the known-location line tells the model not to ask where the person is', () {
     expect(buildSystemPrompt(now: DateTime(2026, 10, 26, 9, 5), locationKnown: true).split('\n')[2],
         "The phone's current location is known; the tools use it when you leave the place out, so don't ask the person where they are.");
+  });
+
+  group('parity with the training captures', () {
+    // The harness renders 2026-10-29 14:30 at UTC-06:00. The test machine's own offset is put in its place (the only part a
+    // DateTime here cannot choose); every other byte is compared as it is.
+    final now = DateTime(2026, 10, 29, 14, 30);
+    String expected(String file) => parityText(file).replaceFirst('(UTC-06:00)', '(UTC${utcOffset(now)})');
+    for (final loc in [true, false]) {
+      for (final voice in [false, true]) {
+        final file = 'system-${loc ? 'loc' : 'noloc'}-${voice ? 'voice' : 'text'}.txt';
+        test(file, () {
+          expect(buildSystemPrompt(now: now, locationKnown: loc, voice: voice), expected(file));
+        });
+      }
+    }
+  });
+
+  test('the voice line is the last line, only in voice mode', () {
+    final now = DateTime(2026, 10, 29, 14, 30);
+    final text = buildSystemPrompt(now: now, locationKnown: true);
+    final voice = buildSystemPrompt(now: now, locationKnown: true, voice: true);
+    expect(text, isNot(contains(kVoiceLine)));
+    expect(voice, '$text\n$kVoiceLine');
+    expect(kVoiceLine,
+        'The user is talking to you by voice and will hear your answer read aloud: keep it short, two to four plain spoken sentences, '
+        'with no tables, lists, headings or links. Keep the citation numbers; they are not read aloud.');
   });
 
   test('isoWithOffset has the local offset', () {
