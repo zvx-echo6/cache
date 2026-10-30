@@ -1,0 +1,3 @@
+# Guide labels that are not in this branch's app yet, one per line. ci_check.py lets these pass.
+#
+# Notebook branch (Notebooks, the Places notebook, the map's ring menu, App lock): remove this block when notebook merges.

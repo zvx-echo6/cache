@@ -24,7 +24,7 @@ const String kLibraryTemplateName = 'cache-library-template.tar.gz';
 const String kGuideLibraryId = 'cache-guide';
 
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
-const String kGuideVersion = '2026-10-29b';
+const String kGuideVersion = '2026-10-30';
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
