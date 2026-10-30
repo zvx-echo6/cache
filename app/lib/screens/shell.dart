@@ -17,7 +17,6 @@ import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
-import '../models/search_model.dart';
 import '../nav/nav_state.dart';
 import '../regions/ui/region_sheet.dart';
 import '../search/app_search.dart';
@@ -33,7 +32,6 @@ import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
 import 'download_confirm.dart' show openStorageForSpace;
-import 'search_model_line.dart';
 import 'settings/deps.dart';
 import 'settings/storage_page.dart';
 import 'settings/weather_page.dart';
@@ -97,24 +95,9 @@ class _ShellState extends State<Shell> {
     LocalAlertNotifier.instance.launchFocus().then((f) {
       if (f != null && mounted) _openAlert(f);
     }).catchError((_) {});
-    // Once the models folder has been read: an install with a chat model and no search model is asked once to get it.
-    widget.app.addListener(_offerSearchModel);
-    _offerSearchModel();
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
-  }
-
-  bool _searchModelAsked = false;
-
-  void _offerSearchModel() {
-    final sm = SearchModel.shared;
-    if (_searchModelAsked || sm == null || !sm.shouldOffer) return;
-    _searchModelAsked = true;
-    widget.app.removeListener(_offerSearchModel);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) offerSearchModelOnce(context, sm);
-    });
   }
 
   void _openAlert(AlertFocus f) {
@@ -124,7 +107,6 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
-    widget.app.removeListener(_offerSearchModel);
     _navEvents?.cancel();
     _alertTaps?.cancel();
     super.dispose();

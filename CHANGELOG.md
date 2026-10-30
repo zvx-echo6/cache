@@ -46,6 +46,9 @@ release notes).
 - Notifications: one choice, Pop up for: Serious only (the default), All alerts or None; serious alerts still ring in quiet hours
 - Storage: what each kind of thing uses (Library, Models, Regions, Videos and weather), each opening a list to remove items, Clean up for unfinished downloads and temporary files, and the space kept free for the phone
 - Weather and alerts settings: one line says how old the data is, with a small refresh button; the sources come from the catalogue, featured ones first and the rest under More sources, and a key is added from the source's own row
+- Models: tighter cards; the search model is one line in the first model's download pop-up (for searching by meaning), with no separate question
+- Ask: Cache uses your location whenever the phone allows it and never asks; the + button beside the box holds the Use my location switch
+- Ask: tap the model name for the model and the memory it takes, Switch model, Unload and Manage models
 
 ### Fixed
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
@@ -54,7 +57,6 @@ release notes).
 - Directions: when there is no off-road data for the area, Walk and Drive buttons show under the message and switch to that way of travel
 - Regions: a part that cannot be downloaded says so in plain words, such as "Places for this area aren't available yet.", instead of the server's error and address
 - Library: adding the blank template says it is empty and needs your own entries first, and a file that is not a library says "This file isn't a Cache library." instead of showing internal error text
-- Models: when the search model is missing, "Meaning search needs the search model" with Get it shows under On this phone, so it can be got after the one-time question was closed or its download stopped
 - Weather: when you open Cache or come back to it, weather, alerts and fires update if the last update is more than 30 minutes old, since iPhone runs background updates only when it chooses
 - Weather: Update now downloads the forecast again even when the last copy is less than 3 hours old, and the Weather page always shows which place it is showing, also when only one place is watched
 - Maps: the base map is on the first time the map opens, also when the map catalogue arrives after the app starts, so a fresh start no longer shows a blank map

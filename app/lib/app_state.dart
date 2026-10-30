@@ -49,8 +49,6 @@ class AppState extends ChangeNotifier {
   /// The search model's file, when it is in the models folder.
   ModelEntry? searchModel;
 
-  /// The one-time question about the search model was asked (kept in the settings file).
-  bool searchModelOffered = false;
   ModelEntry? active;
   ModelInfo? activeInfo;
   ModelEntry? loading;
@@ -124,7 +122,6 @@ class AppState extends ChangeNotifier {
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
       largeModuleIcons = j['moduleIcons'] == 'large';
-      searchModelOffered = j['searchModelOffered'] == true;
       _unsupported
         ..clear()
         ..addAll(((j['unsupported'] as List?) ?? const []).cast<String>());
@@ -146,7 +143,6 @@ class AppState extends ChangeNotifier {
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
         'unsupported': _unsupported.toList(),
         'names': _names,
-        'searchModelOffered': searchModelOffered,
       }));
     } catch (_) {}
   }
@@ -159,12 +155,6 @@ class AppState extends ChangeNotifier {
 
   Future<void> setLargeModuleIcons(bool large) async {
     largeModuleIcons = large;
-    notifyListeners();
-    await _writeSettings();
-  }
-
-  Future<void> setSearchModelOffered() async {
-    searchModelOffered = true;
     notifyListeners();
     await _writeSettings();
   }

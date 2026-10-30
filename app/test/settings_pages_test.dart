@@ -42,14 +42,15 @@ void main() {
     expect(find.text('other'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('delete-model-other.gguf')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('deleted from this phone'), findsOneWidget);
-    await tester.tap(find.text('Keep'));
+    expect(find.text('Delete other?'), findsOneWidget);
+    expect(find.text('You can download it again later.'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(File('${r.modelsDir.path}/other.gguf').existsSync(), isTrue);
     await tester.tap(find.byKey(const ValueKey('delete-model-other.gguf')));
     await tester.pumpAndSettle();
     await tester.runAsync(() async {
-      await tester.tap(find.byKey(const ValueKey('confirm-delete-model')));
+      await tester.tap(find.byKey(const ValueKey('confirm-delete')));
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
     await tester.pumpAndSettle();

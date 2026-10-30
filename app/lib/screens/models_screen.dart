@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../models/model_downloads.dart';
 import '../models/recommendations.dart';
-import '../models/search_model.dart';
 import '../theme.dart';
 import 'model_search_screen.dart';
-import 'search_model_line.dart';
+import '../browse/zim_download.dart' show freeBytesOnDisk;
+import 'download_confirm.dart';
+import 'hold.dart';
+import 'settings/widgets.dart' show GroupLabel;
 
 String _size(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -67,40 +69,35 @@ class _ModelsScreenState extends State<ModelsScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   children: [
                     if (downloads != null && _recommended.models.isNotEmpty) ...[
-                      _heading(context, 'Recommended'),
-                      if (_recommended.noneTuned)
-                        Padding(
-                          key: const ValueKey('tuned-coming'),
-                          padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                          child: Text(
-                            'A model tuned for Cache is coming. These work in the meantime.',
-                            style: TextStyle(fontSize: 15, color: k.secondary),
-                          ),
+                      const GroupLabel('Recommended'),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+                        child: Text(
+                          'The model is the AI that answers your questions. It runs on this phone, so it works with no signal.',
+                          style: TextStyle(fontSize: 13, color: k.secondary),
                         ),
-                      for (final r in _recommended.models) _recommendedTile(context, downloads, r),
-                      const SizedBox(height: 12),
-                    ],
-                    if (downloads != null) ...[
-                      FilledButton.icon(
-                        key: const ValueKey('find-model'),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(builder: (_) => ModelSearchScreen(downloads: downloads)),
-                        ),
-                        icon: const Icon(Icons.search),
-                        label: const Text('Search Hugging Face'),
                       ),
+                      for (final r in _recommended.models) _recommendedTile(context, downloads, r),
                       const SizedBox(height: 8),
                     ],
-                    OutlinedButton.icon(
-                      onPressed: app.copyProgress != null ? null : () => app.pickAndCopy(),
-                      icon: const Icon(Icons.folder_open),
-                      label: const Text('Choose a file…'),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Cache needs a model that can use tools. Files are copied to the app\'s own models folder.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 14, color: k.secondary),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        if (downloads != null)
+                          OutlinedButton(
+                            key: const ValueKey('find-model'),
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(builder: (_) => ModelSearchScreen(downloads: downloads)),
+                            ),
+                            child: const Text('Search Hugging Face'),
+                          ),
+                        OutlinedButton(
+                          key: const ValueKey('choose-file'),
+                          onPressed: app.copyProgress != null ? null : () => app.pickAndCopy(),
+                          child: const Text('Choose a file'),
+                        ),
+                      ],
                     ),
                     if (app.modelsError != null)
                       Padding(
@@ -108,14 +105,9 @@ class _ModelsScreenState extends State<ModelsScreen> {
                         child: Text(app.modelsError!, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.secondary)),
                       )
                     else if (app.models.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      _heading(context, 'On this phone'),
+                      const SizedBox(height: 12),
+                      const GroupLabel('On this phone'),
                       for (final m in app.models) _tile(context, m),
-                      // The one-time question may have been answered "Not now" or closed, or the download after the first chat
-                      // model stopped: the search model can always be got here.
-                      if (SearchModel.shared case final sm?
-                          when sm.state == SearchModelState.missing || sm.state == SearchModelState.failed)
-                        SearchModelLine(searchModel: sm, padding: const EdgeInsets.fromLTRB(4, 8, 4, 8)),
                     ],
                   ],
                 ),
@@ -146,11 +138,6 @@ class _ModelsScreenState extends State<ModelsScreen> {
     );
   }
 
-  Widget _heading(BuildContext context, String text) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
-    child: Text(text, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: context.t.text)),
-  );
-
   Widget _recommendedTile(BuildContext context, ModelDownloads d, ModelRecommendation r) {
     final k = context.t;
     final f = r.hfFile;
@@ -173,35 +160,35 @@ class _ModelsScreenState extends State<ModelsScreen> {
           borderRadius: BorderRadius.circular(16),
           onTap: canDownload ? () => downloadModel(context, d, f) : null,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+            padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
             child: Row(
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(r.name, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
-                      if (r.note.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(r.note, style: TextStyle(fontSize: 14, color: k.secondary)),
-                      ],
-                      const SizedBox(height: 2),
+                      Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+                      if (r.note.isNotEmpty) Text(r.note, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
                       Text.rich(TextSpan(children: [
                         TextSpan(text: _size(r.size), style: TextStyle(color: k.secondary)),
                         if (fit != ModelFit.unknown) TextSpan(text: ' · ${fit.label}', style: TextStyle(color: colour)),
-                      ]), style: const TextStyle(fontSize: 14)),
-                      const SizedBox(height: 2),
-                      Text(r.kind.label, style: TextStyle(fontSize: 13, color: k.secondary)),
+                      ]), style: const TextStyle(fontSize: 13)),
+                      Text(r.kind.label, style: TextStyle(fontSize: 12, color: k.secondary)),
                     ],
                   ),
                 ),
                 if (installed)
-                  Padding(padding: const EdgeInsets.all(12), child: Icon(Icons.check_circle, color: k.ok))
+                  RowBadge('On this phone', color: k.ok)
                 else
                   IconButton(
                     key: ValueKey('download-recommended-${r.file}'),
                     tooltip: 'Download',
-                    icon: const Icon(Icons.download),
+                    icon: Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: canDownload ? k.accent : k.secondary, width: 1.5)),
+                      child: Icon(Icons.download, size: 17, color: canDownload ? k.accent : k.secondary),
+                    ),
                     onPressed: canDownload ? () => downloadModel(context, d, f) : null,
                   ),
               ],
@@ -213,18 +200,10 @@ class _ModelsScreenState extends State<ModelsScreen> {
   }
 
   Future<void> _confirmDelete(BuildContext context, ModelEntry m) async {
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete ${app.displayName(m)}?'),
-        content: Text('The file (${_size(m.size)}) is deleted from this phone. You can add it again later.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
-          TextButton(key: const ValueKey('confirm-delete-model'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (yes == true) await app.deleteModel(m);
+    final dir = app.modelsDir;
+    if (await confirmDelete(context, name: app.displayName(m), bytes: m.size, free: dir == null ? null : freeBytesOnDisk(dir.path))) {
+      await app.deleteModel(m);
+    }
   }
 
   Widget _tile(BuildContext context, ModelEntry m) {
@@ -256,20 +235,20 @@ class _ModelsScreenState extends State<ModelsScreen> {
           borderRadius: BorderRadius.circular(16),
           onTap: (unsupported || isActive || app.loading != null) ? null : () => app.activate(m),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 72),
+            constraints: const BoxConstraints(minHeight: 56),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
               child: Row(
                 children: [
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(app.displayName(m), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: unsupported ? k.secondary : k.text)),
+                        Text(app.displayName(m), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: unsupported ? k.secondary : k.text)),
                         const SizedBox(height: 2),
-                        Text(m.fileName, style: TextStyle(fontSize: 14, color: k.secondary)),
+                        Text(m.fileName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
                         const SizedBox(height: 2),
-                        Text('${_size(m.size)} · $status', style: TextStyle(fontSize: 15, color: statusColor)),
+                        Text('${_size(m.size)} · $status', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: statusColor)),
                       ],
                     ),
                   ),

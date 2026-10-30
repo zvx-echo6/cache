@@ -147,10 +147,10 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
         await tester.pump();
         expect(find.text('Nothing found for "zzz"'), findsOneWidget);
-        // the search by meaning came back on words only: the search model is missing
+        // the search by meaning came back on words only (the search model is missing): no line about it here
         await nav.submitSearch();
         await tester.pump();
-        expect(find.text('Meaning search needs the search model.'), findsOneWidget);
+        expect(find.text('Meaning search needs the search model.'), findsNothing);
         await tester.tap(find.byTooltip('Clear'));
         await tester.pump();
         expect(nav.query, '');
