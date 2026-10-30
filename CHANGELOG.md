@@ -83,6 +83,10 @@ release notes).
 - Weather: the forecast and alerts on the phone show at once, with their age, while newer ones are read
 - Weather: while "Where I am" waits for the position, the Weather screen says so instead of offering to turn weather on
 - Regions: a download stopped because Cache was closed (iPhone stops it in the background) carries on when you tap Get your area or Update, after Cache starts again
+- Regions: each part of a region (map, directions, places, off-road) works as soon as it is saved, and downloads from where you are outwards; the region's line says where each part stands, and Set up says "Not offline yet" until all of it is saved
+- Regions: a region downloads the terrain heights for its own area, and a state's off-road data is downloaded once for all its regions ("Already on this phone"); Storage > Regions lists it
+- Library: "Opening" is now "Getting ready"
+- Weather: fires show how far away they are on Home again
 - Ask: Try again after Cache's search could not start starts it again, instead of failing the same way
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
 - Turn-by-turn: the arrive time shows instead of "--", and on Android the spoken directions can find the phone's text-to-speech
