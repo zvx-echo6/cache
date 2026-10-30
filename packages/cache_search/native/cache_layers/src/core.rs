@@ -78,6 +78,11 @@ pub enum TileOut {
     NeedsConnection,
 }
 
+/// A layer's recent source requests: (time, 0 worked / 1 failed / 2 timed out, the error message).
+type Health = VecDeque<(i64, u8, String)>;
+/// Decoded elevation tiles for contours, by (layer, z, x, y), newest last.
+type DemCache = VecDeque<((String, u8, u32, u32), Arc<Grid>)>;
+
 pub struct Inner {
     pub cfg: LayersCfg,
     pub dir: PathBuf,
@@ -88,9 +93,9 @@ pub struct Inner {
     pm_remote: Mutex<HashMap<String, Arc<Reader>>>,
     stores: Mutex<HashMap<String, Arc<Store>>>,
     no_store: Mutex<HashMap<String, std::time::Instant>>,
-    health: Mutex<HashMap<String, VecDeque<(i64, u8, String)>>>,
+    health: Mutex<HashMap<String, Health>>,
     tj: Mutex<HashMap<String, (i64, Value)>>,
-    dem: Mutex<VecDeque<((String, u8, u32, u32), Arc<Grid>)>>,
+    dem: Mutex<DemCache>,
     cogs: Mutex<HashMap<String, Arc<CogSet>>>,
 }
 

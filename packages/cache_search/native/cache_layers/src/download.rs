@@ -472,13 +472,13 @@ impl Inner {
                     }
                 }
             }
-            if with > 0 {
-                mean.insert(*z, bytes / with);
+            if let Some(m) = bytes.checked_div(with) {
+                mean.insert(*z, m);
             }
             all_bytes += bytes;
             all_with += with;
         }
-        let overall = if all_with > 0 { all_bytes / all_with } else { 0 };
+        let overall = all_bytes.checked_div(all_with).unwrap_or(0);
         let est = by_zoom.iter().map(|(z, tiles)| tiles.len() as u64 * mean.get(z).copied().unwrap_or(overall)).sum();
         Ok((est, fetched))
     }

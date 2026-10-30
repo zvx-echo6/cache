@@ -158,7 +158,7 @@ pub fn options(files: &[FileInfo]) -> Vec<Opt> {
     let mut res: Vec<i64> = files.iter().filter(|f| !f.audio_only()).map(|f| f.res).collect();
     res.sort_unstable_by(|a, b| b.cmp(a));
     res.dedup();
-    let audio_file = |hls: Option<bool>| files.iter().filter(|f| f.audio_only() && f.has_audio && hls.map_or(true, |h| f.hls == h)).min_by_key(|f| f.size).cloned();
+    let audio_file = |hls: Option<bool>| files.iter().filter(|f| f.audio_only() && f.has_audio && hls.is_none_or(|h| f.hls == h)).min_by_key(|f| f.size).cloned();
     let mut out = vec![];
     for r in res {
         let of_res: Vec<&FileInfo> = files.iter().filter(|f| f.res == r && !f.audio_only()).collect();

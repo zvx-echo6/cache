@@ -599,7 +599,7 @@ impl Handle {
         // are read from the shard payload as they are reached, so only the hits that can be shown are read.
         enum Shown {
             Zim(usize, usize),
-            Lib(usize, LibHit),
+            Lib(usize, Box<LibHit>),
         }
         let mut seen: HashSet<String> = HashSet::new();
         let mut shown: Vec<Shown> = Vec::new();
@@ -612,7 +612,7 @@ impl Handle {
                 Entry::Lib(li, hi) => {
                     let h = &libs[li].1[hi];
                     if seen.insert(h.key.clone()) {
-                        shown.push(Shown::Lib(libs[li].0, h.clone()));
+                        shown.push(Shown::Lib(libs[li].0, Box::new(h.clone())));
                     }
                 }
                 Entry::LibKw(ki, hi) => {
@@ -626,7 +626,7 @@ impl Handle {
                     };
                     if let Some(h) = hit {
                         if seen.insert(h.key.clone()) {
-                            shown.push(Shown::Lib(src_i, h));
+                            shown.push(Shown::Lib(src_i, Box::new(h)));
                         }
                     }
                 }
