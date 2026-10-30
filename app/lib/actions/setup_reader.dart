@@ -39,7 +39,7 @@ SetupDeps setupDepsFrom({
         ConnectionKind.none => 'none',
         ConnectionKind.other => 'connected',
       }),
-      SetupItem('Updates on mobile data', settings.mobileForUpdates ? 'on' : 'off'),
+      SetupItem('Mobile data downloads', settings.mobileForDownloads ? 'on' : 'off'),
     ],
     regions: () async => [
       for (final r in ready())
