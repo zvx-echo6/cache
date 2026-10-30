@@ -17,6 +17,8 @@ import 'package:cache/weather/connector.dart';
 import 'package:cache/weather/live_view.dart';
 import 'package:cache/weather/place_alerts.dart';
 import 'package:cache/weather/places.dart';
+import 'package:cache/weather/weather_state.dart';
+import 'package:cache/settings/app_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -304,6 +306,32 @@ void main() {
       };
       final out = pickNewAlerts(views, const {}, rules: (id) => rules[id] ?? PlaceAlertRule.same);
       expect(out.map((x) => x.item.address).toList(), ['w1', 'q2']);
+    });
+
+    test('a Custom place overrides "Pop up for"; Same follows it; Off silences the place', () async {
+      final dir = Directory.systemTemp.createTempSync('cache-popup-');
+      final settings = AppSettings(settingsDirOverride: dir);
+      await settings.init();
+      settings.setPopUpFor(PopUpFor.serious);
+      final custom = place('place:custom'), same = place('place:same'), off = place('place:off');
+      final views = {
+        custom: [view(custom, src('nws', 'alerts'), [item('adv-1')])],
+        same: [view(same, src('nws', 'alerts'), [item('adv-2')])],
+        off: [view(off, src('nws', 'alerts'), [item('adv-3')])],
+      };
+      final rules = {
+        'place:custom': const PlaceAlertRule(mode: PlaceAlertMode.custom, kinds: {'alerts'}),
+        'place:off': const PlaceAlertRule(mode: PlaceAlertMode.off),
+      };
+      final picked = pickNewAlerts(views, const {}, rules: (id) => rules[id] ?? PlaceAlertRule.same);
+      final noon = DateTime(2026, 10, 30, 12);
+      final shown = {for (final a in picked) a.item.address: WeatherState.deliveryOf(a, settings, noon)};
+      // an advisory (not serious) under "Serious only": the Custom place pops it up, the one that follows the setting does not
+      expect(shown, {'adv-1': AlertDelivery.normal, 'adv-2': AlertDelivery.none});
+      settings.setPopUpFor(PopUpFor.none);
+      expect(WeatherState.deliveryOf(picked.firstWhere((a) => a.custom), settings, noon), AlertDelivery.normal);
+      settings.setPopUpFor(PopUpFor.all);
+      expect(WeatherState.deliveryOf(picked.firstWhere((a) => !a.custom), settings, noon), AlertDelivery.normal);
     });
 
     test('a rule is kept in its file, and the default is not stored', () async {

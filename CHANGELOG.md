@@ -12,7 +12,7 @@ release notes).
 - Notebooks: type Markdown in any entry and it formats as you type (headings, bold, lists, checkboxes, quotes, code, links, tables); "?" shows how; tap a checkbox's box to tick it
 - Places notebook: your saved places, with "Where I am" and your downloaded regions, each place with its own marker colour; tap the marker to show or hide it on the map
 - Places: one screen to add or edit a place: search an address, place or coordinates, or tap the map; name, colour, notes, photos, and weather and alerts
-- Places: each place's alerts can follow your alert setting, have their own distance and kinds, or be off
+- Places: each place's alerts can follow your alert setting, have their own distance and kinds (which pop up whatever Pop up for says), or be off
 - Maps: press and hold the map for a ring: To here, From here, Add stop (while a route is shown), Save and Measure; Save opens your notebooks (most used first) and makes an entry at that spot; the centre opens the spot's coordinates
 - Maps: Measure draws a line from the held spot; each tap adds a point, with the running total, Undo and Done
 - Directions: start from a spot you hold on the map, and add up to 10 stops on the way

@@ -7,7 +7,8 @@ import 'places.dart';
 
 /// Something happening near a watched place that the person has not been told about yet.
 class NewAlert {
-  const NewAlert({required this.item, required this.source, required this.place, required this.extreme, bool? serious}) : serious = serious ?? extreme;
+  const NewAlert({required this.item, required this.source, required this.place, required this.extreme, bool? serious, this.custom = false})
+      : serious = serious ?? extreme;
 
   final LiveItem item;
   final String source;
@@ -18,6 +19,9 @@ class NewAlert {
 
   /// Serious ([isSerious]): what "Serious only" pops up, and what still rings in quiet hours.
   final bool serious;
+
+  /// Picked by the place's own Custom rule: it pops up whatever "Pop up for" says (the place's rule overrides it).
+  final bool custom;
 
   /// What the notification carries back to the app when tapped.
   String get payload => jsonEncode({'place': place.id, 'address': item.address});
@@ -111,6 +115,7 @@ List<NewAlert> pickNewAlerts(Map<WatchPlace, List<SourceView>> views, Set<String
           place: place,
           extreme: severity == 'extreme',
           serious: isSerious(i, fire: v.source.category == 'fire', severity: severity, fireReachMiles: fireReach?.call(place) ?? (custom ? rule.miles.toDouble() : kFireReachMiles)),
+          custom: custom,
         ));
       }
     }

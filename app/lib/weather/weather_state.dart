@@ -922,10 +922,17 @@ class WeatherState extends ChangeNotifier {
     if (fresh.isEmpty) return 0;
     var shown = 0;
     for (final a in fresh) {
-      if (await n.show(a, settings.deliveryFor(serious: a.serious, now: _now()))) shown++;
+      if (await n.show(a, deliveryOf(a, settings, _now()))) shown++;
     }
     await t.add([for (final a in fresh) a.item.address]);
     return shown;
+  }
+
+  /// How [a] is shown. A place's Custom rule overrides "Pop up for": what it picked pops up (silent in quiet hours unless it
+  /// is serious). Otherwise "Pop up for" and quiet hours decide; a place set to Off picked nothing.
+  static AlertDelivery deliveryOf(NewAlert a, AppSettings settings, DateTime now) {
+    if (!a.custom) return settings.deliveryFor(serious: a.serious, now: now);
+    return !a.serious && settings.quiet.contains(now) ? AlertDelivery.silent : AlertDelivery.normal;
   }
 
   /// The place Home talks about: "Where I am" when it is watched and known, else the first watched place.
