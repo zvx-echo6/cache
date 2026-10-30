@@ -210,11 +210,10 @@ class _CacheAppState extends State<CacheApp> {
       id: 'regions',
       label: 'Regions',
       icon: Icons.map_outlined,
-      // The layer engine's tiles, the region engine's routing and places, and the legacy hand-placed packs folder.
+      // The layer engine's tiles and the region engine's routing, places and off-road.
       shared: () => {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
-        'packs': _beside(sources.zimsDir?.parent, 'packs'),
       },
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),

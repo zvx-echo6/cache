@@ -20,7 +20,7 @@ void main() {
     expect(shimPath(null), 'libvalhalla_shim.so');
   });
 
-  test('routing is configured with the shim path it is given and the tiles of the first region', () {
+  test('routing is configured with the shim path it is given, on the region engine\'s folder; a hand-placed packs folder is not read', () {
     final files = Directory.systemTemp.createTempSync('files_');
     final support = Directory.systemTemp.createTempSync('support_');
     addTearDown(() {
@@ -31,11 +31,11 @@ void main() {
     File('${files.path}/packs/idaho/valhalla/tiles.tar').writeAsStringSync('x');
     final cfg = buildCoreExtras(filesDir: files, supportDir: support, shim: '/lib/libvalhalla_shim.so');
     final v = (cfg['routing'] as Map)['valhalla'] as Map;
-    expect((v['tiles'] as String).replaceAll('\\', '/'), endsWith('/packs/idaho/valhalla/tiles.tar'));
+    expect(v['tiles'], '', reason: 'empty: the core routes on the regions folder');
     expect(v['shim'], '/lib/libvalhalla_shim.so');
   });
 
-  test('linked routing does not need a dynamic library path, with or without a tiles.tar', () {
+  test('linked routing does not need a dynamic library path', () {
     final files = Directory.systemTemp.createTempSync('linked-files_');
     final support = Directory.systemTemp.createTempSync('linked-support_');
     addTearDown(() {
@@ -46,17 +46,8 @@ void main() {
       filesDir: files, supportDir: support, useLinkedRouter: true,
       shim: '/does-not-exist/libvalhalla_shim.so',
     );
-    // No tiles.tar: still configured, on the region engine's folder.
     expect(((build()['routing'] as Map)['valhalla'] as Map)['tiles'], '');
     expect(((build()['routing'] as Map)['valhalla'] as Map)['shim'], 'linked');
-    final tiles = File('${files.path}/packs/idaho/valhalla/tiles.tar')
-      ..createSync(recursive: true)
-      ..writeAsStringSync('fixture');
-    final valhalla = (build()['routing'] as Map)['valhalla'] as Map;
-    expect(valhalla['shim'], 'linked');
-    expect(File(valhalla['tiles'] as String).absolute.uri, tiles.absolute.uri);
-    tiles.deleteSync();
-    expect(((build()['routing'] as Map)['valhalla'] as Map)['tiles'], '');
   });
 
   group('what is installed becomes the places, routing and user sections', () {
@@ -76,54 +67,23 @@ void main() {
 
     Map<String, dynamic> build({String shim = '/lib/libvalhalla_shim.so'}) => buildCoreExtras(filesDir: files, supportDir: support, shim: shim);
 
-    test('everything installed', () {
+    test('places, routing and off-road come from region downloads only; hand-placed packs are not read', () {
       touch('packs/idaho/places.sqlite');
       touch('packs/idaho/valhalla/tiles.tar');
       touch('packs/idaho/offroad.sqlite');
       touch('packs/idaho/elevation.pmtiles');
       final c = build();
-      expect((c['places'] as Map)['packs'], hasLength(1));
+      expect(c['places'], {'packs': <String>[], 'merged_dir': '${support.path}/regions/places'});
       final routing = c['routing'] as Map;
+      expect((routing['valhalla'] as Map)['tiles'], '');
       expect((routing['valhalla'] as Map)['shim'], '/lib/libvalhalla_shim.so');
-      expect((routing['offroad'] as Map).keys, ['pack', 'elevation']);
+      expect(routing['offroad'], {'dir': '${support.path}/regions/offroad'});
       expect((c['user'] as Map)['db_path'], endsWith('user.sqlite'));
-    });
-
-    test('off-road needs both files; with no tiles.tar the router is still configured, on the region engine\'s folder', () {
-      touch('packs/idaho/places.sqlite');
-      touch('packs/idaho/valhalla/tiles.tar');
-      touch('packs/idaho/offroad.sqlite');
-      // not both: off-road reads the packs downloaded with regions
-      expect((build()['routing'] as Map)['offroad'], {'dir': '${support.path}/regions/offroad'});
-      File('${files.path}/packs/idaho/valhalla/tiles.tar').deleteSync();
-      final v = (build()['routing'] as Map)['valhalla'] as Map;
-      expect(v['tiles'], '', reason: 'empty: the core routes on the regions folder');
-      expect(v['shim'], '/lib/libvalhalla_shim.so');
-      expect(build().containsKey('places'), isTrue);
-    });
-
-    test('the region engine is always configured, and a tiles.tar still wins when there is one', () {
-      touch('packs/idaho/valhalla/tiles.tar');
-      final c = build();
       expect(c['regions'], {
         'dir': '${support.path}/regions',
         'base_url': 'https://data.cached.info/routing/',
         'places_base_url': 'https://data.cached.info/places/',
       });
-      final v = (c['routing'] as Map)['valhalla'] as Map;
-      expect((v['tiles'] as String).replaceAll('\\', '/'), endsWith('/packs/idaho/valhalla/tiles.tar'));
-    });
-
-    test('places: the packs copied in by hand and the merged database of the downloaded regions', () {
-      touch('packs/utah/places.sqlite');
-      touch('packs/idaho/places.sqlite');
-      touch('packs/idaho/valhalla/tiles.tar');
-      final places = build()['places'] as Map;
-      expect(places['merged_dir'], '${support.path}/regions/places');
-      expect([for (final p in places['packs'] as List) (p as String).replaceAll('\\', '/').split('/').reversed.skip(1).first], ['idaho', 'utah']);
-      expect(legacyPlacesPacks(files), places['packs'], reason: 'the same scan, callable again when the sources are refreshed');
-      touch('packs/boise/places.sqlite');
-      expect(legacyPlacesPacks(files), hasLength(3));
     });
 
     test('the data host can be another one that serves the same bucket', () {
@@ -137,13 +97,6 @@ void main() {
       expect((c['regions'] as Map)['places_base_url'], 'https://cache.echo6.co/places/');
       expect(kRoutingBaseUrl, '$kDataBaseUrl/routing/');
       expect(kPlacesBaseUrl, '$kDataBaseUrl/places/');
-    });
-
-    test('several regions give several places packs; no packs folder gives an empty list', () {
-      expect((build()['places'] as Map)['packs'], isEmpty);
-      touch('packs/idaho/places.sqlite');
-      touch('packs/utah/places.sqlite');
-      expect(((build()['places'] as Map)['packs'] as List).length, 2);
     });
   });
 }
