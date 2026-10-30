@@ -208,7 +208,7 @@ fn the_bundled_guide_adds_through_the_compressed_import() {
     let d = &p["detail"];
     assert_eq!(d["settings_source"], "archive");
     assert_eq!(d["resolved"]["library_id"], "cache-guide");
-    assert_eq!(d["resolved"]["version"], "2026-10-30c");
+    assert_eq!(d["resolved"]["version"], "2026-10-31");
     assert!(d["docs"].as_u64().unwrap() > 50, "{d}");
 }
 
