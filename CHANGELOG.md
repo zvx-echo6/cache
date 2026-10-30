@@ -80,6 +80,9 @@ release notes).
 - Regions: "Draw your own area instead" from Home's Set up Cache opens the map to draw the area
 - Library: the guide that comes with Cache is labelled "Built in", and a library still opening when Cache starts no longer stays on "Opening"
 - About shows the full version, 1.0.27; the version number now matches the build on iPhone and Android
+- Weather: the forecast and alerts on the phone show at once, with their age, while newer ones are read
+- Weather: while "Where I am" waits for the position, the Weather screen says so instead of offering to turn weather on
+- Regions: a download stopped because Cache was closed (iPhone stops it in the background) carries on when you tap Get your area or Update, after Cache starts again
 - Ask: Try again after Cache's search could not start starts it again, instead of failing the same way
 - Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
 - Turn-by-turn: the arrive time shows instead of "--", and on Android the spoken directions can find the phone's text-to-speech
