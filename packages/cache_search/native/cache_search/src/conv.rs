@@ -15,8 +15,24 @@ pub struct Conversation {
     /// What `web_search` showed for each `web:<url>` address (title, snippet, fetch time), so `read` can fall back to
     /// the snippet. Lives and dies with the conversation; never written to disk.
     web: HashMap<String, WebNote>,
+    /// Where a numbered address's citation opens (a library point's `link` and `time`), by address. Out of band: it goes
+    /// to the host in the id map and is never part of a tool message.
+    cites: HashMap<String, Cite>,
     /// What tools count across calls (the `act` tool's confirm ids and host runs). Only `confirms` is exported.
     pub tool_state: cache_tool::ConvState,
+}
+
+/// Where a citation opens: a link, and the moment in it (seconds) for a recording. Both optional.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Cite {
+    pub link: Option<String>,
+    pub time: Option<serde_json::Number>,
+}
+
+impl Cite {
+    pub fn is_empty(&self) -> bool {
+        self.link.is_none() && self.time.is_none()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +66,10 @@ struct ExportId {
     address: String,
     #[serde(default)]
     title: String,
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    time: Option<serde_json::Number>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,9 +92,26 @@ impl Conversation {
         Self::default()
     }
 
+    /// `{"n","address","title"}`, plus `"link"` and `"time"` when the address has them (see [`Cite`]).
     fn id_json(&self, i: usize) -> Value {
         let (a, t) = &self.entries[i];
-        json!({"n": i + 1, "address": a, "title": t})
+        let mut v = json!({"n": i + 1, "address": a, "title": t});
+        if let Some(c) = self.cites.get(a) {
+            if let Some(l) = &c.link {
+                v["link"] = json!(l);
+            }
+            if let Some(t) = &c.time {
+                v["time"] = Value::Number(t.clone());
+            }
+        }
+        v
+    }
+
+    /// Remember where `address`'s citation opens. The first one noted is kept; an empty one is not kept.
+    pub fn note_cite(&mut self, address: &str, cite: Cite) {
+        if !cite.is_empty() {
+            self.cites.entry(address.to_string()).or_insert(cite);
+        }
     }
 
     /// `{"n","address","title"}` for number `n` (from 1); `n` must have been given.
@@ -138,7 +175,7 @@ impl Conversation {
 
     /// The whole state of the conversation as JSON, enough for `import_json` to continue numbering and reading exactly
     /// as this conversation would. Keys come out in this order: `format` (1), `next_n` (the number the next new
-    /// address gets), `ids` (`{"n","address","title"}` in number order), `web_hits` (what `web_search` showed, by
+    /// address gets), `ids` (`{"n","address","title"}` in number order, with `"link"` and `"time"` when known), `web_hits` (what `web_search` showed, by
     /// `web:<url>` address in sorted order, each `{"title","snippet","fetched"}`; the snippet is what `read` falls back
     /// to), and `confirms` (the number of confirm cards the `act` tool has issued; left out while it is 0, so a conversation
     /// that never used `act` exports as it always did). Same state, same bytes. Pending host runs are not exported.
@@ -178,6 +215,7 @@ impl Conversation {
             if !c.number(&id.address, &id.title).1 {
                 return Err(Error::bad_json(format!("conversation export: address {:?} is numbered twice", id.address)));
             }
+            c.note_cite(&id.address, Cite { link: id.link, time: id.time });
         }
         if e.next_n != c.entries.len() as u64 + 1 {
             return Err(Error::bad_json(format!("conversation export: next_n is {} but {} ids end at {}", e.next_n, c.entries.len(), c.entries.len())));

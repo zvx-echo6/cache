@@ -36,7 +36,7 @@ class ChatMessage {
         ],
         sources = [
           for (final c in m.citations)
-            NumberedResult(c.n, SourceResult(title: c.title, snippet: c.snippet, address: c.address)),
+            NumberedResult(c.n, SourceResult(title: c.title, snippet: c.snippet, address: c.address, link: c.link, time: c.time)),
         ];
 
   final bool isUser;
@@ -612,7 +612,7 @@ class ChatController extends ChangeNotifier {
             message: m,
             navigationActions: isAnswer ? reply.navigationActions : const [],
             citations: isAnswer
-                ? [for (final s in reply.sources) StoredCitation(n: s.id, title: s.result.title, snippet: s.result.snippet, address: s.result.address)]
+                ? [for (final s in reply.sources) StoredCitation(n: s.id, title: s.result.title, snippet: s.result.snippet, address: s.result.address, link: s.result.link, time: s.result.time)]
                 : const [],
             stats: isAnswer ? stats : const GenerationStats(),
             model: _modelName,

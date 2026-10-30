@@ -7,6 +7,7 @@ release notes).
 ## Unreleased
 
 ### New
+- Ask: a source from a video transcript opens the video at the moment it cites (libraries map `fields.time` and `fields.link`)
 - Home: a "Set up Cache" card with four steps (choose a model, get your area, turn on weather, add a library), each ticked when it is done and showing its download while it runs; it goes away by itself when all four are done
 - Directions: routes to airports, parks and campuses arrive where people actually go, and starts snap to the right road
 - Regions include places and addresses for map search

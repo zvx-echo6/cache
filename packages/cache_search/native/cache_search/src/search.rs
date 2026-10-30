@@ -437,6 +437,7 @@ pub(crate) fn top_deterministic(
 impl Handle {
     pub fn search(&mut self, query: &str, options_json: Option<&str>) -> Result<String> {
         self.poll_opening();
+        self.last_cites.clear();
         let opts: Opts = match options_json.map(str::trim) {
             None | Some("") | Some("null") => serde_json::from_str("{}")?,
             Some(s) => serde_json::from_str(s)?,
@@ -639,6 +640,9 @@ impl Handle {
             let (m_si, hi) = match e {
                 Shown::Lib(src_i, h) => {
                     let Source::Library(l) = &self.sources[src_i] else { continue };
+                    if !h.cite.is_empty() {
+                        self.last_cites.push((h.address.clone(), h.cite.clone()));
+                    }
                     results.push(json!({
                         "address": h.address,
                         "title": h.title,

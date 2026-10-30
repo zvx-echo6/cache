@@ -256,6 +256,9 @@ pub struct Handle {
     pub fetcher: Arc<cache_tool::fetcher::PolicyFetcher>,
     /// The actions modules have published, shared with the registered `act` tool (`cs_act_set_definitions`; see act.rs).
     pub act: Arc<cache_act::ActState>,
+    /// Where the citations of the last search's library results open (address, link and time), for `cs_tool` to keep in
+    /// the conversation beside the numbering. Replaced by every search.
+    pub last_cites: Vec<(String, crate::conv::Cite)>,
 }
 
 impl Drop for Handle {
@@ -286,6 +289,7 @@ impl Handle {
             zim_budget: Arc::new(ZimBudget::new(budget::default_budget_mb(cfg!(any(target_os = "android", target_os = "ios"))) * budget::MIB)),
             fetcher: Arc::new(cache_tool::fetcher::PolicyFetcher::new()),
             act: Arc::new(cache_act::ActState::new()),
+            last_cites: Vec::new(),
         };
         h.register_tool(Box::new(cache_calc::CalculateTool));
         h.register_tool(Box::new(cache_act::ActTool(h.act.clone())));

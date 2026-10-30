@@ -310,7 +310,8 @@ impl Handle {
     }
 
     /// `cs_tool`: run one tool call and number its result in `conv`.
-    /// Returns `{"content":"<the tool message>","ids":[{"n","address","title"}...new ones...]}`. A failure of the
+    /// Returns `{"content":"<the tool message>","ids":[{"n","address","title"}...new ones...]}`; an id also has `"link"`
+    /// and `"time"` when its library point maps them. A failure of the
     /// tool (bad arguments, no such tool, ...) is the content; only malformed `args_json` or an empty `now` fail.
     pub fn call_tool(&mut self, conv: &mut Conversation, name: &str, args_json: &str, now: &str) -> Result<String> {
         if now.trim().is_empty() {
@@ -325,6 +326,14 @@ impl Handle {
         };
         let mut ids: Vec<Value> = Vec::new();
         let result = self.run_tool(conv, name, &args, now, host_vector);
+        // Where search's library results open (link and time) goes into the conversation beside the numbering, before the
+        // numbers are given, so the new ids carry it; the tool message never does.
+        let cites = std::mem::take(&mut self.last_cites);
+        if matches!(Builtin::of(name), Some(Builtin::Search)) {
+            for (address, cite) in cites {
+                conv.note_cite(&address, cite);
+            }
+        }
         // What web_search showed is remembered in the conversation, so a later read can fall back to the snippet.
         for (address, note) in self.web.take_pending() {
             conv.note_web(&address, note);

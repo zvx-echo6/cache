@@ -73,6 +73,12 @@ fn build_shard(dir: &std::path::Path) {
             };
             let mut payload = json!({"title": format!("Doc {i}"), "content": content});
             match i {
+                // video transcript points: where the citation opens (mapped only by the settings that name them)
+                3 => {
+                    payload["video"] = json!("https://videos.example/w/abc");
+                    payload["start_s"] = json!(125.5);
+                }
+                5 => payload["start_s"] = json!("42"),
                 7 => {
                     payload["author"] = json!("A. Writer");
                     payload["page"] = json!(12);
@@ -99,10 +105,14 @@ struct Fx {
 
 impl Fx {
     fn new(name: &str) -> Fx {
+        Fx::with_fields(name, json!({"title":"title","text":"content","author":"author","page":"page"}))
+    }
+
+    fn with_fields(name: &str, fields: Value) -> Fx {
         let tmp = TempDir::new(name);
         let shard = tmp.0.join("shard");
         build_shard(&shard);
-        let settings = json!({"format":1,"library_id":"own","title":"Own","fields":{"title":"title","text":"content","author":"author","page":"page"},
+        let settings = json!({"format":1,"library_id":"own","title":"Own","fields":fields,
             "embedding":{"vector":"","model":MODEL,"sha256":"x","dims":4},"keyword_index":"auto"});
         let cfg = json!({"sources":[{"kind":"library","path":shard.to_str().unwrap(),"index_dir":"/nonexistent/idx","settings":settings}]});
         let h = unsafe { cs_open(cstr(&cfg.to_string()).as_ptr()) };
@@ -181,6 +191,37 @@ fn the_search_line_is_the_tool_message_of_cs_format() {
     let want = f.format(&raw["results"].to_string());
     let got = f.tool("search", r#"{"query":"sesquipedalian"}"#);
     assert_eq!(got["content"], want["tool_message"]);
+}
+
+#[test]
+fn a_video_points_link_and_time_go_in_the_id_map_and_never_in_the_tool_message() {
+    let plain = Fx::new("cite-plain");
+    let video = Fx::with_fields(
+        "cite-video",
+        json!({"title":"title","text":"content","author":"author","page":"page","link":"video","time":"start_s"}),
+    );
+    let (a, b) = (plain.tool("search", r#"{"query":"sesquipedalian"}"#), video.tool("search", r#"{"query":"sesquipedalian"}"#));
+    // the model's text is byte for byte the same whether or not the library maps a link and a time
+    assert_eq!(a["content"], b["content"]);
+    let by = |v: &Value, addr: &str| v["ids"].as_array().unwrap().iter().find(|x| x["address"] == addr).unwrap().clone();
+    assert_eq!(by(&a, "lib:own/3"), json!({"n": by(&a, "lib:own/3")["n"], "address": "lib:own/3", "title": "Doc 3"}));
+    let n3 = by(&b, "lib:own/3")["n"].clone();
+    let n5 = by(&b, "lib:own/5")["n"].clone();
+    assert_eq!(by(&b, "lib:own/3"), json!({"n": n3, "address": "lib:own/3", "title": "Doc 3", "link": "https://videos.example/w/abc", "time": 125.5}));
+    // a time given as text is read as the number it is; no link, no "link"
+    assert_eq!(by(&b, "lib:own/5"), json!({"n": n5, "address": "lib:own/5", "title": "Doc 5", "time": 42}));
+    // cs_conversation_ids gives the same, and an export carries it through an import
+    let ids: Value = serde_json::from_str(&take(unsafe { cs_conversation_ids(video.c) }).unwrap()).unwrap();
+    assert!(ids["ids"].as_array().unwrap().contains(&by(&b, "lib:own/3")), "{ids}");
+    let export = take(unsafe { cs_conversation_export(video.c) }).unwrap();
+    let back = unsafe { cs_conversation_import(cstr(&export).as_ptr()) };
+    assert!(!back.is_null());
+    assert_eq!(take(unsafe { cs_conversation_export(back) }).unwrap(), export);
+    unsafe { cs_conversation_free(back) };
+    // a read of the point is the same text either way
+    let ra = plain.tool("read", &json!({"n": by(&a, "lib:own/3")["n"]}).to_string());
+    let rb = video.tool("read", &json!({"n": n3}).to_string());
+    assert_eq!(ra["content"], rb["content"]);
 }
 
 #[test]
