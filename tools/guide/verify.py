@@ -74,10 +74,15 @@ Q = [
     ('choose a model', G + '1. Getting started: Choose a model'),
     ('use my location', G + '1. Getting started: Let Cache use your location'),
     ('how do I change the app to dark mode', G + '3. Settings, page by page: Appearance'),
-    ("my phone is full and a download stopped", G + "6. When something doesn't work: Storage full"),
+    # Storage full, or the sections that now carry the "Not enough space" pop-up and the stopped download.
+    ("my phone is full and a download stopped", G + "6. When something doesn't work: Storage full",
+     G + '1. Getting started: Downloads, Wi-Fi and mobile data', G + "6. When something doesn't work: A download stopped"),
     ('obsidian vault', G + '5. Notebooks: Write notebooks to Obsidian or Logseq'),
     ('region download stopped', G + '1. Getting started: Region download progress and off-road data', G + '1. Getting started: Download a region'),
-    ('off-road data already on this phone', G + '1. Getting started: Region download progress and off-road data'),
+    # The off-road content is split across these three sections.
+    ('off-road data already on this phone', G + '1. Getting started: Region download progress and off-road data',
+     G + '1. Getting started: Off-road data in regions', G + '3. Settings, page by page: Off-road data in Storage'),
+    ('region download pop-up', G + '1. Getting started: The region download pop-up'),
     ('how do I follow a route while driving', G + '2. Using Cache: Follow a route'),
 ]
 for q, *exps in Q:

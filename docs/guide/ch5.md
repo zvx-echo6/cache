@@ -30,9 +30,11 @@ Make a new notebook from a template.
 ## Edit, delete or share a notebook
 
 1. Open the notebook.
-2. Tap "Edit notebook" to change its name, or turn "Show on map" or "Private" on or off.
+2. Tap "Edit notebook" to change its name or turn "Private" on or off.
 3. Tap "Delete notebook" to remove it. A pop-up says how many entries go with it. This can't be undone.
 4. Tap "Add to Home" to put it on "Home".
+
+- Once entries have places, "Edit notebook" has a "Show on map" switch. The notebook's menu then has "Show on map" or "Hide on map".
 
 ![Edit notebook](shot:notebook-edit)
 
@@ -50,7 +52,7 @@ A Journal keeps dated entries: what happened, where, and what you did.
 
 Cache saves as you type. Each entry has a time you can change, and a place. The place starts as where you are.
 
-With "Show on map" on, the entries appear on the map.
+Once entries have places, "Show on map" puts them on the map. It is a switch in "Edit notebook", and "Show on map" or "Hide on map" in the notebook's menu.
 
 - If you leave before "Done", the journal shows "Unfinished entry · Tue 4:12 PM" (the time varies) with "Continue".
 - If there's no position yet, the entry says "No position yet" and still saves.
@@ -120,8 +122,6 @@ You can also save a place from the map. Press and hold the map and choose "Save"
 
 Add place and Edit place are the same screen.
 
-![Editing a place](shot:places-edit)
-
 1. In the Places notebook, tap "Add place". To edit, press and hold a place.
 2. Search an address, place or coordinates, or tap the map to move the pin.
 3. Type a "Name".
@@ -148,8 +148,6 @@ A place with "Weather and alerts" on is watched. Cache keeps weather, alerts and
 ## The map ring menu
 
 Press and hold any spot on the map to open a ring. The centre shows the place name and coordinates. Tap outside to close it.
-
-![The ring menu](shot:map-ring)
 
 The wedges are:
 - "To here": directions to the spot.
@@ -184,16 +182,12 @@ A route can have up to 10 stops. Each is listed under the destination with a rem
 3. Read the running total in the bar, in your units.
 4. Tap "Done" to end.
 
-![Measuring on the map](shot:map-measure)
-
 "Undo" removes the last point.
 
 ## Save a spot to a notebook
 
 1. Press and hold the map and choose "Save". The ring shows your notebooks, most used first.
 2. Tap a notebook. Its entry form opens at that spot. For "Places" it is the Add place screen with the pin there.
-
-![The notebook ring](shot:map-notebook-ring)
 
 The ring holds at most six wedges: five notebooks and "More". "More" turns to the next page, for example "2 of 3". Tap the back arrow in the centre to go back.
 
@@ -278,8 +272,8 @@ You can tell Cache to log something in "Ask", for example: add a generator test,
 ![The confirm card](shot:ask-confirm-card)
 
 1. Ask in plain words.
-2. Read the card Cache shows. It says "Add to Journal", or Add to and the log's name, with the details.
-3. Tap the add button. "Not now" cancels.
+2. Read the card Cache shows. Its title is the action, for example "Add to Journal", or Add to and the log's name. It lists the details.
+3. Tap the button with the card's title to do it. Tap "Cancel" to stop.
 
 Nothing changes until you tap. To fix a mistake first, tell Cache what to change. It replaces the card.
 

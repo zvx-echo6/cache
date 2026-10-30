@@ -72,20 +72,21 @@ On the Models screen (tap the model name in "Ask", then "Manage models"):
 
 The search model (605 MB) lets Cache search by meaning.
 
-- "Meaning search needs the search model." with "Get it": it's missing or stopped. Open the Models screen and tap "Get it" under "On this phone".
 - "Next: Search model, 605 MB": it downloads after the current model.
 - "Also downloads: Search model, 605 MB": it comes with the model you're downloading.
-- "Search model: download stopped ([reason])": if it's about mobile data, connect to Wi-Fi, then tap "Get it".
-- "Meaning search needs the model [name].": a library wants a different model. Cache can't download it and searches by keywords.
+- "Search model: download stopped ([reason])": in the download bar on the Models screen, tap "Try again". If the reason is mobile data, connect to Wi-Fi first.
+- "Meaning search needs the model [name].": shown under search results in the reader when a library wants a different model. It has no button. Cache can't download that model and searches by keywords.
 - "Matching words only: the meaning search is not available": places search by words only.
 
 ## Download pop-up messages
 
 Every download asks first. See Downloads, Wi-Fi and mobile data in chapter 1.
 
-- "Wait for Wi-Fi": you're on mobile data and "Mobile data downloads" is off. It starts on Wi-Fi.
-- "Download now": goes ahead on mobile data this once.
-- "Needs 28 GB more. Cache always leaves 20 GB for the phone." (numbers vary): it won't fit. Tap "Free up space".
+- "Not enough space": the download won't fit. The pop-up says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Tap "Free up space" to open "Storage", or "Cancel".
+- "You're on mobile data, and mobile data downloads are off. It can wait for Wi-Fi.": tap "Wait for Wi-Fi", or "Download now" to go ahead once.
+- "Phone storage": the free space before and after. The bar shows the same.
+- "Download anyway": goes ahead on mobile data when a carry-on was blocked.
+- "[name] will carry on on Wi-Fi" or "[names] will download on Wi-Fi": it was queued for Wi-Fi.
 
 Delete pop-ups say "Frees" and a size, and "You can download it again later." Tap "Delete" or "Cancel".
 
@@ -183,34 +184,44 @@ In the directions panel:
 ## Region list messages
 
 On the "Regions" sheet (["Maps" > "Layers" > "Download a region"](cache://maps/regions)):
+- "Couldn't read the list of regions. It needs a connection the first time.": connect and try again.
 - "The list of regions needs a connection the first time. After that it works offline.": connect and tap "Try again".
 - "This country's regions need a connection the first time." or "Search needs a connection the first time.": connect once.
 - "This region could not be read. Connect and try again."
 - `No region called "[name]".`: try another spelling, or browse "Countries".
+- "No region here in the catalogue. Search for one in Regions.": search by name.
 - "Nothing downloaded yet": pick a region under "Downloads".
-- "Downloading needs a connection.": connect first.
-- "Could not work out the size" or "Needs a connection to work out the size.": connect and reopen the region.
-- "This region has no outline yet.", "This region is too big to download the map in one go." or "No map layer that can be kept offline is switched on.": shown in place of the download button.
+- "Size unknown": the catalogue has no size for it.
+- "Waiting for Wi-Fi": it will download on Wi-Fi.
 - "On this phone": already here.
 
-## Region downloads paused or failed
+## Region action messages
 
-A downloading region shows one line: "Map", "Directions", "Places" and "Off-road", each ready, a percentage, waiting, stopped or paused. A part that says ready already works.
+When a region action fails, Cache says what happened and what to do. [action] is what you tried, for example "carry on with Idaho".
+- "Couldn't [action]: no connection. Connect, then try again."
+- "Couldn't [action]: there is not enough free space. Free some space in Settings > Storage, then try again.": free space in ["Settings" > "Storage"](cache://settings/storage).
+- "Couldn't [action] just now: another download is starting. Try again in a moment."
+- "Couldn't [action]: part of it is no longer on the phone. Remove it and download it again."
+- "Couldn't [action]. Try again; if it happens again, remove it and download it again."
 
-- "Paused: no connection." or "Paused: no network it may use": connect, or use Wi-Fi. It carries on by itself.
-- "Paused: mobile data is switched off for downloads. Connect to Wi-Fi to carry on.": connect to Wi-Fi, or turn on "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
-- "Paused: [region] needs [size], [size] is free and [size] is kept free": delete things you don't need. It carries on.
-- "Paused: [reason]; trying again shortly": wait.
-- "Paused: could not move to [build]: [reason]" or "Paused: could not move places to [build]: [reason]": check free space. Tap the region's update button.
-- A part that says stopped: tap the region's update button. If Cache was closed, tap "Get your area" in the Set up card ("[region] · Stopped. Tap to carry on"). Cache says "Carrying on with [region]".
-- "Places not downloaded": update the region.
+The message has a "Try again" button where it can.
+
+## Region download messages
+
+On the "Local" tab, a region shows its parts. A part that is ready already works.
+- "Carry on": the download stopped. Tap it. A pop-up asks "Carry on with [region]?"
+- "Try again": a part couldn't finish. Tap it.
+- `Map stopped at 80%`: the map download stopped. Tap "Carry on".
+- "Couldn't finish": open the region and tap "Try again".
+- "Not on this phone" with "Add": off-road isn't here. Tap "Add".
+- "Download anyway": goes ahead on mobile data.
 
 ## Region data messages
 
 Texts you may see on a part:
-- "the places server cannot be reached": try later.
-- "update Cache to use this data: the places are in layout [n], this version reads [n]": the data is newer than Cache. Update Cache.
-- "the index of [build] does not match its checksum": the download was damaged. Update the region again.
+- "Couldn't be downloaded. Try again later."
+- "The download server couldn't send it just now. Try again later."
+- "Off-road data couldn't be downloaded. Try again later."
 
 ## Weather status messages
 
@@ -447,7 +458,7 @@ Weather and alerts always update. If weather is old, see Weather status messages
 
 ## Storage full
 
-When the phone is low on space, downloads refuse or stop. The pop-up says how much more is needed, for example "Needs 28 GB more. Cache always leaves 20 GB for the phone." Cache keeps 10% of storage free, at least 5 GB and at most 20 GB, and you can't change that.
+When the phone is low on space, the download pop-up is titled "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Cache keeps 10% of storage free, at least 5 GB and at most 20 GB, and you can't change that.
 
 ![The Storage page](shot:settings-storage)
 

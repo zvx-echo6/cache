@@ -230,8 +230,6 @@ To delete all chats, go to ["Settings" > "Cache model and web search" > "Delete 
 
 Search finds a place, town, address or coordinates.
 
-![Map search results](shot:maps-search)
-
 1. Open "Maps".
 2. Tap "Search places or coordinates" and type.
 3. Tap a result. The map moves there and the place card opens.
@@ -246,8 +244,6 @@ The locate button ("Find me") moves the map to you. Tap it again to turn the map
 
 Tap a search result or a place to open its card at the bottom of "Maps".
 
-![A place card](shot:place-card)
-
 The card has:
 - "Directions": a route from where you are;
 - "Save place": keeps it in your Places notebook;
@@ -259,8 +255,6 @@ Press and hold on the map for the ring menu. It has "Add stop" and "Measure". Se
 ## Get directions
 
 Directions plan a route from where you are to a place.
-
-![The directions panel](shot:directions-panel)
 
 1. In "Maps", open a place's card. Or press and hold the map and choose "To here".
 2. Tap "Directions".
@@ -277,8 +271,6 @@ Road directions work offline if the region is downloaded.
 ## Off-road directions
 
 Off-road plans a route away from roads.
-
-![Off-road directions](shot:directions-offroad)
 
 1. Open a place's card and tap "Directions".
 2. Tap "Off-road".
@@ -299,8 +291,6 @@ Changing a choice plans the route again. Choices reset on restart: "Drive", then
 
 After "Start", Cache guides you turn by turn.
 
-![Following a route](shot:guidance)
-
 - The banner shows the next turn.
 - "Rerouting" means you left the route.
 - Near the end it says "Arriving", then "You have arrived".
@@ -315,8 +305,6 @@ Guidance keeps running with the screen locked. On Android a "Cache navigation" n
 ## Map layers and offline maps
 
 The "Layers" button on the right of "Maps" opens the layers sheet.
-
-![The layers sheet](shot:layers-sheet)
 
 - Switch a layer on or off. Its line says "Downloaded for offline", "Streams when online" or "Needs a connection".
 - Use "Opacity" for a layer laid over the map.
@@ -352,8 +340,6 @@ The built-in guide has no "Delete". Anything else asks first and shows what it f
 
 The reader opens a Library item.
 
-![The reader](shot:zim-reader)
-
 - "Search this ZIM" searches inside the open work.
 - "Find in page" finds words, with "Previous" and "Next".
 - "Back", "Forward" and "Main page" are at the bottom.
@@ -385,8 +371,6 @@ In the player:
 - Tap "Full screen" for the video alone. Wide video turns landscape and the system bars hide.
 - Tap the screen to show the controls.
 - Back, or "Leave full screen", leaves full screen.
-
-![The video player](shot:video-player)
 
 ## Save a video for offline
 
