@@ -303,7 +303,6 @@ void main() {
       storage: r.s.storage,
       weather: r.s.weather,
       regions: r.regions,
-      locationAccess: r.s.access,
     );
     final deps = SettingsDeps(
       app: r.s.app,
