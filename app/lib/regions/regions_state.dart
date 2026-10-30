@@ -279,6 +279,29 @@ class RegionsState extends ChangeNotifier {
     final kind = _kind = await policy.probe.current();
     final ok = _networkOk = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
     await _core?.call('set_policy', {'network': ok});
+    if (ok && _waiting.isNotEmpty) {
+      final go = List.of(_waiting);
+      _waiting.clear();
+      for (final w in go) {
+        await download(w.$1, routing: w.$2, map: w.$3, places: w.$4);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Regions the person chose to download once on Wi-Fi ("Wait for Wi-Fi"), with the parts picked; they start when the connection
+  /// allows it (kept while the app runs).
+  final List<(RegionRecord, bool, bool, bool)> _waiting = [];
+
+  /// The ids of the regions waiting for Wi-Fi.
+  Set<String> get waitingIds => {for (final w in _waiting) w.$1.id};
+
+  /// Downloads [r] once on Wi-Fi: now if the connection already allows it, else when it does.
+  Future<void> downloadOnWifi(RegionRecord r, {required bool routing, required bool map, bool places = false}) async {
+    if (!await policy.blocksDownload()) return download(r, routing: routing, map: map, places: places);
+    _waiting
+      ..removeWhere((w) => w.$1.id == r.id)
+      ..add((r, routing, map, places));
     notifyListeners();
   }
 
