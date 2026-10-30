@@ -144,12 +144,15 @@ class ChatController extends ChangeNotifier {
 
   bool get canSend => _backend != null && !busy;
 
-  /// The open conversation is in voice mode (started in voice or switched to it): every request's system prompt carries the voice
-  /// line while it is on. A new chat starts in text.
+  /// The open conversation is in voice mode: every request's system prompt carries the voice line. The mode is fixed when the
+  /// conversation is made and stored with it, so a reopened chat keeps it. A new chat starts in text.
   bool get voice => _voice;
 
+  /// Sets the mode of a new chat. A chat that has started keeps its mode: switching starts a new chat in the other mode
+  /// (project decision, 2026-10-30).
   void setVoice(bool on) {
     if (_voice == on) return;
+    if (_activeId != null || messages.isNotEmpty) newChat();
     _voice = on;
     notifyListeners();
   }
@@ -181,6 +184,7 @@ class ChatController extends ChangeNotifier {
     if (store == null || id == _activeId || store.get(id) == null) return;
     newChat();
     _activeId = id;
+    _voice = store.get(id)!.voice;
     final stored = store.messages(id);
     final inTranscript = [for (var i = 0; i < stored.length; i++) if (stored[i].inTranscript) i];
     final cards = cardsInTranscript([for (final i in inTranscript) stored[i].message]);
@@ -315,7 +319,7 @@ class ChatController extends ChangeNotifier {
       convId = _activeId;
       if (store != null && convId == null) {
         try {
-          convId = _activeId = store.create(title: questionTitle(text), model: _modelName).id;
+          convId = _activeId = store.create(title: questionTitle(text), model: _modelName, voice: _voice).id;
           _bump();
         } catch (_) {
           // Keeping the history must never break answering.

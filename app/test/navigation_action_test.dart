@@ -231,6 +231,7 @@ void main() {
       store.close();
       final db = sqlite3.open(path);
       db.execute('ALTER TABLE messages DROP COLUMN navigation_actions_json');
+      db.execute('ALTER TABLE conversations DROP COLUMN voice');
       db.userVersion = 1;
       db.close();
       store = ConversationStore.open(path);

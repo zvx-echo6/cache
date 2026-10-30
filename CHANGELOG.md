@@ -35,6 +35,7 @@ release notes).
 - Assistant: finds your nearest imported repeaters with their settings, and the points of your own map layers by name or nearby
 
 ### Fixed
+- Assistant: a reopened chat stays in the mode it was started in, voice or text; switching mode starts a new chat
 - Turn-by-turn: the arrive time shows instead of "--", and on Android the spoken directions can find the phone's text-to-speech
 - Directions: starting navigation no longer asks to allow notifications and waits on the answer before finding your position; notifications are asked for when you turn on weather and alerts
 - Directions: when there is no off-road data for the area, Walk and Drive buttons show under the message and switch to that way of travel

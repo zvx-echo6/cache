@@ -18,6 +18,7 @@ class Conversation {
     required this.updated,
     required this.pinned,
     required this.model,
+    this.voice = false,
   });
 
   final int id;
@@ -29,6 +30,9 @@ class Conversation {
 
   /// The model that gave the last answer (its display name), or empty.
   final String model;
+
+  /// Started in voice mode; it stays in that mode for its whole life (project decision, 2026-10-30).
+  final bool voice;
 }
 
 /// A cited result as the answer showed it: its number, and the address it opens.
@@ -102,7 +106,7 @@ class SearchHit {
   final String snippet;
 }
 
-const int _schemaVersion = 2;
+const int _schemaVersion = 3;
 
 /// The conversations on this phone, in SQLite (the `sqlite3` package, which brings its own SQLite with FTS5).
 /// Calls are synchronous: rows are small and the database is local.
@@ -168,7 +172,8 @@ class ConversationStore {
         );
       ''');
       }
-      _db.execute("ALTER TABLE messages ADD COLUMN navigation_actions_json TEXT NOT NULL DEFAULT '[]'");
+      if (v < 2) _db.execute("ALTER TABLE messages ADD COLUMN navigation_actions_json TEXT NOT NULL DEFAULT '[]'");
+      _db.execute('ALTER TABLE conversations ADD COLUMN voice INTEGER NOT NULL DEFAULT 0');
       _db.userVersion = _schemaVersion;
     });
   }
@@ -205,12 +210,14 @@ class ConversationStore {
         updated: DateTime.fromMillisecondsSinceEpoch(r['updated'] as int),
         pinned: (r['pinned'] as int) != 0,
         model: r['model'] as String,
+        voice: (r['voice'] as int) != 0,
       );
 
-  /// Starts a conversation titled with the (trimmed) first question.
-  Conversation create({required String title, String model = ''}) {
+  /// Starts a conversation titled with the (trimmed) first question. [voice]: it is a voice conversation.
+  Conversation create({required String title, String model = '', bool voice = false}) {
     final t = _ms(_now());
-    _db.execute('INSERT INTO conversations (title, created, updated, model) VALUES (?, ?, ?, ?)', [title, t, t, model]);
+    _db.execute('INSERT INTO conversations (title, created, updated, model, voice) VALUES (?, ?, ?, ?, ?)',
+        [title, t, t, model, voice ? 1 : 0]);
     final id = _db.lastInsertRowId;
     _indexTitle(id, title);
     return get(id)!;
