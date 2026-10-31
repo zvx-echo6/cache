@@ -125,6 +125,18 @@ jobs:
           path: packages/cache_search/native/target
           key: cargo-target-server-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: cargo-target-server-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      # The release version is <Cargo version>+<short git sha>; cache-server embeds it at build time (CACHE_SERVER_VERSION) and
+      # prints it at start-up and for --version. The tarball name carries the Cargo version and the sha.
+      - name: Version
+        working-directory: .
+        run: |
+          cargo_version=$(grep -m 1 -E '^version[[:space:]]*=' server/Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          if [[ ! "$cargo_version" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "::error::No usable version in server/Cargo.toml: $cargo_version"; exit 1; fi
+          sha="${GITHUB_SHA::7}"
+          echo "CACHE_SERVER_CARGO_VERSION=$cargo_version" >> "$GITHUB_ENV"
+          echo "CACHE_SERVER_SHA=$sha" >> "$GITHUB_ENV"
+          echo "CACHE_SERVER_VERSION=${cargo_version}+${sha}" >> "$GITHUB_ENV"
+          echo "version: ${cargo_version}+${sha}"
       - name: Memory
         run: |
           free -m
@@ -156,9 +168,9 @@ jobs:
         id: pack
         working-directory: .
         run: |
-          version=$(grep -m 1 -E '^version[[:space:]]*=' server/Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
-          if [[ ! "$version" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "::error::No usable version in server/Cargo.toml: $version"; exit 1; fi
-          name="cache-server-${version}-linux-${{ matrix.arch }}"
+          version="$CACHE_SERVER_VERSION"
+          if [[ ! "$version" =~ ^[A-Za-z0-9._-]+\+[0-9a-f]+$ ]]; then echo "::error::Unexpected version: $version"; exit 1; fi
+          name="cache-server-${CACHE_SERVER_CARGO_VERSION}-${CACHE_SERVER_SHA}-linux-${{ matrix.arch }}"
           stage="$RUNNER_TEMP/pack/$name"
           mkdir -p "$stage/web" "$stage/helper" "$stage/lib"
           install -m 755 packages/cache_search/native/target/release/cache-server "$stage/cache-server"

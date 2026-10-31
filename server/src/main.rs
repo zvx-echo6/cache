@@ -1,9 +1,9 @@
 //! `cache-server`: `serve` runs the server, `set-password` sets (or resets) the one password.
 
-use cache_server::auth::{Auth, StoredPassword};
+use cache_server::auth::{Auth, Sessions, StoredPassword};
 use cache_server::helper::{Helper, HelperConfig};
 use cache_server::http::{serve_connection, App};
-use cache_server::{config, tls};
+use cache_server::{config, tls, VERSION};
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,9 @@ use std::sync::Arc;
 const USAGE: &str = "usage:
   cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--helper <exe>] [--core-lib <lib>]
       (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so)
-  cache-server set-password --data <dir>      (reads the password from standard input)";
+  cache-server set-password --data <dir> [--sign-out-all]
+      (reads the password from standard input; a running server uses it at once; --sign-out-all also signs every browser out)
+  cache-server --version";
 
 struct Args {
     values: Vec<(String, String)>,
@@ -89,13 +91,18 @@ fn read_line() -> std::io::Result<String> {
 }
 
 fn set_password(argv: &[String]) -> Result<(), String> {
-    let a = Args::parse(argv, &["data"], &[])?;
+    let a = Args::parse(argv, &["data"], &["sign-out-all"])?;
     let data = Path::new(a.req("data")?);
     let password = read_password().map_err(|e| format!("reading the password: {e}"))?;
     let stored = StoredPassword::new(&password).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
     stored.save(&data.join("auth.json")).map_err(|e| format!("writing auth.json: {e}"))?;
-    eprintln!("password set; restart cache-server to use it");
+    if a.flag("sign-out-all") {
+        Sessions::clear_file(&data.join("sessions.json")).map_err(|e| format!("clearing sessions.json: {e}"))?;
+        eprintln!("password set; every browser has been signed out");
+    } else {
+        eprintln!("password set; a running server uses it from the next sign-in");
+    }
     Ok(())
 }
 
@@ -105,6 +112,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
     let web = PathBuf::from(a.req("web")?);
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
     let use_tls = !a.flag("no-tls");
+    eprintln!("cache-server {VERSION} starting");
 
     config::make_folders(&data).map_err(|e| format!("{}: {e}", data.display()))?;
     let tls_config = if use_tls {
@@ -179,6 +187,10 @@ async fn shutdown() {
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let result = match argv.first().map(String::as_str) {
+        Some("--version" | "-V" | "version") => {
+            println!("cache-server {VERSION}");
+            return;
+        }
         Some("serve") => serve(&argv[1..]),
         Some("set-password") => set_password(&argv[1..]),
         _ => Err("a command is required".to_string()),

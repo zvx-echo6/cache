@@ -1,10 +1,14 @@
 #!/bin/sh
-# Install or update Cache Server from a release tarball. Run as root:
+# Install or update Cache Server from a release tarball, or go back to the previous release. Run as root:
 #   install.sh <path-to-release-tarball>
+#   install.sh --rollback
 #
 # The tarball holds `cache-server` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
 # `lib/libcache_search.so` (the core library the helper loads), `web/` (the browser app) and a `VERSION` file.
 # Running this again with a newer tarball is an update: the data folder and the password stay.
+# The version is `<Cargo version>+<short git sha>`, so two builds of the same Cargo version are different releases. An
+# install keeps the release that was running as `previous` (and removes anything older); `--rollback` swaps `current` and
+# `previous` and restarts the service. Installing the same build again replaces that release's folder in place.
 # It installs no operating-system packages.
 #
 # TODO: downloading the tarball from GitHub Releases comes later; for now it is a local file.
@@ -21,9 +25,37 @@ die() {
     exit 1
 }
 
-[ "$#" -eq 1 ] || die "usage: install.sh <path-to-release-tarball>"
-TARBALL=$1
-[ -f "$TARBALL" ] || die "$TARBALL is not a file"
+# the value of a symbolic link (empty when it is not one or does not exist)
+link_of() {
+    readlink "$1" 2>/dev/null || true
+}
+
+# point the link $1 at $2; the rename makes the switch atomic, so the link never dangles
+point() {
+    ln -sfn "$2" "$1.new"
+    mv -T "$1.new" "$1"
+}
+
+# install the unit file that belongs to the current release
+install_unit() {
+    if [ -f "$OPT/current/cache-server.service" ]; then
+        install -m 644 "$OPT/current/cache-server.service" "$UNIT"
+    elif [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/cache-server.service" ]; then
+        install -m 644 "$SCRIPT_DIR/cache-server.service" "$UNIT"
+    elif [ ! -f "$UNIT" ]; then
+        die "cache-server.service not found next to this script or in the tarball"
+    fi
+}
+
+USAGE="usage: install.sh <path-to-release-tarball> | install.sh --rollback"
+[ "$#" -eq 1 ] || die "$USAGE"
+ROLLBACK=0
+if [ "$1" = "--rollback" ]; then
+    ROLLBACK=1
+else
+    TARBALL=$1
+    [ -f "$TARBALL" ] || die "$TARBALL is not a file"
+fi
 [ "$(id -u)" -eq 0 ] || die "run this as root"
 
 case "$(uname -m)" in
@@ -32,6 +64,22 @@ case "$(uname -m)" in
 esac
 
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
+
+if [ "$ROLLBACK" -eq 1 ]; then
+    CUR=$(link_of "$OPT/current")
+    PREV=$(link_of "$OPT/previous")
+    [ -n "$PREV" ] && [ -d "$PREV" ] || die "there is no previous release to go back to"
+    [ -n "$CUR" ] && [ -d "$CUR" ] || die "there is no current release"
+    # current takes the previous release first, so it always points at a real folder; then previous takes the old current
+    point "$OPT/current" "$PREV"
+    point "$OPT/previous" "$CUR"
+    install_unit
+    systemctl daemon-reload
+    systemctl restart cache-server
+    echo "Rolled back: Cache Server $(basename "$PREV") is running; $(basename "$CUR") is now the previous release."
+    echo "(run install.sh --rollback again to go forward)"
+    exit 0
+fi
 
 # the unit file sits next to this script (or inside the tarball, see below)
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -53,7 +101,7 @@ tar -xzf "$TARBALL" -C "$STAGE"
 [ -f "$STAGE/VERSION" ] || die "the tarball has no VERSION file"
 VERSION=$(tr -d ' \r\n' <"$STAGE/VERSION")
 case "$VERSION" in
-    "" | *[!A-Za-z0-9._-]*) die "the VERSION file holds something that is not a version" ;;
+    "" | . | .. | *[!A-Za-z0-9._+-]*) die "the VERSION file holds something that is not a version" ;;
 esac
 [ -x "$STAGE/cache-server" ] || chmod 755 "$STAGE/cache-server" 2>/dev/null || die "the tarball has no cache-server program"
 [ -f "$STAGE/helper/cache-core-helper" ] || die "the tarball has no helper/cache-core-helper"
@@ -63,22 +111,48 @@ chown -R root:root "$STAGE"
 chmod 755 "$STAGE/cache-server" "$STAGE/helper/cache-core-helper"
 chmod 644 "$STAGE/lib/libcache_search.so"
 chmod -R u=rwX,go=rX "$STAGE/web" "$STAGE/helper" "$STAGE/lib"
-rm -rf "$OPT/releases/$VERSION"
-mv "$STAGE" "$OPT/releases/$VERSION"
-chmod 755 "$OPT/releases/$VERSION"
+chmod 755 "$STAGE"
 
-# point current at it; the rename makes the switch atomic
-ln -sfn "$OPT/releases/$VERSION" "$OPT/current.new"
-mv -T "$OPT/current.new" "$OPT/current"
+REL=$OPT/releases/$VERSION
+OLD_CUR=$(link_of "$OPT/current")
+OLD_PREV=$(link_of "$OPT/previous")
+
+# The same build installed twice: keep a hard-linked copy of the old folder, aim any link at the copy, replace the folder,
+# then remove the copy at the end. Whatever the links point at exists at every step.
+ASIDE=$OPT/releases/.replaced.$$
+if [ -e "$REL" ]; then
+    cp -al "$REL" "$ASIDE"
+    [ "$OLD_CUR" != "$REL" ] || point "$OPT/current" "$ASIDE"
+    [ "$OLD_PREV" != "$REL" ] || point "$OPT/previous" "$ASIDE"
+    rm -rf "$REL"
+fi
+mv "$STAGE" "$REL"
+
+# point current at it, and keep the release that was running as previous
+point "$OPT/current" "$REL"
+if [ "$OLD_CUR" = "$REL" ]; then
+    # a reinstall of the running build: previous stays what it was (and is not the same build)
+    if [ "$OLD_PREV" = "$REL" ]; then
+        rm -f "$OPT/previous"
+    fi
+elif [ -n "$OLD_CUR" ] && [ -d "$OLD_CUR" ]; then
+    point "$OPT/previous" "$OLD_CUR"
+elif [ "$OLD_PREV" = "$REL" ]; then
+    rm -f "$OPT/previous"
+fi
+rm -rf "$ASIDE"
+
+# remove every release that is neither current nor previous (and leftovers of an interrupted run)
+KEEP_CUR=$(link_of "$OPT/current")
+KEEP_PREV=$(link_of "$OPT/previous")
+for d in "$OPT"/releases/* "$OPT"/releases/.[!.]*; do
+    [ -e "$d" ] || continue
+    [ "$d" != "$KEEP_CUR" ] && [ "$d" != "$KEEP_PREV" ] || continue
+    rm -rf "$d"
+done
 
 # the unit
-if [ -f "$OPT/current/cache-server.service" ]; then
-    install -m 644 "$OPT/current/cache-server.service" "$UNIT"
-elif [ -f "$SCRIPT_DIR/cache-server.service" ]; then
-    install -m 644 "$SCRIPT_DIR/cache-server.service" "$UNIT"
-else
-    die "cache-server.service not found next to this script or in the tarball"
-fi
+install_unit
 
 # the data folder, and the password on a first install
 install -d -o cache -g cache -m 0750 "$DATA"
@@ -119,4 +193,7 @@ systemctl restart cache-server
 
 HOST=$(hostname -f 2>/dev/null || hostname)
 echo "Cache Server $VERSION is running. Open https://$HOST:$PORT/"
+if [ -L "$OPT/previous" ]; then
+    echo "The previous release is $(basename "$(link_of "$OPT/previous")"); to go back, run: install.sh --rollback"
+fi
 echo "(the certificate is self-signed, so the browser asks you to accept it once)"

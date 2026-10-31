@@ -14,6 +14,13 @@ pub mod webfiles;
 use std::io::Write;
 use std::path::Path;
 
+/// The version this build reports: `<Cargo version>+<short git sha>` when the release workflow sets `CACHE_SERVER_VERSION`
+/// at build time, the plain Cargo version otherwise.
+pub const VERSION: &str = match option_env!("CACHE_SERVER_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
 /// Write `data` to `path` so that only the owner can read it (mode 0600 on Unix). The file is written beside the target
 /// and renamed over it, so a crash never leaves half a file.
 pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {

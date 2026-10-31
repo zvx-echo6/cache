@@ -3,6 +3,10 @@
 //! The password is kept as PBKDF2-HMAC-SHA256 (600000 iterations, a random 16-byte salt, a 32-byte hash) in `auth.json`.
 //! A sign-in gives a random session token in a cookie; only the SHA-256 of the token is stored, in `sessions.json`, so a
 //! restart or a reboot does not sign anyone out and a copy of the file is no use to someone who wants a session.
+//!
+//! A running server follows both files without a restart (no watcher): a sign-in re-reads `auth.json` when its modification
+//! stamp has changed, and every session check re-reads `sessions.json` the same way, so `set-password` (and its
+//! `--sign-out-all`) take effect at once.
 
 use crate::write_private;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -33,6 +37,14 @@ fn random_bytes<const N: usize>() -> io::Result<[u8; N]> {
     let mut b = [0u8; N];
     SystemRandom::new().fill(&mut b).map_err(|_| io::Error::other("no random bytes available"))?;
     Ok(b)
+}
+
+/// A file's modification time and length, or `None` when it does not exist. Two different stamps mean the file changed.
+type Stamp = Option<(SystemTime, u64)>;
+
+fn stamp(path: &Path) -> Stamp {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 /// What `auth.json` holds.
@@ -93,6 +105,8 @@ impl StoredPassword {
 pub struct Sessions {
     path: PathBuf,
     entries: HashMap<String, u64>,
+    /// The stamp of the file as last read or written; a different stamp on disk means someone else changed it.
+    seen: Stamp,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -107,29 +121,48 @@ fn token_hash(token: &str) -> String {
 impl Sessions {
     /// Read the file; a missing or unreadable one means no sessions (everyone signs in again).
     pub fn load(path: &Path) -> Sessions {
+        let seen = stamp(path);
         let entries = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<SessionsFile>(&t).ok()).unwrap_or_default().sessions;
-        Sessions { path: path.to_path_buf(), entries }
+        Sessions { path: path.to_path_buf(), entries, seen }
     }
 
-    fn save(&self) -> io::Result<()> {
+    /// Re-read the file if it changed since this process last read or wrote it (`set-password --sign-out-all` clears it).
+    fn refresh(&mut self) {
+        if stamp(&self.path) != self.seen {
+            *self = Sessions::load(&self.path);
+        }
+    }
+
+    fn save(&mut self) -> io::Result<()> {
         let f = SessionsFile { sessions: self.entries.clone() };
-        write_private(&self.path, serde_json::to_string(&f).map_err(io::Error::other)?.as_bytes())
+        write_private(&self.path, serde_json::to_string(&f).map_err(io::Error::other)?.as_bytes())?;
+        self.seen = stamp(&self.path);
+        Ok(())
+    }
+
+    /// Empty the sessions file, so every browser has to sign in again (a running server notices on its next request).
+    pub fn clear_file(path: &Path) -> io::Result<()> {
+        let f = SessionsFile::default();
+        write_private(path, serde_json::to_string(&f).map_err(io::Error::other)?.as_bytes())
     }
 
     /// Start a session at time `now`; returns the token for the cookie.
     pub fn create(&mut self, now: u64) -> io::Result<String> {
         let token = URL_SAFE_NO_PAD.encode(random_bytes::<32>()?);
+        self.refresh();
         self.entries.retain(|_, exp| *exp > now);
         self.entries.insert(token_hash(&token), now + SESSION_SECS);
         self.save()?;
         Ok(token)
     }
 
-    pub fn is_valid(&self, token: &str, now: u64) -> bool {
+    pub fn is_valid(&mut self, token: &str, now: u64) -> bool {
+        self.refresh();
         self.entries.get(&token_hash(token)).is_some_and(|exp| *exp > now)
     }
 
     pub fn remove(&mut self, token: &str) -> io::Result<()> {
+        self.refresh();
         if self.entries.remove(&token_hash(token)).is_some() {
             self.save()?;
         }
@@ -148,30 +181,63 @@ pub fn delay_for(n: u32) -> Duration {
 
 /// The sign-in state of the server.
 pub struct Auth {
-    password: Option<StoredPassword>,
+    password: Mutex<PasswordState>,
     sessions: Mutex<Sessions>,
     failures: Mutex<u32>,
     /// Whether the cookie is marked Secure (everything but `--no-tls`).
     pub secure_cookie: bool,
 }
 
+/// The password in memory, and where it came from so a change on disk can be picked up.
+struct PasswordState {
+    current: Option<StoredPassword>,
+    /// `auth.json`, when this state follows a file.
+    path: Option<PathBuf>,
+    seen: Stamp,
+}
+
 impl Auth {
     pub fn load(data: &Path, secure_cookie: bool) -> io::Result<Auth> {
-        let password = StoredPassword::load(&data.join("auth.json"))?;
-        Ok(Auth::new(password, Sessions::load(&data.join("sessions.json")), secure_cookie))
+        let path = data.join("auth.json");
+        let seen = stamp(&path);
+        let current = StoredPassword::load(&path)?;
+        let password = PasswordState { current, path: Some(path), seen };
+        Ok(Auth { password: Mutex::new(password), sessions: Mutex::new(Sessions::load(&data.join("sessions.json"))), failures: Mutex::new(0), secure_cookie })
     }
 
+    /// An `Auth` that holds `password` and never looks at `auth.json` again.
     pub fn new(password: Option<StoredPassword>, sessions: Sessions, secure_cookie: bool) -> Auth {
-        Auth { password, sessions: Mutex::new(sessions), failures: Mutex::new(0), secure_cookie }
+        let password = PasswordState { current: password, path: None, seen: None };
+        Auth { password: Mutex::new(password), sessions: Mutex::new(sessions), failures: Mutex::new(0), secure_cookie }
     }
 
     pub fn has_password(&self) -> bool {
-        self.password.is_some()
+        self.password.lock().unwrap_or_else(|e| e.into_inner()).current.is_some()
+    }
+
+    /// The password to check against: `auth.json` is read again first if it changed since it was last read.
+    fn current_password(&self) -> Option<StoredPassword> {
+        let mut st = self.password.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(path) = st.path.clone() {
+            let now_stamp = stamp(&path);
+            if now_stamp != st.seen {
+                match StoredPassword::load(&path) {
+                    Ok(p) => {
+                        eprintln!("cache-server: auth.json changed; using the new password");
+                        st.current = p;
+                        st.seen = now_stamp;
+                    }
+                    // unreadable right now: keep the old password and try again on the next sign-in
+                    Err(e) => eprintln!("cache-server: auth.json could not be read ({e}); keeping the previous password"),
+                }
+            }
+        }
+        st.current.clone()
     }
 
     /// Check a password (this takes a fraction of a second: call it from a blocking thread). `Some(token)` on success.
     pub fn login(&self, password: &str) -> io::Result<Option<String>> {
-        if !self.password.as_ref().is_some_and(|p| p.verify(password)) {
+        if !self.current_password().is_some_and(|p| p.verify(password)) {
             return Ok(None);
         }
         *self.failures.lock().unwrap_or_else(|e| e.into_inner()) = 0;
@@ -240,7 +306,7 @@ mod tests {
         assert!(s.is_valid(&t, 1001));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains(&t), "the token itself must not be stored");
-        let s2 = Sessions::load(&path);
+        let mut s2 = Sessions::load(&path);
         assert!(s2.is_valid(&t, 1001));
         assert!(!s2.is_valid("not a token", 1001));
     }
@@ -261,6 +327,70 @@ mod tests {
         let t = s.create(now()).unwrap();
         s.remove(&t).unwrap();
         assert!(!s.is_valid(&t, now()));
+    }
+
+    /// Filesystems stamp files in ticks of a few milliseconds; wait one out so a rewrite gets a new stamp.
+    fn tick() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    #[test]
+    fn password_change_applies_without_a_restart() {
+        let dir = TempDir::new("reload");
+        let path = dir.0.join("auth.json");
+        StoredPassword::with_iterations("old password", 1000).unwrap().save(&path).unwrap();
+        let auth = Auth::load(&dir.0, true).unwrap();
+        assert!(auth.login("old password").unwrap().is_some());
+        assert!(auth.login("new password").unwrap().is_none());
+        tick();
+        StoredPassword::with_iterations("new password", 1000).unwrap().save(&path).unwrap();
+        assert!(auth.login("old password").unwrap().is_none(), "the old password must stop working");
+        assert!(auth.login("new password").unwrap().is_some(), "the new password must work");
+    }
+
+    #[test]
+    fn a_first_password_is_picked_up_too() {
+        let dir = TempDir::new("first");
+        let auth = Auth::load(&dir.0, true).unwrap();
+        assert!(!auth.has_password());
+        assert!(auth.login("pw").unwrap().is_none());
+        StoredPassword::with_iterations("pw", 1000).unwrap().save(&dir.0.join("auth.json")).unwrap();
+        assert!(auth.login("pw").unwrap().is_some());
+        assert!(auth.has_password());
+    }
+
+    #[test]
+    fn existing_sessions_survive_a_password_change() {
+        let dir = TempDir::new("keep");
+        let path = dir.0.join("auth.json");
+        StoredPassword::with_iterations("one", 1000).unwrap().save(&path).unwrap();
+        let auth = Auth::load(&dir.0, true).unwrap();
+        let token = auth.login("one").unwrap().unwrap();
+        tick();
+        StoredPassword::with_iterations("two", 1000).unwrap().save(&path).unwrap();
+        assert!(auth.login("two").unwrap().is_some());
+        assert!(auth.is_signed_in(&token));
+    }
+
+    #[test]
+    fn sign_out_all_drops_sessions_in_a_running_server() {
+        let dir = TempDir::new("all");
+        StoredPassword::with_iterations("pw", 1000).unwrap().save(&dir.0.join("auth.json")).unwrap();
+        let auth = Auth::load(&dir.0, true).unwrap();
+        let (a, b) = (auth.login("pw").unwrap().unwrap(), auth.login("pw").unwrap().unwrap());
+        assert!(auth.is_signed_in(&a) && auth.is_signed_in(&b));
+        tick();
+        // what `set-password --sign-out-all` does to the file
+        Sessions::clear_file(&dir.0.join("sessions.json")).unwrap();
+        assert!(!auth.is_signed_in(&a));
+        assert!(!auth.is_signed_in(&b));
+        // a fresh sign-in works and is kept
+        let c = auth.login("pw").unwrap().unwrap();
+        assert!(auth.is_signed_in(&c));
+        // and a restart sees an empty file's worth of sessions, not the old ones
+        let mut again = Sessions::load(&dir.0.join("sessions.json"));
+        assert!(!again.is_valid(&a, now()));
+        assert!(again.is_valid(&c, now()));
     }
 
     #[test]

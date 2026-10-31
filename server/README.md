@@ -29,14 +29,39 @@ It creates the `cache` user, unpacks to `/opt/cache-server/releases/<version>`, 
 at it, installs and starts the service, and on a first install asks for the password twice. Running it again with a
 newer tarball is an update; the data and the password stay. It installs no packages.
 
+The version is `<Cargo version>+<short git sha>`, for example `0.1.0+d5145e6`, so two builds of the same Cargo version
+are two releases. `cache-server --version` and the first line of the service log (`journalctl -u cache-server`) show it.
+
+### Rollback
+
+An install keeps exactly one earlier release: the one that was running becomes `/opt/cache-server/previous`, and anything
+older is removed. The release in use is never removed. Installing the same build again replaces that release's folder
+(the old copy stays reachable until the new one is in place, so `current` never points at nothing). To go back:
+
+    sudo packaging/install.sh --rollback
+
+It swaps `current` and `previous`, installs that release's unit file and restarts the service. Running it again goes
+forward again. The data folder is shared by both releases and is not touched.
+
 ## Set or reset the password
 
-    sudo -u cache /opt/cache-server/current/cache-server set-password --data /var/lib/cache-server
-    sudo systemctl restart cache-server
+    sudo -u cache /opt/cache-server/current/cache-server set-password --data /var/lib/cache-server [--sign-out-all]
+
+No restart is needed. The running server re-reads `auth.json` at the next sign-in after it changed, so the old password
+stops working and the new one works at once. Browsers that are already signed in stay signed in, unless you add
+`--sign-out-all`: it empties `sessions.json`, and the running server drops its sessions on its next request, so every
+browser has to sign in again.
 
 The password is read from standard input (one line; hidden when typed on a terminal). It is stored as a salted
 PBKDF2-HMAC-SHA256 hash. Wrong passwords are slowed down: from the second failure in a row the answer is held back
 2, 4, 8, 16 and then 30 seconds.
+
+## Logs
+
+The server writes plain lines to standard error, which systemd sends to the journal at its default priority (info); the
+unit sets no log level and there is none to set. `journalctl -u cache-server` shows, among others: `cache-server <version>
+starting`, `helper started (pid N)`, `helper ready`, `core opened (N sources)`, `restarting the helper in Ns (reason: ...)`
+and `helper stopped`.
 
 ## Running by hand
 
@@ -48,7 +73,7 @@ Under the data folder (`/var/lib/cache-server` when installed):
 
 | Path | What |
 |---|---|
-| `auth.json` | the password hash (owner only) |
+| `auth.json` | the password hash (owner only; a change is picked up by the running server) |
 | `sessions.json` | signed-in sessions, as hashes, valid for 30 days (owner only) |
 | `tls/cert.pem`, `tls/key.pem` | the certificate and key (the key is owner only) |
 | `sources.json` | optional: the sources the core opens, a JSON array as the app's `SearchCore.open` sends them, e.g. `[{"kind":"zim","path":"/var/lib/cache-server/zims/wiki.zim","index_dir":"/var/lib/cache-server/index/wiki"}]` (missing means none) |

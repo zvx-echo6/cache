@@ -95,6 +95,8 @@ struct State {
     failures: usize,
     /// A restart loop is running.
     restarting: bool,
+    /// Why the helper last went down, for the restart log line.
+    reason: String,
 }
 
 pub struct Helper {
@@ -113,7 +115,7 @@ impl Helper {
     pub async fn start(cfg: HelperConfig) -> Arc<Helper> {
         let h = Arc::new(Helper {
             cfg,
-            state: Mutex::new(State { run: None, failures: 0, restarting: false }),
+            state: Mutex::new(State { run: None, failures: 0, restarting: false, reason: String::new() }),
             next_id: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
         });
@@ -123,6 +125,7 @@ impl Helper {
             Err(e) => {
                 eprintln!("cache-server: starting the helper failed: {e}");
                 st.failures = 1;
+                st.reason = e;
                 h.schedule_restart(&mut st);
             }
         }
@@ -146,6 +149,7 @@ impl Helper {
                     let _ = dead.child.start_kill();
                 }
                 st.failures += 1;
+                st.reason = e.clone();
                 self.schedule_restart(&mut st);
                 Err(unavailable(e))
             }
@@ -162,9 +166,12 @@ impl Helper {
 
     async fn restart_loop(self: Arc<Self>) {
         loop {
-            let failures = self.state.lock().await.failures.max(1);
+            let (failures, reason) = {
+                let st = self.state.lock().await;
+                (st.failures.max(1), st.reason.clone())
+            };
             let wait = self.cfg.backoff.get(failures - 1).or(self.cfg.backoff.last()).copied().unwrap_or(Duration::from_secs(1));
-            eprintln!("cache-server: restarting the helper in {}s", wait.as_secs_f32());
+            eprintln!("cache-server: restarting the helper in {}s (reason: {reason})", wait.as_secs_f32());
             tokio::time::sleep(wait).await;
             if self.stopping.load(Ordering::Relaxed) {
                 return;
@@ -180,6 +187,7 @@ impl Helper {
                 Err(e) => {
                     st.failures += 1;
                     eprintln!("cache-server: restarting the helper failed: {e}");
+                    st.reason = e;
                 }
             }
         }
@@ -196,6 +204,10 @@ impl Helper {
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("{}: {e}", self.cfg.exe.display()))?;
+        match child.id() {
+            Some(pid) => eprintln!("cache-server: helper started (pid {pid})"),
+            None => eprintln!("cache-server: helper started"),
+        }
         let stdin = child.stdin.take().ok_or("no standard input")?;
         let stdout = child.stdout.take().ok_or("no standard output")?;
         if let Some(stderr) = child.stderr.take() {
@@ -225,6 +237,7 @@ impl Helper {
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(format!("the helper was not ready within {}s", self.cfg.ready_timeout.as_secs())),
         }
+        eprintln!("cache-server: helper ready");
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let reply = match timeout(self.cfg.open_timeout, run.exchange(id, "open", json!({"sources": sources, "extra": null}))).await {
             Ok(Ok(v)) => v,
@@ -234,6 +247,7 @@ impl Helper {
         if reply["ok"] != json!(true) {
             return Err(format!("opening the core failed: {}", reply["error"]));
         }
+        eprintln!("cache-server: core opened ({} sources)", sources.as_array().map_or(0, Vec::len));
         Ok(run)
     }
 
@@ -248,6 +262,7 @@ impl Helper {
                 eprintln!("cache-server: the helper did not stop; killing it");
                 let _ = child.kill().await;
             }
+            eprintln!("cache-server: helper stopped");
         }
     }
 }
