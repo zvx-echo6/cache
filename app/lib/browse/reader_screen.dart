@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
@@ -412,7 +413,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       onLoadResourceWithCustomScheme: (controller, request) =>
           serveCustomZimResource(_server, request.url.uriValue),
       shouldInterceptRequest: (controller, request) async {
-        final r = await _server.serve(request.url.uriValue);
+        var r = await _server.serve(request.url.uriValue);
+        if (r.status == 200 && r.mime.split(';').first.trim() == 'text/html') {
+          r = ServedEntry(200, r.mime, utf8.encode(withoutPicturePlaceholders(utf8.decode(r.bytes, allowMalformed: true))));
+        }
         final text =
             r.mime.startsWith('text/') ||
             r.mime.contains('xml') ||

@@ -243,4 +243,28 @@ void main() {
       }
     },
   );
+
+  test('a ZIM made without pictures: its transparent placeholders are hidden, so dark mode shows no blank white boxes', () async {
+    // The infobox of WikiMed mini's "Burn" (wikipedia_en_medicine_mini_2026-10), reduced: the picture is a transparent SVG of its
+    // size, and the article's own style paints infobox pictures white when the phone is in dark mode.
+    const placeholder = 'data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22250%22%20'
+        'height%3D%22149%22%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20fill%3D%22transparent%22%2F%3E%3C%2Fsvg%3E';
+    const page = '<!DOCTYPE html><html><head><title>Burn</title></head><body>'
+        '<table class="infobox infobox-has-images-with-white-backgrounds"><tr><td><img src="$placeholder" width="250" height="149"></td></tr></table>'
+        '<style>@media screen and (prefers-color-scheme:dark){html.skin-theme-clientpref-os .mw-parser-output '
+        '.infobox-has-images-with-white-backgrounds img{background:white}}</style><img src="../I/real.webp"></body></html>';
+    final server = ZimPageServer((address) async => ZimBytes(Uint8List.fromList(utf8.encode(page)), 'text/html'));
+    final response = await serveCustomZimResource(server, readerUrl('zim:$id/Burn', customScheme: true)!);
+    final body = utf8.decode(response.data);
+    expect(body, contains(kNoPicturePlaceholderStyle));
+    expect(body.indexOf(kNoPicturePlaceholderStyle), lessThan(body.indexOf('</head>')), reason: 'in the head, before the article\'s own styles');
+    expect(body, contains('Content-Security-Policy'));
+    // the rule matches the placeholder and not a real picture
+    expect(placeholder.startsWith('data:image/svg+xml') && placeholder.contains('fill%3D%22transparent%22'), isTrue);
+    expect(kNoPicturePlaceholderStyle, contains('img[src^="data:image/svg+xml"][src*="fill%3D%22transparent%22"]'));
+    expect('../I/real.webp'.startsWith('data:'), isFalse);
+    // Android's reader adds the same rule; a page without a head gets it at the start
+    expect(withoutPicturePlaceholders('<p>x</p>'), startsWith(kNoPicturePlaceholderStyle));
+    expect(withoutPicturePlaceholders('<!doctype html><p>x</p>'), '<!doctype html>$kNoPicturePlaceholderStyle<p>x</p>');
+  });
 }
