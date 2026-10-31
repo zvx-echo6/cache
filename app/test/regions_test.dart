@@ -418,7 +418,7 @@ void main() {
       final meter2 = TransferMeter(clock: () => now);
       DownloadedArea area(int done) => DownloadedArea(id: 'a', layerId: 'basemap', bounds: const GeoBounds(west: 0, south: 0, east: 1, north: 1), label: 'R', minZoom: 0, maxZoom: 15, totalTiles: 1000, doneTiles: done, bytes: done * 1000);
       LocalRegion map(int done) => LocalRegion(id: 'm', name: 'M', meter: meter2, areas: [area(done)]);
-      map(100);
+      expect(map(100).parts.single.words, '10%', reason: 'the first look has nothing to measure from');
       now = now.add(const Duration(minutes: 1));
       expect(map(200).parts.single.words, '20% · 2 KB/s · 8 min left');
       expect(const TransferRate(secondsLeft: 4800).leftWords, '1 h 20 min left');
