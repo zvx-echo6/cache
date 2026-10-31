@@ -240,6 +240,7 @@ class LocalRegion {
     this.areas = const [],
     this.wantsRouting = false,
     this.wantsPlaces = false,
+    this.asked = true,
     this.offroad = const [],
     this.terrain = const [],
     this.kind,
@@ -277,6 +278,11 @@ class LocalRegion {
 
   /// Places were asked for (they may not be in the core's status yet).
   final bool wantsPlaces;
+
+  /// The core was asked for this region's road routing or places in this run of the app and has not listed it yet. A part the
+  /// core does not list and was not asked for now is not queued behind anything (1.0.28 showed it "waiting" for ever, with no
+  /// way to restart it): it is stopped, and Carry on asks again.
+  final bool asked;
 
   bool get hasRouting => wantsRouting || routing != null;
   bool get hasPlaces => wantsPlaces || places != null;
@@ -316,7 +322,7 @@ class LocalRegion {
     }
 
     RegionPartStatus? core(RegionPartKind kind, RegionPart which, Map<String, dynamic>? p, bool wanted) {
-      if (p == null) return wanted ? RegionPartStatus(kind, PartState.waiting, fraction: 0) : null;
+      if (p == null) return wanted ? RegionPartStatus(kind, asked ? PartState.waiting : PartState.stopped, fraction: 0) : null;
       final total = (p['bytes'] as num?)?.toInt() ?? 0, done = (p['done_bytes'] as num?)?.toInt() ?? 0;
       final f = p['state'] == 'ready' ? 1.0 : (total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0));
       final e = p['error'];
@@ -464,6 +470,21 @@ class RegionsState extends ChangeNotifier {
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
 
+  /// Regions the core was asked to add in this run that it has not listed yet (their parts are waiting, not stopped).
+  final Set<String> _asked = {};
+
+  /// Every core `add` goes through here, so the parts it asks for wait for the core instead of reading as stopped.
+  Future<Map<String, dynamic>> _coreAdd(RegionsCoreLike core, Map<String, dynamic> args) async {
+    final id = '${args['id']}';
+    _asked.add(id);
+    try {
+      return await core.call('add', args);
+    } catch (_) {
+      _asked.remove(id);
+      rethrow;
+    }
+  }
+
   bool get routingAvailable => _core != null;
 
   Future<File> _appFile() async => File('${(await supportDir()).path}/$kRegionsAppFile');
@@ -501,6 +522,7 @@ class RegionsState extends ChangeNotifier {
     // Switching mobile data for downloads on or off applies at once, mid-download too.
     policy.settings.addListener(_onSettings);
     await refresh();
+    unawaited(recheckPublished().catchError((_) {}));
   }
 
   void _onMaps() {
@@ -577,10 +599,28 @@ class RegionsState extends ChangeNotifier {
     } catch (_) {
       return;
     }
+    _asked.removeWhere((id) => _statusOf(id) != null);
     _schedulePoll();
     await _routingCheck();
     _placesCheck();
     notifyListeners();
+  }
+
+  /// At start, each region's parts are checked against what is published now: a region whose places were not published when it
+  /// was downloaded gets them as soon as they are (they were asked for then). Nothing is downloaded that was not asked for, and
+  /// the mobile data rule applies as to any download.
+  Future<void> recheckPublished() async {
+    if (!placesPublished) return;
+    for (final l in local) {
+      if (l.isArea || !l.placesNotAvailable) continue;
+      try {
+        await policy.checkDownload();
+        await _addPlaces(l);
+      } catch (_) {
+        // Not now (no connection, mobile data, the catalogue not reachable): Update adds them later.
+      }
+    }
+    await refresh();
   }
 
   /// Tells [onPlacesChanged] when the core's places generation moved (the first status only sets where it starts).
@@ -695,6 +735,7 @@ class RegionsState extends ChangeNotifier {
       // (1.0.27 waited for places the core had left out, "Places waiting" for ever).
       wantsRouting: (k?.routing ?? false) && (r == null || _routingOf(r) != null),
       wantsPlaces: (k?.places ?? false) && (r == null || _placesOf(r) != null),
+      asked: _asked.contains(id),
       offroad: k == null ? const [] : [for (final p in k.offroad) _packState(p)],
       terrain: k == null ? const [] : _terrainOf(k),
     );
@@ -866,7 +907,7 @@ class RegionsState extends ChangeNotifier {
     if (routing || places) {
       final core = _core ?? (throw CacheSearchException('unsupported', routingUnavailable ?? 'Road routing downloads are not available.'));
       final geometry = await catalogue.geometry(r);
-      await core.call('add', {
+      await _coreAdd(core, {
         'id': r.id,
         'name': r.name,
         'geometry': geometry,
@@ -1060,7 +1101,7 @@ class RegionsState extends ChangeNotifier {
       final rec = await recordOf(id);
       if (rec == null) throw const CacheSearchException('not_found', 'This region could not be read. Connect and try again.');
       final near = nearFor(rec);
-      await core.call('add', {
+      await _coreAdd(core, {
         'id': rec.id,
         'name': rec.name,
         'geometry': await catalogue.geometry(rec),
@@ -1348,7 +1389,7 @@ class RegionsState extends ChangeNotifier {
       rec = await catalogue.record(l.id);
     } catch (_) {}
     if (rec == null) throw const CacheSearchException('not_found', 'This region could not be read. Connect and try again.');
-    await core.call('add', {'id': rec.id, 'name': rec.name, 'geometry': await catalogue.geometry(rec), 'parts': ['places']});
+    await _coreAdd(core, {'id': rec.id, 'name': rec.name, 'geometry': await catalogue.geometry(rec), 'parts': ['places']});
     (_kept[l.id] ??= _Kept(id: l.id, name: l.name)).places = true;
     await _save();
   }

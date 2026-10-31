@@ -430,6 +430,61 @@ void main() {
       expect(placesNotPublished(null), isFalse);
     });
 
+    testWidgets('a part waiting for a core that does not list the region is stopped and offers Carry on, which asks again', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.us['us-id']!, routing: true, map: false, places: true);
+        await r.regions.refresh();
+      });
+      expect(r.regions.regionOf('us-id')!.phase, RegionPhase.downloading);
+      // the state 1.0.28 left: the app keeps the region, the core never listed it (its add failed before places were published)
+      r.core.regions.remove('us-id');
+      final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() async {
+        await again.init();
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      });
+      final l = again.regionOf('us-id')!;
+      expect([for (final p in l.parts) (p.kind, p.state)], [(RegionPartKind.directions, PartState.stopped), (RegionPartKind.places, PartState.stopped)],
+          reason: 'not "waiting" for ever: nothing is queued for it');
+      expect(l.phase, RegionPhase.stopped);
+      expect(again.offer(r.us['us-id']!).kind, RegionOfferKind.carryOn);
+      await tester.runAsync(() => again.carryOn('us-id'));
+      expect(r.core.added.last['parts'], ['places', 'routing']);
+      expect(again.regionOf('us-id')!.phase, RegionPhase.downloading, reason: 'asked again: the parts download');
+      again.dispose();
+      await r.dispose(tester);
+    });
+
+    testWidgets('a region downloaded before places were published gets them at the next start, once they are', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.us['us-id']!, routing: true, map: false, places: true);
+        r.core.finish('us-id', part: 'routing');
+        // places were not published then: the core's places part failed for want of current.json
+        final parts = r.core.regions['us-id']!['parts'] as Map<String, dynamic>;
+        parts['places'] = {'state': 'failed', 'tiles': 0, 'bytes': 0, 'done_tiles': 0, 'done_bytes': 0, 'error': 'HTTP 404 from https://data.cached.info/places/current.json'};
+        await r.regions.refresh();
+      });
+      final before = r.regions.regionOf('us-id')!;
+      expect(before.placesNotAvailable, isTrue);
+      expect(before.phase, RegionPhase.ready);
+      final adds = r.core.added.length;
+      // places are published now (the core reads a build); the app starts again
+      final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() async {
+        await again.init();
+        await again.recheckPublished();
+      });
+      expect(r.core.added.length, greaterThan(adds));
+      expect(r.core.added.last['parts'], ['places']);
+      final now = again.regionOf('us-id')!;
+      expect(now.placesNotAvailable, isFalse);
+      expect(now.parts.firstWhere((p) => p.kind == RegionPartKind.places).state, PartState.downloading);
+      again.dispose();
+      await r.dispose(tester);
+    });
+
     testWidgets('Local names the parts; a region from before places offers them, and Update adds only that part', (tester) async {
       final r = await _Rig.boot(tester, places: true);
       await tester.runAsync(() async {
