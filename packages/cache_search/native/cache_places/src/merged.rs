@@ -77,6 +77,7 @@ pub fn create(db: &Path, common: &Path) -> Result<Connection> {
             let built_at = meta_get(&c, "c", "built_at")?.unwrap_or_default();
             c.execute_batch("BEGIN")?;
             c.execute_batch(MERGED_SCHEMA)?;
+            ensure_indexes(&c)?;
             c.execute_batch(
                 "INSERT INTO main.meta(key, value) SELECT key, value FROM c.meta;
                  INSERT INTO main.categories(id, title, description, rules, place_count, sort) SELECT id, title, description, rules, 0, sort FROM c.categories;
@@ -131,6 +132,18 @@ fn set_bbox(c: &Connection) -> Result<()> {
     for (k, v) in [("min_lon", b[0]), ("min_lat", b[1]), ("max_lon", b[2]), ("max_lat", b[3])] {
         meta_set(c, k, &v.to_string())?;
     }
+    Ok(())
+}
+
+/// The indexes a merged database's writes and opens need, made when missing (databases made before them get them the next time
+/// they are opened for writing): `tile_counts(what, id)` lets [recount] find a kind's or category's counts without scanning the
+/// table once per kind (an Idaho merge spent 15 s there); the partial index on `places.matched_source_id` lets a reader list
+/// the matched hospitals without scanning every place. Neither changes what any query returns.
+pub fn ensure_indexes(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS main.tile_counts_what_id ON tile_counts(what, id, n);
+         CREATE INDEX IF NOT EXISTS main.places_matched ON places(matched_source_id) WHERE matched_source_id IS NOT NULL;",
+    )?;
     Ok(())
 }
 
@@ -268,6 +281,7 @@ pub fn merge_tile(c: &mut Connection, tile: u32, shard: &Path, sha256: &str, byt
         rep.replaced = tx.query_row("SELECT 1 FROM main.tiles WHERE tile = ?1", params![tile], |_| Ok(())).optional()?.is_some();
         delete_rows(&tx, tile)?;
         add_arrival_columns(&tx)?;
+        ensure_indexes(&tx)?;
         insert_rows(&tx, tile, &mut rep)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         tx.execute(
@@ -292,6 +306,7 @@ pub fn merge_tile(c: &mut Connection, tile: u32, shard: &Path, sha256: &str, byt
 /// its `tiles` row) and recomputes the place counts, in one transaction. A tile that is not there is not an error.
 pub fn remove_tile(c: &mut Connection, tile: u32) -> Result<()> {
     let tx = c.transaction()?;
+    ensure_indexes(&tx)?;
     delete_rows(&tx, tile)?;
     recount(&tx)?;
     set_bbox(&tx)?;
