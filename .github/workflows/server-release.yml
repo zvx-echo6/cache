@@ -28,10 +28,15 @@ jobs:
         include:
           - runner: ubuntu-24.04
             arch: x86_64
+            rustflags: ''
           - runner: ubuntu-24.04-arm
             arch: aarch64
+            rustflags: '-C link-arg=-fuse-ld=lld'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own; x86_64 already uses Rust's bundled lld.
+      RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
         working-directory: packages/cache_search/native
@@ -48,6 +53,16 @@ jobs:
             echo "missing:$missing"
             sudo apt-get update -q && sudo apt-get install -y -q build-essential cmake pkg-config
           fi
+          # lld is needed on aarch64 (see RUSTFLAGS); use one already on the runner, else install it.
+          if ! command -v ld.lld > /dev/null; then
+            found=$(ls /usr/bin/ld.lld-* /usr/lib/llvm-*/bin/ld.lld 2> /dev/null | head -n 1 || true)
+            if [[ -n "$found" ]]; then
+              sudo ln -s "$found" /usr/local/bin/ld.lld
+            else
+              sudo apt-get update -q && sudo apt-get install -y -q lld
+            fi
+          fi
+          ld.lld --version
       - name: Rust
         id: rust
         working-directory: .
