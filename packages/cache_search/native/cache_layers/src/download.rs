@@ -797,7 +797,12 @@ mod near_tests {
         }
         // a 1024-tile batch of the old order spread across the archive; one of the new order covers few blocks
         let blocks_in_first_batch: std::collections::HashSet<_> = deep.iter().take(PMTILES_BATCH).map(block).collect();
-        assert!(blocks_in_first_batch.len() <= 2, "{} blocks", blocks_in_first_batch.len());
+        let mut old = sorted.clone();
+        order_from(&mut old, req.near.unwrap());
+        let old_blocks: std::collections::HashSet<_> = old.iter().filter(|t| t.1 > BLOCK_ZOOM).take(PMTILES_BATCH).map(block).collect();
+        // z11 to z13 is 84 tiles a block: a batch spans about 13 blocks, where the old order's spanned every block in reach
+        assert!(blocks_in_first_batch.len() <= PMTILES_BATCH / 84 + 1, "{} blocks", blocks_in_first_batch.len());
+        assert!(blocks_in_first_batch.len() * 4 < old_blocks.len(), "new {} blocks, old {}", blocks_in_first_batch.len(), old_blocks.len());
         // with no near point the order is still block by block
         let mut plain = req.tiles(8, 13).unwrap();
         order_blocks_from(&mut plain, None);
