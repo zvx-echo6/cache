@@ -1,4 +1,3 @@
-import 'dart:io' show Platform;
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
@@ -9,6 +8,7 @@ import '../location/location_service.dart';
 import '../nav/nav_state.dart';
 import '../settings/data_policy.dart';
 import 'crisis_card.dart';
+import '../platform.dart' as plat;
 
 /// The Library ids of the crisis guides (the SAMHSA, NIMH and other guides). None is known to the app yet, so the card offers
 /// "Get guides" until they are listed here.
@@ -43,7 +43,7 @@ class AppCrisisHelp implements CrisisHelp {
   Future<bool> canPlaceCalls() async {
     // An iPad has no phone app (its shortest side is 600 points or more); an Android tablet without one shows the fix when the
     // dialer cannot open.
-    if (!Platform.isIOS) return true;
+    if (!plat.isIOS) return true;
     final v = PlatformDispatcher.instance.implicitView;
     if (v == null) return true;
     return v.physicalSize.shortestSide / v.devicePixelRatio < 600;

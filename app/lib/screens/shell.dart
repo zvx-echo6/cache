@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
@@ -70,6 +69,7 @@ import 'videos/video_nav.dart';
 import 'videos/videos_screen.dart';
 import 'weather_screen.dart';
 import 'weather_turn_on.dart';
+import '../platform.dart' as plat;
 
 /// The app's frame: Home first, up to three pinned modules, Modules last. The screens are built the first time they are
 /// shown and then kept alive.
@@ -149,8 +149,8 @@ class _ShellState extends State<Shell> {
     });
   }
 
-  late final AppUpdates? _updates = Platform.isIOS || Platform.isAndroid
-      ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: Platform.isAndroid, dismissed: DismissedUpdate())
+  late final AppUpdates? _updates = plat.isIOS || plat.isAndroid
+      ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: plat.isAndroid, dismissed: DismissedUpdate())
       : null;
 
   bool _whatsNewAsked = false;
