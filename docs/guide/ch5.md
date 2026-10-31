@@ -20,7 +20,7 @@ Make a new notebook from a template.
 
 ![New notebook](shot:notebook-new)
 
-1. [Open "Notebooks"](cache://notebooks) and tap "New notebook".
+1. [Open "Notebooks"](cache://notebooks), tap the + button ("Add"), then tap "New notebook".
 2. Under "Start from", choose "Journal", "Log", "Notes" or "Places". Or pick a ready-made log under "Starter logs".
 3. Type a name.
 4. Tap "Create".
@@ -66,7 +66,7 @@ A Log is for something you do again and again, such as a generator test or a blo
 
 ![Making a log](shot:log-editor)
 
-1. Open "Notebooks" and tap "New notebook".
+1. Open "Notebooks", tap the + button ("Add"), then tap "New notebook".
 2. Choose "Log" under "Start from", or a ready-made one under "Starter logs".
 3. Tap "Add field" for each thing to record.
 4. Set its "Label" and "Type": text, number, yes or no, choice or place.
@@ -114,7 +114,7 @@ The Places notebook holds your saved places and shows them on the map.
 
 Each place has its own marker colour. Tap a marker to show or hide the place on the map. A hidden place has an outlined marker with a slash.
 
-The first row is always "Where I am", labelled "Follows the phone". You can't delete or move it. It has its own "Weather and alerts" switch and gear, and a marker toggle.
+The first row is always "Where I am", labelled "Follows the phone". You can't delete or move it. Its weather is set by "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 You can also save a place from the map. Press and hold the map and choose "Save", or tap "Save place" on a place's card.
 
@@ -190,6 +190,43 @@ A route can have up to 10 stops. Each is listed under the destination with a rem
 2. Tap a notebook. Its entry form opens at that spot. For "Places" it is the Add place screen with the pin there.
 
 The ring holds at most six wedges: five notebooks and "More". "More" turns to the next page, for example "2 of 3". Tap the back arrow in the centre to go back.
+
+## Add a repeater list from a file
+
+A repeater list is a RepeaterBook KML, a CHIRP CSV, or both from the same export. It becomes a notebook and shows on the map.
+
+1. [Open "Notebooks"](cache://notebooks), tap the + button ("Add"), then tap "Add from a file".
+2. Choose "Repeater list" and pick the file.
+3. Wait while it says "Reading file…".
+4. When it says "Added [number] repeaters to Notebooks.", tap "Show" to open the list.
+
+- If some have no position, the message adds "[number] have no position and are not on the map."
+- If you see "Could not read that file. It needs to be a RepeaterBook KML or a CHIRP CSV.", pick another file.
+- If you see "No repeaters found in that file.", tap "Choose another file".
+
+The same "Add from a file" sheet has "Places": "KML, KMZ, GPX or GeoJSON. They go into your Places notebook."
+
+## A repeater list notebook
+
+A repeater list is a notebook named "Repeaters: [name]", for example "Repeaters: Eastern Idaho". Notebooks shows how many it has, for example "9 repeaters", and "on map".
+
+1. Open "Notebooks" and tap the list.
+2. Read the rows. Each has frequency and town, the callsign, and the distance and direction. The nearest come first.
+3. Type in "Search [number] repeaters" to narrow the list.
+4. Open the three-dot menu for "Update from a file" or "Show on map".
+
+- If nothing matches, it says "No repeater matches your search."
+- If it says "This list could not be read.", use "Update from a file" or add the list again.
+
+## The repeater card
+
+Tap a repeater on the map to open its card at the bottom of "Maps".
+
+The card shows:
+- the callsign, and "Repeater" with its distance and direction;
+- "Frequency", "Mode", "Offset", "Tone" and "Town". A row the list doesn't have is left out;
+- "Directions";
+- "Open in notebook", which opens the list at that repeater.
 
 ## Write with Markdown
 
@@ -277,4 +314,4 @@ You can tell Cache to log something in "Ask", for example: add a generator test,
 
 Nothing changes until you tap. To fix a mistake first, tell Cache what to change. It replaces the card.
 
-- If you have no log for it, Cache says so and points you to "Notebooks". It doesn't make logs. Use "New notebook".
+- If you have no log for it, Cache says so and points you to "Notebooks". It doesn't make logs. Tap the + button ("Add") in "Notebooks", then "New notebook".

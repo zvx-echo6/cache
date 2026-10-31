@@ -19,6 +19,8 @@ To hide the card, tap "Hide". Cache says "Set up Cache hidden. Bring it back in 
 
 - If "Get your area" shows the region and its parts, the download is running. For example `Idaho · Map stopped at 80% · Places 40% · Off-road waiting. Tap to carry on`.
 - If it says to tap to carry on, tap the row. A pop-up asks "Carry on with [region]?"
+- When a line starts a download, the row shows "Starting…" at once.
+- When the area is done, the row reads `Idaho · Ready`.
 
 ## Choose a model
 
@@ -192,6 +194,19 @@ To remove the region, tap "Delete [region]" at the bottom. The "Region options" 
 - If a part says "Couldn't finish", tap "Try again". If it keeps failing, remove the region and download it again.
 - If you're offline, connect first.
 
+If places are not published for the region yet:
+- The region row says "Places not available yet" after its size. The "Regions" sheet row says the same.
+- On the region's page, the "Places" row says "Not available yet for this area". Tap it for the reason, which ends "Cache will check again when you check for updates."
+- After "Check for updates", Cache says "Places are now available for [region]." when they are.
+
+If a part failed because the phone is full:
+- The part's fix button is "Free space".
+
+If "Try again" fails twice:
+1. Tap "Delete and start again" on the region's page.
+2. In the pop-up, read "What is on this phone for [region] is deleted, then downloaded again."
+3. Tap "Start again". Cache says "Starting [region] again".
+
 ## Press and hold a region
 
 Press and hold a region for its quick menu. It is the same on the "Local" tab, in the Regions sheet and in "Settings" > "Maps".
@@ -302,7 +317,7 @@ This switches on a forecast, weather alerts and wildfires for where you are, in 
 3. If Cache asks "Use your location?", tap "Continue" and allow it.
 4. Wait for the short message that says how the update went.
 
-This switches on "Weather forecast", "Weather alerts" and "Wildfires". The first time, Cache asks to send notifications.
+This switches on "Weather forecast", "Weather alerts", "Wildfires" and "Emergency alerts". The first time, Cache asks to send notifications.
 
 - If you're offline, Cache shows the last data and its age.
 - If location can't be found, see Pick a place for weather.
@@ -318,7 +333,7 @@ Use this if you'd rather not share your location, or it can't be found.
 
 Cache watches that place and switches on the same three sources.
 
-To keep a place for good, add it to the Places notebook. Each place has its own "Weather and alerts" switch.
+To keep a place for good, add it to the Places notebook. Each place has its own "Weather and alerts" switch. The same switch is under "Saved places" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 ## Add more weather sources
 
@@ -371,4 +386,4 @@ The map has its own location controls.
 
 "Show my position" in "Maps" > "Layers" turns your dot on or off. When it is off, Cache doesn't read your position and forgets the last one.
 
-"Where I am" is the first row of the Places notebook ("Follows the phone"). Its weather switch decides whether Cache keeps weather for where you are.
+"Your location" under "What weather watches" in ["Settings" > "Weather and alerts"](cache://settings/weather) decides whether Cache keeps weather for where you are. See What weather watches in chapter 3.

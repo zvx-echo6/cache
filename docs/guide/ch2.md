@@ -17,7 +17,19 @@ The gear at the top right opens "Settings".
 The "Weather and alerts" card shows the temperature and any active alerts. A red triangle is a warning. A fire icon is a fire, with its distance. Tap the card to open "Weather".
 
 - If it says "Not set up yet", tap "Turn on weather".
+- If it says "Weather is off", every source is off. Tap "Turn on". It opens ["Settings" > "Weather and alerts"](cache://settings/weather).
 - If you're offline, it shows the last data and its age.
+
+## New version banner and What's new
+
+When a newer Cache is out, "Home" shows a banner.
+
+- On Android it says "New version available" with "Open Play Store".
+- On iPhone it says "New version available: open TestFlight" with "Open TestFlight".
+
+If you dismiss the banner, it stays gone after a restart. It comes back when an even newer build is out.
+
+To see what changed, open ["Settings" > "Credits and licences"](cache://settings/credits) and tap "What's new in [version]". See Credits and licences in chapter 3.
 
 ## Search Cache from Home
 
@@ -80,6 +92,20 @@ To pin or unpin a module:
 - If the bar is full, Cache says "The bar is full (3 max)". Tap the row for the module to take off, for example "Replace Library", or tap "Cancel".
 
 For bigger icons, go to ["Settings" > "Appearance"](cache://settings/appearance) and choose "Large" under "Module icons".
+
+## Tablets
+
+On a tablet Cache changes its layout. The screens are the same.
+
+1. Hold the tablet upright. Cache uses the bottom bar, as on a phone.
+2. Turn it sideways. Cache uses a rail at the side instead.
+3. On the rail, tap "Hide menu" at its top to hide it. Tap "Show menu" at the top left of the page to bring it back.
+
+Settings, Regions, Notebooks, Library and the guide contents show a list beside the open page.
+1. Tap "Hide list" at the top of the list to hide it.
+2. Tap the button left of the page's title to show it again. It reads "Show Settings", "Show Regions", "Show Notebooks", "Show Library" or "Show contents".
+
+- Before you choose anything, the page says "Choose an item" ("Choose a section" in the guide). The list can't be hidden then.
 
 ## Select several items, and press and hold
 
@@ -175,6 +201,29 @@ The assistant can be wrong, even with sources. For anything about your safety, r
 
 - If you see "No answer was produced.", ask again in other words, or tap "New chat".
 
+## Need help now?
+
+"Need help now?" is a link in the top bar of "Ask". It opens a sheet with ways to get help. It covers the US and Canada.
+
+1. Open "Ask".
+2. Tap "Need help now?" in the top bar.
+3. Read the card, "You don't have to go through this alone".
+4. Tap "Close" when you are done.
+
+The card has:
+- "Call 988" and "Text 988": "Suicide & Crisis Lifeline. Needs a phone signal.";
+- "Call 911": "If you're in danger right now.";
+- "Nearest emergency room": its name and distance, its phone number and "Directions". While it searches it says "Looking in your map…";
+- "Right now": three steps. 1. Put distance between you and anything you could use to hurt yourself. 2. Go where other people are. 3. Reach one person you trust, even with one message.;
+- "Crisis guides": "In your Library, works offline".
+
+When the card is closed, one line stays: "Help is available: 988 · nearest ER".
+
+- If the guides are not in your Library, it says "Not in your Library yet" with "Get guides".
+- If the device can't call, it says "This device can't place calls. Use another phone." The numbers show as text.
+- If the phone app won't open, it says "Couldn't open the phone app. Dial 988 yourself." For 911 it asks you to dial 911 yourself.
+- If there is no signal, it says "No signal right now. Calls and texts need a signal."
+
 ## Report this answer
 
 Use this when an answer is wrong, made up or harmful.
@@ -250,6 +299,12 @@ The card has:
 - "Add to Home": adds a shortcut;
 - "Close".
 
+When the place has a Wikipedia summary, the card shows it with "Read about it".
+- Tap "Read about it". The button says "Opening…", then the article opens in your Wikipedia.
+- A place with no Wikipedia match shows no summary and no button.
+- If Wikipedia is not on the phone, the card shows "Get Wikipedia" and "Wikipedia is not on this phone."
+- If you see "That article is not in your Wikipedia. Update Wikipedia in Library.", tap "Open Library".
+
 Press and hold on the map for the ring menu. It has "Add stop" and "Measure". See The map ring menu in chapter 5.
 
 ## Get directions
@@ -311,6 +366,7 @@ The "Layers" button on the right of "Maps" opens the layers sheet.
 - "Show my position" turns your dot on or off.
 - "Download a region" opens "Regions".
 - "Get more layers" lists every layer.
+- In the my layers group, "Add from a file" adds a file of places or repeaters. See Add a repeater list from a file in chapter 5.
 
 Layers stream while you're online and keep what you viewed. To keep a whole area offline, download its region. See Download a region in chapter 1.
 
@@ -342,7 +398,8 @@ The reader opens a Library item.
 
 - "Search this ZIM" searches inside the open work.
 - "Find in page" finds words, with "Previous" and "Next".
-- "Back", "Forward" and "Main page" are at the bottom.
+- "Back", "Forward" and "Main page" are at the bottom. "Back" and "Forward" move through the pages you read.
+- The arrow at the top left leaves the reader. Its label reads "Close [library name]".
 - "More" > "Add to Home" puts the page on "Home".
 
 - If you see "This ZIM is still being indexed. Text search works when that is done.", you can still read pages.
@@ -405,7 +462,7 @@ The same sheet has "Log out" and "Remove this instance".
 - What's already on the phone shows at once, with its age.
 - When you open Cache and the last update is over 30 minutes old, it updates.
 - The box at the top says when data was last updated. Tap "Update now", or pull the screen down.
-- "Happening nearby" lists alerts, fires and other sources you switched on.
+- "Happening nearby" lists alerts, fires and other sources you switched on. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
 - With more than one place, tap a place's chip to switch.
 
 Tap any item for details. "Ask about this" starts a chat about what it means for you.
@@ -417,6 +474,8 @@ The tune button ("Weather and alerts settings") opens the source settings.
 ## Weather messages and alerts
 
 Every alert is listed in "Weather", whatever you chose under "Pop up for" in "Notifications".
+
+An emergency alert shows "Event", "Severity", "Issued by", "Area" and "Expires", then "Instructions" or "Details". Severity is written as for Weather Service alerts.
 
 - If an alert notification opens Cache, it goes straight to that alert.
 - If it says "That alert has ended or is no longer in the data.", the alert is over.

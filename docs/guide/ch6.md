@@ -17,6 +17,7 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 ## Home weather card messages
 
 - "Not set up yet": no weather source is on. Tap "Turn on weather".
+- "Weather is off": every source is off. Tap "Turn on".
 - "Waiting for your position": the phone doesn't know where it is. Wait, or go outdoors.
 - "forecast expired, needs a connection": connect, open "Weather" and tap "Update now".
 - "no forecast yet": open "Weather" and tap "Update now".
@@ -27,6 +28,8 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 
 - "Nothing found" under "Ask Cache:": nothing on your phone matches. Tap the "Ask Cache:" row to ask instead.
 - "That chat is gone": the chat was deleted. Tap and hold the shortcut, then "Remove from Home".
+- "Wikipedia is not on this phone.": tap "Get Wikipedia" on the place card.
+- "That article is not in your Wikipedia. Update Wikipedia in Library.": tap "Open Library".
 - "That page is not on this phone any more": the ZIM was removed. Remove the shortcut, or download it again.
 - "Finish or end the route first": you're being guided. Tap "End" in "Maps".
 
@@ -222,6 +225,8 @@ Texts you may see on a part:
 - "Couldn't be downloaded. Try again later."
 - "The download server couldn't send it just now. Try again later."
 - "Off-road data couldn't be downloaded. Try again later."
+- "Places not available yet": places are not published for the region. Cache checks again when you check for updates.
+- "Not available yet for this area": the same, on the region's page. Tap the row for the reason.
 
 ## Weather status messages
 
@@ -239,6 +244,7 @@ The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) sa
 - "Expired · [age] · needs a connection for more": connect and update.
 - "Every day of this forecast has passed." or "No forecast.": update when online.
 - "That alert has ended or is no longer in the data.": the alert is over.
+- "No active emergency alerts": none are listed for the place right now. Nothing is wrong.
 
 ## Update messages
 
@@ -248,7 +254,7 @@ After "Update now" or the refresh button, a short message says how it went.
 - "Already updating": wait.
 - "Switch on a source to update it.": turn on a source.
 - "Waiting for your position.": try again soon.
-- "No place is being watched.": turn on "Weather and alerts" for a place in the Places notebook, or for "Where I am".
+- "No place is being watched.": turn on "Your location" or a place under "What weather watches" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 - "No connection. Update when you are online."
 - "Updated, but [problem]": one source didn't update.
 
@@ -347,6 +353,7 @@ In ["Settings" > "Weather and alerts" > "More sources" > "Add sources from a lin
 
 ## Notification messages
 
+- `[alert] near [A] and [B]` or `[alert] near [A], [B] and [C]`: one pop-up for one alert, near all the places it covers. The same alert from the Weather Service and IPAWS pops up once.
 - "No pop-ups at all?": you chose "None" under "Pop up for". Cache won't interrupt you, even for an evacuation. Tap "Keep pop-ups" or "Turn off". Alerts stay listed in "Weather".
 
 If alerts don't pop up, check:
@@ -415,7 +422,11 @@ In ["Settings" > "Credits and licences"](cache://settings/credits):
 In "Notebooks":
 - "Notebooks could not open. Your entries are still on this phone.": tap "Try again". If it repeats, restart Cache.
 - "Could not make it: [reason]": check free space and try again.
-- "No notebooks yet. Make one with New notebook.": tap "New notebook".
+- "No notebooks yet. Make one with New notebook.": tap the + button ("Add"), then "New notebook".
+- "Reading file…": a file is being read. Wait.
+- "Could not read that file. It needs to be a RepeaterBook KML or a CHIRP CSV.": pick another file.
+- "No repeaters found in that file.": tap "Choose another file".
+- "This list could not be read.": use "Update from a file".
 - "Not saved. Your phone may be out of space.": free space and tap "Try again". Your text is kept.
 - "This notebook is gone": remove its shortcut from "Home".
 - "You already have a notebook with this name.": choose another.

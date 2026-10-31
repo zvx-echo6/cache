@@ -91,7 +91,7 @@ This page turns weather sources on and off.
 
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 2. Check the top line, for example "Updated 1 hour ago". Tap the small round button next to it to refresh. If data is old, the line warns, for example "Updated 3 days ago".
-3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire detections near the place (NASA FIRMS)".
+3. Under it, find a source. Featured ones come first, such as "Weather forecast", "Weather alerts", "Wildfires" and "Satellite fire detections near the place (NASA FIRMS)". "Emergency alerts" (provider FEMA IPAWS) is a row too. It needs no key and comes on with "Weather alerts".
 4. Turn its switch on or off.
 
 Each row says what the source gives and who provides it. Tap a row to open the source's page. It has "Use this source".
@@ -101,7 +101,22 @@ The rest are under "More sources", with a count such as "9 more". Open it for a 
 - If the row has a "Get key" button, the source needs a free key. See Keys for data sources.
 - If the list says "No sources downloaded yet. Connect to the internet and they load by themselves.", connect and come back.
 
-Which places the data covers is set in the Places notebook (chapter 5).
+Which places the data covers is set under "What weather watches" at the top of this page. See What weather watches.
+
+## What weather watches
+
+At the top of ["Settings" > "Weather and alerts"](cache://settings/weather), "What weather watches" says which places get weather.
+
+1. Find the group "What weather watches".
+2. Turn on "Your location" for "Updates while you move. Needs location."
+3. Under "Regions", turn a region on or off.
+4. Under "Saved places", turn a saved place on or off. It shows "None yet" if you have none. With more than 8 saved places, a "Search places" box shows.
+
+- If "Your location" says "Location is blocked" in red, tap "Open settings" and allow location.
+- If the phone refuses when you turn on "Your location", the switch goes back. Cache says "Could not turn on. Location is blocked." with "Open settings".
+- If nothing is on, the top line says "Nothing switched on yet".
+
+A saved place's own page has the same "Weather and alerts" switch.
 
 ## Keys for data sources
 
@@ -165,6 +180,10 @@ This page decides which alerts pop up.
    - "All alerts": adds watches and advisories.
    - "None": nothing pops up.
 - A place set to "Custom for this place" overrides this. See Alerts for a place in chapter 5.
+
+Emergency alerts from FEMA IPAWS follow the same choice. An extreme or severe one, or an evacuation order, is serious and pops up under "Serious only".
+
+The same alert from the Weather Service and IPAWS pops up once. One alert near several of your places pops up once too.
 
 Every alert is listed in "Weather" either way.
 
@@ -313,3 +332,7 @@ This page says what Cache is and what it is built on.
    - "Source code": where to get it;
    - "Credits": the maps, data, libraries and art used;
    - "Open-source licences": the full text for every package.
+
+If a newer Cache is out, the "Version" line says "New version available: [version]" and has a button. On Android it is "Open Play Store". On iPhone it is "Open TestFlight".
+
+The row "What's new in [version]" shows what changed in your version. It shows only when lines were written for that version. Tap it, read, and tap "Got it".

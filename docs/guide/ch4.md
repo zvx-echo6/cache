@@ -91,7 +91,7 @@ Open-Meteo provides Cache's forecast: current conditions, tonight, and up to 16 
 To switch it on:
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 2. Turn on "Weather forecast".
-3. Choose the places to watch in the Places notebook (chapter 5).
+3. Choose the places to watch under "What weather watches" on that page.
 
 Forecasts download while online and stay for offline use until they expire. Cache says how old they are.
 
@@ -109,9 +109,23 @@ An empty list means only that the Weather Service lists none for that place. It 
 
 ## Emergency alerts from FEMA (IPAWS)
 
-IPAWS is FEMA's public alert feed. The phone would read it directly. It is free and needs no key.
+IPAWS is FEMA's public alert feed. The phone reads it directly from FEMA. It is free and needs no key.
 
-This is coming in a later update. It is not in this version of Cache yet, so there is nothing to switch on today.
+Cache shows it as the "Emergency alerts" source. Its provider is FEMA IPAWS.
+
+To switch it on:
+1. Tap "Turn on weather". It switches on "Emergency alerts" with "Weather alerts".
+2. Or go to ["Settings" > "Weather and alerts"](cache://settings/weather) and turn on "Emergency alerts".
+
+If "Weather alerts" was already on, Cache switches it on once when the catalogue offers it. After that it is your switch.
+
+The same alert can come from the Weather Service and from IPAWS. Cache shows and pops it up once.
+
+Each alert shows "Event", "Severity", "Issued by", "Area" and "Expires". It also shows "Instructions" when the alert carries them, or "Details" when it carries only a description.
+
+An alert matches your place, or a region's whole area.
+
+An empty list means only that no active emergency alerts are listed for that place.
 
 ## Wildfires with WFIGS
 

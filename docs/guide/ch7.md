@@ -44,7 +44,7 @@ Cache uses your location whenever your phone allows it. It never asks in "Ask". 
 It is used for:
 - showing you on the map and following you in directions;
 - answering questions about places near you;
-- weather, alerts and fires for "Where I am", the first row of the Places notebook.
+- weather, alerts and fires for "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 When your location is used for weather, your coordinates go to the source's provider in each request, so it can send data for that spot. Background updates use the last position Cache saved while open, rounded to about 100 metres. The same goes for every place you watch.
 
@@ -53,7 +53,7 @@ When you search a place in an area you haven't downloaded, Cache's data server s
 ## Limit your location use
 
 - Turn off "Use my location" to keep your position out of your questions. It is in ["Settings" > "Cache model and web search"](cache://settings/assistant) and the + menu in "Ask".
-- Turn off "Weather and alerts" on "Where I am" in the Places notebook. Add a nearby town as a place instead.
+- Turn off "Your location" under "What weather watches" in ["Settings" > "Weather and alerts"](cache://settings/weather). Add a nearby town as a place instead.
 - Turn off "Show my position" in "Maps" > "Layers". Cache then stops reading your position and forgets the last one.
 - Refuse location in the phone's settings. Maps, Ask and weather keep working. You choose places by hand.
 
