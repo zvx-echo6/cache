@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -11,6 +12,7 @@ import 'package:cache/sources/sources_state.dart';
 import 'package:cache/theme.dart';
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
+import 'package:cache/sharing/sharing_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
@@ -424,6 +426,42 @@ void main() {
       expect(libs.libraries, hasLength(1));
     });
 
+    test('a library a sync brings shows in the list as soon as the shared folder settles, with no restart', () async {
+      await setUpLibs();
+      await libs.addFile(libFile('manuals.cache-library', _lib()), confirmUpdate: never, askSettings: noSettings);
+      final sync = _StatusSync();
+      final sharing = SharingState(policy: testPolicy(wifi: true), supportDir: () async => tmp, kinds: const [], opener: (_) async => sync);
+      final rescans = <Set<String>>[];
+      sharing.onShareChanged = (ids) {
+        rescans.add(ids);
+        if (ids.contains('libraries')) unawaited(libs.rescan());
+      };
+      sync.share = {'id': 'libraries', 'files': 4, 'bytes': 1000, 'pending_files': 0};
+      await sharing.setUp();
+      expect(rescans, isEmpty, reason: 'the first look only notes where the folder stands');
+      // A linked device starts sending a library: nothing is read while files are still coming.
+      sync.share = {'id': 'libraries', 'files': 6, 'bytes': 1500, 'pending_files': 3};
+      await sharing.refresh();
+      expect(rescans, isEmpty);
+      // The copy lands (as sync writes it: a whole folder) and the folder settles.
+      _copyTree(Directory('${tmp.path}/libraries/manuals'), Directory('${tmp.path}/libraries/synced'));
+      final settings = File('${tmp.path}/libraries/synced/cache-library.json');
+      settings.writeAsStringSync(settings.readAsStringSync().replaceAll('"manuals"', '"synced"'));
+      expect(libs.libraries.length, 1, reason: 'before: the list still shows what was there');
+      sync.share = {'id': 'libraries', 'files': 9, 'bytes': 2000, 'pending_files': 0};
+      await sharing.refresh();
+      expect(rescans, [
+        {'libraries'},
+      ]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await libs.rescan();
+      expect([for (final l in libs.libraries) l.folderName]..sort(), ['manuals', 'synced']);
+      // Nothing new: no more reads.
+      await sharing.refresh();
+      expect(rescans.length, 1);
+      sharing.dispose();
+    });
+
     test('removing deletes the library and its index', () async {
       await setUpLibs();
       await libs.addFile(libFile('m.cache-library', _lib()), confirmUpdate: never, askSettings: noSettings);
@@ -592,4 +630,28 @@ List<int> _tar(Map<String, List<int>> files) {
       ..addAll(List.filled((512 - e.value.length % 512) % 512, 0));
   }
   return out..addAll(List.filled(1024, 0));
+}
+
+/// A sync engine whose status lists one shared folder as the test sets it.
+class _StatusSync implements SyncCoreLike {
+  Map<String, Object?>? share;
+
+  @override
+  Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async =>
+      method == 'status' ? {'name': 'Test phone', 'shares': [?share], 'peers': const [], 'offers': const []} : {'ok': true};
+
+  @override
+  Future<void> close() async {}
+}
+
+void _copyTree(Directory from, Directory to) {
+  to.createSync(recursive: true);
+  for (final e in from.listSync()) {
+    final name = e.path.split(RegExp(r'[\\/]')).last;
+    if (e is Directory) {
+      _copyTree(e, Directory('${to.path}/$name'));
+    } else if (e is File) {
+      e.copySync('${to.path}/$name');
+    }
+  }
 }

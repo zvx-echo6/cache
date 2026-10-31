@@ -107,8 +107,37 @@ class SharingState extends ChangeNotifier {
     if (c == null) return;
     try {
       status = await c.call('status');
+      _noteShareChanges();
       notifyListeners();
     } catch (_) {}
+  }
+
+  /// Called with the ids of the shared folders whose files a sync added, changed or removed, once the folder has nothing more to
+  /// fetch (a library is never read half-way through). The app reads those folders again (Library's list, for one), so what a
+  /// sync brought shows at once instead of after a restart.
+  void Function(Set<String> shareIds)? onShareChanged;
+
+  /// Each shared folder's files and bytes as last seen with nothing pending: what a change is measured against.
+  final Map<String, (int, int)> _settled = {};
+
+  void _noteShareChanges() {
+    final changed = <String>{};
+    for (final sh in shares) {
+      final id = sh['id'];
+      if (id is! String) continue;
+      final now = (((sh['files'] as num?) ?? 0).toInt(), ((sh['bytes'] as num?) ?? 0).toInt());
+      final before = _settled[id];
+      // The first look only notes where the folder stands (what it held at start the app has read already), even mid-sync, so
+      // what that sync brings is still a change when it settles.
+      if (before == null) {
+        _settled[id] = now;
+        continue;
+      }
+      if (((sh['pending_files'] as num?) ?? 0) > 0) continue;
+      _settled[id] = now;
+      if (before != now) changed.add(id);
+    }
+    if (changed.isNotEmpty) onShareChanged?.call(changed);
   }
 
   Future<Map<String, dynamic>> _call(String m, [Map<String, Object?> a = const {}]) async {

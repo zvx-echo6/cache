@@ -168,6 +168,19 @@ class LibrariesState extends ChangeNotifier {
     await _afterCore();
   }
 
+  /// Reads the libraries folder (and the ZIM folder, through [SourcesState.refresh]) again after something outside an add or a
+  /// remove changed it: a device-to-device sync that brought, updated or removed a library. The list, the core and the
+  /// keyword indexes follow at once.
+  Future<void> rescan() async {
+    if (dir == null || _disposed) return;
+    _recoverLeftovers();
+    await _scan();
+    notifyListeners();
+    await sources.refresh();
+    _resumeIndexes();
+    notifyListeners();
+  }
+
   Future<void> _afterCore() async {
     await sources.refresh();
     _resumeIndexes();
