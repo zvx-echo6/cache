@@ -119,7 +119,7 @@ fn middle(doors: &[&Anchor]) -> Option<(f64, f64)> {
 }
 
 /// The anchors within `reach` metres of `here`.
-fn within_reach<'a>(xs: Vec<&'a Anchor>, here: (f64, f64), reach: f64) -> Vec<&'a Anchor> {
+fn within_reach(xs: Vec<&Anchor>, here: (f64, f64), reach: f64) -> Vec<&Anchor> {
     xs.into_iter().filter(|a| metres(here, (a.lat, a.lon)) <= reach).collect()
 }
 
@@ -157,7 +157,7 @@ pub fn assign(rows: &mut [Raw], anchors: &[Anchor], cfg: &ArrivalCfg) -> Arrival
                 got = nearest(within_reach(main, here, reach)).map(|p| (p, 1));
             }
         }
-        if got.is_none() && cfg.airport_kinds.iter().any(|k| *k == kind) {
+        if got.is_none() && cfg.airport_kinds.contains(&kind) {
             let region = match r.extent {
                 Some(e) => grow(e, cfg.adjacent_m),
                 None => grow([r.lat, r.lon, r.lat, r.lon], cfg.airport_terminal_m),

@@ -143,7 +143,8 @@ pub fn run(o: &Opts) -> Result<Report, String> {
             // the model's answers for the long summaries first, `parallel` calls at a time, in row order
             let long: Vec<usize> = if o.no_model { Vec::new() } else { (0..rows.len()).filter(|&i| whole(&rows[i].2).is_none()).collect() };
             let next = std::sync::atomic::AtomicUsize::new(0);
-            let answers: std::sync::Mutex<Vec<Option<(Result<String, String>, f64)>>> = std::sync::Mutex::new(vec![None; rows.len()]);
+            type Answer = Option<(Result<String, String>, f64)>;
+            let answers: std::sync::Mutex<Vec<Answer>> = std::sync::Mutex::new(vec![None; rows.len()]);
             std::thread::scope(|sc| {
                 for _ in 0..o.parallel.max(1) {
                     sc.spawn(|| loop {

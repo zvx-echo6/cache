@@ -342,7 +342,8 @@ pub fn cut(cfg: &CutCfg) -> Result<Vec<TileOut>, String> {
     let selected = cfg.bbox.map(tiles_in);
     std::fs::create_dir_all(cfg.out.join(&cfg.build)).map_err(|e| e.to_string())?;
     let next = AtomicUsize::new(0);
-    let results: Mutex<Vec<Result<(Vec<TileOut>, BTreeSet<u32>), String>>> = Mutex::new(Vec::new());
+    type BlockResult = Result<(Vec<TileOut>, BTreeSet<u32>), String>;
+    let results: Mutex<Vec<BlockResult>> = Mutex::new(Vec::new());
     std::thread::scope(|sc| {
         for _ in 0..cfg.jobs.clamp(1, blocks.len().max(1)) {
             sc.spawn(|| {
