@@ -43,6 +43,14 @@ const List<SetupArea> kSetupAreas = [
   SetupArea('location', 'Location', 'Cache guide: 1. Getting started: Let Cache use your location', 'not known'),
 ];
 
+/// The guide section a setup citation opens: `app:setup/<area>` (a part of app.setup_status the answer cites) names its guide
+/// section in the reply (`guide`), and that is what the answer points the person to. Null for any other address.
+String? setupGuideTitle(String address) {
+  final m = RegExp(r'^app:setup/([a-z_]+)$').firstMatch(address.split('#').first.trim());
+  if (m == null) return null;
+  return kSetupAreas.where((a) => a.id == m.group(1)).firstOrNull?.guide;
+}
+
 /// One line of a part: `{"label","value"}`.
 class SetupItem {
   const SetupItem(this.label, this.value);
