@@ -33,10 +33,6 @@ fn search(c: &PlacesCore, q: &str, near: Option<(f64, f64)>) -> Value {
     c.search(q, &SearchOpts { near, ..Default::default() }, None).unwrap()
 }
 
-fn names(v: &Value) -> Vec<String> {
-    v["results"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect()
-}
-
 const BURLEY: (f64, f64) = (42.5357, -113.7928);
 const STANLEY: (f64, f64) = (44.2210, -114.9360);
 
