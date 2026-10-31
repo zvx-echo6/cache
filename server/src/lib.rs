@@ -1,13 +1,15 @@
 //! Cache Server: the browser app and the core's search and read calls behind one port and one password.
 //!
 //! The core lives in a Dart helper process (server/helper) that this server supervises (`helper`); `/api/core` forwards the
-//! browser app's calls to it. The rest is the web side: sign-in (`auth`), the routes (`http`), the files of the browser app
+//! browser app's calls to it. The rest is the web side: sign-in (`auth`, `keys`), the sign-in and settings pages (`pages`), the routes (`http`), the files of the browser app
 //! (`webfiles`), the certificate (`tls`) and the data folders (`config`).
 
 pub mod auth;
 pub mod config;
 pub mod helper;
 pub mod http;
+pub mod keys;
+pub mod pages;
 pub mod tls;
 pub mod webfiles;
 

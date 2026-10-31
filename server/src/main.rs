@@ -1,6 +1,7 @@
-//! `cache-server`: `serve` runs the server, `set-password` sets (or resets) the one password.
+//! `cache-server`: `serve` runs the server, `set-password` sets (or resets) the one password and puts sign-in back to
+//! password only, `keys` lists or removes registered keys.
 
-use cache_server::auth::{Auth, Sessions, StoredPassword};
+use cache_server::auth::{Auth, AuthFile, Sessions, StoredPassword};
 use cache_server::helper::{Helper, HelperConfig};
 use cache_server::http::{serve_connection, App};
 use cache_server::{config, tls, VERSION};
@@ -10,10 +11,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const USAGE: &str = "usage:
-  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--helper <exe>] [--core-lib <lib>]
-      (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so)
+  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>]
+      (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so;
+       --public-origin, or public_origin in <dir>/config.json, is the address people use, for security keys: it needs a host name)
   cache-server set-password --data <dir> [--sign-out-all]
-      (reads the password from standard input; a running server uses it at once; --sign-out-all also signs every browser out)
+      (reads the password from standard input; a running server uses it at once; --sign-out-all also signs every browser out;
+       it also puts sign-in back to password only and keeps the registered keys)
+  cache-server keys --data <dir> --list
+  cache-server keys --data <dir> --remove <id>
+      (lists the registered security keys and key files, or removes one; a running server follows at once)
   cache-server --version";
 
 struct Args {
@@ -96,18 +102,61 @@ fn set_password(argv: &[String]) -> Result<(), String> {
     let password = read_password().map_err(|e| format!("reading the password: {e}"))?;
     let stored = StoredPassword::new(&password).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
-    stored.save(&data.join("auth.json")).map_err(|e| format!("writing auth.json: {e}"))?;
+    let path = data.join("auth.json");
+    // the keys stay; the sign-in setting goes back to password only, so a lost key never locks anyone out
+    let mut file = AuthFile::load(&path).map_err(|e| format!("reading auth.json: {e}"))?.unwrap_or_default();
+    file.reset_with_password(stored);
+    file.save(&path).map_err(|e| format!("writing auth.json: {e}"))?;
     if a.flag("sign-out-all") {
         Sessions::clear_file(&data.join("sessions.json")).map_err(|e| format!("clearing sessions.json: {e}"))?;
-        eprintln!("password set; every browser has been signed out");
+        eprintln!("password set; sign-in is password only; every browser has been signed out");
     } else {
-        eprintln!("password set; a running server uses it from the next sign-in");
+        eprintln!("password set; sign-in is password only; a running server uses it from the next sign-in");
+    }
+    Ok(())
+}
+
+fn keys(argv: &[String]) -> Result<(), String> {
+    let a = Args::parse(argv, &["data", "remove"], &["list"])?;
+    let data = Path::new(a.req("data")?);
+    let path = data.join("auth.json");
+    let mut file = AuthFile::load(&path).map_err(|e| format!("reading auth.json: {e}"))?.unwrap_or_default();
+    let when = |t: Option<u64>| t.map_or("never".to_string(), |t| format!("{t}"));
+    if let Some(id) = a.get("remove") {
+        let (before_sk, before_kf) = (file.security_keys.len(), file.key_files.len());
+        file.security_keys.retain(|k| k.id != id);
+        file.key_files.retain(|k| k.id != id);
+        if file.security_keys.len() + file.key_files.len() == before_sk + before_kf {
+            return Err(format!("no key with id {id}"));
+        }
+        // taking the last key away must not leave a setting that needs one
+        if file.mode.needs_key() && file.security_keys.is_empty() && file.key_files.is_empty() {
+            file.mode = cache_server::auth::Mode::Password;
+            file.start_with_password = false;
+            eprintln!("that was the last key: sign-in is back to password only");
+        }
+        file.save(&path).map_err(|e| format!("writing auth.json: {e}"))?;
+        eprintln!("removed {id}; a running server follows at once");
+        return Ok(());
+    }
+    if !a.flag("list") {
+        return Err("--list or --remove <id> is required".into());
+    }
+    println!("sign-in: {}{}", file.mode.as_str(), if file.start_with_password { " (start with the password box)" } else { "" });
+    for k in &file.security_keys {
+        println!("security-key  {}  {}  added {}  last used {}", k.id, k.name, k.added, when(k.last_used));
+    }
+    for k in &file.key_files {
+        println!("key-file      {}  {}  made {}  last used {}", k.id, k.name, k.added, when(k.last_used));
+    }
+    if file.security_keys.is_empty() && file.key_files.is_empty() {
+        println!("no keys registered");
     }
     Ok(())
 }
 
 fn serve(argv: &[String]) -> Result<(), String> {
-    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib"], &["no-tls"])?;
+    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib", "public-origin"], &["no-tls"])?;
     let data = PathBuf::from(a.req("data")?);
     let web = PathBuf::from(a.req("web")?);
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
@@ -121,7 +170,14 @@ fn serve(argv: &[String]) -> Result<(), String> {
     } else {
         None
     };
-    let auth = Auth::load(&data, use_tls).map_err(|e| format!("auth.json: {e}"))?;
+    let origin = config::public_origin(&data, a.get("public-origin"))?;
+    let webauthn = cache_server::keys::build_webauthn(origin.as_deref())?;
+    match (&origin, &webauthn) {
+        (_, Some(_)) => eprintln!("security keys are on for {}", origin.as_deref().unwrap_or("")),
+        (None, None) => eprintln!("security keys are off: set --public-origin https://your-host-name to turn them on"),
+        _ => {}
+    }
+    let auth = Auth::load(&data, use_tls).map_err(|e| format!("auth.json: {e}"))?.with_webauthn(webauthn);
     if !auth.has_password() {
         eprintln!("no password is set: nobody can sign in. Run: cache-server set-password --data {}", data.display());
     }
@@ -193,6 +249,7 @@ fn main() {
         }
         Some("serve") => serve(&argv[1..]),
         Some("set-password") => set_password(&argv[1..]),
+        Some("keys") => keys(&argv[1..]),
         _ => Err("a command is required".to_string()),
     };
     if let Err(m) = result {

@@ -197,3 +197,6 @@ if [ -L "$OPT/previous" ]; then
     echo "The previous release is $(basename "$(link_of "$OPT/previous")"); to go back, run: install.sh --rollback"
 fi
 echo "(the certificate is self-signed, so the browser asks you to accept it once)"
+echo "Sign-in is the password you chose. Security keys and key files are set up after you sign in, at https://$HOST:$PORT/settings/keys"
+echo "(security keys also need a host name and a trusted certificate: see the README, --public-origin)"
+echo "If you ever lose a key, reset with: $OPT/current/cache-server set-password --data $DATA   (as the cache user)"
