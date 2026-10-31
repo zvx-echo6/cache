@@ -6,3 +6,4 @@ bool get isWindows => io.Platform.isWindows;
 bool get isLinux => io.Platform.isLinux;
 bool get isMacOS => io.Platform.isMacOS;
 String get operatingSystem => io.Platform.operatingSystem;
+String get hostName => io.Platform.localHostname;

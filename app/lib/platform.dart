@@ -18,3 +18,5 @@ bool get isWindows => impl.isWindows;
 bool get isLinux => impl.isLinux;
 bool get isMacOS => impl.isMacOS;
 String get operatingSystem => impl.operatingSystem;
+// The machine's own name (dart:io's Platform.localHostname); in a browser, the host the page was loaded from, i.e. the server.
+String get hostName => impl.hostName;

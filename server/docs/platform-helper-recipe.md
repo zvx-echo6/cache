@@ -2,7 +2,7 @@
 
 dart:io's `Platform.isAndroid`, `isIOS` and the rest throw "Unsupported operation: Platform._operatingSystem" in a browser, so the web build (served by Cache Server) crashes at start. The fix is one small helper, `app/lib/platform.dart`, and a mechanical replacement. Phone behaviour is identical: off the web every getter returns what dart:io returns.
 
-Use it as top-level getters through a prefix: `import 'platform.dart' as plat;` then `plat.isAndroid`. Getters: `isWeb`, `isAndroid`, `isIOS`, `isWindows`, `isLinux`, `isMacOS`, `operatingSystem` ('web' in a browser).
+Use it as top-level getters through a prefix: `import 'platform.dart' as plat;` then `plat.isAndroid`. Getters: `isWeb`, `isAndroid`, `isIOS`, `isWindows`, `isLinux`, `isMacOS`, `operatingSystem` ('web' in a browser), `hostName` (dart:io's `Platform.localHostname`; in a browser, `Uri.base.host`, the server's own name). New in the helper: `hostName`. Use `plat.hostName` wherever `Platform.localHostname` could run on the web (the device name in main.dart).
 
 ## 1. Add the three files to app/lib
 
@@ -29,6 +29,8 @@ bool get isWindows => impl.isWindows;
 bool get isLinux => impl.isLinux;
 bool get isMacOS => impl.isMacOS;
 String get operatingSystem => impl.operatingSystem;
+// The machine's own name (dart:io's Platform.localHostname); in a browser, the host the page was loaded from, i.e. the server.
+String get hostName => impl.hostName;
 ```
 
 `app/lib/platform_io.dart`
@@ -42,6 +44,7 @@ bool get isWindows => io.Platform.isWindows;
 bool get isLinux => io.Platform.isLinux;
 bool get isMacOS => io.Platform.isMacOS;
 String get operatingSystem => io.Platform.operatingSystem;
+String get hostName => io.Platform.localHostname;
 ```
 
 `app/lib/platform_web.dart`
@@ -53,6 +56,7 @@ bool get isWindows => false;
 bool get isLinux => false;
 bool get isMacOS => false;
 String get operatingSystem => 'web';
+String get hostName => Uri.base.host;
 ```
 
 ## 2. Replace the call sites
