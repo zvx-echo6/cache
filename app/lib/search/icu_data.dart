@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'core_config.dart';
 import 'icu_setenv.dart';
+import '../platform.dart' as plat;
 
 /// The ICU data file libzim needs (the ICU inside libzim.so has no data of its own).
 const String kIcuDataFile = 'icudt73l.dat';
@@ -16,7 +17,7 @@ typedef SetEnv = void Function(String name, String value);
 /// different size) and sets `ICU_DATA` to that folder in this process, which libzim reads when it first works. Call it before the
 /// first cs_open. Returns the folder, or null when this build has no ICU data (no libzim in it) or this is not Android.
 Future<String?> installIcuData({required Directory supportDir, String? libDir, SetEnv? setEnv}) async {
-  final dir = libDir ?? (Platform.isAndroid ? nativeLibraryDir() : null);
+  final dir = libDir ?? (plat.isAndroid ? nativeLibraryDir() : null);
   if (dir == null) return null;
   final src = File('$dir/$kIcuDataLibraryName');
   if (!src.existsSync()) return null;

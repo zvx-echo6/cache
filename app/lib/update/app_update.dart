@@ -1,8 +1,8 @@
 import 'dart:convert';
-import 'dart:io';
 
 import '../net/fetch.dart';
 import '../search/core_config.dart' show kDataBaseUrl;
+import '../platform.dart' as plat;
 
 /// Where Cache's newest release is described: a small file on cached.info that the release workflow writes. The iPhone's
 /// "New version available: open TestFlight" banner reads it (TestFlight's own auto-update stays the main path); Android reads
@@ -48,7 +48,7 @@ abstract class AppUpdateSource {
 /// top-level build. A file in another format, or one that cannot be read, is no update.
 class ReleaseFileSource implements AppUpdateSource {
   ReleaseFileSource({required this.installedBuild, String? platform, Future<String> Function(Uri url)? fetch, Uri? url})
-      : platform = platform ?? (Platform.isIOS ? 'ios' : 'android'),
+      : platform = platform ?? (plat.isIOS ? 'ios' : 'android'),
         _fetch = fetch ?? ((u) => fetchText(u, maxBytes: 64 * 1024, timeout: const Duration(seconds: 20))),
         url = url ?? Uri.parse(kAppReleaseUrl);
 

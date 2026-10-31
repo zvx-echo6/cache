@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'platform.dart' as plat;
 
 // Small helpers for putting a file in place whole. A file is written under a hidden name next to its real one and renamed
 // over it once complete, so nothing reads half of it, and the sync (which skips names that start with '.') never sends half
@@ -12,7 +13,7 @@ Future<File> renameOver(File from, String to) async {
     try {
       return await from.rename(to);
     } on FileSystemException {
-      if (!Platform.isWindows || i >= 20) rethrow;
+      if (!plat.isWindows || i >= 20) rethrow;
       try {
         await File(to).delete();
       } on FileSystemException catch (_) {}
@@ -27,7 +28,7 @@ File renameOverSync(File from, String to) {
     try {
       return from.renameSync(to);
     } on FileSystemException {
-      if (!Platform.isWindows || i >= 20) rethrow;
+      if (!plat.isWindows || i >= 20) rethrow;
       try {
         File(to).deleteSync();
       } on FileSystemException catch (_) {}

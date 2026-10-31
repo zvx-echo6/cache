@@ -15,6 +15,7 @@ import '../maps/layers/starter_defs.dart';
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
 import '../search/search_access.dart';
+import '../platform.dart' as plat;
 
 /// One ZIM file in the sources folder.
 class ZimFile {
@@ -190,7 +191,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<Map<String, dynamic>> _defaultExtras() async {
     final files =
-        (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+        (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     final support = await getApplicationSupportDirectory();
     // libzim reads its ICU data from the folder ICU_DATA names, so this comes before the first cs_open.
@@ -211,7 +212,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       filesDir: files,
       supportDir: support,
       layerDefsDir: defs,
-      shim: shimPath(Platform.isAndroid ? nativeLibraryDir() : null),
+      shim: shimPath(plat.isAndroid ? nativeLibraryDir() : null),
     );
   }
 
@@ -258,7 +259,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<Directory> _defaultZimsDir() async {
     final base =
-        (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+        (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
         await getApplicationDocumentsDirectory();
     return Directory('${base.path}/zims');
   }

@@ -7,6 +7,7 @@ import 'package:saf_util/saf_util.dart';
 
 import 'folder.dart';
 import 'saf_stream_shim.dart';
+import '../../platform.dart' as plat;
 
 /// Folders the person picks for Obsidian or Logseq, kept across restarts:
 /// - Android: a Storage Access Framework tree with a persisted permission (`content://...`), read and written through SAF;
@@ -17,11 +18,11 @@ const MethodChannel _ios = MethodChannel('co.cache/folders');
 
 /// Lets the person choose a folder; its stored form and its name, or null when none was chosen.
 Future<({String path, String display})?> pickSyncFolder() async {
-  if (Platform.isAndroid) {
+  if (plat.isAndroid) {
     final d = await SafUtil().pickDirectory(writePermission: true, persistablePermission: true);
     return d == null ? null : (path: d.uri, display: d.name);
   }
-  if (Platform.isIOS) {
+  if (plat.isIOS) {
     final r = await _ios.invokeMapMethod<String, dynamic>('pick');
     if (r == null || r['bookmark'] is! String) return null;
     return (path: 'bookmark:${r['bookmark']}', display: '${r['name'] ?? 'Folder'}');

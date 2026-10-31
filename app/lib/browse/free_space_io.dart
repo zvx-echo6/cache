@@ -1,13 +1,13 @@
 import 'dart:ffi' as ffi;
-import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import '../platform.dart' as plat;
 
 /// iOS uses a native helper compiled against its platform statvfs headers.
 /// Android and Linux use libc directly (64-bit). Null on failure or unsupported platforms; the download relies on the
 /// write failing cleanly when the disk is full.
 int? freeBytesOnDisk(String dir) {
-  if (Platform.isIOS) {
+  if (plat.isIOS) {
     final path = dir.toNativeUtf8();
     try {
       final freeBytes = ffi.DynamicLibrary.process()
@@ -23,7 +23,7 @@ int? freeBytesOnDisk(String dir) {
       calloc.free(path);
     }
   }
-  if (!(Platform.isAndroid || Platform.isLinux)) return null;
+  if (!(plat.isAndroid || plat.isLinux)) return null;
   if (ffi.Abi.current() != ffi.Abi.androidArm64 &&
       ffi.Abi.current() != ffi.Abi.androidX64 &&
       ffi.Abi.current() != ffi.Abi.linuxArm64 &&
