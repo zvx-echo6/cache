@@ -58,6 +58,20 @@ class IoAppFs implements AppFs {
       files.writeBytesAtomic(File(await _path(root, path)), bytes);
 
   @override
+  Future<void> writeStringViaTmp(AppRoot root, String path, String text) async {
+    final f = File(await _path(root, path));
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(text, flush: true);
+    await tmp.rename(f.path);
+  }
+
+  @override
+  Future<void> copy(AppRoot root, String from, String to) async {
+    final src = File(await _path(root, from));
+    if (src.existsSync()) src.copySync(await _path(root, to));
+  }
+
+  @override
   void writeStringAtomicSync(AppRoot root, String path, String text) {
     final dir = _resolved(root);
     if (dir == null) throw StateError('The ${root.name} folder has not been used yet');

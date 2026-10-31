@@ -26,6 +26,13 @@ abstract class AppFs {
   Future<void> writeStringAtomic(AppRoot root, String path, String text);
   Future<void> writeBytesAtomic(AppRoot root, String path, List<int> bytes);
 
+  /// The write older code did by hand: the text into `<path>.tmp`, flushed, then renamed over the file. On a phone it is exactly
+  /// that (so the temp file keeps its name); in a browser it is [writeStringAtomic]. Use [writeStringAtomic] in new code.
+  Future<void> writeStringViaTmp(AppRoot root, String path, String text);
+
+  /// Copies the file to [to] (nothing happens when it is missing). On a phone it is File.copySync.
+  Future<void> copy(AppRoot root, String from, String to);
+
   /// [writeStringAtomic] for a caller that cannot wait (a setter that saves). On a phone it is the synchronous write, done
   /// before this returns; in a browser it is queued behind the earlier writes of this [AppFs] and its errors are dropped. The
   /// root must have been used before ([mkdir], or any read or write), or this throws.

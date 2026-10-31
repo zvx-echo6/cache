@@ -46,12 +46,21 @@ class WebAppFs implements AppFs {
 
   @override
   Future<void> writeStringAtomic(AppRoot root, String path, String text) async {
-    await _call('fs.write', root, path, {'data': text});
+    await _call('fs.write', root, path, {'string': text});
   }
 
   @override
   Future<void> writeBytesAtomic(AppRoot root, String path, List<int> bytes) async {
-    await _call('fs.write', root, path, {'data': bytes is Uint8List ? bytes : Uint8List.fromList(bytes)});
+    await _call('fs.write', root, path, {'bytes': bytes is Uint8List ? bytes : Uint8List.fromList(bytes)});
+  }
+
+  @override
+  Future<void> writeStringViaTmp(AppRoot root, String path, String text) => writeStringAtomic(root, path, text);
+
+  @override
+  Future<void> copy(AppRoot root, String from, String to) async {
+    final bytes = await readBytes(root, from);
+    if (bytes != null) await writeBytesAtomic(root, to, bytes);
   }
 
   @override
@@ -62,8 +71,7 @@ class WebAppFs implements AppFs {
   @override
   Future<bool> exists(AppRoot root, String path) async {
     try {
-      final v = await _call('fs.exists', root, path);
-      return v == true || (v is Map && v['exists'] == true);
+      return (await _call('fs.exists', root, path)) == true;
     } catch (e) {
       if (_missing(e)) return false;
       rethrow;
@@ -74,8 +82,7 @@ class WebAppFs implements AppFs {
   Future<List<AppFsEntry>> list(AppRoot root, String path) async {
     try {
       final v = await _call('fs.list', root, path);
-      final items = v is Map ? v['entries'] : v;
-      return [for (final e in (items as List? ?? const [])) _entry((e as Map).cast<String, dynamic>())];
+      return [for (final e in v as List) _entry((e as Map).cast<String, dynamic>())];
     } catch (e) {
       if (_missing(e)) return const [];
       rethrow;
@@ -86,8 +93,7 @@ class WebAppFs implements AppFs {
   Future<AppFsEntry?> stat(AppRoot root, String path) async {
     try {
       final v = await _call('fs.stat', root, path);
-      if (v is! Map || v['exists'] == false) return null;
-      return _entry(v.cast<String, dynamic>(), fallbackName: path.split('/').last);
+      return _entry((v as Map).cast<String, dynamic>(), name: path.split('/').last);
     } catch (e) {
       if (_missing(e)) return null;
       rethrow;
@@ -109,20 +115,11 @@ class WebAppFs implements AppFs {
     await _call('fs.mkdir', root, path);
   }
 
-  static AppFsEntry _entry(Map<String, dynamic> j, {String fallbackName = ''}) => AppFsEntry(
-        name: (j['name'] ?? fallbackName).toString(),
-        isDir: j['isDir'] == true,
-        size: (j['size'] as num?)?.toInt() ?? 0,
-        mtime: _time(j['mtime']),
+  // {name?, isDir, size, mtime in ms since 1970}; fs.stat has no name, so the caller gives it.
+  static AppFsEntry _entry(Map<String, dynamic> j, {String name = ''}) => AppFsEntry(
+        name: (j['name'] ?? name) as String,
+        isDir: j['isDir'] as bool,
+        size: (j['size'] as num).toInt(),
+        mtime: DateTime.fromMillisecondsSinceEpoch((j['mtime'] as num).toInt()),
       );
-
-  // Milliseconds or seconds since 1970, or an ISO 8601 text.
-  static DateTime _time(Object? v) {
-    if (v is num) {
-      final n = v.toInt();
-      return DateTime.fromMillisecondsSinceEpoch(n < 100000000000 ? n * 1000 : n);
-    }
-    if (v is String) return DateTime.tryParse(v) ?? DateTime.fromMillisecondsSinceEpoch(0);
-    return DateTime.fromMillisecondsSinceEpoch(0);
-  }
 }

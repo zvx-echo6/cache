@@ -173,7 +173,7 @@ class AppSettings extends ChangeNotifier {
       j = (jsonDecode(utf8.decode(bytes)) as Map).cast<String, dynamic>();
     } catch (_) {
       try {
-        await fs.writeBytesAtomic(AppRoot.support, '$_name.unreadable', bytes);
+        await fs.copy(AppRoot.support, _name, '$_name.unreadable');
       } catch (_) {}
       return;
     }

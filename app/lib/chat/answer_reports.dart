@@ -139,7 +139,7 @@ class AnswerReports extends ChangeNotifier {
 
   Future<void> _save(List<AnswerReport> items) async {
     await _fs.mkdir(AppRoot.support, '');
-    await _fs.writeStringAtomic(AppRoot.support, _name, jsonEncode([for (final r in items) r.toJson()]));
+    await _fs.writeStringViaTmp(AppRoot.support, _name, jsonEncode([for (final r in items) r.toJson()]));
     _items = items;
     notifyListeners();
   }
