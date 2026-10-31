@@ -104,7 +104,7 @@ class Repeater {
   }
 }
 
-/// An imported repeater list as a notebook source: what the Notebooks shelf lists as "Repeaters: <name>" and the list notebook
+/// An imported repeater list as a notebook source: what the Notebooks shelf lists as `Repeaters: <name>` and the list notebook
 /// shows as rows (frequency, offset, tone, mode, town, distance). The shelf's screen drops in later; this is its data.
 class RepeaterNotebookSource {
   const RepeaterNotebookSource({required this.list, required this.rows});
@@ -114,7 +114,7 @@ class RepeaterNotebookSource {
   /// The list's repeaters in its own order.
   final List<Repeater> rows;
 
-  /// The shelf's name for it: "Repeaters: <list name>".
+  /// The shelf's name for it: `Repeaters: <list name>`.
   String get title => 'Repeaters: ${list.name}';
 
   /// The rows nearest [lat], [lon] first (repeaters with no position last, in list order), with each one's distance in metres.

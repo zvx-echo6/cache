@@ -296,7 +296,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
 }
 
 class _Card extends StatelessWidget {
-  const _Card({super.key, required this.leading, required this.title, required this.detail, required this.onTap, required this.onLongPress, this.actions});
+  const _Card({required this.leading, required this.title, required this.detail, required this.onTap, required this.onLongPress, this.actions});
 
   final Widget leading;
   final String title;

@@ -94,7 +94,9 @@ void main() {
       expect(s.mobileForDownloads, isTrue);
       expect(s.liveSourcesOn, {'alerts', 'nws-alerts-point', 'openmeteo-forecast', 'weather', 'wfigs-incidents-near', 'wfigs-perimeters-near'});
       expect(s.watchedPlaces, {'here', 'place:k1', 'region:Idaho'});
-      expect((s.watchHere, s.watchedRegions, s.watchedSavedPlaces), (true, {'Idaho'}, {'k1'}));
+      expect(s.watchHere, isTrue);
+      expect(s.watchedRegions, {'Idaho'});
+      expect(s.watchedSavedPlaces, {'k1'});
       expect(s.liveDefaultsSeen, {'ipaws-alerts-near'});
       expect(s.extraCatalogues, ['https://example.org/catalogue.json']);
     }
@@ -113,7 +115,9 @@ void main() {
     t.setWatchHere(false);
     t.setRegionWatched('Utah', true);
     final u = await open();
-    expect((u.watchHere, u.watchedRegions, u.watchedSavedPlaces), (false, {'Idaho', 'Utah'}, {'k1'}));
+    expect(u.watchHere, isFalse);
+    expect(u.watchedRegions, {'Idaho', 'Utah'});
+    expect(u.watchedSavedPlaces, {'k1'});
   });
 
   test('one setting that cannot be read leaves the others as they were', () async {

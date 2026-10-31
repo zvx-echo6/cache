@@ -204,9 +204,6 @@ class WeatherState extends ChangeNotifier {
   final Set<String> _keys = {};
   Set<String> _registered = {};
   bool _started = false;
-
-  /// [start] has run: the sources that are on are listed.
-  bool get started => _started;
   bool _updating = false;
   bool _refreshing = false;
   final Map<String, String> _catalogueErrors = {};

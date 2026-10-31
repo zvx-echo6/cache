@@ -491,12 +491,19 @@ class NotebookSync {
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
     final open = {for (final c in _conflicts) c.entryId};
     final conflicts = <SyncConflict>[...unreadable];
+    // A Cache file that is there but cannot be read (asked about, or ignored by the person's choice) is not missing: it is never
+    // written over.
+    final unreadableIds = {
+      for (final c in unreadable) if (c.entryId.isNotEmpty) c.entryId,
+      for (final e in _items.entries) if (_ignored.contains(e.value.path)) e.key,
+    };
     final ids = {...cache.keys, ..._items.keys, ...outside.keys};
     for (final id in ids) {
       if (open.contains(id)) {
         conflicts.addAll(_conflicts.where((c) => c.entryId == id));
         continue;
       }
+      if (unreadableIds.contains(id) && !outside.containsKey(id)) continue;
       final c = cache[id];
       final s = _items[id];
       final f = outside[id];
