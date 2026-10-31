@@ -1,9 +1,7 @@
-import 'dart:ffi';
 import 'dart:io';
 
-import 'package:ffi/ffi.dart';
-
 import 'core_config.dart';
+import 'icu_setenv.dart';
 
 /// The ICU data file libzim needs (the ICU inside libzim.so has no data of its own).
 const String kIcuDataFile = 'icudt73l.dat';
@@ -13,11 +11,6 @@ const String kIcuDataFile = 'icudt73l.dat';
 const String kIcuDataLibraryName = 'libcache_icu_data.so';
 
 typedef SetEnv = void Function(String name, String value);
-
-void _libcSetenv(String name, String value) {
-  final f = DynamicLibrary.process().lookupFunction<Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Int32), int Function(Pointer<Utf8>, Pointer<Utf8>, int)>('setenv');
-  using((a) => f(name.toNativeUtf8(allocator: a), value.toNativeUtf8(allocator: a), 1));
-}
 
 /// Makes the ICU data a plain file in app storage (`<supportDir>/icu/icudt73l.dat`, copied again only when it is missing or a
 /// different size) and sets `ICU_DATA` to that folder in this process, which libzim reads when it first works. Call it before the
@@ -35,6 +28,6 @@ Future<String?> installIcuData({required Directory supportDir, String? libDir, S
     await src.copy(tmp.path);
     await tmp.rename(dest.path);
   }
-  (setEnv ?? _libcSetenv)('ICU_DATA', folder.path);
+  (setEnv ?? libcSetenv)('ICU_DATA', folder.path);
   return folder.path;
 }

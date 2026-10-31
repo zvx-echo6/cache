@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:sqlite3/sqlite3.dart';
+import 'package:sqlite3/common.dart';
 
 import '../chat/navigation_action.dart';
+import 'sqlite_open.dart';
 
 /// Where a conversation's title came from. A title the user typed is never replaced.
 enum TitleSource { question, generated, user }
@@ -123,13 +124,13 @@ class ConversationStore {
 
   /// Opens (or creates) the database file at [path].
   factory ConversationStore.open(String path, {DateTime Function()? now}) =>
-      ConversationStore._(sqlite3.open(path), now ?? DateTime.now);
+      ConversationStore._(openSqliteFile(path), now ?? DateTime.now);
 
   /// A throwaway database in memory (tests).
   factory ConversationStore.memory({DateTime Function()? now}) =>
-      ConversationStore._(sqlite3.openInMemory(), now ?? DateTime.now);
+      ConversationStore._(openSqliteMemory(), now ?? DateTime.now);
 
-  final Database _db;
+  final CommonDatabase _db;
   final DateTime Function() _now;
 
   void close() => _db.close();

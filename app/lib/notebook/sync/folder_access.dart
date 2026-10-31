@@ -3,10 +3,10 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
-import 'package:saf_stream/saf_stream.dart';
 import 'package:saf_util/saf_util.dart';
 
 import 'folder.dart';
+import 'saf_stream_shim.dart';
 
 /// Folders the person picks for Obsidian or Logseq, kept across restarts:
 /// - Android: a Storage Access Framework tree with a persisted permission (`content://...`), read and written through SAF;
