@@ -80,6 +80,11 @@ class _Unit {
 /// since the last sync goes to the other; changed on both sides, the changes are merged word by word and the person is told;
 /// only when both changed the same words is the person asked. Cache creates, changes or deletes only files and blocks that
 /// carry its `cache_id` and the photos it wrote.
+///
+/// Obsidian and Logseq work on Cache's own files only, always (owner, 2026-10-31): a file or block Cache wrote (it carries
+/// Cache's id and Cache has a record of it) is two-way; a note made in Obsidian or Logseq is never read, even inside Cache's
+/// folder; and a Cache file deleted there is written back, because Cache is the source of truth (the entry is not deleted).
+/// Notebook sync between the person's devices ([SyncKind.share]) keeps the full two-way rules.
 class NotebookSync {
   NotebookSync({
     required this.notebook,
@@ -115,6 +120,9 @@ class NotebookSync {
   List<SyncConflict> get conflicts => List.unmodifiable(_conflicts);
 
   bool get _logseq => kind == SyncKind.logseq || kind == SyncKind.logseqExport;
+
+  /// Obsidian and Logseq: only Cache's own files and blocks are synced (see the class comment).
+  bool get _ownFilesOnly => kind != SyncKind.share;
   String get _attachments => _logseq ? 'assets' : (kind == SyncKind.share ? 'photos' : 'attachments');
   String get _journals => logseqConfig?.dir ?? 'journals';
   String get _format => logseqConfig?.format ?? 'yyyy_MM_dd';
@@ -226,6 +234,8 @@ class NotebookSync {
       final probe = parseObsidian(text, fallbackId: '', fallbackNotebook: book?.name ?? '', fieldProps: const {});
       if (probe == null) {
         final known = _items.entries.where((e) => e.value.path == f.path).firstOrNull;
+        // A note that is not Cache's is never Cache's business, readable or not.
+        if (_ownFilesOnly && known == null) continue;
         if (!_ignored.contains(f.path)) {
           unreadable.add(SyncConflict(entryId: known?.key ?? '', kind: ConflictKind.unreadable, title: f.path.split('/').last, path: f.path));
         }
@@ -477,6 +487,8 @@ class NotebookSync {
     final newOutside = <_Unit>[];
     final unreadable = <SyncConflict>[];
     final outside = await _scan(byName, newOutside, unreadable);
+    // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
+    if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
     final open = {for (final c in _conflicts) c.entryId};
     final conflicts = <SyncConflict>[...unreadable];
     final ids = {...cache.keys, ..._items.keys, ...outside.keys};
@@ -515,11 +527,11 @@ class NotebookSync {
             await notebook.deleteEntry(id);
             _items.remove(id);
             r.deleted++;
-          } else if (kind == SyncKind.share) {
-            _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev);
-            r.written++;
           } else {
-            conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.removedOutside, title: doc.title ?? doc.when, path: s.path, cacheText: text));
+            // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
+            // file or block is written back and the entry stays.
+            _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
+            r.written++;
           }
         } else if (cacheChanged && !fileChanged) {
           _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
@@ -566,15 +578,17 @@ class NotebookSync {
           _items[id] = _Item(f.path, f.text, saved.rev, extra: _items[id]!.extra);
           r.read++;
         }
-      } else if (f != null) {
-        // A file or block with an id Cache does not know: read as that entry.
+      } else if (f != null && !_ownFilesOnly) {
+        // A file or block with an id Cache does not know: read as that entry (notebook sync only; in Obsidian and Logseq a
+        // file Cache has no record of is not Cache's).
         final saved = await _apply(id, f.doc, byName, text: f.text);
         _items[id] = _Item(f.path, f.text, saved.rev, extra: _items[id]!.extra);
         r.read++;
       }
     }
-    // New notes and blocks written outside (no id yet): read as new entries, and the id written into them.
-    for (final u in newOutside) {
+    // New notes and blocks written outside (no id yet): read as new entries, and the id written into them (notebook sync only;
+    // Obsidian and Logseq notes the person made are left alone).
+    for (final u in _ownFilesOnly ? const <_Unit>[] : newOutside) {
       final id = _newId();
       final saved = await _apply(id, u.doc, byName, text: u.text);
       final book = notebook.notebook(saved.notebookId) ?? byName[u.doc.notebook]!;
