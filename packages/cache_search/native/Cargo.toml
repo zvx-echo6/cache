@@ -1,5 +1,5 @@
 [workspace]
-members = ["cache_search", "cache_tool", "cache_user", "cache_live", "cache_layers", "cache_video", "cache_navigate", "cache_places", "places_pack", "cache_embed", "../cli", "cache_offroad", "offroad_pack", "cache_sync", "cache_regions", "cache_calc", "cache_act", "cache_notebook"]
+members = ["cache_search", "cache_tool", "cache_user", "cache_live", "cache_layers", "cache_video", "cache_navigate", "cache_places", "places_pack", "cache_embed", "../cli", "../../../server", "cache_offroad", "offroad_pack", "cache_sync", "cache_regions", "cache_calc", "cache_act", "cache_notebook"]
 resolver = "2"
 # Third-party crates patched for a target they do not build for (see [patch.crates-io]); not members of this workspace.
 exclude = ["vendor"]

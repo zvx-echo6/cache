@@ -1,0 +1,102 @@
+# Builds and tests Cache Server on Linux (x86_64 and aarch64, each on a native runner, no cross-compiling) and uploads the install
+# tarball as a workflow artifact. It makes no GitHub Release.
+#
+# The tarball is what server/packaging/install.sh unpacks: cache-server (the program), web/ (the browser app), VERSION and
+# cache-server.service, with install.sh beside them. The browser build does not exist yet, so web/ holds a placeholder page.
+#
+# The core builds on Linux without libzim: the C++ shim over libzim is built only for Windows, Android and iOS (see
+# packages/cache_search/native/cache_search/build.rs), so LIBZIM_DIR is not needed here.
+name: Cache Server build
+
+on:
+  push:
+    branches: [server]
+    paths:
+      - 'server/**'
+      - 'packages/cache_search/native/**'
+      - '.github/workflows/server-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: packages/cache_search/native
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tools
+        working-directory: .
+        # The runner images ship a C/C++ compiler, cmake and pkg-config; they are added only if one is missing (aws-lc-sys, ring,
+        # lzma-sys, zstd-sys and the bundled SQLite build C code).
+        run: |
+          missing=""
+          for tool in gcc g++ cmake pkg-config; do command -v "$tool" > /dev/null || missing="$missing $tool"; done
+          if [[ -n "$missing" ]]; then
+            echo "missing:$missing"
+            sudo apt-get update -q && sudo apt-get install -y -q build-essential cmake pkg-config
+          fi
+      - name: Rust
+        id: rust
+        working-directory: .
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-server-${{ matrix.arch }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-server-${{ matrix.arch }}-
+      - name: Cargo target cache
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-server-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-server-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: Test
+        run: cargo test -p cache_server --release
+      - name: Build
+        run: cargo build -p cache_server --release
+      - name: Package
+        id: pack
+        working-directory: .
+        run: |
+          version=$(grep -m 1 -E '^version[[:space:]]*=' server/Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+          if [[ ! "$version" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "::error::No usable version in server/Cargo.toml: $version"; exit 1; fi
+          name="cache-server-${version}-linux-${{ matrix.arch }}"
+          stage="$RUNNER_TEMP/pack/$name"
+          mkdir -p "$stage/web"
+          install -m 755 packages/cache_search/native/target/release/cache-server "$stage/cache-server"
+          printf '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Cache Server</title>\n</head>\n<body>Cache Server</body>\n</html>\n' > "$stage/web/index.html"
+          printf '%s\n' "$version" > "$stage/VERSION"
+          install -m 644 server/packaging/cache-server.service "$stage/cache-server.service"
+          install -m 755 server/packaging/install.sh "$stage/install.sh"
+          # install.sh unpacks the tarball into an empty folder and expects VERSION and cache-server at its top level, so the files
+          # sit at the root of the archive (no wrapping folder); the file name carries the version and architecture.
+          tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$RUNNER_TEMP/$name.tar.gz" .
+          tar -tzvf "$RUNNER_TEMP/$name.tar.gz"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "path=$RUNNER_TEMP/$name.tar.gz" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.path }}
+          retention-days: 14
+          if-no-files-found: error

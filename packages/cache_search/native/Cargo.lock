@@ -882,6 +882,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_server"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cache_search_cli",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "rcgen",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "cache_sync"
 version = "0.1.0"
 dependencies = [
