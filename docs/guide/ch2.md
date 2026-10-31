@@ -27,7 +27,7 @@ When a newer Cache is out, "Home" shows a banner.
 - On Android it says "New version available" with "Open Play Store".
 - On iPhone it says "New version available: open TestFlight" with "Open TestFlight".
 
-If you dismiss the banner, it stays gone after a restart. It comes back when an even newer build is out.
+Swipe the banner away to dismiss it. It stays gone after a restart. It comes back when an even newer build is out.
 
 To see what changed, open ["Settings" > "Credits and licences"](cache://settings/credits) and tap "What's new in [version]". See Credits and licences in chapter 3.
 
@@ -302,7 +302,7 @@ The card has:
 When the place has a Wikipedia summary, the card shows it with "Read about it".
 - Tap "Read about it". The button says "Opening…", then the article opens in your Wikipedia.
 - A place with no Wikipedia match shows no summary and no button.
-- If Wikipedia is not on the phone, the card shows "Get Wikipedia" and "Wikipedia is not on this phone."
+- If Wikipedia is not on the phone, the card shows "Get Wikipedia" and "Wikipedia is not on this phone." Tap "Get Wikipedia" to open "Add to Library" and choose a Wikipedia to download.
 - If you see "That article is not in your Wikipedia. Update Wikipedia in Library.", tap "Open Library".
 
 Press and hold on the map for the ring menu. It has "Add stop" and "Measure". See The map ring menu in chapter 5.
@@ -366,7 +366,7 @@ The "Layers" button on the right of "Maps" opens the layers sheet.
 - "Show my position" turns your dot on or off.
 - "Download a region" opens "Regions".
 - "Get more layers" lists every layer.
-- In the my layers group, "Add from a file" adds a file of places or repeaters. See Add a repeater list from a file in chapter 5.
+- Under "My layers", "Add from a file" adds a file of places or repeaters. See Add a repeater list from a file in chapter 5.
 
 Layers stream while you're online and keep what you viewed. To keep a whole area offline, download its region. See Download a region in chapter 1.
 

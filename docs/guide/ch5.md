@@ -114,7 +114,7 @@ The Places notebook holds your saved places and shows them on the map.
 
 Each place has its own marker colour. Tap a marker to show or hide the place on the map. A hidden place has an outlined marker with a slash.
 
-The first row is always "Where I am", labelled "Follows the phone". You can't delete or move it. Its weather is set by "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
+Weather for where the phone is is set by "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 You can also save a place from the map. Press and hold the map and choose "Save", or tap "Save place" on a place's card.
 
