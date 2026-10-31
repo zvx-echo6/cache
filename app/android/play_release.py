@@ -2,12 +2,16 @@
 """Sends a signed Android App Bundle to a Google Play testing track, through the Google Play Developer API.
 
 Usage: play_release.py --check-newer <versionCode>        (fails unless it is higher than every versionCode already on Play)
-       play_release.py <app-release.aab> <versionCode> <version name> <track>
+       play_release.py <app-release.aab> <versionCode> <version name> [<track>[,<track>...]]
+         (default: internal,alpha,beta: internal, closed and open testing)
 Environment: PLAY_SERVICE_ACCOUNT_JSON (the service account key, JSON), PACKAGE_NAME, and RELEASE_NOTES (en-US, at most 500
 characters) and RELEASE_STATUS ("completed", the default: sent for review; or "draft") for an upload.
 
-An upload opens an edit, uploads the bundle, puts the new release on the track with that status and the release notes (with
-"completed" it is the only release on the track; a "draft" leaves the track's live releases as they are), and commits the edit.
+An upload opens an edit, uploads the bundle once, puts the new release on every track with that status and the release notes,
+and commits the edit. With "completed" (the owner never clicks in Play Console) the new release is the only one on each track,
+fully rolled out (no userFraction): a halted, staged or draft release left there is cleared. A "draft" (a dry run) leaves the
+tracks' live releases as they are. After the commit every track is read back from Play, and the run fails unless each shows
+the new release as sent.
 The store listing is not touched. Any API error fails the run, and the edit is deleted when a step fails, so nothing half-done
 is left on Play. Standard library and openssl only: nothing to install.
 """
@@ -108,7 +112,53 @@ def check_newer(play: Play, code: int):
     print(f"versionCode {code} is higher than {top}")
 
 
-def upload(play: Play, aab: str, code: int, name: str, track: str, notes: str, status: str):
+TRACKS = ("internal", "alpha", "beta")
+"""The testing tracks every release goes to by default: internal testing, closed testing (alpha) and open testing (beta)."""
+
+# Releases that hold a track part-way (a halted or staged rollout, or a draft waiting for a click in Play Console).
+UNFINISHED = ("halted", "inProgress", "draft")
+
+
+def track_releases(play: Play, edit: str, track: str) -> list:
+    try:
+        return play.call("GET", f"/edits/{edit}/tracks/{track}").get("releases", [])
+    except PlayError as e:
+        if "HTTP 404" in str(e):
+            return []
+        raise
+
+
+def releases_for(current: list, release: dict, status: str) -> list:
+    """What a track holds after this upload. completed: only the new release, fully rolled out (status completed, no
+    userFraction), so a halted, staged or draft release left on the track is cleared and nobody has to click in Play Console.
+    draft (a dry run): the track's live releases stay as they are and only an older draft is replaced."""
+    if status == "completed":
+        return [release]
+    return [r for r in current if r.get("status") != "draft"] + [release]
+
+
+def track_problem(releases: list, code: int, status: str) -> str:
+    """Why the track does not show the new release as it should, or "" when it does."""
+    mine = [r for r in releases if r.get("versionCodes") == [str(code)]]
+    if len(mine) != 1:
+        return f"{len(mine)} releases carry versionCode {code}"
+    r = mine[0]
+    if r.get("status") != status:
+        return f"the release is {r.get('status')}, not {status}"
+    if "userFraction" in r:
+        return f"the release is rolled out to {r['userFraction']} of testers, not all"
+    if status == "completed":
+        left = [(x.get("name"), x.get("status")) for x in releases if x is not r and x.get("status") in UNFINISHED + ("completed",)]
+        if left:
+            return f"other releases are still on the track: {left}"
+    return ""
+
+
+def describe(releases: list) -> list:
+    return [(r.get("name"), r.get("status"), r.get("versionCodes"), r.get("userFraction")) for r in releases]
+
+
+def upload(play: Play, aab: str, code: int, name: str, tracks: list, notes: str, status: str):
     edit = play.call("POST", "/edits", {})["id"]
     print("edit opened")
     try:
@@ -124,29 +174,50 @@ def upload(play: Play, aab: str, code: int, name: str, track: str, notes: str, s
             raise PlayError(f"Play read versionCode {got} from the bundle, expected {code}")
         release = {"name": f"{name} ({code})", "versionCodes": [str(code)], "status": status,
                    "releaseNotes": [{"language": "en-US", "text": notes}]}
-        # completed: only the new release on the track (it replaces what was there). draft: the track's live releases stay as they
-        # are (a draft goes nowhere until it is rolled out), an older draft is replaced.
-        keep = []
-        if status == "draft":
-            keep = [r for r in play.call("GET", f"/edits/{edit}/tracks/{track}").get("releases", []) if r.get("status") != "draft"]
-        tr = play.call("PUT", f"/edits/{edit}/tracks/{track}", {"track": track, "releases": keep + [release]})
-        rels = [(r.get("name"), r.get("status"), r.get("versionCodes")) for r in tr.get("releases", [])]
-        print(f"track {track}: {rels}")
-        mine = [x for x in rels if x[2] == [str(code)]]
-        if mine != [(release["name"], status, [str(code)])] or (status == "completed" and len(rels) != 1):
-            raise PlayError(f"track {track} did not take the release as sent: {rels}")
+        for track in tracks:
+            before = track_releases(play, edit, track)
+            print(f"track {track} before: {describe(before)}")
+            tr = play.call("PUT", f"/edits/{edit}/tracks/{track}", {"track": track, "releases": releases_for(before, release, status)})
+            sent = tr.get("releases", [])
+            print(f"track {track} in the edit: {describe(sent)}")
+            problem = track_problem(sent, code, status)
+            if problem:
+                raise PlayError(f"track {track} did not take the release as sent: {problem}")
         play.call("POST", f"/edits/{edit}:commit")
         print("edit committed")
     except BaseException:
         play.delete_edit(edit)
         raise
-    # Read the committed state back in a fresh edit (deleted afterwards).
+    verify(play, code, tracks, status)
+
+
+def verify(play: Play, code: int, tracks: list, status: str):
+    """Reads every track back from Play in a fresh edit (deleted afterwards) and fails unless each shows the new release with
+    the status sent (completed: fully rolled out and alone on the track)."""
     check = play.call("POST", "/edits", {})["id"]
+    problems = []
     try:
-        tr = play.call("GET", f"/edits/{check}/tracks/{track}")
-        print(f"track {track} on Play now: {[(r.get('name'), r.get('status'), r.get('versionCodes')) for r in tr.get('releases', [])]}")
+        for track in tracks:
+            rels = track_releases(play, check, track)
+            print(f"track {track} on Play now: {describe(rels)}")
+            problem = track_problem(rels, code, status)
+            if problem:
+                problems.append(f"{track}: {problem}")
     finally:
         play.delete_edit(check)
+    if problems:
+        raise PlayError("after the commit, not every track shows the new release " + status + ": " + "; ".join(problems))
+    print(f"every track ({', '.join(tracks)}) shows versionCode {code} {status}")
+
+
+def parse_tracks(text: str) -> list:
+    out = []
+    for t in text.replace(" ", "").split(","):
+        if t and t not in out:
+            out.append(t)
+    if not out:
+        raise PlayError("no track given")
+    return out
 
 
 def main(argv):
@@ -155,10 +226,11 @@ def main(argv):
         if len(argv) == 3 and argv[1] == "--check-newer":
             check_newer(Play(package), int(argv[2]))
             return 0
-        if len(argv) != 5:
+        if len(argv) not in (4, 5):
             print(__doc__, file=sys.stderr)
             return 2
-        aab, code, name, track = argv[1], int(argv[2]), argv[3], argv[4]
+        aab, code, name = argv[1], int(argv[2]), argv[3]
+        tracks = parse_tracks(argv[4] if len(argv) == 5 else ",".join(TRACKS))
         notes = os.environ.get("RELEASE_NOTES", "").strip()
         if not notes:
             raise PlayError("RELEASE_NOTES is empty")
@@ -167,7 +239,7 @@ def main(argv):
         status = os.environ.get("RELEASE_STATUS", "").strip() or "completed"
         if status not in ("completed", "draft"):
             raise PlayError(f"RELEASE_STATUS must be completed or draft, not {status}")
-        upload(Play(package), aab, code, name, track, notes, status)
+        upload(Play(package), aab, code, name, tracks, notes, status)
         return 0
     except PlayError as e:
         print(f"::error::{e}")
