@@ -44,6 +44,7 @@ fn write_admins(p: &Path) {
     c.execute("INSERT INTO admins VALUES (4, 'NV', 'Nevada', ?1)", [rect_blob(-120.0, 35.0, -114.05, 42.0)]).unwrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn place(source: &'static str, id: &str, name: &str, cat: Option<&str>, kind: &str, kind_id: &str, lat: f64, lon: f64) -> Raw {
     Raw {
         source,

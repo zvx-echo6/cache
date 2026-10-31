@@ -442,6 +442,24 @@ class _MapsScreenState extends State<MapsScreen> {
     return false;
   }
 
+  /// A tap on a repeater selects it (UserLayersState.selectedRepeater) so its card can open; true when there was one.
+  Future<bool> _tapRepeater(math.Point<double> point) async {
+    final c = _controller;
+    final u = widget.userLayers;
+    if (c == null || u == null || u.repeaterLists.isEmpty) return false;
+    try {
+      final hits = await c.queryRenderedFeatures(point, [kUserRepeaters], null);
+      for (final h in hits) {
+        final ref = repeaterRef(h is Map ? h['properties'] : null);
+        if (ref != null && u.selectRepeater(ref.$1, ref.$2) != null) {
+          HapticFeedback.selectionClick();
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
   void _notebookCard(NbEntry e) {
     final book = widget.notebooks?.notebook(e.notebookId);
     final place = e.place!;
@@ -508,6 +526,7 @@ class _MapsScreenState extends State<MapsScreen> {
       return;
     }
     if (!nav.searchOpen && await _tapNotebookPin(point)) return;
+    if (!nav.searchOpen && await _tapRepeater(point)) return;
     if (nav.searchOpen) {
       nav.closeSearch(clear: false);
     } else if (nav.phase == NavPhase.browsing && nav.selected != null) {

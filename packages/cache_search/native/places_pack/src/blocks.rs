@@ -85,6 +85,7 @@ pub struct BlockReport {
     pub seconds: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_block(cfg: &BlocksCfg, rules: &Rules, rules_json: &str, sources: &str, h: &Connection, admins: &mut Admins, block: u32, cells: &BTreeSet<u32>) -> Result<BlockReport, String> {
     let t = Instant::now();
     let r = block_rect(block);

@@ -4,6 +4,10 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Range requests in flight for a region's map download from a PMTiles archive, when the definition does not say (each
+/// is at most [`crate::pmtiles::MAX_GROUP_BYTES`], so at most 32 MB is in flight).
+pub const PMTILES_DOWNLOAD_PARALLEL: usize = 16;
+
 pub const FORMAT: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,6 +305,13 @@ impl LayerDef {
 
     pub fn max_parallel(&self) -> usize {
         self.offline.as_ref().and_then(|o| o.max_parallel).unwrap_or(4) as usize
+    }
+
+    /// Range requests a download of a PMTiles archive keeps in flight: the definition's `offline.max_parallel` when it
+    /// sets one (a server that asks for fewer gets fewer), else [`PMTILES_DOWNLOAD_PARALLEL`]. The map's own tile fetches
+    /// keep [`LayerDef::max_parallel`].
+    pub fn pmtiles_download_parallel(&self) -> usize {
+        self.offline.as_ref().and_then(|o| o.max_parallel).map(|n| n as usize).unwrap_or(PMTILES_DOWNLOAD_PARALLEL)
     }
 
     pub fn version(&self) -> &str {

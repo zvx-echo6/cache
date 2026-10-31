@@ -11,7 +11,7 @@ release notes).
 - Notebooks: keep several notebooks, starting with a Journal; make more from Journal, Log, Notes or Places, or from 16 starter logs
 - Notebooks: an entry can have a title, text, a date, a place, photos, attached documents and the notebook's own fields
 - Notebooks: type Markdown in any entry and it formats as you type (headings, bold, lists, checkboxes, quotes, code, links, tables); "?" shows how; tap a checkbox's box to tick it
-- Places notebook: your saved places, with "Where I am" and your downloaded regions, each place with its own marker colour; tap the marker to show or hide it on the map
+- Places notebook: your own saved places, each with its own marker colour; tap the marker to show or hide it on the map
 - Places: one screen to add or edit a place: search an address, place or coordinates, or tap the map; name, colour, notes, photos, and weather and alerts
 - Places: each place's alerts can follow your alert setting, have their own distance and kinds (which pop up whatever Pop up for says), or be off
 - Maps: press and hold the map for a ring: To here, From here, Add stop (while a route is shown), Save and Measure; Save opens your notebooks (most used first) and makes an entry at that spot; the centre opens the spot's coordinates
@@ -77,6 +77,13 @@ release notes).
 - Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
+- Regions: places not published for an area yet say "not available yet" instead of failing; the region counts as done
+- Regions: a part left waiting with nothing downloading offers Carry on; places published after a region was downloaded are added at the next start
+- Weather: Home no longer says "Not set up yet" for weather that is on while Cache is still starting after an update; an update never resets your settings
+- Library: what a sync brings shows in the list at once, without restarting Cache
+- Ask: a source from the phone's setup opens the guide section it names
+- Library reader: a ZIM made without pictures no longer shows white boxes in dark mode
+- Obsidian and Logseq: only Cache's own notes are synced; notes you make there stay yours, and a Cache note deleted there comes back
 - Regions: a region's size shows at once in the Regions sheet, from the region list (only an area you draw is worked out on the phone); a region the list has no size for says "Size unknown"
 - Regions: tapping a region always opens the one download pop-up: download, carry on with what stopped, or add off-road; a region partly on the phone is never "Can't be downloaded here"
 - Regions: a region's row says which parts are not ready yet and labels its bar; tap it for the region's page (each part, its state and its fix), press and hold for Carry on, Check for update and Delete

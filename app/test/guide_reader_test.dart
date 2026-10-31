@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cache/actions/setup_status.dart' show kSetupAreas, setupGuideTitle;
 import 'package:cache/guide/app_links.dart';
 import 'package:cache/guide/guide_book.dart';
 import 'package:cache/guide/guide_reader.dart';
@@ -67,6 +68,16 @@ void main() {
       final r = _python(['-I', '-c', "import uuid;print(uuid.uuid5(uuid.UUID('c4b95b91-e641-5c16-91a0-13ba2f6f7970'),'getting-started--choose-a-model:1:0'))"]);
       expect(s.address, 'lib:cache-guide/${(r.stdout as String).trim()}');
       expect(book.byAddress(s.address), same(s));
+    });
+
+    test('a citation of the phone\'s setup (app:setup/<part>) opens the guide section that part names', () {
+      for (final a in kSetupAreas) {
+        expect(setupGuideTitle('app:setup/${a.id}'), a.guide);
+        expect(book.byTitle(a.guide), isNotNull, reason: 'the setup part ${a.id} names a guide section this guide has');
+      }
+      expect(book.byTitle(setupGuideTitle('app:setup/regions')!)!.heading, 'Download a region');
+      expect(setupGuideTitle('app:setup/nothing'), isNull);
+      expect(setupGuideTitle('lib:cache-guide/x'), isNull);
     });
 
     test('every cache:// link in the guide goes to a place in this version', () {

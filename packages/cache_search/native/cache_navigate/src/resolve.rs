@@ -28,6 +28,9 @@ pub(crate) struct Resolved {
     pub details: Option<PlaceDetails>,
     /// Where a route to the place goes, when the places data says it is not the place's point.
     pub arrival: Option<(f64, f64)>,
+    /// Spec S14: the place's summary and Wikipedia title (shown on `to_matched` only).
+    pub about: Option<String>,
+    pub wikipedia: Option<String>,
     /// Other matches the places pack found for the same text.
     pub others: Vec<PlaceMatch>,
 }
@@ -49,6 +52,8 @@ impl Resolved {
             osm: None,
             details: None,
             arrival: None,
+            about: None,
+            wikipedia: None,
             others: vec![],
         }
     }
@@ -72,6 +77,8 @@ impl Resolved {
             osm: m.osm_category,
             details: m.details,
             arrival: m.arrival,
+            about: m.about,
+            wikipedia: m.wikipedia,
             others: vec![],
         }
     }

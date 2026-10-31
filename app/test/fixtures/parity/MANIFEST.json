@@ -25,14 +25,14 @@
  },
  {
   "file": "act-definitions-gen-places-038.json",
-  "bytes": 2314,
-  "sha256": "b1962e1a8477cedf68799c80f9d60d56143149fea5326c62f757526bfe8b981b",
+  "bytes": 2431,
+  "sha256": "b35a387f757f781f4d53528e531aa95723f84a6184ccf11969fbf623721e08cf",
   "what": "act definitions as published for row gen-places-038 (app); sha256 equals the recording's"
  },
  {
   "file": "act-definitions-nb-067.json",
-  "bytes": 3588,
-  "sha256": "344ebfb2dd0dc5183425e4435d9bd73a1705c9702a3eeadc15d77b919b438174",
+  "bytes": 3705,
+  "sha256": "a6dc9e598cfed6962c3aa3809370c126c83f92d30b92b54f0c92057d3e7b2d62",
   "what": "act definitions as published for row nb-067 (notebook); sha256 equals the recording's"
  },
  {

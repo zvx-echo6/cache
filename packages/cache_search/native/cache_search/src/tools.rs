@@ -221,6 +221,13 @@ pub(crate) fn number_json(conv: &mut Conversation, v: &mut Value, ids: &mut Vec<
                 if new {
                     ids.push(conv.id_value(n));
                 }
+                // S14: a place, town or route destination with a Wikipedia article; `read` of this number opens it
+                if ["place:", "town:", "nav:"].iter().any(|p| address.starts_with(p)) {
+                    let wiki = m.get("wikipedia").or_else(|| m.get("to_matched").and_then(|t| t.get("wikipedia")));
+                    if let Some(Value::String(t)) = wiki {
+                        conv.note_wiki(address, t);
+                    }
+                }
                 let old = std::mem::take(m);
                 for (k, x) in old {
                     if k == "address" {
@@ -437,10 +444,15 @@ impl Handle {
         if let Some(url) = address.strip_prefix("web:") {
             return Ok(self.read_web(conv, n, address, url));
         }
-        if let Some(kind) = shown_kind(address) {
+        let out = if let Some(title) = conv.wiki_title(address) {
+            // S14: a place, town or route destination that showed a `wikipedia` title opens its article from the phone's
+            // Wikipedia, read exactly as a Wikipedia search result is
+            self.read_wikipedia(title)?
+        } else if let Some(kind) = shown_kind(address) {
             return Err(bad_arguments(format!("[{n}] is {kind} result; everything about it is already shown above")));
-        }
-        let out = self.read(&address.clone(), READ_MAX_CHARS).map_err(tool_error)?;
+        } else {
+            self.read(&address.clone(), READ_MAX_CHARS).map_err(tool_error)?
+        };
         let v: Value = serde_json::from_str(&out).map_err(|e| ToolError::new(ToolError::INTERNAL, e.to_string()))?;
         let mut text = format!("[{n}] {}\n", one_line(v["title"].as_str().unwrap_or("")));
         // a library concept: its author and page, each when known, then a blank line before the text
@@ -464,6 +476,25 @@ impl Handle {
             text.push_str("\n[truncated]");
         }
         Ok(ToolOutput::Text(text))
+    }
+
+    /// S14: the `read` result of the English Wikipedia article `title`, from the first installed Wikipedia ZIM that has it
+    /// (the title with its spaces written as underscores is the article's path, as in Kiwix's Wikipedia ZIMs; redirects
+    /// are followed). No Wikipedia ZIM: `not_set_up`; none of them has the article: `no_data`.
+    fn read_wikipedia(&mut self, title: &str) -> std::result::Result<String, ToolError> {
+        let zims: Vec<String> = self.wikipedia_zims().iter().map(|z| z.id.clone()).collect();
+        if zims.is_empty() {
+            return Err(ToolError::new(ToolError::NOT_SET_UP, "Wikipedia is not installed on this phone; the place's summary above is all there is"));
+        }
+        let path = title.replace(' ', "_");
+        for id in zims {
+            match self.read(&crate::zimsrc::format_address(&id, &path), READ_MAX_CHARS) {
+                Ok(out) => return Ok(out),
+                Err(e) if e.code == ErrorCode::NotFound => continue,
+                Err(e) => return Err(tool_error(e)),
+            }
+        }
+        Err(ToolError::new(ToolError::NO_DATA, format!("the installed Wikipedia has no article called \"{title}\"")))
     }
 
     /// `read` on a `web:<url>` result: fetch the page within the read budget. When it loads, `[n] <title> (web,
@@ -896,5 +927,112 @@ mod tests {
         let h = handle();
         assert!(h.places.list().is_empty());
         assert!(h.places.resolve("Home").is_none());
+    }
+
+    // ---- S14: read of a place's Wikipedia article ----
+
+    /// nearby (two places, one with a Wikipedia title), locate (a town with one) and navigate (one destination with one,
+    /// one without), as the tools give them.
+    fn s14_tools(h: &mut Handle) {
+        h.register_tool(dummy("nearby", Box::new(|_, _| {
+            Ok(ToolOutput::Json(json!({"category": "waterfall", "places": [
+                {"address": "place:osm:w1", "name": "Shoshone Falls", "open_status": "Hours not known", "about": "Shoshone Falls is a waterfall.", "wikipedia": "Shoshone Falls"},
+                {"address": "place:osm:w2", "name": "Pillar Falls", "open_status": "Hours not known"}]})))
+        })));
+        h.register_tool(dummy("locate", Box::new(|_, _| {
+            Ok(ToolOutput::Json(json!({"address": "town:t1", "place_name": "Twin Falls, ID", "plus_code": "85GVH2W2+XX", "wikipedia": "Twin Falls, Idaho"})))
+        })));
+        for (name, address, wiki) in [("navigate", "nav:r1", true), ("navigate_other", "nav:r2", false)] {
+            h.register_tool(dummy(name, Box::new(move |_, _| {
+                let mut to = json!({"place_name": "Shoshone Falls", "state": "ID"});
+                if wiki {
+                    to["wikipedia"] = json!("Shoshone Falls");
+                }
+                Ok(ToolOutput::Json(json!({"address": address, "to_matched": to})))
+            })));
+        }
+    }
+
+    fn s14_numbers(h: &mut Handle, c: &mut Conversation) {
+        call(h, c, "nearby", "{}"); // [1] Shoshone Falls, [2] Pillar Falls
+        call(h, c, "locate", "{}"); // [3] Twin Falls
+        call(h, c, "navigate", "{}"); // [4]
+        call(h, c, "navigate_other", "{}"); // [5]
+    }
+
+    #[test]
+    fn s14_read_of_a_place_without_a_wikipedia_zim_is_not_set_up_and_places_without_a_title_keep_the_s5_error() {
+        let mut h = handle();
+        s14_tools(&mut h);
+        let mut c = Conversation::new();
+        s14_numbers(&mut h, &mut c);
+        let not_set_up = r#"{"ok":false,"error":{"type":"not_set_up","detail":"Wikipedia is not installed on this phone; the place's summary above is all there is"}}"#;
+        for n in [1, 3, 4] {
+            assert_eq!(call(&mut h, &mut c, "read", &format!(r#"{{"n":{n}}}"#))["content"], not_set_up, "[{n}]");
+        }
+        assert_eq!(
+            call(&mut h, &mut c, "read", r#"{"n":2}"#)["content"],
+            r#"{"ok":false,"error":{"type":"bad_arguments","detail":"[2] is a place result; everything about it is already shown above"}}"#
+        );
+        assert_eq!(
+            call(&mut h, &mut c, "read", r#"{"n":5}"#)["content"],
+            r#"{"ok":false,"error":{"type":"bad_arguments","detail":"[5] is a route result; everything about it is already shown above"}}"#
+        );
+        // the titles live with the conversation: an export carries them, an import reads them back
+        let e = c.export_json();
+        assert!(e.ends_with(r#","wiki_titles":{"nav:r1":"Shoshone Falls","place:osm:w1":"Shoshone Falls","town:t1":"Twin Falls, Idaho"}}"#), "{e}");
+        let mut back = Conversation::import_json(&e).unwrap();
+        assert_eq!(back.export_json(), e);
+        assert_eq!(call(&mut h, &mut back, "read", r#"{"n":3}"#)["content"], not_set_up);
+        // a conversation that never showed a title exports as it always did
+        let mut plain = Conversation::new();
+        call(&mut h, &mut plain, "navigate_other", "{}");
+        assert!(!plain.export_json().contains("wiki_titles"));
+    }
+
+    /// The real Wikipedia ZIMs (CS_TEST_ZIM_DIR, e.g. E:\cache-data\zims: wikipedia_en_all_maxi_2026-02.zim,
+    /// wikipedia_en_medicine_mini_2026-10.zim, www.ready.gov_en_2024-12.zim); skips without them.
+    #[test]
+    fn s14_read_opens_the_article_from_the_installed_wikipedia() {
+        let Some(dir) = std::env::var("CS_TEST_ZIM_DIR").ok().filter(|d| !d.is_empty()) else {
+            eprintln!("CS_TEST_ZIM_DIR not set: skipping");
+            return;
+        };
+        let zim = |f: &str| json!({"kind": "zim", "path": format!("{dir}/{f}"), "builtin_index": false, "index_dir": std::env::temp_dir().join(format!("none-s14-{f}.idx")).to_string_lossy()});
+        let open = |files: &[&str]| Handle::open(&json!({"sources": files.iter().map(|f| zim(f)).collect::<Vec<_>>()}).to_string()).unwrap();
+
+        // the full Wikipedia: the article, in exactly the format of reading that article as a search result
+        let mut h = open(&["www.ready.gov_en_2024-12.zim", "wikipedia_en_all_maxi_2026-02.zim"]);
+        s14_tools(&mut h);
+        let mut c = Conversation::new();
+        s14_numbers(&mut h, &mut c);
+        let wiki_id = h.wikipedia_zims()[0].id.clone();
+        assert_eq!(h.wikipedia_zims().len(), 1, "ready.gov is not a Wikipedia");
+        let place = call(&mut h, &mut c, "read", r#"{"n":1}"#)["content"].as_str().unwrap().to_string();
+        assert!(place.starts_with("[1] Shoshone Falls\n"), "{place}");
+        let mut d = Conversation::new();
+        d.format(&json!([{"address": format!("zim:{wiki_id}/Shoshone_Falls"), "title": "Shoshone Falls", "snippet": ""}]).to_string()).unwrap();
+        let hit = call(&mut h, &mut d, "read", r#"{"n":1}"#)["content"].as_str().unwrap().to_string();
+        assert_eq!(place, hit);
+        assert!(place.len() > 500 && place.contains("Snake River"), "{place}");
+        // a town and a route destination open theirs the same way
+        assert!(call(&mut h, &mut c, "read", r#"{"n":3}"#)["content"].as_str().unwrap().starts_with("[3] Twin Falls, Idaho\n"));
+        assert!(call(&mut h, &mut c, "read", r#"{"n":4}"#)["content"].as_str().unwrap().starts_with("[4] Shoshone Falls\n"));
+
+        // a smaller Wikipedia without the article: no_data with the title
+        let mut h = open(&["wikipedia_en_medicine_mini_2026-10.zim"]);
+        s14_tools(&mut h);
+        let mut c = Conversation::new();
+        s14_numbers(&mut h, &mut c);
+        assert_eq!(
+            call(&mut h, &mut c, "read", r#"{"n":1}"#)["content"],
+            r#"{"ok":false,"error":{"type":"no_data","detail":"the installed Wikipedia has no article called \"Shoshone Falls\""}}"#
+        );
+        // ZIMs that are not Wikipedia: not_set_up
+        let mut h = open(&["www.ready.gov_en_2024-12.zim"]);
+        s14_tools(&mut h);
+        let mut c = Conversation::new();
+        s14_numbers(&mut h, &mut c);
+        assert!(call(&mut h, &mut c, "read", r#"{"n":1}"#)["content"].as_str().unwrap().contains(r#""type":"not_set_up""#));
     }
 }

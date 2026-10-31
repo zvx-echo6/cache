@@ -734,6 +734,42 @@ void main() {
       expect(await homeAlerts(h.weather), 'Not set up yet');
     });
 
+    test('after an update, Home never says "Not set up yet" for weather that is on while the weather part is still starting', () async {
+      // weather on in 1.0.27; the app updated; the core (and so the weather part) not open yet
+      h = await Harness.create();
+      await h.weather.setRowOn(row('Weather forecast'), true);
+      await h.weather.setRowOn(row('Weather alerts'), true);
+      final on = h.settings.liveSourcesOn;
+      h.weather.dispose();
+      h.settings = AppSettings(settingsDirOverride: h.dir);
+      await h.settings.init();
+      h.policy = DataPolicy(settings: h.settings, probe: h.probe);
+      h.weather = h.build();
+      expect(h.settings.liveSourcesOn, on, reason: 'the switches survive the restart');
+      expect(h.weather.started, isFalse);
+      expect(await homeWeather(h.weather), kWeatherStarting);
+      expect(await h.weather.needsTurnOn(), isFalse, reason: 'no Turn on weather button for weather that is on');
+      await h.weather.start();
+      expect(await homeWeather(h.weather), isNot('Not set up yet'));
+      expect(await h.weather.needsTurnOn(), isFalse);
+    });
+
+    test('before start with nothing switched on, Home says Not set up yet', () async {
+      h = await Harness.create(start: false);
+      expect(await homeWeather(h.weather), 'Not set up yet');
+      expect(await h.weather.needsTurnOn(), isTrue);
+    });
+
+    test('watch areas: Where I am and the downloaded regions, each with its switch (saved places are the Places notebook\'s)', () async {
+      h = await Harness.create();
+      h.regions = [const WatchRegion(name: 'Idaho', lat: 44.0, lon: -114.7)];
+      h.settings.setRegionWatched('Idaho', true);
+      final areas = await h.weather.watchAreas();
+      expect([for (final a in areas) (a.place.name, a.on)], [('Where I am', true), ('Idaho', true)]);
+      h.settings.setWatchHere(false);
+      expect([for (final a in await h.weather.watchAreas()) a.on], [false, true]);
+    });
+
     test('Home weather: now, today and the place, with the age', () async {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather forecast'), true);

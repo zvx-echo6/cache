@@ -537,6 +537,10 @@ class _CacheAppState extends State<CacheApp> {
     // Home's Weather and Alerts cards and the place lists follow "Where I am" as its position arrives and moves.
     location.addListener(weather.positionChanged);
     nav.addListener(_onNav);
+    // What a device-to-device sync brings into the Library's folders shows in the Library list at once.
+    sharing.onShareChanged = (ids) {
+      if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
+    };
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();

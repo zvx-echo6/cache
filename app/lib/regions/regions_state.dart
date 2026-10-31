@@ -146,15 +146,89 @@ String regionPartWords(RegionPart part, String? code, String message) {
 /// starts again; or failed, with a reason, which "Try again" starts again.
 enum RegionPhase { downloading, ready, paused, stopped, failed }
 
-/// Where one part of a region stands.
-enum PartState { ready, downloading, waiting, paused, stopped, failed }
+/// Where one part of a region stands. [notAvailable]: nothing is published for the area yet (places: the region catalogue or the
+/// places server's current.json has none for it). It is not a failure: the region counts as complete and no retry is offered; a
+/// later Update adds the part once it is published.
+enum PartState { ready, downloading, waiting, paused, stopped, failed, notAvailable }
+
+/// True when the core's places error says nothing is published (the places server has no current.json: HTTP 404 or 410 for it).
+/// A tile the index lists that cannot be fetched is a real failure, never this.
+bool placesNotPublished(String? message) {
+  if (message == null) return false;
+  final m = RegExp(r'^HTTP (404|410) from (\S+)').firstMatch(message.trim());
+  return m != null && m.group(2)!.endsWith('current.json');
+}
 
 /// The parts of a region, in the order they are shown.
 enum RegionPartKind { map, directions, places, offroad }
 
 /// One part of a region on this phone: where it stands, how far it got, what it holds, and, when it failed, why (in plain words).
+/// How fast a part is downloading and how long it has left, from what it held over the last half minute.
+class TransferRate {
+  const TransferRate({this.bytesPerSecond, this.secondsLeft});
+
+  final double? bytesPerSecond;
+  final double? secondsLeft;
+
+  /// "2.1 MB/s", "350 KB/s".
+  String? get speedWords {
+    final b = bytesPerSecond;
+    if (b == null || b <= 0) return null;
+    if (b >= 1e6) return '${(b / 1e6).toStringAsFixed(1)} MB/s';
+    return '${(b / 1e3).round()} KB/s';
+  }
+
+  /// "40 s left", "6 min left", "1 h 20 min left".
+  String? get leftWords {
+    final s = secondsLeft;
+    if (s == null || !s.isFinite || s < 0) return null;
+    if (s < 60) return '${s.ceil()} s left';
+    final m = (s / 60).ceil();
+    if (m < 60) return '$m min left';
+    return m % 60 == 0 ? '${m ~/ 60} h left' : '${m ~/ 60} h ${m % 60} min left';
+  }
+}
+
+/// Measures each downloading part's speed and time left from samples of what it holds (bytes, and the share done), taken as
+/// the screens read the regions: the speed over the last 30 seconds, the time left from how fast the share done grows (or the
+/// bytes left, when the part's size is known). A part that is slow shows its speed instead of looking stuck.
+class TransferMeter {
+  TransferMeter({DateTime Function()? clock}) : _now = clock ?? DateTime.now;
+
+  final DateTime Function() _now;
+  final Map<String, List<(DateTime, int, double?)>> _samples = {};
+  static const Duration window = Duration(seconds: 30);
+  static const Duration least = Duration(seconds: 3);
+
+  TransferRate sample(String key, int bytes, double? fraction, {int? totalBytes}) {
+    final now = _now();
+    final l = _samples.putIfAbsent(key, () => []);
+    if (l.isNotEmpty && bytes < l.last.$2) l.clear(); // started again
+    if (l.isEmpty || now.difference(l.last.$1) >= const Duration(milliseconds: 900)) l.add((now, bytes, fraction));
+    while (l.length > 2 && now.difference(l[1].$1) >= window) {
+      l.removeAt(0);
+    }
+    final first = l.first;
+    final dt = now.difference(first.$1).inMilliseconds / 1000;
+    if (dt < least.inSeconds) return const TransferRate();
+    final bps = (bytes - first.$2) / dt;
+    double? left;
+    if (totalBytes != null && totalBytes > bytes && bps > 0) {
+      left = (totalBytes - bytes) / bps;
+    } else if (fraction != null && first.$3 != null && fraction > first.$3!) {
+      left = (1 - fraction) / ((fraction - first.$3!) / dt);
+    }
+    return TransferRate(bytesPerSecond: bps > 0 ? bps : null, secondsLeft: left);
+  }
+
+  void forget(String key) => _samples.remove(key);
+}
+
 class RegionPartStatus {
-  const RegionPartStatus(this.kind, this.state, {this.fraction, this.bytes = 0, this.totalBytes, this.problem});
+  const RegionPartStatus(this.kind, this.state, {this.fraction, this.bytes = 0, this.totalBytes, this.problem, this.rate});
+
+  /// Speed and time left while it downloads (null when not measured yet).
+  final TransferRate? rate;
 
   final RegionPartKind kind;
   final PartState state;
@@ -179,15 +253,23 @@ class RegionPartStatus {
     String pct() => '${((fraction ?? 0) * 100).clamp(0, 99).floor()}%';
     return switch (state) {
       PartState.ready => 'ready',
-      PartState.downloading => fraction == null ? 'downloading' : pct(),
+      PartState.downloading => [
+        fraction == null ? 'downloading' : pct(),
+        ?rate?.speedWords,
+        ?rate?.leftWords,
+      ].join(' · '),
       PartState.waiting => 'waiting',
       PartState.paused => 'paused',
       PartState.stopped => (fraction ?? 0) > 0 ? 'stopped at ${pct()}' : 'stopped',
       PartState.failed => "couldn't finish",
+      PartState.notAvailable => 'not available yet',
     };
   }
 
   bool get ready => state == PartState.ready;
+
+  /// Nothing more will come for this part now: ready, or not published for the area yet. The region counts it as done.
+  bool get complete => state == PartState.ready || state == PartState.notAvailable;
 }
 
 /// The words for a part's state shown on its own (a region's page): "Ready", "40%", "Waiting", "Stopped at 40%: no connection".
@@ -226,6 +308,8 @@ class LocalRegion {
     this.areas = const [],
     this.wantsRouting = false,
     this.wantsPlaces = false,
+    this.asked = true,
+    this.meter,
     this.offroad = const [],
     this.terrain = const [],
     this.kind,
@@ -263,6 +347,14 @@ class LocalRegion {
 
   /// Places were asked for (they may not be in the core's status yet).
   final bool wantsPlaces;
+
+  /// The core was asked for this region's road routing or places in this run of the app and has not listed it yet. A part the
+  /// core does not list and was not asked for now is not queued behind anything (1.0.28 showed it "waiting" for ever, with no
+  /// way to restart it): it is stopped, and Carry on asks again.
+  final bool asked;
+
+  /// Measures the speed and time left of the parts that are downloading (null: not shown).
+  final TransferMeter? meter;
 
   bool get hasRouting => wantsRouting || routing != null;
   bool get hasPlaces => wantsPlaces || places != null;
@@ -302,10 +394,15 @@ class LocalRegion {
     }
 
     RegionPartStatus? core(RegionPartKind kind, RegionPart which, Map<String, dynamic>? p, bool wanted) {
-      if (p == null) return wanted ? RegionPartStatus(kind, PartState.waiting, fraction: 0) : null;
+      if (p == null) return wanted ? RegionPartStatus(kind, asked ? PartState.waiting : PartState.stopped, fraction: 0) : null;
       final total = (p['bytes'] as num?)?.toInt() ?? 0, done = (p['done_bytes'] as num?)?.toInt() ?? 0;
       final f = p['state'] == 'ready' ? 1.0 : (total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0));
       final e = p['error'];
+      // Places not published for the area: no current.json on the server, or the published index has no tile over it.
+      if (which == RegionPart.places &&
+          ((p['state'] == 'failed' && placesNotPublished(e is String ? e : null)) || (p['state'] == 'ready' && (p['tiles'] as num?)?.toInt() == 0))) {
+        return RegionPartStatus(kind, PartState.notAvailable);
+      }
       return switch (p['state']) {
         'ready' => RegionPartStatus(kind, PartState.ready, fraction: 1, bytes: total, totalBytes: total),
         'failed' => RegionPartStatus(kind, PartState.failed, fraction: f, bytes: done, totalBytes: total,
@@ -332,11 +429,23 @@ class LocalRegion {
       return RegionPartStatus(RegionPartKind.offroad, done == 0 ? PartState.waiting : PartState.downloading, fraction: f, bytes: bytes, totalBytes: total);
     }
 
+    RegionPartStatus? rated(RegionPartStatus? p) {
+      final m = meter;
+      if (p == null || m == null) return p;
+      final key = '$id/${p.kind.name}';
+      if (p.state != PartState.downloading) {
+        m.forget(key);
+        return p;
+      }
+      final r = m.sample(key, p.bytes, p.fraction, totalBytes: p.totalBytes);
+      return RegionPartStatus(p.kind, p.state, fraction: p.fraction, bytes: p.bytes, totalBytes: p.totalBytes, problem: p.problem, rate: r);
+    }
+
     return [
-      ?tiles(RegionPartKind.map, areas),
-      ?core(RegionPartKind.directions, RegionPart.routing, routing, wantsRouting),
-      ?core(RegionPartKind.places, RegionPart.places, places, wantsPlaces),
-      ?off(),
+      ?rated(tiles(RegionPartKind.map, areas)),
+      ?rated(core(RegionPartKind.directions, RegionPart.routing, routing, wantsRouting)),
+      ?rated(core(RegionPartKind.places, RegionPart.places, places, wantsPlaces)),
+      ?rated(off()),
     ];
   }
 
@@ -356,11 +465,15 @@ class LocalRegion {
   double get fraction {
     final ps = parts;
     if (ps.isEmpty) return 0;
-    return (ps.fold<double>(0, (s, p) => s + (p.ready ? 1 : (p.fraction ?? 0))) / ps.length).clamp(0, 1).toDouble();
+    return (ps.fold<double>(0, (s, p) => s + (p.complete ? 1 : (p.fraction ?? 0))) / ps.length).clamp(0, 1).toDouble();
   }
 
-  /// The parts that are not ready yet and where each stands, in one short line: "Places 40% · Off-road waiting". A part is used the
-  /// moment its tiles are saved, so the parts that are ready are not named. Empty when every part is ready.
+  /// The places part is not published for this region's area yet (see [PartState.notAvailable]).
+  bool get placesNotAvailable => parts.any((p) => p.kind == RegionPartKind.places && p.state == PartState.notAvailable);
+
+  /// The parts that are not ready yet and where each stands, in one short line: "Places 40% · Off-road waiting", or "Places not
+  /// available yet". A part is used the moment its tiles are saved, so the parts that are ready are not named. Empty when every
+  /// part is ready.
   String get partsLine => [for (final p in parts) if (!p.ready) '${p.name} ${p.words}'].join(' · ');
 
   /// What the bar under a region says: "62% of 1.8 GB" style is left to the screen; this is the part being downloaded now, if any.
@@ -441,6 +554,24 @@ class RegionsState extends ChangeNotifier {
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
 
+  /// Each downloading part's speed and time left.
+  final TransferMeter _meter = TransferMeter();
+
+  /// Regions the core was asked to add in this run that it has not listed yet (their parts are waiting, not stopped).
+  final Set<String> _asked = {};
+
+  /// Every core `add` goes through here, so the parts it asks for wait for the core instead of reading as stopped.
+  Future<Map<String, dynamic>> _coreAdd(RegionsCoreLike core, Map<String, dynamic> args) async {
+    final id = '${args['id']}';
+    _asked.add(id);
+    try {
+      return await core.call('add', args);
+    } catch (_) {
+      _asked.remove(id);
+      rethrow;
+    }
+  }
+
   bool get routingAvailable => _core != null;
 
   Future<File> _appFile() async => File('${(await supportDir()).path}/$kRegionsAppFile');
@@ -478,6 +609,7 @@ class RegionsState extends ChangeNotifier {
     // Switching mobile data for downloads on or off applies at once, mid-download too.
     policy.settings.addListener(_onSettings);
     await refresh();
+    unawaited(recheckPublished().catchError((_) {}));
   }
 
   void _onMaps() {
@@ -554,10 +686,28 @@ class RegionsState extends ChangeNotifier {
     } catch (_) {
       return;
     }
+    _asked.removeWhere((id) => _statusOf(id) != null);
     _schedulePoll();
     await _routingCheck();
     _placesCheck();
     notifyListeners();
+  }
+
+  /// At start, each region's parts are checked against what is published now: a region whose places were not published when it
+  /// was downloaded gets them as soon as they are (they were asked for then). Nothing is downloaded that was not asked for, and
+  /// the mobile data rule applies as to any download.
+  Future<void> recheckPublished() async {
+    if (!placesPublished) return;
+    for (final l in local) {
+      if (l.isArea || !l.placesNotAvailable) continue;
+      try {
+        await policy.checkDownload();
+        await _addPlaces(l);
+      } catch (_) {
+        // Not now (no connection, mobile data, the catalogue not reachable): Update adds them later.
+      }
+    }
+    await refresh();
   }
 
   /// Tells [onPlacesChanged] when the core's places generation moved (the first status only sets where it starts).
@@ -672,6 +822,8 @@ class RegionsState extends ChangeNotifier {
       // (1.0.27 waited for places the core had left out, "Places waiting" for ever).
       wantsRouting: (k?.routing ?? false) && (r == null || _routingOf(r) != null),
       wantsPlaces: (k?.places ?? false) && (r == null || _placesOf(r) != null),
+      asked: _asked.contains(id),
+      meter: _meter,
       offroad: k == null ? const [] : [for (final p in k.offroad) _packState(p)],
       terrain: k == null ? const [] : _terrainOf(k),
     );
@@ -843,7 +995,7 @@ class RegionsState extends ChangeNotifier {
     if (routing || places) {
       final core = _core ?? (throw CacheSearchException('unsupported', routingUnavailable ?? 'Road routing downloads are not available.'));
       final geometry = await catalogue.geometry(r);
-      await core.call('add', {
+      await _coreAdd(core, {
         'id': r.id,
         'name': r.name,
         'geometry': geometry,
@@ -1030,14 +1182,14 @@ class RegionsState extends ChangeNotifier {
     }
     final core = _core;
     final again = [
-      if (l.places?['state'] == 'failed' || (k?.places == true && l.places == null && _statusOf(id) == null)) 'places',
+      if ((l.places?['state'] == 'failed' && !l.placesNotAvailable) || (k?.places == true && l.places == null && _statusOf(id) == null)) 'places',
       if (_routingOf(_statusOf(id))?['state'] == 'failed' || (k?.routing == true && _statusOf(id) == null)) 'routing',
     ];
     if (core != null && again.isNotEmpty) {
       final rec = await recordOf(id);
       if (rec == null) throw const CacheSearchException('not_found', 'This region could not be read. Connect and try again.');
       final near = nearFor(rec);
-      await core.call('add', {
+      await _coreAdd(core, {
         'id': rec.id,
         'name': rec.name,
         'geometry': await catalogue.geometry(rec),
@@ -1160,7 +1312,7 @@ class RegionsState extends ChangeNotifier {
       case RegionPhase.stopped || RegionPhase.failed:
         // What is left: each part's size in the catalogue (or as the core counts it) for the share of it not on the phone yet.
         int? left = 0;
-        for (final p in here.parts.where((p) => !p.ready)) {
+        for (final p in here.parts.where((p) => !p.complete)) {
           final whole = switch (p.kind) {
             RegionPartKind.map => cost.map,
             RegionPartKind.directions => cost.routing ?? p.totalBytes,
@@ -1299,7 +1451,7 @@ class RegionsState extends ChangeNotifier {
     if (placesUpdate != null && placesUpdate!['downloading'] != true && (l?.hasPlaces ?? false)) {
       await _core?.call('update', {'component': 'places'});
     }
-    if (l != null && missesPlaces(l)) await _addPlaces(l);
+    if (l != null && (missesPlaces(l) || (l.placesNotAvailable && placesPublished))) await _addPlaces(l);
     for (final p in k?.offroad ?? const <_KeptPack>[]) {
       if (_packRuns[p.path]?.running != true) unawaited(_fetchPack(p));
     }
@@ -1325,7 +1477,7 @@ class RegionsState extends ChangeNotifier {
       rec = await catalogue.record(l.id);
     } catch (_) {}
     if (rec == null) throw const CacheSearchException('not_found', 'This region could not be read. Connect and try again.');
-    await core.call('add', {'id': rec.id, 'name': rec.name, 'geometry': await catalogue.geometry(rec), 'parts': ['places']});
+    await _coreAdd(core, {'id': rec.id, 'name': rec.name, 'geometry': await catalogue.geometry(rec), 'parts': ['places']});
     (_kept[l.id] ??= _Kept(id: l.id, name: l.name)).places = true;
     await _save();
   }

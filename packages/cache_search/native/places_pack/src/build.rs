@@ -267,7 +267,7 @@ fn dedupe_localities(locs: Vec<RawLocality>) -> Vec<RawLocality> {
         _ => 0,
     };
     let mut locs = locs;
-    locs.sort_by(|a, b| (rank(&b.kind), b.population.unwrap_or(0)).cmp(&(rank(&a.kind), a.population.unwrap_or(0))));
+    locs.sort_by_key(|l| std::cmp::Reverse((rank(&l.kind), l.population.unwrap_or(0))));
     let mut out: Vec<RawLocality> = Vec::new();
     for l in locs {
         let dup = out.iter().any(|o| o.name.eq_ignore_ascii_case(&l.name) && haversine_km(o.lat, o.lon, l.lat, l.lon) < 3.0);

@@ -613,6 +613,18 @@ impl Handle {
             .ok_or_else(|| Error::not_found(format!("no zim source {id:?}")))
     }
 
+    /// The installed English Wikipedia ZIMs (Kiwix's book name starts with `wikipedia_en`, a full or a subset such as
+    /// medicine), in source order. Spec S14: `read` opens a place's article from the first of them that has it.
+    pub fn wikipedia_zims(&self) -> Vec<&ZimSource> {
+        self.sources
+            .iter()
+            .filter_map(|s| match s {
+                Source::Zim(z) if z.src.name.as_deref().is_some_and(|n| n.starts_with("wikipedia_en")) => Some(&z.src),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn status_json(&mut self) -> String {
         self.poll_opening();
         let list: Vec<Value> = self

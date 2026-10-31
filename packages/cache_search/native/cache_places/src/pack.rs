@@ -116,6 +116,8 @@ pub struct PlaceRow {
     pub wikipedia_title: Option<String>,
     /// The article's first paragraph (under 500 characters), when the wiki step matched one by ID.
     pub summary: Option<String>,
+    /// Spec S14: what the model sees of the summary (`places_pack about`); None in a pack built before that step.
+    pub about: Option<String>,
     /// Where a route to the place goes (an airport's passenger terminal, a main entrance, a park's parking), when the
     /// builder found one; None: the place's own point. A pack built before arrival points has none.
     pub arrival: Option<(f64, f64)>,
@@ -135,6 +137,8 @@ pub struct LocalityRow {
     pub source_id: String,
     pub wikipedia_title: Option<String>,
     pub summary: Option<String>,
+    /// Spec S14: as on a place.
+    pub about: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,8 +148,8 @@ pub struct StateRow {
 }
 
 /// The columns of a place row, in `place_row`'s order. `kind_id` is column 4 (a format 1 pack has none: see `Pack::place_cols`).
-const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary, p.arrival_lat, p.arrival_lon";
-const LOC_COLS: &str = "l.id, l.name, l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.source_id, l.wikipedia_title, l.summary";
+const PLACE_COLS: &str = "p.id, p.name, p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, p.website, p.source, p.source_id, p.confidence, p.wikidata_id, p.wikipedia_title, p.summary, p.arrival_lat, p.arrival_lon, p.about";
+const LOC_COLS: &str = "l.id, l.name, l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.source_id, l.wikipedia_title, l.summary, l.about";
 
 fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
     Ok(PlaceRow {
@@ -174,6 +178,7 @@ fn place_row(r: &rusqlite::Row) -> rusqlite::Result<PlaceRow> {
             (Some(la), Some(lo)) => Some((la, lo)),
             _ => None,
         },
+        about: r.get(23)?,
     })
 }
 
@@ -191,6 +196,7 @@ fn locality_row(r: &rusqlite::Row) -> rusqlite::Result<LocalityRow> {
         source_id: r.get(9)?,
         wikipedia_title: r.get(10)?,
         summary: r.get(11)?,
+        about: r.get(12)?,
     })
 }
 
@@ -206,6 +212,9 @@ pub struct Pack {
     pub format: u32,
     /// The places table has the arrival columns (packs and databases built after they were added).
     arrival: bool,
+    /// The places / localities tables have the `about` column (S14; packs, tiles and databases built after it was added).
+    about: bool,
+    loc_about: bool,
     /// Source ids of hospitals that an emergency room row was matched to.
     pub matched: HashSet<String>,
     /// The merged database's level 1 tiles (its `tiles` table); None for a single-region pack.
@@ -272,6 +281,8 @@ impl Pack {
             rows.collect::<rusqlite::Result<HashSet<_>>>()?
         };
         let arrival = crate::merged::has_column(&conn, "main", "places", "arrival_lat")?;
+        let about = crate::merged::has_column(&conn, "main", "places", "about")?;
+        let loc_about = crate::merged::has_column(&conn, "main", "localities", "about")?;
         let data_version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
         let tiles = if version >= MERGED_FORMAT_VERSION {
             let mut st = conn.prepare("SELECT tile FROM tiles")?;
@@ -288,6 +299,8 @@ impl Pack {
             kinds,
             format: version,
             arrival,
+            about,
+            loc_about,
             matched,
             tiles,
             conn: Mutex::new(conn),
@@ -338,7 +351,13 @@ impl Pack {
     /// before arrival points has no arrival columns.
     fn place_cols(&self) -> String {
         let cols = if self.format >= 2 { PLACE_COLS.to_string() } else { PLACE_COLS.replace("p.kind_id", "NULL") };
-        if self.arrival { cols } else { cols.replace("p.arrival_lat, p.arrival_lon", "NULL, NULL") }
+        let cols = if self.arrival { cols } else { cols.replace("p.arrival_lat, p.arrival_lon", "NULL, NULL") };
+        if self.about { cols } else { cols.replace("p.about", "NULL") }
+    }
+
+    /// The locality columns: a pack built before the `about` step has no `about`, which then reads as NULL.
+    fn loc_cols(&self) -> String {
+        if self.loc_about { LOC_COLS.to_string() } else { LOC_COLS.replace("l.about", "NULL") }
     }
 
     /// The nearest `limit` places of a category within `max_km`, nearest first, with their distance in km. The search
@@ -420,10 +439,11 @@ impl Pack {
 
     /// Localities within `radius_km`, unsorted, with their distance.
     pub fn localities_near(&self, lat: f64, lon: f64, radius_km: f64) -> Result<Vec<(LocalityRow, f64)>> {
+        let loc_cols = self.loc_cols();
         let conn = self.conn();
         let (a, b, c, d) = bbox_around(lat, lon, radius_km);
         let mut st = conn.prepare(&format!(
-            "SELECT {LOC_COLS} FROM localities_rt r JOIN localities l ON l.id = r.id \
+            "SELECT {loc_cols} FROM localities_rt r JOIN localities l ON l.id = r.id \
              WHERE r.max_lat >= ?1 AND r.min_lat <= ?2 AND r.max_lon >= ?3 AND r.min_lon <= ?4"
         ))?;
         let rows = st.query_map(params![a, b, c, d], locality_row)?;
@@ -457,6 +477,7 @@ impl Pack {
                     source_id: r.get(8)?,
                     wikipedia_title: None,
                     summary: None,
+                    about: None,
                 })
             })?;
             for r in rows {
@@ -518,7 +539,7 @@ impl Pack {
 
     pub fn locality(&self, id: i64) -> Result<Option<LocalityRow>> {
         let conn = self.conn();
-        Ok(conn.query_row(&format!("SELECT {LOC_COLS} FROM localities l WHERE l.id = ?1"), params![id], locality_row).optional()?)
+        Ok(conn.query_row(&format!("SELECT {} FROM localities l WHERE l.id = ?1", self.loc_cols()), params![id], locality_row).optional()?)
     }
 
     /// A place by the id a map result carries (`place:<source_id>` without the prefix).
@@ -530,7 +551,7 @@ impl Pack {
 
     pub fn locality_by_source_id(&self, source_id: &str) -> Result<Option<LocalityRow>> {
         let conn = self.conn();
-        Ok(conn.query_row(&format!("SELECT {LOC_COLS} FROM localities l WHERE l.source_id = ?1 LIMIT 1"), params![source_id], locality_row).optional()?)
+        Ok(conn.query_row(&format!("SELECT {} FROM localities l WHERE l.source_id = ?1 LIMIT 1", self.loc_cols()), params![source_id], locality_row).optional()?)
     }
 
     /// The model id the pack's vectors were made with, and their length; None for a pack that was never embedded.

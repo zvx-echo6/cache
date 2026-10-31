@@ -545,7 +545,7 @@ impl Tool for NavigateTool {
         }
         Some(json!({"type": "function", "function": {
             "name": "navigate",
-            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links.",
+            "description": "Plan a route to a named place (to) or the nearest place of a type (to_type), using the offline maps on this phone. Omit from to start at the phone's current location. Returns matched places with their coordinates, distance, travel time, the direction from the start, traffic (null when there is no traffic data) and warnings for a brief summary. The app provides Open navigation for this exact route; Maps handles the map and turn-by-turn directions. Do not invent turns or navigation links. to_matched may include about and wikipedia; read the result's number to open the destination's article.",
             "strict": true,
             "parameters": {"type": "object", "properties": {
                 "from": {"type": "string", "maxLength": 300,

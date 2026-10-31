@@ -119,7 +119,9 @@ void main() {
     await reg.run('weather.watch_remove', {'place': 'Where I am'});
     expect(f.watched, {'place:k1'});
     f.saved.clear();
-    expect((await reg.run('weather.watch_add', {'place': 'Home'}))['error']['type'], 'not_found');
+    final gone = (await reg.run('weather.watch_add', {'place': 'Home'}))['error'];
+    expect(gone, {'type': 'not_found', 'detail': 'That place is no longer saved or downloaded.'});
+    expect((await reg.run('weather.watch_remove', {'place': 'Home'}))['error'], gone);
   });
 
   test('home.source_switch switches the row, or says why not', () async {

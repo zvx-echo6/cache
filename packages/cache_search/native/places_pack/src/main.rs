@@ -5,6 +5,8 @@
 //!   places_pack wiki --pack places.sqlite --geo-tags F --page-props F --items-per-site F --index F --xml-url URL [--no-summaries]
 //!   places_pack embed --pack places.sqlite --embed-lib cache_llama.dll --embed-model bge-m3-Q8_0.gguf [--embed-model-id ID] [--embed-threads 4]
 //!   places_pack inspect places.sqlite
+//!   places_pack about-judge --packs DIR --rows-from about.jsonl --llm URL --model NAME --model-sha256 HEX --out judge.jsonl [--parallel 2]   (S14 trial)
+//!   places_pack about --packs work/blocks|block.sqlite --llm http://127.0.0.1:8085 --model NAME --model-sha256 HEX --log about.jsonl [--state ID] [--parallel 2] [--from-log earlier.jsonl | --no-model]
 //!
 //! Places in regions (docs/PLACES-TILES.md, RECIPE.md), on the build host:
 //!   places_pack harvest --out harvest.sqlite [--overture-csv places.csv] [--osm-pbf area.osm.pbf] [--rules categories.json] [--no-general]
@@ -14,6 +16,8 @@
 //!   places_pack common --blocks work/blocks --build NAME --out out/NAME/common.sqlite [--taxonomy overture_taxonomy.tsv]
 //!       [--kinds-described kinds-described.tsv] [--overture-release R] [--osm-source S] [--rules categories.json]
 
+mod about;
+mod about_judge;
 mod addresses;
 mod admins;
 mod arrival;
@@ -50,7 +54,7 @@ fn parse_args(argv: &[String]) -> Result<HashMap<String, String>, String> {
         if let Some((k, v)) = k.split_once('=') {
             m.insert(k.to_string(), v.to_string());
             i += 1;
-        } else if k == "no-general" || k == "no-summaries" {
+        } else if k == "no-general" || k == "no-summaries" || k == "no-model" {
             m.insert(k.to_string(), String::new());
             i += 1;
         } else {
@@ -80,6 +84,55 @@ fn run() -> Result<(), String> {
     let started = std::time::Instant::now();
     let took = || format!("{:.1} s", started.elapsed().as_secs_f64());
     match argv.first().map(String::as_str) {
+        Some("about-judge") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
+            let o = about_judge::Opts {
+                packs: PathBuf::from(need("packs")?),
+                rows_from: PathBuf::from(need("rows-from")?),
+                llm: need("llm")?,
+                model: need("model")?,
+                model_sha256: need("model-sha256")?,
+                parallel: num(&a, "parallel", 1)?,
+                out: PathBuf::from(need("out")?),
+            };
+            let (cut, none, calls) = about_judge::run(&o)?;
+            println!("about-judge: {cut} cut, {none} without about; {calls} model calls; in {}", took());
+            Ok(())
+        }
+        Some("about") => {
+            let a = parse_args(&argv[1..])?;
+            let need = |k: &str| a.get(k).cloned().ok_or_else(|| format!("--{k} is required"));
+            let given = PathBuf::from(need("packs")?);
+            let packs = if given.is_dir() {
+                let mut v: Vec<PathBuf> = std::fs::read_dir(&given)
+                    .map_err(|e| format!("{}: {e}", given.display()))?
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "sqlite"))
+                    .collect();
+                v.sort();
+                v
+            } else {
+                vec![given]
+            };
+            let o = about::Opts {
+                packs,
+                llm: need("llm")?,
+                model: need("model")?,
+                model_sha256: need("model-sha256")?,
+                state: a.get("state").cloned(),
+                parallel: num(&a, "parallel", 1)?,
+                log: PathBuf::from(need("log")?),
+                from_log: a.get("from-log").map(PathBuf::from),
+                no_model: a.contains_key("no-model"),
+            };
+            let r = about::run(&o)?;
+            println!(
+                "about: {} whole, {} cut by the model, {} dropped; {} model calls, {:.2} s per call; in {}",
+                r.whole, r.model_cut, r.dropped, r.calls, if r.calls > 0 { r.call_secs / r.calls as f64 } else { 0.0 }, took()
+            );
+            Ok(())
+        }
         Some("harvest") => {
             let a = parse_args(&argv[1..])?;
             let (rules, rules_json) = load_rules(&a)?;

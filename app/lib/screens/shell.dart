@@ -15,6 +15,7 @@ import '../chat/chat_location.dart';
 import '../chat/navigation_action.dart';
 import '../guide/app_links.dart';
 import '../guide/guide_book.dart';
+import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
 import '../layout/layout_state.dart';
@@ -181,6 +182,13 @@ class _ShellState extends State<Shell> {
     // A citation of the guide opens the guide's reader at that section.
     if (address.startsWith('lib:$kGuideLibrary/')) {
       unawaited(_openGuideAt(address));
+      return;
+    }
+    // A citation of the phone's setup (app.setup_status) opens the guide section that part of the setup names. It went to the
+    // Library before, which has no such address, so the chip did nothing.
+    final setupGuide = setupGuideTitle(address);
+    if (setupGuide != null) {
+      unawaited(openGuide(context, title: setupGuide));
       return;
     }
     _goModule(ModuleId.library);

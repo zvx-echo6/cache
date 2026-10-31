@@ -246,28 +246,68 @@ void main() {
       rep = await r.engine.run();
       expect(rep.deleted, 1);
       expect(r.folder.text.keys, isNot(contains('Journal/2026-10-27 Private one.md')));
-      // removed in the folder: Cache asks
+      // removed in the folder: Cache is the source of truth, so its file is written back and the entry stays
       r.folder.text.remove(path);
-      final eng2 = r.engine;
-      expect((await eng2.run()).conflicts, 1);
-      expect(eng2.conflicts.single.kind, ConflictKind.removedOutside);
-      await eng2.resolve(eng2.conflicts.single, keepCache: true);
+      rep = await r.engine.run();
+      expect((rep.conflicts, rep.written, rep.deleted), (0, 1, 0));
       expect(r.folder.text[path], contains('cache_id: ${a.id}'));
-      // a new note in the Journal folder: a new entry, and its id written into it
+      expect(await r.nb.entry(a.id), isNotNull);
+      // a new note in the Journal folder: never read (Cache syncs its own files only), and left exactly as it is
+      final before = r.store.entries.length;
       r.folder.text['Journal/Shopping.md'] = 'Buy matches.\n';
       rep = await r.engine.run();
-      expect(rep.read, 1);
-      final made = r.store.entries.firstWhere((x) => x['body'] == 'Buy matches.');
-      expect(r.folder.text['Journal/Shopping.md'], contains('cache_id: ${made['id']}'));
-      // unreadable properties: left alone, and Cache asks
+      expect((rep.read, rep.conflicts), (0, 0));
+      expect(r.store.entries.length, before);
+      expect(r.folder.text['Journal/Shopping.md'], 'Buy matches.\n');
+      // a note of the person's own with broken properties: not Cache's, so not a question either
       const broken = '---\ntitle: x\nnot a property\n---\nbody\n';
       r.folder.text['Journal/Broken.md'] = broken;
+      expect((await r.engine.run()).conflicts, 0);
+      expect(r.folder.text['Journal/Broken.md'], broken);
+      // Cache's own file made unreadable: left alone, and Cache asks
+      final good = r.folder.text[path]!;
+      r.folder.text[path] = broken;
       final eng3 = r.engine;
       expect((await eng3.run()).conflicts, 1);
       expect(eng3.conflicts.single.kind, ConflictKind.unreadable);
-      expect(r.folder.text['Journal/Broken.md'], broken);
+      expect(r.folder.text[path], broken);
       await eng3.resolve(eng3.conflicts.single, keepCache: true);
       expect((await r.engine.run()).conflicts, 0, reason: 'ignored from now on');
+      expect(good, contains('cache_id: ${a.id}'));
+    });
+
+    test('Obsidian: a Cache file deleted in the vault comes back; a question kept from an older build is dropped', () async {
+      final r = _Rig(SyncKind.obsidian);
+      final j = await r.journal();
+      final a = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Note', body: 'one');
+      await r.engine.run();
+      const path = 'Journal/2026-10-27 Note.md';
+      final text = r.folder.text[path]!;
+      // an older build asked "Removed in the folder" and kept the question in its state
+      final st = jsonDecode(r.state.readAsStringSync()) as Map<String, dynamic>;
+      st['conflicts'] = [
+        {'entry': a.id, 'kind': 'removedOutside', 'title': 'Note', 'path': path},
+      ];
+      r.state.writeAsStringSync(jsonEncode(st));
+      r.folder.text.remove(path);
+      final eng = r.engine;
+      final rep = await eng.run();
+      expect((rep.conflicts, rep.written), (0, 1));
+      expect(eng.conflicts, isEmpty);
+      expect(r.folder.text[path], text);
+      expect((await r.nb.entry(a.id))!.body, 'one');
+    });
+
+    test('Obsidian: a file with an id Cache has no record of is not read', () async {
+      final r = _Rig(SyncKind.obsidian);
+      await r.journal();
+      await r.engine.run();
+      const stray = '---\ncache_id: 0b6a1f0e-1111-4222-a333-444455556666\nnotebook: Journal\nwhen: 2026-10-27 16:12\n---\nCopied from somewhere.\n';
+      r.folder.text['Journal/Stray.md'] = stray;
+      final rep = await r.engine.run();
+      expect(rep.read, 0);
+      expect(await r.nb.entry('0b6a1f0e-1111-4222-a333-444455556666'), isNull);
+      expect(r.folder.text['Journal/Stray.md'], stray);
     });
 
     test('deleted in Cache but changed in the folder: the folder wins', () async {
@@ -311,6 +351,30 @@ void main() {
       await r.engine.run();
       expect(r.folder.text['journals/2026_10_27.md'], mine);
       expect(r.folder.text['journals/2026_10_28.md'], contains('cache-id:: ${a.id}'));
+    });
+
+    test('Logseq: a block deleted in the graph comes back; a block the person wrote is never read', () async {
+      final r = _Rig(SyncKind.logseq);
+      final j = await r.journal();
+      final a = await r.nb.saveEntry(notebookId: j.id, occurredAt: '2026-10-27T16:12:00-06:00', title: 'Restocked', body: 'six jugs');
+      await r.engine.run();
+      const page = 'journals/2026_10_27.md';
+      final withBlock = r.folder.text[page]!;
+      expect(withBlock, contains('cache-id:: ${a.id}'));
+      // the person deletes Cache's block: it is written back, and the entry stays
+      r.folder.text[page] = '';
+      var rep = await r.engine.run();
+      expect((rep.conflicts, rep.written, rep.deleted), (0, 1, 0));
+      expect(r.folder.text[page], contains('cache-id:: ${a.id}'));
+      expect((await r.nb.entry(a.id))!.body, 'six jugs');
+      // a block of the person's own, even one naming a Cache notebook: left alone, never an entry
+      final before = r.store.entries.length;
+      final mine = '${r.folder.text[page]}- My own note\n  notebook:: Journal\n';
+      r.folder.text[page] = mine;
+      rep = await r.engine.run();
+      expect(rep.read, 0);
+      expect(r.store.entries.length, before);
+      expect(r.folder.text[page], mine);
     });
 
     test('Logseq 2: written for import, never read back', () async {

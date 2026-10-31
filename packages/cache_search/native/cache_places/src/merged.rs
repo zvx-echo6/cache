@@ -176,6 +176,12 @@ fn add_arrival_columns(c: &Connection) -> Result<()> {
     if !has_column(c, "main", "places", "arrival_lat")? {
         c.execute_batch("ALTER TABLE main.places ADD COLUMN arrival_lat REAL; ALTER TABLE main.places ADD COLUMN arrival_lon REAL;")?;
     }
+    // Spec S14: a database made before the places' `about` gets the column (empty), so a newer tile's text merges in.
+    for table in ["places", "localities"] {
+        if !has_column(c, "main", table, "about")? {
+            c.execute_batch(&format!("ALTER TABLE main.{table} ADD COLUMN about TEXT;"))?;
+        }
+    }
     Ok(())
 }
 
@@ -196,17 +202,20 @@ fn insert_rows(tx: &Transaction, tile: u32, rep: &mut MergeReport) -> Result<()>
     let p = mid("id");
     // A tile cut before the arrival points has none.
     let arrival = if has_column(tx, "t", "places", "arrival_lat")? { "arrival_lat, arrival_lon" } else { "NULL, NULL" };
+    // A tile cut before the `about` step has none (S14).
+    let about = if has_column(tx, "t", "places", "about")? { "about" } else { "NULL" };
+    let loc_about = if has_column(tx, "t", "localities", "about")? { "about" } else { "NULL" };
     tx.execute_batch(&format!(
         "INSERT INTO main.places(id, name, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website,
                                  wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence,
-                                 arrival_lat, arrival_lon)
+                                 arrival_lat, arrival_lon, about)
            SELECT {p}, name, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website,
                   wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence,
-                  {arrival} FROM t.places;
+                  {arrival}, {about} FROM t.places;
          INSERT INTO main.places_rt(id, min_lat, max_lat, min_lon, max_lon) SELECT {p}, lat, lat, lon, lon FROM t.places;
          INSERT INTO main.places_fts(rowid, name, alt_names) SELECT {p}, name, alt_names FROM t.places WHERE name IS NOT NULL AND name <> '';
-         INSERT INTO main.localities(id, name, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id)
-           SELECT {p}, name, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id FROM t.localities;
+         INSERT INTO main.localities(id, name, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id, about)
+           SELECT {p}, name, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id, {loc_about} FROM t.localities;
          INSERT INTO main.localities_rt(id, min_lat, max_lat, min_lon, max_lon) SELECT {p}, lat, lat, lon, lon FROM t.localities;
          INSERT INTO main.localities_fts(rowid, name, alt_names) SELECT {p}, name, alt_names FROM t.localities;
          INSERT INTO main.localities_ctx(id, tile, name, kind, lat, lon, population, state, country, source_id)

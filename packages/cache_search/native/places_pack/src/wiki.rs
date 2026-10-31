@@ -8,6 +8,7 @@
 //! 3. Wikidata's `wb_items_per_site` dump gives each item's enwiki and enwikivoyage titles (and the item of a title).
 //! 4. Summary: the first paragraph of the enwiki article, from the official multistream dump: its index gives each
 //!    article's bzip2 stream, only those streams are fetched (HTTP Range, one connection, as the dumps host allows) and read.
+//!
 //! A brand's Wikidata item (`brand_wikidata`) is stored as the brand only; it never fills the place's own fields.
 
 use crate::lead::lead_paragraph;
@@ -182,7 +183,8 @@ pub fn run(o: &Opts) -> Result<Report, String> {
         cell.entry(((g.1 * 10.0).floor() as i32, (g.2 * 10.0).floor() as i32)).or_default().push(i);
     }
     let (mut by_tag, mut by_geo, mut by_title) = (0, 0, 0);
-    let mut resolved: Vec<(usize, Option<i64>, Option<String>, Option<String>)> = Vec::new();
+    type Resolved = (usize, Option<i64>, Option<String>, Option<String>);
+    let mut resolved: Vec<Resolved> = Vec::new();
     for (ti, t) in targets.iter().enumerate() {
         let mut q = t.qid.as_deref().and_then(qnum);
         let mut wp = t.wikipedia.clone();

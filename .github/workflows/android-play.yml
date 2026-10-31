@@ -1,5 +1,5 @@
-# Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to a Google Play testing track (for review,
-# or as a draft with status: draft).
+# Builds Cache for Android, signs the App Bundle with the Play upload key and sends it to Google Play's internal, closed (alpha)
+# and open (beta) testing tracks, fully rolled out with nothing left to click in Play Console (or as a draft with status: draft).
 # Manual trigger only. It builds the branch it is started on.
 #
 # Signing: the upload key (PKCS12 keystore, alias "upload") lives only in the Actions secrets ANDROID_UPLOAD_KEYSTORE_B64,
@@ -11,7 +11,8 @@
 #   routing  Valhalla 3.7.0 + the C shim, libvalhalla_shim.so for arm64-v8a (cached; the app finds it in its native library folder)
 #   app      flutter build appbundle: Gradle builds the Rust search core with cargo-ndk (arm64-v8a, with libzim) and llama.cpp
 #            with the NDK (arm64-v8a, x86_64); Rust, libzim and Gradle are cached
-#   play     upload to Play, only the new release on the track, with the chosen status and the release notes, commit
+#   play     upload to Play, only the new release on each track (anything halted, staged or drafted cleared), with the chosen
+#            status and the release notes, commit, then read every track back and fail unless each shows the new release
 name: Android Play
 
 on:
@@ -21,12 +22,12 @@ on:
         description: Release notes (en-US, at most 500 characters)
         type: string
         required: true
-      track:
-        description: Play track
+      tracks:
+        description: Play tracks, comma separated (internal = internal testing, alpha = closed testing, beta = open testing)
         type: string
-        default: alpha
+        default: internal,alpha,beta
       status:
-        description: Release status (completed = sent for review; draft = uploaded, not sent)
+        description: Release status (completed = fully rolled out on every track, anything halted or drafted there cleared; draft = a dry run, uploaded, not sent)
         type: choice
         options: [completed, draft]
         default: completed
@@ -58,6 +59,9 @@ jobs:
             .github
             app/pubspec.yaml
             app/android/play_release.py
+            app/android/play_release_test.py
+      - name: The upload script's tests (a fake Play)
+        run: python3 -I app/android/play_release_test.py
       - name: Check signing and upload configuration
         env:
           ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
@@ -70,19 +74,19 @@ jobs:
             if [[ -z "${!key}" ]]; then echo "::error::Missing required secret: $key"; exit 1; fi
           done
           echo "Required configuration is present (secret values are not logged)."
-      - name: Release notes and track
+      - name: Release notes and tracks
         env:
           NOTES: ${{ inputs.release_notes }}
-          TRACK: ${{ inputs.track }}
+          TRACKS: ${{ inputs.tracks }}
         run: |
           python3 -I - <<'PY'
           import os, sys
-          notes, track = os.environ["NOTES"].strip(), os.environ["TRACK"].strip()
+          notes, tracks = os.environ["NOTES"].strip(), os.environ["TRACKS"].replace(" ", "")
           if not notes: sys.exit("::error::The release notes are empty")
           if len(notes) > 500: sys.exit(f"::error::The release notes are {len(notes)} characters; Play allows at most 500")
           import re
-          if not re.fullmatch(r"[A-Za-z0-9:_-]+", track): sys.exit(f"::error::Not a track name: {track}")
-          print(f"track {track}, release notes {len(notes)} characters")
+          if not re.fullmatch(r"[A-Za-z0-9:_-]+(,[A-Za-z0-9:_-]+)*", tracks): sys.exit(f"::error::Not a list of track names: {tracks}")
+          print(f"tracks {tracks}, release notes {len(notes)} characters")
           PY
       # The version is 1.0.<build>, the build number the same on iPhone and Android: pubspec.yaml's "version: 1.0.27+27" is
       # version 1.0.27, versionCode 27. It is the versionCode Play gets (not the run number), so it is checked here.
@@ -291,8 +295,10 @@ jobs:
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
-          TRACK: ${{ inputs.track }}
+          TRACKS: ${{ inputs.tracks }}
           RELEASE_STATUS: ${{ inputs.status }}
+        # Uploads once, puts the release on every track, commits, then reads every track back and fails the job unless each
+        # shows the new release as sent (completed: fully rolled out, alone on the track).
         run: |
           python3 -I app/android/play_release.py "out/Cache-${{ needs.plan.outputs.build_name }}.aab" \
-            "${{ needs.plan.outputs.build_number }}" "${{ needs.plan.outputs.build_name }}" "$(printf '%s' "$TRACK" | tr -d '[:space:]')"
+            "${{ needs.plan.outputs.build_number }}" "${{ needs.plan.outputs.build_name }}" "$(printf '%s' "$TRACKS" | tr -d '[:space:]')"

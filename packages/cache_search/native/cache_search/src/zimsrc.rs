@@ -135,6 +135,8 @@ pub struct ZimSource {
     pub path: PathBuf,
     pub title: String,
     pub language: Option<String>,
+    /// The ZIM's `Name` metadata (Kiwix's book name without the date, "wikipedia_en_all_maxi"), when it has one.
+    pub name: Option<String>,
     /// Directory entries in the file (all namespaces), from the header.
     entries: u64,
     /// The ZIM carries the Xapian full-text index (`X/fulltext/xapian`) / the title index (`X/title/xapian`), and their
@@ -332,6 +334,7 @@ impl ZimSource {
             path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
         });
         let language = meta("Language");
+        let name = meta("Name");
         let (ft_bytes, ti_bytes) = index_sizes(&zim);
         let has_ft = zim.fulltext_index().ok().flatten().is_some();
         let has_ti = zim.title_index().ok().flatten().is_some();
@@ -356,6 +359,7 @@ impl ZimSource {
             path: path.to_path_buf(),
             title,
             language,
+            name,
             entries,
             has_ft,
             has_ti,

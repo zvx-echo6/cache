@@ -74,6 +74,30 @@ English Wikipedia article whose primary coordinate is within 6 km (towns) or 150
 enwiki and enwikivoyage titles from Wikidata's `wb_items_per_site`. The summary is the article's first paragraph with the
 wikitext markup removed, cut to 500 characters at a sentence end.
 
+## The about step (spec S14, after the summaries are final)
+
+```
+places_pack about --packs work/blocks --llm http://127.0.0.1:8085 --model gemma-4-E2B-it-uncensored-Q4_K_M.gguf \
+  --model-sha256 <sha256 of the GGUF> --log about.jsonl [--state ID] --parallel 2
+```
+
+Fills the `about` column of `places` and `localities` (added when missing), what the app's model sees of a summary. A
+summary of at most 400 characters, white space collapsed, is stored whole. For a longer one, a local instruct model behind
+llama.cpp's OpenAI-style server (`/v1/chat/completions`, temperature 0, top_k 1, seed 0, thinking off) gets the instruction in
+`about.rs` (`PROMPT`) and the summary's first 400 characters, and returns them up to the end of the last complete sentence.
+The answer is stored only when, white space collapsed, it is an exact prefix of the summary, at most 400 characters, and
+ends in `.`, `!` or `?`, optionally followed by exactly one closing `"` `'` `”` `’` `)` or `]`; otherwise `about` is NULL.
+`--from-log <earlier log>` re-applies the checks to an earlier run's answers without calling the model. The model never adds text of its own to the data. The log's first line
+records the model, its SHA-256, the server, the sampling settings and the prompt; then one line per model call (the
+answer, the verdict `model_cut` or `dropped`, seconds) and a last line with the counts.
+
+Server (CPU, CT138; 4 threads so a running step keeps the rest):
+
+```
+docker run -d --name s14-llama --network host -v /build/places/s14/models:/models:ro ghcr.io/ggml-org/llama.cpp:server \
+  -m /models/gemma-4-E2B-it-uncensored-Q4_K_M.gguf --host 127.0.0.1 --port 8085 -t 4 -tb 4 -c 4096 -np 2
+```
+
 ## Places in regions: the tiled build (build host)
 
 The places that regions download are cut on Valhalla's level 1 grid (docs/PLACES-TILES.md). Every step runs in a

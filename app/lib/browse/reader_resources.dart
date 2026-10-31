@@ -60,7 +60,26 @@ const _offlinePolicy =
     "frame-src $zimReaderScheme:; object-src 'none'; "
     "base-uri $zimReaderScheme:; form-action $zimReaderScheme:";
 
+/// ZIMs made without pictures (Kiwix's "mini" and "nopic" editions, such as WikiMed mini) keep each picture's place as a
+/// transparent SVG of its size (`data:image/svg+xml`, fill transparent). Wikipedia's own styles paint infobox pictures white
+/// when the phone is in dark mode (`prefers-color-scheme: dark`, "images with white backgrounds"), so every missing picture
+/// showed as a blank white box: on iPhone, in dark mode at night (1.0.28 feedback). In light mode the placeholder is invisible,
+/// which is why Android looked fine. Those placeholders are made to take no space and no colour. Real pictures are untouched.
+const String kNoPicturePlaceholderStyle =
+    '<style id="cache-no-picture">img[src^="data:image/svg+xml"][src*="fill%3D%22transparent%22"]'
+    '{background:transparent!important;border:0!important;display:none!important}</style>';
+
+/// [html] with [kNoPicturePlaceholderStyle] at the end of its head (or at the start when it has none). Both readers use it.
+String withoutPicturePlaceholders(String html) {
+  final head = RegExp(r'</head\s*>', caseSensitive: false).firstMatch(html);
+  if (head != null) return html.replaceRange(head.start, head.start, kNoPicturePlaceholderStyle);
+  final doctype = RegExp(r'^\s*<!doctype[^>]*>', caseSensitive: false).firstMatch(html);
+  final at = doctype?.end ?? 0;
+  return html.replaceRange(at, at, kNoPicturePlaceholderStyle);
+}
+
 String _offlineHtml(String html) {
+  html = withoutPicturePlaceholders(html);
   const meta =
       '<meta http-equiv="Content-Security-Policy" content="$_offlinePolicy">';
   // Prefix the policy before any archive markup can execute or load resources.

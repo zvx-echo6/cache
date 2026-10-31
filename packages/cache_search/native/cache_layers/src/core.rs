@@ -478,6 +478,19 @@ impl Inner {
         self.remote_pm(l, url)
     }
 
+    /// The archive for a download job: its own reader with its own limit of requests in flight
+    /// ([`LayerDef::pmtiles_download_parallel`]), so a download neither waits behind the map's tile fetches nor holds them up.
+    pub fn download_pmtiles(&self, l: &LayerDef, url: &str) -> Result<Arc<Reader>> {
+        let key = format!("{url}#download");
+        if let Some(r) = self.pm_remote.lock().map_err(|_| Error::internal("poisoned"))?.get(&key) {
+            return Ok(r.clone());
+        }
+        let gate = http::gate_for(&format!("{}#download", l.id), l.pmtiles_download_parallel());
+        let r = Arc::new(Reader::open(Box::new(pmtiles::HttpSource { url: url.to_string(), gate }))?);
+        self.pm_remote.lock().map_err(|_| Error::internal("poisoned"))?.insert(key, r.clone());
+        Ok(r)
+    }
+
     fn cog_set(&self, l: &LayerDef) -> Result<Arc<CogSet>> {
         let mut g = self.cogs.lock().map_err(|_| Error::internal("poisoned"))?;
         if let Some(c) = g.get(&l.id) {

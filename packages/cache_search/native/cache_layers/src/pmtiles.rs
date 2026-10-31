@@ -11,6 +11,12 @@ use std::sync::{Arc, Mutex};
 
 pub const HEADER_LEN: usize = 127;
 
+/// Neighbouring tile ranges closer than this are read in one request (the bytes between them are read and dropped).
+pub const MAX_GAP_BYTES: u64 = 65_536;
+
+/// The most one merged range read holds: what bounds the memory a download keeps in flight.
+pub const MAX_GROUP_BYTES: u64 = 2 * 1024 * 1024;
+
 pub const COMP_NONE: u8 = 1;
 pub const COMP_GZIP: u8 = 2;
 pub const TYPE_MVT: u8 = 1;
@@ -392,7 +398,7 @@ impl Reader {
         let raw = self.src.read(self.header.leaf_offset + e.offset, e.length as u64)?;
         let l = Arc::new(parse_dir(&decompress(&raw, self.header.internal_compression)?)?);
         let mut g = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?;
-        if g.len() > 256 {
+        if g.len() > 1024 {
             g.clear();
         }
         g.insert(e.offset, l.clone());
@@ -432,6 +438,35 @@ impl Reader {
         }
     }
 
+    /// Fetches, all at once, the first-level leaf directories the lookups of `ids` need that are not in memory yet, so a
+    /// download's lookups do not wait for one leaf request after another.
+    pub fn prefetch_leaves(&self, ids: &[u64]) -> Result<()> {
+        let mut need: Vec<Entry> = Vec::new();
+        {
+            let have = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?;
+            for &id in ids {
+                if let Some(e) = find(&self.root, id) {
+                    if e.run_length == 0 && !have.contains_key(&e.offset) && !need.iter().any(|n| n.offset == e.offset) {
+                        need.push(e);
+                    }
+                }
+            }
+        }
+        if need.is_empty() {
+            return Ok(());
+        }
+        let ranges: Vec<(u64, u64)> = need.iter().map(|e| (self.header.leaf_offset + e.offset, e.length as u64)).collect();
+        let raws = self.src.read_many(&ranges)?;
+        let mut g = self.leaves.lock().map_err(|_| Error::internal("poisoned"))?;
+        if g.len() + need.len() > 1024 {
+            g.clear();
+        }
+        for (e, raw) in need.iter().zip(raws) {
+            g.insert(e.offset, Arc::new(parse_dir(&decompress(&raw, self.header.internal_compression)?)?));
+        }
+        Ok(())
+    }
+
     /// Fetch many (offset,len) tile ranges, merging neighbours into fewer reads. Result order matches input.
     pub fn read_ranges(&self, want: &[(u64, u32)]) -> Result<Vec<Vec<u8>>> {
         let mut order: Vec<usize> = (0..want.len()).collect();
@@ -440,7 +475,7 @@ impl Reader {
         for i in order {
             let (o, l) = (want[i].0, want[i].1 as u64);
             match groups.last_mut() {
-                Some(g) if o <= g.0 + g.1 + 65_536 && (o + l).max(g.0 + g.1) - g.0 <= 4 * 1024 * 1024 => {
+                Some(g) if o <= g.0 + g.1 + MAX_GAP_BYTES && (o + l).max(g.0 + g.1) - g.0 <= MAX_GROUP_BYTES => {
                     g.1 = (o + l).max(g.0 + g.1) - g.0;
                     g.2.push(i);
                 }

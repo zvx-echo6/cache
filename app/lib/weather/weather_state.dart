@@ -39,6 +39,10 @@ class WeatherStatus {
 
 enum StatusTone { ok, warn, quiet }
 
+/// Home's Weather and alerts card while the weather part is starting and sources are on (the same placeholder Home shows while it
+/// reads the card).
+const String kWeatherStarting = '…';
+
 /// What the Weather and alerts card on Home shows (see [WeatherState.homeCard]).
 class HomeWeather {
   const HomeWeather({
@@ -658,6 +662,13 @@ class WeatherState extends ChangeNotifier {
 
   // ---------------------------------------------------------------- places
 
+  /// The weather watch settings' own places (1.0.29: they left the Places notebook): "Where I am" and each downloaded region,
+  /// each with its switch. Saved places are switched from the Places notebook. The screen that lists these drops in later.
+  Future<List<({WatchPlace place, bool on})>> watchAreas() async => [
+    for (final p in await placeChoices())
+      if (p.kind != PlaceKind.saved) (place: p, on: settings.watchedPlaces.contains(p.id)),
+  ];
+
   /// Everything that can be watched: where the phone is, each saved place by name, and the downloaded regions.
   Future<List<WatchPlace>> placeChoices() async {
     final p = position?.call();
@@ -1026,6 +1037,9 @@ class WeatherState extends ChangeNotifier {
   /// Weather is not set up for anywhere yet: no forecast switched on, or no watched place with a position. Home then offers
   /// "Turn on weather".
   Future<bool> needsTurnOn() async {
+    // Before the weather part has started (it waits for the search core, which can take minutes on the first start after an
+    // update) no source is listed yet: what is switched on is read from the settings instead.
+    if (!_started) return settings.liveSourcesOn.isEmpty;
     if (!enabledSources.any((c) => groupOf(c) == LiveGroup.forecast)) return true;
     return await homePlace() == null;
   }
@@ -1035,6 +1049,9 @@ class WeatherState extends ChangeNotifier {
   /// earthquakes, rivers and the rest. Several fire sources describe the same fires (incidents and their perimeters), so the fires
   /// listed are those of the one fire source that reports the most.
   Future<HomeWeather> homeCard() async {
+    // Not started yet: sources that are on are not listed until the catalogues are read at start. Saying "Not set up yet" then
+    // read as weather switched off by the update (1.0.28 feedback); it is still getting ready.
+    if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
     if (forecast.isEmpty && counted.isEmpty) return const HomeWeather(message: 'Not set up yet');

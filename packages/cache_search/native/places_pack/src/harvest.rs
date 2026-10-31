@@ -98,7 +98,10 @@ pub fn harvest(rules: &Rules, rules_json: &str, sources: &mut [Box<dyn PlaceSour
 
 /// The harvested places, towns and arrival anchors whose points are inside [west, south, east, north) (the halo included),
 /// in read order. A harvest made before arrival anchors has none.
-pub fn load(c: &Connection, rect: [f64; 4]) -> Result<(Vec<Raw>, Vec<RawLocality>, Vec<Anchor>), String> {
+/// What [`load`] reads: the places, the towns and the arrival anchors.
+pub type Loaded = (Vec<Raw>, Vec<RawLocality>, Vec<Anchor>);
+
+pub fn load(c: &Connection, rect: [f64; 4]) -> Result<Loaded, String> {
     let [w, s, e, n] = rect;
     // The tiles the box touches, for the index; the box itself then filters exactly.
     let (t0, t1) = (tile_id_l1(s, w), tile_id_l1(n - 1e-9, e - 1e-9));

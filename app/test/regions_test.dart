@@ -402,6 +402,112 @@ void main() {
       expect(s.error, "Places for this area aren't available yet.");
     });
 
+    test('a downloading part shows its speed and time left, so a slow part never looks stuck', () {
+      var now = DateTime(2026, 10, 31, 12);
+      final meter = TransferMeter(clock: () => now);
+      LocalRegion at(int done, int total) => LocalRegion(id: 'r', name: 'R', meter: meter, routing: {'state': 'downloading', 'bytes': total, 'done_bytes': done});
+      // the first look has nothing to measure from
+      expect(at(0, 100 << 20).parts.single.words, '0%');
+      now = now.add(const Duration(seconds: 10));
+      final p = at(20 << 20, 100 << 20).parts.single;
+      expect(p.rate!.speedWords, '2.1 MB/s');
+      expect(p.words, '20% · 2.1 MB/s · 40 s left');
+      expect(partStateWords(p), '20% · 2.1 MB/s · 40 s left');
+      expect(at(20 << 20, 100 << 20).partsLine, 'Directions 20% · 2.1 MB/s · 40 s left');
+      // the map part has no byte total: its time left comes from how fast its share of tiles grows
+      final meter2 = TransferMeter(clock: () => now);
+      DownloadedArea area(int done) => DownloadedArea(id: 'a', layerId: 'basemap', bounds: const GeoBounds(west: 0, south: 0, east: 1, north: 1), label: 'R', minZoom: 0, maxZoom: 15, totalTiles: 1000, doneTiles: done, bytes: done * 1000);
+      LocalRegion map(int done) => LocalRegion(id: 'm', name: 'M', meter: meter2, areas: [area(done)]);
+      expect(map(100).parts.single.words, '10%', reason: 'the first look has nothing to measure from');
+      now = now.add(const Duration(minutes: 1));
+      expect(map(200).parts.single.words, '20% · 2 KB/s · 8 min left');
+      expect(const TransferRate(secondsLeft: 4800).leftWords, '1 h 20 min left');
+      expect(const TransferRate(secondsLeft: 7200).leftWords, '2 h left');
+    });
+
+    test('places not published for the area: not available yet, the region complete, nothing to try again', () {
+      // the places server has no current.json
+      final none = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 404 from https://data.cached.info/places/current.json'});
+      final p = none.parts.firstWhere((p) => p.kind == RegionPartKind.places);
+      expect(p.state, PartState.notAvailable);
+      expect(p.complete, isTrue);
+      expect(p.problem, isNull);
+      expect(partStateWords(p), 'Not available yet');
+      expect(none.placesNotAvailable, isTrue);
+      expect(none.phase, RegionPhase.ready);
+      expect(none.error, isNull);
+      expect(none.fraction, 1.0);
+      expect(none.partsLine, 'Places not available yet');
+      // the published index has no tile over the area
+      final empty = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'ready', 'tiles': 0, 'bytes': 0});
+      expect(empty.placesNotAvailable, isTrue);
+      expect(empty.phase, RegionPhase.ready);
+      // places that do exist and fail to download stay a failure, with its fix
+      final tile = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 404 from https://data.cached.info/places/b1/1/2/3.sqlite.gz'});
+      expect(tile.placesNotAvailable, isFalse);
+      expect(tile.phase, RegionPhase.failed);
+      final busy = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 503 from https://data.cached.info/places/current.json'});
+      expect(busy.phase, RegionPhase.failed);
+      expect(placesNotPublished('HTTP 410 from https://x/places/current.json'), isTrue);
+      expect(placesNotPublished('HTTP 404 from https://x/places/index-b1.json.gz'), isFalse);
+      expect(placesNotPublished(null), isFalse);
+    });
+
+    testWidgets('a part waiting for a core that does not list the region is stopped and offers Carry on, which asks again', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.us['us-id']!, routing: true, map: false, places: true);
+        await r.regions.refresh();
+      });
+      expect(r.regions.regionOf('us-id')!.phase, RegionPhase.downloading);
+      // the state 1.0.28 left: the app keeps the region, the core never listed it (its add failed before places were published)
+      r.core.regions.remove('us-id');
+      final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() async {
+        await again.init();
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+      });
+      final l = again.regionOf('us-id')!;
+      expect([for (final p in l.parts) (p.kind, p.state)], [(RegionPartKind.directions, PartState.stopped), (RegionPartKind.places, PartState.stopped)],
+          reason: 'not "waiting" for ever: nothing is queued for it');
+      expect(l.phase, RegionPhase.stopped);
+      expect(again.offer(r.us['us-id']!).kind, RegionOfferKind.carryOn);
+      await tester.runAsync(() => again.carryOn('us-id'));
+      expect(r.core.added.last['parts'], ['places', 'routing']);
+      expect(again.regionOf('us-id')!.phase, RegionPhase.downloading, reason: 'asked again: the parts download');
+      again.dispose();
+      await r.dispose(tester);
+    });
+
+    testWidgets('a region downloaded before places were published gets them at the next start, once they are', (tester) async {
+      final r = await _Rig.boot(tester, places: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.us['us-id']!, routing: true, map: false, places: true);
+        r.core.finish('us-id', part: 'routing');
+        // places were not published then: the core's places part failed for want of current.json
+        final parts = r.core.regions['us-id']!['parts'] as Map<String, dynamic>;
+        parts['places'] = {'state': 'failed', 'tiles': 0, 'bytes': 0, 'done_tiles': 0, 'done_bytes': 0, 'error': 'HTTP 404 from https://data.cached.info/places/current.json'};
+        await r.regions.refresh();
+      });
+      final before = r.regions.regionOf('us-id')!;
+      expect(before.placesNotAvailable, isTrue);
+      expect(before.phase, RegionPhase.ready);
+      final adds = r.core.added.length;
+      // places are published now (the core reads a build); the app starts again
+      final again = RegionsState(policy: r.s.policy, supportDir: () async => r.s.dir, catalogue: r.catalogue, maps: r.s.maps, opener: (_) async => r.core);
+      await tester.runAsync(() async {
+        await again.init();
+        await again.recheckPublished();
+      });
+      expect(r.core.added.length, greaterThan(adds));
+      expect(r.core.added.last['parts'], ['places']);
+      final now = again.regionOf('us-id')!;
+      expect(now.placesNotAvailable, isFalse);
+      expect(now.parts.firstWhere((p) => p.kind == RegionPartKind.places).state, PartState.downloading);
+      again.dispose();
+      await r.dispose(tester);
+    });
+
     testWidgets('Local names the parts; a region from before places offers them, and Update adds only that part', (tester) async {
       final r = await _Rig.boot(tester, places: true);
       await tester.runAsync(() async {

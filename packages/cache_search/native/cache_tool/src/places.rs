@@ -29,6 +29,11 @@ pub struct PlaceMatch {
     /// Where a route to the place goes, when the places data says it is not the place's point (an airport's passenger
     /// terminal, a main entrance, a park's parking).
     pub arrival: Option<(f64, f64)>,
+    /// Spec S14: the place's `about` (the places data's stored `about`: the summary's opening, at most 400 characters) and
+    /// `wikipedia` (its English Wikipedia article title); None when the places data has none (and for a saved place, a
+    /// layer point, an address or coordinates).
+    pub about: Option<String>,
+    pub wikipedia: Option<String>,
 }
 
 /// What the places data says about a POI beyond where it is; each None when the data does not have it.
@@ -57,6 +62,8 @@ impl PlaceMatch {
             osm_category: None,
             details: None,
             arrival: None,
+            about: None,
+            wikipedia: None,
         }
     }
 }
