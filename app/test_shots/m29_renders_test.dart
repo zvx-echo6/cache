@@ -11,7 +11,7 @@ import 'package:cache/browse/place_about.dart';
 import 'package:cache/browse/reader_screen.dart';
 import 'package:cache/guide/guide_book.dart';
 import 'package:cache/guide/guide_reader.dart';
-import 'package:cache/layout/adaptive.dart' show RailPrefs;
+import 'package:cache/layout/adaptive.dart' show PanePrefs, RailPrefs;
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/layers/layer_def.dart' show AreaPhase;
@@ -564,14 +564,8 @@ void main() {
     final layout = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(layout.init);
     final weather = ShotWeather(r);
-    // The lines are the owner's to write (assets/whats_new.md); these are samples from this release's work.
-    const lines = [
-      '**Places** for an area that has none yet say "not available yet" instead of failing.',
-      '**Weather and alerts** in Settings lists your location, your regions and your saved places, each with a switch.',
-      '**Repeaters** open a card on the map, and each imported list is a notebook.',
-      '**Read about it** on a place opens its Wikipedia article.',
-      '**Tablets** show a rail and two panes.',
-    ];
+    // The owner's approved lines (assets/whats_new.md).
+    final lines = whatsNewLines(File('assets/whats_new.md').readAsStringSync(), '1.0.29');
     Widget home(AppUpdates? u) => HomeScreen(layout: layout, weather: weather, updates: u, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {});
     for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
       final t = theme.name;
@@ -632,7 +626,7 @@ void main() {
     final sizes = {'ipad-portrait': kIpadPortrait, 'ipad-landscape': kIpadLandscape, 'android-portrait': kTabPortrait, 'android-landscape': kTabLandscape};
     for (final e in sizes.entries) {
       await _show(tester, Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub), size: e.value);
-      await snap(tester, _out, '6-${e.key}-home-rail');
+      await snap(tester, _out, '6-${e.key}-home');
       await _show(tester, SettingsScreen(deps: r.deps), size: e.value);
       await tester.tap(find.byKey(const ValueKey('settings-weather')));
       await _settle(tester);
@@ -728,22 +722,44 @@ void main() {
     } catch (_) {}
     await o.dispose(tester);
   });
-  testWidgets('6: portrait rail shown and collapsed (iPad, Android tablet), light and dark', (tester) async {
+  testWidgets('6: tablet navigation and hidden lists: upright the bottom bar, sideways the rail; every list hides; light and dark', (tester) async {
     final o = await _idahoReadyNoPlaces(tester);
     final r = o.s;
     final layout = LayoutState(settingsDirOverride: r.dir);
     await tester.runAsync(layout.init);
     final nav = NavState(backend: FakeBackend(), location: r.location, speaker: FakeSpeaker(), positionSource: FakeNavPosition(), fmt: const Fmt(UnitSystem.imperial));
     for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-      for (final (name, size) in [('ipad-portrait', kIpadPortrait), ('android-portrait', kTabPortrait)]) {
+      final t = theme.name;
+      for (final (name, upright, sideways) in [('ipad', kIpadPortrait, kIpadLandscape), ('android', kTabPortrait, kTabLandscape)]) {
+        PanePrefs.testDir = Directory.systemTemp.createTempSync('m29-panes');
+        // Upright: the bottom bar, and Settings with its list shown, then hidden.
+        await _show(tester, SettingsScreen(deps: r.deps), size: upright, theme: theme);
+        await snap(tester, _out, '6-$name-portrait-settings-list-shown-$t');
+        await tester.tap(find.byKey(const ValueKey('pane-hide')));
+        await tester.pumpAndSettle();
+        await snap(tester, _out, '6-$name-portrait-settings-list-hidden-$t');
         final prefs = RailPrefs(dirOverride: Directory.systemTemp.createTempSync('m29-rail'));
-        await _show(tester, Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, railPrefs: prefs), size: size, theme: theme);
-        await snap(tester, _out, '6-$name-rail-shown-${theme.name}');
+        await _show(tester, Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, railPrefs: prefs), size: upright, theme: theme);
+        await snap(tester, _out, '6-$name-portrait-bottom-bar-$t');
+        // Sideways: the rail shown, then hidden; a list shown, then hidden.
+        await _show(tester, Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, railPrefs: prefs), size: sideways, theme: theme);
+        await snap(tester, _out, '6-$name-landscape-rail-shown-$t');
         await tester.tap(find.byKey(const ValueKey('rail-hide')));
         await tester.pumpAndSettle();
-        await snap(tester, _out, '6-$name-rail-collapsed-${theme.name}');
+        await snap(tester, _out, '6-$name-landscape-rail-hidden-$t');
+        PanePrefs.testDir = Directory.systemTemp.createTempSync('m29-panes');
+        await _show(tester, RegionsScreen(regions: o.regions, initialTab: 1), size: sideways, theme: theme);
+        await tester.pump(const Duration(seconds: 5));
+        await _settle(tester);
+        await tester.tap(find.byKey(const ValueKey('local-us-id')));
+        await _settle(tester);
+        await snap(tester, _out, '6-$name-landscape-list-shown-$t');
+        await tester.tap(find.byKey(const ValueKey('pane-hide')));
+        await tester.pumpAndSettle();
+        await snap(tester, _out, '6-$name-landscape-list-hidden-$t');
       }
     }
+    PanePrefs.testDir = null;
     await _show(tester, const SizedBox());
     nav.dispose();
     layout.dispose();

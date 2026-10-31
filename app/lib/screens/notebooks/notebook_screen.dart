@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart';
+
 import '../../layout/layout_state.dart';
 import '../../maps/user_layers.dart';
 import '../../nav/units.dart';
@@ -209,7 +211,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
     final draft = book.isLog ? null : all.where((e) => e.draft).firstOrNull;
     final entries = [for (final e in all) if (!e.draft) e];
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: paneShowButton(context), 
         title: Text(book.name),
         actions: [
           IconButton(

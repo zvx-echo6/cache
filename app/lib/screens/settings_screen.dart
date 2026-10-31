@@ -121,6 +121,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     // A tablet shows the pages beside the list, the first one chosen.
     return TwoPane(
+      id: 'settings',
+      listName: 'Settings',
       initialKey: 'settings-model',
       initial: (_) => AssistantPage(deps: d),
       list: Builder(builder: _list),
@@ -129,7 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _list(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
         listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions]),
         builder: (context, _) => ListView(

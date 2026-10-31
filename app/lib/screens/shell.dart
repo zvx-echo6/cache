@@ -155,7 +155,7 @@ class _ShellState extends State<Shell> {
 
   bool _whatsNewAsked = false;
 
-  /// The rail is hidden in portrait (the person's choice on this device).
+  /// The rail (a tablet held sideways) is hidden: the person's choice on this device.
   bool _railHidden = false;
   late final RailPrefs _railPrefs = widget.railPrefs ?? RailPrefs();
 
@@ -648,11 +648,10 @@ class _ShellState extends State<Shell> {
         );
         // A regular window (640 wide and up, iPad and Android tablets, either way round): the same destinations in a rail on the
         // left, in the bar's order; a stable frame that stays with the keyboard open.
-        if (isRegular(context)) {
-          // Upright, the rail can slide away to give the page the full width; a menu button at the top left brings it back.
-          // Sideways it stays (there is room for it).
-          final portrait = isPortrait(context);
-          final hidden = portrait && _railHidden;
+        // A tablet held sideways: the main destinations in a rail at the side, which slides away to give the page the whole
+        // width (a menu button at the top left brings it back). Upright, the bottom bar, as on a phone.
+        if (isRegular(context) && !isPortrait(context)) {
+          final hidden = _railHidden;
           final reduce = MediaQuery.disableAnimationsOf(context);
           final rail = SafeArea(
             right: false,
@@ -667,14 +666,12 @@ class _ShellState extends State<Shell> {
                       for (final m in pinned) NavigationRailDestination(icon: Icon(m.icon), selectedIcon: Icon(m.selectedIcon), label: Text(m.label)),
                       const NavigationRailDestination(icon: Icon(Icons.apps_outlined), selectedIcon: Icon(Icons.apps), label: Text('Modules')),
                     ],
-                    leading: portrait
-                        ? IconButton(
-                            key: const ValueKey('rail-hide'),
-                            tooltip: 'Hide menu',
-                            icon: const Icon(Icons.menu_open),
-                            onPressed: () => _setRailHidden(true),
-                          )
-                        : null,
+                    leading: IconButton(
+                      key: const ValueKey('rail-hide'),
+                      tooltip: 'Hide menu',
+                      icon: const Icon(Icons.menu_open),
+                      onPressed: () => _setRailHidden(true),
+                    ),
                   ),
           );
           return Scaffold(

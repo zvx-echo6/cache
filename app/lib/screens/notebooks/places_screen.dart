@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../layout/adaptive.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:cache_search/cache_search.dart' show CacheSearchException;
@@ -192,7 +194,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
         return c != 0 ? c : entryTitle(a).toLowerCase().compareTo(entryTitle(b).toLowerCase());
       });
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: paneShowButton(context), 
         title: Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           PopupMenuButton<String>(

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../layout/adaptive.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 
@@ -72,7 +74,7 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(leading: paneShowButton(context), title: Text(title)),
       body: SafeArea(
         top: false,
         child: Column(

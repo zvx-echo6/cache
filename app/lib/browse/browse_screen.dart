@@ -185,6 +185,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   @override
   Widget build(BuildContext context) => TwoPane(
+    id: 'library',
+    listName: 'Library',
     list: Builder(
       builder: (c) {
         _pane = c;
@@ -197,7 +199,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     final k = context.t;
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      appBar: AppBar(title: const Text('Library')),
+      appBar: AppBar(title: const Text('Library'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
         listenable: Listenable.merge([b, sources, ?libs]),
         builder: (context, _) {
@@ -486,7 +488,7 @@ class LibraryItemScreen extends StatelessWidget {
           if (s.failureOf(l) != null) ('Problem', s.failureOf(l)!),
         ];
         return Scaffold(
-          appBar: AppBar(
+          appBar: AppBar(leading: paneShowButton(context), 
             title: Text(s.titleOf(l), maxLines: 1, overflow: TextOverflow.ellipsis),
             actions: [IconButton(key: const ValueKey('item-menu'), tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: () => menu(context))],
           ),

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../layout/adaptive.dart' show paneShowButton;
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../screens/search_model_line.dart';
@@ -392,7 +393,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                     onPressed: () => nav.pop(),
                   ),
                 )
-              : null,
+              : paneShowButton(context),
           title: _searching
               ? TextField(
                   controller: _query,

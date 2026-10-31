@@ -293,6 +293,8 @@ class _GuideReaderScreenState extends State<GuideReaderScreen> {
 
   @override
   Widget build(BuildContext context) => TwoPane(
+    id: 'guide',
+    listName: 'contents',
     placeholder: 'Choose a section',
     list: Builder(
       builder: (c) {
@@ -311,6 +313,7 @@ class _GuideReaderScreenState extends State<GuideReaderScreen> {
       appBar: AppBar(
         title: const Text('Cache guide'),
         actions: [
+          ?paneHideButton(context),
           if (widget.menu != null)
             IconButton(key: const ValueKey('guide-menu'), tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: () => widget.menu!(context)),
         ],
@@ -555,7 +558,7 @@ class GuideSectionScreenState extends State<GuideSectionScreen> {
     final prev = at > 0 ? sections[at - 1] : null;
     final next = at >= 0 && at < sections.length - 1 ? sections[at + 1] : null;
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: paneShowButton(context), 
         title: Text(s.heading, key: ValueKey('guide-section-${s.slug}'), maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(key: const ValueKey('guide-section-search'), tooltip: 'Search the guide', icon: const Icon(Icons.search), onPressed: () => _toContents(search: true)),

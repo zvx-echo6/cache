@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart';
+
 import '../../maps/ui/layer_sheet.dart' show updateRepeaterList;
 import '../../maps/ui/repeater_card.dart' show repeaterDistance;
 import '../../maps/user_layers.dart';
@@ -216,7 +218,7 @@ class _RepeaterListScreenState extends State<RepeaterListScreen> {
           );
         }
         return Scaffold(
-          appBar: AppBar(
+          appBar: AppBar(leading: paneShowButton(context), 
             title: Text(list == null ? 'Repeaters' : 'Repeaters: ${list.name}', maxLines: 1, overflow: TextOverflow.ellipsis),
             actions: [
               if (list != null)

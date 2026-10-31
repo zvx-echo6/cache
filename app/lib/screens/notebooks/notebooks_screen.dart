@@ -106,6 +106,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
   @override
   Widget build(BuildContext context) => TwoPane(
+    id: 'notebooks',
+    listName: 'Notebooks',
     list: Builder(
       builder: (c) {
         _pane = c;
@@ -120,6 +122,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       appBar: AppBar(
         title: const Text('Notebooks'),
         actions: [
+          ?paneHideButton(context),
           IconButton(key: const ValueKey('notebooks-add'), tooltip: 'Add', icon: const Icon(Icons.add), onPressed: _add),
           IconButton(
             key: const ValueKey('notebooks-search'),

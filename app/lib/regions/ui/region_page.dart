@@ -118,7 +118,7 @@ class RegionPage extends StatelessWidget {
         final l = regions.regionOf(id);
         if (l == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Region')),
+            appBar: AppBar(leading: paneShowButton(context), title: const Text('Region')),
             body: const Padding(padding: EdgeInsets.all(18), child: NoteText('This region is no longer on this phone.')),
           );
         }
@@ -149,7 +149,7 @@ class RegionPage extends StatelessWidget {
         final layers = _layerGroups(l);
         final canAddOffroad = !l.hasOffroad && !l.isArea && regions.offroadCatalogue != null;
         return Scaffold(
-          appBar: AppBar(
+          appBar: AppBar(leading: paneShowButton(context), 
             title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis),
             actions: [
               Center(child: Padding(padding: const EdgeInsets.only(right: 4), child: Text(formatBytes(l.bytes), style: TextStyle(fontSize: 14, color: k.secondary)))),

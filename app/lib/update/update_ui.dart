@@ -141,8 +141,8 @@ class UpdateBanner extends StatelessWidget {
   );
 }
 
-/// "What's new in 1.0.N": the owner's lines for this version, from assets/whats_new.md (`## <version>` then one `- ` line each, up to
-/// five; `**lead words**` are bold). Nothing for a version with no lines: Cache never writes them itself.
+/// "What's new in 1.0.N": the owner's lines for this version, from assets/whats_new.md (`## <version>` then one `- ` line each;
+/// `**lead words**` are bold). Nothing for a version with no lines: Cache never writes them itself.
 List<String> whatsNewLines(String markdown, String version) {
   final out = <String>[];
   var inside = false;
@@ -154,7 +154,7 @@ List<String> whatsNewLines(String markdown, String version) {
     }
     if (inside && l.startsWith('- ') && l.length > 2) out.add(l.substring(2).trim());
   }
-  return out.take(5).toList();
+  return out;
 }
 
 /// Whether "What's new" was seen for each version: a small file next to the settings.
@@ -220,11 +220,11 @@ Future<void> showWhatsNew(BuildContext context, {required String version, requir
   context: context,
   showDragHandle: true,
   isScrollControlled: true,
-  constraints: const BoxConstraints(maxWidth: 560),
+  constraints: BoxConstraints(maxWidth: 560, maxHeight: MediaQuery.sizeOf(context).height * 0.85),
   builder: (ctx) {
     final k = ctx.t;
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
         child: Column(
           key: const ValueKey('whats-new'),
