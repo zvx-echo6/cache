@@ -62,6 +62,51 @@ pub fn order_from(tiles: &mut [(u64, u8, u32, u32)], near: [f64; 2]) {
     });
 }
 
+/// The zoom whose tiles are a PMTiles download's blocks (about 39 km across): see [`order_blocks_from`].
+const BLOCK_ZOOM: u8 = 10;
+
+/// The order a download from a PMTiles archive fetches its tiles in: the zooms up to [`BLOCK_ZOOM`] first (few tiles), from
+/// the near point outwards; then block by block (each tile's ancestor at [`BLOCK_ZOOM`]), nearest block first, and inside a
+/// block in tile id order. Tile ids follow the archive's Hilbert order, so the tiles of a block lie side by side in the file
+/// and merge into a few large range reads. [`order_from`] (each zoom from the near point outwards, tile by tile) scattered
+/// every batch across the archive: Idaho's map took one request for every few tiles.
+pub fn order_blocks_from(tiles: &mut [(u64, u8, u32, u32)], near: Option<[f64; 2]>) {
+    let (cx, cy) = match near {
+        Some([lat, lon]) if lat.is_finite() && lon.is_finite() => (lon_to_x(lon, BLOCK_ZOOM), lat_to_y(lat, BLOCK_ZOOM)),
+        _ => (f64::NAN, f64::NAN),
+    };
+    let dist = |z: u8, x: u32, y: u32| -> f64 {
+        if cx.is_nan() {
+            return 0.0;
+        }
+        // the tile's centre in BLOCK_ZOOM tile units
+        let s = (1u64 << BLOCK_ZOOM) as f64 / (1u64 << z) as f64;
+        let (tx, ty) = ((x as f64 + 0.5) * s, (y as f64 + 0.5) * s);
+        (tx - cx).powi(2) + (ty - cy).powi(2)
+    };
+    tiles.sort_by(|a, b| {
+        let key = |t: &(u64, u8, u32, u32)| {
+            if t.1 <= BLOCK_ZOOM {
+                (0u8, t.1, dist(t.1, t.2, t.3), 0u32, 0u32)
+            } else {
+                let k = t.1 - BLOCK_ZOOM;
+                let (bx, by) = (t.2 >> k, t.3 >> k);
+                (1u8, 0, dist(BLOCK_ZOOM, bx, by), bx, by)
+            }
+        };
+        let (ka, kb) = (key(a), key(b));
+        ka.0.cmp(&kb.0)
+            .then(ka.1.cmp(&kb.1))
+            .then(ka.2.total_cmp(&kb.2))
+            .then(ka.3.cmp(&kb.3))
+            .then(ka.4.cmp(&kb.4))
+            .then(a.0.cmp(&b.0))
+    });
+}
+
+/// Tiles a PMTiles download looks up and fetches per batch (their merged range reads run in parallel).
+const PMTILES_BATCH: usize = 1024;
+
 const MAX_ENUMERATED: u64 = 6_000_000;
 
 /// The most tiles a size estimate fetches at one zoom, and in all (see `sample_estimate`).
@@ -553,18 +598,20 @@ impl Inner {
         let total = p.need.len() as u64;
         let max_bytes = p.base.offline.as_ref().and_then(|o| o.max_bytes_per_download);
         let gzip_mvt = p.src.kind != "pmtiles" && (type_of(p.src.format()) == Some(pmtiles::TYPE_MVT) || p.src.format().is_none() && p.base.kind == crate::def::Kind::Vector);
-        let reader = if p.src.kind == "pmtiles" { Some(self.remote_pmtiles(&p.dl, &p.src.url)?) } else { None };
+        let reader = if p.src.kind == "pmtiles" { Some(self.download_pmtiles(&p.dl, &p.src.url)?) } else { None };
         let table = if updating { Table::Staging } else { Table::Tiles };
         if updating {
             store.staging_keep_only(&ver)?;
         }
         // staged tiles of this version from an interrupted update are kept
         let mut todo: Vec<(u64, u8, u32, u32)> = if updating { p.need.iter().filter(|t| !store.staging_has(t.1, t.2, t.3, &ver).unwrap_or(false)).copied().collect() } else { p.need.clone() };
-        if let Some(near) = req.near {
+        if reader.is_some() {
+            order_blocks_from(&mut todo, req.near);
+        } else if let Some(near) = req.near {
             order_from(&mut todo, near);
         }
         let skipped = total - todo.len() as u64;
-        let batch = if reader.is_some() { 256 } else { 48 };
+        let batch = if reader.is_some() { PMTILES_BATCH } else { 48 };
         let workers = p.base.max_parallel().clamp(1, 8);
         let (mut done, mut run_bytes) = (skipped, 0u64);
         let mut inserted: Vec<(u8, u32, u32)> = Vec::new();
@@ -576,6 +623,7 @@ impl Inner {
             }
             let chunk = &todo[at..(at + batch).min(todo.len())];
             let fetched: Vec<Option<Vec<u8>>> = if let Some(r) = &reader {
+                r.prefetch_leaves(&chunk.iter().map(|t| t.0).collect::<Vec<_>>())?;
                 let found: Vec<Option<(u64, u32)>> = chunk.iter().map(|t| r.lookup(t.0)).collect::<Result<_>>()?;
                 let want: Vec<(u64, u32)> = found.iter().flatten().copied().collect();
                 let mut got = r.read_ranges(&want)?.into_iter();
@@ -720,6 +768,50 @@ impl Inner {
 #[cfg(test)]
 mod near_tests {
     use super::*;
+
+    #[test]
+    fn a_pmtiles_download_goes_block_by_block_from_near_outwards_in_tile_id_order() {
+        let req: AreaReq = serde_json::from_str(r#"{"layer":"x","bbox":[-115.5,42.0,-113.0,44.0],"minzoom":8,"maxzoom":13,"near":[42.56,-114.46]}"#).unwrap();
+        let mut tiles = req.tiles(8, 13).unwrap();
+        let mut sorted = tiles.clone();
+        sorted.sort();
+        order_blocks_from(&mut tiles, req.near);
+        let mut again = tiles.clone();
+        again.sort();
+        assert_eq!(again, sorted, "the same tiles, only reordered");
+        // the zooms up to the block zoom come first
+        let first_deep = tiles.iter().position(|t| t.1 > BLOCK_ZOOM).unwrap();
+        assert!(tiles[..first_deep].iter().all(|t| t.1 <= BLOCK_ZOOM));
+        assert!(tiles[first_deep..].iter().all(|t| t.1 > BLOCK_ZOOM));
+        // the first block holds the near point, and each block's tiles are together, in tile id order
+        let block = |t: &(u64, u8, u32, u32)| (t.2 >> (t.1 - BLOCK_ZOOM), t.3 >> (t.1 - BLOCK_ZOOM));
+        let deep = &tiles[first_deep..];
+        assert_eq!(block(&deep[0]), (lon_to_x(-114.46, BLOCK_ZOOM).floor() as u32, lat_to_y(42.56, BLOCK_ZOOM).floor() as u32));
+        let mut seen = std::collections::HashSet::new();
+        for w in deep.windows(2) {
+            if block(&w[0]) == block(&w[1]) {
+                assert!(w[0].0 < w[1].0, "tile id order inside a block");
+            } else {
+                assert!(seen.insert(block(&w[0])), "a block's tiles are never split");
+            }
+        }
+        // a 1024-tile batch of the old order spread across the archive; one of the new order covers few blocks
+        let blocks_in_first_batch: std::collections::HashSet<_> = deep.iter().take(PMTILES_BATCH).map(block).collect();
+        assert!(blocks_in_first_batch.len() <= 2, "{} blocks", blocks_in_first_batch.len());
+        // with no near point the order is still block by block
+        let mut plain = req.tiles(8, 13).unwrap();
+        order_blocks_from(&mut plain, None);
+        assert_eq!(plain.len(), sorted.len());
+    }
+
+    #[test]
+    fn a_download_keeps_more_range_requests_in_flight_unless_the_definition_says_fewer() {
+        let mut d: LayerDef = serde_json::from_value(serde_json::json!({"format":1,"id":"b","title":"B","kind":"vector","transform":"as_is","source":{"type":"pmtiles","url":"https://example.org/a.pmtiles"},"offline":{"allowed":true}})).unwrap();
+        assert_eq!(d.pmtiles_download_parallel(), crate::def::PMTILES_DOWNLOAD_PARALLEL);
+        assert_eq!(d.max_parallel(), 4, "the map's own fetches keep their limit");
+        d.offline.as_mut().unwrap().max_parallel = Some(4);
+        assert_eq!(d.pmtiles_download_parallel(), 4);
+    }
 
     #[test]
     fn tiles_come_by_zoom_then_from_near_outwards() {
