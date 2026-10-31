@@ -2,7 +2,8 @@
 # Install or update Cache Server from a release tarball. Run as root:
 #   install.sh <path-to-release-tarball>
 #
-# The tarball holds `cache-server` (the program), `web/` (the browser app) and a `VERSION` file.
+# The tarball holds `cache-server` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
+# `lib/libcache_search.so` (the core library the helper loads), `web/` (the browser app) and a `VERSION` file.
 # Running this again with a newer tarball is an update: the data folder and the password stay.
 # It installs no operating-system packages.
 #
@@ -55,7 +56,13 @@ case "$VERSION" in
     "" | *[!A-Za-z0-9._-]*) die "the VERSION file holds something that is not a version" ;;
 esac
 [ -x "$STAGE/cache-server" ] || chmod 755 "$STAGE/cache-server" 2>/dev/null || die "the tarball has no cache-server program"
+[ -f "$STAGE/helper/cache-core-helper" ] || die "the tarball has no helper/cache-core-helper"
+[ -f "$STAGE/lib/libcache_search.so" ] || die "the tarball has no lib/libcache_search.so"
 chown -R root:root "$STAGE"
+# the service runs as the cache user: it must execute the program and the helper and read the library and the web files
+chmod 755 "$STAGE/cache-server" "$STAGE/helper/cache-core-helper"
+chmod 644 "$STAGE/lib/libcache_search.so"
+chmod -R u=rwX,go=rX "$STAGE/web" "$STAGE/helper" "$STAGE/lib"
 rm -rf "$OPT/releases/$VERSION"
 mv "$STAGE" "$OPT/releases/$VERSION"
 chmod 755 "$OPT/releases/$VERSION"

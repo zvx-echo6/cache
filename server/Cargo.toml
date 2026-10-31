@@ -3,7 +3,7 @@ name = "cache_server"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "Cache Server: one HTTPS port serving the browser app and the core's search and read calls, behind a single password"
+description = "Cache Server: one HTTPS port serving the browser app and proxying its core calls to a supervised Dart helper, behind a single password"
 # This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
 workspace = "../packages/cache_search/native"
 
@@ -15,11 +15,16 @@ path = "src/lib.rs"
 name = "cache-server"
 path = "src/main.rs"
 
+# A stand-in for the Dart helper, used only by the proxy tests (tests/proxy.rs); it is not installed.
+[[bin]]
+name = "fake-helper"
+path = "testbin/fake_helper.rs"
+test = false
+
 [dependencies]
-cache_search_cli = { path = "../packages/cache_search/cli" }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "signal", "process", "io-util", "sync"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"

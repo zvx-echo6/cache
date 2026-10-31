@@ -886,7 +886,6 @@ name = "cache_server"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "cache_search_cli",
  "http-body-util",
  "hyper",
  "hyper-util",

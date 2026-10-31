@@ -1,17 +1,17 @@
 //! `cache-server`: `serve` runs the server, `set-password` sets (or resets) the one password.
 
-use cache_search_cli::engine::Core;
 use cache_server::auth::{Auth, StoredPassword};
-use cache_server::http::{serve_connection, App, CoreCell};
+use cache_server::helper::{Helper, HelperConfig};
+use cache_server::http::{serve_connection, App};
 use cache_server::{config, tls};
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
 const USAGE: &str = "usage:
-  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls]
+  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--helper <exe>] [--core-lib <lib>]
+      (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so)
   cache-server set-password --data <dir>      (reads the password from standard input)";
 
 struct Args {
@@ -100,7 +100,7 @@ fn set_password(argv: &[String]) -> Result<(), String> {
 }
 
 fn serve(argv: &[String]) -> Result<(), String> {
-    let a = Args::parse(argv, &["data", "web", "listen"], &["no-tls"])?;
+    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib"], &["no-tls"])?;
     let data = PathBuf::from(a.req("data")?);
     let web = PathBuf::from(a.req("web")?);
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
@@ -118,14 +118,17 @@ fn serve(argv: &[String]) -> Result<(), String> {
         eprintln!("no password is set: nobody can sign in. Run: cache-server set-password --data {}", data.display());
     }
 
-    // TODO: the query embedder (hybrid search) comes later. This skeleton opens the core for keyword search only.
-    let cfg = config::core_config(&data).map_err(|e| format!("reading the library folders: {e}"))?;
-    let mut core = Core::open(&cfg).map_err(|e| format!("opening the core: {}", e.to_json()))?;
-    core.wait_ready(Duration::from_secs(600)).map_err(|e| format!("opening the core: {}", e.to_json()))?;
-    let app = Arc::new(App { auth: Arc::new(auth), core: Some(Arc::new(Mutex::new(CoreCell(core)))), web });
+    let install_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
+    let (helper_name, lib_name) = if cfg!(windows) { ("cache-core-helper.exe", "cache_search.dll") } else { ("cache-core-helper", "libcache_search.so") };
+    let helper_exe = a.get("helper").map(PathBuf::from).unwrap_or_else(|| install_dir.join("helper").join(helper_name));
+    let core_lib = a.get("core-lib").map(PathBuf::from).unwrap_or_else(|| install_dir.join("lib").join(lib_name));
+    let helper_cfg = HelperConfig::new(helper_exe, core_lib, data.join("sources.json"));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
+        // TODO: the query embedder (hybrid search) comes later.
+        let helper = Helper::start(helper_cfg).await;
+        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;
         let scheme = if use_tls { "https" } else { "http" };
         eprintln!("listening on {scheme}://{listen}/");
@@ -149,6 +152,7 @@ fn serve(argv: &[String]) -> Result<(), String> {
                 }
             }
         }
+        helper.shutdown().await;
         Ok::<(), String>(())
     })
 }

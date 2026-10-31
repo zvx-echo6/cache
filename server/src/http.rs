@@ -5,18 +5,18 @@
 //!   POST /auth/login    {"password"}        -> 204 and the session cookie; 401 (held back after repeated failures)
 //!   POST /auth/logout                       -> 204
 //!   GET  /auth/check                        -> 204 signed in, 401 not
-//!   GET  /api/status                        -> Core::status
-//!   POST /api/search    {query, options}    -> Core::search
-//!   POST /api/read      {address, max_chars}-> Core::read
-//!   GET  /api/tools                         -> Core::tool_schemas
+//!   POST /api/core      {"op","args"}       -> the core helper's {"ok":true,"result"} or {"ok":false,"error"} (200 either way);
+//!                                              "open" and "close" are answered here, not forwarded: the server owns the one engine
+//!   GET  /api/status                        -> the same, for the "status" op
 //!   anything else                           -> a file from the web folder (no sign-in needed)
 //!
-//! `/api/` needs a valid session. Errors from the core are its own `{"code","message"}` with `ApiError::http_status`.
-//! One line per request goes to stderr: method, path, status, milliseconds. Nothing from the request body or the headers is logged.
+//! `/api/` needs a valid session. An error from the server itself is `{"ok":false,"error":{"code","message"}}`: 401 not signed
+//! in, 400 bad request, 404 no such endpoint, 503 `core_unavailable` while the helper is down. One line per request goes to
+//! stderr: method, path, status, milliseconds. Nothing from the request body or the headers is logged.
 
 use crate::auth::{token_from_cookie, Auth};
+use crate::helper::Helper;
 use crate::webfiles::{self, Resolved};
-use cache_search_cli::engine::{ApiError, Core};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::service_fn;
@@ -25,24 +25,19 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// The largest request body taken, in bytes.
 const MAX_BODY: usize = 1 << 20;
-
-/// The core handle, which holds a raw pointer and so is not `Send` on its own.
-pub struct CoreCell(pub Core);
-
-// SAFETY: the C ABI wants a handle used by one call at a time, not by one thread. Every use goes through the Mutex in `App`,
-// so calls never overlap, and moving the handle between threads between calls is allowed.
-unsafe impl Send for CoreCell {}
+/// The largest body of a signed-in `/api/core` call (imports and uploads travel through it).
+const MAX_CORE_BODY: usize = 64 << 20;
 
 pub struct App {
     pub auth: Arc<Auth>,
     /// `None` only in tests that never reach the core.
-    pub core: Option<Arc<Mutex<CoreCell>>>,
+    pub helper: Option<Arc<Helper>>,
     pub web: PathBuf,
 }
 
@@ -61,8 +56,8 @@ impl Reply {
         Reply { status, headers: vec![("Content-Type", "application/json".into())], body: body.into_bytes() }
     }
 
-    fn api_error(e: &ApiError) -> Reply {
-        Reply::json(e.http_status(), e.to_json())
+    fn error(status: u16, code: &str, message: impl AsRef<str>) -> Reply {
+        Reply::json(status, json!({"ok": false, "error": {"code": code, "message": message.as_ref()}}).to_string())
     }
 
     fn with(mut self, k: &'static str, v: String) -> Reply {
@@ -71,60 +66,41 @@ impl Reply {
     }
 }
 
-fn bad(msg: impl Into<String>) -> ApiError {
-    ApiError::new("bad_json", msg)
-}
-
-fn body_json(body: &[u8]) -> Result<Value, ApiError> {
-    if body.iter().all(u8::is_ascii_whitespace) {
-        return Ok(json!({}));
+/// Run one op on the helper and shape its reply for the browser.
+async fn core_call(app: &App, op: &str, args: Value) -> Reply {
+    let Some(helper) = app.helper.clone() else { return Reply::error(503, "core_unavailable", "the core is not available: no helper") };
+    match helper.call(op, args).await {
+        Ok(mut reply) => {
+            let body = if reply["ok"] == json!(true) {
+                json!({"ok": true, "result": reply["result"].take()})
+            } else {
+                json!({"ok": false, "error": reply["error"].take()})
+            };
+            Reply::json(200, body.to_string())
+        }
+        Err(message) => Reply::error(503, "core_unavailable", message),
     }
-    serde_json::from_slice(body).map_err(|e| bad(format!("request body: {e}")))
 }
 
-fn need_str<'a>(v: &'a Value, key: &str) -> Result<&'a str, ApiError> {
-    v[key].as_str().ok_or_else(|| bad(format!("\"{key}\" (string) is required")))
-}
-
-/// Run one core call on a blocking thread, holding the lock for the whole call.
-async fn with_core<F>(app: &App, f: F) -> Result<String, ApiError>
-where
-    F: FnOnce(&mut Core) -> Result<String, ApiError> + Send + 'static,
-{
-    let Some(core) = app.core.clone() else { return Err(ApiError::new("internal", "the core is not open")) };
-    tokio::task::spawn_blocking(move || {
-        let mut g = core.lock().unwrap_or_else(|e| e.into_inner());
-        f(&mut g.0)
-    })
-    .await
-    .map_err(|e| ApiError::new("internal", format!("core call failed: {e}")))?
-}
-
-async fn api(app: &App, method: &str, path: &str, body: &[u8]) -> Result<String, ApiError> {
+async fn api(app: &App, method: &str, path: &str, body: &[u8]) -> Reply {
     match (method, path) {
-        ("GET", "/api/status") => with_core(app, |c| c.status()).await,
-        ("GET", "/api/tools") => with_core(app, |c| c.tool_schemas()).await,
-        ("POST", "/api/search") => {
-            let v = body_json(body)?;
-            let query = need_str(&v, "query")?.to_string();
-            let options = match &v["options"] {
+        ("GET", "/api/status") => core_call(app, "status", json!({})).await,
+        ("POST", "/api/core") => {
+            let parsed: Result<Value, _> = serde_json::from_slice(body);
+            let Ok(req) = parsed else { return Reply::error(400, "bad_json", "the body is not JSON") };
+            let Some(op) = req["op"].as_str() else { return Reply::error(400, "bad_json", "\"op\" (string) is required") };
+            let args = match &req["args"] {
                 Value::Null => json!({}),
-                o @ Value::Object(_) => o.clone(),
-                _ => return Err(bad("\"options\" must be an object")),
+                a @ Value::Object(_) => a.clone(),
+                _ => return Reply::error(400, "bad_json", "\"args\" must be an object"),
             };
-            // TODO: the query embedder (hybrid search) comes later; this is keyword search only.
-            with_core(app, move |c| c.search(&query, &options.to_string())).await
+            // The server owns the one shared engine, so a tab can neither replace nor close it.
+            if op == "open" || op == "close" {
+                return Reply::json(200, json!({"ok": true, "result": null}).to_string());
+            }
+            core_call(app, op, args).await
         }
-        ("POST", "/api/read") => {
-            let v = body_json(body)?;
-            let address = need_str(&v, "address")?.to_string();
-            let max = match &v["max_chars"] {
-                Value::Null => 6000,
-                m => m.as_i64().filter(|n| i32::try_from(*n).is_ok()).ok_or_else(|| bad("\"max_chars\" must be an integer"))? as i32,
-            };
-            with_core(app, move |c| c.read(&address, max)).await
-        }
-        _ => Err(ApiError::new("not_found", format!("no such endpoint: {method} {path}"))),
+        _ => Reply::error(404, "not_found", format!("no such endpoint: {method} {path}")),
     }
 }
 
@@ -165,12 +141,9 @@ pub async fn route(app: &App, method: &str, path: &str, cookie: Option<&str>, bo
         ("GET", "/auth/check") => Reply::empty(if signed_in { 204 } else { 401 }),
         _ if path == "/api" || path.starts_with("/api/") => {
             if !signed_in {
-                return Reply::empty(401);
+                return Reply::error(401, "unauthorized", "sign in first");
             }
-            match api(app, method, path, body).await {
-                Ok(s) => Reply::json(200, s),
-                Err(e) => Reply::api_error(&e),
-            }
+            api(app, method, path, body).await
         }
         ("GET" | "HEAD", _) => {
             let head = method == "HEAD";
@@ -198,7 +171,10 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<Full<Bytes>> 
     let method = req.method().as_str().to_string();
     let path = req.uri().path().to_string();
     let cookie = req.headers().get(hyper::header::COOKIE).and_then(|v| v.to_str().ok()).map(str::to_string);
-    let reply = match Limited::new(req.into_body(), MAX_BODY).collect().await {
+    // The big limit is for signed-in /api/core calls only; everyone else gets the small one before anything is read.
+    let signed_in = cookie.as_deref().and_then(token_from_cookie).is_some_and(|t| app.auth.is_signed_in(t));
+    let limit = if path == "/api/core" && signed_in { MAX_CORE_BODY } else { MAX_BODY };
+    let reply = match Limited::new(req.into_body(), limit).collect().await {
         Ok(b) => route(&app, &method, &path, cookie.as_deref(), &b.to_bytes()).await,
         Err(_) => Reply::empty(413),
     };
@@ -239,17 +215,20 @@ mod tests {
 
     fn app(dir: &TempDir) -> App {
         let auth = Auth::new(None, Sessions::load(&dir.0.join("sessions.json")), true);
-        App { auth: Arc::new(auth), core: None, web: dir.0.join("web") }
+        App { auth: Arc::new(auth), helper: None, web: dir.0.join("web") }
     }
 
     #[tokio::test]
     async fn api_needs_a_session() {
         let d = TempDir::new("http");
         let a = app(&d);
-        for (m, p) in [("GET", "/api/status"), ("POST", "/api/search"), ("POST", "/api/read"), ("GET", "/api/tools"), ("GET", "/api/other")] {
-            assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
+        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("GET", "/api/other")] {
+            let r = route(&a, m, p, None, b"{}").await;
+            assert_eq!(r.status, 401, "{m} {p}");
+            let v: Value = serde_json::from_slice(&r.body).unwrap();
+            assert_eq!((v["ok"].clone(), v["error"]["code"].clone()), (json!(false), json!("unauthorized")));
         }
-        let r = route(&a, "GET", "/api/status", Some("cache_session=forged"), b"").await;
+        let r = route(&a, "POST", "/api/core", Some("cache_session=forged"), b"{}").await;
         assert_eq!(r.status, 401);
         assert_eq!(route(&a, "GET", "/auth/check", None, b"").await.status, 401);
     }
@@ -267,8 +246,15 @@ mod tests {
         }
         let pair = cookie.split(';').next().unwrap();
         assert_eq!(route(&a, "GET", "/auth/check", Some(pair), b"").await.status, 204);
-        // signed in, but the core is not open in this test
-        assert_eq!(route(&a, "GET", "/api/status", Some(pair), b"").await.status, 500);
+        // signed in, but there is no helper in this test
+        let r = route(&a, "POST", "/api/core", Some(pair), br#"{"op":"version","args":{}}"#).await;
+        assert_eq!(r.status, 503);
+        assert_eq!(serde_json::from_slice::<Value>(&r.body).unwrap()["error"]["code"], "core_unavailable");
+        // malformed calls, unknown endpoints
+        assert_eq!(route(&a, "POST", "/api/core", Some(pair), b"nope").await.status, 400);
+        assert_eq!(route(&a, "POST", "/api/core", Some(pair), br#"{"args":{}}"#).await.status, 400);
+        assert_eq!(route(&a, "POST", "/api/core", Some(pair), br#"{"op":"x","args":[1]}"#).await.status, 400);
+        assert_eq!(route(&a, "GET", "/api/search", Some(pair), b"").await.status, 404);
         assert_eq!(route(&a, "POST", "/auth/logout", Some(pair), b"").await.status, 204);
         assert_eq!(route(&a, "GET", "/auth/check", Some(pair), b"").await.status, 401);
     }

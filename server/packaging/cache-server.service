@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 User=cache
 Group=cache
-ExecStart=/opt/cache-server/current/cache-server serve --data /var/lib/cache-server --web /opt/cache-server/current/web
+ExecStart=/opt/cache-server/current/cache-server serve --data /var/lib/cache-server --web /opt/cache-server/current/web --helper /opt/cache-server/current/helper/cache-core-helper --core-lib /opt/cache-server/current/lib/libcache_search.so
 Restart=always
 RestartSec=5
 StateDirectory=cache-server
