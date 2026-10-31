@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../layout/layout_state.dart';
 import '../../maps/user_layers.dart';
+import '../../nav/units.dart';
 import '../../notebook/sync/connections.dart';
 import '../../settings/app_pin.dart';
 import '../../notebook/notebook_model.dart';
@@ -28,7 +29,35 @@ class NotebookDeps {
     this.pin,
     this.shareAvailable,
     this.now = DateTime.now,
+    this.onShowRepeater,
+    this.onRepeaterDirections,
+    this.fmt,
   });
+
+  /// The same deps with the repeater lists' map actions (the shell's: they switch to Maps).
+  NotebookDeps withRepeaterActions({void Function(Repeater)? onShow, void Function(Repeater)? onDirections, Fmt? fmt}) => NotebookDeps(
+    notebook: notebook,
+    places: places,
+    layout: layout,
+    placesDeps: placesDeps,
+    userLayers: userLayers,
+    connections: connections,
+    pin: pin,
+    shareAvailable: shareAvailable,
+    now: now,
+    onShowRepeater: onShow,
+    onRepeaterDirections: onDirections,
+    fmt: fmt,
+  );
+
+  /// A repeater list's row tapped: Maps opens on the repeater with its card; null: rows do nothing.
+  final void Function(Repeater repeater)? onShowRepeater;
+
+  /// Directions to a repeater (a row's press-and-hold menu); null leaves it out.
+  final void Function(Repeater repeater)? onRepeaterDirections;
+
+  /// Distances in the person's units (the map's).
+  final Fmt? fmt;
 
   final NotebookState notebook;
   final PlaceChoices places;

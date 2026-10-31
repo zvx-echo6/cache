@@ -47,3 +47,5 @@ app.*.map.json
 # Full-size golden pictures (the guide uses the resized copies in assets/guide/shots)
 /test_shots/guide/
 /test_shots/owner/
+/test_shots/m29/
+/test_shots/crisis/

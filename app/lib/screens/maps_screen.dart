@@ -29,7 +29,10 @@ import '../notebook/notebook_state.dart';
 import '../notebook/notebook_text.dart';
 import '../nav/nav_state.dart';
 import '../nav/ui/guidance_panels.dart';
+import '../browse/place_about.dart';
+import '../layout/adaptive.dart' show kSideCardWidth;
 import '../nav/ui/place_card.dart';
+import '../maps/ui/repeater_card.dart';
 import '../nav/ui/route_panel.dart';
 import '../nav/ui/search_panel.dart';
 import '../regions/regions_state.dart';
@@ -39,7 +42,13 @@ import '../theme.dart';
 /// credits, and a layer button; one search bar; a place card; directions and turn-by-turn guidance. The style comes from the
 /// one style generator and the active theme's palette.
 class MapsScreen extends StatefulWidget {
-  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers});
+  const MapsScreen({super.key, required this.location, required this.maps, required this.nav, required this.themeId, this.glyphsLoader, this.regions, this.notebooks, this.onOpenEntry, this.onNewEntryAt, this.userLayers, this.onOpenRepeaterList, this.about});
+
+  /// "Open in notebook" on a repeater's card: its list notebook at its row; null leaves the button out.
+  final void Function(Repeater repeater)? onOpenRepeaterList;
+
+  /// "Read about it" on a place card (the place's Wikipedia article); null leaves it out.
+  final PlaceAbout? about;
 
   /// Notebooks whose entries have places: drawn as pins and listed under "My layers"; null leaves them out.
   final NotebookState? notebooks;
@@ -107,6 +116,7 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.notebooks?.addListener(_pushNotebooks);
     widget.notebooks?.addListener(_notebooksChanged);
     widget.userLayers?.addListener(_pushUser);
+    widget.userLayers?.selectedRepeater.addListener(_onRepeater);
     _lifecycle;
     final c = maps.savedCamera;
     if (c != null) {
@@ -137,6 +147,7 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.notebooks?.removeListener(_pushNotebooks);
     widget.notebooks?.removeListener(_notebooksChanged);
     widget.userLayers?.removeListener(_pushUser);
+    widget.userLayers?.selectedRepeater.removeListener(_onRepeater);
     _restyleTimer?.cancel();
     _idleTimer?.cancel();
     super.dispose();
@@ -453,11 +464,45 @@ class _MapsScreenState extends State<MapsScreen> {
         final ref = repeaterRef(h is Map ? h['properties'] : null);
         if (ref != null && u.selectRepeater(ref.$1, ref.$2) != null) {
           HapticFeedback.selectionClick();
+          // One card at a time: the repeater's replaces a place's.
+          if (nav.selected != null) nav.clearSelection();
           return true;
         }
       }
     } catch (_) {}
     return false;
+  }
+
+  /// A repeater was chosen: its card shows; one chosen outside the map (its list notebook) is brought into view.
+  void _onRepeater() {
+    final u = widget.userLayers;
+    final r = u?.selectedRepeater.value;
+    if (u != null && r != null && u.focusPending) {
+      u.focusPending = false;
+      if (nav.selected != null) nav.clearSelection();
+      if (r.located) _focusOn(r.lat!, r.lon!);
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// The card of the repeater chosen on the map (null when none, or a place card or route is showing).
+  Widget? _repeaterCard() {
+    final u = widget.userLayers;
+    final r = u?.selectedRepeater.value;
+    if (u == null || r == null) return null;
+    final here = nav.here;
+    return RepeaterCard(
+      repeater: r,
+      distance: repeaterDistance(r, nav.fmt, fromLat: here?.lat ?? _lat, fromLon: here?.lon ?? _lon, fromMapCentre: here == null),
+      onClose: u.clearRepeater,
+      onDirections: nav.phase != NavPhase.browsing || !r.located
+          ? null
+          : () {
+              u.clearRepeater();
+              nav.openDirections(MapPlace.pin(r.lat!, r.lon!, name: r.name));
+            },
+      onOpenList: widget.onOpenRepeaterList == null ? null : () => widget.onOpenRepeaterList!(r),
+    );
   }
 
   void _notebookCard(NbEntry e) {
@@ -1046,7 +1091,9 @@ class _MapsScreenState extends State<MapsScreen> {
     } else if (nav.phase == NavPhase.previewing) {
       panel = RoutePanel(nav: nav, fmt: nav.fmt);
     } else if (sel != null && !searching) {
-      panel = PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection);
+      panel = PlaceCard(nav: nav, place: sel, fmt: nav.fmt, onClose: nav.clearSelection, about: widget.about);
+    } else if (!searching && nav.phase == NavPhase.browsing) {
+      panel = _repeaterCard();
     }
     return Align(
       alignment: Alignment.bottomCenter,
@@ -1069,7 +1116,12 @@ class _MapsScreenState extends State<MapsScreen> {
                 AttributionChip(lines: maps.attributions, onTap: _showCredits),
                 const SizedBox(height: 6),
               ],
-              if (panel != null && !searching) SizedBox(width: double.infinity, child: Padding(padding: const EdgeInsets.only(bottom: 8), child: panel)),
+              // From 800 wide a place or repeater card sits on the left (360 wide) and the map stays in view beside it.
+              if (panel != null && !searching)
+                SizedBox(
+                  width: MediaQuery.sizeOf(context).width >= kSideCardWidth && (panel is PlaceCard || panel is RepeaterCard) ? 360 : double.infinity,
+                  child: Padding(padding: const EdgeInsets.only(bottom: 8), child: panel),
+                ),
             ],
           ),
         ),

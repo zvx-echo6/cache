@@ -125,7 +125,7 @@ void main() {
     expect(find.text('Wikipedia'), findsOneWidget);
     await tester.tap(row('setup-model'));
     await tester.pump();
-    expect(opened, isEmpty, reason: 'a done line has no button');
+    expect(opened, ['models'], reason: 'a done line still opens its screen (it is not dead)');
     await r.dispose(tester);
   });
 
@@ -150,7 +150,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(count(1), findsOneWidget);
     expect(tickIn('setup-area'), findsOneWidget);
-    expect(find.text('Wasatch Front · directions and places · 120 MB'), findsOneWidget);
+    expect(find.text('Wasatch Front · Ready'), findsOneWidget);
     await r.dispose(tester);
   });
 
@@ -170,6 +170,9 @@ void main() {
     await tester.tap(row('setup-area'));
     await tester.pump();
     expect(opened, ['area']);
+    // The tap starts a download: the line says so at once, with a spinner instead of its circle.
+    expect(find.text('Starting…'), findsOneWidget);
+    expect(find.byKey(const ValueKey('setup-starting')), findsOneWidget);
     regions.set([_region('ready')]);
     expect(setup.stoppedRegion, isNull, reason: 'a region that is ready leaves nothing to carry on');
     await r.dispose(tester);

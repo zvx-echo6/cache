@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../../location/location_service.dart';
+import '../../location/position_source.dart' show LocationPermissionState;
 import '../../theme.dart';
 import '../../weather/connector.dart';
+import '../../weather/places.dart';
 import '../../weather/source_icon.dart';
 import '../../weather/weather_state.dart';
 import 'catalogues_page.dart';
@@ -39,8 +42,9 @@ String _sentence(String s) {
   return '${t[0].toUpperCase()}${t.substring(1)}.';
 }
 
-/// Settings > Weather and alerts: one line saying how old the data is (with a small refresh button), the sources from the catalogue
-/// (featured ones first, the rest under More sources). The places weather is kept for are in the Places notebook.
+/// Settings > Weather and alerts: one line saying how old the data is (with a small refresh button), what weather watches (your
+/// location, the downloaded regions and the saved places, each with its switch), and the sources from the catalogue (featured ones
+/// first, the rest under More sources).
 class WeatherPage extends StatefulWidget {
   const WeatherPage({super.key, required this.deps});
 
@@ -77,6 +81,7 @@ class _WeatherPageState extends State<WeatherPage> {
           title: 'Weather and alerts',
           children: [
             StatusLine(status: w.status(), updating: w.updating, onRefresh: _refresh),
+            WatchGroups(deps: d),
             if (all.isEmpty)
               NoteText(w.refreshingCatalogues
                   ? 'Loading sources…'
@@ -102,6 +107,149 @@ class _WeatherPageState extends State<WeatherPage> {
           ],
         );
       },
+    );
+  }
+}
+
+/// "What weather watches": your location, the downloaded regions and the saved places, each with its switch. A saved place's switch
+/// is the same one as on its edit page (one value, two views). Switches move at once; turning on your location asks the phone for
+/// it, and when the phone will not give it the switch goes back with why and "Open settings".
+class WatchGroups extends StatefulWidget {
+  const WatchGroups({super.key, required this.deps});
+
+  final SettingsDeps deps;
+
+  @override
+  State<WatchGroups> createState() => _WatchGroupsState();
+}
+
+class _WatchGroupsState extends State<WatchGroups> {
+  WeatherState get w => widget.deps.hub.weather;
+  late Future<List<WatchPlace>> _choices = w.placeChoices();
+  final _query = TextEditingController();
+  String _q = '';
+
+  /// More saved places than this and the group gets a search box.
+  static const int searchFrom = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    w.addListener(_reread);
+  }
+
+  @override
+  void dispose() {
+    w.removeListener(_reread);
+    _query.dispose();
+    super.dispose();
+  }
+
+  // The saved places and regions change with the weather part (a place saved or deleted, a region downloaded).
+  void _reread() {
+    if (mounted) {
+      setState(() {
+        _choices = w.placeChoices();
+      });
+    }
+  }
+
+  Future<void> _setHere(bool on) async {
+    final settings = w.settings;
+    final loc = widget.deps.location;
+    final m = ScaffoldMessenger.of(context);
+    settings.setWatchHere(on);
+    if (!on || loc.fix != null) return;
+    if (!loc.enabled) await loc.setEnabled(true);
+    final ok = await loc.request(explain: () async => true);
+    if (ok) return;
+    settings.setWatchHere(false);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      content: const Text('Could not turn on. Location is blocked.'),
+      action: SnackBarAction(label: 'Open settings', onPressed: loc.openAppSettings),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = w.settings;
+    final loc = widget.deps.location;
+    final k = context.t;
+    return ListenableBuilder(
+      listenable: Listenable.merge([settings, loc]),
+      builder: (context, _) => FutureBuilder<List<WatchPlace>>(
+        future: _choices,
+        builder: (context, snap) {
+          final all = snap.data ?? const <WatchPlace>[];
+          final regions = [for (final p in all) if (p.kind == PlaceKind.region) p];
+          final saved = [for (final p in all) if (p.kind == PlaceKind.saved) p];
+          final words = _q.toLowerCase().split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
+          final shown = [for (final p in saved) if (words.every('${p.name} ${p.subtitle}'.toLowerCase().contains)) p];
+          final blocked = loc.permission == LocationPermissionState.deniedForever || loc.problem == LocationProblem.permissionBlocked;
+          Widget place(WatchPlace p) => SwitchRow(
+            key: ValueKey('watch-${p.id}'),
+            title: p.name,
+            value: settings.watchedPlaces.contains(p.id),
+            onChanged: (on) => settings.setWatched(p.id, on),
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SettingsGroup(
+                label: 'What weather watches',
+                rows: [
+                  if (blocked)
+                    SettingsRow(
+                      key: const ValueKey('watch-here'),
+                      title: 'Your location',
+                      status: const [Part('Location is blocked', Tone.danger)],
+                      trailing: RowButton(key: const ValueKey('watch-here-settings'), label: 'Open settings', onPressed: loc.openAppSettings),
+                    )
+                  else
+                    SwitchRow(
+                      key: const ValueKey('watch-here'),
+                      title: 'Your location',
+                      status: const [Part('Updates while you move. Needs location.')],
+                      value: settings.watchHere,
+                      onChanged: _setHere,
+                    ),
+                ],
+              ),
+              if (regions.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SettingsGroup(label: 'Regions', rows: [for (final p in regions) place(p)]),
+              ],
+              const SizedBox(height: 10),
+              SettingsGroup(
+                label: 'Saved places',
+                rows: [
+                  if (saved.length > searchFrom)
+                    Material(
+                      color: k.surface,
+                      child: TextField(
+                        key: const ValueKey('watch-search'),
+                        controller: _query,
+                        onChanged: (v) => setState(() => _q = v.trim()),
+                        textInputAction: TextInputAction.search,
+                        style: TextStyle(fontSize: 15, color: k.text),
+                        decoration: InputDecoration(
+                          hintText: 'Search places',
+                          hintStyle: TextStyle(color: k.secondary),
+                          prefixIcon: Icon(Icons.search, color: k.secondary),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                        ),
+                      ),
+                    ),
+                  if (saved.isEmpty) const SettingsRow(key: ValueKey('watch-no-places'), title: 'None yet'),
+                  for (final p in shown) place(p),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }

@@ -55,7 +55,13 @@ void main() {
     expect(find.text('Notebooks'), findsOneWidget);
     expect(find.text('Journal'), findsOneWidget);
     expect(find.text('Journal · 0 entries'), findsOneWidget);
+    // + opens New notebook and Add from a file (the same sheet as Maps > Layers > My layers).
+    await tester.tap(find.byKey(const ValueKey('notebooks-add')));
+    await tester.pumpAndSettle();
     expect(find.text('New notebook'), findsOneWidget);
+    expect(find.text('Add from a file'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
     expect(find.text('Log again'), findsNothing);
     expect(find.text('on map'), findsNothing, reason: 'no entry has a place yet');
   });
@@ -63,6 +69,8 @@ void main() {
   testWidgets('New notebook offers the templates and the starter logs; a starter is made at once and opens its quick add', (tester) async {
     final r = _Rig();
     await r.pump(tester, NotebooksScreen(deps: r.deps, templates: _templates()));
+    await tester.tap(find.byKey(const ValueKey('notebooks-add')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('New notebook'));
     await tester.pumpAndSettle();
     for (final t in ['Journal', 'Log', 'Notes', 'Places']) {

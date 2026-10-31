@@ -9,10 +9,13 @@ enum Tone { normal, ok, warn, danger, quiet }
 
 /// One piece of a status line: "Ready" in the good colour inside "Gemma 4 E2B · Ready · Web search off".
 class Part {
-  const Part(this.text, [this.tone = Tone.normal]);
+  const Part(this.text, [this.tone = Tone.normal, this.icon]);
 
   final String text;
   final Tone tone;
+
+  /// A small icon before the text, in the same colour (the info mark of "Places not available yet").
+  final IconData? icon;
 }
 
 /// The pieces joined with " · ".
@@ -39,7 +42,16 @@ Widget statusText(BuildContext context, List<Part> parts, {double size = 13, int
   final k = context.t;
   return Text.rich(
     TextSpan(
-      children: [for (final p in parts) TextSpan(text: p.text, style: TextStyle(color: toneColor(k, p.tone)))],
+      children: [
+        for (final p in parts) ...[
+          if (p.icon != null)
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(padding: const EdgeInsets.only(right: 3), child: Icon(p.icon, size: size + 1, color: toneColor(k, p.tone))),
+            ),
+          TextSpan(text: p.text, style: TextStyle(color: toneColor(k, p.tone))),
+        ],
+      ],
       style: TextStyle(fontSize: size, height: 1.35, color: k.secondary),
     ),
     maxLines: maxLines,
@@ -152,7 +164,11 @@ class SettingsRow extends StatelessWidget {
     this.statusLines = 1,
     this.onHold,
     this.holdLabel = 'Options',
+    this.selected = false,
   });
+
+  /// The row whose page is open beside the list (a tablet's two panes): tinted.
+  final bool selected;
 
   final IconData? icon;
   final Widget? leading;
@@ -193,8 +209,9 @@ class SettingsRow extends StatelessWidget {
     return Semantics(
       container: true,
       customSemanticsActions: hold == null ? null : {CustomSemanticsAction(label: holdLabel): hold},
+      selected: selected,
       child: Material(
-        color: k.surface,
+        color: selected ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : k.surface,
         borderRadius: radius,
         clipBehavior: Clip.antiAlias,
         child: InkWell(

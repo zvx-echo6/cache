@@ -101,7 +101,15 @@ void main() {
   });
 
   group('the reader', () {
+    // A phone (a window under 640 wide): the contents and a section are pages of their own (a tablet shows them side by side).
+    void phoneSize(WidgetTester tester) {
+      tester.view.physicalSize = const Size(1170, 2532);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+    }
+
     Future<void> show(WidgetTester tester, Widget page) async {
+      phoneSize(tester);
       await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: page));
       await tester.pumpAndSettle();
     }
@@ -132,6 +140,7 @@ void main() {
 
     testWidgets('a section page: Previous, where it is in its chapter, Next; search and contents in the top bar', (tester) async {
       final c = book.chapters.first;
+      phoneSize(tester);
       await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: GuideReaderScreen(book: book)));
       await tester.tap(find.byKey(ValueKey('guide-toc-${c.sections[1].slug}')));
       await tester.pumpAndSettle();

@@ -1,4 +1,3 @@
-import 'package:cache_search/cache_search.dart' show CacheSearchException;
 import 'package:flutter/material.dart';
 
 import '../../location/location_service.dart';
@@ -201,23 +200,30 @@ class LayerSheet extends StatelessWidget {
   }
 }
 
-/// "Add from a file": places (a KML, KMZ, GPX or GeoJSON file, into a new Places notebook) or a repeater list (a
-/// RepeaterBook-style KML and/or a CHIRP CSV of the same export).
-Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLayersState? userLayers}) async {
+/// "Add from a file", the same sheet from Notebooks (its + menu) and Maps > Layers > My layers: places (a KML, KMZ, GPX or GeoJSON
+/// file, into your Places notebook) or a repeater list (a RepeaterBook KML and/or a CHIRP CSV of the same export), then the phone's
+/// file picker. Reading a file shows "Reading file…" with a bar until it is done; the end says how many came in, with Show when
+/// [onShowList] is given (the list notebook).
+Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLayersState? userLayers, void Function(String listId)? onShowList}) async {
   final kind = await showModalBottomSheet<String>(
     context: context,
     showDragHandle: true,
     builder: (ctx) => SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: Text('Add from a file', key: const ValueKey('add-file-title'), style: Theme.of(ctx).textTheme.titleLarge),
+          ),
           if (notebooks != null)
             ListTile(
               key: const ValueKey('add-file-places'),
               minTileHeight: 56,
               leading: const Icon(Icons.place_outlined),
               title: const Text('Places'),
-              subtitle: const Text('KML, KMZ, GPX or GeoJSON. They become a Places notebook.'),
+              subtitle: const Text('KML, KMZ, GPX or GeoJSON. They go into your Places notebook.'),
               onTap: () => Navigator.pop(ctx, 'places'),
             ),
           if (userLayers != null)
@@ -229,23 +235,89 @@ Future<void> addMapFile(BuildContext context, {NotebookState? notebooks, UserLay
               subtitle: const Text('A RepeaterBook KML, a CHIRP CSV, or both from the same export.'),
               onTap: () => Navigator.pop(ctx, 'repeaters'),
             ),
+          const SizedBox(height: 8),
         ],
       ),
     ),
   );
   if (kind == null || !context.mounted) return;
   if (kind == 'places') {
-    await importPlacesInto(context, notebooks!, now: DateTime.now);
+    final nb = notebooks!;
+    final mine = nb.notebooks.where((n) => n.savedPlaces).firstOrNull;
+    await importPlacesInto(context, nb, notebookId: mine?.id, now: DateTime.now);
     return;
   }
-  final messenger = ScaffoldMessenger.of(context);
-  try {
-    final r = await withPickedFiles((paths) => userLayers!.importRepeaters(paths));
-    if (r == null) return;
-    final n = (r['repeaters'] as num?)?.toInt() ?? 0;
-    final noPos = (r['without_position'] as num?)?.toInt() ?? 0;
-    messenger.showSnackBar(SnackBar(content: Text('${n == 1 ? '1 repeater' : '$n repeaters'} added${noPos > 0 ? ', $noPos without a position (not on the map)' : ''}')));
-  } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Could not read the file: ${e is CacheSearchException ? e.message : e}')));
+  await importRepeaterFile(ScaffoldMessenger.of(context), userLayers!, onShowList: onShowList);
+}
+
+/// The long action's line while a file is read: "Reading file…" over a thin bar, until the result replaces it.
+SnackBar readingFileBar() => const SnackBar(
+  key: ValueKey('reading-file'),
+  duration: Duration(minutes: 5),
+  content: Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text('Reading file…'),
+      SizedBox(height: 8),
+      LinearProgressIndicator(minHeight: 3),
+    ],
+  ),
+);
+
+/// Picks a repeater file and reads it into a new list ([name] keeps a list's name when it is updated). Returns the new list's id,
+/// or null when nothing came in. Says what happened: "Added 214 repeaters to Notebooks." (with Show), or why not with Choose another
+/// file.
+Future<String?> importRepeaterFile(
+  ScaffoldMessengerState m,
+  UserLayersState u, {
+  String? name,
+  void Function(String listId)? onShowList,
+  Future<Map<String, dynamic>?> Function(Future<Map<String, dynamic>> Function(List<String> paths) use)? pick,
+}) async {
+  void tellAgain(String text) {
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      content: Text(text),
+      action: SnackBarAction(label: 'Choose another file', onPressed: () => importRepeaterFile(m, u, name: name, onShowList: onShowList, pick: pick)),
+    ));
   }
+
+  try {
+    final r = await (pick ?? withPickedFiles<Map<String, dynamic>>)((paths) {
+      m.hideCurrentSnackBar();
+      m.showSnackBar(readingFileBar());
+      return u.importRepeaters(paths, name: name);
+    });
+    if (r == null) return null;
+    final n = (r['repeaters'] as num?)?.toInt() ?? 0;
+    final id = r['id'] as String?;
+    if (n == 0) {
+      if (id != null) {
+        final empty = u.repeaterLists.where((l) => l.id == id).firstOrNull;
+        if (empty != null) await u.delete(empty);
+      }
+      tellAgain('No repeaters found in that file.');
+      return null;
+    }
+    final noPos = (r['without_position'] as num?)?.toInt() ?? 0;
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('repeaters-added'),
+      content: Text('Added ${n == 1 ? '1 repeater' : '$n repeaters'} to Notebooks.${noPos > 0 ? ' $noPos have no position and are not on the map.' : ''}'),
+      action: onShowList == null || id == null ? null : SnackBarAction(label: 'Show', onPressed: () => onShowList(id)),
+    ));
+    return id;
+  } catch (e) {
+    tellAgain('Could not read that file. It needs to be a RepeaterBook KML or a CHIRP CSV.');
+    return null;
+  }
+}
+
+/// "Update from a file" in a repeater list's menu: the same steps as Add from a file; the new list keeps the name and replaces the
+/// old one. Returns the new list's id.
+Future<String?> updateRepeaterList(BuildContext context, UserLayersState u, UserLayer list) async {
+  final id = await importRepeaterFile(ScaffoldMessenger.of(context), u, name: list.name);
+  if (id != null && id != list.id) await u.delete(list);
+  return id;
 }

@@ -40,8 +40,8 @@ void phone(WidgetTester tester, {Size size = const Size(430, 932), double ratio 
 }
 
 /// The light theme with every text style in Roboto (the phone's own font; a test draws a style with no family as boxes).
-ThemeData shotTheme() {
-  final t = buildTheme(CacheThemeId.light);
+ThemeData shotTheme([CacheThemeId id = CacheThemeId.light]) {
+  final t = buildTheme(id);
   TextStyle? r(TextStyle? x) => x?.copyWith(fontFamily: 'Roboto');
   ButtonStyle? b(ButtonStyle? st) {
     if (st == null) return null;
@@ -66,6 +66,10 @@ ThemeData shotTheme() {
     textButtonTheme: TextButtonThemeData(style: b(t.textButtonTheme.style)),
     elevatedButtonTheme: ElevatedButtonThemeData(style: b(t.elevatedButtonTheme.style)),
     inputDecorationTheme: t.inputDecorationTheme.copyWith(hintStyle: r(t.inputDecorationTheme.hintStyle)),
+    navigationRailTheme: t.navigationRailTheme.copyWith(
+      selectedLabelTextStyle: r(t.navigationRailTheme.selectedLabelTextStyle),
+      unselectedLabelTextStyle: r(t.navigationRailTheme.unselectedLabelTextStyle),
+    ),
     navigationBarTheme: t.navigationBarTheme.copyWith(
       labelTextStyle: t.navigationBarTheme.labelTextStyle == null ? null : WidgetStateProperty.resolveWith((s) => r(t.navigationBarTheme.labelTextStyle!.resolve(s))),
     ),
@@ -74,13 +78,16 @@ ThemeData shotTheme() {
 
 /// [page] in the app's light theme, as the phone shows it (a status bar's room at the top). Each call is a new app (a dialog left
 /// open by the last picture is gone).
-Widget shotApp(Widget page, {GlobalKey<ScaffoldMessengerState>? messenger}) => MaterialApp(
+Widget shotApp(Widget page, {GlobalKey<ScaffoldMessengerState>? messenger, CacheThemeId theme = CacheThemeId.light, EdgeInsets? insets}) => MaterialApp(
   key: UniqueKey(),
   debugShowCheckedModeBanner: false,
   scaffoldMessengerKey: messenger,
-  theme: shotTheme(),
+  theme: shotTheme(theme),
   builder: (context, child) => MediaQuery(
-    data: MediaQuery.of(context).copyWith(padding: const EdgeInsets.only(top: 54, bottom: 34), viewPadding: const EdgeInsets.only(top: 54, bottom: 34)),
+    data: MediaQuery.of(context).copyWith(
+      padding: insets ?? const EdgeInsets.only(top: 54, bottom: 34),
+      viewPadding: insets ?? const EdgeInsets.only(top: 54, bottom: 34),
+    ),
     child: DefaultTextStyle.merge(style: const TextStyle(fontFamily: 'Roboto'), child: child!),
   ),
   home: page,

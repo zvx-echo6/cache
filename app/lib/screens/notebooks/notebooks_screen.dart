@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart';
+
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
@@ -11,6 +13,9 @@ import 'notebook_editor.dart';
 import 'notebook_screen.dart';
 import 'notebook_search_screen.dart';
 import 'quick_add_sheet.dart';
+import 'repeater_list_screen.dart';
+import '../../maps/ui/layer_sheet.dart' show addMapFile;
+import '../../maps/user_layers.dart' show UserLayer;
 
 /// The shape a template's icon names.
 IconData templateIcon(String icon) => switch (icon) {
@@ -20,8 +25,9 @@ IconData templateIcon(String icon) => switch (icon) {
       _ => Icons.circle_outlined,
     };
 
-/// Notebooks: the shelf of the user's notebooks (a fresh install has the Journal), "Log again" for the logs used last, search
-/// across all of them, and New notebook.
+/// Notebooks: the shelf of the user's notebooks (a fresh install has the Journal) and of each imported repeater list ("Repeaters:
+/// [name]"), "Log again" for the logs used last, search across all of them, and + for New notebook and Add from a file (the same
+/// sheet as Maps > Layers > My layers).
 class NotebooksScreen extends StatefulWidget {
   const NotebooksScreen({super.key, required this.deps, this.templates});
 
@@ -51,9 +57,31 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     widget.deps.connections?.syncAll();
   }
 
-  void _open(Notebook n) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => NotebookScreen(deps: widget.deps, notebookId: n.id)));
+  /// The shelf's context inside the two panes (a tablet opens a notebook beside the shelf).
+  BuildContext? _pane;
+
+  void _open(Notebook n) => openDetail(_pane ?? context, key: 'notebook-${n.id}', builder: (_) => NotebookScreen(deps: widget.deps, notebookId: n.id));
 
   void _quickAdd(Notebook n) => showQuickAdd(context, notebook: nb, log: n, places: widget.deps.places, now: widget.deps.now);
+
+  void _openRepeaters(String listId) =>
+      openDetail(_pane ?? context, key: 'repeaters-$listId', builder: (_) => RepeaterListScreen(deps: widget.deps, listId: listId));
+
+  Future<void> _add() async {
+    final box = context.findRenderObject() as RenderBox?;
+    final size = box?.size ?? MediaQuery.sizeOf(context);
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(size.width - 220, kToolbarHeight + MediaQuery.paddingOf(context).top, 8, 0),
+      items: [
+        const PopupMenuItem(key: ValueKey('new-notebook'), value: 'new', child: Text('New notebook')),
+        const PopupMenuItem(key: ValueKey('notebooks-add-file'), value: 'file', child: Text('Add from a file')),
+      ],
+    );
+    if (!mounted) return;
+    if (choice == 'new') _new();
+    if (choice == 'file') await addMapFile(context, notebooks: nb, userLayers: widget.deps.userLayers, onShowList: _openRepeaters);
+  }
 
   void _new() {
     final t = _templates;
@@ -77,12 +105,22 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => TwoPane(
+    list: Builder(
+      builder: (c) {
+        _pane = c;
+        return _shelf(c);
+      },
+    ),
+  );
+
+  Widget _shelf(BuildContext context) {
     final k = context.t;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notebooks'),
         actions: [
+          IconButton(key: const ValueKey('notebooks-add'), tooltip: 'Add', icon: const Icon(Icons.add), onPressed: _add),
           IconButton(
             key: const ValueKey('notebooks-search'),
             tooltip: 'Search',
@@ -105,14 +143,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
             ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        key: const ValueKey('new-notebook'),
-        onPressed: _new,
-        icon: const Icon(Icons.add),
-        label: const Text('New notebook'),
-      ),
       body: ListenableBuilder(
-        listenable: nb,
+        listenable: Listenable.merge([nb, ?widget.deps.userLayers]),
         builder: (context, _) {
           if (nb.loading) return const Center(child: CircularProgressIndicator());
           if (nb.error != null) {
@@ -151,6 +183,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
               for (final n in nb.notebooks)
                 Card(
                   key: ValueKey('notebook-${n.id}'),
+                  color: isPaneSelected(context, 'notebook-${n.id}') ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : null,
                   margin: const EdgeInsets.symmetric(vertical: 4),
                   child: ListTile(
                     minTileHeight: 64,
@@ -168,7 +201,21 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                     onTap: () => _open(n),
                   ),
                 ),
-              if (nb.notebooks.isEmpty)
+              for (final l in widget.deps.userLayers?.repeaterLists ?? const <UserLayer>[])
+                Card(
+                  key: ValueKey('repeaters-${l.id}'),
+                  color: isPaneSelected(context, 'repeaters-${l.id}') ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : null,
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  child: ListTile(
+                    minTileHeight: 64,
+                    leading: Icon(Icons.cell_tower, color: k.accent),
+                    title: Text('Repeaters: ${l.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                    subtitle: Text(l.count == 1 ? '1 repeater' : '${l.count} repeaters', maxLines: 1, overflow: TextOverflow.ellipsis),
+                    trailing: l.visible ? Text('on map', style: TextStyle(fontSize: 13, color: k.secondary)) : null,
+                    onTap: () => _openRepeaters(l.id),
+                  ),
+                ),
+              if (nb.notebooks.isEmpty && (widget.deps.userLayers?.repeaterLists.isEmpty ?? true))
                 Padding(
                   padding: const EdgeInsets.only(top: 40),
                   child: Text('No notebooks yet. Make one with New notebook.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17, color: k.secondary)),

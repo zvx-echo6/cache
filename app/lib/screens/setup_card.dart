@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +11,7 @@ import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
 import '../maps/ui/format.dart';
 import '../models/model_downloads.dart';
 import '../regions/regions_state.dart';
+import '../regions/ui/region_page.dart' show openRegionPage;
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../weather/weather_state.dart';
@@ -62,6 +65,7 @@ class SetupCache {
     required this.turnOnWeather,
     required this.addLibrary,
     this.openGuide,
+    this.openWeatherSettings,
   });
 
   final AppState app;
@@ -80,6 +84,9 @@ class SetupCache {
 
   /// Opens the guide at a section (its title); null leaves the guide buttons out.
   final void Function(BuildContext, String title)? openGuide;
+
+  /// Settings > Weather and alerts: where "Turn on weather" goes once weather is on (a done line is not a dead line).
+  final void Function(BuildContext)? openWeatherSettings;
 
   /// The guide section for each line: the same pointers the assistant's setup check gives (kSetupAreas).
   static final List<String> guideTitles = [
@@ -115,15 +122,16 @@ class SetupCache {
     return going?.phase == RegionPhase.failed || going?.phase == RegionPhase.stopped ? going : null;
   }
 
-  /// A region with its road routing on the phone is done; one with road routing on its way runs.
+  /// The first region with its road routing that is ready (places not published for its area count as done).
+  LocalRegion? get readyRegion =>
+      [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting && l.phase == RegionPhase.ready) l].firstOrNull;
+
+  /// A region with its road routing on the phone is done ("Idaho · Ready"; places not published for it are said on its row in
+  /// Regions, not here: one fact in one place); one with road routing on its way runs.
   SetupLine get areaLine {
     final withRouting = [for (final l in regions?.local ?? const <LocalRegion>[]) if (l.hasRouting) l];
-    final ready = withRouting.where((l) => l.phase == RegionPhase.ready).firstOrNull;
-    if (ready != null) {
-      final parts = [if (ready.hasMap) 'map', 'directions', if (ready.hasPlaces) 'places'];
-      final words = parts.length == 1 ? parts.single : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
-      return SetupLine(SetupPhase.done, detail: '${ready.name} · $words · ${formatBytes(ready.bytes)}');
-    }
+    final ready = readyRegion;
+    if (ready != null) return SetupLine(SetupPhase.done, detail: '${ready.name} · Ready');
     final going = withRouting.firstOrNull;
     if (going == null) return const SetupLine(SetupPhase.todo);
     // The same words as the region's row in Regions (one source: they always agree).
@@ -203,7 +211,20 @@ class SetupCard extends StatelessWidget {
 
   Widget _card(BuildContext context, SetupStatus s) {
     final k = context.t;
-    final actions = [setup.chooseModel, setup.getArea, setup.turnOnWeather, setup.addLibrary];
+    // A done line still opens its part of Cache: the model's list, the region's page, the weather settings, the Library.
+    void area(BuildContext c) {
+      final r = setup.readyRegion, regions = setup.regions;
+      if (r != null && regions != null) {
+        openRegionPage(c, regions, r.id);
+      } else {
+        setup.getArea(c);
+      }
+    }
+
+    void weather(BuildContext c) => s.weather.done && setup.openWeatherSettings != null ? setup.openWeatherSettings!(c) : setup.turnOnWeather(c);
+    final actions = [setup.chooseModel, area, weather, setup.addLibrary];
+    // "Get your area" with a stopped region starts a download: it says "Starting…" at once.
+    final starts = [false, setup.stoppedRegion != null, false, false];
     return Container(
       key: const ValueKey('setup-card'),
       padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
@@ -243,6 +264,7 @@ class SetupCard extends StatelessWidget {
               title: _titles[i],
               reason: _reasons[i],
               line: s.lines[i],
+              starts: starts[i],
               onTap: () => actions[i](context),
               onGuide: setup.openGuide == null ? null : () => setup.openGuide!(context, SetupCache.guideTitles[i]),
             ),
@@ -252,21 +274,68 @@ class SetupCard extends StatelessWidget {
   }
 }
 
-class _SetupRow extends StatelessWidget {
-  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap, this.onGuide});
+class _SetupRow extends StatefulWidget {
+  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap, this.onGuide, this.starts = false});
 
   final String title;
   final String reason;
   final SetupLine line;
   final VoidCallback onTap;
 
+  /// A tap starts a download (not a screen change): the line says "Starting…" with a spinner until its state moves.
+  final bool starts;
+
   /// Opens this line's section of the guide.
   final VoidCallback? onGuide;
 
   @override
+  State<_SetupRow> createState() => _SetupRowState();
+}
+
+class _SetupRowState extends State<_SetupRow> {
+  bool _starting = false;
+  Timer? _giveUp;
+
+  String get title => widget.title;
+  String get reason => widget.reason;
+  SetupLine get line => widget.line;
+  VoidCallback? get onGuide => widget.onGuide;
+
+  @override
+  void didUpdateWidget(_SetupRow old) {
+    super.didUpdateWidget(old);
+    // The download moved (its line changed): the line shows where it is now.
+    if (_starting && (old.line.phase != line.phase || old.line.detail != line.detail)) _stop();
+  }
+
+  @override
+  void dispose() {
+    _giveUp?.cancel();
+    super.dispose();
+  }
+
+  void _stop() {
+    _giveUp?.cancel();
+    _starting = false;
+  }
+
+  void onTap() {
+    if (widget.starts && !_starting) {
+      setState(() => _starting = true);
+      // Nothing moved in 15 seconds: the line goes back to what it says (the snackbar has said why).
+      _giveUp = Timer(const Duration(seconds: 15), () {
+        if (mounted) setState(_stop);
+      });
+    }
+    widget.onTap();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final Widget mark = switch (line.phase) {
+    final Widget mark = _starting
+        ? SizedBox(key: const ValueKey('setup-starting'), width: 26, height: 26, child: Padding(padding: const EdgeInsets.all(3), child: CircularProgressIndicator(strokeWidth: 2.5, color: k.accent)))
+        : switch (line.phase) {
       SetupPhase.done => Container(
         key: const ValueKey('setup-tick'),
         width: 26,
@@ -297,7 +366,7 @@ class _SetupRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                Text(line.detail ?? reason, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
+                Text(_starting ? 'Starting…' : line.detail ?? reason, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: k.secondary)),
                 if (running) ...[
                   const SizedBox(height: 6),
                   LinearProgressIndicator(
@@ -312,7 +381,7 @@ class _SetupRow extends StatelessWidget {
               ],
             ),
           ),
-          if (!line.done) ...[
+          if (!line.done && !_starting) ...[
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: k.secondary),
           ],
@@ -332,7 +401,7 @@ class _SetupRow extends StatelessWidget {
               if (!line.done)
                 ListTile(leading: const Icon(Icons.play_arrow), title: Text(title), onTap: () => Navigator.pop(ctx, false)),
               ListTile(
-                key: ValueKey('${key is ValueKey<String> ? (key as ValueKey<String>).value : title}-guide'),
+                key: ValueKey('${widget.key is ValueKey<String> ? (widget.key as ValueKey<String>).value : title}-guide'),
                 leading: const Icon(Icons.menu_book_outlined),
                 title: const Text('How to, in the guide'),
                 onTap: () => Navigator.pop(ctx, true),
@@ -347,10 +416,10 @@ class _SetupRow extends StatelessWidget {
     }
 
     return Semantics(
-      button: !line.done,
+      button: true,
       customSemanticsActions: guide == null ? null : {CustomSemanticsAction(label: 'How to, in the guide'): guide},
       child: InkWell(
-        onTap: line.done ? null : onTap,
+        onTap: _starting ? null : onTap,
         onLongPress: guide == null ? null : hold,
         borderRadius: BorderRadius.circular(12),
         child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 48), child: body),

@@ -1,28 +1,33 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
-import 'package:cache_search/cache_search.dart' show GeoPoint;
+import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../browse/browse_screen.dart';
 import '../browse/browse_state.dart';
 import '../browse/catalogue_screen.dart' show AddToLibraryScreen;
+import '../browse/place_about.dart';
 import '../browse/reader_screen.dart';
 import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
+import '../chat/crisis.dart';
 import '../chat/navigation_action.dart';
 import '../guide/app_links.dart';
 import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
+import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
 import '../layout/modules_screen.dart';
 import '../location/location_service.dart';
 import '../maps/maps_state.dart';
+import '../maps/user_layers.dart' show Repeater;
 import '../nav/nav_state.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/regions_list_sheet.dart';
@@ -31,11 +36,16 @@ import '../search/app_search_providers.dart';
 import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
 import '../settings/hub.dart';
+import '../sources/libraries_state.dart' show LibraryItem;
 import '../sources/sources_state.dart';
+import '../update/app_update.dart' show ReleaseFileSource;
+import '../update/update_ui.dart';
 import '../video/video_state.dart';
 import '../weather/alert_notifier.dart';
 import '../weather/alert_watch.dart';
 import 'ask_screen.dart';
+import 'crisis_card.dart' show CrisisHelp;
+import 'crisis_help.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
@@ -44,6 +54,7 @@ import '../notebook/notebook_model.dart';
 import 'notebooks/notebook_screen.dart';
 import 'notebooks/notebooks_screen.dart';
 import 'notebooks/quick_add_sheet.dart';
+import 'notebooks/repeater_list_screen.dart';
 import 'settings/about_pages.dart' show AboutPage;
 import 'settings/appearance_page.dart';
 import 'settings/assistant_page.dart';
@@ -125,6 +136,23 @@ class _ShellState extends State<Shell> {
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
+    // Is a newer build out for this phone (cached.info's release file)? iPhone: TestFlight; Android: the Play Store app.
+    currentAppUpdates = _updates;
+    unawaited(_updates?.check());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _whatsNew());
+  }
+
+  late final AppUpdates? _updates = Platform.isIOS || Platform.isAndroid
+      ? AppUpdates(source: ReleaseFileSource(installedBuild: installedBuild), openUrl: widget.hub.openUrl, android: Platform.isAndroid, dismissed: DismissedUpdate())
+      : null;
+
+  bool _whatsNewAsked = false;
+
+  /// "What's new" once after an update, on Home only, never over another screen or pop-up (it waits until Home is back).
+  Future<void> _whatsNew() async {
+    if (_whatsNewAsked || !mounted || _module != null || _onModules || !(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    _whatsNewAsked = true;
+    await maybeShowWhatsNew(context, seen: WhatsNewSeen(), firstInstall: widget.app.models.isEmpty);
   }
 
   void _openAlert(AlertFocus f) {
@@ -149,10 +177,13 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
-  void _goHome() => setState(() {
-        _module = null;
-        _onModules = false;
-      });
+  void _goHome() {
+    setState(() {
+      _module = null;
+      _onModules = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _whatsNew());
+  }
 
   void _goModules() => setState(() {
         _module = null;
@@ -266,6 +297,7 @@ class _ShellState extends State<Shell> {
     turnOnWeather: (context) => turnOnWeather(context, _weatherTurnOn),
     addLibrary: (context) => showAddToLibrary(context, widget.browse),
     openGuide: (context, title) => openGuide(context, title: title),
+    openWeatherSettings: (_) => _openWeatherSettings(),
   );
 
   /// "Get your area": the Regions sheet for where the phone is; without a position, the regions to search.
@@ -474,13 +506,76 @@ class _ShellState extends State<Shell> {
     null => null,
   };
 
+  /// The Notebooks' deps with the repeater lists' map actions (a row opens Maps on its repeater).
+  late final NotebookDeps? _notebookDeps = widget.notebooks?.withRepeaterActions(onShow: _showRepeater, onDirections: _repeaterDirections, fmt: widget.nav.fmt);
+
+  /// A repeater list's row: Maps, on the repeater, with its card.
+  void _showRepeater(Repeater r) {
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    widget.notebooks?.userLayers?.showRepeater(r);
+    _goModule(ModuleId.maps);
+  }
+
+  /// Directions to a repeater (its row's menu): the way there on the map, as from its card.
+  void _repeaterDirections(Repeater r) {
+    if (!r.located) return;
+    if (widget.nav.phase != NavPhase.browsing) {
+      _say('Finish or end the route first');
+      return;
+    }
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    _goModule(ModuleId.maps);
+    widget.nav.openDirections(MapPlace.pin(r.lat!, r.lon!, name: r.name));
+  }
+
+  /// "Open in notebook" on a repeater's card: its list notebook, at its row.
+  void _openRepeaterList(Repeater r) {
+    final deps = _notebookDeps;
+    if (deps == null) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RepeaterListScreen(deps: deps, listId: r.listId, focusItem: r.item)));
+  }
+
+  /// "Read about it" on a place card: the place's article in the phone's Wikipedia, in the Library's reader.
+  late final PlaceAbout _about = LibraryPlaceAbout(
+    sources: widget.sources,
+    openReader: (z, address) => Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => ZimReaderScreen(sources: widget.sources, zim: z, address: address, layout: widget.layout)),
+    ),
+    onGetWikipedia: () => showAddToLibrary(context, widget.browse),
+    onOpenLibrary: () => _goModule(ModuleId.library),
+  );
+
+  /// The safety card's turns in Ask (no detector yet: only "Need help now?" opens the card).
+  final CrisisWatch _crisis = CrisisWatch();
+
+  late final CrisisHelp _crisisHelp = AppCrisisHelp(
+    nav: widget.nav,
+    location: widget.location,
+    policy: widget.hub.policy,
+    installedIds: () => {for (final z in widget.sources.zims) ?widget.sources.originOf(z)?.name, for (final l in widget.browse.libraries?.libraries ?? const <LibraryItem>[]) l.folderName},
+    onOpenGuides: (_) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      _goModule(ModuleId.library);
+    },
+    onGetGuides: (_) => showAddToLibrary(context, widget.browse),
+    onGetMap: (_) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      _getArea(context);
+    },
+    onDirections: (_, place) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      _goModule(ModuleId.maps);
+      if (widget.nav.phase == NavPhase.browsing) widget.nav.openDirections(place);
+    },
+  );
+
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, crisis: _crisis, crisisHelp: _crisisHelp),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
-        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers),
+        ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
-        ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this phone'))) : NotebooksScreen(deps: widget.notebooks!),
+        ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this phone'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 
@@ -494,6 +589,8 @@ class _ShellState extends State<Shell> {
     onAsk: _askFromHome,
     onOpenSettings: _openSettings,
     onOpenShortcut: _openShortcut,
+    updates: _updates,
+    onOpenWeatherSettings: _openWeatherSettings,
   );
 
   @override
@@ -515,28 +612,58 @@ class _ShellState extends State<Shell> {
           selected = i < 0 ? pinned.length + 1 : i + 1;
         }
         final show = _onModules ? 1 : (_module == null ? 0 : 2 + ModuleId.values.indexOf(_module!));
+        void go(int i) {
+          if (i == 0) {
+            _goHome();
+          } else if (i == pinned.length + 1) {
+            _goModules();
+          } else {
+            _goModule(pinned[i - 1]);
+          }
+        }
+
+        final stack = IndexedStack(
+          index: show,
+          children: [
+            _home(),
+            ModulesScreen(layout: layout, app: widget.app, onOpen: _goModule),
+            for (final m in ModuleId.values) _built.contains(m) ? _moduleScreen(m) : const SizedBox.shrink(),
+          ],
+        );
+        // A regular window (640 wide and up, iPad and Android tablets, either way round): the same destinations in a rail on the
+        // left, in the bar's order; a stable frame that stays with the keyboard open.
+        if (isRegular(context)) {
+          return Scaffold(
+            body: Row(
+              children: [
+                SafeArea(
+                  right: false,
+                  child: NavigationRail(
+                    key: const ValueKey('nav-rail'),
+                    minWidth: kRailWidth,
+                    labelType: NavigationRailLabelType.all,
+                    selectedIndex: selected,
+                    onDestinationSelected: go,
+                    destinations: [
+                      const NavigationRailDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: Text('Home')),
+                      for (final m in pinned) NavigationRailDestination(icon: Icon(m.icon), selectedIcon: Icon(m.selectedIcon), label: Text(m.label)),
+                      const NavigationRailDestination(icon: Icon(Icons.apps_outlined), selectedIcon: Icon(Icons.apps), label: Text('Modules')),
+                    ],
+                  ),
+                ),
+                VerticalDivider(width: 1, thickness: 1, color: Theme.of(context).dividerColor.withValues(alpha: 0.3)),
+                Expanded(child: stack),
+              ],
+            ),
+          );
+        }
         return Scaffold(
-          body: IndexedStack(
-            index: show,
-            children: [
-              _home(),
-              ModulesScreen(layout: layout, app: widget.app, onOpen: _goModule),
-              for (final m in ModuleId.values) _built.contains(m) ? _moduleScreen(m) : const SizedBox.shrink(),
-            ],
-          ),
+          body: stack,
           bottomNavigationBar: keyboardOpen
               ? null
               : NavigationBar(
                   selectedIndex: selected,
-                  onDestinationSelected: (i) {
-                    if (i == 0) {
-                      _goHome();
-                    } else if (i == pinned.length + 1) {
-                      _goModules();
-                    } else {
-                      _goModule(pinned[i - 1]);
-                    }
-                  },
+                  onDestinationSelected: go,
                   destinations: [
                     const NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
                     for (final m in pinned) NavigationDestination(icon: Icon(m.icon), selectedIcon: Icon(m.selectedIcon), label: m.label),

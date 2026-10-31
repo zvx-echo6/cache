@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../layout/adaptive.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../theme.dart';
@@ -281,13 +283,26 @@ class _GuideReaderScreenState extends State<GuideReaderScreen> {
     super.dispose();
   }
 
+  /// The contents' context inside the two panes (a tablet shows the section beside the contents).
+  BuildContext? _pane;
+
   void _openSection(GuideSection s) {
     _focus.unfocus();
-    Navigator.of(context).push(_section(widget.book, s, menu: widget.menu));
+    openDetail(_pane ?? context, key: s.title, builder: (_) => GuideSectionScreen(book: widget.book, section: s, menu: widget.menu));
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => TwoPane(
+    placeholder: 'Choose a section',
+    list: Builder(
+      builder: (c) {
+        _pane = c;
+        return _contents(c);
+      },
+    ),
+  );
+
+  Widget _contents(BuildContext context) {
     final k = context.t;
     final q = _query.text.trim();
     final hits = widget.book.search(q);

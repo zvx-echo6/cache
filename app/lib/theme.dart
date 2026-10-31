@@ -279,7 +279,19 @@ ThemeData buildTheme(CacheThemeId id) {
             color: s.contains(WidgetState.selected) ? k.accent : k.secondary,
           )),
     ),
+    // A tablet's rail: the bar's look, in a column.
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: k.surface,
+      indicatorColor: k.primary.withValues(alpha: 0.28),
+      selectedIconTheme: IconThemeData(size: 26, color: k.accent),
+      unselectedIconTheme: IconThemeData(size: 26, color: k.secondary),
+      selectedLabelTextStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.accent),
+      unselectedLabelTextStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary),
+    ),
+    // On a tablet a sheet is a centred sheet 560 wide at most, and a pop-up 400 wide at most (a phone is narrower than both).
+    bottomSheetTheme: const BottomSheetThemeData(constraints: BoxConstraints(maxWidth: 560)),
     dialogTheme: DialogThemeData(
+      constraints: const BoxConstraints(maxWidth: 400),
       backgroundColor: k.surface,
       surfaceTintColor: Colors.transparent,
       titleTextStyle: textTheme.titleMedium,

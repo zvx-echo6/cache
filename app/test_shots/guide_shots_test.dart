@@ -791,6 +791,8 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'notebooks');
 
+    await tester.tap(find.byKey(const ValueKey('notebooks-add')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('New notebook'));
     await tester.pumpAndSettle();
     await shot(tester, 'notebook-new');

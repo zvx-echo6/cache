@@ -6,6 +6,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../settings/hub.dart';
 import '../../theme.dart';
+import '../../update/update_ui.dart';
 import '../../version.dart';
 import 'widgets.dart';
 
@@ -17,7 +18,13 @@ const String kCreditsAsset = 'assets/credits.md';
 
 /// Settings > Credits and licences: the version, the licence, the credits and the open-source licences.
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion});
+  const AboutPage({super.key, this.openUrl = openInSystemBrowser, this.version = installedVersion, this.updates, this.whatsNew = currentWhatsNew});
+
+  /// This version's "What's new" lines (the owner's); none leaves the row out.
+  final Future<List<String>> Function() whatsNew;
+
+  /// The iPhone's update check (the app's when null): the Version line says when a newer build is out, with Open TestFlight.
+  final AppUpdates? updates;
 
   /// How a link is opened (the phone's browser; a test passes its own).
   final UrlOpener openUrl;
@@ -32,7 +39,40 @@ class AboutPage extends StatelessWidget {
       children: [
         SettingsGroup(
           rows: [
-            SettingsRow(title: 'Version', statusWidget: _VersionText(version: version)),
+            ListenableBuilder(
+              listenable: updates ?? currentAppUpdates ?? ValueNotifier(0),
+              builder: (context, _) {
+                final u = updates ?? currentAppUpdates;
+                final newer = u?.available;
+                return SettingsRow(
+                  key: const ValueKey('about-version'),
+                  title: 'Version',
+                  statusWidget: newer == null
+                      ? _VersionText(version: version)
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _VersionText(version: version),
+                            statusText(context, [Part('New version available: ${newer.version}', Tone.ok)]),
+                          ],
+                        ),
+                  trailing: newer == null ? null : RowButton(key: const ValueKey('about-update-open'), label: u!.openLabel, onPressed: u.open),
+                );
+              },
+            ),
+            FutureBuilder<List<String>>(
+              future: whatsNew(),
+              builder: (context, snap) {
+                final lines = snap.data ?? const <String>[];
+                if (lines.isEmpty) return const SizedBox.shrink();
+                return SettingsRow(
+                  key: const ValueKey('about-whats-new'),
+                  icon: Icons.new_releases_outlined,
+                  title: "What's new in $kAppVersion",
+                  onTap: () => showWhatsNew(context, version: kAppVersion, lines: lines),
+                );
+              },
+            ),
             SettingsRow(
               title: 'Licence',
               status: const [Part('$kAppLicenceId. Free software: you may share and change it under the GNU Affero General Public License, version 3 or later.')],

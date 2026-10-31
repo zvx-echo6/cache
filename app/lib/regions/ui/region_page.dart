@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart';
+
 import '../../maps/layers/layer_def.dart';
 import '../../maps/ui/format.dart';
+import '../../screens/download_confirm.dart' show openStorageForSpace;
 import '../../screens/settings/widgets.dart';
 import '../../theme.dart';
 import '../problem_words.dart';
@@ -10,18 +13,27 @@ import '../regions_state.dart';
 import 'region_actions.dart';
 
 /// Opens the page of region [id] (each part with where it stands and its fix).
+/// Beside the list on a tablet (Regions' two panes), else as a page of its own.
 Future<void> openRegionPage(BuildContext context, RegionsState regions, String id) =>
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RegionPage(regions: regions, id: id)));
+    openDetail(context, key: 'region-$id', builder: (_) => RegionPage(regions: regions, id: id));
 
 /// The line under a region's name: "Ready · 1.8 GB" when all of it is here; otherwise only the parts that are not ready and where
 /// each stands ("Places 40% · Off-road waiting"), in the warning colour when something stopped and the danger colour when it failed.
 List<Part> regionStatusParts(RegionsState regions, LocalRegion l) => switch (l.phase) {
-  RegionPhase.ready => [Part('${l.isArea ? 'Map ready' : 'Ready'} · ${formatBytes(l.bytes)}')],
+  // Places not published for the area count as done; the row still says so, in the neutral colour with an info mark (a search that
+  // finds no places is then understood). On a narrow row the size goes before the note does.
+  RegionPhase.ready => [
+    Part('${l.isArea ? 'Map ready' : 'Ready'} · ${formatBytes(l.bytes)}'),
+    if (l.placesNotAvailable) ...[const Part(' · '), const Part(kPlacesNotAvailableShort, Tone.quiet, Icons.info_outline)],
+  ],
   RegionPhase.downloading => [Part(l.partsLine)],
   RegionPhase.paused => [Part(regions.paused ?? 'Paused', Tone.warn), Part(' · ${l.partsLine}')],
   RegionPhase.stopped => [Part(l.partsLine, Tone.warn)],
   RegionPhase.failed => [Part(l.partsLine, Tone.danger)],
 };
+
+/// "Places not available yet": a region's places not published for its area, on its row.
+const String kPlacesNotAvailableShort = 'Places not available yet';
 
 /// What the bar under a downloading region says: how far the whole region is and the part downloading now, "56% of 2.6 GB in all ·
 /// now map" (the size in all when the catalogue knows it). The line above it says how far each part is.
@@ -55,6 +67,7 @@ class RegionRow extends StatelessWidget {
     };
     return SettingsRow(
       key: ValueKey('local-${l.id}'),
+      selected: isPaneSelected(context, 'region-${l.id}'),
       title: l.name,
       statusLines: 2,
       statusWidget: Column(
@@ -112,11 +125,14 @@ class RegionPage extends StatelessWidget {
         final k = context.t;
         final m = ScaffoldMessenger.of(context);
         void fix(bool again) => carryOnNow(m, regions, l.id, name: l.name, again: again);
-        Widget? trailingFor(PartState s, double? fraction, String key) => switch (s) {
+        Widget? trailingFor(RegionPartStatus p, String key) => switch (p.state) {
           PartState.ready => Icon(Icons.check_circle, color: k.ok, semanticLabel: 'Ready'),
           PartState.stopped => RowButton(key: ValueKey('fix-$key'), label: 'Carry on', onPressed: () => fix(false)),
+          // A full phone is fixed by freeing space, not by trying again.
+          PartState.failed when p.noSpace && openStorageForSpace != null =>
+            RowButton(key: ValueKey('fix-$key'), label: 'Free space', onPressed: () => openStorageForSpace!(context)),
           PartState.failed => RowButton(key: ValueKey('fix-$key'), label: 'Try again', onPressed: () => fix(true)),
-          PartState.downloading => SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, value: fraction)),
+          PartState.downloading => SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, value: p.fraction)),
           PartState.waiting || PartState.paused || PartState.notAvailable => null,
         };
         Tone toneOf(PartState s) => switch (s) {
@@ -157,6 +173,9 @@ class RegionPage extends StatelessWidget {
                 SettingsGroup(
                   rows: [
                     for (final p in l.parts)
+                      if (p.state == PartState.notAvailable)
+                        _NotAvailableRow(key: ValueKey('part-${p.kind.name}'), part: p.name, region: l.name)
+                      else
                       SettingsRow(
                         key: ValueKey('part-${p.kind.name}'),
                         title: p.name,
@@ -165,7 +184,7 @@ class RegionPage extends StatelessWidget {
                           [Part(partStateWords(p), toneOf(p.state))],
                           if (sizeOf(p).isNotEmpty) [Part(sizeOf(p))],
                         ]),
-                        trailing: trailingFor(p.state, p.fraction, p.kind.name),
+                        trailing: trailingFor(p, p.kind.name),
                       ),
                     if (canAddOffroad)
                       SettingsRow(
@@ -176,6 +195,19 @@ class RegionPage extends StatelessWidget {
                       ),
                   ],
                 ),
+                // Try again has not worked twice: the last fix, one pop-up.
+                if (l.phase == RegionPhase.failed && regions.triesOf(l.id) >= 2) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('region-start-again'),
+                      icon: const Icon(Icons.restart_alt),
+                      label: const Text('Delete and start again'),
+                      onPressed: () => askStartAgain(context, regions, l),
+                    ),
+                  ),
+                ],
                 if (layers.isNotEmpty) ...[
                   const SizedBox(height: 14),
                   SettingsGroup(
@@ -190,7 +222,7 @@ class RegionPage extends StatelessWidget {
                             [Part(partStateWords(g.status), toneOf(g.status.state))],
                             if (g.status.bytes > 0) [Part(formatBytes(g.status.bytes))],
                           ]),
-                          trailing: trailingFor(g.status.state, g.status.fraction, 'layer-${g.key}'),
+                          trailing: trailingFor(g.status, 'layer-${g.key}'),
                         ),
                     ],
                   ),
@@ -252,6 +284,47 @@ class RegionPage extends StatelessWidget {
     if (l.any((a) => a.phase == AreaPhase.failed)) return RegionPartStatus(RegionPartKind.map, PartState.stopped, fraction: f, bytes: bytes);
     if (l.any((a) => a.phase == AreaPhase.running)) return RegionPartStatus(RegionPartKind.map, PartState.downloading, fraction: f, bytes: bytes);
     return RegionPartStatus(RegionPartKind.map, PartState.ready, fraction: 1, bytes: bytes);
+  }
+}
+
+/// A part not published for the region's area yet: "Not available yet for this area" with an info mark and no button (a tick would
+/// claim it is there). A tap opens a short note under it saying why and when Cache checks again; the one place the reason is given.
+class _NotAvailableRow extends StatefulWidget {
+  const _NotAvailableRow({super.key, required this.part, required this.region});
+
+  final String part;
+  final String region;
+
+  @override
+  State<_NotAvailableRow> createState() => _NotAvailableRowState();
+}
+
+class _NotAvailableRowState extends State<_NotAvailableRow> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return SettingsRow(
+      title: widget.part,
+      statusWidget: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          statusText(context, const [Part('Not available yet for this area')]),
+          if (_open) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${widget.part} are not published for ${widget.region} yet. Cache will check again when you check for updates.',
+              key: const ValueKey('part-note'),
+              style: TextStyle(fontSize: 13, height: 1.4, color: k.text),
+            ),
+          ],
+        ],
+      ),
+      trailing: Icon(_open ? Icons.info : Icons.info_outline, color: k.secondary, semanticLabel: _open ? 'Hide why' : 'Why'),
+      chevron: false,
+      onTap: () => setState(() => _open = !_open),
+    );
   }
 }
 

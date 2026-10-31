@@ -119,12 +119,13 @@ class RepeaterNotebookSource {
 
   /// The rows nearest [lat], [lon] first (repeaters with no position last, in list order), with each one's distance in metres.
   List<({Repeater repeater, double? metres})> nearest(double lat, double lon) {
-    final out = [for (final r in rows) (repeater: r, metres: r.located ? _metres(lat, lon, r.lat!, r.lon!) : null)];
+    final out = [for (final r in rows) (repeater: r, metres: r.located ? metresBetween(lat, lon, r.lat!, r.lon!) : null)];
     out.sort((a, b) => (a.metres ?? double.infinity).compareTo(b.metres ?? double.infinity));
     return out;
   }
 
-  static double _metres(double lat1, double lon1, double lat2, double lon2) {
+  /// The great-circle distance between two points, in metres.
+  static double metresBetween(double lat1, double lon1, double lat2, double lon2) {
     const r = 6371000.0;
     double rad(double d) => d * math.pi / 180;
     final dLat = rad(lat2 - lat1), dLon = rad(lon2 - lon1);
@@ -164,6 +165,23 @@ class UserLayersState extends ChangeNotifier {
   }
 
   void clearRepeater() => selectedRepeater.value = null;
+
+  /// A repeater chosen outside the map (a row of its list notebook): the map opens on it with its card. [focusPending] tells the map
+  /// to bring it into view once.
+  void showRepeater(Repeater r) {
+    focusPending = true;
+    selectedRepeater.value = r;
+  }
+
+  bool focusPending = false;
+
+  /// The repeaters of list [listId], in its own order (null when it cannot be read).
+  Future<RepeaterNotebookSource?> repeaterSource(String listId) async {
+    final l = repeaterLists.where((x) => x.id == listId).firstOrNull;
+    if (l == null) return null;
+    final g = await _call('get', l.id);
+    return RepeaterNotebookSource(list: l, rows: [for (final r in (g['repeaters'] as List? ?? const [])) Repeater.fromJson(l.id, l.name, r as Map)]);
+  }
 
   /// Each imported repeater list as a notebook source (hidden lists too: the shelf lists every list).
   Future<List<RepeaterNotebookSource>> repeaterNotebookSources() async {
