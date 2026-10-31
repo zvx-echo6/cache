@@ -1,0 +1,6 @@
+include: package:lints/recommended.yaml
+
+# The helper reads the Flutter-free sources of packages/cache_search by relative path (see pubspec.yaml).
+linter:
+  rules:
+    avoid_relative_lib_imports: false
