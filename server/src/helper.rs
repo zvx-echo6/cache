@@ -1,7 +1,7 @@
 //! The Dart helper (server/helper): a child process that hosts the app's core dispatcher. The server talks to it over its
 //! standard input and output, one JSON line each way (`{"id","op","args"}` in, `{"id","ok",...}` out), one request at a time.
 //!
-//! `Helper` starts it, waits for `{"ready":true}`, sends `open` with the server's sources, and then serialises requests through
+//! `Helper` starts it, waits for `{"ready":true}`, sends `open` with `{"sources": <sources.json, or null>}` (the helper builds the rest of the config on the app folders), and then serialises requests through
 //! one lock. If the child dies or its pipe breaks, the request in flight fails with `Err(message)` (the route answers 503
 //! `core_unavailable`) and the child is started again in the background with a backoff, with `open` sent again.
 
@@ -21,8 +21,12 @@ pub struct HelperConfig {
     pub exe: PathBuf,
     /// The core library (`CACHE_CORE_LIB` for the helper).
     pub core_lib: PathBuf,
-    /// `<data>/sources.json`: a JSON array of sources as `SearchCore.open` sends them; missing means no sources.
+    /// `<data>/sources.json`: a JSON array of sources as `SearchCore.open` sends them. Missing means the helper finds the sources
+    /// itself (the ZIMs and library folders under the app documents folder).
     pub sources_file: PathBuf,
+    /// The app's support and documents folders on the server (`<data>/app/support`, `<data>/app/docs`), handed to the helper as
+    /// `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`. The helper builds the core's whole config on them and serves `fs.*` from them.
+    pub app_dirs: Option<(PathBuf, PathBuf)>,
     /// How long the helper has to print `{"ready":true}`.
     pub ready_timeout: Duration,
     /// How long `open` may take (it can index).
@@ -39,6 +43,7 @@ impl HelperConfig {
             exe,
             core_lib,
             sources_file,
+            app_dirs: None,
             ready_timeout: Duration::from_secs(30),
             open_timeout: Duration::from_secs(600),
             backoff: [1, 2, 5, 10].map(Duration::from_secs).to_vec(),
@@ -47,11 +52,11 @@ impl HelperConfig {
     }
 }
 
-/// The server's sources: the array in `path`, or `[]` when there is no such file.
+/// The server's sources: the array in `path`, or `null` when there is no such file (the helper then scans the app folders).
 pub fn read_sources(path: &Path) -> Result<Value, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!([])),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
     match serde_json::from_str::<Value>(&text) {
@@ -196,8 +201,12 @@ impl Helper {
     /// Spawn the child, wait for ready, send open.
     async fn launch(&self) -> Result<Running, String> {
         let sources = read_sources(&self.cfg.sources_file)?;
-        let mut child = Command::new(&self.cfg.exe)
-            .env("CACHE_CORE_LIB", &self.cfg.core_lib)
+        let mut cmd = Command::new(&self.cfg.exe);
+        cmd.env("CACHE_CORE_LIB", &self.cfg.core_lib);
+        if let Some((support, docs)) = &self.cfg.app_dirs {
+            cmd.env("CACHE_APP_SUPPORT", support).env("CACHE_APP_DOCS", docs);
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -239,7 +248,7 @@ impl Helper {
         }
         eprintln!("cache-server: helper ready");
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let reply = match timeout(self.cfg.open_timeout, run.exchange(id, "open", json!({"sources": sources, "extra": null}))).await {
+        let reply = match timeout(self.cfg.open_timeout, run.exchange(id, "open", json!({"sources": sources}))).await {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err("opening the core took too long".to_string()),
@@ -247,7 +256,16 @@ impl Helper {
         if reply["ok"] != json!(true) {
             return Err(format!("opening the core failed: {}", reply["error"]));
         }
-        eprintln!("cache-server: core opened ({} sources)", sources.as_array().map_or(0, Vec::len));
+        // The helper builds the config and says what it opened: {"sources": N, "extras": [section names]}.
+        let result = &reply["result"];
+        let n = result["sources"].as_u64().or_else(|| sources.as_array().map(|a| a.len() as u64)).unwrap_or(0);
+        match result["extras"].as_array() {
+            Some(x) => {
+                let names: Vec<&str> = x.iter().filter_map(Value::as_str).collect();
+                eprintln!("cache-server: core opened ({n} sources; config sections: {})", names.join(", "));
+            }
+            None => eprintln!("cache-server: core opened ({n} sources)"),
+        }
         Ok(run)
     }
 

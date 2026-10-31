@@ -1,12 +1,14 @@
 //! The folders the server keeps its data in, and its one setting file. The sources the core opens come from
-//! `<data>/sources.json` (see `helper`).
+//! `<data>/sources.json` when it exists, else from `<data>/app/docs/zims` and `libraries` (see `helper`).
 
 use std::io;
 use std::path::Path;
 
 /// Create the folders the server keeps its data in.
 pub fn make_folders(data: &Path) -> io::Result<()> {
-    for d in ["zims", "libraries", "index"] {
+    // `app/support` and `app/docs` are the app's support and documents folders (the helper's `fs.*` roots); the ZIMs and the
+    // library folders the helper scans live in `app/docs`. Made by the server (user `cache`), so they belong to it.
+    for d in ["zims", "libraries", "index", "app/support", "app/docs/zims", "app/docs/libraries"] {
         std::fs::create_dir_all(data.join(d))?;
     }
     Ok(())
@@ -38,7 +40,7 @@ mod tests {
         let d = TempDir::new("cfg");
         make_folders(&d.0).unwrap();
         make_folders(&d.0).unwrap();
-        for f in ["zims", "libraries", "index"] {
+        for f in ["zims", "libraries", "index", "app/support", "app/docs/zims", "app/docs/libraries"] {
             assert!(d.0.join(f).is_dir());
         }
     }

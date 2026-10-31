@@ -50,6 +50,7 @@ async fn rig(tag: &str, sources: Option<&str>) -> Rig {
         std::fs::write(dir.0.join("sources.json"), s).unwrap();
     }
     let mut cfg = HelperConfig::new(PathBuf::from(env!("CARGO_BIN_EXE_fake-helper")), PathBuf::from("libfake"), dir.0.join("sources.json"));
+    cfg.app_dirs = Some((PathBuf::from("/app/support"), PathBuf::from("/app/docs")));
     cfg.backoff = vec![Duration::from_millis(50), Duration::from_millis(100)];
     cfg.ready_timeout = Duration::from_secs(10);
     cfg.stop_wait = Duration::from_secs(5);
@@ -95,7 +96,11 @@ async fn forwards_ops_and_answers_open_and_close_itself() {
     // /api/status is the status op
     let r = route(&rig.app, "GET", "/api/status", Some(&rig.cookie), b"").await;
     assert_eq!((r.status, serde_json::from_slice::<Value>(&r.body).unwrap()), (200, json!({"ok": true, "result": []})));
-    // open and close are answered here
+    // open, close and setSources are answered here; a tab never replaces the server's source list
+    assert_eq!(
+        rig.core(r#"{"op":"setSources","args":{"sources":[{"kind":"zim","path":"/evil.zim","index_dir":"/x"}]}}"#).await,
+        (200, json!({"ok": true, "result": null}))
+    );
     assert_eq!(rig.core(r#"{"op":"open","args":{"sources":[]}}"#).await, (200, json!({"ok": true, "result": null})));
     assert_eq!(rig.core(r#"{"op":"close","args":{}}"#).await, (200, json!({"ok": true, "result": null})));
     assert_eq!(rig.core(r#"{"op":"version","args":{}}"#).await.0, 200);
@@ -104,17 +109,22 @@ async fn forwards_ops_and_answers_open_and_close_itself() {
     assert_eq!(rig.core(r#"{"args":{}}"#).await.0, 400);
     let log = rig.log();
     // the server's own open, with the server's sources, was the first thing the helper saw and the only open/close
-    assert_eq!(open_args(&log[0]), json!({"extra": null, "sources": [{"kind": "zim", "path": "/z/a.zim", "index_dir": "/i/a"}]}));
+    assert_eq!(open_args(&log[0]), json!({"sources": [{"kind": "zim", "path": "/z/a.zim", "index_dir": "/i/a"}]}));
     assert_eq!(log.iter().filter(|l| l.starts_with("open ") || l.starts_with("close ")).count(), 1, "{log:?}");
+    assert!(log.iter().all(|l| !l.starts_with("setSources")), "setSources is not forwarded: {log:?}");
     assert_eq!(log.len(), 1 + 6, "{log:?}");
     rig.app.helper.as_ref().unwrap().shutdown().await;
 }
 
 #[tokio::test]
-async fn no_sources_file_opens_with_an_empty_list() {
+async fn no_sources_file_opens_with_null_sources_and_the_helper_gets_the_app_folders() {
     let _g = LOCK.lock().await;
     let rig = rig("nosrc", None).await;
-    assert_eq!(open_args(&rig.log()[0]), json!({"extra": null, "sources": []}));
+    assert_eq!(open_args(&rig.log()[0]), json!({"sources": null}));
+    assert_eq!(
+        rig.core(r#"{"op":"env","args":{}}"#).await,
+        (200, json!({"ok": true, "result": {"support": "/app/support", "docs": "/app/docs"}}))
+    );
     rig.app.helper.as_ref().unwrap().shutdown().await;
 }
 
@@ -160,5 +170,5 @@ async fn a_bad_sources_file_is_reported_not_ignored() {
     let dir = Dir::new("badsrc");
     std::fs::write(dir.0.join("sources.json"), "{}").unwrap();
     assert!(cache_server::helper::read_sources(&dir.0.join("sources.json")).is_err());
-    assert_eq!(cache_server::helper::read_sources(&dir.0.join("none.json")).unwrap(), json!([]));
+    assert_eq!(cache_server::helper::read_sources(&dir.0.join("none.json")).unwrap(), Value::Null);
 }

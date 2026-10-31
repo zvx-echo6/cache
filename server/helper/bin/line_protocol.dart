@@ -5,6 +5,14 @@ import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/errors.dart';
 import '../../../packages/cache_search/lib/src/wire.dart';
 
+/// An op family the helper answers itself, before the core dispatcher (`fs.*`, and the helper's own `open`).
+abstract class OpHandler {
+  bool handles(String op);
+
+  /// The plain result (Uint8List allowed), or throws a [CacheSearchException].
+  Object? handle(String op, Map<String, dynamic> args);
+}
+
 /// Cache Server's helper protocol: UTF-8 lines on [input] and [output], one JSON object per line.
 ///
 /// Prints `{"ready":true}` first. A request is `{"id":<int>,"op":<string>,"args":{...}}`; the reply is
@@ -16,12 +24,13 @@ Future<void> serveLines(
   FutureOr<void> Function(String line) output,
   CoreDispatcher dispatcher, {
   void Function(String message)? log,
+  List<OpHandler> handlers = const [],
 }) async {
   await output(jsonEncode({'ready': true}));
   final lines = input.transform(utf8.decoder).transform(const LineSplitter());
   await for (final line in lines) {
     if (line.trim().isEmpty) continue;
-    await output(handleLine(line, dispatcher, log: log));
+    await output(handleLine(line, dispatcher, log: log, handlers: handlers));
   }
   try {
     dispatcher.handle('close', const {});
@@ -31,7 +40,7 @@ Future<void> serveLines(
 }
 
 /// One request line in, the reply line out.
-String handleLine(String line, CoreDispatcher dispatcher, {void Function(String message)? log}) {
+String handleLine(String line, CoreDispatcher dispatcher, {void Function(String message)? log, List<OpHandler> handlers = const []}) {
   Object? id;
   try {
     final req = jsonDecode(line);
@@ -41,7 +50,16 @@ String handleLine(String line, CoreDispatcher dispatcher, {void Function(String 
     if (op is! String) throw const CacheSearchException('bad_json', 'A request needs an "op"');
     final rawArgs = wireDecode(req['args'] ?? const {});
     if (rawArgs is! Map) throw const CacheSearchException('bad_json', 'A request\'s "args" is a JSON object');
-    final result = dispatcher.handle(op, rawArgs.cast<String, dynamic>());
+    final args = rawArgs.cast<String, dynamic>();
+    Object? result;
+    OpHandler? own;
+    for (final h in handlers) {
+      if (h.handles(op)) {
+        own = h;
+        break;
+      }
+    }
+    result = own != null ? own.handle(op, args) : dispatcher.handle(op, args);
     return jsonEncode({'id': id, 'ok': true, 'result': wireEncode(result)});
   } on CacheSearchException catch (e) {
     return _error(id, e.code, e.message);

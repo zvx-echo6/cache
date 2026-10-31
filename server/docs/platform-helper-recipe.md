@@ -18,11 +18,12 @@ Use it as top-level getters through a prefix: `import 'platform.dart' as plat;` 
 // On the web isWeb is true, the other checks are false and operatingSystem is 'web'. Everywhere else every getter returns exactly
 // what dart:io's Platform returns, so phone behaviour is unchanged. The dart:io side sits in platform_io.dart, chosen by a
 // conditional import, so a web build never touches dart:io's Platform.
-import 'package:flutter/foundation.dart' show kIsWeb;
-
 import 'platform_io.dart' if (dart.library.js_interop) 'platform_web.dart' as impl;
 
-bool get isWeb => kIsWeb;
+// Flutter's kIsWeb is defined exactly so (foundation/constants.dart); it is spelled out here so this file, and everything that imports
+// it (lib/search/core_config.dart, which Cache Server's helper reads), needs no Flutter.
+const bool _isWeb = bool.fromEnvironment('dart.library.js_util');
+bool get isWeb => _isWeb;
 bool get isAndroid => impl.isAndroid;
 bool get isIOS => impl.isIOS;
 bool get isWindows => impl.isWindows;
@@ -58,6 +59,8 @@ bool get isMacOS => false;
 String get operatingSystem => 'web';
 String get hostName => Uri.base.host;
 ```
+
+**Keep `platform.dart` free of Flutter.** `lib/search/core_config.dart` imports it, and Cache Server's helper (a plain Dart program, no Flutter SDK) imports `core_config.dart` by relative path to build the core's config. Do not add `package:flutter/...` to `platform.dart`, `platform_io.dart`, `platform_web.dart` or `core_config.dart`.
 
 ## 2. Replace the call sites
 

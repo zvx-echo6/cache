@@ -1,5 +1,6 @@
 //! A stand-in for the Dart helper, speaking its line protocol (see server/helper/bin/line_protocol.dart). Used by the proxy
 //! tests. Behaviour:
+//!   env     -> {support, docs}: CACHE_APP_SUPPORT and CACHE_APP_DOCS as the server set them
 //!   version -> "fake-1"      status -> []      echo -> the args      (anything else -> ok, null)
 //!   crash   -> exits without replying the first time (the marker file FAKE_MARKER is created), then replies "back"
 //!   open    -> fails with ok:false when FAKE_OPEN_FAILS is set
@@ -29,6 +30,8 @@ fn main() {
         let reply = match op.as_str() {
             "version" => json!({"id": id, "ok": true, "result": "fake-1"}),
             "status" => json!({"id": id, "ok": true, "result": []}),
+            "env" => json!({"id": id, "ok": true, "result": {
+                "support": std::env::var("CACHE_APP_SUPPORT").ok(), "docs": std::env::var("CACHE_APP_DOCS").ok()}}),
             "echo" => json!({"id": id, "ok": true, "result": args}),
             "open" if std::env::var_os("FAKE_OPEN_FAILS").is_some() => {
                 json!({"id": id, "ok": false, "error": {"code": "bad_config", "message": "no"}})

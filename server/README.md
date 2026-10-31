@@ -4,7 +4,8 @@ Cache Server runs the Cache core on a machine of your own and serves the browser
 with a single password (no username), a security key, a key file, or a mix (see "Signing in" below). The core runs in a helper process (`server/helper`, a Dart program that hosts the
 app's own core dispatcher); the server starts it, restarts it if it dies (waits of 1, 2, 5, then 10 seconds, logging each
 restart) and forwards the browser's `POST /api/core {"op","args"}` calls to it, one at a time. The server owns the one
-shared engine, so a browser's `open` and `close` are answered without being forwarded. While the helper is down, calls
+shared engine, so a browser's `open`, `close` and `setSources` are answered without being forwarded (the browser never
+replaces the server's source list). While the helper is down, calls
 get HTTP 503 with `{"ok":false,"error":{"code":"core_unavailable",...}}`.
 
 ## Build
@@ -121,10 +122,29 @@ Under the data folder (`/var/lib/cache-server` when installed):
 | `config.json` | optional: `{"public_origin": "https://your-host-name"}`, the same as `--public-origin` |
 | `sessions.json` | signed-in sessions, as hashes, valid for 30 days (owner only) |
 | `tls/cert.pem`, `tls/key.pem` | the certificate and key (the key is owner only) |
-| `sources.json` | optional: the sources the core opens, a JSON array as the app's `SearchCore.open` sends them, e.g. `[{"kind":"zim","path":"/var/lib/cache-server/zims/wiki.zim","index_dir":"/var/lib/cache-server/index/wiki"}]` (missing means none) |
-| `zims/` | ZIM files |
-| `libraries/` | one folder per library |
-| `index/` | search indexes the core builds |
+| `sources.json` | optional: the sources the core opens, a JSON array as the app's `SearchCore.open` sends them, e.g. `[{"kind":"zim","path":"/var/lib/cache-server/app/docs/zims/wiki.zim","index_dir":"/var/lib/cache-server/app/support/indexes/wiki.zim.idx"}]`. Missing means the helper finds them: every `*.zim` in `app/docs/zims` and every folder with a `shard` folder in `app/docs/libraries` |
+| `app/support/` | the app's support folder (`getApplicationSupportDirectory` on a phone): the core's databases (`user.sqlite`, `live.sqlite`, `notebook/`), `regions/`, `layers/`, `indexes/` |
+| `app/docs/` | the app's documents folder: `zims/`, `libraries/` (one folder per library), `live-defs/` |
+| `zims/`, `libraries/`, `index/` | the older folders, no longer read |
+
+## The helper
+
+The server starts `cache-core-helper` with `CACHE_CORE_LIB` (the core library), `CACHE_APP_SUPPORT` and `CACHE_APP_DOCS`
+(the two `app/` folders above). It answers three kinds of op over the line protocol:
+
+- **`open`** (sent by the server only): the helper builds the core's config with the app's own `buildCoreExtras`
+  (`app/lib/search/core_config.dart`) on the server paths, as `SourcesState._defaultExtras` does on desktop Linux, and opens the
+  core with it. The server logs `core opened (N sources; config sections: ...)`; the helper's own lines (`[helper] ...`) say
+  where the sources came from and which extras it sent (`layers, live, notebook, places, regions, routing, user`). Not done on
+  the server yet: the ICU data install (`installIcuData`) and the starter map layers (`installStarterLayers`).
+- **`fs.*`**, the browser's only way to the app's files, confined to two roots, `support` and `docs`: `fs.read`, `fs.readString`,
+  `fs.write` (atomic: temp file, then rename; makes parent folders), `fs.list`, `fs.stat`, `fs.exists`, `fs.delete`
+  (`recursive?`), `fs.mkdir`. Paths are relative, use `/`, and may not contain `..` or leave the root even through a symlink
+  (`bad_path`); missing files give `not_found`, other failures `io_error`. Bytes travel as `{"$bytes": "<base64>"}`.
+- every other op goes to the core's dispatcher.
+
+Not done yet: **`history.*`**. The browser's chat history is not saved on the server; it waits for the shared Flutter-free
+package split (step 4), because `ConversationStore` imports Flutter-dependent code.
 
 ## TLS
 

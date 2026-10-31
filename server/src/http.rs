@@ -13,7 +13,8 @@
 //!   POST /auth/logout                       -> 204
 //!   GET  /auth/check                        -> 204 signed in, 401 not
 //!   POST /api/core      {"op","args"}       -> the core helper's {"ok":true,"result"} or {"ok":false,"error"} (200 either way);
-//!                                              "open" and "close" are answered here, not forwarded: the server owns the one engine
+//!                                              "open", "close" and "setSources" are answered here, not forwarded: the server owns the
+//!                                              one engine and its source list
 //!   GET  /api/status                        -> the same, for the "status" op
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
@@ -110,8 +111,8 @@ async fn api(app: &App, method: &str, path: &str, body: &[u8]) -> Reply {
                 a @ Value::Object(_) => a.clone(),
                 _ => return Reply::error(400, "bad_json", "\"args\" must be an object"),
             };
-            // The server owns the one shared engine, so a tab can neither replace nor close it.
-            if op == "open" || op == "close" {
+            // The server owns the one shared engine and its source list, so a tab can neither replace, close nor re-source it.
+            if op == "open" || op == "close" || op == "setSources" {
                 return Reply::json(200, json!({"ok": true, "result": null}).to_string());
             }
             core_call(app, op, args).await

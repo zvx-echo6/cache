@@ -186,7 +186,8 @@ fn serve(argv: &[String]) -> Result<(), String> {
     let (helper_name, lib_name) = if cfg!(windows) { ("cache-core-helper.exe", "cache_search.dll") } else { ("cache-core-helper", "libcache_search.so") };
     let helper_exe = a.get("helper").map(PathBuf::from).unwrap_or_else(|| install_dir.join("helper").join(helper_name));
     let core_lib = a.get("core-lib").map(PathBuf::from).unwrap_or_else(|| install_dir.join("lib").join(lib_name));
-    let helper_cfg = HelperConfig::new(helper_exe, core_lib, data.join("sources.json"));
+    let mut helper_cfg = HelperConfig::new(helper_exe, core_lib, data.join("sources.json"));
+    helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
