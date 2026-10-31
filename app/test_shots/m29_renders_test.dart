@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:cache/app_state.dart';
 import 'package:cache/browse/browse_screen.dart';
 import 'package:cache/browse/place_about.dart';
+import 'package:cache/browse/reader_screen.dart';
 import 'package:cache/guide/guide_book.dart';
 import 'package:cache/guide/guide_reader.dart';
 import 'package:cache/layout/layout_state.dart';
@@ -49,6 +50,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../test/browse/fakes.dart' show FakeSources;
 import '../test/nav_fakes.dart';
 import '../test/support/notebook_fake.dart';
 import '../test/support/owner_state.dart';
@@ -725,7 +727,35 @@ void main() {
     } catch (_) {}
     await o.dispose(tester);
   });
+  // ---- The ZIM reader's bars (the top-left arrow leaves; the bottom arrows are the page history) ----------------------------
+
+  testWidgets('7: the reader\'s top and bottom bars, light and dark', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('m29-reader');
+    final sources = _PendingSources(dir);
+    final zim = ZimFile(path: '${dir.path}/urban-prepper_en_all_2026-08.zim', size: 2245235674);
+    sources
+      ..zims = [zim]
+      ..titles[zim.path] = 'Urban Prepper'
+      ..ids[zim.path] = '6f1d1c3e-2b7a-4e4b-9a55-1d2f0c9e8a11';
+    for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+      await _show(tester, Scaffold(body: Builder(builder: (c) => Center(child: TextButton(onPressed: () => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => ZimReaderScreen(sources: sources, zim: zim, debugHasHistory: true))), child: const Text('open'))))), theme: theme);
+      await tester.tap(find.text('open'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await snap(tester, _out, '7-reader-bars-${theme.name}');
+    }
+    await _show(tester, const SizedBox());
+  });
 }
+
+/// A Library whose ZIM is still opening (the reader shows its bars over the spinner).
+class _PendingSources extends FakeSources {
+  _PendingSources(super.dir);
+
+  @override
+  Future<String> zimMainPage(String zimId) => Completer<String>().future;
+}
+
 
 class _Newer implements AppUpdateSource {
   _Newer(this.build);

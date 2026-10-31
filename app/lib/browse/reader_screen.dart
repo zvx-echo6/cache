@@ -14,6 +14,45 @@ import '../theme.dart';
 import 'zim_urls.dart';
 import 'reader_resources.dart';
 
+/// What the system back does in the reader, in order: close the search, close find in page, go a page back while there is
+/// history, then leave the reader.
+enum ReaderBack { closeSearch, closeFind, pageBack, exit }
+
+/// A page that sends the reader on at once instead of showing something: a meta refresh, or a short page whose script only sets
+/// the location (a ZIM's landing page, such as a video channel's). Read from the HTML (a machine format).
+bool isLandingPage(String html) {
+  if (RegExp(r'<meta[^>]+http-equiv\s*=\s*["' "'" r']?refresh', caseSensitive: false).hasMatch(html)) return true;
+  if (html.length > 4096) return false;
+  final sets = RegExp(r'(location(\.href)?\s*=[^=])|location\.(replace|assign)\s*\(').hasMatch(html);
+  if (!sets) return false;
+  final text = html
+      .replaceAll(RegExp(r'<script[\s\S]*?</script>', caseSensitive: false), ' ')
+      .replaceAll(RegExp(r'<style[\s\S]*?</style>', caseSensitive: false), ' ')
+      .replaceAll(RegExp(r'<[^>]*>'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return text.length < 200;
+}
+
+/// The steps back from [current] in [history] (the pages' addresses) to the nearest page that is not in [landing], or null when
+/// every earlier page is a landing page: Back from the first real page leaves the reader.
+///
+/// [firstReal] is the entry the reader settled on after opening (a page that rewrites its address as it starts, such as a video
+/// channel's app, adds entries before it): nothing before it is a step either.
+int? readerBackSteps(List<String> history, int current, Set<String> landing, {int firstReal = 0}) {
+  for (var i = current - 1; i >= firstReal; i--) {
+    if (!landing.contains(history[i])) return i - current;
+  }
+  return null;
+}
+
+ReaderBack readerBackStep({required bool searching, required bool finding, required bool hasHistory}) {
+  if (searching) return ReaderBack.closeSearch;
+  if (finding) return ReaderBack.closeFind;
+  if (hasHistory) return ReaderBack.pageBack;
+  return ReaderBack.exit;
+}
+
 /// Opens a ZIM like a web site: the page is a WebView whose requests are all answered from the ZIM file
 /// (no network), with a main page, back and forward, find in the page, title search and full-text search
 /// limited to this ZIM.
@@ -25,7 +64,11 @@ class ZimReaderScreen extends StatefulWidget {
     this.address,
     this.layout,
     this.itemMenu,
+    this.debugHasHistory = false,
   });
+
+  /// Tests and renders only: start as if the page had history (there is no web view in a test).
+  final bool debugHasHistory;
 
   /// The Library's menu for this item (Check for update, Change icon, Add to Home, Delete), behind "..."; given the way to add the page
   /// on screen to Home. Without it "..." offers Add to Home alone.
@@ -59,7 +102,49 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           }
         },
       );
-  late final ZimPageServer _server = ZimPageServer(widget.sources.zimGet);
+  /// Every page is served through here: a landing page (one that sends the reader on at once) is noted, so it is never a step of
+  /// the page history (going back to it would send the reader forward again, and Back could never leave).
+  late final ZimPageServer _server = ZimPageServer((address) async {
+    final z = await widget.sources.zimGet(address);
+    if (z.mime.split(';').first.trim() == 'text/html' && isLandingPage(utf8.decode(z.bytes, allowMalformed: true))) {
+      _landing.add(_historyKey(address));
+    }
+    return z;
+  });
+
+  /// The addresses of the landing pages served (without their #fragment).
+  final Set<String> _landing = {};
+
+  /// Steps back to the nearest real page (null: none, Back leaves the reader).
+  int? _backSteps;
+
+  /// The history entry the reader settled on after it opened (the first real page), and whether it has settled: 1.5 s after the
+  /// first page finished loading, or at the first touch on the page.
+  int _firstReal = 0;
+  bool _settled = false;
+  Timer? _settle;
+
+  void _settleNow() {
+    _settle?.cancel();
+    if (_settled) return;
+    _settled = true;
+    _syncNav();
+  }
+
+  static String _historyKey(String address) => address.split('#').first;
+
+  String _keyOfUrl(WebUri? u) {
+    final uri = u?.uriValue;
+    if (uri == null) return '';
+    return _historyKey(addressOfUrl(uri) ?? uri.toString());
+  }
+
+  /// A page back, over any landing page (none there: nothing to do).
+  Future<void> _pageBack() async {
+    final steps = _backSteps;
+    if (steps == null) return;
+    await _web?.goBackOrForward(steps: steps);
+  }
   final TextEditingController _query = TextEditingController();
   final TextEditingController _find = TextEditingController();
   final FocusNode _queryFocus = FocusNode();
@@ -73,7 +158,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   int _webGeneration = 0;
   String _pageTitle = '';
   String? _currentAddress;
-  bool _canBack = false;
+  late bool _canBack = widget.debugHasHistory;
   bool _canForward = false;
   double _progress = 0;
 
@@ -116,6 +201,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _settle?.cancel();
     _query.dispose();
     _find.dispose();
     _queryFocus.dispose();
@@ -125,8 +211,19 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   Future<void> _syncNav() async {
     final c = _web;
     if (c == null) return;
-    final b = await c.canGoBack();
     final f = await c.canGoForward();
+    bool b;
+    try {
+      final h = await c.getCopyBackForwardList();
+      final items = h?.list ?? const <WebHistoryItem>[];
+      final cur = h?.currentIndex ?? -1;
+      if (!_settled && cur >= 0) _firstReal = cur;
+      _backSteps = cur < 0 ? null : readerBackSteps([for (final i in items) _keyOfUrl(i.url)], cur, _landing, firstReal: _firstReal);
+      b = _backSteps != null;
+    } catch (_) {
+      b = await c.canGoBack();
+      _backSteps = b ? -1 : null;
+    }
     if (mounted) {
       setState(() {
         _canBack = b;
@@ -153,6 +250,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       _start = reloadUrl(_currentAddress, _start, customScheme: _customScheme);
       _pageGone = false;
       _webGeneration++;
+      // A new WebView has a new history: it settles again on the page it opens.
+      _settle?.cancel();
+      _settle = null;
+      _settled = false;
+      _firstReal = 0;
     });
   }
 
@@ -255,20 +357,42 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   Widget build(BuildContext context) {
     final k = context.t;
     final title = widget.sources.titleOf(widget.zim);
+    final nav = Navigator.of(context);
+    // The system back (Android): closes search or find, then a page back while there is history, then leaves the reader
+    // (readerBackStep). The top-left arrow always leaves; the bottom bar's arrows are the page history.
     return PopScope(
-      canPop: !_canBack && !_searching && !_finding,
+      canPop: readerBackStep(searching: _searching, finding: _finding, hasHistory: _canBack) == ReaderBack.exit,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        if (_searching) {
-          setState(() => _searching = false);
-        } else if (_finding) {
-          _toggleFind();
-        } else if (_canBack) {
-          await _web?.goBack();
+        switch (readerBackStep(searching: _searching, finding: _finding, hasHistory: _canBack)) {
+          case ReaderBack.closeSearch:
+            setState(() => _searching = false);
+          case ReaderBack.closeFind:
+            _toggleFind();
+          case ReaderBack.pageBack:
+            await _pageBack();
+          case ReaderBack.exit:
+            break;
         }
       },
       child: Scaffold(
         appBar: AppBar(
+          automaticallyImplyLeading: false,
+          // Leaves the reader for where it was opened from (Library, a citation, a search result), whatever the page history.
+          // Beside a list on a tablet the reader is the pane's own page: there is nothing to leave to.
+          leading: nav.canPop()
+              ? Semantics(
+                  label: 'Close $title',
+                  button: true,
+                  excludeSemantics: true,
+                  child: IconButton(
+                    key: const ValueKey('reader-close'),
+                    tooltip: 'Close $title',
+                    icon: const BackButtonIcon(),
+                    onPressed: () => nav.pop(),
+                  ),
+                )
+              : null,
           title: _searching
               ? TextField(
                   controller: _query,
@@ -367,11 +491,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(
+                key: const ValueKey('reader-page-back'),
                 tooltip: 'Back',
                 icon: const Icon(Icons.arrow_back),
-                onPressed: _canBack ? () => _web?.goBack() : null,
+                onPressed: _canBack ? _pageBack : null,
               ),
               IconButton(
+                key: const ValueKey('reader-page-forward'),
                 tooltip: 'Forward',
                 icon: const Icon(Icons.arrow_forward),
                 onPressed: _canForward ? () => _web?.goForward() : null,
@@ -404,7 +530,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     if (_pageGone) return ReaderPageGone(onReload: _reload);
     final start = _start;
     if (start == null) return const Center(child: CircularProgressIndicator());
-    return InAppWebView(
+    return Listener(
+      // A touch on the page: it has settled (anything it adds to the history from now on is the person's own).
+      onPointerDown: (_) => _settleNow(),
+      child: InAppWebView(
       key: ValueKey('reader-web-$_webGeneration'),
       initialUrlRequest: URLRequest(url: WebUri.uri(start)),
       initialSettings: readerSettings(customScheme: _customScheme),
@@ -462,12 +591,16 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         }
       },
       onRenderProcessGone: (c, detail) => _pageStopped(),
-      onLoadStop: (c, u) => _syncNav(),
+      onLoadStop: (c, u) {
+        _syncNav();
+        _settle ??= Timer(const Duration(milliseconds: 1500), _settleNow);
+      },
       onUpdateVisitedHistory: (c, u, r) {
         final uri = u?.uriValue;
         if (uri != null) _currentAddress = addressOfUrl(uri) ?? _currentAddress;
         _syncNav();
       },
+    ),
     );
   }
 
