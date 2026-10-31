@@ -402,6 +402,29 @@ void main() {
       expect(s.error, "Places for this area aren't available yet.");
     });
 
+    test('a downloading part shows its speed and time left, so a slow part never looks stuck', () {
+      var now = DateTime(2026, 10, 31, 12);
+      final meter = TransferMeter(clock: () => now);
+      LocalRegion at(int done, int total) => LocalRegion(id: 'r', name: 'R', meter: meter, routing: {'state': 'downloading', 'bytes': total, 'done_bytes': done});
+      // the first look has nothing to measure from
+      expect(at(0, 100 << 20).parts.single.words, '0%');
+      now = now.add(const Duration(seconds: 10));
+      final p = at(20 << 20, 100 << 20).parts.single;
+      expect(p.rate!.speedWords, '2.1 MB/s');
+      expect(p.words, '20% · 2.1 MB/s · 40 s left');
+      expect(partStateWords(p), '20% · 2.1 MB/s · 40 s left');
+      expect(at(20 << 20, 100 << 20).partsLine, 'Directions 20% · 2.1 MB/s · 40 s left');
+      // the map part has no byte total: its time left comes from how fast its share of tiles grows
+      final meter2 = TransferMeter(clock: () => now);
+      DownloadedArea area(int done) => DownloadedArea(id: 'a', layerId: 'basemap', bounds: const GeoBounds(west: 0, south: 0, east: 1, north: 1), label: 'R', minZoom: 0, maxZoom: 15, totalTiles: 1000, doneTiles: done, bytes: done * 1000);
+      LocalRegion map(int done) => LocalRegion(id: 'm', name: 'M', meter: meter2, areas: [area(done)]);
+      map(100);
+      now = now.add(const Duration(minutes: 1));
+      expect(map(200).parts.single.words, '20% · 2 KB/s · 8 min left');
+      expect(const TransferRate(secondsLeft: 4800).leftWords, '1 h 20 min left');
+      expect(const TransferRate(secondsLeft: 7200).leftWords, '2 h left');
+    });
+
     test('places not published for the area: not available yet, the region complete, nothing to try again', () {
       // the places server has no current.json
       final none = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 404 from https://data.cached.info/places/current.json'});

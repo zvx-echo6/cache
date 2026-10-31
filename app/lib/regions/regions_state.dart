@@ -163,8 +163,72 @@ bool placesNotPublished(String? message) {
 enum RegionPartKind { map, directions, places, offroad }
 
 /// One part of a region on this phone: where it stands, how far it got, what it holds, and, when it failed, why (in plain words).
+/// How fast a part is downloading and how long it has left, from what it held over the last half minute.
+class TransferRate {
+  const TransferRate({this.bytesPerSecond, this.secondsLeft});
+
+  final double? bytesPerSecond;
+  final double? secondsLeft;
+
+  /// "2.1 MB/s", "350 KB/s".
+  String? get speedWords {
+    final b = bytesPerSecond;
+    if (b == null || b <= 0) return null;
+    if (b >= 1e6) return '${(b / 1e6).toStringAsFixed(1)} MB/s';
+    return '${(b / 1e3).round()} KB/s';
+  }
+
+  /// "40 s left", "6 min left", "1 h 20 min left".
+  String? get leftWords {
+    final s = secondsLeft;
+    if (s == null || !s.isFinite || s < 0) return null;
+    if (s < 60) return '${s.ceil()} s left';
+    final m = (s / 60).ceil();
+    if (m < 60) return '$m min left';
+    return m % 60 == 0 ? '${m ~/ 60} h left' : '${m ~/ 60} h ${m % 60} min left';
+  }
+}
+
+/// Measures each downloading part's speed and time left from samples of what it holds (bytes, and the share done), taken as
+/// the screens read the regions: the speed over the last 30 seconds, the time left from how fast the share done grows (or the
+/// bytes left, when the part's size is known). A part that is slow shows its speed instead of looking stuck.
+class TransferMeter {
+  TransferMeter({DateTime Function()? clock}) : _now = clock ?? DateTime.now;
+
+  final DateTime Function() _now;
+  final Map<String, List<(DateTime, int, double?)>> _samples = {};
+  static const Duration window = Duration(seconds: 30);
+  static const Duration least = Duration(seconds: 3);
+
+  TransferRate sample(String key, int bytes, double? fraction, {int? totalBytes}) {
+    final now = _now();
+    final l = _samples.putIfAbsent(key, () => []);
+    if (l.isNotEmpty && bytes < l.last.$2) l.clear(); // started again
+    if (l.isEmpty || now.difference(l.last.$1) >= const Duration(milliseconds: 900)) l.add((now, bytes, fraction));
+    while (l.length > 2 && now.difference(l[1].$1) >= window) {
+      l.removeAt(0);
+    }
+    final first = l.first;
+    final dt = now.difference(first.$1).inMilliseconds / 1000;
+    if (dt < least.inSeconds) return const TransferRate();
+    final bps = (bytes - first.$2) / dt;
+    double? left;
+    if (totalBytes != null && totalBytes > bytes && bps > 0) {
+      left = (totalBytes - bytes) / bps;
+    } else if (fraction != null && first.$3 != null && fraction > first.$3!) {
+      left = (1 - fraction) / ((fraction - first.$3!) / dt);
+    }
+    return TransferRate(bytesPerSecond: bps > 0 ? bps : null, secondsLeft: left);
+  }
+
+  void forget(String key) => _samples.remove(key);
+}
+
 class RegionPartStatus {
-  const RegionPartStatus(this.kind, this.state, {this.fraction, this.bytes = 0, this.totalBytes, this.problem});
+  const RegionPartStatus(this.kind, this.state, {this.fraction, this.bytes = 0, this.totalBytes, this.problem, this.rate});
+
+  /// Speed and time left while it downloads (null when not measured yet).
+  final TransferRate? rate;
 
   final RegionPartKind kind;
   final PartState state;
@@ -189,7 +253,11 @@ class RegionPartStatus {
     String pct() => '${((fraction ?? 0) * 100).clamp(0, 99).floor()}%';
     return switch (state) {
       PartState.ready => 'ready',
-      PartState.downloading => fraction == null ? 'downloading' : pct(),
+      PartState.downloading => [
+        fraction == null ? 'downloading' : pct(),
+        ?rate?.speedWords,
+        ?rate?.leftWords,
+      ].join(' · '),
       PartState.waiting => 'waiting',
       PartState.paused => 'paused',
       PartState.stopped => (fraction ?? 0) > 0 ? 'stopped at ${pct()}' : 'stopped',
@@ -241,6 +309,7 @@ class LocalRegion {
     this.wantsRouting = false,
     this.wantsPlaces = false,
     this.asked = true,
+    this.meter,
     this.offroad = const [],
     this.terrain = const [],
     this.kind,
@@ -283,6 +352,9 @@ class LocalRegion {
   /// core does not list and was not asked for now is not queued behind anything (1.0.28 showed it "waiting" for ever, with no
   /// way to restart it): it is stopped, and Carry on asks again.
   final bool asked;
+
+  /// Measures the speed and time left of the parts that are downloading (null: not shown).
+  final TransferMeter? meter;
 
   bool get hasRouting => wantsRouting || routing != null;
   bool get hasPlaces => wantsPlaces || places != null;
@@ -357,11 +429,23 @@ class LocalRegion {
       return RegionPartStatus(RegionPartKind.offroad, done == 0 ? PartState.waiting : PartState.downloading, fraction: f, bytes: bytes, totalBytes: total);
     }
 
+    RegionPartStatus? rated(RegionPartStatus? p) {
+      final m = meter;
+      if (p == null || m == null) return p;
+      final key = '$id/${p.kind.name}';
+      if (p.state != PartState.downloading) {
+        m.forget(key);
+        return p;
+      }
+      final r = m.sample(key, p.bytes, p.fraction, totalBytes: p.totalBytes);
+      return RegionPartStatus(p.kind, p.state, fraction: p.fraction, bytes: p.bytes, totalBytes: p.totalBytes, problem: p.problem, rate: r);
+    }
+
     return [
-      ?tiles(RegionPartKind.map, areas),
-      ?core(RegionPartKind.directions, RegionPart.routing, routing, wantsRouting),
-      ?core(RegionPartKind.places, RegionPart.places, places, wantsPlaces),
-      ?off(),
+      ?rated(tiles(RegionPartKind.map, areas)),
+      ?rated(core(RegionPartKind.directions, RegionPart.routing, routing, wantsRouting)),
+      ?rated(core(RegionPartKind.places, RegionPart.places, places, wantsPlaces)),
+      ?rated(off()),
     ];
   }
 
@@ -469,6 +553,9 @@ class RegionsState extends ChangeNotifier {
   ConnectionKind _kind = ConnectionKind.wifi;
   final Map<String, _Kept> _kept = {};
   String? _routingKey;
+
+  /// Each downloading part's speed and time left.
+  final TransferMeter _meter = TransferMeter();
 
   /// Regions the core was asked to add in this run that it has not listed yet (their parts are waiting, not stopped).
   final Set<String> _asked = {};
@@ -736,6 +823,7 @@ class RegionsState extends ChangeNotifier {
       wantsRouting: (k?.routing ?? false) && (r == null || _routingOf(r) != null),
       wantsPlaces: (k?.places ?? false) && (r == null || _placesOf(r) != null),
       asked: _asked.contains(id),
+      meter: _meter,
       offroad: k == null ? const [] : [for (final p in k.offroad) _packState(p)],
       terrain: k == null ? const [] : _terrainOf(k),
     );
