@@ -46,6 +46,8 @@ CREATE TABLE kinds (
 -- tags by the kind rules, or from the raw type when no rule says more. arrival_lat/arrival_lon is where a route to the place
 -- goes when that is not its own point: an airport's passenger terminal, a building's main entrance, a park's or campus's
 -- parking (NULL: the place's point). They were added after the first layout; a reader checks for them.
+-- about (spec S14, places and localities) is what the app's model sees of the summary: its opening, at most 400
+-- characters, cut at a sentence end by the `places_pack about` step (NULL: none). Added later too; a reader checks for it.
 CREATE TABLE places (
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -73,7 +75,8 @@ CREATE TABLE places (
   source_id TEXT NOT NULL,
   confidence REAL,
   arrival_lat REAL,
-  arrival_lon REAL
+  arrival_lon REAL,
+  about TEXT
 );
 CREATE INDEX places_category ON places(category);
 -- A map result's id ("place:<source_id>") is looked up by this.
@@ -96,7 +99,8 @@ CREATE TABLE localities (
   wikipedia_title TEXT,
   wikivoyage_title TEXT,
   summary TEXT,
-  source_id TEXT NOT NULL
+  source_id TEXT NOT NULL,
+  about TEXT
 );
 CREATE VIRTUAL TABLE localities_rt USING rtree(id, min_lat, max_lat, min_lon, max_lon);
 CREATE VIRTUAL TABLE localities_fts USING fts5(name, alt_names, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
@@ -250,7 +254,8 @@ CREATE TABLE places (
   source_id TEXT NOT NULL,
   confidence REAL,
   arrival_lat REAL,
-  arrival_lon REAL
+  arrival_lon REAL,
+  about TEXT
 );
 
 CREATE TABLE localities (
@@ -268,7 +273,8 @@ CREATE TABLE localities (
   wikipedia_title TEXT,
   wikivoyage_title TEXT,
   summary TEXT,
-  source_id TEXT NOT NULL
+  source_id TEXT NOT NULL,
+  about TEXT
 );
 
 -- Cities, towns and villages (not hamlets) outside the cell but within 25 km of it: "nearest town" and the anchor step at
@@ -374,7 +380,8 @@ CREATE TABLE places (
   source_id TEXT NOT NULL,
   confidence REAL,
   arrival_lat REAL,
-  arrival_lon REAL
+  arrival_lon REAL,
+  about TEXT
 );
 CREATE INDEX places_category ON places(category);
 CREATE INDEX places_source_id ON places(source_id);
@@ -396,7 +403,8 @@ CREATE TABLE localities (
   wikipedia_title TEXT,
   wikivoyage_title TEXT,
   summary TEXT,
-  source_id TEXT NOT NULL
+  source_id TEXT NOT NULL,
+  about TEXT
 );
 CREATE VIRTUAL TABLE localities_rt USING rtree(id, min_lat, max_lat, min_lon, max_lon);
 CREATE VIRTUAL TABLE localities_fts USING fts5(name, alt_names, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');

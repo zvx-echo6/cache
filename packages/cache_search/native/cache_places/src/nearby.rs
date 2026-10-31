@@ -145,7 +145,7 @@ impl Tool for NearbyTool {
         let list: Vec<String> = cats.iter().map(|(id, _, d)| format!("{id} = {}", d.trim().trim_end_matches('.'))).collect();
         Some(json!({"type": "function", "function": {
             "name": "nearby",
-            "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there.",
+            "description": "List the nearest places of one kind, without directions. Use navigate instead when the person wants to go there. A place may include about (a short summary from Wikipedia) and wikipedia (its article title); read its number to open the article.",
             "parameters": {"type": "object", "properties": {
                 "category": {"type": "string", "enum": ids, "description": format!("Kind of place. {}.", list.join("; "))},
                 "near": {"type": "string", "minLength": 1, "maxLength": 200,
@@ -242,6 +242,13 @@ impl Tool for NearbyTool {
                     if let Some(v) = v {
                         m.insert(k.into(), json!(v));
                     }
+                }
+                // Spec S14: the last two keys, each left out when the place has none.
+                if let Some(a) = crate::about::about_of(r.about.as_deref()) {
+                    m.insert("about".into(), json!(a));
+                }
+                if let Some(w) = crate::about::wikipedia_of(r.wikipedia_title.as_deref()) {
+                    m.insert("wikipedia".into(), json!(w));
                 }
                 Value::Object(m)
             })

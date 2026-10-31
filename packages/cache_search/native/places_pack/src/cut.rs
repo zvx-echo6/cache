@@ -116,8 +116,8 @@ fn open(p: &Path) -> Result<Connection, String> {
 
 const PLACE_COLS: &str = "name, alt_names, category, kind, kind_id, lat, lon, street, locality, county, state, country, phone, hours, website, \
                           wikidata_id, wikipedia_title, wikivoyage_title, summary, brand_wikidata, matched_source_id, source, source_id, confidence, \
-                          arrival_lat, arrival_lon";
-const LOCALITY_COLS: &str = "name, alt_names, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id";
+                          arrival_lat, arrival_lon, about";
+const LOCALITY_COLS: &str = "name, alt_names, kind, lat, lon, population, county, state, country, wikidata_id, wikipedia_title, wikivoyage_title, summary, source_id, about";
 const ADDR_COLS: &str = "uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, min_lat, max_lat, min_lon, max_lon, n, numbers";
 
 /// A block's rows, by tile: (block row id, the columns of the tile's table in order).
@@ -186,7 +186,7 @@ fn write_tile(cfg: &CutCfg, t: TileInput, towns: &Towns, addr: Option<&Connectio
     let mut counts: BTreeMap<(&str, String), i64> = BTreeMap::new();
     let (mut n_places, mut n_towns, mut n_ctx, mut n_streets, mut n_numbers) = (0i64, 0i64, 0i64, 0i64, 0i64);
     {
-        let mut ins = tx.prepare(&format!("INSERT INTO places(id, {PLACE_COLS}) VALUES ({})", placeholders(27))).map_err(|e| e.to_string())?;
+        let mut ins = tx.prepare(&format!("INSERT INTO places(id, {PLACE_COLS}) VALUES ({})", placeholders(28))).map_err(|e| e.to_string())?;
         for (block_id, v) in t.places {
             n_places += 1;
             let mut vals = vec![Value::Integer(n_places)];
@@ -202,7 +202,7 @@ fn write_tile(cfg: &CutCfg, t: TileInput, towns: &Towns, addr: Option<&Connectio
                 tx.execute("INSERT INTO vectors(kind, ref, vec) VALUES ('place', ?1, ?2)", params![n_places, vec]).map_err(|e| e.to_string())?;
             }
         }
-        let mut ins = tx.prepare(&format!("INSERT INTO localities(id, {LOCALITY_COLS}) VALUES ({})", placeholders(15))).map_err(|e| e.to_string())?;
+        let mut ins = tx.prepare(&format!("INSERT INTO localities(id, {LOCALITY_COLS}) VALUES ({})", placeholders(16))).map_err(|e| e.to_string())?;
         for (block_id, v) in t.localities {
             n_towns += 1;
             let mut vals = vec![Value::Integer(n_towns)];
@@ -296,11 +296,14 @@ fn cut_block(cfg: &CutCfg, path: &Path, towns: &Towns, addr: Option<&Connection>
     // A block built before arrival points has no arrival columns.
     let has_arrival = c.prepare("SELECT arrival_lat FROM places LIMIT 0").is_ok();
     let arrival = if has_arrival { "p.arrival_lat, p.arrival_lon" } else { "NULL, NULL" };
+    // A block built before the `about` step (S14) has no `about` column.
+    let about = if c.prepare("SELECT about FROM places LIMIT 0").is_ok() { "p.about" } else { "NULL" };
+    let loc_about = if c.prepare("SELECT about FROM localities LIMIT 0").is_ok() { "l.about" } else { "NULL" };
     let places = read_rows(
         &c,
         &format!(
             "SELECT p.id, p.name, NULLIF(f.alt_names, ''), p.category, p.kind, p.kind_id, p.lat, p.lon, p.street, p.locality, p.county, p.state, p.country, p.phone, p.hours, \
-             p.website, p.wikidata_id, p.wikipedia_title, p.wikivoyage_title, p.summary, p.brand_wikidata, p.matched_source_id, p.source, p.source_id, p.confidence, {arrival} \
+             p.website, p.wikidata_id, p.wikipedia_title, p.wikivoyage_title, p.summary, p.brand_wikidata, p.matched_source_id, p.source, p.source_id, p.confidence, {arrival}, {about} \
              FROM places p LEFT JOIN places_fts f ON f.rowid = p.id ORDER BY p.id"
         ),
         5,
@@ -308,8 +311,10 @@ fn cut_block(cfg: &CutCfg, path: &Path, towns: &Towns, addr: Option<&Connection>
     )?;
     let localities = read_rows(
         &c,
-        "SELECT l.id, l.name, NULLIF(f.alt_names, ''), l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.wikidata_id, l.wikipedia_title, \
-         l.wikivoyage_title, l.summary, l.source_id FROM localities l LEFT JOIN localities_fts f ON f.rowid = l.id ORDER BY l.id",
+        &format!(
+            "SELECT l.id, l.name, NULLIF(f.alt_names, ''), l.kind, l.lat, l.lon, l.population, l.county, l.state, l.country, l.wikidata_id, l.wikipedia_title, \
+             l.wikivoyage_title, l.summary, l.source_id, {loc_about} FROM localities l LEFT JOIN localities_fts f ON f.rowid = l.id ORDER BY l.id"
+        ),
         3,
         4,
     )?;

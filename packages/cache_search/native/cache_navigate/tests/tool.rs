@@ -90,9 +90,30 @@ impl PlaceSource for Pack {
         other.locality = Some("Declo".into());
         other.details = Some(PlaceDetails { phone: Some("+1 208 000 0000".into()), website: Some("https://example.org".into()), hours: Some("24/7".into()) });
         let town = PlaceMatch::new("Rupert", 42.617, -113.675);
+        // S14: a POI and a town from the wiki place index (about and wikipedia), and another match that has them too
+        let mut falls = PlaceMatch::new("Shoshone Falls", 42.5951, -114.4013);
+        falls.kind = Some("waterfall".into());
+        falls.locality = Some("Twin Falls".into());
+        falls.state = Some("ID".into());
+        falls.details = Some(PlaceDetails::default());
+        falls.about = Some("Shoshone Falls is a waterfall on the Snake River in Idaho.".into());
+        falls.wikipedia = Some("Shoshone Falls".into());
+        let mut park = PlaceMatch::new("Shoshone Falls Park", 42.594, -114.40);
+        park.details = Some(PlaceDetails::default());
+        park.about = Some("A city park above the falls.".into());
+        park.wikipedia = Some("Shoshone Falls Park".into());
+        let mut twin = PlaceMatch::new("Twin Falls", 42.5629, -114.4609);
+        twin.kind = Some("city".into());
+        twin.state = Some("ID".into());
+        twin.about = Some("Twin Falls is a city in Idaho.".into());
+        twin.wikipedia = Some("Twin Falls, Idaho".into());
         Ok(GeocodeAnswer {
             matches: if self.empty {
                 vec![]
+            } else if q.text.contains("Shoshone") {
+                vec![falls, park]
+            } else if q.text.contains("Twin Falls") {
+                vec![twin]
             } else if q.text.contains("Rupert") {
                 vec![town]
             } else {
@@ -534,4 +555,50 @@ fn region_packs_route_exactly_as_the_pack_and_elevation_file() {
     }
     assert!(routed > 0, "no trip went off-road, so the off-road data was not compared");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- S14: the destination's summary and Wikipedia title ----
+
+#[test]
+fn a_destination_with_a_wiki_entry_shows_about_and_wikipedia_after_open_status() {
+    let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
+    let v = run_at(&t, Some(&here()), json!({"to": "Shoshone Falls", "mode": "drive"}), THU_1430).unwrap();
+    let to = &v["to_matched"];
+    assert_eq!(
+        keys(to),
+        ["place_name", "kind", "street", "locality", "county", "state", "phone", "website", "hours", "open_status", "about", "wikipedia", "distance_km", "near", "snap_distance_m", "lat", "lon"]
+    );
+    assert_eq!(to["about"], "Shoshone Falls is a waterfall on the Snake River in Idaho.");
+    assert_eq!(to["wikipedia"], "Shoshone Falls");
+    // byte for byte, up to distance_km
+    let s = serde_json::to_string(to).unwrap();
+    assert!(
+        s.starts_with(r#"{"place_name":"Shoshone Falls","kind":"waterfall","street":null,"locality":"Twin Falls","county":null,"state":"ID","phone":null,"website":null,"hours":null,"open_status":"Hours not known","about":"Shoshone Falls is a waterfall on the Snake River in Idaho.","wikipedia":"Shoshone Falls","distance_km":"#),
+        "{s}"
+    );
+    // never on the start or on the other candidates
+    assert_eq!(keys(&v["other_destination_candidates"][0]), PLACE_KEYS);
+    assert!(v["from_matched"].get("about").is_none() && v["from_matched"].get("wikipedia").is_none());
+}
+
+#[test]
+fn a_town_destination_shows_about_and_wikipedia_after_state() {
+    let t = tool(fake(), Some(Arc::new(Pack { empty: false })));
+    let v = run_at(&t, Some(&here()), json!({"to": "Twin Falls", "mode": "drive"}), THU_1430).unwrap();
+    assert_eq!(
+        keys(&v["to_matched"]),
+        ["place_name", "kind", "street", "locality", "county", "state", "about", "wikipedia", "distance_km", "near", "snap_distance_m", "lat", "lon"]
+    );
+    assert_eq!(v["to_matched"]["wikipedia"], "Twin Falls, Idaho");
+}
+
+#[test]
+fn an_error_with_a_wiki_destination_carries_about_and_wikipedia_on_to_matched() {
+    let t = tool(Fake { fail: Some(442), ..fake() }, Some(Arc::new(Pack { empty: false })));
+    let j = run_at(&t, Some(&here()), json!({"to": "Shoshone Falls", "mode": "drive"}), THU_1430).unwrap_err().to_json();
+    assert_eq!(
+        keys(&j["to_matched"]),
+        ["place_name", "kind", "street", "locality", "county", "state", "phone", "website", "hours", "open_status", "about", "wikipedia", "distance_km"]
+    );
+    assert_eq!(keys(&j["from_matched"]), PLACE_KEYS);
 }

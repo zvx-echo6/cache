@@ -8,6 +8,7 @@
 //! A query that starts with a house number ("350 N State St, Salt Lake City") is first looked up as an address in the
 //! street rows of a merged database (`address`); when no street matches, it is searched as a name like any other.
 
+use crate::about::{about_of, wikipedia_of};
 use crate::address;
 use crate::geo::{bearing_deg, haversine_km};
 use crate::kind::humanize;
@@ -59,6 +60,10 @@ pub struct GeoHit {
     pub details: Option<PlaceDetails>,
     /// Where a route to it goes, when that is not its point (a place's arrival point); None for towns and addresses.
     pub arrival: Option<(f64, f64)>,
+    /// The place's or town's `about` (its stored `about` column) and `wikipedia` (its English Wikipedia article
+    /// title), spec S14; None when it has none, and always None for an address.
+    pub about: Option<String>,
+    pub wikipedia: Option<String>,
 }
 
 /// The nearest town to a point.
@@ -422,6 +427,8 @@ impl PackGeocoder {
                 score,
                 approximate: f.approximate,
                 details: None,
+                about: None,
+                wikipedia: None,
             });
         }
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -535,6 +542,8 @@ impl PackGeocoder {
                         score,
                         approximate: false,
                         details: None,
+                        about: about_of(l.about.as_deref()),
+                        wikipedia: wikipedia_of(l.wikipedia_title.as_deref()),
                     });
                 }
                 // the best text matches, and, when there are more of them than that, the matches nearest the bias point (a
@@ -579,6 +588,8 @@ impl PackGeocoder {
                         score,
                         approximate: false,
                         details: Some(PlaceDetails { phone: r.phone.clone(), website: r.website.clone(), hours: r.hours.clone() }),
+                        about: about_of(r.about.as_deref()),
+                        wikipedia: wikipedia_of(r.wikipedia_title.as_deref()),
                     });
                 }
             }
@@ -671,6 +682,8 @@ impl PackGeocoder {
             score: 0.0,
             approximate: false,
             details: None,
+            about: about_of(l.about.as_deref()),
+            wikipedia: wikipedia_of(l.wikipedia_title.as_deref()),
         })
     }
 }
