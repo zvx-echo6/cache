@@ -3,7 +3,7 @@
 use crate::geo::{bbox_around, haversine_km, lon_scale};
 use crate::schema::{FORMAT_VERSION, MERGED_FORMAT_VERSION, MIN_FORMAT_VERSION};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
@@ -200,6 +200,9 @@ fn locality_row(r: &rusqlite::Row) -> rusqlite::Result<LocalityRow> {
     })
 }
 
+/// Stored vectors as (ref, packed vector), in the table's order.
+type StoredVectors = Vec<(String, Vec<u8>)>;
+
 /// One open pack.
 pub struct Pack {
     pub path: PathBuf,
@@ -223,6 +226,9 @@ pub struct Pack {
     stamp: (u64, u64),
     /// `PRAGMA data_version` when the tables above were read: another connection's commit (a tile merged) changes it.
     data_version: i64,
+    /// The category and kind vectors (a few thousand, read by every meaning search), kept after the first search, in the order
+    /// the table gives them. A pack whose file changes is opened again, so they never go stale.
+    vector_cache: Mutex<HashMap<String, Arc<StoredVectors>>>,
 }
 
 fn file_stamp(path: &Path) -> (u64, u64) {
@@ -306,6 +312,7 @@ impl Pack {
             conn: Mutex::new(conn),
             stamp: file_stamp(path),
             data_version,
+            vector_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -567,6 +574,19 @@ impl Pack {
     /// The cosine of `query` (L2-normalised) with every stored vector of `kind` ("category", "place" or "locality"), best
     /// `top` first as (ref, cosine).
     pub fn vector_scan(&self, kind: &str, query: &[f32], top: usize) -> Result<Vec<(String, f32)>> {
+        if kind == "category" || kind == "kind" {
+            let rows = self.cached_vectors(kind)?;
+            let mut best: Vec<(String, f32)> = Vec::new();
+            for (id, blob) in rows.iter() {
+                let Some(c) = crate::schema::dot_packed(blob, query) else { continue };
+                if best.len() < top || c > best[best.len() - 1].1 {
+                    let at = best.iter().position(|(_, x)| c > *x).unwrap_or(best.len());
+                    best.insert(at, (id.clone(), c));
+                    best.truncate(top);
+                }
+            }
+            return Ok(best);
+        }
         let conn = self.conn();
         let mut st = conn.prepare("SELECT ref, vec FROM vectors WHERE kind = ?1")?;
         let mut rows = st.query(params![kind])?;
@@ -582,6 +602,21 @@ impl Pack {
             }
         }
         Ok(best)
+    }
+
+    /// Every vector of `kind`, read once (see `vector_cache`).
+    fn cached_vectors(&self, kind: &str) -> Result<Arc<StoredVectors>> {
+        if let Some(v) = self.vector_cache.lock().unwrap_or_else(|e| e.into_inner()).get(kind) {
+            return Ok(v.clone());
+        }
+        let rows = {
+            let conn = self.conn();
+            let mut st = conn.prepare("SELECT ref, vec FROM vectors WHERE kind = ?1")?;
+            let rows = st.query_map(params![kind], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+            Arc::new(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        };
+        self.vector_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(kind.to_string(), rows.clone());
+        Ok(rows)
     }
 
     /// The alternative names of a place or locality, joined by spaces (the FTS alt_names column).
