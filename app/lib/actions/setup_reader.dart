@@ -12,8 +12,26 @@ import '../weather/curated.dart';
 import '../weather/weather_state.dart';
 import 'setup_status.dart';
 
-/// "maps, routing, places": the parts of a region on the phone.
-String regionParts(LocalRegion r) => [if (r.hasMap) 'maps', if (r.hasRouting) 'routing', if (r.hasPlaces) 'places'].join(', ');
+/// A region's value in app.setup_status (agreed with cache-llm-training, 2026-10-31): the parts that are ready, in the order
+/// maps, routing, places, off-road; then "; " and what is not ready ("places not finished", "places not available yet"); then
+/// "; " and the age. "maps, routing; places not finished; 3 weeks old". A region with nothing ready yet is "nothing ready yet":
+/// a partly downloaded region never reads as none installed.
+String regionSetupValue(LocalRegion r, {String? age}) {
+  String name(RegionPartKind k) => switch (k) {
+    RegionPartKind.map => 'maps',
+    RegionPartKind.directions => 'routing',
+    RegionPartKind.places => 'places',
+    RegionPartKind.offroad => 'off-road',
+  };
+  final parts = r.parts;
+  final ready = [for (final p in parts) if (p.state == PartState.ready) name(p.kind)];
+  if (ready.isEmpty) return 'nothing ready yet';
+  final not = [
+    for (final p in parts)
+      if (p.state == PartState.notAvailable) '${name(p.kind)} not available yet' else if (p.state != PartState.ready) '${name(p.kind)} not finished',
+  ];
+  return [ready.join(', '), if (not.isNotEmpty) not.join(', '), ?age].join('; ');
+}
 
 /// The setup parts read from the app's state, in the words the screens use.
 SetupDeps setupDepsFrom({
@@ -32,8 +50,7 @@ SetupDeps setupDepsFrom({
   String? age(DateTime? t) => t == null ? null : setupAge(now().difference(t));
   // Map downloads kept from before regions (listed with the regions on screen since 1.0.28) were never regions to the assistant:
   // what it reads stays as it was.
-  // A region whose places are not published yet counts as complete on screen since 1.0.29; to the assistant it reads as before
-  // (it was a failed region then), until cache-llm-training agrees a wording for it.
+  // Regions whose every part is ready: what Place details names.
   List<LocalRegion> ready() => [for (final r in regions.local) if (r.phase == RegionPhase.ready && !r.isArea && !r.placesNotAvailable) r];
   return SetupDeps(
     connection: () async => [
@@ -46,8 +63,9 @@ SetupDeps setupDepsFrom({
       SetupItem('Mobile data downloads', settings.mobileForDownloads ? 'on' : 'off'),
     ],
     regions: () async => [
-      for (final r in ready())
-        SetupItem(r.name, [regionParts(r), ?age(r.fetchedAt)].where((s) => s.isNotEmpty).join('; ')),
+      // every region on the phone, partly downloaded ones too, each with what is ready and what is not
+      for (final r in regions.local)
+        if (!r.isArea) SetupItem(r.name, regionSetupValue(r, age: age(r.fetchedAt))),
     ],
     libraries: () async => [
       for (final z in sources.zims) SetupItem(sources.titleOf(z), formatBytes(z.size)),
