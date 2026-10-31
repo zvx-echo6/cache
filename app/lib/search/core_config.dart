@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../platform.dart' as plat;
 
 /// Where Cache's published data lives (road routing, places, the region catalogue). `https://cache.echo6.co` serves the same
 /// bucket with the same paths: build with `--dart-define=CACHE_DATA_BASE=https://cache.echo6.co` to use it. No trailing slash.
@@ -40,7 +41,7 @@ Map<String, dynamic> buildCoreExtras({
     },
     'routing': {
       // The region engine's folder (an empty `tiles`).
-      'valhalla': {'tiles': '', 'shim': (useLinkedRouter ?? Platform.isIOS) ? 'linked' : shim},
+      'valhalla': {'tiles': '', 'shim': (useLinkedRouter ?? plat.isIOS) ? 'linked' : shim},
       // Off-road: the region packs downloaded with regions (regions_state.dart), with elevation from the map's elevation layer.
       'offroad': {'dir': '${supportDir.path}/regions/offroad'},
     },

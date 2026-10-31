@@ -10,12 +10,13 @@ import '../settings/data_policy.dart';
 import '../settings/space.dart';
 import 'device_memory.dart';
 import 'hf_hub.dart';
+import '../platform.dart' as plat;
 
 /// The phone's total memory in bytes, when it can be read: Android and Linux from /proc/meminfo, iPhone (and Mac) from the
 /// system's hw.memsize.
 Future<int?> totalMemoryBytes() async {
-  if (Platform.isIOS || Platform.isMacOS) return sysctlMemsize();
-  if (!(Platform.isAndroid || Platform.isLinux)) return null;
+  if (plat.isIOS || plat.isMacOS) return sysctlMemsize();
+  if (!(plat.isAndroid || plat.isLinux)) return null;
   try {
     for (final line in await File('/proc/meminfo').readAsLines()) {
       final m = RegExp(r'^MemTotal:\s+(\d+)\s+kB').firstMatch(line);

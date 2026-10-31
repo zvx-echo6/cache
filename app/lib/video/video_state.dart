@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../settings/data_policy.dart';
 import 'format.dart';
 import 'token_store.dart';
+import '../platform.dart' as plat;
 
 /// What a person is told when a video call fails.
 String videoErrorText(Object e) {
@@ -105,7 +106,7 @@ class VideoState extends ChangeNotifier {
     if (dirOverride != null) {
       dir = dirOverride!;
     } else {
-      final base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
+      final base = (plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
       dir = Directory('${base.path}/videos');
     }
     this.dir = dir;

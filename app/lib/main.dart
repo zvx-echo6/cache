@@ -81,6 +81,7 @@ import 'screens/shell.dart';
 import 'screens/videos/library_screen.dart' as videos show LibraryScreen;
 import 'theme.dart';
 import 'keyboard.dart';
+import 'platform.dart' as plat;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -89,7 +90,7 @@ void main() {
     yield LicenseEntryWithLineBreaks(['Cache: libraries, data and art'], await rootBundle.loadString(kCreditsAsset));
   });
   // Background updates of weather, alerts and fires (scheduled once something is switched on; see scheduleBackgroundUpdates).
-  if (Platform.isAndroid || Platform.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
+  if (plat.isAndroid || plat.isIOS) backgroundReady = Workmanager().initialize(cacheBackgroundDispatcher);
   runApp(const CacheApp());
 }
 
@@ -140,7 +141,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SearchModel searchModel = SearchModel(
     app: app,
     downloads: modelDownloads,
-    modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
+    modelsDir: () async => Directory('${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
   );
   late final MapsState maps = MapsState(
     engine: CoreLayerEngine(
@@ -270,7 +271,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SharingState sharing = SharingState(
     policy: policy,
     supportDir: getApplicationSupportDirectory,
-    deviceName: Platform.isAndroid ? 'Android phone' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
+    deviceName: plat.isAndroid ? 'Android phone' : (plat.isIOS ? 'iPhone' : plat.hostName),
     kinds: dataKinds,
   );
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing

@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:geolocator/geolocator.dart';
 
 import '../location/position_source.dart';
+import '../platform.dart' as plat;
 
 /// The position stream guidance runs on: one fix a second, kept running with the screen locked. On Android that is
 /// geolocator's foreground service, which shows an ongoing notification for as long as it runs; it stops when the stream is
@@ -41,7 +41,7 @@ class GeolocatorNavSource implements NavPositionSource {
     _sub = null;
     _out = null;
     unawaited(_release(old.$1, old.$2));
-    final LocationSettings settings = Platform.isAndroid
+    final LocationSettings settings = plat.isAndroid
         ? AndroidSettings(
             accuracy: LocationAccuracy.best,
             distanceFilter: 0,
@@ -55,7 +55,7 @@ class GeolocatorNavSource implements NavPositionSource {
               setOngoing: true,
             ),
           )
-        : Platform.isIOS
+        : plat.isIOS
             ? AppleSettings(
                 accuracy: LocationAccuracy.bestForNavigation,
                 activityType: ActivityType.automotiveNavigation,

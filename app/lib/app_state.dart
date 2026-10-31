@@ -10,6 +10,7 @@ import 'chat/model_name.dart';
 import 'files.dart';
 import 'models/search_model.dart' show isSearchModelFile;
 import 'theme.dart';
+import 'platform.dart' as plat;
 
 /// One model file in the models folder.
 class ModelEntry {
@@ -89,7 +90,7 @@ class AppState extends ChangeNotifier {
     if (modelsDirOverride != null) {
       modelsDir = modelsDirOverride;
     } else {
-      final base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ??
+      final base = (plat.isAndroid ? await getExternalStorageDirectory() : null) ??
           await getApplicationDocumentsDirectory();
       modelsDir = Directory('${base.path}/models');
     }

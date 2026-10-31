@@ -5,6 +5,8 @@
 # that hosts the core, compiled with `dart compile exe` on each architecture's own runner), lib/libcache_search.so (the core
 # library the helper loads), web/ (the real Flutter web build), VERSION and cache-server.service, with install.sh beside them.
 #
+# The web build bundles canvaskit (--no-web-resources-cdn) and serves its fonts from web/fontfallback, so Cache Server works with no internet.
+#
 # The web build is architecture-independent, so the `web` job builds it once on x64 and both `build` jobs take it as an artifact.
 # Flutter 3.44.8 has no Linux arm64 SDK, so the `build` jobs use the plain Dart SDK (setup-dart, which has arm64) pinned to the
 # version Flutter 3.44.8 bundles (3.12.2); the helper imports only Flutter-free sources, so it needs nothing more. No cross-compiling.
@@ -42,7 +44,7 @@ jobs:
         working-directory: app
         run: |
           flutter --version
-          flutter build web --release --no-tree-shake-icons
+          flutter build web --release --no-tree-shake-icons --no-web-resources-cdn
       - uses: actions/upload-artifact@v4
         with:
           name: web-build

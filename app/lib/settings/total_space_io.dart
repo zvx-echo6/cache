@@ -1,20 +1,20 @@
 import 'dart:ffi' as ffi;
-import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import '../platform.dart' as plat;
 
 /// The size of the storage holding [dir]: statvfs on Android and Linux, the volume's total capacity on iOS (a native helper beside
 /// the free-space one). Null when it cannot be told.
 int? totalBytesOnDisk(String dir) {
   final path = dir.toNativeUtf8();
   try {
-    if (Platform.isIOS) {
+    if (plat.isIOS) {
       final total = ffi.DynamicLibrary.process()
           .lookupFunction<ffi.Int64 Function(ffi.Pointer<Utf8>), int Function(ffi.Pointer<Utf8>)>('cache_total_bytes_on_disk');
       final t = total(path);
       return t <= 0 ? null : t;
     }
-    if (!(Platform.isAndroid || Platform.isLinux)) return null;
+    if (!(plat.isAndroid || plat.isLinux)) return null;
     if (ffi.Abi.current() != ffi.Abi.androidArm64 &&
         ffi.Abi.current() != ffi.Abi.androidX64 &&
         ffi.Abi.current() != ffi.Abi.linuxArm64 &&

@@ -12,6 +12,7 @@ import '../browse/zim_download.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
 import 'sources_state.dart';
+import '../platform.dart' as plat;
 
 /// The settings file of a library (docs/LIBRARY-FORMAT.md): inside a .cache-library archive, and beside the library here.
 const String kLibrarySettingsFile = 'cache-library.json';
@@ -151,7 +152,7 @@ class LibrariesState extends ChangeNotifier {
   Future<void> init() async {
     final base = dirOverride ??
         Directory(
-          '${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}'
+          '${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}'
           '${Platform.pathSeparator}libraries',
         );
     await base.create(recursive: true);
