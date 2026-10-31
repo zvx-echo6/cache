@@ -102,6 +102,12 @@ class VideoState extends ChangeNotifier {
   static CsNative _defaultNative() => FfiCsNative.open();
 
   Future<void> init() async {
+    if (plat.isWeb) {
+      // Videos are saved into a folder on the phone; there is none in a browser.
+      unavailable = 'Videos are not available on this device';
+      notifyListeners();
+      return;
+    }
     final Directory dir;
     if (dirOverride != null) {
       dir = dirOverride!;

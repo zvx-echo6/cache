@@ -147,13 +147,17 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Map<String, dynamic> get openedExtra => _extra;
 
   Future<void> init() async {
-    zimsDir = zimsDirOverride ?? await _defaultZimsDir();
-    indexesDir =
-        indexesDirOverride ??
-        Directory('${(await getApplicationSupportDirectory()).path}/indexes');
-    await zimsDir!.create(recursive: true);
-    await indexesDir!.create(recursive: true);
-    _scan();
+    // In a browser the server owns the sources and their folders: nothing is scanned or created here, and the list comes from
+    // the core's status.
+    if (!plat.isWeb) {
+      zimsDir = zimsDirOverride ?? await _defaultZimsDir();
+      indexesDir =
+          indexesDirOverride ??
+          Directory('${(await getApplicationSupportDirectory()).path}/indexes');
+      await zimsDir!.create(recursive: true);
+      await indexesDir!.create(recursive: true);
+      _scan();
+    }
     notifyListeners();
     final core = await _openCore();
     if (!_coreOpened.isCompleted) _coreOpened.complete(core);
@@ -166,9 +170,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Future<SearchCore?> _openCore() async {
     final SearchCore core;
     try {
-      final extra = _extra = coreExtras ?? await _defaultExtras();
+      // In a browser the server opens the core with its own config (open is answered there), so nothing is built here.
+      final extra = _extra = coreExtras ?? (plat.isWeb ? const <String, dynamic>{} : await _defaultExtras());
       core = await SearchCore.open(
-        _configs(),
+        plat.isWeb ? const <SourceConfig>[] : _configs(),
         extra: extra,
         native: nativeFactory ?? _defaultNative,
       );
@@ -295,12 +300,14 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   /// The icon saved when the ZIM came from the catalogue, or null.
   File? iconOf(ZimFile z) {
+    if (plat.isWeb) return null;
     final f = _iconFile(z.path);
     return f.existsSync() ? f : null;
   }
 
   /// What this ZIM is in the catalogue's terms: the record saved at install, else the file name's.
   ZimOrigin? originOf(ZimFile z) {
+    if (plat.isWeb) return z.nameOrigin;
     try {
       final f = _originFile(z.path);
       if (f.existsSync()) {
@@ -333,6 +340,15 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   void _scan() {
     final found = <ZimFile>[];
+    if (plat.isWeb) {
+      // The server's ZIMs, as the core lists them.
+      for (final s in _status.values) {
+        if (s.kind == 'zim') found.add(ZimFile(path: s.path, size: 0));
+      }
+      found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      zims = found;
+      return;
+    }
     for (final f in zimsDir!.listSync().whereType<File>()) {
       if (f.path.toLowerCase().endsWith('.zim')) {
         found.add(ZimFile(path: f.path, size: f.lengthSync()));
@@ -406,9 +422,15 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<void> _refreshOnce() async {
     try {
-      _scan();
+      if (!plat.isWeb) _scan();
       final core = _core;
       if (core == null) return;
+      if (plat.isWeb) {
+        // The server keeps the source list and builds the indexes; only its status is read.
+        await _readStatus(core);
+        _scan();
+        return;
+      }
       await core.setSources(_configs());
       await _refreshPlaces(core);
       await _readStatus(core);

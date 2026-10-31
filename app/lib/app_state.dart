@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_fs.dart';
 import 'chat/model_name.dart';
 import 'files.dart';
 import 'models/search_model.dart' show isSearchModelFile;
@@ -74,7 +75,8 @@ class AppState extends ChangeNotifier {
   /// Bumped when the active model changes so the chat can start fresh.
   int modelGeneration = 0;
 
-  File? _settingsFile;
+  AppFs? _fs;
+  static const String _settingsName = 'settings.json';
 
   bool isUnsupported(ModelEntry e) => _unsupported.contains(e.key);
 
@@ -82,11 +84,18 @@ class AppState extends ChangeNotifier {
   String displayName(ModelEntry e) => _names[e.key] ?? e.name;
 
   Future<void> init() async {
-    final settingsDir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await settingsDir.create(recursive: true);
-    _settingsFile = File('${settingsDir.path}/settings.json');
-    _readSettings();
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
+    await _readSettings();
 
+    if (plat.isWeb) {
+      // No model files here: the browser runs no model itself, so the list stays empty and nothing is wrong.
+      await refreshModels();
+      started = true;
+      notifyListeners();
+      return;
+    }
     if (modelsDirOverride != null) {
       modelsDir = modelsDirOverride;
     } else {
@@ -114,11 +123,11 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _readSettings() {
+  Future<void> _readSettings() async {
     try {
-      final f = _settingsFile!;
-      if (!f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = await _fs!.readString(AppRoot.support, _settingsName);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       _lastModelFile = j['lastModel'] as String?;
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
@@ -136,9 +145,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> _writeSettings() async {
     try {
-      final f = _settingsFile;
-      if (f == null) return;
-      await writeStringAtomic(f, jsonEncode({
+      final fs = _fs;
+      if (fs == null) return;
+      await fs.writeStringAtomic(AppRoot.support, _settingsName, jsonEncode({
         'lastModel': _lastModelFile,
         'theme': theme.name,
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
@@ -163,6 +172,12 @@ class AppState extends ChangeNotifier {
   Future<void> refreshModels() async {
     final found = <ModelEntry>[];
     ModelEntry? search;
+    if (modelsDir == null) {
+      models = found;
+      searchModel = null;
+      notifyListeners();
+      return;
+    }
     try {
       for (final f in modelsDir!.listSync().whereType<File>()) {
         if (f.path.toLowerCase().endsWith('.gguf')) {
