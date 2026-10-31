@@ -421,6 +421,57 @@ void main() {
     expect(calls, contains('import:{"kind":"repeaters","paths":["/a.kml","/a.csv"]}'));
   });
 
+  test('a repeater tapped on the map is selected with its details; each repeater list is a notebook source', () async {
+    final u = UserLayersState((call, [arg]) async => switch (call) {
+          'list' => {
+              'layers': const [],
+              'repeater_lists': [
+                {'id': 'l2', 'kind': 'repeaters', 'name': 'Magic Valley', 'visible': true, 'repeaters': 3},
+                {'id': 'l3', 'kind': 'repeaters', 'name': 'Hidden list', 'visible': false, 'repeaters': 1},
+              ],
+            },
+          'get' when arg == 'l2' => {
+              'id': 'l2',
+              'name': 'Magic Valley',
+              'repeaters': [
+                {'item': 1, 'address': 'repeater:l2/1', 'name': 'K7ABC', 'town': 'Twin Falls', 'lat': 42.56, 'lon': -114.46, 'frequency': '146.940 MHz', 'offset': '-0.600 MHz', 'tone': '100.0 Hz', 'mode': 'FM', 'list': 'Magic Valley', 'details_link': 'https://example.org/r/1'},
+                {'item': 2, 'address': 'repeater:l2/2', 'name': 'W7XYZ', 'town': 'Burley', 'lat': 42.54, 'lon': -113.79, 'frequency': '449.500 MHz', 'offset': '-5.000 MHz', 'tone': 'none', 'list': 'Magic Valley'},
+                {'item': 3, 'address': 'repeater:l2/3', 'name': 'NOPOS', 'town': null, 'lat': null, 'lon': null, 'frequency': '147.000 MHz', 'list': 'Magic Valley'},
+              ],
+            },
+          'get' when arg == 'l3' => {
+              'id': 'l3',
+              'name': 'Hidden list',
+              'repeaters': [
+                {'item': 1, 'address': 'repeater:l3/1', 'name': 'K7OFF', 'lat': 43.0, 'lon': -114.0, 'frequency': '145.230 MHz', 'list': 'Hidden list'},
+              ],
+            },
+          _ => const <String, dynamic>{},
+        });
+    await u.reload();
+    final g = await u.mapGeoJson();
+    final props = [for (final f in g['features'] as List) (f as Map)['properties'] as Map];
+    expect([for (final p in props) (p['list'], p['item'])], [('l2', 1), ('l2', 2)], reason: 'shown lists only, located repeaters only');
+    // the map's hit-test reads the tapped feature's properties and selects that repeater
+    final ref = repeaterRef(props.first)!;
+    expect(u.selectRepeater(ref.$1, ref.$2)?.name, 'K7ABC');
+    final r = u.selectedRepeater.value!;
+    expect((r.frequency, r.offset, r.tone, r.mode, r.town, r.listName, r.detailsLink),
+        ('146.940 MHz', '-0.600 MHz', '100.0 Hz', 'FM', 'Twin Falls', 'Magic Valley', 'https://example.org/r/1'));
+    expect(u.selectRepeater('l2', 99), isNull, reason: 'a feature that is not a drawn repeater changes nothing');
+    expect(u.selectedRepeater.value?.name, 'K7ABC');
+    u.clearRepeater();
+    expect(u.selectedRepeater.value, isNull);
+    expect(repeaterRef({'layer': 'y1', 'name': 'Walk'}), isNull);
+    // every list, shown or hidden, is a notebook source with its rows; nearest first from a position
+    final sources = await u.repeaterNotebookSources();
+    expect([for (final s in sources) (s.title, s.rows.length)], [('Repeaters: Magic Valley', 3), ('Repeaters: Hidden list', 1)]);
+    final near = sources.first.nearest(42.54, -113.80);
+    expect([for (final n in near) n.repeater.name], ['W7XYZ', 'K7ABC', 'NOPOS']);
+    expect(near.last.metres, isNull);
+    expect(near.first.metres!, lessThan(1000));
+  });
+
   test('Home search: notebooks and their entries under Notebooks, places under Places', () async {
     final r = _Rig();
     final places = await r.saved();
