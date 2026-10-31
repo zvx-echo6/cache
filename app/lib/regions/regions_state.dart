@@ -146,8 +146,18 @@ String regionPartWords(RegionPart part, String? code, String message) {
 /// starts again; or failed, with a reason, which "Try again" starts again.
 enum RegionPhase { downloading, ready, paused, stopped, failed }
 
-/// Where one part of a region stands.
-enum PartState { ready, downloading, waiting, paused, stopped, failed }
+/// Where one part of a region stands. [notAvailable]: nothing is published for the area yet (places: the region catalogue or the
+/// places server's current.json has none for it). It is not a failure: the region counts as complete and no retry is offered; a
+/// later Update adds the part once it is published.
+enum PartState { ready, downloading, waiting, paused, stopped, failed, notAvailable }
+
+/// True when the core's places error says nothing is published (the places server has no current.json: HTTP 404 or 410 for it).
+/// A tile the index lists that cannot be fetched is a real failure, never this.
+bool placesNotPublished(String? message) {
+  if (message == null) return false;
+  final m = RegExp(r'^HTTP (404|410) from (\S+)').firstMatch(message.trim());
+  return m != null && m.group(2)!.endsWith('current.json');
+}
 
 /// The parts of a region, in the order they are shown.
 enum RegionPartKind { map, directions, places, offroad }
@@ -184,10 +194,14 @@ class RegionPartStatus {
       PartState.paused => 'paused',
       PartState.stopped => (fraction ?? 0) > 0 ? 'stopped at ${pct()}' : 'stopped',
       PartState.failed => "couldn't finish",
+      PartState.notAvailable => 'not available yet',
     };
   }
 
   bool get ready => state == PartState.ready;
+
+  /// Nothing more will come for this part now: ready, or not published for the area yet. The region counts it as done.
+  bool get complete => state == PartState.ready || state == PartState.notAvailable;
 }
 
 /// The words for a part's state shown on its own (a region's page): "Ready", "40%", "Waiting", "Stopped at 40%: no connection".
@@ -306,6 +320,11 @@ class LocalRegion {
       final total = (p['bytes'] as num?)?.toInt() ?? 0, done = (p['done_bytes'] as num?)?.toInt() ?? 0;
       final f = p['state'] == 'ready' ? 1.0 : (total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0));
       final e = p['error'];
+      // Places not published for the area: no current.json on the server, or the published index has no tile over it.
+      if (which == RegionPart.places &&
+          ((p['state'] == 'failed' && placesNotPublished(e is String ? e : null)) || (p['state'] == 'ready' && (p['tiles'] as num?)?.toInt() == 0))) {
+        return RegionPartStatus(kind, PartState.notAvailable);
+      }
       return switch (p['state']) {
         'ready' => RegionPartStatus(kind, PartState.ready, fraction: 1, bytes: total, totalBytes: total),
         'failed' => RegionPartStatus(kind, PartState.failed, fraction: f, bytes: done, totalBytes: total,
@@ -356,11 +375,15 @@ class LocalRegion {
   double get fraction {
     final ps = parts;
     if (ps.isEmpty) return 0;
-    return (ps.fold<double>(0, (s, p) => s + (p.ready ? 1 : (p.fraction ?? 0))) / ps.length).clamp(0, 1).toDouble();
+    return (ps.fold<double>(0, (s, p) => s + (p.complete ? 1 : (p.fraction ?? 0))) / ps.length).clamp(0, 1).toDouble();
   }
 
-  /// The parts that are not ready yet and where each stands, in one short line: "Places 40% · Off-road waiting". A part is used the
-  /// moment its tiles are saved, so the parts that are ready are not named. Empty when every part is ready.
+  /// The places part is not published for this region's area yet (see [PartState.notAvailable]).
+  bool get placesNotAvailable => parts.any((p) => p.kind == RegionPartKind.places && p.state == PartState.notAvailable);
+
+  /// The parts that are not ready yet and where each stands, in one short line: "Places 40% · Off-road waiting", or "Places not
+  /// available yet". A part is used the moment its tiles are saved, so the parts that are ready are not named. Empty when every
+  /// part is ready.
   String get partsLine => [for (final p in parts) if (!p.ready) '${p.name} ${p.words}'].join(' · ');
 
   /// What the bar under a region says: "62% of 1.8 GB" style is left to the screen; this is the part being downloaded now, if any.
@@ -1030,7 +1053,7 @@ class RegionsState extends ChangeNotifier {
     }
     final core = _core;
     final again = [
-      if (l.places?['state'] == 'failed' || (k?.places == true && l.places == null && _statusOf(id) == null)) 'places',
+      if ((l.places?['state'] == 'failed' && !l.placesNotAvailable) || (k?.places == true && l.places == null && _statusOf(id) == null)) 'places',
       if (_routingOf(_statusOf(id))?['state'] == 'failed' || (k?.routing == true && _statusOf(id) == null)) 'routing',
     ];
     if (core != null && again.isNotEmpty) {
@@ -1160,7 +1183,7 @@ class RegionsState extends ChangeNotifier {
       case RegionPhase.stopped || RegionPhase.failed:
         // What is left: each part's size in the catalogue (or as the core counts it) for the share of it not on the phone yet.
         int? left = 0;
-        for (final p in here.parts.where((p) => !p.ready)) {
+        for (final p in here.parts.where((p) => !p.complete)) {
           final whole = switch (p.kind) {
             RegionPartKind.map => cost.map,
             RegionPartKind.directions => cost.routing ?? p.totalBytes,
@@ -1299,7 +1322,7 @@ class RegionsState extends ChangeNotifier {
     if (placesUpdate != null && placesUpdate!['downloading'] != true && (l?.hasPlaces ?? false)) {
       await _core?.call('update', {'component': 'places'});
     }
-    if (l != null && missesPlaces(l)) await _addPlaces(l);
+    if (l != null && (missesPlaces(l) || (l.placesNotAvailable && placesPublished))) await _addPlaces(l);
     for (final p in k?.offroad ?? const <_KeptPack>[]) {
       if (_packRuns[p.path]?.running != true) unawaited(_fetchPack(p));
     }

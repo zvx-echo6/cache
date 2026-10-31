@@ -117,7 +117,7 @@ class RegionPage extends StatelessWidget {
           PartState.stopped => RowButton(key: ValueKey('fix-$key'), label: 'Carry on', onPressed: () => fix(false)),
           PartState.failed => RowButton(key: ValueKey('fix-$key'), label: 'Try again', onPressed: () => fix(true)),
           PartState.downloading => SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, value: fraction)),
-          PartState.waiting || PartState.paused => null,
+          PartState.waiting || PartState.paused || PartState.notAvailable => null,
         };
         Tone toneOf(PartState s) => switch (s) {
           PartState.stopped || PartState.paused => Tone.warn,

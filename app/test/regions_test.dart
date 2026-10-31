@@ -402,6 +402,34 @@ void main() {
       expect(s.error, "Places for this area aren't available yet.");
     });
 
+    test('places not published for the area: not available yet, the region complete, nothing to try again', () {
+      // the places server has no current.json
+      final none = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 404 from https://data.cached.info/places/current.json'});
+      final p = none.parts.firstWhere((p) => p.kind == RegionPartKind.places);
+      expect(p.state, PartState.notAvailable);
+      expect(p.complete, isTrue);
+      expect(p.problem, isNull);
+      expect(partStateWords(p), 'Not available yet');
+      expect(none.placesNotAvailable, isTrue);
+      expect(none.phase, RegionPhase.ready);
+      expect(none.error, isNull);
+      expect(none.fraction, 1.0);
+      expect(none.partsLine, 'Places not available yet');
+      // the published index has no tile over the area
+      final empty = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'ready', 'tiles': 0, 'bytes': 0});
+      expect(empty.placesNotAvailable, isTrue);
+      expect(empty.phase, RegionPhase.ready);
+      // places that do exist and fail to download stay a failure, with its fix
+      final tile = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 404 from https://data.cached.info/places/b1/1/2/3.sqlite.gz'});
+      expect(tile.placesNotAvailable, isFalse);
+      expect(tile.phase, RegionPhase.failed);
+      final busy = LocalRegion(id: 'r', name: 'R', routing: {'state': 'ready', 'bytes': 100}, places: {'state': 'failed', 'error': 'HTTP 503 from https://data.cached.info/places/current.json'});
+      expect(busy.phase, RegionPhase.failed);
+      expect(placesNotPublished('HTTP 410 from https://x/places/current.json'), isTrue);
+      expect(placesNotPublished('HTTP 404 from https://x/places/index-b1.json.gz'), isFalse);
+      expect(placesNotPublished(null), isFalse);
+    });
+
     testWidgets('Local names the parts; a region from before places offers them, and Update adds only that part', (tester) async {
       final r = await _Rig.boot(tester, places: true);
       await tester.runAsync(() async {

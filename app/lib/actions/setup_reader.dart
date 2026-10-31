@@ -32,7 +32,9 @@ SetupDeps setupDepsFrom({
   String? age(DateTime? t) => t == null ? null : setupAge(now().difference(t));
   // Map downloads kept from before regions (listed with the regions on screen since 1.0.28) were never regions to the assistant:
   // what it reads stays as it was.
-  List<LocalRegion> ready() => [for (final r in regions.local) if (r.phase == RegionPhase.ready && !r.isArea) r];
+  // A region whose places are not published yet counts as complete on screen since 1.0.29; to the assistant it reads as before
+  // (it was a failed region then), until cache-llm-training agrees a wording for it.
+  List<LocalRegion> ready() => [for (final r in regions.local) if (r.phase == RegionPhase.ready && !r.isArea && !r.placesNotAvailable) r];
   return SetupDeps(
     connection: () async => [
       SetupItem('Network', switch (await policy.probe.current()) {
