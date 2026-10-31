@@ -136,7 +136,7 @@ class AppActions {
       for (final c in await watch.choices()) {
         if (c.name == name) return c.id;
       }
-      throw const ActionFailure('not_found', 'That place is no longer in the Places list.');
+      throw const ActionFailure('not_found', 'That place is no longer saved or downloaded.');
     }
 
     final field = {'place': {'type': 'string', 'enum': names, 'description': 'Where the phone is, a saved place or a downloaded region, by name'}};
