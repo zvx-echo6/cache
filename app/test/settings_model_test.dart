@@ -63,6 +63,70 @@ void main() {
     expect(s.popUpFor, PopUpFor.serious);
   });
 
+  test('a damaged file is kept beside it before anything is written over it', () async {
+    File('${dir.path}/preferences.json').writeAsStringSync('{not json');
+    final s = await open();
+    s.setMobileForDownloads(true);
+    expect(File('${dir.path}/preferences.json.unreadable').readAsStringSync(), '{not json');
+  });
+
+  test('an upgrade from 1.0.27 keeps every choice: weather sources, watched places, alerts, catalogues, keys it does not know', () async {
+    // preferences.json as 1.0.27 and 1.0.28 wrote it (weather turned on in one tap, Home and a region watched)
+    const old = {
+      'popUpFor': 'all',
+      'toldNoPopUps': true,
+      'quiet': {'on': true, 'from': 1290, 'to': 420},
+      'mobileForDownloads': true,
+      'webSearchOn': false,
+      'liveSourcesOn': ['alerts', 'nws-alerts-point', 'openmeteo-forecast', 'weather', 'wfigs-incidents-near', 'wfigs-perimeters-near'],
+      'watchedPlaces': ['here', 'place:k1', 'region:Idaho'],
+      'seenSavedPlaces': ['place:k1', 'place:k2'],
+      'liveDefaultsSeen': ['ipaws-alerts-near'],
+      'catalogueUrl': null,
+      'extraCatalogues': ['https://example.org/catalogue.json'],
+      'mobileForUpdates': true,
+    };
+    File('${dir.path}/preferences.json').writeAsStringSync(jsonEncode(old));
+    void same(AppSettings s) {
+      expect(s.popUpFor, PopUpFor.all);
+      expect(s.toldNoPopUps, isTrue);
+      expect((s.quiet.from, s.quiet.to), (1290, 420));
+      expect(s.mobileForDownloads, isTrue);
+      expect(s.liveSourcesOn, {'alerts', 'nws-alerts-point', 'openmeteo-forecast', 'weather', 'wfigs-incidents-near', 'wfigs-perimeters-near'});
+      expect(s.watchedPlaces, {'here', 'place:k1', 'region:Idaho'});
+      expect((s.watchHere, s.watchedRegions, s.watchedSavedPlaces), (true, {'Idaho'}, {'k1'}));
+      expect(s.liveDefaultsSeen, {'ipaws-alerts-near'});
+      expect(s.extraCatalogues, ['https://example.org/catalogue.json']);
+    }
+
+    final s = await open();
+    same(s);
+    // the first save writes the weather watch settings (1.0.29) and keeps the old list for an older build
+    s.setWebSearchOn(true);
+    final j = jsonDecode(File('${dir.path}/preferences.json').readAsStringSync()) as Map;
+    expect(j['weatherWatch'], {'format': 1, 'here': true, 'regions': ['Idaho'], 'places': ['k1']});
+    expect(j['watchedPlaces'], ['here', 'place:k1', 'region:Idaho']);
+    expect(j['mobileForUpdates'], isTrue, reason: 'a key this build does not read is kept');
+    same(await open());
+    // a choice made in 1.0.29 reads back from the weather watch settings
+    final t = await open();
+    t.setWatchHere(false);
+    t.setRegionWatched('Utah', true);
+    final u = await open();
+    expect((u.watchHere, u.watchedRegions, u.watchedSavedPlaces), (false, {'Idaho', 'Utah'}, {'k1'}));
+  });
+
+  test('one setting that cannot be read leaves the others as they were', () async {
+    File('${dir.path}/preferences.json').writeAsStringSync(jsonEncode({
+      'quiet': {'on': true, 'from': 'ten', 'to': 360},
+      'liveSourcesOn': ['openmeteo-forecast', 'weather'],
+      'watchedPlaces': ['here', 'region:Idaho'],
+    }));
+    final s = await open();
+    expect(s.liveSourcesOn, {'openmeteo-forecast', 'weather'});
+    expect(s.watchedPlaces, {'here', 'region:Idaho'});
+  });
+
   test('the old pop-up switch reads as the one choice: off is None, on is Serious only', () async {
     File('${dir.path}/preferences.json').writeAsStringSync('{"alertPopups": false, "ringThroughExtreme": true}');
     expect((await open()).popUpFor, PopUpFor.none);

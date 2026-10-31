@@ -12,6 +12,9 @@ const String kDefaultCatalogueUrl = 'https://cache.echo6.co/connectors/catalogue
 /// The id of "Where I am" among the watched places: the place follows the phone.
 const String kWatchHere = 'here';
 
+/// The format of preferences.json's `weatherWatch` (1.0.29).
+const int kWeatherWatchFormat = 1;
+
 /// "10 PM", "6:30 AM": a time of day in minutes after midnight, as people say it.
 String formatMinutes(int minutes) {
   final m = ((minutes % 1440) + 1440) % 1440;
@@ -119,6 +122,21 @@ class AppSettings extends ChangeNotifier {
   /// (a downloaded region). "Where I am" is watched until the person unchecks it.
   Set<String> get watchedPlaces => Set.unmodifiable(_watched);
 
+  /// Weather watch settings (1.0.29): "Where I am" and the downloaded regions belong to Weather and alerts, not to the Places
+  /// notebook, which holds only the person's own places. Kept in preferences.json as `weatherWatch` ({format, here, regions,
+  /// places}); `watchedPlaces` is still written beside it, so an older build reads the same choices.
+  bool get watchHere => _watched.contains(kWatchHere);
+
+  /// The downloaded regions watched, by region name.
+  Set<String> get watchedRegions => {for (final id in _watched) if (id.startsWith('region:')) id.substring(7)};
+
+  /// The saved places watched, by place key.
+  Set<String> get watchedSavedPlaces => {for (final id in _watched) if (id.startsWith('place:')) id.substring(6)};
+
+  void setWatchHere(bool on) => setWatched(kWatchHere, on);
+
+  void setRegionWatched(String regionName, bool on) => setWatched('region:$regionName', on);
+
   /// The address of the connector catalogue the person set in Advanced, or null for the default ([kDefaultCatalogueUrl]).
   String? get catalogueUrl => _catalogueUrl;
 
@@ -133,14 +151,40 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Keys this build does not know (written by a newer or an older build), kept and written back as they were, so moving between
+  /// versions never drops a setting.
+  Map<String, dynamic> _other = {};
+
+  static const Set<String> _known = {
+    'popUpFor', 'alertPopups', 'toldNoPopUps', 'quiet', 'mobileForDownloads', 'webSearchOn', 'liveSourcesOn', 'watchedPlaces',
+    'weatherWatch', 'seenSavedPlaces', 'liveDefaultsSeen', 'catalogueUrl', 'extraCatalogues',
+  };
+
+  /// Each setting is read on its own: one that cannot be read keeps its default and the rest are still read (one bad value used
+  /// to leave every setting after it at its default, and the next save wrote those defaults over the person's choices). A file
+  /// that is not readable at all is kept beside it (preferences.json.unreadable) before anything is written over it.
   void _read() {
+    final f = _file!;
+    if (!f.existsSync()) return;
+    Map<String, dynamic> j;
     try {
-      final f = _file!;
-      if (!f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-      // Before the one choice there was a pop-up switch: off reads as None.
-      _popUpFor = j['popUpFor'] != null ? PopUpFor.byName(j['popUpFor']) : (j['alertPopups'] == false ? PopUpFor.none : PopUpFor.serious);
-      _toldNoPopUps = j['toldNoPopUps'] == true;
+      j = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
+    } catch (_) {
+      try {
+        f.copySync('${f.path}.unreadable');
+      } catch (_) {}
+      return;
+    }
+    void each(void Function() read) {
+      try {
+        read();
+      } catch (_) {}
+    }
+
+    // Before the one choice there was a pop-up switch: off reads as None.
+    each(() => _popUpFor = j['popUpFor'] != null ? PopUpFor.byName(j['popUpFor']) : (j['alertPopups'] == false ? PopUpFor.none : PopUpFor.serious));
+    each(() => _toldNoPopUps = j['toldNoPopUps'] == true);
+    each(() {
       final q = j['quiet'];
       if (q is Map) {
         _quiet = QuietHours(
@@ -149,18 +193,33 @@ class AppSettings extends ChangeNotifier {
           to: ((q['to'] as num?)?.toInt() ?? 6 * 60).clamp(0, 1439),
         );
       }
-      _mobileForDownloads = j['mobileForDownloads'] == true;
-      _webSearchOn = j['webSearchOn'] == true;
-      _liveOn = _strings(j['liveSourcesOn']).toSet();
-      if (j['watchedPlaces'] is List) _watched = _strings(j['watchedPlaces']).toSet();
+    });
+    each(() => _mobileForDownloads = j['mobileForDownloads'] == true);
+    each(() => _webSearchOn = j['webSearchOn'] == true);
+    each(() => _liveOn = _strings(j['liveSourcesOn']).toSet());
+    each(() {
+      final ww = j['weatherWatch'];
+      if (ww is Map && ww['format'] == kWeatherWatchFormat) {
+        _watched = {
+          if (ww['here'] != false) kWatchHere,
+          for (final r in _strings(ww['regions'])) 'region:$r',
+          for (final k in _strings(ww['places'])) 'place:$k',
+        };
+      } else if (j['watchedPlaces'] is List) {
+        // 1.0.28 and before: one list of ids, which the Places notebook showed. Read as it is (the choices are the person's).
+        _watched = _strings(j['watchedPlaces']).toSet();
+      }
+    });
+    each(() {
       if (j['seenSavedPlaces'] is List) _seenPlaces = _strings(j['seenSavedPlaces']).toSet();
-      _defaultsSeen = _strings(j['liveDefaultsSeen']).toSet();
+    });
+    each(() => _defaultsSeen = _strings(j['liveDefaultsSeen']).toSet());
+    each(() {
       final u = j['catalogueUrl'];
       _catalogueUrl = u is String && u.trim().isNotEmpty ? u.trim() : null;
-      _extraCatalogues = _strings(j['extraCatalogues']);
-    } catch (_) {
-      // A damaged file is ignored; the defaults apply.
-    }
+    });
+    each(() => _extraCatalogues = _strings(j['extraCatalogues']));
+    _other = {for (final e in j.entries) if (!_known.contains(e.key)) e.key: e.value};
   }
 
   static List<String> _strings(Object? v) => v is List ? [for (final e in v) if (e is String && e.isNotEmpty) e] : <String>[];
@@ -171,6 +230,7 @@ class AppSettings extends ChangeNotifier {
       final f = _file;
       if (f == null) return;
       writeStringAtomicSync(f, jsonEncode({
+        ..._other,
         'popUpFor': _popUpFor.name,
         if (_toldNoPopUps) 'toldNoPopUps': true,
         'quiet': {'on': _quiet.on, 'from': _quiet.from, 'to': _quiet.to},
@@ -178,6 +238,12 @@ class AppSettings extends ChangeNotifier {
         'webSearchOn': _webSearchOn,
         'liveSourcesOn': _liveOn.toList()..sort(),
         'watchedPlaces': _watched.toList()..sort(),
+        'weatherWatch': {
+          'format': kWeatherWatchFormat,
+          'here': watchHere,
+          'regions': watchedRegions.toList()..sort(),
+          'places': watchedSavedPlaces.toList()..sort(),
+        },
         if (_seenPlaces != null) 'seenSavedPlaces': _seenPlaces!.toList()..sort(),
         if (_defaultsSeen.isNotEmpty) 'liveDefaultsSeen': _defaultsSeen.toList()..sort(),
         'catalogueUrl': _catalogueUrl,

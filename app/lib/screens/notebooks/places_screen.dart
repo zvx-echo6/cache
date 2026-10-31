@@ -59,10 +59,11 @@ class PlaceNotebookDeps {
   /// Directions on the map to a place.
   final void Function(NbPlace place, String name)? directions;
 
-  /// The downloaded regions weather can be kept for (watched-place id `region:<name>`), listed after "Where I am".
+  /// The downloaded regions weather can be kept for (watched-place id `region:<name>`). No longer listed in the Places notebook
+  /// (1.0.29); kept for the Weather and alerts screen that lists the watched areas.
   final Future<List<({String id, String name})>> Function()? regions;
 
-  /// "Where I am" on the map (the position dot), and its marker's toggle.
+  /// "Where I am" on the map (the position dot), and its marker's toggle (for the same screen).
   final bool Function()? hereOnMap;
   final void Function(bool on)? setHereOnMap;
 }
@@ -71,8 +72,8 @@ class PlaceNotebookDeps {
 String? watchId(NbEntry e) => e.place?.key == null ? null : 'place:${e.place!.key}';
 
 /// A Places notebook: each place with its own marker colour (tap the marker to show or hide it on the map; a hidden place
-/// shows an outlined marker with a slash), tap to open, press and hold to edit, and "+ Add place". The saved places' notebook
-/// also lists "Where I am" first, with its weather and alerts.
+/// shows an outlined marker with a slash), tap to open, press and hold to edit, and "+ Add place". It holds only the person's own
+/// places (1.0.29): "Where I am" and the downloaded regions are Weather and alerts' watched areas (WeatherState.watchAreas).
 class PlacesNotebookScreen extends StatefulWidget {
   const PlacesNotebookScreen({super.key, required this.deps, required this.notebookId});
 
@@ -89,7 +90,6 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
   List<NbEntry>? _entries;
   int _readAt = -1;
   ({double lat, double lon})? _here;
-  List<({String id, String name})> _regions = const [];
 
   @override
   void initState() {
@@ -98,9 +98,6 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
     pd?.alerts.addListener(_onChange);
     pd?.alerts.load();
     _read();
-    pd?.regions?.call().then((r) {
-      if (mounted) setState(() => _regions = r);
-    }).catchError((_) {});
     widget.deps.places.here().then((h) {
       if (mounted && h != null) setState(() => _here = h);
     }).catchError((_) {});
@@ -216,20 +213,6 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
               children: [
-                if (book.savedPlaces && pd != null) _whereIAm(k),
-                if (book.savedPlaces && pd != null)
-                  for (final r in _regions)
-                    _Card(
-                      key: ValueKey('place-${r.id}'),
-                      leading: SizedBox(width: 44, height: 44, child: Icon(Icons.map_outlined, color: k.secondary)),
-                      title: r.name,
-                      detail: 'Downloaded region · weather ${pd!.watched(r.id) ? 'on' : 'off'}',
-                      onTap: () => showWeatherSheet(context, pd!, placeId: r.id, name: r.name).then((_) => setState(() {})),
-                      onLongPress: () {
-                        HapticFeedback.mediumImpact();
-                        showWeatherSheet(context, pd!, placeId: r.id, name: r.name).then((_) => setState(() {}));
-                      },
-                    ),
                 for (final e in list) _row(book, e, k),
                 if (list.isEmpty)
                   Padding(
@@ -256,41 +239,6 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
                 ),
               ],
             ),
-    );
-  }
-
-  /// "Where I am": the fixed first row (the phone's position, never deleted or moved), with its marker toggle (the position on
-  /// the map) and its weather and alerts.
-  Widget _whereIAm(CacheTokens k) {
-    final p = pd!;
-    final on = p.watched('here');
-    final shown = p.hereOnMap?.call() ?? true;
-    return _Card(
-      key: const ValueKey('place-here'),
-      leading: Semantics(
-        button: true,
-        toggled: shown,
-        label: 'Where I am marker, ${shown ? 'shown on the map' : 'hidden on the map'}',
-        excludeSemantics: true,
-        child: InkResponse(
-          key: const ValueKey('marker-here'),
-          radius: 24,
-          onTap: p.setHereOnMap == null
-              ? null
-              : () {
-                  HapticFeedback.selectionClick();
-                  setState(() => p.setHereOnMap!(!shown));
-                },
-          child: SizedBox(width: 44, height: 44, child: Icon(shown ? Icons.my_location : Icons.location_disabled_outlined, color: k.accent)),
-        ),
-      ),
-      title: 'Where I am',
-      detail: 'Follows the phone · weather ${on ? 'on' : 'off'}',
-      onTap: () => showWeatherSheet(context, p, placeId: 'here', name: 'Where I am').then((_) => setState(() {})),
-      onLongPress: () {
-        HapticFeedback.mediumImpact();
-        showWeatherSheet(context, p, placeId: 'here', name: 'Where I am').then((_) => setState(() {}));
-      },
     );
   }
 

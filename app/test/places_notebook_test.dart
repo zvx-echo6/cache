@@ -79,26 +79,21 @@ class _Rig {
 
 void main() {
   group('the Places notebook', () {
-    testWidgets('lists Where I am, the regions and each place with its marker; tapping the marker hides and shows it', (tester) async {
+    testWidgets('lists only the person\'s own places, each with its marker; tapping the marker hides and shows it', (tester) async {
       final r = _Rig();
       final book = await r.saved();
       await r.place(book, 'Home', 42.5607, -114.4623, color: 'green');
       await r.place(book, 'Rally point 1', 42.5630, -114.4610, color: 'purple');
       await r.pump(tester, NotebookScreen(deps: r.deps, notebookId: book.id));
       expect(find.text('Places'), findsOneWidget);
-      expect(find.text('Where I am'), findsOneWidget);
-      expect(find.text('Follows the phone · weather on'), findsOneWidget);
-      expect(find.text('Idaho'), findsOneWidget);
-      expect(find.text('Downloaded region · weather off'), findsOneWidget);
+      // Where I am and the downloaded regions are Weather and alerts' watched areas now, not rows here
+      expect(find.text('Where I am'), findsNothing);
+      expect(find.byKey(const ValueKey('marker-here')), findsNothing);
+      expect(find.text('Idaho'), findsNothing);
       expect(find.text('Home'), findsOneWidget);
       expect(find.text('Rally point 1'), findsOneWidget);
-      expect(find.textContaining('weather off'), findsNWidgets(3), reason: 'the region and both places are not watched yet');
+      expect(find.textContaining('weather off'), findsNWidgets(2), reason: 'both places are not watched yet');
       expect(find.byIcon(Icons.location_off_outlined), findsNothing);
-      // Where I am: a fixed first row with its own marker toggle (no delete)
-      await tester.tap(find.byKey(const ValueKey('marker-here')));
-      await tester.pumpAndSettle();
-      expect(r.hereShown, isFalse);
-      expect(find.byIcon(Icons.location_disabled_outlined), findsOneWidget);
       final home = r.store.entries.firstWhere((e) => e['title'] == 'Home');
       await tester.tap(find.byKey(ValueKey('marker-${home['id']}')));
       await tester.pumpAndSettle();
