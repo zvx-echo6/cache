@@ -88,7 +88,11 @@ class Shell extends StatefulWidget {
     required this.layout,
     required this.hub,
     this.notebooks,
+    this.railPrefs,
   });
+
+  /// Where the rail's hidden-in-portrait choice is kept (the app's support folder when null).
+  final RailPrefs? railPrefs;
 
   final AppState app;
   final ChatController chat;
@@ -140,6 +144,9 @@ class _ShellState extends State<Shell> {
     currentAppUpdates = _updates;
     unawaited(_updates?.check());
     WidgetsBinding.instance.addPostFrameCallback((_) => _whatsNew());
+    _railPrefs.hidden().then((h) {
+      if (mounted && h != _railHidden) setState(() => _railHidden = h);
+    });
   }
 
   late final AppUpdates? _updates = Platform.isIOS || Platform.isAndroid
@@ -147,6 +154,15 @@ class _ShellState extends State<Shell> {
       : null;
 
   bool _whatsNewAsked = false;
+
+  /// The rail is hidden in portrait (the person's choice on this device).
+  bool _railHidden = false;
+  late final RailPrefs _railPrefs = widget.railPrefs ?? RailPrefs();
+
+  void _setRailHidden(bool hidden) {
+    setState(() => _railHidden = hidden);
+    _railPrefs.setHidden(hidden);
+  }
 
   /// "What's new" once after an update, on Home only, never over another screen or pop-up (it waits until Home is back).
   Future<void> _whatsNew() async {
@@ -633,12 +649,14 @@ class _ShellState extends State<Shell> {
         // A regular window (640 wide and up, iPad and Android tablets, either way round): the same destinations in a rail on the
         // left, in the bar's order; a stable frame that stays with the keyboard open.
         if (isRegular(context)) {
-          return Scaffold(
-            body: Row(
-              children: [
-                SafeArea(
-                  right: false,
-                  child: NavigationRail(
+          // Upright, the rail can slide away to give the page the full width; a menu button at the top left brings it back.
+          // Sideways it stays (there is room for it).
+          final portrait = isPortrait(context);
+          final hidden = portrait && _railHidden;
+          final reduce = MediaQuery.disableAnimationsOf(context);
+          final rail = SafeArea(
+            right: false,
+            child: NavigationRail(
                     key: const ValueKey('nav-rail'),
                     minWidth: kRailWidth,
                     labelType: NavigationRailLabelType.all,
@@ -649,10 +667,61 @@ class _ShellState extends State<Shell> {
                       for (final m in pinned) NavigationRailDestination(icon: Icon(m.icon), selectedIcon: Icon(m.selectedIcon), label: Text(m.label)),
                       const NavigationRailDestination(icon: Icon(Icons.apps_outlined), selectedIcon: Icon(Icons.apps), label: Text('Modules')),
                     ],
+                    leading: portrait
+                        ? IconButton(
+                            key: const ValueKey('rail-hide'),
+                            tooltip: 'Hide menu',
+                            icon: const Icon(Icons.menu_open),
+                            onPressed: () => _setRailHidden(true),
+                          )
+                        : null,
+                  ),
+          );
+          return Scaffold(
+            body: Row(
+              children: [
+                ClipRect(
+                  child: AnimatedAlign(
+                    duration: reduce ? Duration.zero : const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.centerRight,
+                    widthFactor: hidden ? 0 : 1,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [rail, VerticalDivider(width: 1, thickness: 1, color: Theme.of(context).dividerColor.withValues(alpha: 0.3))],
+                    ),
                   ),
                 ),
-                VerticalDivider(width: 1, thickness: 1, color: Theme.of(context).dividerColor.withValues(alpha: 0.3)),
-                Expanded(child: stack),
+                Expanded(
+                  child: hidden
+                      ? Stack(
+                          children: [
+                            // The pages' top bars make room for the menu button at the top left.
+                            MediaQuery(
+                              data: MediaQuery.of(context).copyWith(
+                                padding: MediaQuery.paddingOf(context).copyWith(left: MediaQuery.paddingOf(context).left + 52),
+                                viewPadding: MediaQuery.viewPaddingOf(context).copyWith(left: MediaQuery.viewPaddingOf(context).left + 52),
+                              ),
+                              child: stack,
+                            ),
+                            Positioned(
+                              left: 4,
+                              top: MediaQuery.paddingOf(context).top + 4,
+                              child: Material(
+                                color: Theme.of(context).colorScheme.surface,
+                                shape: CircleBorder(side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.4))),
+                                child: IconButton(
+                                  key: const ValueKey('rail-show'),
+                                  tooltip: 'Show menu',
+                                  icon: const Icon(Icons.menu),
+                                  onPressed: () => _setRailHidden(false),
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : stack,
+                ),
               ],
             ),
           );

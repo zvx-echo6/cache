@@ -11,6 +11,7 @@ import 'package:cache/browse/place_about.dart';
 import 'package:cache/browse/reader_screen.dart';
 import 'package:cache/guide/guide_book.dart';
 import 'package:cache/guide/guide_reader.dart';
+import 'package:cache/layout/adaptive.dart' show RailPrefs;
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/location/location_service.dart';
 import 'package:cache/maps/layers/layer_def.dart' show AreaPhase;
@@ -727,6 +728,28 @@ void main() {
     } catch (_) {}
     await o.dispose(tester);
   });
+  testWidgets('6: portrait rail shown and collapsed (iPad, Android tablet), light and dark', (tester) async {
+    final o = await _idahoReadyNoPlaces(tester);
+    final r = o.s;
+    final layout = LayoutState(settingsDirOverride: r.dir);
+    await tester.runAsync(layout.init);
+    final nav = NavState(backend: FakeBackend(), location: r.location, speaker: FakeSpeaker(), positionSource: FakeNavPosition(), fmt: const Fmt(UnitSystem.imperial));
+    for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
+      for (final (name, size) in [('ipad-portrait', kIpadPortrait), ('android-portrait', kTabPortrait)]) {
+        final prefs = RailPrefs(dirOverride: Directory.systemTemp.createTempSync('m29-rail'));
+        await _show(tester, Shell(app: r.app, chat: r.chat, sources: r.sources, location: r.location, maps: r.maps, video: r.video, browse: r.browse, nav: nav, layout: layout, hub: r.hub, railPrefs: prefs), size: size, theme: theme);
+        await snap(tester, _out, '6-$name-rail-shown-${theme.name}');
+        await tester.tap(find.byKey(const ValueKey('rail-hide')));
+        await tester.pumpAndSettle();
+        await snap(tester, _out, '6-$name-rail-collapsed-${theme.name}');
+      }
+    }
+    await _show(tester, const SizedBox());
+    nav.dispose();
+    layout.dispose();
+    await o.dispose(tester);
+  });
+
   // ---- The ZIM reader's bars (the top-left arrow leaves; the bottom arrows are the page history) ----------------------------
 
   testWidgets('7: the reader\'s top and bottom bars, light and dark', (tester) async {

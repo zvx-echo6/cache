@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../theme.dart';
 
@@ -15,6 +19,9 @@ const double kWideWidth = 900;
 const double kSideCardWidth = 800;
 
 const double kRailWidth = 80;
+
+/// The narrowest page that takes two panes (a 640 window less the rail: list 280, detail 280).
+const double kTwoPaneMinWidth = 559;
 const double kListWidth = 280;
 const double kWideListWidth = 340;
 
@@ -52,10 +59,12 @@ class TwoPaneState extends State<TwoPane> {
     _builder = builder;
   });
 
+  // The width the pages have (the window less the rail when it shows): two panes when it fits, else the list alone.
   @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    if (width < kRegularWidth) return widget.list;
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) => _panes(context, c.maxWidth));
+
+  Widget _panes(BuildContext context, double width) {
+    if (MediaQuery.sizeOf(context).width < kRegularWidth || width < kTwoPaneMinWidth) return widget.list;
     final k = context.t;
     final b = _builder;
     return Row(
@@ -124,4 +133,36 @@ Future<void> openDetail(BuildContext context, {required Object key, required Wid
 bool isPaneSelected(BuildContext context, Object key) {
   final pane = _PaneScope.of(context);
   return pane != null && pane.inList && pane.selected == key;
+}
+
+/// Whether the rail is hidden in portrait, kept on this device across restarts (a small file next to the settings).
+class RailPrefs {
+  RailPrefs({Directory? dirOverride}) : _dir = dirOverride;
+
+  final Directory? _dir;
+
+  Future<File> _file() async => File('${(_dir ?? await getApplicationSupportDirectory()).path}/rail.json');
+
+  Future<bool> hidden() async {
+    try {
+      final f = await _file();
+      if (!f.existsSync()) return false;
+      final j = jsonDecode(f.readAsStringSync());
+      return j is Map && j['hidden'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setHidden(bool hidden) async {
+    try {
+      (await _file()).writeAsStringSync(jsonEncode({'hidden': hidden}));
+    } catch (_) {}
+  }
+}
+
+/// The window is taller than it is wide (a tablet held upright): the rail can be hidden to give the page the full width.
+bool isPortrait(BuildContext context) {
+  final s = MediaQuery.sizeOf(context);
+  return s.height > s.width;
 }
