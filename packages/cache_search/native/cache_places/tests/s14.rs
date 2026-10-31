@@ -127,9 +127,8 @@ fn sql(cfg: &PlacesCfg, q: &str) {
 #[test]
 fn about_is_the_stored_column_as_it_is_never_the_summary() {
     let (_d, cfg) = pack("stored", true);
-    // a long summary: the build stored its opening; the core shows exactly that and never cuts or re-reads the summary
-    let long = format!("{SPRING_ABOUT} {}", "More words here. ".repeat(40));
-    sql(&cfg, &format!("UPDATE places SET summary = '{long}', about = 'A cold natural spring.' WHERE name = 'Sawtooth Spring';"));
+    // a summary of 400 characters or less: the core shows the stored column exactly and never re-reads the summary
+    sql(&cfg, &format!("UPDATE places SET summary = '{SPRING_ABOUT} More words.', about = 'A cold natural spring.' WHERE name = 'Sawtooth Spring';"));
     let v = run(&tools(&cfg), "nearby", json!({"category": "water", "near": "Stanley, Idaho", "limit": 10}));
     let spring = v["places"].as_array().unwrap().iter().find(|p| p["name"] == "Sawtooth Spring").unwrap().clone();
     assert_eq!(spring["about"], "A cold natural spring.");
@@ -140,6 +139,23 @@ fn about_is_the_stored_column_as_it_is_never_the_summary() {
     assert!(spring.get("about").is_none());
     assert_eq!(*keys(&spring).last().unwrap(), "wikipedia");
     assert_eq!(spring["wikipedia"], "Sawtooth Spring");
+}
+
+#[test]
+fn the_1_0_rule_a_summary_over_400_characters_has_no_about_even_with_a_stored_cut() {
+    let (_d, cfg) = pack("cut", true);
+    let exactly = "a".repeat(400);
+    sql(&cfg, &format!("UPDATE places SET summary = '  {exactly}  ', about = 'A cold natural spring.' WHERE name = 'Sawtooth Spring';"));
+    let v = run(&tools(&cfg), "nearby", json!({"category": "water", "near": "Stanley, Idaho", "limit": 10}));
+    let spring = v["places"].as_array().unwrap().iter().find(|p| p["name"] == "Sawtooth Spring").unwrap().clone();
+    assert_eq!(spring["about"], "A cold natural spring.", "400 characters, whitespace collapsed, keeps its about");
+    let long = format!("{SPRING_ABOUT} {}", "More words here. ".repeat(40));
+    sql(&cfg, &format!("UPDATE places SET summary = '{long}' WHERE name = 'Sawtooth Spring';"));
+    let ts = tools(&cfg);
+    let v = run(&ts, "nearby", json!({"category": "water", "near": "Stanley, Idaho", "limit": 10}));
+    let spring = v["places"].as_array().unwrap().iter().find(|p| p["name"] == "Sawtooth Spring").unwrap().clone();
+    assert!(spring.get("about").is_none(), "{spring}");
+    assert_eq!(*keys(&spring).last().unwrap(), "wikipedia");
 }
 
 #[test]

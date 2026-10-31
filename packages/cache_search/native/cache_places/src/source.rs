@@ -41,7 +41,7 @@ fn from_row(packs: &[Arc<Pack>], r: &PlaceRow, title: &str, from: Option<(f64, f
     m.osm_category = crate::geocoder::osm_category(r);
     m.details = Some(PlaceDetails { phone: r.phone.clone(), website: r.website.clone(), hours: r.hours.clone() });
     m.arrival = r.arrival;
-    m.about = crate::about::about_of(r.about.as_deref());
+    m.about = crate::about::about_of(r.about.as_deref(), r.summary.as_deref());
     m.wikipedia = crate::about::wikipedia_of(r.wikipedia_title.as_deref());
     m
 }

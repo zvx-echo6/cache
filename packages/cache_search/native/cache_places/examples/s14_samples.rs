@@ -33,7 +33,7 @@ fn main() {
             m.insert("lon".into(), json!(r.lon));
             m.insert("locality".into(), Value::Null);
             m.insert("summary".into(), json!(r.summary));
-            if let Some(a) = about_of(r.about.as_deref()) {
+            if let Some(a) = about_of(r.about.as_deref(), r.summary.as_deref()) {
                 m.insert("about".into(), json!(a));
             }
             if let Some(w) = wikipedia_of(r.wikipedia_title.as_deref()) {
@@ -48,7 +48,7 @@ fn main() {
             m.insert("lon".into(), json!(r.lon));
             m.insert("locality".into(), json!(r.locality));
             m.insert("summary".into(), json!(r.summary));
-            if let Some(a) = about_of(r.about.as_deref()) {
+            if let Some(a) = about_of(r.about.as_deref(), r.summary.as_deref()) {
                 m.insert("about".into(), json!(a));
             }
             if let Some(w) = wikipedia_of(r.wikipedia_title.as_deref()) {

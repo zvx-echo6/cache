@@ -244,7 +244,7 @@ impl Tool for NearbyTool {
                     }
                 }
                 // Spec S14: the last two keys, each left out when the place has none.
-                if let Some(a) = crate::about::about_of(r.about.as_deref()) {
+                if let Some(a) = crate::about::about_of(r.about.as_deref(), r.summary.as_deref()) {
                     m.insert("about".into(), json!(a));
                 }
                 if let Some(w) = crate::about::wikipedia_of(r.wikipedia_title.as_deref()) {

@@ -542,7 +542,7 @@ impl PackGeocoder {
                         score,
                         approximate: false,
                         details: None,
-                        about: about_of(l.about.as_deref()),
+                        about: about_of(l.about.as_deref(), l.summary.as_deref()),
                         wikipedia: wikipedia_of(l.wikipedia_title.as_deref()),
                     });
                 }
@@ -588,7 +588,7 @@ impl PackGeocoder {
                         score,
                         approximate: false,
                         details: Some(PlaceDetails { phone: r.phone.clone(), website: r.website.clone(), hours: r.hours.clone() }),
-                        about: about_of(r.about.as_deref()),
+                        about: about_of(r.about.as_deref(), r.summary.as_deref()),
                         wikipedia: wikipedia_of(r.wikipedia_title.as_deref()),
                     });
                 }
@@ -682,7 +682,7 @@ impl PackGeocoder {
             score: 0.0,
             approximate: false,
             details: None,
-            about: about_of(l.about.as_deref()),
+            about: about_of(l.about.as_deref(), l.summary.as_deref()),
             wikipedia: wikipedia_of(l.wikipedia_title.as_deref()),
         })
     }
