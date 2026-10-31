@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+
+import '../app_fs.dart';
 
 /// Why someone reported an answer.
 enum ReportReason {
@@ -100,23 +101,22 @@ class AnswerReports extends ChangeNotifier {
   final Directory? dirOverride;
   List<AnswerReport>? _items;
 
-  Future<File> _file() async {
-    final dir = dirOverride ?? await getApplicationSupportDirectory();
-    return File('${dir.path}${Platform.pathSeparator}reported_answers.json');
-  }
+  static const String _name = 'reported_answers.json';
+
+  late final AppFs _fs = createAppFs(supportOverride: dirOverride);
 
   /// Newest first.
   Future<List<AnswerReport>> list() async {
     if (_items != null) return List.unmodifiable(_items!);
-    final f = await _file();
     var items = <AnswerReport>[];
-    if (await f.exists()) {
-      try {
-        final raw = jsonDecode(await f.readAsString());
+    try {
+      final text = await _fs.readString(AppRoot.support, _name);
+      if (text != null) {
+        final raw = jsonDecode(text);
         if (raw is List) items = [for (final j in raw) ?AnswerReport.fromJson(j)];
-      } catch (e) {
-        debugPrint('Reported answers could not be read: $e');
       }
+    } catch (e) {
+      debugPrint('Reported answers could not be read: $e');
     }
     items.sort((a, b) => b.at.compareTo(a.at));
     _items = items;
@@ -138,11 +138,8 @@ class AnswerReports extends ChangeNotifier {
   Future<void> clear() => _save([]);
 
   Future<void> _save(List<AnswerReport> items) async {
-    final f = await _file();
-    await f.parent.create(recursive: true);
-    final tmp = File('${f.path}.tmp');
-    await tmp.writeAsString(jsonEncode([for (final r in items) r.toJson()]), flush: true);
-    await tmp.rename(f.path);
+    await _fs.mkdir(AppRoot.support, '');
+    await _fs.writeStringViaTmp(AppRoot.support, _name, jsonEncode([for (final r in items) r.toJson()]));
     _items = items;
     notifyListeners();
   }

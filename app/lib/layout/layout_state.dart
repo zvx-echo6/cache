@@ -3,9 +3,8 @@ import 'dart:io';
 
 import 'package:cache_search/cache_search.dart' show MapPlace;
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
-import '../files.dart';
+import '../app_fs.dart';
 import 'modules.dart';
 
 /// The blocks Home can show.
@@ -148,7 +147,7 @@ class LayoutState extends ChangeNotifier {
   List<HomeBlock> _order = List.of(defaultBlocks);
   final Set<HomeBlock> _off = {};
   final List<Shortcut> _shortcuts = [];
-  File? _file;
+  AppFs? _fs;
 
   /// The modules in the bar between Home and Modules, in bar order (at most [kMaxPinned]).
   List<ModuleId> get pinned => List.unmodifiable(_pinned);
@@ -164,18 +163,20 @@ class LayoutState extends ChangeNotifier {
   List<Shortcut> get shortcuts => List.unmodifiable(_shortcuts);
 
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/layout.json');
-    _read();
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
+    await _read();
     notifyListeners();
   }
 
-  void _read() {
+  static const String _name = 'layout.json';
+
+  Future<void> _read() async {
     try {
-      final f = _file!;
-      if (!f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final text = await _fs!.readString(AppRoot.support, _name);
+      if (text == null) return;
+      final j = jsonDecode(text) as Map<String, dynamic>;
       final pinned = <ModuleId>[];
       for (final n in (j['pinned'] as List? ?? const [])) {
         final m = ModuleId.byName(n as String?);
@@ -210,9 +211,9 @@ class LayoutState extends ChangeNotifier {
   void _save() {
     notifyListeners();
     try {
-      final f = _file;
-      if (f == null) return;
-      writeStringAtomicSync(f, jsonEncode({
+      final fs = _fs;
+      if (fs == null) return;
+      fs.writeStringAtomicSync(AppRoot.support, _name, jsonEncode({
         'pinned': [for (final m in _pinned) m.name],
         'blocks': [for (final b in _order) b.name],
         'off': [for (final b in _off) b.name],

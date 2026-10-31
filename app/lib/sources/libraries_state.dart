@@ -150,6 +150,17 @@ class LibrariesState extends ChangeNotifier {
   Future<void> whenIdle() => Future.wait(_pending.toList());
 
   Future<void> init() async {
+    if (plat.isWeb) {
+      // In a browser the server owns the libraries' folders: nothing is scanned or created here, and there is no guide to copy out.
+      notifyListeners();
+      final core = await sources.whenCoreReady();
+      if (core == null) {
+        unawaited(sources.whenCoreOpen().then((_) => sources.refresh()));
+        return;
+      }
+      await sources.refresh();
+      return;
+    }
     final base = dirOverride ??
         Directory(
           '${((plat.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}'

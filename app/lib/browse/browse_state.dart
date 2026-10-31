@@ -4,9 +4,8 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
-import '../files.dart';
+import '../app_fs.dart';
 import '../settings/data_policy.dart';
 import '../settings/space.dart';
 import '../sources/libraries_state.dart';
@@ -93,7 +92,7 @@ class BrowseState extends ChangeNotifier {
   final Future<Uint8List?> Function(Uri url) _iconFetch;
   final String? _phoneLanguage;
 
-  File? _file;
+  AppFs? _fs;
 
   /// A `zim:` address a citation asked to open; the Browse tab takes it and clears it.
   String? requestedAddress;
@@ -113,14 +112,17 @@ class BrowseState extends ChangeNotifier {
   /// update finishes (the old file goes) even if the app is closed while the new one is indexed.
   final Map<String, String> _replacements = {};
 
+  static const String _name = 'browse.json';
+
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/browse.json');
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
     var hadLanguage = false;
     try {
-      if (_file!.existsSync()) {
-        final j = (jsonDecode(_file!.readAsStringSync()) as Map)
+      final text = await fs.readString(AppRoot.support, _name);
+      if (text != null) {
+        final j = (jsonDecode(text) as Map)
             .cast<String, dynamic>();
         if (j['language'] is String) {
           language = j['language'] as String;
@@ -143,10 +145,11 @@ class BrowseState extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      final f = _file;
-      if (f == null) return;
-      await writeStringAtomic(
-        f,
+      final fs = _fs;
+      if (fs == null) return;
+      await fs.writeStringAtomic(
+        AppRoot.support,
+        _name,
         jsonEncode({
           'language': language,
           'replacements': _replacements,

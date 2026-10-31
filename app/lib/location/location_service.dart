@@ -3,9 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
-import 'package:path_provider/path_provider.dart';
 
-import '../files.dart';
+import '../app_fs.dart';
 import 'position_source.dart';
 
 /// Why there is no position right now, for the one line shown under the coordinates.
@@ -32,7 +31,7 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
   bool busy = false;
   LocationPermissionState permission = LocationPermissionState.notAsked;
 
-  File? _file;
+  AppFs? _fs;
   StreamSubscription<Fix>? _sub;
   bool _foreground = true;
   bool _held = false;
@@ -57,13 +56,16 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  static const String _name = 'location.json';
+
   Future<void> init() async {
-    final dir = settingsDirOverride ?? await getApplicationSupportDirectory();
-    await dir.create(recursive: true);
-    _file = File('${dir.path}/location.json');
+    final fs = createAppFs(supportOverride: settingsDirOverride);
+    await fs.mkdir(AppRoot.support, '');
+    _fs = fs;
     try {
-      if (_file!.existsSync()) {
-        enabled = (jsonDecode(_file!.readAsStringSync()) as Map)['enabled'] != false;
+      final text = await fs.readString(AppRoot.support, _name);
+      if (text != null) {
+        enabled = (jsonDecode(text) as Map)['enabled'] != false;
       }
     } catch (_) {}
     if (_disposed) return;
@@ -204,8 +206,8 @@ class LocationService extends ChangeNotifier with WidgetsBindingObserver {
     }
     notifyListeners();
     try {
-      final f = _file;
-      if (f != null) await writeStringAtomic(f, jsonEncode({'enabled': enabled}));
+      final fs = _fs;
+      if (fs != null) await fs.writeStringAtomic(AppRoot.support, _name, jsonEncode({'enabled': enabled}));
     } catch (_) {}
   }
 

@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace, SearchCore;
-import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -20,6 +20,7 @@ import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
 import 'chat/system_prompt.dart' show isoWithOffset;
 import 'history/conversation_store.dart';
+import 'history/store_open.dart';
 import 'layout/layout_state.dart';
 import 'location/location_service.dart';
 import 'maps/layers/core_layer_engine.dart';
@@ -481,7 +482,7 @@ class _CacheAppState extends State<CacheApp> {
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(onResume: () {
       unawaited(weather.updateIfDue(kBackgroundEvery));
-      unawaited(connections.syncAll());
+      if (!plat.isWeb) unawaited(connections.syncAll());
     });
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
@@ -493,32 +494,41 @@ class _CacheAppState extends State<CacheApp> {
     settingsRead.then((_) => webSearch.init());
     // The weather part starts once the settings are read and the core is open; then background updates are kept in step with what is
     // switched on, and the place the background runs use is kept up to date.
-    final supportRead = getApplicationSupportDirectory().then((d) => _supportPath = d.path);
-    getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
+    // path_provider has no browser side: there the folders stay unknown (null), which the code below already treats as "not here".
+    final Future<void> supportRead = plat.isWeb ? Future.value() : getApplicationSupportDirectory().then((d) => _supportPath = d.path);
+    if (!plat.isWeb) getTemporaryDirectory().then((d) => _tempPath = d.path).catchError((_) => '');
     // Once the core is open: at the first start, or after Try again in Ask started it again.
     settingsRead.then((_) => supportRead).then((_) => sources.whenCoreOpen()).then((core) async {
-      await webSearch.apply();
-      await LocalAlertNotifier.instance.init();
-      await weather.start();
-      weather.addListener(_onWeather);
-      _onWeather();
-      unawaited(weather.updateIfDue(kBackgroundEvery));
-      await appActions.publishAll();
+      // In a browser a part that cannot start (it needs a phone feature) is logged and the rest still starts; on a phone nothing changes.
+      await _soft('web search', webSearch.apply);
+      await _soft('alert notifier', LocalAlertNotifier.instance.init);
+      await _soft('weather', () async {
+        await weather.start();
+        weather.addListener(_onWeather);
+        _onWeather();
+        unawaited(weather.updateIfDue(kBackgroundEvery));
+      });
+      await _soft('actions', appActions.publishAll);
       // Notebooks are published after the app's own actions, so they are listed last.
-      await notebooks.start();
-      notebookActions.start();
+      await _soft('notebooks', () async {
+        await notebooks.start();
+        notebookActions.start();
+      });
       unawaited(userLayers.reload());
       // Connected folders follow each saved change; notebook sync also looks for what linked devices sent every 2 minutes.
       final before = notebooks.onChanged;
       notebooks.onChanged = () {
         before?.call();
-        connections.changed();
+        if (!plat.isWeb) connections.changed();
       };
       notebooks.privateSharing = connections;
-      unawaited(connections.syncAll());
-      _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
-        if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
-      });
+      // Connected folders and device sharing are the phone's own (they need its folders), so a browser starts neither.
+      if (!plat.isWeb) {
+        unawaited(connections.syncAll());
+        _shareSync = Timer.periodic(const Duration(minutes: 2), (_) {
+          if (sharing.running && sharing.shareOf('notebooks') != null) unawaited(connections.syncAll());
+        });
+      }
     });
     // A place saved on the map joins the Places list the watch actions name.
     nav.events.listen((e) {
@@ -542,8 +552,10 @@ class _CacheAppState extends State<CacheApp> {
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
     };
-    settingsRead.then((_) => sharing.init());
-    settingsRead.then((_) => regions.init());
+    if (!plat.isWeb) {
+      settingsRead.then((_) => sharing.init());
+      settingsRead.then((_) => regions.init());
+    }
     layout.init();
     sources.init();
     libraries.init();
@@ -552,6 +564,16 @@ class _CacheAppState extends State<CacheApp> {
     location.init();
     maps.init();
     _openHistory();
+  }
+
+  /// Runs one start-up step. In a browser a step that fails is logged and the next one still runs; elsewhere the error goes on as before.
+  Future<void> _soft(String what, Future<void> Function() step) async {
+    try {
+      await step();
+    } catch (e, stack) {
+      if (!plat.isWeb) rethrow;
+      debugPrint('Start-up step "$what" skipped: $e\n$stack');
+    }
   }
 
   ConversationStore? _store;
@@ -598,9 +620,7 @@ class _CacheAppState extends State<CacheApp> {
   /// The conversations live in the app's private storage.
   Future<void> _openHistory() async {
     try {
-      final dir = await getApplicationSupportDirectory();
-      await dir.create(recursive: true);
-      _store = ConversationStore.open('${dir.path}/conversations.db');
+      _store = await openHistoryStore();
       chat.attachStore(_store!);
     } catch (_) {
       // Without the database the app still answers; it just keeps no history.
