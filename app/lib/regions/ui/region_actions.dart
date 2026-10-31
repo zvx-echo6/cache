@@ -116,6 +116,11 @@ Future<void> askCarryOn(BuildContext context, RegionsState regions, String id, {
   final again = o?.kind == RegionOfferKind.tryAgain;
   final left = o?.bytes;
   final m = ScaffoldMessenger.of(context);
+  // Nothing left to download: a pop-up of 0 B asks nothing, so it carries on at once.
+  if (left == 0) {
+    await carryOnNow(m, regions, id, name: name, again: again);
+    return;
+  }
   final addOffroad = (o?.offroad ?? false) && rec != null;
   final choice = await askToDownload(
     context,
@@ -144,6 +149,7 @@ Future<void> carryOnNow(ScaffoldMessengerState m, RegionsState regions, String i
     return;
   }
   tell(m, again ? 'Trying again with $name' : 'Carrying on with $name');
+  if (again) regions.noteTry(id);
   try {
     await regions.carryOn(id, anyway: anyway);
   } on MobileDataBlocked catch (e) {
@@ -161,6 +167,11 @@ Future<void> _askAddParts(BuildContext context, RegionsState regions, RegionReco
   final have = l == null ? '' : partsSentence(map: l.hasMap, routing: l.hasRouting, places: l.hasPlaces).replaceFirst(RegExp(r'\.$'), '');
   final adds = [if (o.offroad) 'off-road', if (o.places) 'places'].join(' and ');
   final m = ScaffoldMessenger.of(context);
+  if (o.bytes == 0) {
+    tell(m, 'Adding $adds to ${rec.name}');
+    await _run(m, 'add $adds to ${rec.name}', () => regions.addParts(rec, offroad: o.offroad, places: o.places));
+    return;
+  }
   final choice = await askToDownload(
     context,
     title: 'Add $adds to ${rec.name}?',
@@ -199,6 +210,40 @@ Future<void> _run(ScaffoldMessengerState m, String what, Future<void> Function()
   }
 }
 
+/// "Delete and start again", offered on a region's page once Try again has not worked twice: one pop-up with what downloads again,
+/// then the region is deleted and downloaded again (the parts it had).
+Future<void> askStartAgain(BuildContext context, RegionsState regions, LocalRegion l) async {
+  final rec = await regions.recordOf(l.id);
+  if (rec == null || !context.mounted) return;
+  final cost = regions.costOf(rec);
+  final routing = l.hasRouting, map = l.hasMap, places = l.hasPlaces && !l.placesNotAvailable, offroad = l.hasOffroad;
+  final sizes = [if (map) cost.map, if (routing) cost.routing, if (places) cost.places, if (offroad) cost.offroad];
+  final bytes = sizes.contains(null) ? null : sizes.fold<int>(0, (s, b) => s + b!);
+  final dir = await regions.supportDir();
+  if (!context.mounted) return;
+  final m = ScaffoldMessenger.of(context);
+  final choice = await askToDownload(
+    context,
+    title: 'Delete and start again with ${l.name}?',
+    summary: ['What is on this phone for ${l.name} is deleted, then downloaded again.', sizeWords(bytes)],
+    bytes: bytes,
+    name: l.name,
+    action: 'Start again',
+    dir: dir.path,
+    policy: regions.policy,
+  );
+  if (choice == DownloadChoice.cancel) return;
+  tell(m, 'Starting ${l.name} again');
+  await _run(m, 'start ${l.name} again', () async {
+    await regions.remove(l.id);
+    if (choice == DownloadChoice.now) {
+      await regions.download(rec, routing: routing, map: map, places: places, offroad: offroad, anyway: true);
+    } else {
+      await regions.downloadOnWifi(rec, routing: routing, map: map, places: places, offroad: offroad);
+    }
+  });
+}
+
 /// Deletes a region after asking, with what it frees.
 Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRegion l) async {
   final yes = await confirmDelete(
@@ -223,9 +268,13 @@ Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRe
 Future<void> checkRegionUpdate(BuildContext context, RegionsState regions, LocalRegion l, {bool anyway = false}) async {
   final m = ScaffoldMessenger.of(context);
   tell(m, 'Checking ${l.name} for updates');
+  final noPlaces = l.placesNotAvailable;
   try {
     await regions.checkUpdates();
     await regions.updateRegion(l.id, anyway: anyway);
+    // Places that were not published for the area are added by the update once they are: say so.
+    final now = regions.regionOf(l.id);
+    if (noPlaces && now != null && !now.placesNotAvailable) tell(m, 'Places are now available for ${l.name}.');
   } on MobileDataBlocked catch (e) {
     tell(m, e.message, action: SnackBarAction(label: 'Download anyway', onPressed: () => unawaited(checkRegionUpdate(context, regions, l, anyway: true))));
   } catch (e) {

@@ -51,12 +51,15 @@ class RigPositionSource implements PositionSource {
   int settingsOpened = 0;
   int asked = 0;
 
+  /// What the phone answers when asked for the location (false: the person says no).
+  bool grant = true;
+
   @override
   Future<LocationPermissionState> permission() async => permissionState;
   @override
   Future<LocationPermissionState> requestPermission() async {
     asked++;
-    return permissionState = LocationPermissionState.granted;
+    return permissionState = grant ? LocationPermissionState.granted : LocationPermissionState.denied;
   }
 
   @override

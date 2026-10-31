@@ -2,6 +2,7 @@ import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../browse/place_about.dart';
 import '../../maps/ui/map_widgets.dart';
 import '../../screens/settings/places_page.dart' show confirmRemovePlace;
 import '../../theme.dart';
@@ -11,12 +12,15 @@ import 'search_panel.dart';
 
 /// What is known about the selected place or dropped pin, and what to do with it: directions, save, add to Home.
 class PlaceCard extends StatelessWidget {
-  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose});
+  const PlaceCard({super.key, required this.nav, required this.place, required this.fmt, required this.onClose, this.about});
 
   final NavState nav;
   final MapPlace place;
   final Fmt fmt;
   final VoidCallback onClose;
+
+  /// "Read about it": the place's Wikipedia article in the reader; null leaves the button out.
+  final PlaceAbout? about;
 
   void _copy(BuildContext context, String text) {
     Clipboard.setData(ClipboardData(text: text));
@@ -94,8 +98,10 @@ class PlaceCard extends StatelessWidget {
                 if (detail.isNotEmpty) ...[const SizedBox(height: 6), ...detail],
                 if (place.summary != null) ...[
                   const SizedBox(height: 8),
-                  Text(place.summary!, key: const ValueKey('place-card-summary'), style: TextStyle(fontSize: 15, height: 1.35, color: k.text)),
-                  if (place.wikipediaTitle != null)
+                  Text(aboutSummary(place.summary!), key: const ValueKey('place-card-summary'), style: TextStyle(fontSize: 14, height: 1.35, color: k.text)),
+                  if (place.wikipediaTitle != null && about != null)
+                    ReadAbout(key: ValueKey('read-about-${place.id}'), about: about!, title: place.wikipediaTitle!)
+                  else if (place.wikipediaTitle != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text('Wikipedia: ${place.wikipediaTitle}', style: TextStyle(fontSize: 13, color: k.secondary)),
@@ -170,5 +176,92 @@ class PlaceCard extends StatelessWidget {
   static List<(String, String)> _pinFormats(MapPlace p) {
     const labels = [('decimal', 'Decimal'), ('dms', 'DMS'), ('usng', 'USNG'), ('plus_code', 'Plus Code')];
     return [for (final l in labels) if (p.formats[l.$1] != null) (l.$2, p.formats[l.$1]!)];
+  }
+}
+
+/// A place's summary as the card shows it: at most 400 characters (the places data keeps only summaries that fit, S14), cut at a word
+/// with an ellipsis if one ever is longer.
+String aboutSummary(String s, {int max = 400}) {
+  final t = s.trim();
+  if (t.length <= max) return t;
+  final cut = t.lastIndexOf(' ', max - 1);
+  return '${t.substring(0, cut > max ~/ 2 ? cut : max - 1).trimRight()}…';
+}
+
+/// "Read about it" under a place's summary. The article is looked up when the card opens: in the phone's Wikipedia, the button;
+/// no Wikipedia on the phone, "Get Wikipedia" with a line saying so; a Wikipedia without the article, nothing (the card is just
+/// shorter). A press says "Opening…" until the reader is up; an article gone since the lookup says so, with Open Library.
+class ReadAbout extends StatefulWidget {
+  const ReadAbout({super.key, required this.about, required this.title});
+
+  final PlaceAbout about;
+  final String title;
+
+  @override
+  State<ReadAbout> createState() => _ReadAboutState();
+}
+
+class _ReadAboutState extends State<ReadAbout> {
+  ({AboutState state, String? address})? _found;
+  bool _opening = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.about.lookUp(widget.title).then((f) {
+      if (mounted) setState(() => _found = f);
+    }).catchError((_) {});
+  }
+
+  Future<void> _open(String address) async {
+    final m = ScaffoldMessenger.of(context);
+    setState(() => _opening = true);
+    try {
+      await widget.about.open(address);
+    } catch (_) {
+      m.hideCurrentSnackBar();
+      m.showSnackBar(SnackBar(
+        content: const Text('That article is not in your Wikipedia. Update Wikipedia in Library.'),
+        action: SnackBarAction(label: 'Open Library', onPressed: widget.about.openLibrary),
+      ));
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final f = _found;
+    if (f == null || f.state == AboutState.missing) return const SizedBox.shrink();
+    final k = context.t;
+    if (f.state == AboutState.noWikipedia) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8, right: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            OutlinedButton.icon(
+              key: const ValueKey('place-get-wikipedia'),
+              onPressed: widget.about.getWikipedia,
+              icon: const Icon(Icons.download),
+              label: const Text('Get Wikipedia'),
+            ),
+            const SizedBox(height: 4),
+            Text('Wikipedia is not on this phone.', key: const ValueKey('place-no-wikipedia'), style: TextStyle(fontSize: 13, color: k.secondary)),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, right: 8),
+      child: OutlinedButton.icon(
+        key: const ValueKey('place-read-about'),
+        onPressed: _opening ? null : () => _open(f.address!),
+        icon: _opening
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.menu_book_outlined),
+        label: Text(_opening ? 'Opening…' : 'Read about it'),
+      ),
+    );
   }
 }

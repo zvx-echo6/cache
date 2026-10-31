@@ -9,6 +9,7 @@ import '../search/app_search.dart';
 import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
+import '../update/update_ui.dart';
 import '../weather/weather_state.dart';
 import '../weather/words.dart' show lineStart;
 import 'setup_card.dart';
@@ -29,7 +30,15 @@ class HomeScreen extends StatefulWidget {
     this.onOpenWeather,
     this.turnOn,
     this.setup,
+    this.updates,
+    this.onOpenWeatherSettings,
   });
+
+  /// "Turn on" on the Weather card when every source is off: Settings > Weather and alerts.
+  final VoidCallback? onOpenWeatherSettings;
+
+  /// The iPhone's "New version available" banner at the top; null leaves it out.
+  final AppUpdates? updates;
 
   /// The "Set up Cache" block; null leaves it out.
   final SetupCache? setup;
@@ -142,6 +151,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
+              if (widget.updates != null && !typing) UpdateBanner(updates: widget.updates!),
               for (final b in blocks)
                 if (typing && b != HomeBlock.ask)
                   const SizedBox.shrink()
@@ -151,7 +161,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     HomeBlock.ask => Padding(padding: const EdgeInsets.only(bottom: 12), child: _searchBox(k)),
                     HomeBlock.weather => Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: _WeatherCard(weather: widget.weather, onTap: widget.onOpenWeather, turnOn: setupShown ? null : widget.turnOn),
+                      child: _WeatherCard(weather: widget.weather, onTap: widget.onOpenWeather, turnOn: setupShown ? null : widget.turnOn, onOpenSettings: widget.onOpenWeatherSettings),
                     ),
                     HomeBlock.shortcuts => Padding(padding: const EdgeInsets.only(bottom: 12), child: _shortcuts(context, k)),
                   },
@@ -406,7 +416,10 @@ String homeConditionsLine(HomeWeather h) => lineStart([
 /// below them each warning (a red triangle) and fire (a flame) near the place, with one line of detail. With nothing active it
 /// says so beside a tick, never in words alone.
 class _WeatherCard extends StatelessWidget {
-  const _WeatherCard({required this.weather, this.onTap, this.turnOn});
+  const _WeatherCard({required this.weather, this.onTap, this.turnOn, this.onOpenSettings});
+
+  /// "Turn on" when every source is off.
+  final VoidCallback? onOpenSettings;
 
   final WeatherState? weather;
   final VoidCallback? onTap;
@@ -425,11 +438,19 @@ class _WeatherCard extends StatelessWidget {
       listenable: w,
       builder: (context, _) => FutureBuilder<(HomeWeather, bool)>(
         future: _read(w),
-        builder: (context, snap) => _frame(
-          context,
-          snap.data?.$1 ?? const HomeWeather(message: '…'),
-          t != null && snap.data?.$2 == true ? WeatherTurnOnButtons(turnOn: t, secondary: false) : null,
-        ),
+        builder: (context, snap) {
+          final h = snap.data?.$1 ?? const HomeWeather(message: '…');
+          final Widget? action;
+          if (h.off && onOpenSettings != null) {
+            action = Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton(key: const ValueKey('weather-off-turn-on'), onPressed: onOpenSettings, child: const Text('Turn on')),
+            );
+          } else {
+            action = t != null && snap.data?.$2 == true ? WeatherTurnOnButtons(turnOn: t, secondary: false) : null;
+          }
+          return _frame(context, h, action);
+        },
       ),
     );
   }

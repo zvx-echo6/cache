@@ -225,7 +225,10 @@ class TransferMeter {
 }
 
 class RegionPartStatus {
-  const RegionPartStatus(this.kind, this.state, {this.fraction, this.bytes = 0, this.totalBytes, this.problem, this.rate});
+  const RegionPartStatus(this.kind, this.state, {this.fraction, this.bytes = 0, this.totalBytes, this.problem, this.rate, this.noSpace = false});
+
+  /// It failed because the phone is full: its fix is Free space, not Try again.
+  final bool noSpace;
 
   /// Speed and time left while it downloads (null when not measured yet).
   final TransferRate? rate;
@@ -406,7 +409,7 @@ class LocalRegion {
       return switch (p['state']) {
         'ready' => RegionPartStatus(kind, PartState.ready, fraction: 1, bytes: total, totalBytes: total),
         'failed' => RegionPartStatus(kind, PartState.failed, fraction: f, bytes: done, totalBytes: total,
-            problem: e is String && e.isNotEmpty ? regionPartWords(which, p['code'] as String?, e) : null),
+            problem: e is String && e.isNotEmpty ? regionPartWords(which, p['code'] as String?, e) : null, noSpace: p['code'] == 'no_space'),
         'paused' => RegionPartStatus(kind, PartState.paused, fraction: f, bytes: done, totalBytes: total),
         _ => RegionPartStatus(kind, PartState.downloading, fraction: f, bytes: done, totalBytes: total),
       };
@@ -438,7 +441,7 @@ class LocalRegion {
         return p;
       }
       final r = m.sample(key, p.bytes, p.fraction, totalBytes: p.totalBytes);
-      return RegionPartStatus(p.kind, p.state, fraction: p.fraction, bytes: p.bytes, totalBytes: p.totalBytes, problem: p.problem, rate: r);
+      return RegionPartStatus(p.kind, p.state, fraction: p.fraction, bytes: p.bytes, totalBytes: p.totalBytes, problem: p.problem, rate: r, noSpace: p.noSpace);
     }
 
     return [
@@ -1169,6 +1172,18 @@ class RegionsState extends ChangeNotifier {
   /// Starts again what stopped or failed in region [id], and only that: map areas that stopped part way carry on from the tiles they
   /// have, off-road packs that are not on the phone download again, and directions or places that failed are asked for again (the
   /// core keeps the tiles it has). Nothing that is ready is fetched again (1.0.27's Update fetched the whole map again).
+  final Map<String, int> _tries = {};
+
+  /// How many times Try again was tapped for region [id] in this run of the app: after two, its page also offers Delete and start
+  /// again.
+  int triesOf(String id) => _tries[id] ?? 0;
+
+  /// Try again was tapped for region [id].
+  void noteTry(String id) {
+    _tries[id] = triesOf(id) + 1;
+    notifyListeners();
+  }
+
   Future<void> carryOn(String id, {bool anyway = false}) async {
     await policy.checkDownload(anyway: anyway);
     final l = regionOf(id);

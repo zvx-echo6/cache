@@ -82,6 +82,8 @@ fn open_writer(path: &Path) -> Result<Connection> {
     let c = Connection::open(path)?;
     c.busy_timeout(Duration::from_secs(10))?;
     c.execute_batch("PRAGMA synchronous = NORMAL;")?;
+    // A database made before its indexes gets them now (a merge makes them too if this cannot: another writer holds it).
+    let _ = merged::ensure_indexes(&c);
     Ok(c)
 }
 

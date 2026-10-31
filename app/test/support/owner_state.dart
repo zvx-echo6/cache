@@ -65,7 +65,7 @@ class OwnerState {
   /// The 1.0.0 per-layer downloads, by name.
   final Map<String, DownloadedArea> legacy = {};
 
-  static Future<OwnerState> boot(WidgetTester tester, {bool legacyOutside = false, bool legacyFiles = true, bool idaho = true}) async {
+  static Future<OwnerState> boot(WidgetTester tester, {bool legacyOutside = false, bool legacyFiles = true, bool idaho = true, bool offroad = true}) async {
     final o = OwnerState();
     o.s = await SettingsRig.create(tester);
     o.core = FakeRegions(tileDir: '${o.s.dir.path}/regions/tiles/2026-10')..placesEnabled = true;
@@ -140,7 +140,8 @@ class OwnerState {
               'places': true,
               'areas': [],
               'offroad': [
-                {'path': 'offroad-2026-10/idaho/offroad.sqlite', 'name': 'Idaho', 'url': '${kOffroadBaseUrl}offroad-2026-10/idaho/offroad.sqlite', 'bytes': 1022825920, 'sha256': 'ab' * 32},
+                if (offroad)
+                  {'path': 'offroad-2026-10/idaho/offroad.sqlite', 'name': 'Idaho', 'url': '${kOffroadBaseUrl}offroad-2026-10/idaho/offroad.sqlite', 'bytes': 1022825920, 'sha256': 'ab' * 32},
               ],
             },
           },

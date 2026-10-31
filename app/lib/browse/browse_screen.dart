@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../layout/adaptive.dart';
+
 import '../guide/guide_book.dart';
 import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
@@ -97,17 +99,20 @@ class _BrowseScreenState extends State<BrowseScreen> {
     _openZim(z, address: address);
   }
 
+  /// The list's context inside the two panes (a tablet opens items beside the list).
+  BuildContext? _pane;
+
   void _openZim(ZimFile z, {String? address}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ZimReaderScreen(
+    openDetail(
+      _pane ?? context,
+      key: 'zim:${z.path}',
+      builder: (_) => ZimReaderScreen(
           sources: sources,
           zim: z,
           address: address,
           layout: widget.layout,
           itemMenu: (ctx, addPage) => showLibraryMenu(ctx, _zimActions(z, addToHome: addPage)),
         ),
-      ),
     );
   }
 
@@ -119,7 +124,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   }
 
   void _openLibrary(LibraryItem l) {
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l)))));
+    openDetail(_pane ?? context, key: 'library:${l.folderName}', builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
   int? get _free => b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
@@ -179,11 +184,22 @@ class _BrowseScreenState extends State<BrowseScreen> {
   void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => TwoPane(
+    id: 'library',
+    listName: 'Library',
+    list: Builder(
+      builder: (c) {
+        _pane = c;
+        return _list(c);
+      },
+    ),
+  );
+
+  Widget _list(BuildContext context) {
     final k = context.t;
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      appBar: AppBar(title: const Text('Library')),
+      appBar: AppBar(title: const Text('Library'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
         listenable: Listenable.merge([b, sources, ?libs]),
         builder: (context, _) {
@@ -472,7 +488,7 @@ class LibraryItemScreen extends StatelessWidget {
           if (s.failureOf(l) != null) ('Problem', s.failureOf(l)!),
         ];
         return Scaffold(
-          appBar: AppBar(
+          appBar: AppBar(leading: paneShowButton(context), 
             title: Text(s.titleOf(l), maxLines: 1, overflow: TextOverflow.ellipsis),
             actions: [IconButton(key: const ValueKey('item-menu'), tooltip: 'More', icon: const Icon(Icons.more_horiz), onPressed: () => menu(context))],
           ),

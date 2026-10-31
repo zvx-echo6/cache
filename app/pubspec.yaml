@@ -110,6 +110,8 @@ flutter:
     - assets/brand/tiles/
     # The credits text (a copy of CREDITS.md at the repository root; a test keeps them equal).
     - assets/credits.md
+    # The owner's "What's new" lines for each version (the sheet shown once after an update).
+    - assets/whats_new.md
     # The guide's chapters for the reader (copies of docs/guide/ch*.md, which the guide library is built from; a test keeps them equal).
     - assets/guide/chapters/
     # The guide's screenshots (made by test_shots/guide_shots_test.dart; tools/guide/shots.txt lists them).

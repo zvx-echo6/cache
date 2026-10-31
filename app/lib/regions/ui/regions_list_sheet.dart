@@ -202,7 +202,11 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     }
     final line = l != null && (o.kind == RegionOfferKind.busy)
         ? '${regionKindLabel(rec.kind, country: rec.country)} · ${l.partsLine.isEmpty ? formatBytes(l.bytes) : l.partsLine}'
-        : offerLine(rec, o, offroadFrom: r.offroadSharedWith(rec));
+        : [
+            offerLine(rec, o, offroadFrom: r.offroadSharedWith(rec)),
+            // On the phone with its places not published for the area: said here too, as on its row in Regions.
+            if (o.kind == RegionOfferKind.onPhone && (l?.placesNotAvailable ?? false)) kPlacesNotAvailableShort,
+          ].join(' · ');
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Holdable(

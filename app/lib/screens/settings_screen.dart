@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../nav/units.dart';
+import '../layout/adaptive.dart';
 import '../theme.dart';
 import '../settings/app_settings.dart';
 import '../sharing/sharing_state.dart';
@@ -38,8 +39,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     d.hub.storage.measure();
   }
 
-  Future<void> _open(Widget page) async {
-    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  /// Opens a Settings page: beside the list on a tablet (the two panes), else as a page of its own.
+  Future<void> _open(BuildContext context, String key, Widget page) async {
+    await openDetail(context, key: key, builder: (_) => page);
     // Something may have been added or deleted on the page: measure again so every size agrees.
     if (mounted) d.hub.storage.measure();
   }
@@ -117,8 +119,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // A tablet shows the pages beside the list, the first one chosen.
+    return TwoPane(
+      id: 'settings',
+      listName: 'Settings',
+      initialKey: 'settings-model',
+      initial: (_) => AssistantPage(deps: d),
+      list: Builder(builder: _list),
+    );
+  }
+
+  Widget _list(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('Settings'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
         listenable: Listenable.merge([d.app, d.maps, d.hub.changes, ?d.hub.regions]),
         builder: (context, _) => ListView(
@@ -131,29 +144,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.lightbulb_outline,
                   title: 'Cache model and web search',
                   status: _model(),
-                  onTap: () => _open(AssistantPage(deps: d)),
+                  selected: isPaneSelected(context, 'settings-model'),
+                  onTap: () => _open(context, 'settings-model', AssistantPage(deps: d)),
                 ),
-                SettingsRow(key: const ValueKey('settings-maps'), icon: Icons.map_outlined, title: 'Maps', status: _maps(), onTap: () => _open(MapsPage(deps: d))),
+                SettingsRow(key: const ValueKey('settings-maps'), icon: Icons.map_outlined, title: 'Maps', status: _maps(), selected: isPaneSelected(context, 'settings-maps'),
+                  onTap: () => _open(context, 'settings-maps', MapsPage(deps: d))),
                 SettingsRow(
                   key: const ValueKey('settings-weather'),
                   icon: Icons.cloud_outlined,
                   title: 'Weather and alerts',
                   status: _weather(),
-                  onTap: () => _open(WeatherPage(deps: d)),
+                  selected: isPaneSelected(context, 'settings-weather'),
+                  onTap: () => _open(context, 'settings-weather', WeatherPage(deps: d)),
                 ),
                 SettingsRow(
                   key: const ValueKey('settings-notifications'),
                   icon: Icons.notifications_none,
                   title: 'Notifications',
                   status: _notifications(),
-                  onTap: () => _open(NotificationsPage(deps: d)),
+                  selected: isPaneSelected(context, 'settings-notifications'),
+                  onTap: () => _open(context, 'settings-notifications', NotificationsPage(deps: d)),
                 ),
                 SettingsRow(
                   key: const ValueKey('settings-storage'),
                   icon: Icons.sd_storage_outlined,
                   title: 'Storage',
                   status: _storage(),
-                  onTap: () => _open(StoragePage(deps: d)),
+                  selected: isPaneSelected(context, 'settings-storage'),
+                  onTap: () => _open(context, 'settings-storage', StoragePage(deps: d)),
                 ),
                 if (d.hub.sharing case final sharing?)
                   ListenableBuilder(
@@ -163,7 +181,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.sync_alt,
                       title: 'Sharing and sync',
                       status: _sharing(sharing),
-                      onTap: () => _open(SharingPage(sharing: sharing)),
+                      selected: isPaneSelected(context, 'settings-sharing'),
+                  onTap: () => _open(context, 'settings-sharing', SharingPage(sharing: sharing)),
                     ),
                   ),
                 SettingsRow(
@@ -171,7 +190,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.contrast,
                   title: 'Appearance',
                   status: [Part(d.app.theme.label)],
-                  onTap: () => _open(AppearancePage(app: d.app)),
+                  selected: isPaneSelected(context, 'settings-appearance'),
+                  onTap: () => _open(context, 'settings-appearance', AppearancePage(app: d.app)),
                 ),
                 FutureBuilder<String>(
                   future: _version,
@@ -181,7 +201,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.info_outline,
                     title: 'Credits and licences',
                     status: [Part('${snap.data ?? kAppVersion} · $kAppLicenceShort')],
-                    onTap: () => _open(const AboutPage()),
+                    selected: isPaneSelected(context, 'settings-credits'),
+                  onTap: () => _open(context, 'settings-credits', const AboutPage()),
                   ),
                 ),
               ],

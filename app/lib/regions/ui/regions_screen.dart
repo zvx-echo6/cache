@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart';
+
 import '../../maps/ui/format.dart';
 import '../../screens/settings/widgets.dart';
 import '../../settings/data_policy.dart';
@@ -31,12 +33,18 @@ class _RegionsScreenState extends State<RegionsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // A tablet shows a region's page beside the list.
+    return TwoPane(id: 'regions', listName: 'Regions', list: Builder(builder: _tabs));
+  }
+
+  Widget _tabs(BuildContext context) {
     return DefaultTabController(
       length: 3,
       initialIndex: widget.initialTab,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Regions'),
+          actions: [?paneHideButton(context)],
           bottom: const TabBar(tabs: [Tab(text: 'Downloads'), Tab(text: 'Local'), Tab(text: 'Updates')]),
         ),
         body: SafeArea(

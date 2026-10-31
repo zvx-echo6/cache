@@ -47,6 +47,7 @@ const String kWeatherStarting = '…';
 class HomeWeather {
   const HomeWeather({
     this.message,
+    this.off = false,
     this.place = '',
     this.temperature,
     this.conditions,
@@ -63,6 +64,9 @@ class HomeWeather {
 
   /// Words in place of the card's data: "Not set up yet", "Waiting for your position", "Choose a place to watch in Settings".
   final String? message;
+
+  /// Weather was on and every source is off now: the card says "Weather is off" with Turn on (Settings > Weather and alerts).
+  final bool off;
   final String place;
 
   /// "45 °F" and "clear sky", as the forecast source writes them.
@@ -1054,6 +1058,8 @@ class WeatherState extends ChangeNotifier {
     if (!_started) return HomeWeather(message: settings.liveSourcesOn.isEmpty ? 'Not set up yet' : kWeatherStarting);
     final forecast = [for (final c in enabledSources) if (groupOf(c) == LiveGroup.forecast) c];
     final counted = [for (final c in enabledSources) if (c.category == 'alerts' || c.category == 'fire' || c.id == 'alerts') c];
+    // Every source switched off after weather was on (its defaults were applied once): "Weather is off", not "Not set up yet".
+    if (enabledSources.isEmpty && settings.liveDefaultsSeen.isNotEmpty) return const HomeWeather(message: 'Weather is off', off: true);
     if (forecast.isEmpty && counted.isEmpty) return const HomeWeather(message: 'Not set up yet');
     final p = await homePlace();
     if (p == null) return HomeWeather(message: _noPlaceWords);
