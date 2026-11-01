@@ -1,0 +1,224 @@
+//! `cache-build`: the library builder's command line.
+//!
+//!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
+//!                                            [--created-at TEXT] [--pieces-out FILE]
+//!   cache-build library <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive]
+//!   cache-build dump <in.pdf> <page>     (the blocks and lines MuPDF reports for a 1-based page; for debugging)
+
+use cache_builder::build::{build_pack, BuildOptions};
+use cache_builder::embed::FakeEmbedder;
+use cache_builder::library::{build_library, check_library_dir, LibraryOptions};
+use cache_builder::pack::write_pack;
+use std::path::PathBuf;
+use std::time::Instant;
+
+fn usage() -> ! {
+    eprintln!(
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> --fake-embedder [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
+    );
+    std::process::exit(2);
+}
+
+fn now_utc() -> String {
+    // ISO 8601 UTC from the system clock (civil-from-days, no date crate).
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+struct Args {
+    pos: Vec<String>,
+    opts: Vec<(String, Option<String>)>,
+}
+
+fn parse(args: &[String]) -> Args {
+    let flags = ["--fake-embedder", "--archive"];
+    let mut pos = Vec::new();
+    let mut opts = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a.starts_with("--") {
+            if flags.contains(&a.as_str()) {
+                opts.push((a.clone(), None));
+            } else {
+                i += 1;
+                if i >= args.len() {
+                    usage();
+                }
+                opts.push((a.clone(), Some(args[i].clone())));
+            }
+        } else {
+            pos.push(a.clone());
+        }
+        i += 1;
+    }
+    Args { pos, opts }
+}
+
+impl Args {
+    fn get(&self, k: &str) -> Option<String> {
+        self.opts.iter().find(|(n, _)| n == k).and_then(|(_, v)| v.clone())
+    }
+    fn has(&self, k: &str) -> bool {
+        self.opts.iter().any(|(n, _)| n == k)
+    }
+}
+
+fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
+        usage();
+    }
+    let a = parse(&argv[1..]);
+    let code = match argv[0].as_str() {
+        "pdf" => cmd_pdf(&a),
+        "library" => cmd_library(&a),
+        "dump" => cmd_dump(&a),
+        _ => usage(),
+    };
+    std::process::exit(code);
+}
+
+fn cmd_pdf(a: &Args) -> i32 {
+    let Some(out) = a.get("--out") else { usage() };
+    if a.pos.is_empty() {
+        usage();
+    }
+    if !a.has("--fake-embedder") {
+        eprintln!("error: there is no real embedder in this build yet; pass --fake-embedder (stand-in vectors for testing the pipeline)");
+        return 2;
+    }
+    if a.pos.len() > 1 && (a.get("--doc-id").is_some() || a.get("--title").is_some() || a.get("--https").is_some()) {
+        eprintln!("error: --doc-id, --title and --https apply to a single PDF");
+        return 2;
+    }
+    let created = a.get("--created-at").unwrap_or_else(now_utc);
+    let mut failed = 0;
+    let mut pieces_out = String::new();
+    for f in &a.pos {
+        let t0 = Instant::now();
+        let bytes = match std::fs::read(f) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("{f}: FAILED reading: {e}");
+                failed += 1;
+                continue;
+            }
+        };
+        let name = PathBuf::from(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.clone());
+        let mut o = BuildOptions::new(&name, &created);
+        o.doc_id = a.get("--doc-id");
+        o.title = a.get("--title");
+        o.https = a.get("--https");
+        if let Some(v) = a.get("--doc-version") {
+            o.doc_version = v.parse().unwrap_or(0);
+        }
+        match build_pack(&bytes, &o, &FakeEmbedder) {
+            Ok((pack, r)) => {
+                let path = match write_pack(&pack, &PathBuf::from(&out)) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{f}: FAILED writing the pack: {e}");
+                        failed += 1;
+                        continue;
+                    }
+                };
+                println!(
+                    "{name}: pages {} pieces {} words/piece mean {:.0} min {} max {} ocr_pages {} headings {} time {:.1}s -> {}",
+                    r.pages,
+                    r.pieces,
+                    r.mean_words,
+                    r.min_words,
+                    r.max_words,
+                    r.ocr_pages.len(),
+                    r.heading_count,
+                    t0.elapsed().as_secs_f32(),
+                    path.display()
+                );
+                for (l, h) in &r.headings {
+                    println!("    H{l} {h}");
+                }
+                if a.get("--pieces-out").is_some() {
+                    for (i, p) in pack.pieces.iter().enumerate() {
+                        pieces_out.push_str(&format!(
+                            "=== {name} piece {} | page {}{} | {}\n{}\n\n",
+                            i,
+                            p.page,
+                            p.page_end.as_ref().map(|e| format!("-{e}")).unwrap_or_default(),
+                            p.heading_path.join(" > "),
+                            p.text
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{f}: FAILED: {e}");
+                failed += 1;
+            }
+        }
+    }
+    if let Some(p) = a.get("--pieces-out") {
+        let _ = std::fs::write(p, pieces_out);
+    }
+    if failed > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn cmd_library(a: &Args) -> i32 {
+    let (Some(out), Some(id), Some(title)) = (a.get("--out"), a.get("--id"), a.get("--title")) else { usage() };
+    let Some(dir) = a.pos.first() else { usage() };
+    let o = LibraryOptions { id, title, version: a.get("--version").unwrap_or_else(|| "1".into()), archive: a.has("--archive") };
+    match build_library(&PathBuf::from(dir), &PathBuf::from(&out), &o) {
+        Ok(r) => {
+            println!("library {out}: {} points from {} documents", r.points, r.documents);
+            match check_library_dir(&PathBuf::from(&out)) {
+                Ok(c) => println!("check: docs {} whole_library_only {}", c["docs"], c["whole_library_only"]),
+                Err(e) => {
+                    eprintln!("check FAILED: {e}");
+                    return 1;
+                }
+            }
+            if let Some(p) = r.archive {
+                println!("archive {}", p.display());
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("FAILED: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_dump(a: &Args) -> i32 {
+    let (Some(f), Some(p)) = (a.pos.first(), a.pos.get(1)) else { usage() };
+    let page: usize = p.parse().unwrap_or(1);
+    let bytes = std::fs::read(f).expect("read");
+    let ext = cache_builder::extract::extract_pdf(&bytes).expect("extract");
+    let Some(pg) = ext.pages.get(page - 1) else { return 1 };
+    println!("page {} label {} size {}x{} images {}", page, pg.label, pg.width, pg.height, pg.images);
+    for (i, b) in pg.blocks.iter().enumerate() {
+        println!("block {i}: x {:.0}-{:.0} y {:.0}-{:.0} lines {}", b.x0, b.x1, b.y0, b.y1, b.lines.len());
+        for l in &b.lines {
+            println!("   [{:.0},{:.0} {:.0},{:.0}] sz {:.1}{}{} {:?}", l.x0, l.y0, l.x1, l.y1, l.size, if l.bold { " B" } else { "" }, if l.italic { " I" } else { "" }, l.text);
+        }
+    }
+    let order = cache_builder::layout::reading_order(&pg.blocks, cache_builder::layout::body_size(&ext.pages));
+    println!("reading order: {order:?}");
+    0
+}

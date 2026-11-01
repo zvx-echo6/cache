@@ -95,6 +95,10 @@ jobs:
             fi
           fi
           ld.lld --version
+          # mupdf-sys (cache_builder) generates its bindings with bindgen, which needs libclang; use the runner's, else install it.
+          if ! ls /usr/lib/llvm-*/lib/libclang*.so* /usr/lib/*/libclang*.so* > /dev/null 2>&1; then
+            sudo apt-get update -q && sudo apt-get install -y -q libclang-dev clang
+          fi
       - name: Rust
         id: rust
         working-directory: .
@@ -145,9 +149,14 @@ jobs:
           nproc
       - name: Clippy (cache_server)
         run: cargo clippy -p cache_server --all-targets -- -D warnings
+      # The library builder core builds MuPDF from source (mupdf-sys); the aarch64 build of it is checked here on its native runner.
+      - name: Clippy (cache_builder)
+        run: cargo clippy -p cache_builder --all-targets -- -D warnings
       # Tests do not need the release profile's fat LTO.
       - name: Test
         run: cargo test -p cache_server
+      - name: Test (cache_builder)
+        run: cargo test -p cache_builder
       # The arm runner gets killed during the fat-LTO link, so aarch64 uses thin LTO; the x86_64 build is unchanged.
       - name: Build (aarch64)
         if: matrix.arch == 'aarch64'

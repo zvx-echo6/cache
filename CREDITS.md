@@ -32,6 +32,7 @@ No data, library content or language model ships inside Cache. The maps, library
 - MapLibre Native (draws the map, through the maplibre_gl package): BSD-2-Clause. https://maplibre.org
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
 - OpenSSL 3 (inside Cache Server, linked statically; checks security-key sign-ins): Apache-2.0, Copyright the OpenSSL Project Authors. https://www.openssl.org
+- MuPDF (reads PDF text for the library builder, through the mupdf crate; bundled and linked statically): AGPL-3.0-or-later, Copyright Artifex Software, Inc. https://mupdf.com
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
 - Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licences of the libraries inside the Flutter engine are listed under Open-source licences.
 
@@ -253,6 +254,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - bincode 1.3.3: MIT (github.com/servo/bincode)
 - bincode 2.0.1: MIT (github.com/bincode-org/bincode)
 - bincode_derive 2.0.1: MIT (github.com/bincode-org/bincode)
+- bindgen 0.72.1: BSD-3-Clause (github.com/rust-lang/rust-bindgen)
 - binout 0.3.2: MIT OR Apache-2.0 (github.com/beling/bsuccinct-rs)
 - bit-vec 0.9.1: Apache-2.0 OR MIT (github.com/contain-rs/bit-vec)
 - bitflags 1.3.2: MIT OR Apache-2.0 (github.com/bitflags/bitflags)
@@ -283,6 +285,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - cedarwood 0.5.0: BSD-2-Clause (github.com/MnO2/cedarwood)
 - census 0.4.2: MIT (github.com/quickwit-inc/census)
 - cesu8 1.1.0: Apache-2.0/MIT (github.com/emk/cesu8-rs)
+- cexpr 0.6.0: Apache-2.0 OR MIT (github.com/jethrogb/rust-cexpr)
 - cfg-if 1.0.5: MIT OR Apache-2.0 (github.com/rust-lang/cfg-if)
 - cfg_aliases 0.2.2: MIT (github.com/katharostech/cfg_aliases)
 - chacha20 0.10.2: MIT OR Apache-2.0 (github.com/RustCrypto/stream-ciphers)
@@ -291,6 +294,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - chrono-tz 0.10.4: MIT OR Apache-2.0 (github.com/chronotope/chrono-tz)
 - chunked_transfer 1.5.0: MIT OR Apache-2.0 (github.com/frewsxcv/rust-chunked-transfer)
 - cipher 0.4.4: MIT OR Apache-2.0 (github.com/RustCrypto/traits)
+- clang-sys 1.9.1: Apache-2.0 (github.com/KyleMayes/clang-sys)
 - clap 4.6.7: MIT OR Apache-2.0 (github.com/clap-rs/clap)
 - clap_builder 4.6.7: MIT OR Apache-2.0 (github.com/clap-rs/clap)
 - clap_derive 4.6.7: MIT OR Apache-2.0 (github.com/clap-rs/clap)
@@ -432,6 +436,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - getrandom 0.4.3: MIT OR Apache-2.0 (github.com/rust-random/getrandom)
 - ghash 0.5.1: Apache-2.0 OR MIT (github.com/RustCrypto/universal-hashes)
 - gimli 0.32.3: MIT OR Apache-2.0 (github.com/gimli-rs/gimli)
+- glob 0.3.4: MIT OR Apache-2.0 (github.com/rust-lang/glob)
 - gloo-timers 0.3.0: MIT OR Apache-2.0 (github.com/rustwasm/gloo/tree/master/crates/timers)
 - gpu 0.1.0: Apache-2.0 (github.com/qdrant/qdrant)
 - h2 0.4.20: MIT (github.com/hyperium/h2)
@@ -515,6 +520,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - irpc 0.17.0: Apache-2.0/MIT (github.com/n0-computer/irpc)
 - irpc-derive 0.17.0: Apache-2.0/MIT (github.com/n0-computer/irpc)
 - is_terminal_polyfill 1.70.2: MIT OR Apache-2.0 (github.com/polyfill-rs/is_terminal_polyfill)
+- itertools 0.13.0: MIT OR Apache-2.0 (github.com/rust-itertools/itertools)
 - itertools 0.14.0: MIT OR Apache-2.0 (github.com/rust-itertools/itertools)
 - itertools 0.15.0: MIT OR Apache-2.0 (github.com/rust-itertools/itertools)
 - itoa 1.0.18: MIT OR Apache-2.0 (github.com/dtolnay/itoa)
@@ -565,6 +571,8 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - miniz_oxide 0.8.9: MIT OR Zlib OR Apache-2.0 (github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - miniz_oxide 0.9.1: MIT OR Zlib OR Apache-2.0 (github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - mio 1.2.4: MIT (github.com/tokio-rs/mio)
+- mupdf 0.8.0: AGPL-3.0 (github.com/messense/mupdf-rs)
+- mupdf-sys 0.8.0: AGPL-3.0 (github.com/messense/mupdf-rs)
 - murmur3_32 0.1.0: MIT OR Apache-2.0 (github.com/jsen-/murmur3_32)
 - murmurhash32 0.4.0: MIT (github.com/quickwit-inc/murmurhash32)
 - n0-dns-resolver 0.1.0: MIT OR Apache-2.0 (github.com/n0-computer/iroh)
@@ -786,6 +794,7 @@ Every crate in `packages/cache_search/native/Cargo.lock` (the search core, built
 - sha2 0.11.1: MIT OR Apache-2.0 (github.com/RustCrypto/hashes)
 - shard 0.1.0: Apache-2.0 (github.com/qdrant/qdrant)
 - sharded-slab 0.1.7: MIT (github.com/hawkw/sharded-slab)
+- shlex 1.3.0: MIT OR Apache-2.0 (github.com/comex/rust-shlex)
 - shlex 2.0.1: MIT OR Apache-2.0 (github.com/comex/rust-shlex)
 - sif-itree 0.4.1: MIT OR Apache-2.0 (codeberg.org/adamreichold/sif-itree)
 - signal-hook-registry 1.4.8: MIT OR Apache-2.0 (github.com/vorner/signal-hook)
