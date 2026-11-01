@@ -35,9 +35,14 @@ rcgen = "0.14"
 ring = "0.17"
 subtle = "2"
 base64 = "0.22"
-# Security keys (WebAuthn). 0.6.1-dev is the newest release at least two weeks old; unlike 0.5.x it needs no OpenSSL. The feature
-# lets a key sign in with one touch (user presence) instead of also demanding a PIN.
-webauthn-rs = { version = "=0.6.1-dev", features = ["danger-user-presence-only-security-keys"] }
+# Security keys (WebAuthn). 0.5.5 is the newest stable release at least two weeks old (0.6.2 is a day old). The feature lets a
+# key sign in with one touch (user presence) instead of also demanding a PIN.
+webauthn-rs = { version = "0.5.5", features = ["danger-user-presence-only-security-keys"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# webauthn-rs 0.5 uses OpenSSL. On Linux it is built from source and linked statically, so the installed server needs no libssl.
+# (On Windows it comes from vcpkg instead: see server/README.md.)
+[target.'cfg(not(windows))'.dependencies]
+openssl = { version = "0.10.81", features = ["vendored"] }

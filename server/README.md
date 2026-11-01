@@ -19,6 +19,11 @@ The program is `target/release/cache-server`. It also needs the helper and the c
 below), whose paths are the `--helper` and `--core-lib` options; by default they are `helper/cache-core-helper` and
 `lib/libcache_search.so` beside the program.
 
+Security keys use OpenSSL (through webauthn-rs). On Linux it is built from source and linked statically, so the installed
+server needs no libssl; the build needs `perl` and `make`. On Windows the build links a static OpenSSL from vcpkg instead:
+`vcpkg install openssl:x64-windows-static-md`, then set `OPENSSL_DIR` to `<vcpkg>\installed\x64-windows-static-md`,
+`OPENSSL_STATIC=1` and `OPENSSL_NO_VENDOR=1` before `cargo build`.
+
 ## Install (Linux, systemd)
 
 The release tarball (built by `.github/workflows/server-release.yml`) holds `cache-server`, `helper/cache-core-helper`,
