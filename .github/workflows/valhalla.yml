@@ -59,7 +59,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update -q
-          apt-get install -y -q build-essential pkg-config curl git ca-certificates unzip zip xz-utils zstd tar gzip python3 python3-pip software-properties-common gawk ccache
+          apt-get install -y -q build-essential pkg-config curl git ca-certificates unzip zip xz-utils zstd tar gzip python3 python3-pip software-properties-common gawk ccache file
           add-apt-repository -y ppa:ubuntu-toolchain-r/test
           apt-get update -q
           apt-get install -y -q gcc-13 g++-13
