@@ -89,7 +89,7 @@ pub fn decode_minhash(s: &str) -> Vec<u32> {
     if bytes.len() % 4 != 0 {
         return Vec::new();
     }
-    bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
 }
 
 /// The mean of some vectors, scaled to length 1 (empty when there are none, or the mean is zero).

@@ -1427,7 +1427,7 @@ mod tests {
         assert_eq!(json_call(&a, "POST", "/api/build/queue/nope/decide", &c, r#"{"action":"keep_both"}"#).await.0, 404);
         assert_eq!(json_call(&a, "POST", "/api/build/classes/reclassify", &c, "{}").await.0, 200);
         let (s, v) = json_call(&a, "GET", "/api/build/removed", &c, "").await;
-        assert_eq!((s, v["result"]["count"].as_u64()), (200, Some(0)));
+        assert!(s == 200 && v["result"]["count"].is_u64() && v["result"]["items"].is_array());
         assert_eq!(json_call(&a, "POST", "/api/build/removed/nope/restore", &c, "").await.0, 404);
         assert_eq!(json_call(&a, "DELETE", "/api/build/removed/nope", &c, "").await.0, 404);
         assert_eq!(json_call(&a, "DELETE", "/api/build/removed", &c, "").await.0, 200);

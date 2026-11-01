@@ -194,11 +194,16 @@ fn stop_drops_the_waiting_books_and_lets_the_current_one_finish() {
     let lib = new_lib(&svc, "L");
     let ids: Vec<String> = (0..4).map(|i| add(&svc, &lib, &format!("b{i}.pdf"), &book(&format!("kind{i}"), 2, None))).collect();
     let s2 = svc.clone();
+    // the hook runs at every request to the embedder (the book's pieces, then the division texts): stop is asked at each, and the
+    // waiting books go at the first
+    let removed = Arc::new(AtomicUsize::new(0));
+    let r2 = removed.clone();
     *lock(&fake.hook) = Some(Box::new(move || {
         let v = s2.stop();
-        assert_eq!(v["removed"], json!(3));
+        r2.fetch_add(v["removed"].as_u64().unwrap() as usize, Ordering::Relaxed);
     }));
     assert!(matches!(svc.run_one(), Run::Ran));
+    assert_eq!(removed.load(Ordering::Relaxed), 3);
     assert_eq!(state(&svc, &ids[0]), S::Done);
     assert_eq!(lock(&svc.st).items.len(), 1);
     assert!(matches!(svc.run_one(), Run::Idle));

@@ -267,8 +267,9 @@ mod tests {
         assert_eq!(v.top.len(), 3);
         assert!(v.top[0].score >= v.top[1].score && v.top[1].score >= v.top[2].score);
         // between two divisions: too close to call
-        let v = classify(&[0.7, 0.7], &vecs, &cls);
-        assert_eq!(v.unsure.as_deref(), Some("close"));
+        let two = ClassVectors { digest: String::new(), vectors: vec![("110".into(), vec![1.0, 0.0]), ("120".into(), vec![0.0, 1.0])] };
+        let v = classify(&[0.7, 0.69], &two, &cls);
+        assert_eq!((v.division, v.unsure.as_deref()), (None, Some("close")));
         // nothing near enough
         let strict = Classes { unsure_below: 0.99, ..cls.clone() };
         assert_eq!(classify(&[1.0, 0.3], &vecs, &strict).unsure.as_deref(), Some("low"));

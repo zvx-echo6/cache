@@ -902,7 +902,7 @@ impl BuildService {
                             pack.header.doc_version = old.doc_version + 1;
                             pack.header.title = old.title.clone();
                             replaced_because = Some(reason);
-                            replacing = Some(old);
+                            replacing = Some(*old);
                         }
                         Compare::Decide(d) => return Outcome::NeedsDecision(d),
                         Compare::Missing => return Outcome::Failed("The older book is no longer in this library.".into()),
@@ -953,7 +953,7 @@ impl BuildService {
             Some("replace_older") => {
                 let other = item.decision.as_ref().map(|d| d.other_doc_id.clone()).unwrap_or_default();
                 return match books.into_iter().find(|b| b.doc_id == other) {
-                    Some(old) => Compare::Better { old, reason: "the older edition was replaced at your choice".into() },
+                    Some(old) => Compare::Better { old: Box::new(old), reason: "the older edition was replaced at your choice".into() },
                     None => Compare::Missing,
                 };
             }
@@ -976,7 +976,7 @@ impl BuildService {
             Match::Same => {
                 let new_q = Quality { text_pages: rep.text_pages as u32, pages: pack.header.page_count as u32, ppi: rep.ppi.unwrap_or(0), size };
                 match same::better(&new_q, &old.quality()) {
-                    Some(reason) => Compare::Better { old: old.clone(), reason },
+                    Some(reason) => Compare::Better { old: Box::new(old.clone()), reason },
                     None => Compare::Worse(old.title.clone()),
                 }
             }
@@ -1970,7 +1970,7 @@ enum Compare {
     /// The same book, and this copy is not better.
     Worse(String),
     /// The same book, and this copy is better (or the person chose to replace).
-    Better { old: Book, reason: String },
+    Better { old: Box<Book>, reason: String },
     Decide(Box<Decision>),
     /// The older book to replace has gone.
     Missing,
