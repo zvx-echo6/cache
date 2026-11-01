@@ -143,6 +143,14 @@ impl BuildService {
         }))
     }
 
+    /// Remember where a book's file went in the drop folder's `complete/`, so that placing the book moves it too.
+    pub(crate) fn note_drop_copy(&self, lib: &str, doc: &str, path: &Path, root: &Path) {
+        let _ = self.update_book(lib, doc, |b| {
+            b.drop_copy = Some(path.to_string_lossy().into_owned());
+            b.drop_root = Some(root.to_string_lossy().into_owned());
+        });
+    }
+
     /// Change a book's recorded fields and save the library's file.
     fn update_book(&self, lib: &str, doc: &str, f: impl FnOnce(&mut Book)) -> Result<(), String> {
         let mut st = lock(&self.st);

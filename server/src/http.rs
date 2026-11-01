@@ -1328,6 +1328,13 @@ mod tests {
             ("GET", "/api/build/drop"),
             ("PUT", "/api/build/drop"),
             ("POST", "/api/build/drop/check"),
+            ("GET", "/api/build/classes"),
+            ("POST", "/api/build/classes/reclassify"),
+            ("GET", "/api/build/removed"),
+            ("POST", "/api/build/removed/x/restore"),
+            ("DELETE", "/api/build/removed"),
+            ("POST", "/api/build/queue/x/decide"),
+            ("POST", "/api/build/libraries/x/books/y/place"),
         ] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
@@ -1412,6 +1419,18 @@ mod tests {
         assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}/books/{doc}"), &c, "").await.0, 200);
         assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}"), &c, "").await.0, 200);
         assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}"), &c, "").await.0, 404);
+        // filing, choices and Removed
+        let (s, v) = json_call(&a, "GET", "/api/build/classes", &c, "").await;
+        assert_eq!((s, v["result"]["classes"].as_array().map(|x| x.len())), (200, Some(10)));
+        assert_eq!(json_call(&a, "GET", "/api/build/classes?library_id=nope", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "POST", &format!("/api/build/libraries/{lib}/books/nope/place"), &c, r#"{"division":"510"}"#).await.0, 404);
+        assert_eq!(json_call(&a, "POST", "/api/build/queue/nope/decide", &c, r#"{"action":"keep_both"}"#).await.0, 404);
+        assert_eq!(json_call(&a, "POST", "/api/build/classes/reclassify", &c, "{}").await.0, 200);
+        let (s, v) = json_call(&a, "GET", "/api/build/removed", &c, "").await;
+        assert_eq!((s, v["result"]["count"].as_u64()), (200, Some(0)));
+        assert_eq!(json_call(&a, "POST", "/api/build/removed/nope/restore", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/build/removed/nope", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/build/removed", &c, "").await.0, 200);
         // unknown build endpoints are 404 like the rest
         assert_eq!(json_call(&a, "GET", "/api/build/nope", &c, "").await.0, 404);
     }

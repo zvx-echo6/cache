@@ -386,3 +386,57 @@ fn real_books() {
         assert!(r.max_words <= 300);
     }
 }
+
+fn headed_book(meta: Option<&str>) -> Vec<u8> {
+    let body = wrap(&"Ordinary text runs along the page in the regular face for many lines. ".repeat(30), 70);
+    let body: Vec<&str> = body.iter().map(|s| s.as_str()).collect();
+    let mut pages = Vec::new();
+    for name in ["Water Purification Handbook", "Boiling and Filters", "Chlorine Doses"] {
+        let mut p = Page::new();
+        p.line(45.0, 40.0, 20.0, Font::Bold, name);
+        p.block(45.0, 90.0, 10.0, Font::Regular, &body[..12]);
+        pages.push(p);
+    }
+    make_pdf(&pages, meta)
+}
+
+#[test]
+fn the_smart_title_is_the_real_metadata_title_then_the_first_big_heading_then_the_tidied_file_name() {
+    let smart = |pdf: &[u8], file: &str| {
+        let mut o = BuildOptions::new(file, STAMP);
+        o.smart_title = true;
+        build_pack(pdf, &o, &FakeEmbedder).unwrap()
+    };
+    // a metadata title that names a Word file is not a title: the first big heading is
+    let (pack, rep) = smart(&headed_book(Some("Microsoft Word - notes.doc")), "my_water_file.pdf");
+    assert_eq!(pack.header.title, "Water Purification Handbook");
+    assert_eq!(rep.first_heading.as_deref(), Some("Water Purification Handbook"));
+    // a real metadata title wins
+    let (pack, _) = smart(&headed_book(Some("The Metadata Title")), "x.pdf");
+    assert_eq!(pack.header.title, "The Metadata Title");
+    // with neither, the file name, tidied
+    let body = wrap(&"Ordinary text runs along the page in the regular face for many lines. ".repeat(30), 70);
+    let body: Vec<&str> = body.iter().map(|s| s.as_str()).collect();
+    let mut p = Page::new();
+    p.block(45.0, 80.0, 10.0, Font::Regular, &body[..20]);
+    let (pack, rep) = smart(&make_pdf(&[p], None), "my_water__file.pdf");
+    assert_eq!(pack.header.title, "my water file");
+    assert_eq!(rep.first_heading, None);
+    // without the switch the title is the metadata title or the file name as before
+    let (pack, _) = build(&headed_book(None));
+    assert_eq!(pack.header.title, "book");
+}
+
+#[test]
+fn a_build_reports_what_the_server_compares() {
+    let (pack, rep) = build(&two_page_doc());
+    assert_eq!(rep.text_pages, 2);
+    assert!(rep.words > 20);
+    assert_eq!(rep.minhash.len(), cache_builder::fingerprint::HASHES);
+    assert!((rep.mean_vector.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-3);
+    assert!((rep.class_vector.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-3);
+    assert_eq!(pack.header.page_count, 2);
+    // the same PDF always gives the same fingerprint
+    let (_, again) = build(&two_page_doc());
+    assert_eq!(rep.minhash, again.minhash);
+}

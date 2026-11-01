@@ -100,6 +100,18 @@ impl BuildService {
         let ingest = PathBuf::from(self.drop_folder()).join("ingest");
         let name = if entry.file.to_lowercase().ends_with(".pdf") { entry.file.clone() } else { format!("{}.pdf", entry.file) };
         let put = dropdir::move_unique(&src, &ingest, &name).map_err(|e| err(500, "server_error", format!("Could not put the file back: {e}")))?;
+        // It is a new file as far as the drop folder is concerned: its time is now, and the record of an earlier file with the same
+        // name no longer says it has been dealt with.
+        let dest = ingest.join(&put);
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&dest) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+        {
+            let mut st = lock(&self.st);
+            let path = dest.to_string_lossy().into_owned();
+            st.items.retain(|i| !(i.origin == super::Origin::Drop && i.path == path && !i.state.live()));
+            self.save_queue_locked(&st);
+        }
         {
             let mut list = lock(&self.removed);
             list.retain(|e| e.id != id);

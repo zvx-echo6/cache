@@ -220,3 +220,20 @@ pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder,
     };
     Ok((Pack { header, pieces: pack_pieces }, report))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn titles_from_files_and_metadata_are_tidied() {
+        assert_eq!(tidy_file_title("Water_Purification  Handbook.pdf"), "Water Purification Handbook");
+        assert_eq!(tidy_file_title("plain"), "plain");
+        assert_eq!(usable_metadata_title("Microsoft Word - notes.doc"), None);
+        assert_eq!(usable_metadata_title("Microsoft Word - The Well Book"), Some("The Well Book".to_string()));
+        assert_eq!(usable_metadata_title("  The Well Handbook "), Some("The Well Handbook".to_string()));
+        assert_eq!(usable_metadata_title("untitled"), None);
+        assert_eq!(usable_metadata_title("12345"), None);
+        assert_eq!(usable_metadata_title("report.pdf"), None);
+    }
+}

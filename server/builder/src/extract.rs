@@ -207,3 +207,17 @@ fn extract_page(pdf: &PdfDocument, i: usize, ppis: &mut Vec<f32>) -> Result<RawP
     let label = pdf.page_label(i).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| (i + 1).to_string());
     Ok(RawPage { index: i, label, width: bounds.x1 - bounds.x0, height: bounds.y1 - bounds.y0, blocks, images })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::year_of;
+
+    #[test]
+    fn a_year_comes_from_a_pdf_date() {
+        assert_eq!(year_of("D:20190512103000+00'00'"), Some(2019));
+        assert_eq!(year_of("2007-03-01T10:00:00Z"), Some(2007));
+        assert_eq!(year_of("D:00000101"), None);
+        assert_eq!(year_of("x"), None);
+        assert_eq!(year_of(""), None);
+    }
+}

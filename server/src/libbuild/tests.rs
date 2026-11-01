@@ -1,7 +1,7 @@
 //! Tests of the build service: the queue, the library swap, the drop folder. The embedder is the builder crate's fake.
 
 use super::dropdir::unique_name;
-use super::testpdf::{book, make_pdf, picture_page, text_page};
+use super::testpdf::{book, make_pdf, picture_page, text_page, Page};
 use super::*;
 use crate::TempDir;
 use cache_builder::library::check_library_dir;
@@ -859,4 +859,473 @@ fn drop_settings_are_checked_and_remembered() {
     svc2.scan();
     assert_eq!(names(&folder, "ingest"), vec!["a.pdf"]);
     assert_eq!(svc2.drop_view()["status"]["error"]["code"], json!("no_library"));
+}
+
+// ---- filing by subject, the same book in another file, Removed
+
+/// A small set of classes whose descriptions use the words the test books are about (the fake embedder reads words).
+fn small_classes(d: &TempDir) {
+    std::fs::create_dir_all(d.0.join("build")).unwrap();
+    let c = json!({"version": 1, "unsure_below": 0.12, "min_margin": 0.02, "classes": [
+        {"number": "500", "name": "Water and Energy", "divisions": [
+            {"number": "510", "name": "Wells", "description": "well well wells digging"},
+            {"number": "520", "name": "Rain", "description": "rainwater cistern barrel"}]},
+        {"number": "700", "name": "Communication", "divisions": [
+            {"number": "710", "name": "Radio", "description": "radio antenna transmitter"},
+            {"number": "720", "name": "Unused", "description": ""}]}]});
+    std::fs::write(d.0.join("build/classes.json"), c.to_string()).unwrap();
+}
+
+fn tune(d: &TempDir, v: Value) {
+    std::fs::create_dir_all(d.0.join("build")).unwrap();
+    std::fs::write(d.0.join("build/tuning.json"), v.to_string()).unwrap();
+}
+
+/// `n` text pages about `topic`, numbered from `from`, with a metadata title.
+fn pdf_of(topic: &str, from: usize, n: usize, title: &str) -> Vec<u8> {
+    let pages: Vec<Page> = (from..from + n).map(|i| text_page(topic, i, 120)).collect();
+    make_pdf(&pages, Some(title))
+}
+
+fn by_title<'a>(books: &'a Value, title: &str) -> &'a Value {
+    books.as_array().unwrap().iter().find(|b| b["title"] == json!(title)).unwrap_or_else(|| panic!("no book {title}: {books}"))
+}
+
+fn src_file(d: &TempDir, lib: &str, rel: &str) -> PathBuf {
+    d.0.join("app/docs/sources").join(lib).join(rel)
+}
+
+#[test]
+fn a_book_is_filed_by_meaning_and_an_unsure_one_goes_to_unsorted() {
+    let d = TempDir::new("c1");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let a = add(&svc, &lib, "a.pdf", &book("well", 3, Some("The Well Handbook")));
+    add(&svc, &lib, "b.pdf", &book("radio", 3, Some("Antenna Notes")));
+    let c = add(&svc, &lib, "c.pdf", &book("kiln", 3, Some("Kiln Craft")));
+    drain(&svc);
+    let books = svc.books(&lib).unwrap();
+    let w = by_title(&books, "The Well Handbook");
+    assert_eq!((w["division"].as_str(), w["class"].as_str(), w["call_number"].as_str()), (Some("510"), Some("500"), Some("510 · WEL")));
+    assert_eq!((w["division_name"].as_str(), w["unsorted"].as_bool()), (Some("Wells"), Some(false)));
+    let sug = w["suggestions"].as_array().unwrap();
+    assert!(!sug.is_empty() && sug.len() <= 3, "{sug:?}");
+    assert_eq!(sug[0]["division"], json!("510"));
+    let r = by_title(&books, "Antenna Notes");
+    assert_eq!((r["division"].as_str(), r["class"].as_str(), r["call_number"].as_str()), (Some("710"), Some("700"), Some("710 · ANT")));
+    let k = by_title(&books, "Kiln Craft");
+    assert_eq!((k["division"].is_null(), k["unsorted"].as_bool(), k["call_number"].as_str()), (true, Some(true), Some("KIL")));
+    assert!(k["unsure_reason"].as_str().is_some_and(|m| !m.is_empty()));
+    assert_eq!(k["placed_by_hand"], json!(false));
+    // the device copies are filed in the tree
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf").is_file());
+    assert!(src_file(&d, &lib, "700 Communication/710 Radio/710 · ANT  Antenna Notes.pdf").is_file());
+    assert!(src_file(&d, &lib, "Unsorted/KIL  Kiln Craft.pdf").is_file());
+    assert_eq!(svc.source_path(&lib, w["id"].as_str().unwrap()), src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf"));
+    assert_eq!(w["filed_in"], json!("500 Water and Energy/510 Wells"));
+    // the queue says where each went
+    let (ia, ic) = (item(&svc, &a), item(&svc, &c));
+    assert_eq!((ia.division.as_deref(), ia.result.as_deref()), (Some("510"), Some("Filed in 510 Wells")));
+    assert_eq!((ic.division, ic.result.as_deref()), (None, Some("Filed in Unsorted")));
+    // counts per class and division, and Unsorted
+    let v = svc.classes_view(None).unwrap();
+    assert_eq!(v["classes"].as_array().unwrap().len(), 2);
+    assert_eq!(v["unsorted"]["count"], json!(1));
+    assert_eq!((v["libraries"][0]["divisions"]["510"].as_u64(), v["libraries"][0]["divisions"]["520"].as_u64()), (Some(1), Some(0)));
+    assert_eq!((v["libraries"][0]["classes"]["500"].as_u64(), v["libraries"][0]["classes"]["700"].as_u64()), (Some(1), Some(1)));
+    assert_eq!((v["libraries"][0]["unsorted"].as_u64(), v["classes"][0]["divisions"][0]["count"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(svc.classes_view(Some("nope")).unwrap_err().status, 404);
+    assert_eq!(svc.classes_view(Some(&lib)).unwrap()["libraries"].as_array().unwrap().len(), 1);
+    // books by division, by class, in Unsorted, and by call number (Unsorted first)
+    assert_eq!(svc.books_q(&lib, "division=510").unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(svc.books_q(&lib, "division=520").unwrap().as_array().unwrap().len(), 0);
+    assert_eq!(svc.books_q(&lib, "division=unsorted").unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(svc.books_q(&lib, "class=700").unwrap()[0]["title"], json!("Antenna Notes"));
+    let by_call: Vec<String> = svc.books_q(&lib, "sort=call").unwrap().as_array().unwrap().iter().map(|b| b["call_number"].as_str().unwrap().to_string()).collect();
+    assert_eq!(by_call, vec!["KIL", "510 · WEL", "710 · ANT"]);
+    // classification is not in the search payloads: the pack header carries none of it
+    let doc = w["id"].as_str().unwrap();
+    let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
+    let header = serde_json::to_string(&p.header).unwrap();
+    assert!(!header.contains("division") && !header.contains("call_number") && !header.contains("suggestions"), "{header}");
+}
+
+#[test]
+fn placing_a_book_moves_its_files_and_changes_its_call_number() {
+    let d = TempDir::new("c2");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
+    drain(&svc);
+    let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let r = svc.place_book(&lib, &doc, br#"{"division":"510"}"#).unwrap();
+    assert_eq!((r["call_number"].as_str(), r["division"].as_str(), r["placed_by_hand"].as_bool()), (Some("510 · KIL"), Some("510"), Some(true)));
+    assert_eq!((r["moved_from"].as_str(), r["unsorted"].as_bool()), (Some("Unsorted"), Some(false)));
+    assert!(!src_file(&d, &lib, "Unsorted/KIL  Kiln Craft.pdf").exists());
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · KIL  Kiln Craft.pdf").is_file());
+    assert!(svc.source_path(&lib, &doc).is_file());
+    // refused
+    assert_eq!(svc.place_book(&lib, &doc, br#"{"division":"999"}"#).unwrap_err().status, 400);
+    assert_eq!(svc.place_book(&lib, &doc, br#"{"division":"720"}"#).unwrap_err().status, 400, "an unassigned division");
+    assert_eq!(svc.place_book(&lib, &doc, br#"{"x":1}"#).unwrap_err().status, 400);
+    assert_eq!(svc.place_book(&lib, &doc, b"nope").unwrap_err().code, "bad_json");
+    assert_eq!(svc.place_book(&lib, "nope", br#"{"division":"510"}"#).unwrap_err().status, 404);
+    // a book the person placed stays where it is when the books are looked at again
+    let v = svc.reclassify(b"{}").unwrap();
+    assert_eq!((v["checked"].as_u64(), v["moved"].as_u64()), (Some(0), Some(0)));
+    // a new title keeps the call number's letters; the filed PDF takes the new name
+    svc.rename_book(&lib, &doc, br#"{"title":"Zebra Notes"}"#).unwrap();
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · KIL  Zebra Notes.pdf").is_file());
+    assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("510 · KIL"));
+    // and back to Unsorted
+    let r = svc.place_book(&lib, &doc, br#"{"division":"unsorted"}"#).unwrap();
+    assert_eq!((r["call_number"].as_str(), r["moved_from"].as_str()), (Some("KIL"), Some("510 Wells")));
+    assert!(src_file(&d, &lib, "Unsorted/KIL  Zebra Notes.pdf").is_file());
+    assert!(!src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · KIL  Zebra Notes.pdf").exists());
+}
+
+#[test]
+fn books_from_the_drop_folder_are_filed_in_complete_and_their_files_follow_a_placement() {
+    let d = TempDir::new("c3");
+    small_classes(&d);
+    let (svc, _, lib, root) = drop_rig(&d, 0);
+    put(&root, "ingest", "a.pdf", &book("well", 3, Some("The Well Handbook")));
+    put(&root, "ingest", "b.pdf", &book("kiln", 3, Some("Kiln Craft")));
+    svc.scan();
+    drain(&svc);
+    assert_eq!(tree_files(&root.join("complete")), vec!["500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf", "Unsorted/KIL  Kiln Craft.pdf"]);
+    assert_eq!(names(&root, "ingest"), Vec::<String>::new());
+    let v = svc.drop_view();
+    let files = v["files"].as_array().unwrap();
+    let well = files.iter().find(|f| f["path"] == json!("500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf")).expect("the well book");
+    assert_eq!((well["class"].as_str(), well["division"].as_str(), well["call_number"].as_str()), (Some("500"), Some("510"), Some("510 · WEL")));
+    assert_eq!((well["where"].as_str(), well["title"].as_str(), well["reason"].as_str()), (Some("500 Water and Energy/510 Wells"), Some("The Well Handbook"), Some("Filed in 510 Wells")));
+    let kiln = files.iter().find(|f| f["name"] == json!("KIL  Kiln Craft.pdf")).expect("the kiln book");
+    assert_eq!((kiln["division"].is_null(), kiln["where"].as_str(), kiln["reason"].as_str()), (true, Some("Unsorted"), Some("Filed in Unsorted")));
+    // placing the unsure book moves the device copy and the copy in complete/
+    let doc = svc.books(&lib).unwrap().as_array().unwrap().iter().find(|b| b["title"] == json!("Kiln Craft")).unwrap()["id"].as_str().unwrap().to_string();
+    svc.place_book(&lib, &doc, br#"{"division":"520"}"#).unwrap();
+    assert_eq!(tree_files(&root.join("complete")), vec!["500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf", "500 Water and Energy/520 Rain/520 · KIL  Kiln Craft.pdf"]);
+    assert!(src_file(&d, &lib, "500 Water and Energy/520 Rain/520 · KIL  Kiln Craft.pdf").is_file());
+    let v = svc.drop_view();
+    let moved = v["files"].as_array().unwrap().iter().find(|f| f["path"] == json!("500 Water and Energy/520 Rain/520 · KIL  Kiln Craft.pdf")).expect("the placed book");
+    assert_eq!((moved["moved_from"].as_str(), moved["division"].as_str()), (Some("Unsorted"), Some("520")));
+    // two different books with the same title in one division: the second gets a number
+    put(&root, "ingest", "c.pdf", &pdf_of("well", 50, 3, "Manual"));
+    put(&root, "ingest", "d.pdf", &pdf_of("well", 80, 3, "Manual"));
+    svc.scan();
+    drain(&svc);
+    let tree = tree_files(&root.join("complete"));
+    assert!(tree.contains(&"500 Water and Energy/510 Wells/510 · MAN  Manual.pdf".to_string()), "{tree:?}");
+    assert!(tree.contains(&"500 Water and Energy/510 Wells/510 · MAN  Manual (2).pdf".to_string()), "{tree:?}");
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · MAN  Manual (2).pdf").is_file());
+}
+
+#[test]
+fn flat_source_paths_are_migrated_at_start_up_and_the_books_are_filed_later() {
+    let d = TempDir::new("c4");
+    small_classes(&d);
+    let lib;
+    let docs: Vec<String>;
+    {
+        let (svc, _) = rig(&d);
+        lib = new_lib(&svc, "L");
+        add(&svc, &lib, "a.pdf", &book("well", 3, Some("The Well Handbook")));
+        add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
+        drain(&svc);
+        docs = svc.books(&lib).unwrap().as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect();
+        // as a library built before filing: the PDFs flat in sources/<library>/
+        for doc in &docs {
+            std::fs::rename(svc.source_path(&lib, doc), d.0.join("app/docs/sources").join(&lib).join(format!("{doc}.pdf"))).unwrap();
+        }
+    }
+    let meta_path = d.0.join("build/libs").join(format!("{lib}.json"));
+    let mut m: Value = serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    for b in m["books"].as_array_mut().unwrap() {
+        let o = b.as_object_mut().unwrap();
+        for k in ["source_rel", "letters", "division", "classified", "suggestions", "unsure", "minhash"] {
+            o.remove(k);
+        }
+    }
+    std::fs::write(&meta_path, m.to_string()).unwrap();
+    let (svc, _) = rig(&d);
+    for doc in &docs {
+        let p = svc.source_path(&lib, doc);
+        assert!(p.is_file(), "{p:?}");
+        assert!(p.to_string_lossy().contains("/Unsorted/"), "{p:?}");
+        assert!(!d.0.join("app/docs/sources").join(&lib).join(format!("{doc}.pdf")).exists(), "the flat file is gone");
+    }
+    // when the queue is idle each book is looked at once
+    svc.maintenance();
+    svc.maintenance();
+    assert!(lock(&svc.st).libs[0].books.iter().all(|b| b.classified));
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(by_title(&books, "The Well Handbook")["division"], json!("510"));
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf").is_file());
+    assert!(src_file(&d, &lib, "Unsorted/KIL  Kiln Craft.pdf").is_file());
+    assert!(!src_file(&d, &lib, "Unsorted/WEL  The Well Handbook.pdf").exists());
+}
+
+#[test]
+fn the_classes_are_written_on_first_start_and_edits_are_picked_up() {
+    let d = TempDir::new("c5");
+    let (svc, fake) = rig(&d);
+    assert!(d.0.join("build/classes.json").is_file());
+    let v = svc.classes_view(None).unwrap();
+    assert_eq!(v["classes"].as_array().unwrap().len(), 10);
+    let (cls, vecs) = svc.class_vectors().unwrap();
+    assert_eq!(vecs.vectors.len(), 89, "060 has no description and is not scored");
+    assert!(d.0.join("build/classes-vectors.json").is_file());
+    let first = vecs.digest.clone();
+    assert_eq!(cls.classes.len(), 10);
+    // the vectors are kept on disk: a restart does not embed them again
+    let calls = fake.calls.load(Ordering::Relaxed);
+    let (svc2, fake2) = rig(&d);
+    assert_eq!(svc2.class_vectors().unwrap().1.digest, first);
+    assert_eq!(fake2.calls.load(Ordering::Relaxed), 0);
+    assert!(calls > 0);
+    // an edit to the file is picked up (a description changes the vectors); a broken file keeps the last good classes
+    std::thread::sleep(Duration::from_millis(50));
+    let path = d.0.join("build/classes.json");
+    let mut c: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    c["classes"][5]["divisions"][0]["description"] = json!("Wells, springs and boreholes, and how to find water underground.");
+    std::fs::write(&path, c.to_string()).unwrap();
+    let v = svc2.classes_view(None).unwrap();
+    assert_eq!(v["classes"][5]["divisions"][0]["description"], json!("Wells, springs and boreholes, and how to find water underground."));
+    assert_ne!(svc2.class_vectors().unwrap().1.digest, first);
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(&path, "not json").unwrap();
+    assert_eq!(svc2.classes_view(None).unwrap()["classes"].as_array().unwrap().len(), 10);
+}
+
+#[test]
+fn the_same_book_in_a_better_file_replaces_the_old_one_and_a_worse_one_is_not_kept() {
+    let d = TempDir::new("c6");
+    small_classes(&d);
+    tune(&d, json!({"same_cosine": 0.8}));
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "guide.pdf", &pdf_of("river", 1, 20, "River Guide"));
+    drain(&svc);
+    let b0 = svc.books(&lib).unwrap()[0].clone();
+    let doc = b0["id"].as_str().unwrap().to_string();
+    let call = b0["call_number"].as_str().unwrap().to_string();
+    // a better file of it: more pages with text
+    let better = pdf_of("river", 1, 21, "River Guide scan");
+    let b = add(&svc, &lib, "guide scan.pdf", &better);
+    drain(&svc);
+    let ib = item(&svc, &b);
+    assert_eq!((ib.state, ib.result.as_deref()), (S::Done, Some("Replaced: the new copy has 21 text pages vs 20")));
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(books.as_array().unwrap().len(), 1);
+    let nb = &books[0];
+    assert_eq!((nb["id"].as_str(), nb["doc_version"].as_u64(), nb["title"].as_str(), nb["pages"].as_u64()), (Some(doc.as_str()), Some(2), Some("River Guide"), Some(21)));
+    assert_eq!(nb["call_number"].as_str(), Some(call.as_str()), "the call number stays");
+    assert_eq!(std::fs::read(svc.source_path(&lib, &doc)).unwrap(), better);
+    assert!(svc.packs_dir(&lib).join(format!("{doc}@2.cdoc")).is_file() && !svc.packs_dir(&lib).join(format!("{doc}@1.cdoc")).exists());
+    let r = svc.removed_view();
+    assert_eq!((r["count"].as_u64(), r["items"][0]["kind"].as_str()), (Some(1), Some("source")));
+    assert!(r["items"][0]["reason"].as_str().unwrap().starts_with("Replaced by a better copy: the new copy has 21 text pages vs 20"));
+    // a worse file of it (fewer pages): not kept
+    let c = add(&svc, &lib, "guide again.pdf", &pdf_of("river", 1, 20, "River Guide 3"));
+    drain(&svc);
+    let ic = item(&svc, &c);
+    assert_eq!((ic.state, ic.result.as_deref(), ic.duplicate_of.as_deref()), (S::SkippedDuplicate, Some("Already have a better copy"), Some("River Guide")));
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(svc.removed_view()["count"], json!(2));
+    assert_eq!(std::fs::read_dir(d.0.join("build/pending")).unwrap().count(), 0);
+    // an excerpt is never the same book
+    let e = add(&svc, &lib, "excerpt.pdf", &pdf_of("river", 1, 3, "River Excerpt"));
+    drain(&svc);
+    assert_eq!(state(&svc, &e), S::Done);
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 2);
+    // two different books on one topic are not the same
+    let f = add(&svc, &lib, "other.pdf", &pdf_of("river", 100, 21, "Another River Book"));
+    drain(&svc);
+    assert_eq!(state(&svc, &f), S::Done);
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 3);
+}
+
+/// Ten pages: the first eight about the river, the last two about `tail`.
+fn edition_pdf(tail: &str) -> Vec<u8> {
+    let mut pages: Vec<Page> = (1..=8).map(|i| text_page("river", i, 120)).collect();
+    pages.push(text_page(tail, 9, 120));
+    pages.push(text_page(tail, 10, 120));
+    make_pdf(&pages, Some("Field Guide"))
+}
+
+#[test]
+fn a_possible_new_edition_waits_for_a_choice_and_keep_both_adds_a_suffix() {
+    let d = TempDir::new("c7");
+    small_classes(&d);
+    tune(&d, json!({"same_cosine": 0.5}));
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "guide.pdf", &edition_pdf("delta"));
+    drain(&svc);
+    let b = add(&svc, &lib, "guide 2nd.pdf", &edition_pdf("gamma"));
+    assert!(matches!(svc.run_one(), Run::Ran));
+    assert_eq!(state(&svc, &b), S::NeedsDecision);
+    let it = item(&svc, &b);
+    let dec = it.decision.clone().expect("a decision");
+    assert_eq!((dec.other_title.as_str(), dec.new_title.as_str(), dec.new.pages, dec.old.pages), ("Field Guide", "Field Guide", 10, 10));
+    assert!(dec.jaccard >= 0.5 && dec.jaccard < 0.85, "{}", dec.jaccard);
+    let q = svc.queue();
+    assert_eq!(q["counts"]["needs_decision"], json!(1));
+    let qi = q["items"].as_array().unwrap().iter().find(|i| i["id"] == json!(b)).unwrap();
+    assert_eq!((qi["state"].as_str(), qi["decision"]["old_title"].as_str(), qi["decision"]["summary"]["pages"]["new"].as_u64()), (Some("needs_decision"), Some("Field Guide"), Some(10)));
+    assert_eq!(qi["decision"]["actions"], json!(["keep_both", "replace_older"]));
+    // nothing was added, nothing moved or removed; the file waits where it is
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(svc.removed_view()["count"], json!(0));
+    assert!(Path::new(&it.path).is_file());
+    assert!(matches!(svc.run_one(), Run::Idle), "it is not built again while it waits");
+    // the choice
+    assert_eq!(svc.decide(&b, br#"{"action":"nope"}"#).unwrap_err().status, 400);
+    assert_eq!(svc.decide("nope", br#"{"action":"keep_both"}"#).unwrap_err().status, 404);
+    svc.decide(&b, br#"{"action":"keep_both"}"#).unwrap();
+    assert_eq!(state(&svc, &b), S::Queued);
+    assert_eq!(svc.decide(&b, br#"{"action":"keep_both"}"#).unwrap_err().status, 409);
+    drain(&svc);
+    assert_eq!(state(&svc, &b), S::Done);
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(books.as_array().unwrap().len(), 2);
+    let mut calls: Vec<String> = books.as_array().unwrap().iter().map(|x| x["call_number"].as_str().unwrap().to_string()).collect();
+    calls.sort_by_key(|c| c.len());
+    assert!(calls[0].ends_with("FIE") && calls[1].ends_with("FIE 2e"), "{calls:?}");
+    let files = tree_files(&d.0.join("app/docs/sources").join(&lib));
+    assert!(files.iter().any(|f| f.ends_with("FIE 2e  Field Guide.pdf")) && files.iter().any(|f| f.ends_with("FIE  Field Guide.pdf")), "{files:?}");
+    assert_eq!(svc.removed_view()["count"], json!(0), "keep both removes nothing");
+}
+
+#[test]
+fn replace_the_older_one_goes_first_in_the_queue_and_the_old_copy_goes_to_removed() {
+    let d = TempDir::new("c8");
+    small_classes(&d);
+    tune(&d, json!({"same_cosine": 0.5}));
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "guide.pdf", &edition_pdf("delta"));
+    drain(&svc);
+    let old_doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let b = add(&svc, &lib, "guide 2nd.pdf", &edition_pdf("gamma"));
+    assert!(matches!(svc.run_one(), Run::Ran));
+    assert_eq!(state(&svc, &b), S::NeedsDecision);
+    let other = add(&svc, &lib, "tank.pdf", &book("tank", 2, Some("Tanks")));
+    // the other book was queued ahead of it
+    {
+        let mut st = lock(&svc.st);
+        let (i, j) = (st.items.iter().position(|x| x.id == b).unwrap(), st.items.iter().position(|x| x.id == other).unwrap());
+        st.items.swap(i, j);
+    }
+    svc.decide(&b, br#"{"action":"replace_older"}"#).unwrap();
+    let order: Vec<String> = lock(&svc.st).items.iter().map(|i| i.id.clone()).collect();
+    let (pb, po) = (order.iter().position(|x| *x == b).unwrap(), order.iter().position(|x| *x == other).unwrap());
+    assert!(pb < po, "the rebuild goes to the front of the queue: {order:?}");
+    drain(&svc);
+    let ib = item(&svc, &b);
+    assert_eq!((ib.state, ib.result.as_deref()), (S::Done, Some("Replaced: the older edition was replaced at your choice")));
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(books.as_array().unwrap().len(), 2);
+    let nb = by_title(&books, "Field Guide");
+    assert_eq!((nb["id"].as_str(), nb["doc_version"].as_u64()), (Some(old_doc.as_str()), Some(2)));
+    assert_eq!(svc.removed_view()["count"], json!(1));
+    // a choice for a book that is not waiting
+    assert_eq!(svc.decide(&b, br#"{"action":"replace_older"}"#).unwrap_err().status, 409);
+}
+
+#[test]
+fn drop_folder_results_say_replaced_or_already_have_a_better_copy_and_a_restore_is_looked_at_again() {
+    let d = TempDir::new("c9");
+    small_classes(&d);
+    tune(&d, json!({"same_cosine": 0.8}));
+    let (svc, _, _, root) = drop_rig(&d, 0);
+    put(&root, "ingest", "a.pdf", &pdf_of("river", 1, 20, "River Guide"));
+    svc.scan();
+    drain(&svc);
+    assert_eq!(tree_files(&root.join("complete")).len(), 1);
+    // a better copy: the book is rebuilt from it, the old copies go to Removed
+    put(&root, "ingest", "b.pdf", &pdf_of("river", 1, 21, "River Guide v2"));
+    svc.scan();
+    drain(&svc);
+    let tree = tree_files(&root.join("complete"));
+    assert_eq!(tree.len(), 1, "{tree:?}");
+    let v = svc.drop_view();
+    let row = v["files"].as_array().unwrap().iter().find(|f| f["folder"] == json!("complete")).unwrap();
+    assert_eq!(row["reason"], json!("Replaced: the new copy has 21 text pages vs 20"));
+    let r = svc.removed_view();
+    let mut kinds: Vec<&str> = r["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    kinds.sort();
+    assert_eq!(kinds, vec!["drop", "source"]);
+    // a worse copy
+    put(&root, "ingest", "c.pdf", &pdf_of("river", 1, 20, "River Guide again"));
+    svc.scan();
+    drain(&svc);
+    assert_eq!(names(&root, "ingest"), Vec::<String>::new());
+    assert_eq!(tree_files(&root.join("complete")).len(), 1);
+    assert_eq!(svc.removed_view()["count"], json!(3));
+    let v = svc.drop_view();
+    let gone = v["files"].as_array().unwrap().iter().find(|f| f["folder"] == json!("removed")).expect("a removed row");
+    assert_eq!((gone["name"].as_str(), gone["reason"].as_str()), (Some("c.pdf"), Some("Already have a better copy")));
+    assert_eq!(v["status"]["counts"]["removed"], json!(1));
+    // restore puts it back in ingest/; it is compared again and ends the same way
+    let id = svc.removed_view()["items"].as_array().unwrap().iter().find(|i| i["reason"] == json!("Already have a better copy")).unwrap()["id"].as_str().unwrap().to_string();
+    svc.restore_removed(&id).unwrap();
+    assert_eq!(names(&root, "ingest"), vec!["c.pdf"]);
+    assert_eq!(svc.removed_view()["count"], json!(2));
+    svc.scan();
+    drain(&svc);
+    assert_eq!(names(&root, "ingest"), Vec::<String>::new());
+    assert_eq!(svc.removed_view()["count"], json!(3));
+    assert!(svc.removed_view()["items"].as_array().unwrap().iter().filter(|i| i["reason"] == json!("Already have a better copy")).count() == 1);
+}
+
+#[test]
+fn removed_files_are_listed_restored_deleted_and_purged_after_thirty_days() {
+    let d = TempDir::new("c10");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let pdf = book("river", 2, Some("River"));
+    add(&svc, &lib, "river.pdf", &pdf);
+    add(&svc, &lib, "copy.pdf", &pdf);
+    drain(&svc);
+    let r = svc.removed_view();
+    assert_eq!((r["count"].as_u64(), r["items"][0]["file"].as_str(), r["items"][0]["reason"].as_str(), r["items"][0]["kind"].as_str()), (Some(1), Some("copy.pdf"), Some("Exact copy of River"), Some("upload")));
+    let id = r["items"][0]["id"].as_str().unwrap().to_string();
+    assert!(d.0.join("build/removed/files").join(format!("{id}.pdf")).is_file());
+    assert_eq!(svc.restore_removed("nope").unwrap_err().status, 404);
+    // restore: the drop folder's ingest/
+    let out = svc.restore_removed(&id).unwrap();
+    assert_eq!(out["file"], json!("copy.pdf"));
+    assert_eq!(std::fs::read(d.0.join("drop/ingest/copy.pdf")).unwrap(), pdf);
+    assert_eq!(svc.removed_view()["count"], json!(0));
+    assert_eq!(svc.restore_removed(&id).unwrap_err().status, 404);
+    // the purge
+    add(&svc, &lib, "copy2.pdf", &pdf);
+    drain(&svc);
+    assert_eq!(svc.removed_view()["count"], json!(1));
+    assert_eq!(svc.purge_removed(epoch()), 0);
+    assert_eq!(svc.purge_removed(epoch() + 29 * 24 * 3600), 0);
+    assert_eq!(svc.purge_removed(epoch() + 31 * 24 * 3600), 1);
+    assert_eq!(svc.removed_view()["count"], json!(0));
+    assert_eq!(std::fs::read_dir(d.0.join("build/removed/files")).unwrap().count(), 0);
+    // at start-up
+    add(&svc, &lib, "copy3.pdf", &pdf);
+    drain(&svc);
+    assert_eq!(svc.removed_view()["count"], json!(1));
+    let manifest = d.0.join("build/removed/manifest.json");
+    let mut m: Value = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    m[0]["epoch"] = json!(1);
+    std::fs::write(&manifest, m.to_string()).unwrap();
+    let (svc2, _) = rig(&d);
+    assert_eq!(svc2.removed_view()["count"], json!(0));
+    assert_eq!(std::fs::read_dir(d.0.join("build/removed/files")).unwrap().count(), 0);
+    // delete for good
+    add(&svc2, &lib, "copy4.pdf", &pdf);
+    drain(&svc2);
+    assert_eq!(svc2.delete_removed("nope").unwrap_err().status, 404);
+    assert_eq!(svc2.delete_removed("").unwrap()["deleted"], json!(1));
+    assert_eq!(svc2.removed_view()["count"], json!(0));
 }

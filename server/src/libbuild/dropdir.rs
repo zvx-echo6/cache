@@ -545,7 +545,7 @@ impl BuildService {
         }
         let cls = self.classes();
         for e in complete.iter().rev().take(LIST_CAP) {
-            let item = st.items.iter().find(|i| i.origin == Origin::Drop && i.moved_to.as_deref() == Some(e.rel.as_str()) && matches!(i.state, S::Done | S::SkippedDuplicate));
+            let item = st.items.iter().rev().find(|i| i.origin == Origin::Drop && i.moved_to.as_deref() == Some(e.rel.as_str()) && matches!(i.state, S::Done | S::SkippedDuplicate));
             let dup = item.filter(|i| i.state == S::SkippedDuplicate);
             let done = item.filter(|i| i.state == S::Done);
             let book = done.and_then(|i| i.doc_id.as_deref().and_then(|d| st.libs.iter().find(|l| l.id == i.library_id).and_then(|l| l.books.iter().find(|b| b.doc_id == d))));
