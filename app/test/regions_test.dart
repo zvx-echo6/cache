@@ -169,12 +169,10 @@ void main() {
     await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
     await tester.pump();
     expect(find.text('Twin Falls County'), findsOneWidget);
-    // each part on its own line of state, not one percentage for the whole region
-    // only the parts not ready yet, each with where it stands, and a bar that says what it is
-    expect(find.textContaining(RegExp(r'^(Map \d+% · )?Directions \d+%$')), findsOneWidget);
+    // the download pattern: one line and one bar for the whole region, "Starting…" until its first bytes
+    expect(find.byKey(const ValueKey('local-$_county-line')), findsOneWidget);
+    expect(find.text('Starting…'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
-    expect(find.byKey(const ValueKey('local-bar-$_county')), findsOneWidget);
-    expect(find.textContaining(RegExp(r'^\d+% (of .+ )?in all · now (map|directions)$')), findsOneWidget);
     // with no position known, everything downloads from the region's centre outwards
     final b = r.county.bounds!;
     final centre = [(b.south + b.north) / 2, (b.west + b.east) / 2];
@@ -187,7 +185,7 @@ void main() {
       await r.regions.refresh();
     });
     await tester.pump();
-    expect(find.textContaining('Ready · '), findsOneWidget);
+    expect(find.textContaining('On this device · '), findsOneWidget);
     expect(find.textContaining('next time Cache opens'), findsNothing, reason: 'the next route uses it, nothing waits for a restart');
 
     final saved = jsonDecode(File('${r.s.dir.path}/$kRegionsAppFile').readAsStringSync()) as Map;
@@ -230,7 +228,7 @@ void main() {
 
     await tester.tap(find.text('Local'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Paused: mobile data is switched off for downloads'), findsWidgets);
+    expect(find.text('Waiting for Wi-Fi'), findsWidgets);
 
     r.s.settings.setMobileForDownloads(true);
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
@@ -238,8 +236,8 @@ void main() {
     await tester.runAsync(r.regions.refresh);
     await tester.pump();
     expect(r.core.regions[_county]!['state'], 'downloading');
-    expect(find.textContaining('Paused'), findsNothing);
-    expect(find.textContaining('Directions'), findsOneWidget);
+    expect(find.textContaining('Waiting for Wi-Fi'), findsNothing);
+    expect(find.byKey(const ValueKey('local-$_county-line')), findsOneWidget);
     await r.dispose(tester);
   });
 
@@ -287,7 +285,7 @@ void main() {
     expect([for (final l in r.regions.local) l.id], ['us-id', 'us-ut', _county]);
     final y = [for (final id in ['us-id', 'us-ut', _county]) tester.getTopLeft(find.byKey(ValueKey('local-$id'))).dy];
     expect(y[0] < y[1] && y[1] < y[2], isTrue);
-    expect(find.text('Ready · 900 MB'), findsOneWidget);
+    expect(find.text('On this device · 900 MB'), findsOneWidget);
     expect(find.text('Tap a region to open it. Press and hold for Carry on, Check for update and Delete.'), findsOneWidget);
     await r.dispose(tester);
   });
@@ -549,7 +547,7 @@ void main() {
       });
       await r.s.show(tester, RegionsScreen(regions: r.regions, initialTab: 1));
       await tester.pump();
-      expect(find.text('Ready · ${formatBytes(140 << 20)}'), findsOneWidget);
+      expect(find.text('On this device · ${formatBytes(140 << 20)}'), findsOneWidget);
       expect(r.regions.missesPlaces(r.regions.regionOf(_county)!), isTrue);
       expect(r.core.added.last['parts'], ['routing']);
 

@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'chat/model_name.dart';
 import 'files.dart';
+import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
 import 'theme.dart';
 
@@ -79,6 +80,12 @@ class AppState extends ChangeNotifier {
 
   /// The model's real name, for example "Gemma 4 E2B · Q4_K_M"; the file name if not known yet.
   String displayName(ModelEntry e) => _names[e.key] ?? e.name;
+
+  /// The settings a model carries in the recommended list (by its file), applied when it loads; null: none known.
+  ModelSettings? Function(ModelEntry e)? settingsFor;
+
+  /// The settings of the model loaded now (none for a model the list does not name).
+  ModelSettings activeSettings = ModelSettings.none;
 
   Future<void> init() async {
     final settingsDir = settingsDirOverride ?? await getApplicationSupportDirectory();
@@ -210,7 +217,8 @@ class AppState extends ChangeNotifier {
     loadError = null;
     notifyListeners();
     try {
-      final info = await session.load(entry.path, nCtx: kContextTokens);
+      final own = settingsFor?.call(entry) ?? ModelSettings.none;
+      final info = await session.load(entry.path, nCtx: own.nCtx ?? kContextTokens);
       final pretty = prettyModelName(info.description, fileName: entry.fileName);
       if (pretty.isNotEmpty) _names[entry.key] = pretty;
       if (!info.supportsTools) {
@@ -227,6 +235,7 @@ class AppState extends ChangeNotifier {
       } else {
         active = entry;
         activeInfo = info;
+        activeSettings = own;
         _lastModelFile = entry.fileName;
         await _writeSettings();
       }

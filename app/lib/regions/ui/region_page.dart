@@ -117,6 +117,7 @@ class RegionPage extends StatelessWidget {
           _ => Tone.normal,
         };
         final layers = _layerGroups(l);
+        final parts = l.parts;
         final canAddOffroad = !l.hasOffroad && !l.isArea && regions.offroadCatalogue != null;
         final canAddPlaces = regions.placesNowAvailable(l);
         return Scaffold(
@@ -145,7 +146,7 @@ class RegionPage extends StatelessWidget {
                 ],
                 SettingsGroup(
                   rows: [
-                    for (final p in l.parts)
+                    for (final p in parts)
                       if (p.state == PartState.notAvailable)
                         _NotAvailableRow(key: ValueKey('part-${p.kind.name}'), part: p.name, region: l.name)
                       else if (p.complete)
@@ -156,7 +157,7 @@ class RegionPage extends StatelessWidget {
                           trailing: trailingFor(p, p.kind.name),
                         )
                       else
-                        _PartRow(key: ValueKey('part-${p.kind.name}'), regions: regions, region: l, part: p),
+                        _PartRow(key: ValueKey('part-${p.kind.name}'), regions: regions, region: l, part: p, parts: parts),
                     // Published since this region was downloaded: offered here.
                     if (canAddPlaces)
                       SettingsRow(
@@ -331,7 +332,10 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
 /// A part of a region that is not complete, in the download pattern: the running part's line, bar and Pause; a waiting part
 /// "Waiting for Map to finish"; a paused or failed part its Resume (or Free space) and Remove.
 class _PartRow extends StatelessWidget {
-  const _PartRow({super.key, required this.regions, required this.region, required this.part, this.title, this.own = false});
+  const _PartRow({super.key, required this.regions, required this.region, required this.part, this.title, this.own = false, this.parts});
+
+  /// The list [part] came from.
+  final List<RegionPartStatus>? parts;
 
   final RegionsState regions;
   final LocalRegion region;
@@ -346,7 +350,7 @@ class _PartRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final s = partDl(regions, region, part, own: own);
+    final s = partDl(regions, region, part, own: own, parts: parts);
     final a = regionDlActions(context, regions, region);
     final key = 'part-${part.kind.name}';
     return Padding(

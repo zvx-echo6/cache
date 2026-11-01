@@ -25,6 +25,7 @@ DlActions modelActions(BuildContext context, ModelDownloads d, HfFile f) => DlAc
       pause: () => d.pause(f),
       resume: () => d.resume(f),
       remove: () => d.remove(f),
+      downloadNow: () => d.resume(f, anyway: true),
       freeSpace: openStorageForSpace == null ? null : () => openStorageForSpace!(context),
     );
 

@@ -50,6 +50,7 @@ import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
+import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
@@ -473,6 +474,13 @@ class _CacheAppState extends State<CacheApp> {
   void initState() {
     super.initState();
     ModelDownloads.shared = modelDownloads;
+    // A model the recommended list names loads with the settings the list gives it (none today: the usual ones).
+    app.settingsFor = (e) {
+      for (final r in RecommendedModels.shared.models) {
+        if (r.file == e.fileName && r.size == e.size) return r.settings;
+      }
+      return null;
+    };
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
@@ -615,7 +623,7 @@ class _CacheAppState extends State<CacheApp> {
     if (_backendGeneration != app.modelGeneration) {
       _backendGeneration = app.modelGeneration;
       chat.setBackend(
-        app.active == null ? null : LocalLlamaBackend(app.session),
+        app.active == null ? null : LocalLlamaBackend(app.session, extras: () => app.activeSettings.requestExtras),
         modelName: app.active == null ? '' : app.displayName(app.active!),
       );
     }

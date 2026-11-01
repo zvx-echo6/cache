@@ -46,6 +46,48 @@ enum RecommendationKind {
   }
 }
 
+/// Settings a recommended model may carry, applied when that model is loaded. Every field is optional: a missing one keeps what the
+/// app does for any model (the sampling the GGUF recommends with llama.cpp's defaults for the rest, 8192 tokens of context, no
+/// output cap, the template's own stop). Today the engine takes [temp] and [nCtx]; the others are carried for when it takes them.
+/// [fetchFirst] is reserved (false; not used in 1.0.29).
+class ModelSettings {
+  const ModelSettings({this.temp, this.topK, this.topP, this.minP, this.repeatPenalty, this.nCtx, this.maxTokens, this.stop = const [], this.fetchFirst = false});
+
+  final double? temp;
+  final int? topK;
+  final double? topP;
+  final double? minP;
+  final double? repeatPenalty;
+  final int? nCtx;
+  final int? maxTokens;
+  final List<String> stop;
+  final bool fetchFirst;
+
+  static const none = ModelSettings();
+
+  bool get isEmpty => temp == null && topK == null && topP == null && minP == null && repeatPenalty == null && nCtx == null && maxTokens == null && stop.isEmpty;
+
+  static ModelSettings fromJson(Object? j) {
+    if (j is! Map) return none;
+    double? d(String k) => j[k] is num ? (j[k] as num).toDouble() : null;
+    int? n(String k) => j[k] is int && (j[k] as int) > 0 ? j[k] as int : null;
+    return ModelSettings(
+      temp: d('temp'),
+      topK: n('top_k'),
+      topP: d('top_p'),
+      minP: d('min_p'),
+      repeatPenalty: d('repeat_penalty'),
+      nCtx: n('n_ctx'),
+      maxTokens: n('max_tokens'),
+      stop: [for (final s in (j['stop'] is List ? j['stop'] as List : const [])) if (s is String && s.isNotEmpty) s],
+      fetchFirst: j['fetch_first'] == true,
+    );
+  }
+
+  /// What a generation request carries for these settings (only what the engine takes: temperature).
+  Map<String, dynamic> get requestExtras => {if (temp != null) 'temperature': temp};
+}
+
 /// One recommended model file: on Hugging Face ([repo], [revision]), or at a direct address ([url]).
 class ModelRecommendation {
   const ModelRecommendation({
@@ -60,7 +102,11 @@ class ModelRecommendation {
     this.revision = 'main',
     this.section = RecommendationSection.recommended,
     this.licence,
+    this.settings = ModelSettings.none,
   });
+
+  /// The model's own settings (none: the app's usual ones).
+  final ModelSettings settings;
 
   /// The file's direct address (https), for a file not on Hugging Face; [repo] is then empty.
   final Uri? url;
@@ -116,6 +162,7 @@ class ModelRecommendation {
       revision: j['revision'] is String && (j['revision'] as String).isNotEmpty ? j['revision'] as String : 'main',
       section: section,
       licence: j['licence'] is String ? j['licence'] as String : null,
+      settings: ModelSettings.fromJson(j['settings']),
     );
   }
 }
@@ -125,7 +172,8 @@ class ModelRecommendation {
 /// ```json
 /// {"format": 2, "models": [{"name": "...", "repo": "owner/name", "revision": "commit", "file": "x.gguf", "size": 123,
 ///   "sha256": "... or null", "kind": "tuned_for_cache" | "works_not_tuned", "section": "recommended" | "experimental",
-///   "licence": "optional line", "note": "one line"},
+///   "licence": "optional line", "note": "one line", "settings": {"temp": 1.0, "top_k": 64, "top_p": 0.95, "min_p": 0.05,
+///   "repeat_penalty": 1.0, "n_ctx": 8192, "max_tokens": 2048, "stop": [], "fetch_first": false} (every setting optional)},
 ///   {"name": "...", "url": "https://...", "file": "x.gguf", "size": 123, "sha256": "required", ...}]}
 /// ```
 ///

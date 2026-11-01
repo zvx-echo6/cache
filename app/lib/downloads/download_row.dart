@@ -138,7 +138,7 @@ class DlMeter {
 
 /// The things a row can be told to do. A null callback leaves that control out.
 class DlActions {
-  const DlActions({this.download, this.pause, this.resume, this.remove, this.removeAsks = false, this.freeSpace, this.downloadLabel = 'Download'});
+  const DlActions({this.download, this.pause, this.resume, this.remove, this.removeAsks = false, this.freeSpace, this.downloadNow, this.downloadLabel = 'Download'});
 
   final VoidCallback? download;
   final VoidCallback? pause;
@@ -150,6 +150,9 @@ class DlActions {
   /// [remove] asks in its own words (deleting a region): the row does not ask again.
   final bool removeAsks;
   final VoidCallback? freeSpace;
+
+  /// Starts a download that waits for Wi-Fi on mobile data anyway (the person's "Download now").
+  final VoidCallback? downloadNow;
 
   /// "Download", or "Add" where a screen has always said that.
   final String downloadLabel;
@@ -261,6 +264,8 @@ Widget dlControl(BuildContext context, DlState s, DlActions a, {String keyBase =
         : a.resume == null
             ? const SizedBox.shrink()
             : TextButton(key: ValueKey('$keyBase-resume'), onPressed: a.resume, child: const Text('Resume')),
+    DlPhase.waiting when s.waitLine == 'Waiting for Wi-Fi' && a.downloadNow != null =>
+      TextButton(key: ValueKey('$keyBase-download-now'), onPressed: a.downloadNow, child: const Text('Download now')),
     DlPhase.waiting => a.remove == null
         ? const SizedBox.shrink()
         : TextButton(key: ValueKey('$keyBase-remove'), onPressed: () => removeDownload(context, s, a.remove!, asks: a.removeAsks), child: const Text('Remove')),
@@ -312,11 +317,14 @@ class DlStatus extends StatelessWidget {
         if (removable)
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton(
+            child: InkWell(
               key: ValueKey('$keyBase-remove'),
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 36), tapTargetSize: MaterialTapTargetSize.padded, textStyle: const TextStyle(fontSize: 13)),
-              onPressed: () => removeDownload(context, s, actions.remove!, asks: actions.removeAsks),
-              child: const Text('Remove'),
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => removeDownload(context, s, actions.remove!, asks: actions.removeAsks),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
+                child: Text('Remove', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.accent)),
+              ),
             ),
           ),
       ],
@@ -429,7 +437,7 @@ class DownloadRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+                      Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
                       if (subtitle != null && subtitle!.isNotEmpty)
                         Text(subtitle!, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
                       DlStatus(state: s, actions: actions, idle: idleLine, idleSpan: idleSpan, done: doneLine, idleColor: idleLineColor, keyBase: keyBase),

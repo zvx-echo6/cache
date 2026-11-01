@@ -782,6 +782,9 @@ class RegionsState extends ChangeNotifier {
   /// The core downloads places with regions (its config has a places address and it knows the places part).
   bool get placesAvailable => _core != null && status['places'] is Map;
 
+  /// The downloads wait for Wi-Fi: the phone is on mobile data and downloads may not use it.
+  bool get waitingForWifi => _core != null && !_networkOk && _kind == ConnectionKind.mobile;
+
   /// Why downloads are paused right now, in words for people, or null.
   String? get paused {
     if (_core == null) return null;

@@ -24,6 +24,7 @@ DlState regionDl(RegionsState regions, LocalRegion l) {
       return DlState(DlPhase.paused, done: done, total: total);
     case RegionPhase.paused:
       if (regions.held) return DlState(DlPhase.paused, done: done, total: total);
+      if (regions.waitingForWifi) return DlState(DlPhase.waiting, done: done, total: total, waitLine: 'Waiting for Wi-Fi');
       // Paused by the engine (no connection it may use, too little space): it goes on by itself, and says why.
       return DlState(DlPhase.failed, done: done, total: total, reason: DlReason.of(regions.paused), part: l.parts.where((p) => !p.complete).firstOrNull?.name);
     case RegionPhase.downloading:
@@ -44,33 +45,35 @@ DlState regionDl(RegionsState regions, LocalRegion l) {
 DlReason partReason(RegionPartStatus p) => p.noSpace ? DlReason.full : DlReason.of(p.problem);
 
 /// One part of a region on its page: the running part has its own line, bar and Pause; a part not started yet waits for the one
-/// running; a stopped or failed part offers Resume (or Free space); the others read as they always have.
-DlState partDl(RegionsState regions, LocalRegion l, RegionPartStatus p, {bool own = false}) {
-  final running = l.downloadingPart;
-  bool first() => own || identical(p, firstUnfinished(l));
+/// running (or for the first part not finished); a stopped or failed part offers Resume (or Free space). [parts] is the list [p] came
+/// from (the region reads its parts afresh each time, so they are compared by kind). [own]: a map layer of the region, which pauses
+/// and resumes as itself.
+DlState partDl(RegionsState regions, LocalRegion l, RegionPartStatus p, {bool own = false, List<RegionPartStatus>? parts}) {
+  final ps = parts ?? l.parts;
+  final running = ps.where((x) => x.state == PartState.downloading).firstOrNull;
+  final firstOpen = ps.where((x) => !x.complete).firstOrNull;
+  final first = own || firstOpen?.kind == p.kind;
   final total = p.totalBytes ?? 0;
   if (regions.pausing && !p.complete && p.state == PartState.downloading) return DlState(DlPhase.pausing, done: p.bytes, total: total);
-  if (regions.resuming && !p.complete && first()) return DlState(DlPhase.starting, done: p.bytes, total: total);
+  if (regions.resuming && !p.complete && first) return DlState(DlPhase.starting, done: p.bytes, total: total);
+  DlState waitFor(RegionPartStatus? other) => other == null || other.kind == p.kind
+      ? DlState(DlPhase.starting, done: p.bytes, total: total)
+      : DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: other.name);
   return switch (p.state) {
     PartState.ready || PartState.notAvailable => DlState(DlPhase.done, done: p.bytes, total: p.bytes),
     PartState.downloading => DlState(DlPhase.running, done: p.bytes, total: total, speed: DlMeter.speed('part:${l.id}:${p.kind.name}', p.bytes)),
-    PartState.waiting => running == null
-        ? DlState(DlPhase.starting, done: p.bytes, total: total)
-        : DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: running.name),
+    PartState.waiting => own ? DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: running?.name) : waitFor(running ?? firstOpen),
     PartState.failed => DlState(DlPhase.failed, done: p.bytes, total: total, reason: partReason(p)),
-    PartState.stopped => first()
-        ? DlState(DlPhase.paused, done: p.bytes, total: total)
-        : DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: firstUnfinished(l)?.name),
-    PartState.paused => !first()
-        ? DlState(DlPhase.waiting, done: p.bytes, total: total, waitingFor: firstUnfinished(l)?.name)
+    PartState.stopped => first ? DlState(DlPhase.paused, done: p.bytes, total: total) : waitFor(firstOpen),
+    PartState.paused => !first
+        ? waitFor(firstOpen)
         : regions.held
             ? DlState(DlPhase.paused, done: p.bytes, total: total)
-            : DlState(DlPhase.failed, done: p.bytes, total: total, reason: DlReason.of(regions.paused)),
+            : regions.waitingForWifi
+                ? DlState(DlPhase.waiting, done: p.bytes, total: total, waitLine: 'Waiting for Wi-Fi')
+                : DlState(DlPhase.failed, done: p.bytes, total: total, reason: DlReason.of(regions.paused)),
   };
 }
-
-/// The first part of [l] that is not complete (the one a Resume starts with).
-RegionPartStatus? firstUnfinished(LocalRegion l) => l.parts.where((p) => !p.complete).firstOrNull;
 
 /// What a region's controls do: Pause and Resume hold or carry on every region download; Resume on a failed region tries it again;
 /// Remove deletes the region (asking first); a full device opens Storage.

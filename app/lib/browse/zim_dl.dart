@@ -31,6 +31,7 @@ DlActions zimActions(BuildContext context, BrowseState b, CatalogEntry e, {VoidC
     pause: () => b.pause(e),
     resume: () => t?.phase == TransferPhase.paused ? b.resume(e) : b.download(e, replaces: t?.replaces),
     remove: () => b.cancel(e),
+    downloadNow: () => b.download(e, replaces: t?.replaces, allowMobile: true),
     freeSpace: openStorageForSpace == null ? null : () => openStorageForSpace!(context),
   );
 }
@@ -62,6 +63,7 @@ String _lower(String s) {
 /// What an add row's controls do: Pause and Resume while it downloads, Resume (Try again) after a failed download, Remove.
 DlActions addActions(LibrariesState s, AddTask t, {VoidCallback? downloadNow}) => DlActions(
       pause: t.step == AddStep.downloading ? s.pauseAdd : null,
-      resume: t.blockedByMobileData ? downloadNow : (t.again == null ? null : () => s.resumeAdd()),
+      resume: t.again == null ? null : () => s.resumeAdd(),
       remove: () => s.removeAdd(),
+      downloadNow: downloadNow,
     );

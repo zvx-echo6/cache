@@ -97,6 +97,15 @@ void main() {
       expect(r[0].hfFile.fileName, 'e2b-stock-cache-1.0-Q4_K_M.gguf');
     });
 
+    test('an entry may carry its own settings; the four listed carry none (the usual ones apply)', () {
+      final r = parseRecommendations(File('../docs/models-recommended.json').readAsStringSync())!;
+      expect(r.every((m) => m.settings.isEmpty && !m.settings.fetchFirst), isTrue);
+      expect(r.first.settings.requestExtras, isEmpty, reason: 'requests go out exactly as today');
+      final s = ModelSettings.fromJson({'temp': 1.0, 'top_k': 64, 'top_p': 0.95, 'min_p': 0.05, 'repeat_penalty': 1.0, 'n_ctx': 8192, 'max_tokens': 2048, 'stop': ['<x>'], 'fetch_first': true});
+      expect([s.temp, s.topK, s.topP, s.minP, s.repeatPenalty, s.nCtx, s.maxTokens, s.stop, s.fetchFirst], [1.0, 64, 0.95, 0.05, 1.0, 8192, 2048, ['<x>'], true]);
+      expect(s.requestExtras, {'temperature': 1.0});
+    });
+
     test('a direct entry needs https and its checksum; a format 1 file is still read', () {
       Map<String, Object?> direct(String url, {String? sha}) => {'name': 'd', 'url': url, 'file': 'd.gguf', 'size': 10, 'sha256': sha, 'kind': 'tuned_for_cache'};
       final r = parseRecommendations(jsonEncode({
@@ -175,7 +184,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pumpAndSettle();
     expect(d.started.map((f) => '${f.repo}/${f.path}'), ['acme/Small-GGUF/small-Q4_K_M.gguf']);
-    await tester.tap(find.byKey(const ValueKey('download-recommended-big-Q4_K_M.gguf')));
+    await tester.tap(find.byKey(const ValueKey('model-big-Q4_K_M.gguf-download')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pumpAndSettle();

@@ -22,6 +22,7 @@ DlState videoDl(DownloadTask t) {
 /// What a video row's controls do.
 DlActions videoActions(VideoState v, DownloadTask t) => DlActions(
       pause: () => v.pause(t),
-      resume: () => v.retry(t, anyway: t.blockedByMobile),
+      resume: () => v.retry(t),
       remove: () => v.remove(t),
+      downloadNow: () => v.retry(t, anyway: true),
     );

@@ -200,6 +200,14 @@ void main() {
     // Idaho: directions ready, places 40%, off-road waiting (the rig's start).
     final places = (o.core.regions['us-id']!['parts'] as Map)['places'] as Map<String, dynamic>;
     final done = places['done_bytes'] as int;
+    // The rig's Forest Service layer stopped part way: done here, so Idaho reads as downloading (places 40%).
+    final usfs = o.legacy['usfs']!;
+    final usfsTiles = usfs.doneTiles, usfsBytes = usfs.bytes;
+    usfs
+      ..phase = AreaPhase.done
+      ..interrupted = false
+      ..error = null
+      ..doneTiles = usfs.totalTiles;
     await tester.runAsync(o.regions.refresh);
     final l = o.regions.regionOf('us-id')!;
     final regionDone = l.parts.fold<int>(0, (s, p) => s + p.bytes);
@@ -235,9 +243,10 @@ void main() {
     await _show(tester, RegionPage(regions: o.regions, id: 'us-id'));
     await snap(tester, _out, '07-region-page-failed-places');
     // 9: an off-road layer of the region downloading, then paused.
-    final usfs = o.legacy['usfs']!;
     usfs
       ..phase = AreaPhase.running
+      ..doneTiles = usfsTiles
+      ..bytes = usfsBytes
       ..interrupted = false
       ..error = null;
     places
