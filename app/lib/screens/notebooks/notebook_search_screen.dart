@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart' show ReadingWidth;
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
 import '../../theme.dart';
@@ -79,8 +80,10 @@ class _NotebookSearchScreenState extends State<NotebookSearchScreen> {
           onSubmitted: _run,
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      // A desktop window keeps the results and their snippets to a reading width.
+      body: LayoutBuilder(
+        builder: (context, c) => ListView(
+        padding: ReadingWidth.padFor(context, c.maxWidth, style: const TextStyle(fontSize: 16)).copyWith(top: 8, bottom: 24),
         children: [
           if (_asked.trim().isNotEmpty && _hits.isEmpty)
             Padding(
@@ -108,6 +111,7 @@ class _NotebookSearchScreenState extends State<NotebookSearchScreen> {
               ),
           ],
         ],
+      ),
       ),
     );
   }

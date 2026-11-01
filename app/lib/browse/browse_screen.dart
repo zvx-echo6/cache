@@ -182,12 +182,24 @@ class _BrowseScreenState extends State<BrowseScreen> {
     delete: libs!.isGuide(l) ? null : () => libs!.remove(l),
   );
 
-  void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  /// Add to Library: in the detail pane on a desktop window (where it is the page Library opens on), else a page of its own.
+  void _add() {
+    final pane = _pane;
+    if (pane != null && pane.mounted && isDesktop(context)) {
+      openDetail(pane, key: _kAddKey, builder: (_) => AddToLibraryScreen(browse: b));
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  }
+
+  static const _kAddKey = 'add-to-library';
 
   @override
   Widget build(BuildContext context) => TwoPane(
     id: 'library',
     listName: 'Library',
+    // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
+    desktopInitial: widget.active ? (_) => AddToLibraryScreen(browse: b) : null,
     list: Builder(
       builder: (c) {
         _pane = c;
