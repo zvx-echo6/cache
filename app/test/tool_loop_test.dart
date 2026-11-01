@@ -117,6 +117,16 @@ void main() {
       expect(loop.results.keys, [1, 2, 3]);
     });
 
+    test('every request caps what it generates at the eval\'s 2048 tokens', () async {
+      final backend = FakeBackend([(_) => toolCall('x'), (_) => answer('Done.')]);
+      final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);
+      await loop.ask('x?').toList();
+      expect(backend.requests, hasLength(2));
+      for (final r in backend.requests) {
+        expect(r['max_tokens'], 2048);
+      }
+    });
+
     test('empty search gives No results and no sources', () async {
       final backend = FakeBackend([(_) => toolCall('x'), (_) => answer('Not in your sources.')]);
       final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);

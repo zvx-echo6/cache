@@ -156,6 +156,7 @@ class ToolLoop {
           ?extra,
         ],
         'enable_thinking': enableThinking,
+        'max_tokens': kMaxTokens,
         if (withTools) 'tools': _schemas,
       };
 
