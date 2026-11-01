@@ -92,11 +92,9 @@ fn a_library_index_never_travels() {
     until("the library and its index on B", 60, &a, &b, || {
         fb.join("lib1/shard/seg.bin").exists() && fb.join("lib1/index/meta.json").exists()
     });
-    a.close();
+    // B is updated (it excludes `*/index`); A is not yet. Only one restarts at a time: with no lookup service a device is found
+    // again only by one that still knows its address.
     b.close();
-
-    // B is updated (it excludes `*/index`); A is not yet.
-    let a = engine(&da, "Desk", pa, false);
     let b = engine(&db, "Phone", pb, true);
     write(&fa.join("lib1/index/meta.json"), "index of A, rebuilt");
     write(&fa.join("lib1/index/seg2"), "more of A's index");
