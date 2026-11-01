@@ -58,6 +58,10 @@ class IoAppFs implements AppFs {
       files.writeBytesAtomic(File(await _path(root, path)), bytes);
 
   @override
+  Future<void> writeString(AppRoot root, String path, String text) async =>
+      File(await _path(root, path)).writeAsStringSync(text);
+
+  @override
   Future<void> writeStringViaTmp(AppRoot root, String path, String text) async {
     final f = File(await _path(root, path));
     final tmp = File('${f.path}.tmp');

@@ -55,6 +55,9 @@ class WebAppFs implements AppFs {
   }
 
   @override
+  Future<void> writeString(AppRoot root, String path, String text) => writeStringAtomic(root, path, text);
+
+  @override
   Future<void> writeStringViaTmp(AppRoot root, String path, String text) => writeStringAtomic(root, path, text);
 
   @override

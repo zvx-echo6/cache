@@ -48,10 +48,45 @@ _fs!.writeStringAtomicSync(AppRoot.support, 'layout.json', text);    // or: awai
 
 Done in: `app_state.dart` (settings.json), `settings/app_settings.dart` (preferences.json), `layout/layout_state.dart` (layout.json),
 `browse/browse_state.dart` (browse.json), `maps/maps_state.dart` (maps.json), `location/location_service.dart` (location.json),
-`chat/answer_reports.dart` (reported_answers.json). A `_read` that was synchronous became `async` and is awaited in `init`.
+`chat/answer_reports.dart` (reported_answers.json), `layout/adaptive.dart` (panes.json, rail.json) and `update/update_ui.dart`
+(update_banner.json, whats_new.json). A `_read` that was synchronous became `async` and is awaited in `init`.
 
 Rules for new code: never call `getApplicationSupportDirectory` / `getApplicationDocumentsDirectory` or build a `File` for a file in
 those folders; use `AppFs`. Guard anything that needs a real folder (model files, ZIMs, downloads) with `plat.isWeb`.
+
+### The four small stores (`PanePrefs`, `RailPrefs`, `DismissedUpdate`, `WhatsNewSeen`)
+
+Each kept `dirOverride` and built a `File` in the support folder, then read with `existsSync` + `readAsStringSync` and wrote with
+`writeAsStringSync` (a plain write, no temp file). `AppFs.writeString` is that plain write (`File.writeAsStringSync` on a phone, so the
+bytes, file names and timing are unchanged; in a browser it is `writeStringAtomic`). Same file names, same folder.
+
+Before:
+
+```dart
+Future<File> _file() async => File('${(_dir ?? await getApplicationSupportDirectory()).path}/rail.json');
+...
+final f = await _file();
+if (!f.existsSync()) return false;
+final j = jsonDecode(f.readAsStringSync());
+...
+(await _file()).writeAsStringSync(jsonEncode({'hidden': hidden}));
+```
+
+After:
+
+```dart
+AppFs get _fs => createAppFs(supportOverride: _dir);   // PanePrefs: _dir ?? testDir
+...
+final text = await _fs.readString(AppRoot.support, 'rail.json');
+if (text == null) return false;
+final j = jsonDecode(text);
+...
+await _fs.writeString(AppRoot.support, 'rail.json', jsonEncode({'hidden': hidden}));
+```
+
+The same swap for `panes.json` (PanePrefs), `update_banner.json` (DismissedUpdate) and `whats_new.json` (WhatsNewSeen). Everything
+else in those files (UI, text, layout) is untouched. Verify in a browser: hide the rail / a pane list, dismiss the update banner,
+reload; each stays as left (the four files are in `<data>/app/support`).
 
 ## Verify
 
