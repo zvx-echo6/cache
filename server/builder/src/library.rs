@@ -94,12 +94,17 @@ pub fn live_packs(dir: &Path) -> Result<Vec<Pack>> {
     Ok(best.into_values().collect())
 }
 
-fn settings_json(o: &LibraryOptions) -> Value {
+/// The settings file of a library: the template with this library's id, title and version.
+pub fn library_settings(id: &str, title: &str, version: &str) -> Value {
     let mut s = cache_search::libadd::template_settings();
-    s["library_id"] = json!(o.id);
-    s["title"] = json!(o.title);
-    s["version"] = json!(o.version);
+    s["library_id"] = json!(id);
+    s["title"] = json!(title);
+    s["version"] = json!(version);
     s
+}
+
+fn settings_json(o: &LibraryOptions) -> Value {
+    library_settings(&o.id, &o.title, &o.version)
 }
 
 /// Build the library folder `out` (it must not exist, or be empty): `shard/` and `cache-library.json`.

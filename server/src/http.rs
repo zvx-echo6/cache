@@ -28,6 +28,8 @@
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
 //!   GET  /api/fetch?url=<encoded>           -> the answer of a catalogue host (allow-list in `fetch`), streamed, at most 50 MB
 //!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
+//!   /api/build/...                          -> building libraries from PDFs and the drop folder; the whole list is in server/BUILD-API.md
+//!                                              (libraries, books, upload, queue, drop folder)
 //!   GET  /api/models/embedder               -> {state:"missing"|"downloading"|"ready"|"error", bytes?,total?,error?, file,size,library_found}
 //!   POST /api/models/embedder/download      -> the same; starts (or continues) the model download, 202-style: answers at once
 //!   POST /api/embed {texts:[...]}           -> {vectors:[[f32;1024]],model,dims}: 1 to 64 texts, in order; 503 model_missing while the
@@ -52,6 +54,7 @@ use crate::pages;
 use crate::helper::Helper;
 use crate::webfiles::{self, Resolved};
 use crate::embed::{self, EmbedService};
+use crate::libbuild::BuildService;
 use crate::library::{ApiErr, Library};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, Limited};
@@ -82,6 +85,8 @@ pub struct App {
     pub library: Arc<Library>,
     /// The bge-m3 embedder: the model download and the vectors (see `embed`).
     pub embed: Arc<EmbedService>,
+    /// Building libraries from PDFs, and the drop folder (see `build`).
+    pub build: Arc<BuildService>,
 }
 
 pub struct Reply {
@@ -184,6 +189,89 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
     })
 }
 
+/// Where a streamed build upload goes: `/api/build/upload` (the library is the `library_id` query parameter) or
+/// `/api/build/libraries/{id}/books/{doc}/replace`. `None` for any other path.
+fn build_upload_target(path: &str) -> Option<(String, Option<String>)> {
+    if path == "/api/build/upload" {
+        return Some((String::new(), None));
+    }
+    let rest = path.strip_prefix("/api/build/libraries/")?;
+    let seg: Vec<&str> = rest.split('/').collect();
+    match seg.as_slice() {
+        [id, "books", doc, "replace"] => Some((id.to_string(), Some(doc.to_string()))),
+        _ => None,
+    }
+}
+
+/// Run blocking work (files, the core) off the async threads.
+async fn blocking<F>(f: F) -> Reply
+where
+    F: FnOnce() -> Result<Value, ApiErr> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => library_reply(r),
+        Err(_) => Reply::error(500, "server_error", "an internal error stopped the request"),
+    }
+}
+
+/// `/api/build/...` (the caller has checked the session). `None` when the path is not one of these.
+async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
+    let rest = path.strip_prefix("/api/build/")?;
+    let b = app.build.clone();
+    let seg: Vec<&str> = rest.split('/').collect();
+    let body_owned = body.to_vec();
+    Some(match (method, seg.as_slice()) {
+        ("GET", ["libraries"]) => ok(b.libraries()),
+        ("POST", ["libraries"]) => blocking(move || b.create_library(&body_owned)).await,
+        ("PATCH", ["libraries", id]) => {
+            let id = id.to_string();
+            blocking(move || b.rename_library(&id, &body_owned)).await
+        }
+        ("DELETE", ["libraries", id]) => {
+            let id = id.to_string();
+            blocking(move || b.delete_library(&id)).await
+        }
+        ("GET", ["libraries", id, "books"]) => library_reply(b.books(id)),
+        ("PATCH", ["libraries", id, "books", doc]) => {
+            let (id, doc) = (id.to_string(), doc.to_string());
+            blocking(move || b.rename_book(&id, &doc, &body_owned)).await
+        }
+        ("DELETE", ["libraries", id, "books", doc]) => {
+            let (id, doc) = (id.to_string(), doc.to_string());
+            blocking(move || b.delete_book(&id, &doc)).await
+        }
+        // Uploads: the real server streams them (see `handle`); a body that came whole is handled the same way.
+        ("POST", _) if build_upload_target(path).is_some() => {
+            let (lib, replace) = build_upload_target(path)?;
+            let full = Full::new(Bytes::copy_from_slice(body));
+            library_reply(b.upload(&lib, replace.as_deref(), query, Some(body.len() as u64), full).await)
+        }
+        ("GET", ["queue"]) => ok(b.queue()),
+        ("POST", ["queue", "pause"]) => ok(b.pause()),
+        ("POST", ["queue", "resume"]) => ok(b.resume()),
+        ("POST", ["queue", "stop"]) => {
+            let b2 = b.clone();
+            match tokio::task::spawn_blocking(move || b2.stop()).await {
+                Ok(v) => ok(v),
+                Err(_) => Reply::error(500, "server_error", "an internal error stopped the request"),
+            }
+        }
+        ("POST", ["queue", id, "retry"]) => {
+            let id = id.to_string();
+            blocking(move || b.retry(&id)).await
+        }
+        ("DELETE", ["queue", id]) => {
+            let id = id.to_string();
+            blocking(move || b.dismiss(&id)).await
+        }
+        ("GET", ["drop"]) => blocking(move || Ok(b.drop_view())).await,
+        ("PUT", ["drop"]) => blocking(move || b.drop_put(&body_owned)).await,
+        ("POST", ["drop", "check"]) => blocking(move || Ok(b.drop_check())).await,
+        ("POST", ["drop", "retry"]) => blocking(move || b.drop_retry(&body_owned)).await,
+        _ => return None,
+    })
+}
+
 /// `/api/models/embedder...` and `/api/embed` (the caller has checked the session). `None` when the path is not one of these.
 async fn embedder(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
     let svc = &app.embed;
@@ -213,6 +301,9 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
         return r;
     }
     if let Some(r) = embedder(app, method, path, body).await {
+        return r;
+    }
+    if let Some(r) = build_api(app, method, path, query, body).await {
         return r;
     }
     if let Some(r) = library(app, method, path, query, body).await {
@@ -622,6 +713,11 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody>
         let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
         let query = req.uri().query().unwrap_or("").to_string();
         library_reply(app.library.upload(&query, len, req.into_body()).await)
+    } else if let (true, "POST", Some((lib, replace))) = (signed_in, method.as_str(), build_upload_target(&path)) {
+        // A PDF upload is streamed to disk the same way.
+        let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+        let query = req.uri().query().unwrap_or("").to_string();
+        library_reply(app.build.upload(&lib, replace.as_deref(), &query, len, req.into_body()).await)
     } else {
         match Limited::new(req.into_body(), limit).collect().await {
             Ok(b) => route(&app, &method, &target, cookie.as_deref(), &b.to_bytes()).await,
@@ -672,9 +768,16 @@ mod tests {
         EmbedService::with_spec(dir.0.clone(), dir.0.join("none.so"), crate::embed::ModelSpec { url: "http://127.0.0.1:1/none".into(), ..crate::embed::ModelSpec::bge_m3() })
     }
 
+    /// An app with the fake embedder in the build service (nothing is downloaded and the build thread is not started).
+    fn test_app(dir: &TempDir, auth: Arc<Auth>, web: PathBuf) -> App {
+        let library = Library::new(dir.0.clone(), None);
+        let build = BuildService::new(dir.0.clone(), library.clone(), crate::libbuild::tests::FakeEmbed::new(true), crate::libbuild::BuildConfig::default());
+        App { auth, helper: None, web, library, embed: test_embed(dir), build }
+    }
+
     fn app(dir: &TempDir) -> App {
         let auth = Auth::new(None, Sessions::load(&dir.0.join("sessions.json")), true);
-        App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None), embed: test_embed(dir) }
+        test_app(dir, Arc::new(auth), dir.0.join("web"))
     }
 
     #[tokio::test]
@@ -726,7 +829,7 @@ mod tests {
         std::fs::write(dir.0.join("web/index.html"), b"the app").unwrap();
         std::fs::write(dir.0.join("web/main.dart.js"), b"js").unwrap();
         std::fs::write(dir.0.join("secret.txt"), b"no").unwrap();
-        App { auth: Arc::new(Auth::load(&dir.0, true).unwrap()), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None), embed: test_embed(dir) }
+        test_app(dir, Arc::new(Auth::load(&dir.0, true).unwrap()), dir.0.join("web"))
     }
 
     fn set_cookies(r: &Reply) -> Vec<String> {
@@ -1183,5 +1286,110 @@ mod tests {
         ] {
             assert_eq!(effective_mime(mime, entry), want, "{mime:?} {entry}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_build_routes_need_a_session() {
+        let d = TempDir::new("route-build-auth");
+        let a = file_app(&d);
+        for (m, p) in [
+            ("GET", "/api/build/libraries"),
+            ("POST", "/api/build/libraries"),
+            ("PATCH", "/api/build/libraries/x"),
+            ("DELETE", "/api/build/libraries/x"),
+            ("GET", "/api/build/libraries/x/books"),
+            ("POST", "/api/build/upload?library_id=x&name=a.pdf"),
+            ("GET", "/api/build/queue"),
+            ("POST", "/api/build/queue/pause"),
+            ("POST", "/api/build/queue/stop"),
+            ("GET", "/api/build/drop"),
+            ("PUT", "/api/build/drop"),
+            ("POST", "/api/build/drop/check"),
+        ] {
+            let r = route(&a, m, p, None, b"{}").await;
+            assert_eq!(r.status, 401, "{m} {p}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_build_api_makes_libraries_queues_books_and_runs_the_drop_folder() {
+        use crate::libbuild::testpdf::book;
+        let d = TempDir::new("route-build");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        // libraries
+        assert_eq!(json_call(&a, "POST", "/api/build/libraries", &c, "nope").await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/build/libraries", &c, "{}").await.0, 400);
+        let (s, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"Wells"}"#).await;
+        assert_eq!((s, v["ok"].clone()), (200, json!(true)));
+        let lib = v["result"]["id"].as_str().unwrap().to_string();
+        assert_eq!(v["result"]["books"], json!(0));
+        let (s, v) = json_call(&a, "POST", "/api/build/libraries", &c, r#"{"title":"wells"}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (409, json!("name_taken")));
+        let (_, v) = json_call(&a, "PATCH", &format!("/api/build/libraries/{lib}"), &c, r#"{"title":"Water wells"}"#).await;
+        assert_eq!(v["result"]["title"], json!("Water wells"));
+        assert_eq!(json_call(&a, "PATCH", "/api/build/libraries/nope", &c, r#"{"title":"x"}"#).await.0, 404);
+        // an upload is queued; a non-PDF and an unknown library are refused
+        let pdf = book("well", 3, Some("Well book"));
+        let up = format!("/api/build/upload?library_id={lib}&name=well.pdf");
+        let r = route(&a, "POST", &up, Some(&c), &pdf).await;
+        assert_eq!(r.status, 200, "{}", body_str(&r));
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        let item = v["result"]["id"].as_str().unwrap().to_string();
+        assert_eq!((v["result"]["state"].clone(), v["result"]["position"].clone()), (json!("queued"), json!(1)));
+        assert_eq!(route(&a, "POST", &format!("/api/build/upload?library_id={lib}&name=a.pdf"), Some(&c), b"plain text").await.status, 400);
+        assert_eq!(route(&a, "POST", "/api/build/upload?library_id=nope&name=a.pdf", Some(&c), &pdf).await.status, 404);
+        // the queue, pause and resume
+        let (_, q) = json_call(&a, "GET", "/api/build/queue", &c, "").await;
+        assert_eq!((q["result"]["counts"]["waiting"].clone(), q["result"]["items"][0]["file_name"].clone()), (json!(1), json!("well.pdf")));
+        assert_eq!(json_call(&a, "POST", "/api/build/queue/pause", &c, "").await.1["result"]["paused"], json!(true));
+        assert_eq!(json_call(&a, "POST", "/api/build/queue/resume", &c, "").await.1["result"]["paused"], json!(false));
+        assert_eq!(json_call(&a, "POST", &format!("/api/build/queue/{item}/retry"), &c, "").await.0, 409);
+        assert_eq!(json_call(&a, "POST", "/api/build/queue/nope/retry", &c, "").await.0, 404);
+        // build it (the service's thread is not started in tests), then the books
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        let (_, q) = json_call(&a, "GET", "/api/build/queue", &c, "").await;
+        assert_eq!(q["result"]["items"][0]["state"], json!("done"));
+        let (_, l) = json_call(&a, "GET", "/api/build/libraries", &c, "").await;
+        assert_eq!((l["result"][0]["books"].clone(), l["result"][0]["published"].clone()), (json!(1), json!(true)));
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        let doc = b["result"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(b["result"][0]["title"], json!("Well book"));
+        let (_, v) = json_call(&a, "PATCH", &format!("/api/build/libraries/{lib}/books/{doc}"), &c, r#"{"title":"Wells, 2nd"}"#).await;
+        assert_eq!(v["result"]["title"], json!("Wells, 2nd"));
+        // a new edition goes through the replace upload
+        let v2 = book("pump", 4, None);
+        let r = route(&a, "POST", &format!("/api/build/libraries/{lib}/books/{doc}/replace?name=well%20v2.pdf"), Some(&c), &v2).await;
+        assert_eq!(r.status, 200, "{}", body_str(&r));
+        assert_eq!(serde_json::from_slice::<Value>(&r.body).unwrap()["result"]["replace"], json!(doc));
+        assert_eq!(route(&a, "POST", &format!("/api/build/libraries/{lib}/books/nope/replace?name=x.pdf"), Some(&c), &v2).await.status, 404);
+        assert!(matches!(a.build.run_one(), crate::libbuild::Run::Ran));
+        let (_, b) = json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books"), &c, "").await;
+        assert_eq!((b["result"][0]["doc_version"].clone(), b["result"][0]["title"].clone()), (json!(2), json!("Wells, 2nd")));
+        // stop takes the waiting books off the list
+        let _ = route(&a, "POST", &up, Some(&c), &book("river", 2, None)).await;
+        let (_, v) = json_call(&a, "POST", "/api/build/queue/stop", &c, "").await;
+        assert_eq!(v["result"]["removed"], json!(1));
+        // the drop folder
+        let (_, dv) = json_call(&a, "GET", "/api/build/drop", &c, "").await;
+        assert_eq!((dv["result"]["settings"]["enabled"].clone(), dv["result"]["status"]["state"].clone()), (json!(false), json!("off")));
+        let folder = d.0.join("dropped");
+        let body = json!({"folder": folder.to_string_lossy(), "enabled": true, "library_id": lib}).to_string();
+        let (s, dv) = json_call(&a, "PUT", "/api/build/drop", &c, &body).await;
+        assert_eq!((s, dv["result"]["settings"]["library_title"].clone()), (200, json!("Water wells")));
+        assert_eq!(json_call(&a, "PUT", "/api/build/drop", &c, r#"{"folder":"relative"}"#).await.0, 400);
+        std::fs::write(folder.join("ingest/notes.txt"), b"x").unwrap();
+        // the file has to settle (30 s) before it is taken: the first check only notices it
+        let (_, dv) = json_call(&a, "POST", "/api/build/drop/check", &c, "").await;
+        assert_eq!(dv["result"]["status"]["state"], json!("ok"));
+        assert!(dv["result"]["status"]["last_check"].is_string());
+        assert_eq!(dv["result"]["files"][0]["state"], json!("new"));
+        assert_eq!(json_call(&a, "POST", "/api/build/drop/retry", &c, r#"{"name":"missing.pdf"}"#).await.0, 409);
+        // the library goes
+        assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}/books/{doc}"), &c, "").await.0, 200);
+        assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}"), &c, "").await.0, 200);
+        assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}"), &c, "").await.0, 404);
+        // unknown build endpoints are 404 like the rest
+        assert_eq!(json_call(&a, "GET", "/api/build/nope", &c, "").await.0, 404);
     }
 }

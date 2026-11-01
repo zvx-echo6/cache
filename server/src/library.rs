@@ -99,7 +99,7 @@ struct Job {
 }
 
 /// Now as RFC 3339 UTC, to the second (`2026-11-01T03:12:09Z`).
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     rfc3339_of(secs)
 }
@@ -248,7 +248,7 @@ fn sha256_file(path: &Path, cancel: &AtomicBool) -> Result<String, JobErr> {
     Ok(hex(ctx.finish().as_ref()))
 }
 
-fn random_hex() -> String {
+pub(crate) fn random_hex() -> String {
     let mut b = [0u8; 8];
     // The system random source does not fail on any platform this runs on.
     let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut b);
@@ -361,6 +361,11 @@ impl Library {
         });
         lib.ensure_worker();
         lib
+    }
+
+    /// Whether there is a helper to tell about library changes (none in some tests).
+    pub(crate) fn has_helper(&self) -> bool {
+        self.helper.is_some()
     }
 
     // ---- paths

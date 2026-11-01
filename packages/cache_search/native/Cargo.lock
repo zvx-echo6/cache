@@ -966,6 +966,8 @@ name = "cache_server"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "blake3",
+ "cache_builder",
  "cache_embed",
  "http-body-util",
  "hyper",
