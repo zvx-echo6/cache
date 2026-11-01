@@ -175,7 +175,7 @@ class ModelDownloads extends ChangeNotifier {
       (app.searchModel?.fileName == f.fileName && app.searchModel?.size == f.size);
 
   /// Downloads [f], continuing a partly downloaded file. While another download runs, [f] waits its turn in the queue (its row says
-  /// "Waiting for <the running one> to finish"). A chat model brings the search model after it when that is missing; it starts once
+  /// "Waiting for (the running one) to finish"). A chat model brings the search model after it when that is missing; it starts once
   /// the chat model has finished.
   Future<void> start(HfFile f, {bool anyway = false}) async {
     if (app.modelsDir == null) return;

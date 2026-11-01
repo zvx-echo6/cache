@@ -53,7 +53,7 @@ class DlState {
   /// What a waiting download waits for: "Idaho map", "Gemma 4 E2B".
   final String? waitingFor;
 
-  /// A waiting line that is not "Waiting for <name> to finish" ("Waiting for Wi-Fi").
+  /// A waiting line that is not "Waiting for (name) to finish" ("Waiting for Wi-Fi").
   final String? waitLine;
 
   /// For a region: the part a stop is about ("Places").
@@ -375,7 +375,7 @@ class DownloadRow extends StatelessWidget {
   final InlineSpan? idleSpan;
   final Color? idleLineColor;
 
-  /// The line when done; "On this device · <size>" when null.
+  /// The line when done; "On this device · (size)" when null.
   final String? doneLine;
 
   /// Extra lines under the status while idle or done (a model's kind).

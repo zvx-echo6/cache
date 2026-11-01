@@ -180,7 +180,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     } else if (waiting) {
       trailing = RowBadge('Waiting for Wi-Fi', color: k.warning);
     } else if (downloading) {
-      trailing = dlControl(context, dl!, regionActions(context, r, l!), keyBase: 'region-${rec.id}');
+      trailing = dlControl(context, dl, regionDlActions(context, r, l!), keyBase: 'region-${rec.id}');
     } else {
       trailing = switch (o.kind) {
         RegionOfferKind.carryOn || RegionOfferKind.tryAgain => RowButton(
@@ -242,7 +242,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                       Text(rec.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: k.text)),
                       const SizedBox(height: 2),
                       if (downloading)
-                        DlStatus(state: dl!, actions: regionActions(context, r, l!), keyBase: 'region-${rec.id}')
+                        DlStatus(state: dl, actions: regionDlActions(context, r, l!), keyBase: 'region-${rec.id}')
                       else
                         Text(line, key: ValueKey('region-line-${rec.id}'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
                     ],

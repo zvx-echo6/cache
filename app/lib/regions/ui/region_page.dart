@@ -67,7 +67,7 @@ class RegionRow extends StatelessWidget {
       keyBase: 'local-${l.id}',
       title: l.name,
       state: s,
-      actions: regionActions(context, regions, l),
+      actions: regionDlActions(context, regions, l),
       selected: isPaneSelected(context, 'region-${l.id}'),
       doneLine: regionDoneLine(l, placesNote: kPlacesNotAvailableShort),
       doneAction: Icon(Icons.chevron_right, color: context.t.secondary),
@@ -347,7 +347,7 @@ class _PartRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final k = context.t;
     final s = partDl(regions, region, part, own: own);
-    final a = regionActions(context, regions, region);
+    final a = regionDlActions(context, regions, region);
     final key = 'part-${part.kind.name}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),

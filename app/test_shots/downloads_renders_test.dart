@@ -1,7 +1,6 @@
 // The 1.0.29 download pattern (UX-downloads-29) for the owner to approve, drawn by the app's own widgets with sample data.
 // flutter test test_shots/downloads_renders_test.dart --update-goldens  (pictures in test_shots/downloads/)
 
-import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';

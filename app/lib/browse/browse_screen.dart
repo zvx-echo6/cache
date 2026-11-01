@@ -9,7 +9,6 @@ import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' as modules show addToHome;
 import '../screens/hold.dart';
-import '../screens/libraries_screen.dart';
 import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';

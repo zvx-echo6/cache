@@ -74,7 +74,7 @@ RegionPartStatus? firstUnfinished(LocalRegion l) => l.parts.where((p) => !p.comp
 
 /// What a region's controls do: Pause and Resume hold or carry on every region download; Resume on a failed region tries it again;
 /// Remove deletes the region (asking first); a full device opens Storage.
-DlActions regionActions(BuildContext context, RegionsState regions, LocalRegion l) {
+DlActions regionDlActions(BuildContext context, RegionsState regions, LocalRegion l) {
   final m = ScaffoldMessenger.of(context);
   return DlActions(
     pause: () => regions.pauseAll(),

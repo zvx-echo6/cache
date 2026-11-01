@@ -4,6 +4,7 @@ import '../downloads/download_row.dart';
 import '../screens/download_confirm.dart' show openStorageForSpace;
 import '../sources/libraries_state.dart';
 import 'browse_state.dart';
+import 'opds.dart';
 
 /// A ZIM download (a library from the catalogue, Wikipedia) as its row shows it.
 DlState zimDl(ZimTransfer? t, {int size = 0}) {

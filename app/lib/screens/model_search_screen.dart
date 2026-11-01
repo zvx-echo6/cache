@@ -205,8 +205,6 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
     );
   }
 
-  Future<void> _download(HfFile f) => downloadModel(context, widget.downloads, f);
-
   @override
   Widget build(BuildContext context) {
     final k = context.t;

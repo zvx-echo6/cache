@@ -347,7 +347,7 @@ class EntryTile extends StatelessWidget {
     final newer = installed != null && installedRelease != null && installedRelease.compareTo(entry.release) < 0;
     final s = zimDl(transfer, size: entry.size);
     // An entry on its way is in the download pattern; one on this device, or not yet downloaded, keeps its own badge and button.
-    final Widget? idleAction = installed != null && !newer
+    final Widget idleAction = installed != null && !newer
         ? RowBadge('On this device', color: k.ok)
         : IconButton(
             key: ValueKey('download-${entry.id}'),

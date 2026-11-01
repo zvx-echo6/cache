@@ -1,4 +1,4 @@
-/// Gemma 4's tool call markers. A call the model writes as text instead of a parsed call ("<|tool_call>call:search{...}<tool_call|>")
+/// Gemma 4's tool call markers. A call the model writes as text instead of a parsed call (`<|tool_call>call:search{...}<tool_call|>`)
 /// must never reach the person: the answer they read has every span from an opening marker through the next closing marker taken
 /// out, and an opening marker with no closing one takes the rest of the text with it. The conversation keeps exactly what the model
 /// wrote; only the shown text is stripped.
