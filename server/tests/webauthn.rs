@@ -136,7 +136,10 @@ fn rig(tag: &str, origin: Option<&str>) -> Rig {
     file.save(&dir.0.join("auth.json")).unwrap();
     let wa = build_webauthn(origin).unwrap();
     let auth = Auth::load(&dir.0, true).unwrap().with_webauthn(wa);
-    Rig { app: App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None), embed: cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so")) }, dir }
+    let library = Library::new(dir.0.clone(), None);
+    let embed = cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so"));
+    let build = cache_server::libbuild::BuildService::new(dir.0.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
+    Rig { app: App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library, embed, build }, dir }
 }
 
 fn cookie(r: &Reply, name: &str) -> String {

@@ -87,7 +87,9 @@ async fn an_upload_over_a_real_connection_is_not_held_to_the_ordinary_body_limit
     let dir = Dir::new("conn");
     let auth = Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&dir.0.join("sessions.json")), false);
     let library = Library::with_options(dir.0.clone(), None, LibraryOptions { free_bytes: Some(Arc::new(|_| Some(1 << 50))), ..LibraryOptions::default() });
-    let app = Arc::new(App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library, embed: cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so")) });
+    let embed = cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so"));
+    let build = cache_server::libbuild::BuildService::new(dir.0.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
+    let app = Arc::new(App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library, embed, build });
     let r = route(&app, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
     let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.split(';').next().unwrap().to_string();
 

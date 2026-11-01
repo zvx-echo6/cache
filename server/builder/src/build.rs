@@ -43,10 +43,25 @@ pub struct Report {
     pub heading_count: usize,
 }
 
-const EMBED_BATCH: usize = 32;
+/// Pieces embedded per call (the server's build service batches the same way).
+const EMBED_BATCH: usize = 16;
+
+/// Where a build has got to, for callers that show progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    /// The PDF has been read and cut into pieces (sent before any embedding, and also when there are no pieces to embed).
+    Extracted { pages: usize, pieces: usize, ocr_pages: usize },
+    /// `done` of `total` pieces have vectors.
+    Embedded { done: usize, total: usize },
+}
 
 /// Build the pack for one PDF.
 pub fn build_pack(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder) -> Result<(Pack, Report)> {
+    build_pack_with(pdf, opts, embedder, &mut |_| {})
+}
+
+/// [`build_pack`] that tells `on` how far it has got.
+pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder, on: &mut dyn FnMut(Progress)) -> Result<(Pack, Report)> {
     let hash = blake3::hash(pdf).to_hex().to_string();
     let doc_id = opts.doc_id.clone().unwrap_or_else(|| hash.clone());
     if !valid_doc_id(&doc_id) {
@@ -59,6 +74,7 @@ pub fn build_pack(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder) -> R
     let lay = layout(&ext);
     let pieces = chunk(&lay.elements);
     let ocr_pages: Vec<usize> = lay.ocr_pages.iter().map(|i| i + 1).collect();
+    on(Progress::Extracted { pages: ext.pages.len(), pieces: pieces.len(), ocr_pages: ocr_pages.len() });
     if pieces.is_empty() {
         return Err(Error::new(if ocr_pages.is_empty() {
             "no text found in the PDF".to_string()
@@ -74,6 +90,7 @@ pub fn build_pack(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder) -> R
             return Err(Error::new("the embedder returned a different number of vectors than texts"));
         }
         vectors.extend(v);
+        on(Progress::Embedded { done: vectors.len(), total: texts.len() });
     }
     let dims = vectors[0].len();
     if dims == 0 || vectors.iter().any(|v| v.len() != dims) {

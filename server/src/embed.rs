@@ -291,6 +291,18 @@ impl EmbedService {
         Ok(out)
     }
 
+    /// Whether vectors can be made now: Ok, or why not (a missing model also starts its download). The library builder waits on this.
+    pub fn ready_reason(self: &Arc<Self>) -> Result<(), String> {
+        if !self.model_present() {
+            self.start_download();
+            return Err("waiting for the search model".to_string());
+        }
+        if !self.lib.is_file() {
+            return Err("the search model's library is not installed on this device".to_string());
+        }
+        Ok(())
+    }
+
     /// The model id a vector carries (equals a library's `embedding.model`).
     pub fn model_id(&self) -> &str {
         &self.spec.file_name

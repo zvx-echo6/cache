@@ -6,12 +6,13 @@ pub mod chunk;
 pub mod embed;
 pub mod error;
 pub mod extract;
+pub mod incremental;
 pub mod layout;
 pub mod library;
 pub mod pack;
 pub mod text;
 
-pub use build::{build_pack, BuildOptions, Report};
+pub use build::{build_pack, build_pack_with, BuildOptions, Progress, Report};
 pub use embed::{Embedder, FakeEmbedder};
 pub use error::{Error, Result};
 pub use library::{build_library, check_library_dir, LibraryOptions};
