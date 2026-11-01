@@ -7,6 +7,7 @@ import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
+import '../web/desktop_layout.dart';
 import 'browse_state.dart';
 import 'library_actions.dart';
 import 'opds.dart';
@@ -125,81 +126,12 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
       body: ListenableBuilder(
         listenable: b,
         builder: (context, _) {
+          // The desktop layout (a browser, 1280 wide and up): adding things on the left, the catalogue on the right.
+          if (b.device != null && WidthClass.of(context) == WidthClass.desktop) return _desktop(context, k);
           return Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _search,
-                        textInputAction: TextInputAction.search,
-                        decoration: InputDecoration(
-                          hintText: 'Search the catalogue',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: _search.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  icon: const Icon(Icons.close),
-                                  onPressed: () {
-                                    _search.clear();
-                                    b.setFilter(query: '');
-                                  },
-                                ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(28),
-                            borderSide: BorderSide.none,
-                          ),
-                          filled: true,
-                          fillColor: k.surface,
-                        ),
-                        onChanged: (v) {
-                          setState(() {});
-                          _debounce?.cancel();
-                          _debounce = Timer(
-                            const Duration(milliseconds: 400),
-                            () => b.setFilter(query: v),
-                          );
-                        },
-                        onSubmitted: (v) => b.setFilter(query: v),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ActionChip(
-                      avatar: const Icon(Icons.language, size: 18),
-                      label: Text(_languageName()),
-                      onPressed: _pickLanguage,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                height: 48,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  children: [
-                    _chip(
-                      'All',
-                      b.category == null && b.tag == null,
-                      () => b.setFilter(clearCategory: true, clearTag: true),
-                    ),
-                    for (final c in b.categories)
-                      _chip(
-                        c.label,
-                        b.category == c.id,
-                        () => b.setFilter(category: c.id, clearTag: true),
-                      ),
-                    for (final t in _topics)
-                      _chip(
-                        t.label,
-                        b.tag == t.tag,
-                        () => b.setFilter(tag: t.tag, clearCategory: true),
-                      ),
-                  ],
-                ),
-              ),
+              _searchRow(k),
+              _chipsRow(),
               Expanded(child: _list(context, k)),
             ],
           );
@@ -207,6 +139,83 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
       ),
     );
   }
+
+  Widget _searchRow(CacheTokens k) =>
+    Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _search,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: 'Search the catalogue',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _search.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          _search.clear();
+                          b.setFilter(query: '');
+                        },
+                      ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: k.surface,
+              ),
+              onChanged: (v) {
+                setState(() {});
+                _debounce?.cancel();
+                _debounce = Timer(
+                  const Duration(milliseconds: 400),
+                  () => b.setFilter(query: v),
+                );
+              },
+              onSubmitted: (v) => b.setFilter(query: v),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ActionChip(
+            avatar: const Icon(Icons.language, size: 18),
+            label: Text(_languageName()),
+            onPressed: _pickLanguage,
+          ),
+        ],
+      ),
+    );
+
+  Widget _chipsRow() =>
+    SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          _chip(
+            'All',
+            b.category == null && b.tag == null,
+            () => b.setFilter(clearCategory: true, clearTag: true),
+          ),
+          for (final c in b.categories)
+            _chip(
+              c.label,
+              b.category == c.id,
+              () => b.setFilter(category: c.id, clearTag: true),
+            ),
+          for (final t in _topics)
+            _chip(
+              t.label,
+              b.tag == t.tag,
+              () => b.setFilter(tag: t.tag, clearCategory: true),
+            ),
+        ],
+      ),
+    );
 
   Widget _chip(String label, bool selected, VoidCallback onTap) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
@@ -218,7 +227,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   );
 
   /// "Your own library", and the label over Kiwix's collections.
-  List<Widget> _head(CacheTokens k) {
+  List<Widget> _head(CacheTokens k, {bool catalogueLabel = true}) {
     final libraries = b.libraries;
     return [
       // In a browser the first section is the computer the browser is on.
@@ -260,8 +269,53 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
       ],
       // In a browser, building a library from PDFs and the drop folder.
       if (b.device != null) ...buildAddRows(context, b.device!),
-      const GroupLabel('Ready-made collections · free from Kiwix'),
+      if (catalogueLabel) const GroupLabel('Ready-made collections · free from Kiwix'),
     ];
+  }
+
+  /// The desktop layout (a browser, 1280 wide and up): what you add on the left (from this computer, your own, the drop folder), Kiwix's
+  /// ready-made collections on the right as a grid of two.
+  Widget _desktop(BuildContext context, CacheTokens k) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final left = (c.maxWidth * 0.36).clamp(380.0, 560.0);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: left, child: ListView(padding: const EdgeInsets.only(top: 4, bottom: 24), children: _head(k, catalogueLabel: false))),
+              const SizedBox(width: 28),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const GroupLabel('Ready-made collections · free from Kiwix'),
+                    _searchRow(k),
+                    _chipsRow(),
+                    Expanded(child: _grid(context, k)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// The catalogue as a grid of two columns.
+  Widget _grid(BuildContext context, CacheTokens k) {
+    if (b.entries.isEmpty) {
+      return ListView(children: [if (b.loading) const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())) else _nothing(k)]);
+    }
+    return GridView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 24),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisExtent: 64, crossAxisSpacing: 8),
+      itemCount: b.entries.length,
+      itemBuilder: (context, i) => EntryTile(browse: b, entry: b.entries[i]),
+    );
   }
 
   Widget _list(BuildContext context, CacheTokens k) {

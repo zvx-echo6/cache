@@ -521,7 +521,7 @@ void main() {
       expect(find.text('Working · building passages 212 of 480'), findsOneWidget);
       expect(find.text('Queued'), findsOneWidget);
       expect(find.text('Library file'), findsWidgets);
-      expect(find.text('Not a file Cache can use'), findsOneWidget);
+      expect(find.text('Not a file Cache can use. Note: backup-2026-10.tar.why.txt'), findsOneWidget);
       expect(find.byKey(const ValueKey('drop-retry-backup-2026-10.tar')), findsNothing);
       expect(find.textContaining('Duplicate: the same content is already in Wilderness Medicine Handbook, 7th ed'), findsOneWidget);
       expect(find.textContaining('Note: Trapping 1952 scan.pdf.why.txt'), findsOneWidget);

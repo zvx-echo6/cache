@@ -423,10 +423,11 @@ class _DropFolderPageState extends State<DropFolderPage> {
       case 'duplicate':
         return f.reason ?? 'Duplicate: the same content is already in the library';
       case 'unsupported':
-        return f.reason ?? 'Not a file Cache can use';
+        return '${f.reason ?? 'Not a file Cache can use'}. Note: ${f.name}.why.txt';
       case 'failed':
         final r = f.reason ?? 'Could not be used';
-        return f.note != null ? '$r Note: ${f.note}' : r;
+        // Each file in failed/ has a note beside it, `<name>.why.txt`.
+        return f.folder == 'failed' ? '$r. Note: ${f.name}.why.txt' : r;
       default:
         final n = f.name.toLowerCase();
         final base = n.endsWith('.pdf') ? 'Built into the library' : 'Added to the Library';

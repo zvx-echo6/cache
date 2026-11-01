@@ -4,6 +4,7 @@ import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../settings/space.dart' show reserveFor;
 import '../../theme.dart';
 import '../../video/format.dart';
+import 'build_common.dart' show DashedBox;
 import 'build_list.dart';
 import 'device_api.dart';
 import 'device_library.dart';
@@ -431,6 +432,57 @@ class _DropOverlayState extends State<DropOverlay> {
     super.dispose();
   }
 
+  /// A file to add to this device's library: the box in the middle.
+  Widget _plainBox(CacheTokens k) => Center(
+        child: Container(
+          margin: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(28),
+          constraints: const BoxConstraints(maxWidth: 520),
+          decoration: BoxDecoration(border: Border.all(color: k.accent, width: 2), borderRadius: BorderRadius.circular(20)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.upload_file, size: 56, color: k.accent),
+              const SizedBox(height: 10),
+              Text("Drop to add to this device's library", textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: k.text)),
+              const SizedBox(height: 6),
+              Text('A .zim file, a .cache-library file or a library snapshot.', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: k.secondary)),
+            ],
+          ),
+        ),
+      );
+
+  /// PDFs to build a library: a dashed frame round the whole page.
+  Widget _pdfFrame(CacheTokens k) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: DashedBox(
+          color: k.accent,
+          radius: 28,
+          padding: EdgeInsets.zero,
+          child: SizedBox.expand(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.library_books, size: 56, color: k.accent),
+                    const SizedBox(height: 12),
+                    Text('Drop PDFs to build a library', textAlign: TextAlign.center, style: TextStyle(fontSize: 30, color: k.text)),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Release to choose where they go. A folder works too. A .zim or .cache-library file is added to the Library as usual.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 15, height: 1.4, color: k.text),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
@@ -443,30 +495,7 @@ class _DropOverlayState extends State<DropOverlay> {
               child: ColoredBox(
                 key: const ValueKey('drop-overlay'),
                 color: k.background.withValues(alpha: 0.82),
-                child: Center(
-                  child: Container(
-                    margin: const EdgeInsets.all(24),
-                    padding: const EdgeInsets.all(28),
-                    constraints: const BoxConstraints(maxWidth: 520),
-                    decoration: BoxDecoration(border: Border.all(color: k.accent, width: 2), borderRadius: BorderRadius.circular(20)),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(widget.onPdfs == null ? Icons.upload_file : Icons.library_books, size: 56, color: k.accent),
-                        const SizedBox(height: 10),
-                        Text(widget.onPdfs == null ? "Drop to add to this device's library" : 'Drop PDFs to build a library', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: k.text)),
-                        const SizedBox(height: 6),
-                        Text(
-                          widget.onPdfs == null
-                              ? 'A .zim file, a .cache-library file or a library snapshot.'
-                              : 'Release to choose where they go. A folder works too. A .zim or .cache-library file is added to the Library as usual.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, color: k.secondary),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                child: widget.onPdfs == null ? _plainBox(k) : _pdfFrame(k),
               ),
             ),
           ),

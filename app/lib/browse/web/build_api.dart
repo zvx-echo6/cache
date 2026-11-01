@@ -17,7 +17,7 @@ class BuildLibrary {
     this.published = false,
     this.dirty = false,
     this.waiting = 0,
-    this.building = 0,
+    this.building = false,
     this.publishError,
   });
 
@@ -31,8 +31,11 @@ class BuildLibrary {
 
   /// Built books that are not searchable yet.
   final bool dirty;
+  /// Books of this library that are waiting or being built.
   final int waiting;
-  final int building;
+
+  /// A book of it is being built now.
+  final bool building;
   final String? publishError;
 
   static BuildLibrary fromJson(Map<String, dynamic> j) => BuildLibrary(
@@ -45,7 +48,7 @@ class BuildLibrary {
         published: j['published'] == true,
         dirty: j['dirty'] == true,
         waiting: (j['waiting'] as num?)?.toInt() ?? 0,
-        building: (j['building'] as num?)?.toInt() ?? 0,
+        building: j['building'] == true,
         publishError: j['publish_error'] as String?,
       );
 }
