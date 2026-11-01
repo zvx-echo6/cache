@@ -162,6 +162,26 @@ pub fn agent() -> ureq::Agent {
         .build()
 }
 
+/// A Kiwix catalogue icon asked for at a size the catalogue does not have (it answers 404 for anything but the 48 px its feed
+/// links): the same icon at 48. None for any other address, or one already at 48 (so the retry happens once).
+pub fn illustration_fallback(url: &str) -> Option<String> {
+    let p = parse_url(url)?;
+    if p.host != "opds.library.kiwix.org" {
+        return None;
+    }
+    let (base, query) = url.split_once('?')?;
+    if !base.contains("/catalog/v2/illustration/") || query.split('&').any(|kv| kv == "size=48") {
+        return None;
+    }
+    let rest: Vec<&str> = query.split('&').filter(|kv| !kv.starts_with("size=")).collect();
+    let mut out = format!("{base}?size=48");
+    for kv in rest {
+        out.push('&');
+        out.push_str(kv);
+    }
+    Some(out)
+}
+
 /// An answer being read.
 pub struct Opened {
     pub content_type: Option<String>,
@@ -177,6 +197,11 @@ pub fn open(hosts: &[String], url: &str, max: u64) -> Result<Opened, FetchError>
         check(hosts, &cur)?;
         let resp = match agent.get(&cur).call() {
             Ok(r) => r,
+            Err(ureq::Error::Status(404, _)) if illustration_fallback(&cur).is_some() => {
+                // The catalogue only serves its icons at the size its own feed links (48); another size is a 404.
+                cur = illustration_fallback(&cur).unwrap_or_default();
+                continue;
+            }
             Err(ureq::Error::Status(code, _)) => return Err(FetchError::Upstream(code)),
             Err(e) => return Err(FetchError::Unreachable(e.to_string())),
         };
@@ -264,5 +289,20 @@ mod tests {
         assert_eq!(query_param("kind=zim", "name"), None);
         assert_eq!(query_param("name=%zz", "name"), None);
         assert_eq!(query_param("name=%FF", "name"), None);
+    }
+
+    #[test]
+    fn a_catalogue_icon_at_another_size_falls_back_to_48() {
+        let u = "https://opds.library.kiwix.org/catalog/v2/illustration/abc/?size=96";
+        assert_eq!(illustration_fallback(u).as_deref(), Some("https://opds.library.kiwix.org/catalog/v2/illustration/abc/?size=48"));
+        assert_eq!(
+            illustration_fallback("https://opds.library.kiwix.org/catalog/v2/illustration/abc/?x=1&size=128").as_deref(),
+            Some("https://opds.library.kiwix.org/catalog/v2/illustration/abc/?size=48&x=1")
+        );
+        // already 48, no query, another path or another host: no retry
+        assert_eq!(illustration_fallback("https://opds.library.kiwix.org/catalog/v2/illustration/abc/?size=48"), None);
+        assert_eq!(illustration_fallback("https://opds.library.kiwix.org/catalog/v2/illustration/abc/"), None);
+        assert_eq!(illustration_fallback("https://opds.library.kiwix.org/catalog/v2/entries?size=96"), None);
+        assert_eq!(illustration_fallback("https://data.cached.info/catalog/v2/illustration/abc/?size=96"), None);
     }
 }

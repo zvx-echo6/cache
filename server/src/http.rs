@@ -236,6 +236,41 @@ fn with_frame_script(html: &[u8]) -> Vec<u8> {
     out.into_bytes()
 }
 
+/// The type to serve an entry as. The ZIM's own type is kept when it is specific; when it is missing, empty or the generic
+/// `application/octet-stream` (some ZIMs store scripts and style sheets so), the type comes from the path's extension. With
+/// `nosniff` on, a script or style sheet served as octet-stream is refused by the browser, so this must not be left generic.
+fn effective_mime(mime: &str, entry: &str) -> String {
+    let essence = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if !essence.is_empty() && essence != "application/octet-stream" {
+        return mime.to_string();
+    }
+    let path = entry.split(['?', '#']).next().unwrap_or("");
+    let name = path.rsplit('/').next().unwrap_or("");
+    let ext = match name.rsplit_once('.') {
+        Some((_, e)) => e.to_ascii_lowercase(),
+        None => return mime.to_string(),
+    };
+    let inferred = match ext.as_str() {
+        "js" | "mjs" => "text/javascript",
+        "css" => "text/css",
+        "html" | "htm" => "text/html",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "json" => "application/json",
+        "wasm" => "application/wasm",
+        "txt" => "text/plain",
+        _ => return mime.to_string(),
+    };
+    inferred.to_string()
+}
+
 /// `GET /zim/<token>/<zim id>/<entry path>`: one entry of a ZIM, for the reader's frame. The token in the path is the only
 /// credential (see the module doc): the session cookie is neither needed nor looked at.
 async fn zim(app: &App, method: &str, path: &str, query: &str) -> Reply {
@@ -265,6 +300,7 @@ async fn zim(app: &App, method: &str, path: &str, query: &str) -> Reply {
     let result = &reply["result"];
     let bytes = result[0]["$bytes"].as_str().and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok());
     let (Some(bytes), Some(mime)) = (bytes, result[1].as_str()) else { return Reply::empty(502) };
+    let mime = &effective_mime(mime, entry);
     let essence = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
     let is_html = essence == "text/html";
     let content_type = if mime.to_ascii_lowercase().contains("charset") || !essence.starts_with("text/") { mime.to_string() } else { format!("{essence}; charset=utf-8") };
@@ -1057,5 +1093,37 @@ mod tests {
         // a session cleared by `set-password --sign-out-all` takes its tokens along
         crate::auth::Sessions::clear_file(&d.0.join("sessions.json")).unwrap();
         assert_eq!(route(&a, "GET", &page(&t_other), None, b"").await.status, 401);
+    }
+
+    #[test]
+    fn zim_entries_with_a_generic_type_get_one_from_the_extension() {
+        for (mime, entry, want) in [
+            ("application/octet-stream", "assets/index.js", "text/javascript"),
+            ("", "assets/index.mjs", "text/javascript"),
+            ("application/octet-stream", "assets/index.css?v=3", "text/css"),
+            ("Application/Octet-Stream; x=y", "A/Page.HTML", "text/html"),
+            ("", "i/logo.svg", "image/svg+xml"),
+            ("", "i/a.png", "image/png"),
+            ("", "i/a.JPG", "image/jpeg"),
+            ("", "i/a.jpeg", "image/jpeg"),
+            ("", "i/a.gif", "image/gif"),
+            ("", "i/a.webp", "image/webp"),
+            ("", "i/favicon.ico", "image/x-icon"),
+            ("", "f/a.woff", "font/woff"),
+            ("", "f/a.woff2", "font/woff2"),
+            ("", "f/a.ttf", "font/ttf"),
+            ("", "d/a.json", "application/json"),
+            ("", "d/a.wasm", "application/wasm"),
+            ("", "d/a.txt", "text/plain"),
+            // a specific type from the ZIM is kept, whatever the extension says
+            ("text/css", "assets/odd.js", "text/css"),
+            ("text/html; charset=utf-8", "A/x.html", "text/html; charset=utf-8"),
+            // nothing to infer from: unchanged
+            ("application/octet-stream", "A/noext", "application/octet-stream"),
+            ("application/octet-stream", "A/dir.v2/noext", "application/octet-stream"),
+            ("application/octet-stream", "A/x.bin", "application/octet-stream"),
+        ] {
+            assert_eq!(effective_mime(mime, entry), want, "{mime:?} {entry}");
+        }
     }
 }
