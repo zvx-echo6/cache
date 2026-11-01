@@ -77,6 +77,8 @@ jobs:
       RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
+        # A job container defaults to sh; the steps use bash features.
+        shell: bash
         working-directory: packages/cache_search/native
     steps:
       - uses: actions/checkout@v4
