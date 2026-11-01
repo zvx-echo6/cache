@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../app_fs.dart';
 import '../../settings/space.dart' show Space, reserveFor;
 import '../opds.dart';
+import 'build_state.dart';
 import 'device_api.dart';
 import 'local_files.dart';
 
@@ -86,7 +87,12 @@ class DeviceLibrary extends ChangeNotifier {
     this.slow = const Duration(seconds: 30),
     void Function(bool)? leaveWarning,
     this.onItemsChanged,
-  }) : _leaveWarning = leaveWarning ?? setLeaveWarning;
+    this.build,
+  }) : _leaveWarning = leaveWarning ?? setLeaveWarning {
+    build?.addListener(notifyListeners);
+    build?.sizeOf = (id) => items.where((i) => i.kind == 'library' && i.name == id).firstOrNull?.bytes;
+    build?.freeSpace = () => space.free;
+  }
 
   final DeviceApi api;
   final AppFs fs;
@@ -94,6 +100,9 @@ class DeviceLibrary extends ChangeNotifier {
   final Duration fast;
   final Duration slow;
   final void Function(bool) _leaveWarning;
+
+  /// Building libraries from PDFs on the device (null where the device does not offer it, as in a test that is not about it).
+  final BuildController? build;
 
   /// Called after the device's items changed (a download or an upload ended, an item was removed), so the app reads the sources again.
   Future<void> Function()? onItemsChanged;
@@ -139,6 +148,9 @@ class DeviceLibrary extends ChangeNotifier {
   /// The line over the Library list while something is going on, or null.
   String? get activityHint {
     if (upload?.running == true) return 'Keep this tab open until the upload ends. Downloads and indexing carry on without it.';
+    final b = build;
+    if (b?.upload?.running == true) return 'Keep this tab open until the upload ends. Building carries on without it.';
+    if (b != null && b.isAnythingBuilding) return 'Building keeps going if you close this tab.';
     if (anyActive) return 'Downloads keep going if you close this tab.';
     return null;
   }
@@ -167,6 +179,7 @@ class DeviceLibrary extends ChangeNotifier {
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    if (build != null) unawaited(build!.start());
     await _readSeen();
     await refresh();
     final seen = _seen;
@@ -181,6 +194,7 @@ class DeviceLibrary extends ChangeNotifier {
 
   /// The window came back into focus.
   void onFocus() {
+    build?.onFocus();
     if (_started) unawaited(refresh());
   }
 
@@ -442,6 +456,8 @@ class DeviceLibrary extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     if (upload?.running == true) _leaveWarning(false);
+    build?.removeListener(notifyListeners);
+    build?.dispose();
     super.dispose();
   }
 }

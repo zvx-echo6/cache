@@ -15,13 +15,18 @@ import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../video/format.dart';
+import '../web/desktop_layout.dart';
 import 'catalogue_screen.dart' show AddToLibraryScreen;
 import 'browse_state.dart';
 import 'library_actions.dart';
 import 'reader_screen.dart';
+import 'web/build_common.dart' show buildBadge, builtLibraryLine;
+import 'web/build_library_page.dart' show BuiltLibraryPage;
+import 'web/build_page.dart' show openBuildPage;
 import 'web/device_api.dart' show DeviceJob;
 import 'web/device_flows.dart';
 import 'web/device_library.dart' show kUploadedAgain;
+import 'web/local_files.dart' show LocalFile;
 import 'web/device_widgets.dart';
 import 'zim_urls.dart';
 
@@ -108,17 +113,16 @@ class _BrowseScreenState extends State<BrowseScreen> {
   BuildContext? _pane;
 
   void _openZim(ZimFile z, {String? address}) {
-    openDetail(
-      _pane ?? context,
-      key: 'zim:${z.path}',
-      builder: (_) => ZimReaderScreen(
+    Widget page(BuildContext _) => ZimReaderScreen(
           sources: sources,
           zim: z,
           address: address,
           layout: widget.layout,
           itemMenu: (ctx, addPage) => showLibraryMenu(ctx, _zimActions(z, addToHome: addPage)),
-        ),
-    );
+        );
+    // The desktop layout (a browser, 1280 wide and up) opens a ZIM in the full window: the list is hidden, the rail stays.
+    if (openInDesktopPane(_pane ?? context, key: 'zim:${z.path}', builder: page, fullWindow: true)) return;
+    openDetail(_pane ?? context, key: 'zim:${z.path}', builder: page);
   }
 
   /// The guide that ships in the app opens as a book: its chapters, links and search, with the library's usual menu.
@@ -198,26 +202,52 @@ class _BrowseScreenState extends State<BrowseScreen> {
     await device.packageHandled(job);
   }
 
-  void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  void _add() {
+    if (openInDesktopPane(_pane ?? context, key: 'add', builder: (_) => AddToLibraryScreen(browse: b))) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  }
+
+  /// A library built from PDFs: its own page (books, the queue), beside the list or as a page of its own.
+  void _openBuilt(String id) {
+    final bc = b.device?.build;
+    if (bc == null) return;
+    Widget page(BuildContext _) => BuiltLibraryPage(build: bc, libraryId: id);
+    final target = _pane ?? context;
+    if (openInDesktopPane(target, key: 'built:$id', builder: page)) return;
+    openDetail(target, key: 'built:$id', builder: page);
+  }
+
+  /// PDFs (or a folder of them) dropped anywhere on the Library: the build page holds them until the person says where they go.
+  void _dropPdfs(List<LocalFile> files) {
+    final bc = b.device?.build;
+    if (bc == null) return;
+    final sink = bc.sink;
+    if (sink != null) {
+      sink(files);
+      return;
+    }
+    openBuildPage(_pane ?? context, bc, files: files);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final pane = TwoPane(
-      id: 'library',
-      listName: 'Library',
-      list: Builder(
+    final pane = TwoPane(id: 'library', listName: 'Library', list: _listPane());
+    final device = b.device;
+    if (device == null) return pane;
+    // In a browser a file dropped anywhere on the Library is added from this computer; PDFs build a library.
+    return DropOverlay(
+      onFile: (f) => addFromComputer(context, device: device, libraries: libs, dropped: f),
+      onPdfs: device.build == null ? null : _dropPdfs,
+      child: WidthClass.of(context) == WidthClass.desktop ? DesktopFrame(list: _listPane(), initial: (_) => AddToLibraryScreen(browse: b)) : pane,
+    );
+  }
+
+  Widget _listPane() => Builder(
         builder: (c) {
           _pane = c;
           return _list(c);
         },
-      ),
-    );
-    final device = b.device;
-    // In a browser a file dropped anywhere on the Library is added from this computer.
-    return device == null
-        ? pane
-        : DropOverlay(onFile: (f) => addFromComputer(context, device: device, libraries: libs, dropped: f), child: pane);
-  }
+      );
 
   Widget _list(BuildContext context) {
     final k = context.t;
@@ -231,7 +261,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           _maybeCheck();
           final transfers = b.transfers.values.toList();
           final task = libs?.task;
-          final items = sources.zims.length + (libs?.libraries.length ?? 0);
+          final items = sources.zims.length + (libs?.libraries.length ?? 0) + (b.device?.build?.libraries.length ?? 0);
           final empty = items == 0 && transfers.isEmpty && task == null && (b.device == null || (b.device!.jobs.isEmpty && b.device!.upload == null));
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
@@ -258,11 +288,13 @@ class _BrowseScreenState extends State<BrowseScreen> {
                     style: TextStyle(fontSize: 12, color: k.secondary),
                   ),
                 ),
-              if (b.device != null) DeviceLibraryTop(device: b.device!, onAddPackage: _addPackage),
+              if (b.device != null) DeviceLibraryTop(device: b.device!, onAddPackage: _addPackage, onOpenBuilt: _openBuilt),
               for (final t in transfers) _transferRow(k, t),
               if (task != null) _taskRow(k, task),
               for (final z in sources.zims) _zimRow(k, z),
-              for (final l in libs?.libraries ?? const <LibraryItem>[]) _libraryRow(k, l),
+              for (final l in libs?.libraries ?? const <LibraryItem>[])
+                if (b.device?.build?.library(l.folderName) == null) _libraryRow(k, l),
+              ..._builtRows(k),
               if (b.updateError != null && items > 0)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -307,6 +339,26 @@ class _BrowseScreenState extends State<BrowseScreen> {
       onTap: canOpen ? () => _openZim(z) : null,
       onHold: () => showLibraryMenu(context, _zimActions(z)),
     );
+  }
+
+  /// The libraries built from PDFs on the device (a browser): their own rows, with a badge while they are being built.
+  List<Widget> _builtRows(CacheTokens k) {
+    final bc = b.device?.build;
+    if (bc == null) return const [];
+    return [
+      for (final l in bc.libraries)
+        LibraryRow(
+          key: ValueKey('built-${l.id}'),
+          title: l.title,
+          detail: builtLibraryLine(l, b.device!.items.where((i) => i.kind == 'library' && i.name == l.id).firstOrNull?.bytes),
+          badge: switch (buildBadge(bc, l)) {
+            final String t => RowBadge(t, color: t.endsWith('failed') || t == 'Paused' ? k.warning : k.secondary),
+            _ => null,
+          },
+          selected: isDesktopSelected(context, 'built:${l.id}'),
+          onTap: () => _openBuilt(l.id),
+        ),
+    ];
   }
 
   Widget _libraryRow(CacheTokens k, LibraryItem l) {
@@ -426,7 +478,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
 /// One row of the Library: the icon (the source's own, or a letter), the name on one line, the description and size on one line,
 /// and a badge for an exception. The size always stays visible; a long name ends in an ellipsis.
 class LibraryRow extends StatelessWidget {
-  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold});
+  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false});
 
   final String title;
   final String detail;
@@ -434,6 +486,9 @@ class LibraryRow extends StatelessWidget {
   final Widget? badge;
   final VoidCallback? onTap;
   final VoidCallback? onHold;
+
+  /// The item whose page is open beside the list (the desktop layout marks it).
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -466,6 +521,7 @@ class LibraryRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Holdable(
+        color: selected ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : null,
         onTap: onTap,
         onHold: onHold,
         child: more ? HoverReveal(builder: content) : content(false),

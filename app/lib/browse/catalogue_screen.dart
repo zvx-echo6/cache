@@ -11,6 +11,7 @@ import 'browse_state.dart';
 import 'library_actions.dart';
 import 'opds.dart';
 import 'web/device_flows.dart';
+import 'web/build_list.dart' show buildAddRows;
 import 'web/device_widgets.dart' show FromThisComputer;
 
 String formatBytes(int bytes) {
@@ -257,6 +258,8 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
         ),
         const SizedBox(height: 6),
       ],
+      // In a browser, building a library from PDFs and the drop folder.
+      if (b.device != null) ...buildAddRows(context, b.device!),
       const GroupLabel('Ready-made collections · free from Kiwix'),
     ];
   }

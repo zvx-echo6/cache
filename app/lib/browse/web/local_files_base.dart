@@ -30,3 +30,16 @@ typedef UploadProgress = void Function(int sent, int total);
 abstract class Uploader {
   UploadTask start(LocalFile file, {required String kind, required String name, required UploadProgress onProgress});
 }
+
+/// Sends a [LocalFile] to an address on the device (the body is the file, streamed; the device wants its `Content-Length`).
+abstract class RawUploader {
+  UploadTask post(LocalFile file, String url, UploadProgress onProgress);
+}
+
+/// Where a file chosen from a folder sat in it, for the files a folder brought ("books/sub/a.pdf"); the file's name when it came alone.
+String relativePathOf(LocalFile f) => f is PathedFile ? f.relativePath : f.name;
+
+/// A [LocalFile] that knows where it was in the folder it came from.
+abstract class PathedFile implements LocalFile {
+  String get relativePath;
+}

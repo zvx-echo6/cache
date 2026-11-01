@@ -122,6 +122,7 @@ class FakeUpload implements UploadTask {
   final UploadProgress onProgress;
   final Completer<Map<String, dynamic>> _done = Completer<Map<String, dynamic>>();
   bool cancelled = false;
+  bool get finished => _done.isCompleted;
 
   void progress(int sent) => onProgress(sent, file.size);
   void finish([Map<String, dynamic> result = const {}]) => _done.complete(result);

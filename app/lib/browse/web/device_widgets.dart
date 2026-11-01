@@ -4,15 +4,17 @@ import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../settings/space.dart' show reserveFor;
 import '../../theme.dart';
 import '../../video/format.dart';
+import 'build_list.dart';
 import 'device_api.dart';
 import 'device_library.dart';
+import 'build_text.dart' show isPdfName;
 import 'local_files.dart';
 
 const int _gb = 1 << 30;
 
 /// One card of the Library list, in the phone's transfer card shape: a title, a line, a progress bar, and actions.
-class _Card extends StatelessWidget {
-  const _Card({required this.title, required this.line, this.warn = false, this.fraction, this.indeterminate = false, this.actions = const [], this.cardKey});
+class TransferCard extends StatelessWidget {
+  const TransferCard({super.key, required this.title, required this.line, this.warn = false, this.fraction, this.indeterminate = false, this.actions = const [], this.cardKey});
 
   final String title;
   final String line;
@@ -79,9 +81,12 @@ String _left(int seconds) {
 /// What sits above the Library list in a browser: the card for what happened while the tab was closed, the upload, the transfers the
 /// device is running, and library packages that wait to be added.
 class DeviceLibraryTop extends StatelessWidget {
-  const DeviceLibraryTop({super.key, required this.device, required this.onAddPackage});
+  const DeviceLibraryTop({super.key, required this.device, required this.onAddPackage, this.onOpenBuilt});
 
   final DeviceLibrary device;
+
+  /// The person tapped a building library's card.
+  final void Function(String libraryId)? onOpenBuilt;
 
   /// The person added a downloaded library package.
   final void Function(DeviceJob package) onAddPackage;
@@ -102,11 +107,12 @@ class DeviceLibraryTop extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                 child: Text(device.problem!, key: const ValueKey('device-problem'), style: TextStyle(fontSize: 13, color: k.warning)),
               ),
-            if (device.whileClosed.isNotEmpty) WhileClosedCard(device: device),
+            if (device.whileClosed.isNotEmpty || (device.build?.whileClosed.isNotEmpty ?? false)) WhileClosedCard(device: device),
             if (up != null) _uploadCard(up),
+            if (device.build != null) BuildListCards(ctl: device.build!, onOpen: onOpenBuilt),
             for (final j in shown) _jobCard(j),
             for (final j in device.readyPackages)
-              _Card(
+              TransferCard(
                 cardKey: ValueKey('package-${j.id}'),
                 title: j.name,
                 line: 'Downloaded. Ready to add to your library.',
@@ -123,7 +129,7 @@ class DeviceLibraryTop extends StatelessWidget {
 
   Widget _uploadCard(DeviceUpload up) {
     if (!up.running) {
-      return _Card(
+      return TransferCard(
         cardKey: const ValueKey('upload-card'),
         title: 'Uploading ${up.name}',
         line: up.error!,
@@ -143,7 +149,7 @@ class DeviceLibraryTop extends StatelessWidget {
               if (left != null) _left(left),
             ].join(' · '),
           ].join('\n');
-    return _Card(
+    return TransferCard(
       cardKey: const ValueKey('upload-card'),
       title: 'Uploading',
       line: line,
@@ -156,7 +162,7 @@ class DeviceLibraryTop extends StatelessWidget {
   Widget _jobCard(DeviceJob j) {
     final title = device.titleOfJob(j);
     if (j.failed) {
-      return _Card(
+      return TransferCard(
         cardKey: ValueKey('job-${j.id}'),
         title: title,
         line: deviceJobWords(j),
@@ -169,7 +175,7 @@ class DeviceLibraryTop extends StatelessWidget {
     }
     final waiting = j.state == 'queued';
     final since = j.createdAt == null ? '' : ' · started ${startedWords(j.createdAt!)}';
-    return _Card(
+    return TransferCard(
       cardKey: ValueKey('job-${j.id}'),
       title: title,
       line: waiting ? 'Waiting its turn…' : (j.total > 0 ? 'Downloading · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}$since' : 'Downloading · ${formatBytes(j.bytes)}$since'),
@@ -237,9 +243,21 @@ class WhileClosedCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Text('•  ${_line(j)}', style: TextStyle(fontSize: 13, color: k.text)),
                 ),
+              for (final line in device.build?.whileClosed ?? const <String>[])
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text('•  $line', style: TextStyle(fontSize: 13, color: k.text)),
+                ),
               Align(
                 alignment: Alignment.centerLeft,
-                child: TextButton(key: const ValueKey('dismiss-while-closed'), onPressed: device.dismissWhileClosed, child: const Text('Dismiss')),
+                child: TextButton(
+                  key: const ValueKey('dismiss-while-closed'),
+                  onPressed: () {
+                    device.build?.dismissWhileClosed();
+                    device.dismissWhileClosed();
+                  },
+                  child: const Text('Dismiss'),
+                ),
               ),
             ],
           ),
@@ -371,10 +389,13 @@ class _StorageBar extends StatelessWidget {
 
 /// Files dropped anywhere on the page. While a file is dragged over it shows what dropping does; a drop is handed to [onFile].
 class DropOverlay extends StatefulWidget {
-  const DropOverlay({super.key, required this.child, required this.onFile, this.enabled = true});
+  const DropOverlay({super.key, required this.child, required this.onFile, this.onPdfs, this.enabled = true});
 
   final Widget child;
   final void Function(LocalFile file) onFile;
+
+  /// Where a drop that holds PDFs (or a folder of them) goes, with every file in it; null leaves PDFs to [onFile] like any other file.
+  final void Function(List<LocalFile> files)? onPdfs;
   final bool enabled;
 
   @override
@@ -392,8 +413,14 @@ class _DropOverlayState extends State<DropOverlay> {
       onActive: (a) {
         if (mounted && widget.enabled) setState(() => _active = a);
       },
-      onDrop: (f) {
-        if (mounted && widget.enabled) widget.onFile(f);
+      onDrop: (files) {
+        if (!mounted || !widget.enabled || files.isEmpty) return;
+        final pdfs = widget.onPdfs;
+        if (pdfs != null && files.any((f) => isPdfName(f.name))) {
+          pdfs(files);
+        } else {
+          widget.onFile(files.first);
+        }
       },
     );
   }
@@ -425,11 +452,17 @@ class _DropOverlayState extends State<DropOverlay> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.upload_file, size: 56, color: k.accent),
+                        Icon(widget.onPdfs == null ? Icons.upload_file : Icons.library_books, size: 56, color: k.accent),
                         const SizedBox(height: 10),
-                        Text("Drop to add to this device's library", textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: k.text)),
+                        Text(widget.onPdfs == null ? "Drop to add to this device's library" : 'Drop PDFs to build a library', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: k.text)),
                         const SizedBox(height: 6),
-                        Text('A .zim file, a .cache-library file or a library snapshot.', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: k.secondary)),
+                        Text(
+                          widget.onPdfs == null
+                              ? 'A .zim file, a .cache-library file or a library snapshot.'
+                              : 'Release to choose where they go. A folder works too. A .zim or .cache-library file is added to the Library as usual.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 14, color: k.secondary),
+                        ),
                       ],
                     ),
                   ),
