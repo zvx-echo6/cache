@@ -1,5 +1,5 @@
 name: libzim prebuilt (Linux)
-description: Kiwix's official prebuilt libzim 9.8.2-1 for Linux (pinned URL, sha256 and md5), unpacked; unpacked under $RUNNER_TEMP/zimbuild (the shell's path, not the expression's: in a container job they differ); sets LIBZIM_DIR for the later steps. The pin lives in packages/cache_search/native/zimx/fetch-libzim-linux.sh.
+description: Kiwix's official prebuilt libzim 9.8.2-1 for Linux (pinned URL, sha256 and md5), unpacked under RUNNER_TEMP/zimbuild, sets LIBZIM_DIR for the later steps. The pin lives in packages/cache_search/native/zimx/fetch-libzim-linux.sh. (The path comes from the shell's RUNNER_TEMP, because in a container job the expression runner.temp is a different path.)
 inputs:
   arch:
     description: x86_64 or aarch64
