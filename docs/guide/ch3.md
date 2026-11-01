@@ -252,7 +252,7 @@ It covers models, Library items, regions, videos, libraries from a link, and sha
 
 - If it's off and you're on mobile data, the pop-up offers "Wait for Wi-Fi". Tap "Download now" to go ahead once.
 
-## Room kept free for the phone
+## Room kept free for the device
 
 Cache never uses the last part of your storage, so the device keeps working. You can't change this.
 

@@ -1,6 +1,6 @@
 # 7. Privacy
 
-## What stays on your phone
+## What stays on your device
 
 Cache works on your device, with no account and no Cache server in the middle.
 
