@@ -52,12 +52,17 @@ jobs:
         include:
           - runner: ubuntu-24.04
             arch: x86_64
+            rustflags: ''
           - runner: ubuntu-24.04-arm
             arch: aarch64
+            rustflags: '-C link-arg=-fuse-ld=lld'
     name: cache-llama-linux-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     container: ubuntu:22.04
     timeout-minutes: 120
+    env:
+      # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own (cache_search builds here now).
+      RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
         shell: bash
@@ -79,7 +84,7 @@ jobs:
           apt-get update -q
           apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip file
           # mupdf-sys (cache_builder, pulled in by the server crate) generates its bindings with bindgen, which needs libclang.
-          apt-get install -y -q libclang-dev clang
+          apt-get install -y -q libclang-dev clang lld
           gcc --version | sed -n 1p
           cmake --version | sed -n 1p
           ldd --version | sed -n 1p
