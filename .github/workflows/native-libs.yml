@@ -77,7 +77,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update -q
-          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip
+          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip file
           gcc --version | sed -n 1p
           cmake --version | sed -n 1p
           ldd --version | sed -n 1p
@@ -247,7 +247,6 @@ jobs:
         uses: ./.github/actions/libzim-prebuilt
         with:
           arch: ${{ matrix.arch }}
-          dir: ${{ runner.temp }}/zimbuild
       - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
         working-directory: .
         run: |

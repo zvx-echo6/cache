@@ -56,7 +56,6 @@ jobs:
         uses: ./.github/actions/libzim-prebuilt
         with:
           arch: x86_64
-          dir: ${{ runner.temp }}/zimbuild
       - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
         run: |
           line=$(bash zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')

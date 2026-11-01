@@ -1,17 +1,14 @@
 name: libzim prebuilt (Linux)
-description: Kiwix's official prebuilt libzim 9.8.2-1 for Linux (pinned URL, sha256 and md5), unpacked; sets LIBZIM_DIR for the later steps. The pin lives in packages/cache_search/native/zimx/fetch-libzim-linux.sh.
+description: Kiwix's official prebuilt libzim 9.8.2-1 for Linux (pinned URL, sha256 and md5), unpacked; unpacked under $RUNNER_TEMP/zimbuild (the shell's path, not the expression's: in a container job they differ); sets LIBZIM_DIR for the later steps. The pin lives in packages/cache_search/native/zimx/fetch-libzim-linux.sh.
 inputs:
   arch:
     description: x86_64 or aarch64
-    required: true
-  dir:
-    description: Where to unpack it (outside the repository)
     required: true
 runs:
   using: composite
   steps:
     - shell: bash
       run: |
-        line=$(bash "$GITHUB_WORKSPACE/packages/cache_search/native/zimx/fetch-libzim-linux.sh" "${{ inputs.dir }}" "${{ inputs.arch }}" | grep '^LIBZIM_DIR=')
+        line=$(bash "$GITHUB_WORKSPACE/packages/cache_search/native/zimx/fetch-libzim-linux.sh" "$RUNNER_TEMP/zimbuild" "${{ inputs.arch }}" | grep '^LIBZIM_DIR=')
         echo "$line"
         echo "$line" >> "$GITHUB_ENV"

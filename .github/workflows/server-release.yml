@@ -130,7 +130,6 @@ jobs:
         uses: ./.github/actions/libzim-prebuilt
         with:
           arch: ${{ matrix.arch }}
-          dir: ${{ runner.temp }}/zimbuild
       # The Dart SDK Flutter 3.44.8 bundles; setup-dart has Linux x64 and arm64 builds of it.
       - uses: dart-lang/setup-dart@v1
         with:
