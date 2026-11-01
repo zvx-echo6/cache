@@ -133,6 +133,13 @@ jobs:
           path: packages/cache_search/native/target
           key: cargo-target-llama-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: cargo-target-llama-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      # cache_search builds with the `xapian` feature by default, which needs the official prebuilt libzim (build.rs reads
+      # LIBZIM_DIR); the exactness test builds the server crate, which pulls cache_search in. Not --no-default-features, so this
+      # job builds what ships.
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: ${{ matrix.arch }}
       # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
       - name: Embedding model cache
         uses: actions/cache@v4
@@ -158,6 +165,7 @@ jobs:
           CACHE_EMBED_MODEL: ${{ github.workspace }}/bge-model/bge-m3-Q8_0.gguf
           CACHE_EMBED_REF: ${{ runner.temp }}/embed-ref.f32
         run: |
+          export LD_LIBRARY_PATH="$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")"
           cargo run --locked -p cache_embed --example embed_texts -- --model "$CACHE_EMBED_MODEL" --lib "$CACHE_EMBED_LIB" \
             --in ../../../server/tests/data/embed_texts.jsonl --out "$CACHE_EMBED_REF" --meta "$RUNNER_TEMP/embed-ref.meta.json"
           cat "$RUNNER_TEMP/embed-ref.meta.json"
