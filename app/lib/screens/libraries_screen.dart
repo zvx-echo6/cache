@@ -1,8 +1,50 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../browse/web/device_flows.dart';
 import '../sources/libraries_state.dart';
 import '../theme.dart';
+
+/// Asks whether to update the library [name] from version [from] to version [to] (either may be null); true on Update.
+Future<bool> askUpdateLibrary(BuildContext context, String name, String? from, String? to) async {
+  final versions = from != null && to != null
+      ? ' (version $from → version $to)'
+      : to != null
+          ? ' (to version $to)'
+          : '';
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Update $name$versions?'),
+      content: Text('This is a copy of $name, which is already on this device. The new copy replaces it once it opens.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        TextButton(key: const ValueKey('update-library'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Update')),
+      ],
+    ),
+  );
+  return yes == true;
+}
+
+/// Asks for the settings file of a library that came without one, and picks it with [pick]; null to stop.
+Future<String?> askLibrarySettings(BuildContext context, String reason, PickSettingsFile pick) async {
+  final choose = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Choose its settings file'),
+      content: Text(
+        'This library came without its settings file (cache-library.json), and Cache could not work them out from the '
+        'library itself.\n\n$reason',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        TextButton(key: const ValueKey('choose-settings'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Choose file')),
+      ],
+    ),
+  );
+  if (choose != true) return null;
+  return pick();
+}
 
 /// Picks the settings file (cache-library.json) of a library that came without one; a test hook replaces it.
 typedef PickSettingsFile = Future<String?> Function();
@@ -27,46 +69,16 @@ class _LibrariesScreenState extends State<LibrariesScreen> {
 
   Future<bool> _confirmUpdate(String name, String? from, String? to) async {
     if (!mounted) return false;
-    final versions = from != null && to != null
-        ? ' (version $from → version $to)'
-        : to != null
-            ? ' (to version $to)'
-            : '';
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Update $name$versions?'),
-        content: Text('This is a copy of $name, which is already on this device. The new copy replaces it once it opens.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(key: const ValueKey('update-library'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Update')),
-        ],
-      ),
-    );
-    return yes == true;
+    return askUpdateLibrary(context, name, from, to);
   }
 
   Future<String?> _askSettings(String reason) async {
     if (!mounted) return null;
-    final choose = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Choose its settings file'),
-        content: Text(
-          'This library came without its settings file (cache-library.json), and Cache could not work them out from the '
-          'library itself.\n\n$reason',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(key: const ValueKey('choose-settings'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Choose file')),
-        ],
-      ),
-    );
-    if (choose != true) return null;
-    return widget.pickSettingsFile();
+    return askLibrarySettings(context, reason, s.device != null ? s.pickSettingsOnDevice : widget.pickSettingsFile);
   }
 
-  Future<void> _fromFile() => s.pickAndAdd(confirmUpdate: _confirmUpdate, askSettings: _askSettings);
+  // In a browser the file is on the computer the browser is on: it is uploaded to the device, then added (browse/web/device_flows.dart).
+  Future<void> _fromFile() => s.device != null ? addFromComputer(context, device: s.device!, libraries: s) : s.pickAndAdd(confirmUpdate: _confirmUpdate, askSettings: _askSettings);
 
   Future<void> _fromLink() async {
     final link = await showDialog<String>(context: context, builder: (_) => const _LinkDialog());
@@ -104,7 +116,7 @@ class _LibrariesScreenState extends State<LibrariesScreen> {
               ),
               if (t != null) _taskCard(k, t),
               if (s.sources.copyProgress != null) _copyCard(k),
-              _row(k, key: 'add-from-file', icon: Icons.folder_open_outlined, title: 'From a file on this device', detail: 'A .cache-library file, a library snapshot or a .zim', onTap: busy || !ready ? null : _fromFile),
+              _row(k, key: 'add-from-file', icon: Icons.folder_open_outlined, title: s.device != null ? 'From this computer' : 'From a file on this device', detail: 'A .cache-library file, a library snapshot or a .zim', onTap: busy || !ready ? null : _fromFile),
               _row(k, key: 'add-from-link', icon: Icons.link, title: 'From a download link', detail: 'A link to a library file', onTap: busy || !ready ? null : _fromLink),
               if (s.error != null || s.sources.error != null)
                 Padding(

@@ -73,6 +73,20 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   Directory? indexesDir;
   List<ZimFile> zims = [];
 
+  /// In a browser: removes a ZIM on the device (its files and index). Set by the app at start; null on a phone.
+  Future<void> Function(ZimFile z)? removeOnDevice;
+
+  /// In a browser: the size of each ZIM on the device, by file name (the core's status does not carry it).
+  Map<String, int> _deviceSizes = const {};
+
+  /// A browser: the sizes of the device's ZIM files, by file name, for the Library list.
+  void setDeviceSizes(Map<String, int> sizes) {
+    if (!plat.isWeb || mapEquals(_deviceSizes, sizes)) return;
+    _deviceSizes = sizes;
+    _scan();
+    notifyListeners();
+  }
+
   /// The libraries' source entries (set by the libraries' state, libraries_state.dart); they join the ZIMs in the list the
   /// core is given.
   List<SourceConfig> Function()? librarySources;
@@ -343,7 +357,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     if (plat.isWeb) {
       // The server's ZIMs, as the core lists them.
       for (final s in _status.values) {
-        if (s.kind == 'zim') found.add(ZimFile(path: s.path, size: 0));
+        if (s.kind == 'zim') found.add(ZimFile(path: s.path, size: _deviceSizes[s.path.split(RegExp(r'[\\/]')).last] ?? 0));
       }
       found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       zims = found;
@@ -757,6 +771,16 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   /// Removes a ZIM and its index from the phone.
   Future<void> remove(ZimFile z) async {
+    final onDevice = removeOnDevice;
+    if (onDevice != null) {
+      try {
+        await onDevice(z);
+      } catch (e) {
+        error = 'Could not remove the file.';
+      }
+      await refresh();
+      return;
+    }
     final job = _jobs.remove(z.path);
     if (job != null) {
       try {

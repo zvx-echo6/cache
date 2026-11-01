@@ -10,11 +10,16 @@
 //! - **Installing a ZIM** is what the phone does (`SourcesState.installDownloaded`): the file goes to
 //!   `<data>/app/docs/zims/<name>` under a hidden name first and is renamed over any earlier file of that name, with the same
 //!   sidecars, `<name>.origin.json` and `<name>.icon.png`. Then the helper is told to rescan (`sources.rescan`).
-//! - **Library packages** (`kind: "library"`) are not installed here yet: on the phone that is a Dart procedure (see
-//!   `LibrariesState._install` in app/lib/sources/libraries_state.dart) around several core jobs, not one core call. The API
-//!   refuses the kind with 501 until that is decided.
+//! - **Library packages** (`kind: "library"`) are not installed here: on the phone that is a Dart procedure (see
+//!   `LibrariesState._install` in app/lib/sources/libraries_state.dart) around several core jobs, not one core call. The browser
+//!   runs that procedure itself. The server only brings the file: a downloaded or uploaded package lands in
+//!   `<data>/app/docs/incoming/<name>` (the docs root, where the helper's `fs.*` ops and the core's jobs can reach it), and the
+//!   browser installs it from there and deletes it.
 //! - **Uploads** (`POST /api/library/upload`) stream the request body to `<data>/tmp/up-<random>.part` without holding it in memory.
 //! - **Items** (`GET /api/library/items`, `DELETE /api/library/items/{id}`) list and remove what is on the server.
+//! - **Space** (`GET /api/library/space`): free and total bytes of the disk the data folder is on.
+//! - **Rescan** (`POST /api/library/rescan`): tells the core to read the library folders again, for a browser that has put a
+//!   library in place itself.
 //! - **Fetch** (`GET /api/fetch?url=`) reads a catalogue through the server, from the allow-listed hosts only (`fetch`).
 //!
 //! Everything is inside `<data>`. An item is locked while it is installed or removed.
@@ -55,14 +60,6 @@ fn api_err(status: u16, code: &'static str, message: impl Into<String>) -> ApiEr
     ApiErr { status, code, message: message.into() }
 }
 
-fn library_pending() -> ApiErr {
-    api_err(
-        501,
-        "library_install_pending",
-        "Installing library packages on the server is not built yet; ZIM files can be downloaded or uploaded.",
-    )
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
@@ -93,13 +90,41 @@ struct Job {
     sha256: Option<String>,
     origin: Option<Value>,
     icon_url: Option<String>,
+    /// When the job was asked for, RFC 3339 UTC. Null in entries written before this was kept.
+    #[serde(default)]
+    created_at: Option<String>,
+    /// When it finished, failed or was cancelled, RFC 3339 UTC; null until then.
+    #[serde(default)]
+    finished_at: Option<String>,
+}
+
+/// Now as RFC 3339 UTC, to the second (`2026-11-01T03:12:09Z`).
+fn now_rfc3339() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    rfc3339_of(secs)
+}
+
+fn rfc3339_of(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // civil-from-days (proleptic Gregorian)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3_600, rem % 3_600 / 60, rem % 60)
 }
 
 impl Job {
     /// What the API shows.
     fn view(&self) -> Value {
         json!({"id": self.id, "url": self.url, "kind": self.kind, "name": self.name, "bytes": self.bytes, "total": self.total,
-               "state": self.state, "error": self.error})
+               "state": self.state, "error": self.error, "created_at": self.created_at, "finished_at": self.finished_at})
     }
 }
 
@@ -134,6 +159,8 @@ pub type FreeFn = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
 pub struct LibraryOptions {
     /// Free bytes on the file system holding a path; None when it cannot be told. Default: the real answer.
     pub free_bytes: Option<FreeFn>,
+    /// Total bytes of the file system holding a path; None when it cannot be told. Default: the real answer.
+    pub total_bytes: Option<FreeFn>,
     /// The hosts `/api/fetch` may read. Default: [`fetch::FETCH_HOSTS`].
     pub fetch_hosts: Option<Vec<String>>,
     /// The size cap of `/api/fetch`. Default: [`fetch::FETCH_MAX_BYTES`].
@@ -144,6 +171,7 @@ pub struct Library {
     data: PathBuf,
     helper: Option<Arc<Helper>>,
     free: FreeFn,
+    total: FreeFn,
     fetch_hosts: Vec<String>,
     fetch_max: u64,
     jobs: Mutex<Vec<Job>>,
@@ -167,6 +195,28 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
                 return None;
             }
             Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// The total size in bytes of the file system that holds `path`.
+pub fn total_bytes(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        // SAFETY: `c` is a valid NUL-terminated path and `st` is a zeroed statvfs that the call fills in.
+        unsafe {
+            let mut st: libc::statvfs = std::mem::zeroed();
+            if libc::statvfs(c.as_ptr(), &mut st) != 0 {
+                return None;
+            }
+            Some((st.f_blocks as u64).saturating_mul(st.f_frsize as u64))
         }
     }
     #[cfg(not(unix))]
@@ -300,6 +350,7 @@ impl Library {
             data,
             helper,
             free: o.free_bytes.unwrap_or_else(|| Arc::new(free_bytes)),
+            total: o.total_bytes.unwrap_or_else(|| Arc::new(total_bytes)),
             fetch_hosts: o.fetch_hosts.unwrap_or_else(|| fetch::FETCH_HOSTS.iter().map(|h| h.to_string()).collect()),
             fetch_max: o.fetch_max.unwrap_or(fetch::FETCH_MAX_BYTES),
             jobs: Mutex::new(jobs),
@@ -320,6 +371,11 @@ impl Library {
 
     fn zims_dir(&self) -> PathBuf {
         self.data.join("app").join("docs").join("zims")
+    }
+
+    /// Where a library package waits for the browser to install it.
+    fn incoming_dir(&self) -> PathBuf {
+        self.data.join("app").join("docs").join("incoming")
     }
 
     fn libs_dir(&self) -> PathBuf {
@@ -403,7 +459,7 @@ impl Library {
             let (me, j, c) = (self.clone(), job.clone(), cancel.clone());
             let res = tokio::task::spawn_blocking(move || me.run_job(&j, &c)).await.unwrap_or_else(|e| Err(job_err("failed", format!("internal error: {e}"))));
             let mut note = None;
-            if res.is_ok() {
+            if res.is_ok() && job.kind == "zim" {
                 if let Err(e) = self.rescan().await {
                     eprintln!("cache-server: rescan after installing {} failed: {e}", job.name);
                     note = Some(format!("Installed, but the search core was not told: {e}"));
@@ -415,6 +471,7 @@ impl Library {
                 if j.state == State::Cancelled && res.is_err() {
                     return;
                 }
+                j.finished_at = Some(now_rfc3339());
                 match res {
                     Ok(()) => {
                         j.state = State::Done;
@@ -578,7 +635,10 @@ impl Library {
         }
         check_cancel()?;
 
-        // 5. Install.
+        // 5. Install. A library package is only put in the docs root: the browser installs it.
+        if job.kind == "library" {
+            return self.install_incoming(part, &job.name).map_err(io_job_err);
+        }
         let icon = job.icon_url.as_deref().and_then(|u| fetch_icon(&agent, u));
         self.install_zim(part, &job.name, job.origin.as_ref(), icon.as_deref()).map_err(io_job_err)
     }
@@ -614,6 +674,29 @@ impl Library {
         })
     }
 
+    /// Put a finished library package where the browser installs it from: `<data>/app/docs/incoming/<name>`, first under a hidden
+    /// name and then renamed over any earlier file of that name. Holds the item's lock.
+    pub fn install_incoming(&self, finished: &Path, name: &str) -> std::io::Result<()> {
+        let dir = self.incoming_dir();
+        std::fs::create_dir_all(&dir)?;
+        let dest = dir.join(name);
+        let hidden = dir.join(format!(".{name}.install.part"));
+        self.with_item_lock(&format!("incoming:{name}"), || {
+            if std::fs::rename(finished, &hidden).is_err() {
+                if let Err(e) = std::fs::copy(finished, &hidden) {
+                    let _ = std::fs::remove_file(&hidden);
+                    return Err(e);
+                }
+                let _ = std::fs::remove_file(finished);
+            }
+            if let Err(e) = std::fs::rename(&hidden, &dest) {
+                let _ = std::fs::remove_file(&hidden);
+                return Err(e);
+            }
+            Ok(())
+        })
+    }
+
     /// Tell the helper to rescan the app folders (or `sources.json`, when there is one). The number of sources it now has.
     pub async fn rescan(&self) -> Result<u64, String> {
         let Some(h) = &self.helper else { return Ok(0) };
@@ -634,10 +717,8 @@ impl Library {
         let url = v["url"].as_str().ok_or_else(|| api_err(400, "invalid", "\"url\" is required"))?.trim().to_string();
         fetch::parse_url(&url).filter(fetch::scheme_ok).ok_or_else(|| api_err(400, "invalid", "Use a link that starts with https://"))?;
         let kind = v["kind"].as_str().unwrap_or("");
-        match kind {
-            "zim" => {}
-            "library" => return Err(library_pending()),
-            _ => return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\"")),
+        if kind != "zim" && kind != "library" {
+            return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\""));
         }
         let name = match v["name"].as_str() {
             Some(n) => n.to_string(),
@@ -667,7 +748,7 @@ impl Library {
             if let Some(j) = jobs.iter().find(|j| j.state.active() && j.url == url) {
                 return j.view();
             }
-            let j = Job { id: random_hex(), url, kind: kind.to_string(), name, bytes: 0, total: 0, state: State::Queued, error: None, sha256, origin, icon_url };
+            let j = Job { id: random_hex(), url, kind: kind.to_string(), name, bytes: 0, total: 0, state: State::Queued, error: None, sha256, origin, icon_url, created_at: Some(now_rfc3339()), finished_at: None };
             let view = j.view();
             jobs.push(j);
             view
@@ -691,6 +772,7 @@ impl Library {
             if jobs[i].state.active() {
                 jobs[i].state = State::Cancelled;
                 jobs[i].error = None;
+                jobs[i].finished_at = Some(now_rfc3339());
                 Some((jobs[i].view(), true))
             } else {
                 Some((jobs.remove(i).view(), false))
@@ -725,10 +807,8 @@ impl Library {
         B::Error: std::fmt::Display,
     {
         let kind = fetch::query_param(query, "kind").unwrap_or_default();
-        match kind.as_str() {
-            "zim" => {}
-            "library" => return Err(library_pending()),
-            _ => return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\"")),
+        if kind != "zim" && kind != "library" {
+            return Err(api_err(400, "invalid", "\"kind\" is \"zim\" or \"library\""));
         }
         let name = fetch::query_param(query, "name").ok_or_else(|| api_err(400, "invalid_name", "A file name is needed."))?;
         let name = sanitize_name(&name, &kind).map_err(|m| api_err(400, "invalid_name", m))?;
@@ -771,12 +851,15 @@ impl Library {
         f.flush().await.map_err(write_err)?;
         f.sync_all().await.map_err(write_err)?;
         drop(f);
-        let (me, p, n) = (self.clone(), part.clone(), name.clone());
-        let installed = tokio::task::spawn_blocking(move || me.install_zim(&p, &n, None, None)).await;
+        let (me, p, n, k) = (self.clone(), part.clone(), name.clone(), kind.clone());
+        let installed = tokio::task::spawn_blocking(move || if k == "library" { me.install_incoming(&p, &n) } else { me.install_zim(&p, &n, None, None) }).await;
         match installed {
             Ok(Ok(())) => guard.keep(),
             Ok(Err(e)) => return Err(write_err(e)),
             Err(e) => return Err(api_err(500, "server_error", format!("internal error: {e}"))),
+        }
+        if kind == "library" {
+            return Ok(json!({"name": name, "bytes": got, "path": format!("incoming/{name}")}));
         }
         let rescan = self.rescan().await;
         if let Err(e) = &rescan {
@@ -787,6 +870,18 @@ impl Library {
             out["note"] = json!(format!("Installed, but the search core was not told: {e}"));
         }
         Ok(out)
+    }
+
+    // ---- space
+
+    /// `GET /api/library/space`: the free and total bytes of the disk the data folder is on (null when that cannot be told).
+    pub fn space(&self) -> Value {
+        json!({"free_bytes": (self.free)(&self.data), "total_bytes": (self.total)(&self.data)})
+    }
+
+    /// `POST /api/library/rescan`: the core reads the library folders again. The number of sources it now has.
+    pub async fn rescan_api(&self) -> Result<Value, ApiErr> {
+        self.rescan().await.map(|n| json!({"sources": n})).map_err(|e| api_err(502, "core_unavailable", e))
     }
 
     // ---- what is installed
@@ -1026,5 +1121,26 @@ mod tests {
         assert_eq!(a, item_id("zim", "a b.zim"));
         assert_ne!(a, item_id("library", "a b.zim"));
         assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    #[test]
+    fn job_times_are_rfc3339_and_old_entries_load_with_null() {
+        assert_eq!(rfc3339_of(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_of(1_782_958_329), "2026-07-02T02:12:09Z");
+        assert_eq!(rfc3339_of(951_782_400), "2000-02-29T00:00:00Z");
+        let now = now_rfc3339();
+        assert_eq!(now.len(), 20);
+        assert!(now.ends_with('Z') && now.as_bytes()[10] == b'T', "{now}");
+        // an entry written before the times were kept
+        let old: Job = serde_json::from_str(
+            r#"{"id":"a","url":"u","kind":"zim","name":"n.zim","bytes":1,"total":2,"state":"done","error":null,"sha256":null,"origin":null,"icon_url":null}"#,
+        )
+        .unwrap();
+        let v = old.view();
+        assert!(v["created_at"].is_null() && v["finished_at"].is_null());
+        let j = Job { created_at: Some(now.clone()), finished_at: None, ..old };
+        let back: Job = serde_json::from_str(&serde_json::to_string(&j).unwrap()).unwrap();
+        assert_eq!(back.created_at.as_deref(), Some(now.as_str()));
+        assert!(back.view()["finished_at"].is_null());
     }
 }

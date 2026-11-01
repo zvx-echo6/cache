@@ -47,6 +47,7 @@ Future<DownloadChoice> confirmDownload(
   int? bytes,
   String action = 'Download',
   String? name,
+  String? footnote,
 }) async {
   final choice = await showDialog<DownloadChoice>(
     context: context,
@@ -59,6 +60,7 @@ Future<DownloadChoice> confirmDownload(
       bytes: summary == null ? null : bytes,
       action: action,
       name: name,
+      footnote: footnote,
     ),
   );
   return choice ?? DownloadChoice.cancel;
@@ -76,11 +78,12 @@ Future<DownloadChoice> askToDownload(
   int? bytes,
   String action = 'Download',
   String? name,
+  String? footnote,
 }) async {
   final blocked = policy != null && await policy.blocksDownload();
   if (!context.mounted) return DownloadChoice.cancel;
   return confirmDownload(context,
-      title: title, lines: lines, space: spaceOf(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name);
+      title: title, lines: lines, space: spaceOf(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name, footnote: footnote);
 }
 
 /// Delete always asks first, in the same shape: what it frees, the storage after, that it can come back, and a red Delete.
@@ -172,8 +175,11 @@ class _DownloadDialog extends StatelessWidget {
     this.bytes,
     this.action = 'Download',
     this.name,
+    this.footnote,
   });
 
+  /// A line after the main text (in a browser: that the download goes on with the tab closed).
+  final String? footnote;
   final String title;
   final List<DownloadLine> lines;
   final Space space;
@@ -200,11 +206,21 @@ class _DownloadDialog extends StatelessWidget {
       final what = name ?? (said == null && lines.length == 1 ? lines.single.name : null);
       return AlertDialog(
         title: const Text('Not enough space'),
-        content: Text(
-          '${what ?? 'This download'} needs ${formatBytes(total)}. You have ${formatBytes(usable)} to use; Cache keeps '
-          '${formatBytes(space.reserve)} free for the device.',
-          key: const ValueKey('download-short'),
-          style: body,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '${what ?? 'This download'} needs ${formatBytes(total)}. You have ${formatBytes(usable)} to use; Cache keeps '
+              '${formatBytes(space.reserve)} free for the device.',
+              key: const ValueKey('download-short'),
+              style: body,
+            ),
+            if (footnote != null) ...[
+              const SizedBox(height: 10),
+              Text(footnote!, key: const ValueKey('download-footnote'), style: TextStyle(fontSize: 13, color: k.secondary)),
+            ],
+          ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, DownloadChoice.cancel), child: const Text('Cancel')),
@@ -236,6 +252,10 @@ class _DownloadDialog extends StatelessWidget {
             _Bar(free: free, bytes: total, fits: fits),
             const SizedBox(height: 6),
             _small(context, 'Device storage', fits ? '${formatBytes(free)} free, ${formatBytes(free - total)} after' : '${formatBytes(free)} free, needs ${formatBytes(total)}'),
+          ],
+          if (footnote != null) ...[
+            const SizedBox(height: 8),
+            Text(footnote!, key: const ValueKey('download-footnote'), style: TextStyle(fontSize: 13, color: k.secondary)),
           ],
           if (mobileBlocked) ...[
             const SizedBox(height: 8),

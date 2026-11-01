@@ -5,16 +5,21 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../screens/download_confirm.dart';
+import '../settings/space.dart' show Space;
 import '../sources/sources_state.dart' show ZimFile;
 import '../theme.dart';
 import '../video/format.dart';
 import 'browse_state.dart';
 import 'opds.dart';
+import 'web/device_api.dart' show DeviceException;
 
 /// What the Library's hold menu (and the "..." of an opened item) offers for one item. An action that does not apply is null and
 /// is left out of the menu.
 class LibraryActions {
-  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free});
+  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free, this.again});
+
+  /// The last line of the delete confirm; null: "You can download it again later."
+  final String? again;
 
   final String title;
   final int bytes;
@@ -70,7 +75,11 @@ Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
     case 'home':
       a.addToHome!();
     case 'delete':
-      if (await confirmDelete(context, name: a.title, bytes: a.bytes, free: a.free)) await a.delete!();
+      if (a.again != null
+          ? await confirmDelete(context, name: a.title, bytes: a.bytes, free: a.free, again: a.again!)
+          : await confirmDelete(context, name: a.title, bytes: a.bytes, free: a.free)) {
+        await a.delete!();
+      }
   }
 }
 
@@ -93,17 +102,39 @@ Future<bool> pickIconInto(File dest, {Future<String?> Function()? pick}) async {
   }
 }
 
-/// Downloads a ZIM after the download pop-up: [replaces] makes it an update. Wait for Wi-Fi starts it waiting.
+/// Downloads a ZIM after the download pop-up: [replaces] makes it an update. Wait for Wi-Fi starts it waiting. In a browser the device
+/// downloads it, and it goes on with the tab closed (the pop-up says so).
 Future<void> downloadZim(BuildContext context, BrowseState browse, CatalogEntry entry, {ZimFile? replaces}) async {
   final dir = browse.sources.zimsDir;
-  if (dir == null) return;
+  final device = browse.device;
+  if (dir == null && device == null) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  if (device != null) {
+    await device.refresh(); // the room it shows is the room there is now
+    if (!context.mounted) return;
+  }
   final choice = await askToDownload(
     context,
     title: replaces == null ? 'Download ${entry.title}?' : 'Update ${entry.title}?',
     lines: [DownloadLine(entry.summary.isEmpty ? entry.title : '${entry.title}, ${entry.summary}', entry.size)],
-    dir: dir.path,
-    policy: browse.policy,
+    dir: dir?.path ?? '',
+    policy: device == null ? browse.policy : null,
+    spaceOf: device == null ? Space.of : (_) => device.spaceForDialog,
+    footnote: device == null ? null : 'It keeps downloading if you close this tab.',
   );
   if (choice == DownloadChoice.cancel) return;
+  if (device != null) {
+    String say;
+    try {
+      await browse.download(entry, replaces: replaces);
+      say = 'Download started. It keeps downloading if you close this tab.';
+    } on DeviceException {
+      say = "The download couldn't be started. Try again.";
+    }
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(say)));
+    return;
+  }
   unawaited(browse.download(entry, replaces: replaces, allowMobile: choice == DownloadChoice.now));
 }

@@ -331,7 +331,7 @@ async fn a_download_is_installed_like_the_phone_does_with_its_sidecars_and_the_c
 }
 
 #[tokio::test]
-async fn bad_download_requests_are_refused_and_library_packages_wait_for_a_decision() {
+async fn bad_download_requests_are_refused() {
     let _g = LOCK.lock().await;
     let rig = rig("dlbad", Setup::new()).await;
     let url = rig.origin.url("/big.zim");
@@ -344,7 +344,7 @@ async fn bad_download_requests_are_refused_and_library_packages_wait_for_a_decis
         (json!({"url": url, "kind": "zim", "name": "a/b.zim"}), 400, "invalid_name"),
         (json!({"url": url, "kind": "zim", "sha256": "abc"}), 400, "invalid"),
         (json!({"url": url, "kind": "zim", "origin": [1]}), 400, "invalid"),
-        (json!({"url": url, "kind": "library"}), 501, "library_install_pending"),
+        (json!({"url": url, "kind": "library", "name": "../x.cache-library"}), 400, "invalid_name"),
     ] {
         let (s, v) = rig.call("POST", "/api/library/download", &body.to_string()).await;
         assert_eq!((s, v["error"]["code"].clone()), (status, json!(code)), "{body}");
@@ -501,8 +501,12 @@ async fn an_upload_is_installed_like_a_download_and_its_name_is_made_safe() {
     }
     assert_eq!(up("kind=zim", b"x").await.0, 400);
     assert_eq!(up("kind=other&name=a.zim", b"x").await.0, 400);
-    let (s, v) = up("kind=library&name=a.cache-library", b"x").await;
-    assert_eq!((s, v["error"]["code"].clone()), (501, json!("library_install_pending")));
+    // a library package is only put in the docs root, for the browser to install; no rescan, no item
+    let (s, v) = up("kind=library&name=a.cache-library", b"PKG").await;
+    assert_eq!((s, v["result"]["path"].clone(), v["result"]["bytes"].clone()), (200, json!("incoming/a.cache-library"), json!(3)), "{v}");
+    assert_eq!(std::fs::read(rig.data().join("app/docs/incoming/a.cache-library")).unwrap(), b"PKG");
+    assert_eq!(rig.rescans(), 2, "{:?}", rig.log());
+    assert_eq!(up("kind=library&name=..%2Fx", b"x").await.0, 400);
     let names: Vec<String> = std::fs::read_dir(rig.zims()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
     assert_eq!(names, vec!["Small Pack.zim".to_string()]);
     assert!(part_files(rig.data()).is_empty());
@@ -541,6 +545,38 @@ async fn an_upload_is_refused_with_507_unless_the_disk_has_its_size_and_a_gigaby
     let r = route(&rig.app, "POST", q, Some(&rig.cookie), b"0123456789").await;
     assert_eq!(r.status, 200);
     assert_eq!(std::fs::read(rig.zims().join("a.zim")).unwrap(), b"0123456789");
+    stop(&rig).await;
+}
+
+// ---- space, library packages, the rescan call
+
+#[tokio::test]
+async fn space_tells_free_and_total_bytes_and_a_library_package_waits_in_the_docs_root() {
+    let _g = LOCK.lock().await;
+    let mut setup = Setup::new();
+    let free = Arc::new(AtomicU64::new(1234));
+    let f2 = free.clone();
+    setup.options.free_bytes = Some(Arc::new(move |_| Some(f2.load(Ordering::Relaxed))));
+    setup.options.total_bytes = Some(Arc::new(|_| Some(5678)));
+    let rig = rig("space", setup).await;
+    let (s, v) = rig.call("GET", "/api/library/space", "").await;
+    assert_eq!((s, v["result"].clone()), (200, json!({"free_bytes": 1234, "total_bytes": 5678})), "{v}");
+    assert_eq!(route(&rig.app, "GET", "/api/library/space", None, b"").await.status, 401);
+    free.store(10 << 30, Ordering::Relaxed);
+    // a download of a library package ends in docs/incoming, is not rescanned and does not become an item
+    let job = rig.download(json!({"url": rig.origin.url("/big.zim"), "kind": "library", "name": "pack.cache-library"})).await;
+    let done = rig.wait_state(job["id"].as_str().unwrap(), &["done", "failed"]).await;
+    assert_eq!((done["state"].clone(), done["kind"].clone()), (json!("done"), json!("library")), "{done}");
+    assert_eq!(std::fs::read(rig.data().join("app/docs/incoming/pack.cache-library")).unwrap(), content(0, BIG));
+    assert_eq!(rig.rescans(), 0, "{:?}", rig.log());
+    assert!(part_files(rig.data()).is_empty());
+    let (_, v) = rig.call("GET", "/api/library/items", "").await;
+    assert!(v["result"].as_array().unwrap().is_empty());
+    // the browser asks for the rescan after it has put a library in place
+    let (s, v) = rig.call("POST", "/api/library/rescan", "").await;
+    assert_eq!((s, v["ok"].clone()), (200, json!(true)), "{v}");
+    assert_eq!(rig.rescans(), 1, "{:?}", rig.log());
+    assert_eq!(route(&rig.app, "POST", "/api/library/rescan", None, b"").await.status, 401);
     stop(&rig).await;
 }
 

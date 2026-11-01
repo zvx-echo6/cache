@@ -16,6 +16,9 @@ import 'package:cache/sharing/sharing_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'browse/fakes.dart';
+import 'browse/web_fakes.dart';
+import 'package:cache/browse/web/device_api.dart';
+import 'package:cache/browse/web/device_library.dart';
 
 // A "library file" in these tests is JSON standing in for a snapshot: {"fake_library":true,"docs":N,"settings":{...}|null,
 // "guessable":bool,"whole":bool,"fails_to_open":bool}. The fake core below unpacks it into the folder as fake.json and answers
@@ -605,6 +608,142 @@ void main() {
       expect(menus, 1);
     });
   });
+
+  // The browser's Library: the app's own install procedure run against the device's files (AppFs) and core, with the same prompts.
+  group('LibrariesState on the device (in a browser)', () {
+    late FakeDeviceApi api;
+    late DeviceLibrary device;
+    late Directory docs;
+    late Directory support;
+
+    Future<void> setUpDevice() async {
+      docs = Directory('${tmp.path}/docs')..createSync(recursive: true);
+      support = Directory('${tmp.path}/support')..createSync(recursive: true);
+      api = FakeDeviceApi();
+      // The "device" lists what is in its libraries folder, forgets a library when asked, and counts the rescans.
+      api.onRemove = (id) => Directory('${docs.path}/libraries/${id.substring('library-'.length)}').deleteSync(recursive: true);
+      device = DeviceLibrary(api: _FolderApi(api, docs), fs: diskFs(support, docs), leaveWarning: (_) {});
+      sources = SourcesState(
+        zimsDirOverride: Directory('${tmp.path}/zims'),
+        indexesDirOverride: Directory('${tmp.path}/indexes'),
+        nativeFactory: _makeNative,
+        coreExtras: const {},
+      );
+      libs = LibrariesState(
+        sources: sources,
+        device: device,
+        appFs: diskFs(support, docs),
+        saveBytes: (name, bytes) async {
+          saved[name] = bytes;
+          return true;
+        },
+        pollInterval: const Duration(milliseconds: 5),
+      );
+      await sources.init();
+      await libs.init();
+    }
+
+    File incoming(String name, String body) => touch('${docs.path}/incoming/$name', body) ;
+    List<String> inLibs() => [for (final d in Directory('${docs.path}/libraries').listSync()) _base(d.path)]..sort();
+    Future<bool> never(String n, String? a, String? b) async => fail('no update was expected');
+    Future<String?> noSettings(String reason) async => fail('no settings file was expected');
+
+    test('an uploaded package is added from the docs root: unpacked, indexed, put in place, the package deleted, the core told', () async {
+      await setUpDevice();
+      incoming('manuals.cache-library', _lib());
+      await libs.addDeviceFile('manuals.cache-library', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task, isNull);
+      final l = libs.libraries.single;
+      expect(l.folderName, 'manuals');
+      expect(l.path, '${docs.path}/libraries/manuals');
+      expect(libs.phaseOf(l), LibraryPhase.ready);
+      expect(libs.docsOf(l), 3);
+      expect(File('${docs.path}/libraries/manuals/cache-library.json').existsSync(), isTrue);
+      expect(inLibs(), ['manuals'], reason: 'no hidden work folder is left');
+      expect(File('${docs.path}/incoming/manuals.cache-library').existsSync(), isFalse);
+      expect(api.rescans, greaterThan(0));
+    });
+
+    test('the same library again asks about the update, swaps it in through the device, and keeps the old one when it will not open', () async {
+      await setUpDevice();
+      incoming('m1.cache-library', _lib(version: '1'));
+      await libs.addDeviceFile('m1.cache-library', confirmUpdate: never, askSettings: noSettings);
+      final asked = <List<String?>>[];
+      incoming('m2.cache-library', _lib(version: '2', docs: 9));
+      await libs.addDeviceFile('m2.cache-library', confirmUpdate: (n, a, b) async {
+        asked.add([n, a, b]);
+        return true;
+      }, askSettings: noSettings);
+      expect(asked, [
+        ['Manuals', '1', '2'],
+      ]);
+      expect(libs.versionOf(libs.libraries.single), '2');
+      expect(libs.docsOf(libs.libraries.single), 9);
+      expect(inLibs(), ['manuals'], reason: 'no old copy left');
+      incoming('bad.cache-library', _lib(version: '3', failsToOpen: true));
+      await libs.addDeviceFile('bad.cache-library', confirmUpdate: (n, a, b) async => true, askSettings: noSettings);
+      expect(libs.task?.error, contains('kept as it was'));
+      expect(libs.versionOf(libs.libraries.single), '2');
+      expect(libs.phaseOf(libs.libraries.single), LibraryPhase.ready);
+      expect(inLibs(), ['manuals']);
+    });
+
+    test('a settings file the core cannot do without is asked for, then read from the device', () async {
+      await setUpDevice();
+      final settings = incoming('s.json', jsonEncode({'format': 1, 'library_id': 'notes', 'title': 'Notes', 'fields': {'text': 'text'}}));
+      incoming('b.snapshot', _lib(withSettings: false, guessable: false));
+      String? reason;
+      await libs.addDeviceFile('b.snapshot', confirmUpdate: never, askSettings: (r) async {
+        reason = r;
+        return settings.path;
+      });
+      expect(reason, contains('cannot guess'));
+      expect(libs.titleOf(libs.libraries.single), 'Notes');
+    });
+
+    test('a file that is not a library, and the blank template, say so; nothing is left on the device', () async {
+      await setUpDevice();
+      incoming('x.txt', 'hello');
+      await libs.addDeviceFile('x.txt', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, "This file isn't a Cache library.");
+      libs.dismissTask();
+      incoming('cache-library-template.tar.gz', 'not json');
+      await libs.addDeviceFile('cache-library-template.tar.gz', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, startsWith('This is an empty library template.'));
+      expect(libs.libraries, isEmpty);
+      expect(inLibs(), isEmpty);
+    });
+
+    test('remove goes through the device, and a download link is a device download that waits as a package', () async {
+      await setUpDevice();
+      incoming('manuals.cache-library', _lib());
+      await libs.addDeviceFile('manuals.cache-library', confirmUpdate: never, askSettings: noSettings);
+      await libs.remove(libs.libraries.single);
+      expect(api.removed, ['library-manuals']);
+      expect(libs.libraries, isEmpty);
+      await libs.addLink('http://example.org/x', confirmUpdate: never, askSettings: noSettings);
+      expect(libs.task?.error, contains('https://'));
+      libs.dismissTask();
+      await libs.addLink('https://example.org/lib/pack.cache-library', confirmUpdate: never, askSettings: noSettings);
+      expect(api.downloads.single['kind'], 'library');
+      expect(api.downloads.single['url'], 'https://example.org/lib/pack.cache-library');
+    });
+
+    test('work a cut-off add left on the device is cleaned up or put back at start', () async {
+      docs = Directory('${tmp.path}/docs')..createSync(recursive: true);
+      touch('${docs.path}/libraries/.add-5/shard/x', '1');
+      touch('${docs.path}/libraries/.manuals.old/shard/fake.json', _lib());
+      await setUpDevice();
+      expect(inLibs(), ['manuals'], reason: 'the half-made one is gone and the old copy is back');
+    });
+
+    test('the blank template is made on the device and handed to the browser\'s save', () async {
+      await setUpDevice();
+      expect(await libs.saveTemplate(), isTrue);
+      expect(saved.keys, [kLibraryTemplateName]);
+      expect(Directory('${docs.path}/incoming').listSync().where((e) => _base(e.path).startsWith('.template')), isEmpty);
+    });
+  });
 }
 
 /// A ustar archive of [files] (name to bytes), as the template's tar.
@@ -630,6 +769,7 @@ List<int> _tar(Map<String, List<int>> files) {
       ..addAll(List.filled((512 - e.value.length % 512) % 512, 0));
   }
   return out..addAll(List.filled(1024, 0));
+
 }
 
 /// A sync engine whose status lists one shared folder as the test sets it.
@@ -653,5 +793,23 @@ void _copyTree(Directory from, Directory to) {
     } else if (e is File) {
       e.copySync('${to.path}/$name');
     }
+  }
+}
+
+/// The device's answers about its libraries come from its folder; everything else is the fake's.
+class _FolderApi extends FakeDeviceApiView {
+  _FolderApi(super.inner, this.docs);
+
+  final Directory docs;
+
+  @override
+  Future<List<DeviceItem>> items() async {
+    final libs = Directory('${docs.path}/libraries');
+    if (!libs.existsSync()) return const [];
+    return [
+      for (final d in libs.listSync().whereType<Directory>())
+        if (!_base(d.path).startsWith('.') && Directory('${d.path}/shard').existsSync())
+          DeviceItem(id: 'library-${_base(d.path)}', kind: 'library', name: _base(d.path), title: _base(d.path), bytes: 10, path: 'app/docs/libraries/${_base(d.path)}'),
+    ];
   }
 }

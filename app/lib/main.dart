@@ -12,9 +12,14 @@ import 'actions/act_core.dart';
 import 'actions/action_registry.dart';
 import 'actions/app_actions.dart';
 import 'actions/setup_reader.dart';
+import 'app_fs.dart';
 import 'app_state.dart';
 import 'brand.dart';
 import 'browse/browse_state.dart';
+import 'browse/web/device_api.dart';
+import 'browse/web/device_fetch.dart';
+import 'browse/web/device_library.dart';
+import 'browse/web/local_files.dart' show createBrowserUploader;
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
@@ -105,11 +110,25 @@ class CacheApp extends StatefulWidget {
 class _CacheAppState extends State<CacheApp> {
   late final AppState app = AppState();
   late final SourcesState sources = SourcesState();
-  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries);
+  late final BrowseState browse = BrowseState(sources: sources, policy: policy, libraries: libraries, device: device);
+  // In a browser the Library lives on the device the browser is signed in to: what is installed, the downloads it runs (they go on
+  // with the tab closed) and the uploads from this computer. Null on a phone.
+  late final DeviceLibrary? device = _makeDevice();
+
+  DeviceLibrary? _makeDevice() {
+    if (!plat.isWeb) return null;
+    final api = HttpDeviceApi();
+    deviceFetchApi = api;
+    final d = DeviceLibrary(api: api, fs: createAppFs(), uploader: createBrowserUploader(), onItemsChanged: () => sources.refresh());
+    sources.removeOnDevice = (z) => d.remove('zim', z.fileName);
+    d.addListener(() => sources.setDeviceSizes({for (final i in d.items) if (i.kind == 'zim') i.name: i.bytes}));
+    return d;
+  }
   // Libraries (Qdrant collections the core searches): added from a file or a link, in their own folder beside the ZIMs.
   late final LibrariesState libraries = LibrariesState(
     sources: sources,
     policy: policy,
+    device: device,
     // The setup guide ships compressed in the assets; it is copied out to be added like any library file.
     bundledGuide: () async {
       try {
@@ -481,6 +500,7 @@ class _CacheAppState extends State<CacheApp> {
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(onResume: () {
+      device?.onFocus();
       unawaited(weather.updateIfDue(kBackgroundEvery));
       if (!plat.isWeb) unawaited(connections.syncAll());
     });
@@ -558,6 +578,7 @@ class _CacheAppState extends State<CacheApp> {
     }
     layout.init();
     sources.init();
+    if (device != null) unawaited(device!.start());
     libraries.init();
     browse.init();
     video.init();
@@ -657,6 +678,7 @@ class _CacheAppState extends State<CacheApp> {
     nav.dispose();
     searchModel.dispose();
     libraries.dispose();
+    device?.dispose();
     sources.dispose();
     video.dispose();
     layout.dispose();

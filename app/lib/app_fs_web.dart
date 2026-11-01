@@ -113,6 +113,19 @@ class WebAppFs implements AppFs {
   }
 
   @override
+  Future<void> rename(AppRoot root, String from, String to) async {
+    await _transport.call('fs.rename', {'root': root.name, 'from': from, 'to': to});
+  }
+
+  Map<String, String>? _roots;
+
+  @override
+  Future<String> rootPath(AppRoot root) async {
+    final r = _roots ??= ((await _transport.call('fs.roots', const {})) as Map).cast<String, String>();
+    return r[root.name]!;
+  }
+
+  @override
   Future<void> mkdir(AppRoot root, String path) async {
     if (path.isEmpty) return; // the roots are the server's, and always there
     await _call('fs.mkdir', root, path);
