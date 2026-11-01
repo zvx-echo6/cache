@@ -28,6 +28,10 @@
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
 //!   GET  /api/fetch?url=<encoded>           -> the answer of a catalogue host (allow-list in `fetch`), streamed, at most 50 MB
 //!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
+//!   GET  /api/models/embedder               -> {state:"missing"|"downloading"|"ready"|"error", bytes?,total?,error?, file,size,library_found}
+//!   POST /api/models/embedder/download      -> the same; starts (or continues) the model download, 202-style: answers at once
+//!   POST /api/embed {texts:[...]}           -> {vectors:[[f32;1024]],model,dims}: 1 to 64 texts, in order; 503 model_missing while the
+//!                                              model is not there (the download is started), 503 embed_unavailable if it cannot load
 //!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
 //!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
 //!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
@@ -47,6 +51,7 @@ use crate::keys::KeyError;
 use crate::pages;
 use crate::helper::Helper;
 use crate::webfiles::{self, Resolved};
+use crate::embed::{self, EmbedService};
 use crate::library::{ApiErr, Library};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, Limited};
@@ -75,6 +80,8 @@ pub struct App {
     pub web: PathBuf,
     /// Library downloads, uploads, installed items and the catalogue fetch.
     pub library: Arc<Library>,
+    /// The bge-m3 embedder: the model download and the vectors (see `embed`).
+    pub embed: Arc<EmbedService>,
 }
 
 pub struct Reply {
@@ -177,8 +184,35 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
     })
 }
 
+/// `/api/models/embedder...` and `/api/embed` (the caller has checked the session). `None` when the path is not one of these.
+async fn embedder(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
+    let svc = &app.embed;
+    Some(match (method, path) {
+        ("GET", "/api/models/embedder") => ok(svc.status()),
+        ("POST", "/api/models/embedder/download") => ok(svc.start_download()),
+        ("POST", "/api/embed") => {
+            let texts = match embed::parse_texts(body) {
+                Ok(t) => t,
+                Err(e) => return Some(api_error(e)),
+            };
+            let s = svc.clone();
+            // llama.cpp is blocking and busy for a while: keep it off the async threads.
+            let r = tokio::task::spawn_blocking(move || s.embed_batch(&texts)).await;
+            match r {
+                Ok(Ok(v)) => Reply::json(200, embed::vectors_json(&v, svc.model_id())),
+                Ok(Err(e)) => api_error(e),
+                Err(_) => Reply::error(500, "embed_failed", "the embedder stopped unexpectedly"),
+            }
+        }
+        _ => return None,
+    })
+}
+
 async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Reply {
     if let Some(r) = settings(app, method, path, body) {
+        return r;
+    }
+    if let Some(r) = embedder(app, method, path, body).await {
         return r;
     }
     if let Some(r) = library(app, method, path, query, body).await {
@@ -597,9 +631,14 @@ mod tests {
     use crate::auth::{Sessions, StoredPassword};
     use crate::TempDir;
 
+    fn test_embed(dir: &TempDir) -> Arc<EmbedService> {
+        // the address is one nothing listens on, so a test that starts the model download never reaches the network
+        EmbedService::with_spec(dir.0.clone(), dir.0.join("none.so"), crate::embed::ModelSpec { url: "http://127.0.0.1:1/none".into(), ..crate::embed::ModelSpec::bge_m3() })
+    }
+
     fn app(dir: &TempDir) -> App {
         let auth = Auth::new(None, Sessions::load(&dir.0.join("sessions.json")), true);
-        App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None) }
+        App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None), embed: test_embed(dir) }
     }
 
     #[tokio::test]
@@ -651,7 +690,7 @@ mod tests {
         std::fs::write(dir.0.join("web/index.html"), b"the app").unwrap();
         std::fs::write(dir.0.join("web/main.dart.js"), b"js").unwrap();
         std::fs::write(dir.0.join("secret.txt"), b"no").unwrap();
-        App { auth: Arc::new(Auth::load(&dir.0, true).unwrap()), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None) }
+        App { auth: Arc::new(Auth::load(&dir.0, true).unwrap()), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None), embed: test_embed(dir) }
     }
 
     fn set_cookies(r: &Reply) -> Vec<String> {
@@ -676,6 +715,25 @@ mod tests {
 
     fn body_str(r: &Reply) -> String {
         String::from_utf8_lossy(&r.body).to_string()
+    }
+
+    #[tokio::test]
+    async fn the_embedder_routes_need_a_session_and_check_their_input() {
+        let d = TempDir::new("route-embed");
+        let a = file_app(&d);
+        for (m, p) in [("GET", "/api/models/embedder"), ("POST", "/api/models/embedder/download"), ("POST", "/api/embed")] {
+            assert_eq!(route(&a, m, p, None, b"{}").await.status, 401, "{m} {p}");
+        }
+        let c = sign_in(&a).await;
+        let (s, v) = json_call(&a, "GET", "/api/models/embedder", &c, "").await;
+        assert_eq!((s, v["result"]["state"].clone(), v["result"]["library_found"].clone()), (200, json!("missing"), json!(false)));
+        assert_eq!(json_call(&a, "POST", "/api/embed", &c, "nope").await.0, 400);
+        assert_eq!(json_call(&a, "POST", "/api/embed", &c, r#"{"texts":[]}"#).await.0, 400);
+        let many = json!({"texts": vec!["x"; 65]}).to_string();
+        assert_eq!(json_call(&a, "POST", "/api/embed", &c, &many).await.0, 400);
+        // a good call with no model on the server: asked to wait, and the download has started
+        let (s, v) = json_call(&a, "POST", "/api/embed", &c, r#"{"texts":["hello"]}"#).await;
+        assert_eq!((s, v["error"]["code"].clone()), (503, json!("model_missing")));
     }
 
     #[tokio::test]

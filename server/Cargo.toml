@@ -22,6 +22,8 @@ path = "testbin/fake_helper.rs"
 test = false
 
 [dependencies]
+# The embedder loader (libloading + cl_embed settings shared with the cs command line and the places pack builder); workspace member.
+cache_embed = { path = "../packages/cache_search/native/cache_embed" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "signal", "process", "io-util", "sync", "fs"] }

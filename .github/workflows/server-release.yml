@@ -11,6 +11,12 @@
 # Flutter 3.44.8 has no Linux arm64 SDK, so the `build` jobs use the plain Dart SDK (setup-dart, which has arm64) pinned to the
 # version Flutter 3.44.8 bundles (3.12.2); the helper imports only Flutter-free sources, so it needs nothing more. No cross-compiling.
 #
+# The text embedder: lib/libcache_llama.so is packages/cache_llama (llama.cpp at the pinned submodule commit behind cl_embed) built
+# here for each architecture with CMake (x86_64 with AVX2/FMA/F16C, aarch64 at the baseline Armv8-A so it runs on a Raspberry Pi 4)
+# and cached by the submodule commit. The server loads it at run time (server/src/embed.rs). A step then downloads bge-m3 (cached by
+# its sha256), embeds three fixed texts with cache_embed's own example (the program the places pack builder uses) and through the
+# server, requires cosine >= 0.9999 between them, and prints load time, memory and texts/s.
+#
 # The core builds on Linux without libzim: the C++ shim over libzim is built only for Windows, Android and iOS (see
 # packages/cache_search/native/cache_search/build.rs), so LIBZIM_DIR is not needed here.
 #
@@ -27,6 +33,7 @@ on:
       - 'app/**'
       - 'packages/cache_search/lib/**'
       - 'packages/cache_search/native/**'
+      - 'packages/cache_llama/**'
       - '.github/workflows/server-release.yml'
   workflow_dispatch:
 
@@ -81,7 +88,16 @@ jobs:
         shell: bash
         working-directory: packages/cache_search/native
     steps:
+      # The bare container has no git, and checkout only fetches submodules with one: install it first. (The folder the other
+      # steps default to does not exist yet, hence the working directory.)
+      - name: Git for the checkout
+        working-directory: /
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update -q && apt-get install -y -q git ca-certificates
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build tools
         working-directory: .
         # The container is a bare ubuntu:22.04 with no sudo; everything the core and the actions need is installed here
@@ -127,6 +143,77 @@ jobs:
           path: packages/cache_search/native/target
           key: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      # libcache_llama.so for this architecture (see the top of the file). Cached by the llama.cpp commit and the cache_llama sources.
+      - name: cache_llama key
+        id: llama
+        working-directory: .
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "rev=$(git rev-parse HEAD:packages/cache_llama/third_party/llama.cpp)" >> "$GITHUB_OUTPUT"
+      - name: cache_llama cache
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: build-llama/libcache_llama.so
+          key: libcache-llama-${{ matrix.arch }}-${{ steps.llama.outputs.rev }}-${{ hashFiles('packages/cache_llama/src/**') }}-g2235-1
+      - name: Build libcache_llama
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        working-directory: .
+        run: |
+          avx2=""
+          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then avx2="-DCACHE_LLAMA_X86_AVX2=ON"; fi
+          # libstdc++ and libgcc are linked in, so the installed library needs nothing but libc.
+          cmake -S packages/cache_llama/src -B build-llama -DCMAKE_BUILD_TYPE=Release $avx2 \
+            -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          cmake --build build-llama --target cache_llama -j "$(nproc)"
+          strip --strip-unneeded build-llama/libcache_llama.so
+      - name: Check libcache_llama
+        working-directory: .
+        run: |
+          ls -l build-llama/libcache_llama.so
+          ldd build-llama/libcache_llama.so || true
+          # (the output is read whole: grep -q ending a pipe early would fail the step under pipefail)
+          symbols=$(nm -D --defined-only build-llama/libcache_llama.so)
+          for s in cl_embed_load cl_embed_info cl_embed cl_embed_free; do
+            grep -q " T $s\$" <<< "$symbols" || { echo "::error::libcache_llama.so has no $s"; exit 1; }
+          done
+          echo "max glibc: $(objdump -T build-llama/libcache_llama.so | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)"
+      # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
+      - name: Embedding model cache
+        uses: actions/cache@v4
+        with:
+          path: bge-model
+          key: bge-m3-q8_0-c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+      - name: Embedding model
+        working-directory: .
+        run: |
+          mkdir -p bge-model
+          f=bge-model/bge-m3-Q8_0.gguf
+          sha=c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+          if [[ ! -f "$f" ]]; then
+            curl -fL --retry 8 --retry-delay 5 --retry-all-errors -C - -o "$f.part" \
+              "https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf"
+            mv "$f.part" "$f"
+          fi
+          echo "$sha  $f" | sha256sum -c -
+          test "$(stat -c %s "$f")" = 634553856
+      - name: Embedding exactness and speed
+        env:
+          CACHE_EMBED_LIB: ${{ github.workspace }}/build-llama/libcache_llama.so
+          CACHE_EMBED_MODEL: ${{ github.workspace }}/bge-model/bge-m3-Q8_0.gguf
+          CACHE_EMBED_REF: ${{ runner.temp }}/embed-ref.f32
+        run: |
+          # The reference: cache_embed's own example, the program the places pack builder and the evaluation use.
+          cargo run -p cache_embed --example embed_texts -- --model "$CACHE_EMBED_MODEL" --lib "$CACHE_EMBED_LIB" \
+            --in ../../../server/tests/data/embed_texts.jsonl --out "$CACHE_EMBED_REF" --meta "$RUNNER_TEMP/embed-ref.meta.json"
+          cat "$RUNNER_TEMP/embed-ref.meta.json"
+          cargo test -p cache_server --test embed_exact -- --ignored --nocapture --test-threads=1 | tee "$RUNNER_TEMP/embed-test.log"
+          {
+            echo "### Embedder (${{ matrix.arch }}, $(nproc) cores, $(grep -m1 -E 'model name|Model' /proc/cpuinfo || true))"
+            echo '```'
+            grep -E 'cosine|PERF' "$RUNNER_TEMP/embed-test.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       # The release version is <Cargo version>+<short git sha>; cache-server embeds it at build time (CACHE_SERVER_VERSION) and
       # prints it at start-up and for --version. The tarball name carries the Cargo version and the sha.
       - name: Version
@@ -169,7 +256,7 @@ jobs:
         run: |
           limit="2.35"
           fail=0
-          for f in packages/cache_search/native/target/release/cache-server packages/cache_search/native/target/release/libcache_search.so "$RUNNER_TEMP/helper/cache-core-helper"; do
+          for f in packages/cache_search/native/target/release/cache-server packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper"; do
             max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
             echo "$f: max GLIBC_${max:-none}"
             if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
@@ -195,6 +282,7 @@ jobs:
           install -m 755 packages/cache_search/native/target/release/cache-server "$stage/cache-server"
           install -m 755 "$RUNNER_TEMP/helper/cache-core-helper" "$stage/helper/cache-core-helper"
           install -m 644 packages/cache_search/native/target/release/libcache_search.so "$stage/lib/libcache_search.so"
+          install -m 644 build-llama/libcache_llama.so "$stage/lib/libcache_llama.so"
           cp -R "$RUNNER_TEMP/web-build/." "$stage/web/"
           if [[ ! -f "$stage/web/index.html" ]]; then echo "::error::the web build has no index.html"; exit 1; fi
           printf '%s\n' "$version" > "$stage/VERSION"

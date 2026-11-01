@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod embed;
 pub mod fetch;
 pub mod helper;
 pub mod http;

@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const USAGE: &str = "usage:
-  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>]
-      (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so;
+  cache-server serve --data <dir> --web <dir> [--listen 0.0.0.0:8443] [--no-tls] [--public-origin https://host[:port]] [--helper <exe>] [--core-lib <lib>] [--embed-lib <lib>]
+      (--helper defaults to <this program's folder>/helper/cache-core-helper, --core-lib to <folder>/lib/libcache_search.so,
+       --embed-lib (the cache_llama library that embeds text) to <folder>/lib/libcache_llama.so;
        --public-origin, or public_origin in <dir>/config.json, is the address people use, for security keys: it needs a host name)
   cache-server set-password --data <dir> [--sign-out-all]
       (reads the password from standard input; a running server uses it at once; --sign-out-all also signs every browser out;
@@ -157,7 +158,7 @@ fn keys(argv: &[String]) -> Result<(), String> {
 }
 
 fn serve(argv: &[String]) -> Result<(), String> {
-    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib", "public-origin"], &["no-tls"])?;
+    let a = Args::parse(argv, &["data", "web", "listen", "helper", "core-lib", "embed-lib", "public-origin"], &["no-tls"])?;
     let data = PathBuf::from(a.req("data")?);
     let web = PathBuf::from(a.req("web")?);
     let listen: SocketAddr = a.get("listen").unwrap_or("0.0.0.0:8443").parse().map_err(|e| format!("--listen: {e}"))?;
@@ -186,16 +187,27 @@ fn serve(argv: &[String]) -> Result<(), String> {
     let install_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let (helper_name, lib_name) = if cfg!(windows) { ("cache-core-helper.exe", "cache_search.dll") } else { ("cache-core-helper", "libcache_search.so") };
     let helper_exe = a.get("helper").map(PathBuf::from).unwrap_or_else(|| install_dir.join("helper").join(helper_name));
+    let embed_lib_name = if cfg!(windows) { "cache_llama.dll" } else { "libcache_llama.so" };
+    let embed_lib = a.get("embed-lib").map(PathBuf::from).unwrap_or_else(|| install_dir.join("lib").join(embed_lib_name));
     let core_lib = a.get("core-lib").map(PathBuf::from).unwrap_or_else(|| install_dir.join("lib").join(lib_name));
     let mut helper_cfg = HelperConfig::new(helper_exe, core_lib, data.join("sources.json"));
     helper_cfg.app_dirs = Some((data.join("app").join("support"), data.join("app").join("docs")));
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(async move {
-        // TODO: the query embedder (hybrid search) comes later.
         let helper = Helper::start(helper_cfg).await;
         let library = Library::new(data.clone(), Some(helper.clone()));
-        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library });
+        // The text embedder (bge-m3): the model is fetched on first need; a loaded model is let go when idle.
+        let embed = cache_server::embed::EmbedService::new(data.clone(), embed_lib);
+        let reaper = embed.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
+            loop {
+                tick.tick().await;
+                reaper.reap_idle(cache_server::embed::IDLE);
+            }
+        });
+        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;
         let scheme = if use_tls { "https" } else { "http" };
         eprintln!("listening on {scheme}://{listen}/");
