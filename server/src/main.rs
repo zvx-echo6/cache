@@ -207,7 +207,10 @@ fn serve(argv: &[String]) -> Result<(), String> {
                 reaper.reap_idle(cache_server::embed::IDLE);
             }
         });
-        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed });
+        // The library builder: books from PDFs, one at a time, and the drop folder. Its threads keep going with no browser open.
+        let build = cache_server::libbuild::BuildService::new(data.clone(), library.clone(), Arc::new(embed.clone()), Default::default());
+        build.start();
+        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library, embed, build });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;
         let scheme = if use_tls { "https" } else { "http" };
         eprintln!("listening on {scheme}://{listen}/");
