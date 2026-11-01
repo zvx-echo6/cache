@@ -72,7 +72,7 @@ jobs:
       - name: Pinned Valhalla source
         uses: ./.github/actions/valhalla-source
         with:
-          dir: ${{ github.workspace }}/work/src
+          dir: work/src
       - name: Dependency cache (vcpkg downloads and built packages)
         uses: actions/cache@v4
         with:

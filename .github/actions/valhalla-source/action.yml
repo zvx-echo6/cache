@@ -8,4 +8,4 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: bash "${{ github.workspace }}/packages/valhalla/scripts/fetch-source.sh" "${{ inputs.dir }}"
+      run: bash "$GITHUB_WORKSPACE/packages/valhalla/scripts/fetch-source.sh" "${{ inputs.dir }}"
