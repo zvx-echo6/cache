@@ -103,7 +103,8 @@ void main() {
       expect(find.text('Not enough space on this device.'), findsOneWidget);
       expect(find.textContaining('server'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('retry-f1')));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump();
       expect(api.downloads.single['url'], 'https://dl.example/f1.zim');
     });
 
@@ -138,9 +139,9 @@ void main() {
       await tester.pump();
       expect(find.text('Uploading'), findsOneWidget);
       expect(find.textContaining('wikipedia_fr_all_nopic_2026-09.zim'), findsOneWidget);
-      expect(find.textContaining('1000 B of 3.9 KB'), findsOneWidget);
+      expect(find.textContaining('1000 B of 4 KB'), findsOneWidget);
       expect(find.text('Keep this tab open until the upload ends. Downloads and indexing carry on without it.'), findsOneWidget);
-      expect(find.textContaining('3.0 KB still to upload'), findsOneWidget);
+      expect(find.textContaining('3 KB still to upload'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('cancel-upload')));
       await tester.pump();
       expect(uploader.started.single.cancelled, isTrue);
