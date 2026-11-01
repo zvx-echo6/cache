@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn a_book_goes_to_its_nearest_division_unless_unsure() {
         let cls = Classes { version: 1, unsure_below: 0.5, min_margin: 0.1, classes: vec![] };
-        let vecs = ClassVectors { digest: String::new(), vectors: vec![("110".into(), vec![1.0, 0.0]), ("120".into(), vec![0.0, 1.0]), ("130".into(), vec![0.7071, 0.7071])] };
+        let vecs = ClassVectors { digest: String::new(), vectors: vec![("110".into(), vec![1.0, 0.0]), ("120".into(), vec![0.0, 1.0]), ("130".into(), vec![std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2])] };
         let v = classify(&[1.0, 0.05], &vecs, &cls);
         assert_eq!((v.division.as_deref(), v.unsure.as_deref()), (Some("110"), None));
         assert_eq!(v.top.len(), 3);
