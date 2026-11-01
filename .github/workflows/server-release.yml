@@ -92,13 +92,13 @@ jobs:
           apt-get update -q
           apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip lld
           ld.lld --version
-          gcc --version | head -n 1
-          ldd --version | head -n 1
+          gcc --version | sed -n 1p
+          ldd --version | sed -n 1p
       - name: Rust
         id: rust
         working-directory: .
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           . "$HOME/.cargo/env"
           echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
