@@ -36,6 +36,8 @@ The model is the AI that answers in "Ask". You pick it, and Cache runs it on you
 
 A model is about 3 to 5 GB.
 
+The models under "Recommended" are the default choice. Below them is a section called "Experimental". It says: "These models are uncensored. They are not recommended."
+
 - If you're on mobile data, the download waits for Wi-Fi. See Downloads, Wi-Fi and mobile data.
 - If a model says "Not supported: Cache needs a model that can use tools", pick another.
 - If there's no room, the pop-up is "Not enough space". Tap "Free up space".
