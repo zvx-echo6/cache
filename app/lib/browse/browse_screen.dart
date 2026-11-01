@@ -71,11 +71,14 @@ class _BrowseScreenState extends State<BrowseScreen> {
     super.dispose();
   }
 
-  /// Looks for updates once, the first time the tab is shown and there are ZIMs to check.
+  /// Looks for updates once, the first time the tab is shown and there are ZIMs to check. After the frame: this runs while the tab
+  /// builds, and the check tells the state's listeners at once (others may be on screen, Add to Library beside the list).
   void _maybeCheck() {
     if (!widget.active || _checked || sources.zims.isEmpty) return;
     _checked = true;
-    b.checkUpdates();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) b.checkUpdates();
+    });
   }
 
   /// A citation asked for an article.

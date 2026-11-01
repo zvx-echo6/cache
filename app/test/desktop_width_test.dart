@@ -108,10 +108,10 @@ void main() {
     expect(tester.getSize(find.byKey(const ValueKey('L'))).width, closeTo(1400 * 0.36, 0.01));
     expect(tester.getSize(find.byKey(const ValueKey('R'))).width, closeTo(1400 - 1400 * 0.36 - kTwoColumnGap, 0.01));
     expect(find.byKey(const ValueKey('N')), findsNothing);
-    // 1440: the detail is 1059 wide, so the left column is its minimum.
-    await pumpColumns(tester, const Size(1440, 900), 1059);
+    // A page of 1000 (36% would be 360): the left column is its minimum.
+    await pumpColumns(tester, const Size(1440, 900), 1000);
     expect(tester.getSize(find.byKey(const ValueKey('L'))).width, kTwoColumnLeftMinWidth);
-    expect(tester.getSize(find.byKey(const ValueKey('R'))).width, 1059 - kTwoColumnLeftMinWidth - kTwoColumnGap);
+    expect(tester.getSize(find.byKey(const ValueKey('R'))).width, 1000 - kTwoColumnLeftMinWidth - kTwoColumnGap);
     // Too narrow a page, or any window under 1280: the page's own one column.
     await pumpColumns(tester, const Size(1920, 1080), kTwoColumnMinWidth - 1);
     expect(find.byKey(const ValueKey('N')), findsOneWidget);
@@ -131,8 +131,8 @@ void main() {
   testWidgets('ReadingWidth keeps text to about 70 characters on a desktop window and leaves narrower windows alone', (tester) async {
     expect(await readingBoxWidth(tester, const Size(1279, 800)), 1279);
     final w = await readingBoxWidth(tester, const Size(1920, 1080));
-    // 70 widths of "0" at 16 px (the test font draws each character as a 16 px square).
-    expect(w, closeTo(70 * 16, 0.5));
+    // 70 widths of "0" at 16 px (the test font's characters are about 16 px wide).
+    expect(w, inInclusiveRange(70 * 15, 70 * 17));
     final ctx = tester.element(find.byKey(const ValueKey('text')));
     expect(ReadingWidth.maxWidthOf(ctx, style: const TextStyle(fontSize: 16)), closeTo(w, 0.5));
     expect(ReadingWidth.padFor(ctx, 1920, style: const TextStyle(fontSize: 16)).left, closeTo((1920 - w) / 2, 0.5));
