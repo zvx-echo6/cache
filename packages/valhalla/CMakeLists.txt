@@ -56,6 +56,10 @@ target_link_libraries(valhalla_shim PRIVATE valhalla)
 if(ANDROID)
   target_link_options(valhalla_shim PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections -Wl,-z,max-page-size=16384)
 endif()
+# Linux (glibc): one self-contained library that needs only glibc. libstdc++ and libgcc are linked statically and hidden.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  target_link_options(valhalla_shim PRIVATE -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,--gc-sections)
+endif()
 
 # C test program (also what is pushed to the phone).
 if(CACHE_VALHALLA_BUILD_TEST)
