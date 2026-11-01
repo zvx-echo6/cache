@@ -254,6 +254,14 @@ String? distanceLine(NavState nav, Fmt fmt, MapPlace p) {
   return null;
 }
 
+/// A search result's "0.4 mi NE": from the point the search was centred on (the map's centre, else the phone), the point
+/// the results were ranked around, so the distances never contradict the order. A result without one falls back to
+/// [distanceLine].
+String? resultDistanceLine(NavState nav, Fmt fmt, MapPlace p) {
+  if (p.distanceM != null) return '${fmt.distance(p.distanceM!)}${p.direction == null ? '' : ' ${p.direction}'}';
+  return distanceLine(nav, fmt, p);
+}
+
 double bearingBetween(double lat1, double lon1, double lat2, double lon2) {
   double rad(double d) => d * math.pi / 180;
   final dl = rad(lon2 - lon1);
@@ -274,7 +282,7 @@ class _ResultRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final dist = place.isCategory ? null : distanceLine(nav, fmt, place);
+    final dist = place.isCategory ? null : resultDistanceLine(nav, fmt, place);
     final sub = place.isCategory
         ? 'All nearby'
         : [place.kind, if (place.address.isNotEmpty) place.address].join(' · ');

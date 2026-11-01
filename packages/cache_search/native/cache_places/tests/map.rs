@@ -96,6 +96,30 @@ fn a_town_name_finds_the_town_first() {
 }
 
 #[test]
+fn a_town_whose_name_is_the_query_leads_the_places_even_when_nearer_matches_score_higher() {
+    let t = Tmp::new("towntop");
+    write_fixture_pack_with_vectors(&t.pack());
+    let c = core(&t);
+    // Searched near Stanley with a query vector that is Stanley Lake's own: the meaning step finds the lake (and things
+    // like it) next to the map centre, which outscores a town 190 km away on closeness. "Burley" still means the town.
+    let lake = fake_embed("Stanley Lake. A large alpine lake beneath the Sawtooth Mountains, popular for camping and kayaking.");
+    let opts = SearchOpts { near: Some(STANLEY), vector: Some((FAKE_MODEL.to_string(), lake)), ..Default::default() };
+    let v = c.search("Burley", &opts, None).unwrap();
+    assert_eq!(v["meaning"], "used", "{v}");
+    let r = v["results"].as_array().unwrap();
+    assert!(r.iter().any(|x| x["name"] == "Stanley Lake" && x["matched"] == "meaning"), "{v}");
+    let first = r.iter().find(|x| x["type"] != "category").unwrap();
+    assert_eq!((first["type"].as_str(), first["name"].as_str()), (Some("town"), Some("Burley")), "{v}");
+    // the shop and the school named after the town come after it
+    let at = |n: &str| r.iter().position(|x| x["name"] == n);
+    assert!(at("Burley Elementary School").is_none_or(|i| i > at("Burley").unwrap()));
+    // a city whose name is two words, with a place of the same name elsewhere
+    let v = search(&c, "Twin Falls", Some(STANLEY));
+    let first = v["results"].as_array().unwrap().iter().find(|x| x["type"] != "category").unwrap().clone();
+    assert_eq!((first["type"].as_str(), first["name"].as_str(), first["kind"].as_str()), (Some("town"), Some("Twin Falls"), Some("City")));
+}
+
+#[test]
 fn a_category_gives_its_row_then_the_nearest_places_from_the_anchor_town() {
     let t = Tmp::new("category");
     write_fixture_pack(&t.pack());

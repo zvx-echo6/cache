@@ -118,12 +118,21 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
     _lifecycle;
+    // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
+    // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
     final c = maps.savedCamera;
     if (c != null) {
       _lat = c.lat;
       _lon = c.lon;
       _zoom = c.zoom;
     }
+    final fix = location.fix;
+    if (fix != null) {
+      _lat = fix.lat;
+      _lon = fix.lon;
+      if (c == null) _zoom = 14;
+    }
+    if (fix != null || c != null) nav.setMapCentre(_lat, _lon);
     // A draw asked for before this screen was first built (the Regions sheet opened from Home) starts it now.
     if (maps.drawRequest) {
       maps.clearDrawRequest();

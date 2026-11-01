@@ -205,6 +205,22 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
+      testWidgets('search rows give the distance from where the search was centred, as they were ranked', (tester) async {
+        // The map looks at Idaho Falls while the phone is near Burley: the core measured from the map's centre.
+        nav.setMapCentre(43.49, -112.03);
+        backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: const [
+              MapPlace(id: 'place:osm:n9', type: 'place', name: 'Maverik', kind: 'Gas station', address: 'Idaho Falls, ID', lat: 43.50, lon: -112.02, distanceM: 1609, direction: 'NE'),
+            ]);
+        await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
+        await tester.enterText(find.byKey(const ValueKey('map-search-field')), 'Maverik');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        expect(find.text('Maverik'), findsWidgets);
+        expect(find.textContaining('1.0 mi NE'), findsOneWidget);
+        expect(find.textContaining('113 mi'), findsNothing, reason: 'not the distance from the phone, 113 mi');
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('place card: details, copy, and the three actions', (tester) async {
         await tester.pumpWidget(host(theme, PlaceCard(nav: nav, place: hospital, fmt: fmt, onClose: () {})));
         expect(find.text('Cassia Regional Hospital'), findsOneWidget);

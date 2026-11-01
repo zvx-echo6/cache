@@ -14,12 +14,14 @@
 //!     the name-and-summary texts of places and towns. A matching kind gives a `kind:<id>` row and its nearest places.
 //!     Without either, this step is skipped and the answer says so (`meaning`: "no_embedder" or "no_vectors").
 //!
-//! A query that starts with a house number can also give addresses (the geocoder's address search, step 3).
+//! A query that starts with a house number can also give addresses (the geocoder's address search, step 3). With an anchor
+//! town after it ("321 2nd Ave E, Twin Falls") only addresses in that town or within 15 km of it answer, and none is no results.
 //! The answer says what places the phone has for the search (`places`, `warning_code`: see `feed::places_state`).
 //!
 //! Ranking: `score = 0.7 * relevance + 0.3 * closeness`, where closeness is `exp(-km / 25)` from the anchor, else the map
 //! centre or GPS fix (0.5 when neither is known). Relevance is the name match (0..1), the category match (0..1, a little
-//! under a name match) or the vector cosine mapped from the model's useful range onto 0..1.
+//! under a name match) or the vector cosine mapped from the model's useful range onto 0..1. A town whose whole name is the
+//! query ("Filer") leads the places whatever its score: it is what was searched for, not the streets and shops named after it.
 //!
 //! Every result carries an `id` (`place:<source id>`, `town:<source id>`, `addr:<uid>/<number>`, `loc:<lat>,<lon>`,
 //! `category:<id>`, `kind:<id>`); the route call accepts all but `category:` as an end.
@@ -28,7 +30,7 @@ use crate::address;
 use crate::coord::{self, Parsed};
 use crate::feed::{places_state, FeedSlot, PlacesFeed, PrepareAnswer};
 use crate::geo::{bearing_deg, compass8, dms, haversine_km, round_to};
-use crate::geocoder::{GeoHit, Geocoder, HitKind};
+use crate::geocoder::{GeoHit, Geocoder, HitKind, ADDRESS_AREA_KM, EXACT_NAME_MATCH};
 use crate::kind::{humanize, kind_of};
 use crate::nearby::ranked;
 use crate::pack::{Category, LocalityRow, Pack, PackSet, PlaceRow};
@@ -537,13 +539,16 @@ impl PlacesCore {
         let rest = anchor.as_ref().map(|(_, r)| r.clone());
         let centre = anchor.as_ref().map(|(l, _)| (l.lat, l.lon)).or(opts.near);
         let q_words = stems(rest.as_deref().unwrap_or(q));
+        // A house number and street in a named town ("321 2nd Ave E, Twin Falls"): only addresses in or near that town answer
+        // it, and none means nothing was found there (not the same number on a street of that name in another town).
+        let in_town: Option<LocalityRow> = anchor.as_ref().filter(|(_, r)| address::split_house_number(r).is_some()).map(|(l, _)| l.clone());
 
         let mut cands: Vec<Cand> = Vec::new();
         let mut cat_rows: Vec<(Category, f64, &'static str)> = Vec::new();
         let mut kind_rows: Vec<(crate::pack::KindInfo, f64)> = Vec::new();
 
         // 4. categories by keyword
-        for c in &cats {
+        for c in cats.iter().filter(|_| in_town.is_none()) {
             let s = keyword_strength(&q_words, c, &vocab);
             if s >= KEYWORD_CATEGORY {
                 cat_rows.push((c.clone(), s.min(1.0), "category"));
@@ -551,9 +556,9 @@ impl PlacesCore {
         }
 
         // 5. meaning
-        let mut meaning = if opts.meaning { "no_vectors" } else { "off" };
+        let mut meaning = if opts.meaning && in_town.is_none() { "no_vectors" } else { "off" };
         let mut meaning_places: Vec<(Cand, f64)> = Vec::new();
-        let with_vectors: Vec<&Arc<Pack>> = if opts.meaning { packs.iter().filter(|p| p.embedding().is_some()).collect() } else { Vec::new() };
+        let with_vectors: Vec<&Arc<Pack>> = if opts.meaning && in_town.is_none() { packs.iter().filter(|p| p.embedding().is_some()).collect() } else { Vec::new() };
         if !with_vectors.is_empty() {
             let have = opts
                 .vector
@@ -639,6 +644,10 @@ impl PlacesCore {
         let answered = !cat_rows.is_empty() || !kind_rows.is_empty() || !meaning_places.is_empty();
         let anchor_town = anchor.as_ref().filter(|(_, r)| !r.trim().is_empty()).map(|(l, _)| format!("town:{}", l.source_id));
         let mut name_hits: Vec<GeoHit> = self.geo.forward(q, centre, 12);
+        // A town whose name is the query ("Filer") is what was searched for: it leads the places, ahead of the streets, shops
+        // and addresses named after it, however near they are.
+        let exact_towns: HashSet<String> =
+            name_hits.iter().filter(|h| h.kind == HitKind::Locality && h.name_match >= EXACT_NAME_MATCH).map(|h| h.address.clone()).collect();
         if let Some(r) = rest.as_deref().filter(|r| !r.trim().is_empty()) {
             name_hits.extend(self.geo.forward(r, centre, 8));
         }
@@ -649,6 +658,12 @@ impl PlacesCore {
             }
             if anchor_town.as_deref() == Some(h.address.as_str()) {
                 continue;
+            }
+            if let Some(t) = &in_town {
+                let here = h.locality.as_deref().is_some_and(|l| norm(l) == norm(&t.name)) || haversine_km(t.lat, t.lon, h.lat, h.lon) <= ADDRESS_AREA_KM;
+                if h.kind != HitKind::Address || !here {
+                    continue;
+                }
             }
             let rel = (0.85 * h.name_match / 100.0 + 0.15 * (h.score / max_score).clamp(0.0, 1.0)).min(1.0);
             let cand = match h.kind {
@@ -721,7 +736,7 @@ impl PlacesCore {
                 }
             }
         }
-        let mut scored: Vec<(f64, Value)> = Vec::new();
+        let mut scored: Vec<(bool, f64, Value)> = Vec::new();
         let mut keep: Vec<(f64, Cand)> = Vec::new();
         for c in uniq {
             let close = match centre {
@@ -741,7 +756,7 @@ impl PlacesCore {
             kept.push((s, c));
         }
         for (s, c) in kept {
-            scored.push((s, cand_json(&c, opts.near, s)));
+            scored.push((exact_towns.contains(&c.id), s, cand_json(&c, opts.near, s)));
         }
         // category rows lead (they are what "pharmacy" means), then places by score
         let mut results: Vec<Value> = Vec::new();
@@ -749,8 +764,8 @@ impl PlacesCore {
         cat_sorted.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         let cat_n = cat_sorted.len().min(2);
         results.extend(cat_sorted.into_iter().take(cat_n).map(|(_, v)| v));
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        results.extend(scored.into_iter().map(|(_, v)| v).take(limit));
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)));
+        results.extend(scored.into_iter().map(|(_, _, v)| v).take(limit));
 
         out.insert(
             "interpreted".into(),

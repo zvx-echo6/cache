@@ -172,4 +172,69 @@ void main() {
       }
     },
   );
+
+  for (final withFix in [true, false]) {
+    testWidgets(
+      withFix
+          ? 'Maps opens on the phone position, not the remembered view, and the search box searches there'
+          : 'with no position yet, Maps opens on the remembered view and the search box searches there',
+      (tester) async {
+        final dir = Directory.systemTemp.createTempSync('open-camera-');
+        final originalPlatform = MapLibrePlatform.createInstance;
+        MapLibrePlatform.createInstance = () => NoSurface();
+        final location = LocationService(source: FakeSource(), settingsDirOverride: dir);
+        final engine = TestLayerEngine();
+        final maps = MapsState(engine: engine, settingsDirOverride: dir);
+        final backend = FakeBackend();
+        final nav = NavState(
+          backend: backend,
+          location: location,
+          speaker: FakeSpeaker(),
+          positionSource: FakeNavPosition(),
+          fmt: const Fmt(UnitSystem.imperial),
+        );
+        GeoPoint? searchedNear;
+        backend.onSearch = (q, {near, meaning}) async {
+          searchedNear = near;
+          return MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: const []);
+        };
+        try {
+          await tester.runAsync(() async {
+            await location.init();
+            await engine.start();
+          });
+          // The view left on Idaho Falls last time; the phone is near Twin Falls.
+          maps.savedCamera = SavedCamera(43.49, -112.03, 12);
+          if (withFix) location.publish(fixAt(42.574, -114.607));
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: buildTheme(CacheThemeId.dark),
+              home: MapsScreen(
+                location: location,
+                maps: maps,
+                nav: nav,
+                themeId: CacheThemeId.dark,
+                glyphsLoader: () async => 'file:///test/fonts/{fontstack}/{range}.pbf',
+              ),
+            ),
+          );
+          await tester.pump();
+          // The map's first camera and the search box's centre are the same point (the screen's centre before any move).
+          final (lat, lon) = withFix ? (42.574, -114.607) : (43.49, -112.03);
+          expect((nav.mapCentre?.lat, nav.mapCentre?.lon), (lat, lon));
+          // "Maverik" is searched around the map's centre: the phone's position when it is known.
+          nav.onQueryChanged('Maverik');
+          await tester.runAsync(() => nav.submitSearch());
+          expect((searchedNear?.lat, searchedNear?.lon), (lat, lon));
+        } finally {
+          await tester.pumpWidget(const SizedBox.shrink());
+          MapLibrePlatform.createInstance = originalPlatform;
+          nav.dispose();
+          maps.dispose();
+          location.dispose();
+          await tester.runAsync(() => dir.delete(recursive: true));
+        }
+      },
+    );
+  }
 }
