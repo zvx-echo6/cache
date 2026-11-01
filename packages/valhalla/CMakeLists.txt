@@ -58,7 +58,8 @@ if(ANDROID)
 endif()
 # Linux (glibc): one self-contained library that needs only glibc. libstdc++ and libgcc are linked statically and hidden.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
-  target_link_options(valhalla_shim PRIVATE -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,--gc-sections)
+  target_link_options(valhalla_shim PRIVATE -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL -Wl,--gc-sections
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/shim/valhalla_shim.map")
 endif()
 
 # C test program (also what is pushed to the phone).
