@@ -4,6 +4,7 @@
 use cache_server::auth::{Auth, AuthFile, Sessions, StoredPassword};
 use cache_server::helper::{Helper, HelperConfig};
 use cache_server::http::{serve_connection, App};
+use cache_server::library::Library;
 use cache_server::{config, tls, VERSION};
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;
@@ -193,7 +194,8 @@ fn serve(argv: &[String]) -> Result<(), String> {
     rt.block_on(async move {
         // TODO: the query embedder (hybrid search) comes later.
         let helper = Helper::start(helper_cfg).await;
-        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web });
+        let library = Library::new(data.clone(), Some(helper.clone()));
+        let app = Arc::new(App { auth: Arc::new(auth), helper: Some(helper.clone()), web, library });
         let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("binding {listen}: {e}"))?;
         let scheme = if use_tls { "https" } else { "http" };
         eprintln!("listening on {scheme}://{listen}/");

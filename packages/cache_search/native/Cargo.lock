@@ -944,6 +944,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tokio-rustls",
+ "ureq",
  "webauthn-rs",
 ]
 

@@ -42,7 +42,7 @@ Future<void> main() async {
     },
     dispatcher,
     log: log,
-    handlers: [OpenOp(dirs, dispatcher, log: log), FsOps(support: dirs.support, docs: dirs.docs)],
+    handlers: [OpenOp(dirs, dispatcher, log: log), RescanOp(dirs, dispatcher, log: log), FsOps(support: dirs.support, docs: dirs.docs)],
   );
   await stdout.flush();
   exit(0);

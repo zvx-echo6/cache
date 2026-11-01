@@ -1,7 +1,8 @@
 //! A stand-in for the Dart helper, speaking its line protocol (see server/helper/bin/line_protocol.dart). Used by the proxy
 //! tests. Behaviour:
 //!   env     -> {support, docs}: CACHE_APP_SUPPORT and CACHE_APP_DOCS as the server set them
-//!   version -> "fake-1"      status -> []      echo -> the args      (anything else -> ok, null)
+//!   version -> "fake-1"      status -> [] (or the JSON in FAKE_STATUS)      echo -> the args
+//!   sources.rescan -> {sources: the length of args.sources, or 0}      (anything else -> ok, null)
 //!   crash   -> exits without replying the first time (the marker file FAKE_MARKER is created), then replies "back"
 //!   open    -> fails with ok:false when FAKE_OPEN_FAILS is set
 //! Every op it receives is appended to the file FAKE_LOG, one `op args` line each. FAKE_NO_READY makes it exit at once.
@@ -29,7 +30,14 @@ fn main() {
         }
         let reply = match op.as_str() {
             "version" => json!({"id": id, "ok": true, "result": "fake-1"}),
-            "status" => json!({"id": id, "ok": true, "result": []}),
+            "status" => match std::env::var("FAKE_STATUS") {
+                Ok(t) => json!({"id": id, "ok": true, "result": serde_json::from_str::<Value>(&t).unwrap()}),
+                Err(_) => json!({"id": id, "ok": true, "result": []}),
+            },
+            "sources.rescan" => {
+                let n = args["sources"].as_array().map_or(0, Vec::len);
+                json!({"id": id, "ok": true, "result": {"sources": n}})
+            }
             "env" => json!({"id": id, "ok": true, "result": {
                 "support": std::env::var("CACHE_APP_SUPPORT").ok(), "docs": std::env::var("CACHE_APP_DOCS").ok()}}),
             "echo" => json!({"id": id, "ok": true, "result": args}),

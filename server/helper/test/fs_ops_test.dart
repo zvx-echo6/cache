@@ -158,4 +158,39 @@ void main() {
     expect(sent['notebook'], isNotNull);
     expect(sent['sources'], isEmpty);
   });
+
+  test('sources.rescan scans the app folders and hands the core the new list', () {
+    final fake = FakeNative();
+    final d = CoreDispatcher(() => fake);
+    d.handle('open', {'sources': [], 'extra': null});
+    final logs = <String>[];
+    final rescan = RescanOp(AppDirs(support, docs), d, log: logs.add);
+    expect(rescan.handles('sources.rescan'), isTrue);
+    expect(rescan.handles('open'), isFalse);
+    Directory('${docs.path}/zims').createSync();
+    File('${docs.path}/zims/Wiki.zim').writeAsStringSync('');
+    Directory('${docs.path}/libraries/guide/shard').createSync(recursive: true);
+    var r = rescan.handle('sources.rescan', {'sources': null}) as Map;
+    expect(r, {'sources': 2});
+    expect(logs.last, 'sources rescanned (2)');
+    var sent = jsonDecode(fake.calls.lastWhere((c) => c.startsWith('setSources:')).substring('setSources:'.length)) as Map;
+    expect((sent['sources'] as List).map((s) => (s as Map)['kind']), ['zim', 'library']);
+    // a ZIM taken away is gone after the next rescan
+    File('${docs.path}/zims/Wiki.zim').deleteSync();
+    r = rescan.handle('sources.rescan', {}) as Map;
+    expect(r, {'sources': 1});
+    expect(logs.last, 'sources rescanned (1)');
+    sent = jsonDecode(fake.calls.lastWhere((c) => c.startsWith('setSources:')).substring('setSources:'.length)) as Map;
+    expect((sent['sources'] as List).single['kind'], 'library');
+    // the server's own list (sources.json) wins over the scan
+    r = rescan.handle('sources.rescan', {
+      'sources': [
+        {'kind': 'zim', 'path': '/z/a.zim', 'index_dir': '/i/a'},
+      ],
+    }) as Map;
+    expect(r, {'sources': 1});
+    sent = jsonDecode(fake.calls.lastWhere((c) => c.startsWith('setSources:')).substring('setSources:'.length)) as Map;
+    expect((sent['sources'] as List).single['path'], '/z/a.zim');
+    expect(logs.last, 'sources rescanned (1)');
+  });
 }

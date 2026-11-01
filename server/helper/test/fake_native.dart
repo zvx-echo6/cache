@@ -21,6 +21,14 @@ class FakeNative implements CsNative, CsLiveNative {
   }
 
   @override
+  int setSources(int handle, String configJson) {
+    calls.add('setSources:$configJson');
+    return setSourcesResult;
+  }
+
+  int setSourcesResult = 0;
+
+  @override
   String? status(int handle) => replies['status'];
   @override
   String? lastError(int handle) => error;
