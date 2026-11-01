@@ -174,6 +174,22 @@ fn a_bold_first_line_of_a_wrapped_paragraph_is_not_a_heading() {
 }
 
 #[test]
+fn a_paragraph_in_large_type_is_not_a_heading() {
+    let mut pages = Vec::new();
+    for n in 0..4 {
+        let mut p = Page::new();
+        p.block(45.0, 60.0, 10.0, Font::Regular, &wrap(&format!("Small print number {n} runs for a good while. ").repeat(14), 80).iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        pages.push(p);
+    }
+    let mut big = Page::new();
+    big.block(45.0, 60.0, 14.0, Font::Regular, &["This manual has been prepared for the", "reader who would like to learn more", "about the subject. Most important, it", "touches on the critical decisions."]);
+    pages.push(big);
+    let lay = layout(&extract_pdf(&make_pdf(&pages, None)).unwrap());
+    assert!(lay.elements.iter().all(|e| !matches!(e, Element::Heading { .. })), "{:?}", lay.elements);
+    assert!(lay.elements.iter().any(|e| matches!(e, Element::Para { text, .. } if text.starts_with("This manual has been prepared"))));
+}
+
+#[test]
 fn running_heads_and_page_numbers_are_removed() {
     let mut pages = Vec::new();
     for n in 1..=9 {

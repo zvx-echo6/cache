@@ -535,7 +535,21 @@ pub fn layout(ext: &Extracted) -> Layout {
             let b = &p.blocks[bi];
             let long_bold = b.lines.len() > 3 && b.lines.iter().all(|l| l.bold);
             // Runs of lines of one kind: a heading level, or body.
-            let lvls: Vec<Option<u8>> = (0..b.lines.len()).map(|k| style.heading_level(&b.lines[k], b.lines.get(k + 1), long_bold)).collect();
+            let mut lvls: Vec<Option<u8>> = (0..b.lines.len()).map(|k| style.heading_level(&b.lines[k], b.lines.get(k + 1), long_bold)).collect();
+            // A "heading" that runs over more than three lines is a paragraph set in large type.
+            let mut k = 0;
+            while k < lvls.len() {
+                let mut e = k + 1;
+                while e < lvls.len() && lvls[e] == lvls[k] {
+                    e += 1;
+                }
+                if lvls[k].is_some() && e - k > 3 {
+                    for v in &mut lvls[k..e] {
+                        *v = None;
+                    }
+                }
+                k = e;
+            }
             let mut i = 0;
             while i < b.lines.len() {
                 let lvl = lvls[i];
