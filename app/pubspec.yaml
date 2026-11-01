@@ -73,6 +73,10 @@ dependencies:
   # Both BSD-3-Clause; approved 2026-10-30. Pinned (published 2026-09-30 and 2026-10-21).
   saf_util: 3.1.1
   saf_stream: 4.0.3
+  # The PDF viewer (PDF entries in ZIM libraries, notebook files): pdfrx (MIT) on PDFium (BSD-3-Clause). Pinned to 2.4.8
+  # (published 2026-08-26): the newest release at least two weeks old that runs on the app's Flutter 3.44 (2.5 and later need
+  # Flutter 3.47). Approved 2026-11-01.
+  pdfrx: 2.4.8
 
 dev_dependencies:
   flutter_test:
