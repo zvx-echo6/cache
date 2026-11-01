@@ -18,7 +18,7 @@ To add it to Cache:
 2. Under "Web search", tap "Set up" next to "Search service".
 3. Paste the key into "Key" and tap "Check and save".
 
-Cache checks the key with one real search, turns web search on and says "Web search is on". The key stays on this phone and is never shown again.
+Cache checks the key with one real search, turns web search on and says "Web search is on". The key stays on this device and is never shown again.
 
 - If saving fails, Cache says why. For example, "Kagi didn't accept this key. Check you copied all of it." or "Couldn't reach Kagi. Check your connection."
 - If it says "Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.", add credit.
@@ -109,7 +109,7 @@ An empty list means only that the Weather Service lists none for that place. It 
 
 ## Emergency alerts from FEMA (IPAWS)
 
-IPAWS is FEMA's public alert feed. The phone reads it directly from FEMA. It is free and needs no key.
+IPAWS is FEMA's public alert feed. The device reads it directly from FEMA. It is free and needs no key.
 
 Cache shows it as the "Emergency alerts" source. Its provider is FEMA IPAWS.
 
@@ -209,12 +209,12 @@ Each new ZIM is indexed in the background, which can take a while.
 
 ## Models from Hugging Face
 
-Cache's assistant runs a model on your phone. Models download from Hugging Face.
+Cache's assistant runs a model on your device. Models download from Hugging Face.
 
 1. Tap the model name at the top of "Ask" and choose "Manage models".
 2. Tap "Search Hugging Face", or "Choose a file" for a .gguf file you already have.
 
-Cache shows each file's size and whether it fits this phone. It lists single-file GGUF models only.
+Cache shows each file's size and whether it fits this device. It lists single-file GGUF models only.
 
 - If a model is marked "Not supported: Cache needs a model that can use tools", pick another.
 - If a model needs a Hugging Face account, get it in a browser, then use "Choose a file".

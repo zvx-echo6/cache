@@ -18,7 +18,7 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 
 - "Not set up yet": no weather source is on. Tap "Turn on weather".
 - "Weather is off": every source is off. Tap "Turn on".
-- "Waiting for your position": the phone doesn't know where it is. Wait, or go outdoors.
+- "Waiting for your position": the device doesn't know where it is. Wait, or go outdoors.
 - "forecast expired, needs a connection": connect, open "Weather" and tap "Update now".
 - "no forecast yet": open "Weather" and tap "Update now".
 - "No alerts known, data expired": alert data is too old to trust. Connect and update.
@@ -26,11 +26,11 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 
 ## Home search and shortcut messages
 
-- "Nothing found" under "Ask Cache:": nothing on your phone matches. Tap the "Ask Cache:" row to ask instead.
+- "Nothing found" under "Ask Cache:": nothing on your device matches. Tap the "Ask Cache:" row to ask instead.
 - "That chat is gone": the chat was deleted. Tap and hold the shortcut, then "Remove from Home".
-- "Wikipedia is not on this phone.": tap "Get Wikipedia" on the place card.
+- "Wikipedia is not on this device.": tap "Get Wikipedia" on the place card.
 - "That article is not in your Wikipedia. Update Wikipedia in Library.": tap "Open Library".
-- "That page is not on this phone any more": the ZIM was removed. Remove the shortcut, or download it again.
+- "That page is not on this device any more": the ZIM was removed. Remove the shortcut, or download it again.
 - "Finish or end the route first": you're being guided. Tap "End" in "Maps".
 
 ## Ask messages
@@ -40,16 +40,16 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 - "Starting…": Cache is starting. Your question waits.
 - "Cache's search couldn't start, so this wasn't answered.": tap "Try again". If it repeats, restart Cache.
 - "No answer was produced." or "The model stopped without an answer": ask again in other words, or tap "New chat". Try another model if it repeats.
-- "Not from your sources": the answer isn't from your phone or a search. Check it.
+- "Not from your sources": the answer isn't from your device or a search. Check it.
 - "Navigation unavailable: this route snapshot is no longer available.": ask for directions again.
-- "Report saved on this phone. Find it in Settings > Assistant.": saved. That page is now "Cache model and web search".
+- "Report saved on this device. Find it in Settings > Assistant.": saved. That page is now "Cache model and web search".
 
 ## Location messages in Ask
 
-Cache uses your location in "Ask" when the phone allows it. The "Use my location" switch is in the + menu and in ["Settings" > "Cache model and web search"](cache://settings/assistant). It's the same switch.
+Cache uses your location in "Ask" when the device allows it. The "Use my location" switch is in the + menu and in ["Settings" > "Cache model and web search"](cache://settings/assistant). It's the same switch.
 
-- "Blocked in the phone's settings": tap "Open the phone's settings" in the + menu, or "Phone settings" in "Settings". Allow location.
-- "The phone's location is switched off": the same buttons. Turn location on.
+- "Blocked in the device's settings": tap "Open the device's settings" in the + menu, or "Device settings" in "Settings". Allow location.
+- "The device's location is switched off": the same buttons. Turn location on.
 - Answers ignore where you are: check that the switch is on, and "Show my position" in "Maps" > "Layers" is on.
 
 If Cache can't get a position yet, chat still works. Go outdoors or near a window and try again.
@@ -58,7 +58,7 @@ If Cache can't get a position yet, chat still works. Go outdoors or near a windo
 
 On the Models screen (tap the model name in "Ask", then "Manage models"):
 - "Not supported: Cache needs a model that can use tools": pick another. Your current model stays loaded.
-- "Too big for this phone": choose a smaller one. "May be tight on this phone" may be slow or fail to load.
+- "Too big for this device": choose a smaller one. "May be tight on this device" may be slow or fail to load.
 - "Can't read the models folder": restart Cache. Check free space.
 - "Could not copy the file: [reason]": check free space and try again.
 
@@ -85,9 +85,9 @@ The search model (605 MB) lets Cache search by meaning.
 
 Every download asks first. See Downloads, Wi-Fi and mobile data in chapter 1.
 
-- "Not enough space": the download won't fit. The pop-up says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Tap "Free up space" to open "Storage", or "Cancel".
+- "Not enough space": the download won't fit. The pop-up says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the device." Tap "Free up space" to open "Storage", or "Cancel".
 - "You're on mobile data, and mobile data downloads are off. It can wait for Wi-Fi.": tap "Wait for Wi-Fi", or "Download now" to go ahead once.
-- "Phone storage": the free space before and after. The bar shows the same.
+- "Device storage": the free space before and after. The bar shows the same.
 - "Download anyway": goes ahead on mobile data when a carry-on was blocked.
 - "[name] will carry on on Wi-Fi" or "[names] will download on Wi-Fi": it was queued for Wi-Fi.
 
@@ -97,7 +97,7 @@ Delete pop-ups say "Frees" and a size, and "You can download it again later." Ta
 
 - "Nothing in your library yet. Add Wikipedia, medical guides, survival manuals or your own library, and read them with no signal.": tap "Add to Library".
 - "Update ready": press and hold the item, then "Check for update".
-- "That source is not on this phone any more.": download it again.
+- "That source is not on this device any more.": download it again.
 - "Indexing", "Waiting to index" or "Building index": see An index still building.
 - "Nothing found. Try another word, language or category.": change the search or chips.
 
@@ -105,7 +105,7 @@ Delete pop-ups say "Frees" and a size, and "You can download it again later." Ta
 
 When the catalogue in ["Library" > "Add to Library"](cache://library/add) can't load:
 - "Cannot reach the Kiwix library. Check the connection.": connect and tap "Try again".
-- "Cannot make a secure connection to the Kiwix library.": the network may block it, or the phone's date is wrong. Try another network.
+- "Cannot make a secure connection to the Kiwix library.": the network may block it, or the device's date is wrong. Try another network.
 - "The Kiwix library took too long to answer.": try later.
 - "The library answered [code].", "The library redirected too many times.", "The library sent a redirect with no address.", "The library answered with something that is not a catalogue." or "The library could not be read: [reason]": try later or on another network.
 
@@ -161,7 +161,7 @@ In the layer definition editor (["Settings" > "Maps" > "Advanced"](cache://setti
 
 Under "Search places or coordinates":
 - `Nothing found for "[words]"`: try other words, a nearby town or coordinates.
-- "No places on this phone.": tap "Get a region".
+- "No places on this device.": tap "Get a region".
 - "No places downloaded here.": tap "Get this area".
 - "Getting places for this area…": wait. Results appear by themselves.
 
@@ -180,7 +180,7 @@ In the directions panel:
 
 ## Guidance messages
 
-- "Getting your position": waiting for the first GPS fix. Go where the phone sees the sky.
+- "Getting your position": waiting for the first GPS fix. Go where the device sees the sky.
 - "Rerouting": you left the route. A new one is being worked out.
 - "Arriving", then "You have arrived".
 
@@ -196,7 +196,7 @@ On the "Regions" sheet (["Maps" > "Layers" > "Download a region"](cache://maps/r
 - "Nothing downloaded yet": pick a region under "Downloads".
 - "Size unknown": the catalogue has no size for it.
 - "Waiting for Wi-Fi": it will download on Wi-Fi.
-- "On this phone": already here.
+- "On this device": already here.
 
 ## Region action messages
 
@@ -204,7 +204,7 @@ When a region action fails, Cache says what happened and what to do. [action] is
 - "Couldn't [action]: no connection. Connect, then try again."
 - "Couldn't [action]: there is not enough free space. Free some space in Settings > Storage, then try again.": free space in ["Settings" > "Storage"](cache://settings/storage).
 - "Couldn't [action] just now: another download is starting. Try again in a moment."
-- "Couldn't [action]: part of it is no longer on the phone. Remove it and download it again."
+- "Couldn't [action]: part of it is no longer on this device. Remove it and download it again."
 - "Couldn't [action]. Try again; if it happens again, remove it and download it again."
 
 The message has a "Try again" button where it can.
@@ -216,7 +216,7 @@ On the "Local" tab, a region shows its parts. A part that is ready already works
 - "Try again": a part couldn't finish. Tap it.
 - `Map stopped at 80%`: the map download stopped. Tap "Carry on".
 - "Couldn't finish": open the region and tap "Try again".
-- "Not on this phone" with "Add": off-road isn't here. Tap "Add".
+- "Not on this device" with "Add": off-road isn't here. Tap "Add".
 - "Download anyway": goes ahead on mobile data.
 
 ## Region data messages
@@ -239,7 +239,7 @@ The top line of ["Settings" > "Weather and alerts"](cache://settings/weather) sa
 
 ## Weather screen messages
 
-- "Waiting for your position." with "The forecast and alerts for where you are show here once the phone knows where it is.": nothing is wrong. Wait.
+- "Waiting for your position." with "The forecast and alerts for where you are show here once the device knows where it is.": nothing is wrong. Wait.
 - "Not downloaded yet. Update now to get it.": tap "Update now".
 - "Expired · [age] · needs a connection for more": connect and update.
 - "Every day of this forecast has passed." or "No forecast.": update when online.
@@ -313,7 +313,7 @@ In the "Web search" sheet (["Settings" > "Cache model and web search" > "Set up"
 - "Couldn't reach Kagi. Check your connection."
 - "Kagi had a problem (HTTP [code]). Try again in a moment."
 - "Kagi answered with an error (HTTP [code])." or "Kagi answered with something Cache couldn't read. Try again later."
-- "The key was accepted but couldn't be saved on this phone.": try again. Restart Cache if it repeats.
+- "The key was accepted but couldn't be saved on this device.": try again. Restart Cache if it repeats.
 - "Couldn't open the page. Go to [address]": open that address in your browser.
 - "Web search is on": it worked.
 - "Key removed": web search is off.
@@ -331,7 +331,7 @@ In the key sheet from "Get key" on a source's row (["Settings" > "Weather and al
 - "[Provider] answered with an error (HTTP [code])." or "[Provider] answered with something Cache couldn't read. Try again later."
 - "This source needs no key.": nothing to add.
 - "That key wasn't accepted." or "Couldn't check the key. Try again."
-- "The key was accepted but couldn't be saved on this phone.": try again.
+- "The key was accepted but couldn't be saved on this device.": try again.
 - "[source] is on" or "Key replaced": it worked.
 - "Key removed": its sources are off.
 
@@ -358,7 +358,7 @@ In ["Settings" > "Weather and alerts" > "More sources" > "Add sources from a lin
 
 If alerts don't pop up, check:
 - "Pop up for" in ["Settings" > "Notifications"](cache://settings/notifications) is not "None";
-- your phone allows notifications for Cache;
+- your device allows notifications for Cache;
 - you're not in quiet hours. Serious alerts still ring.
 
 Location isn't set in Notifications. Use "Use my location" in "Settings" > "Cache model and web search".
@@ -377,7 +377,7 @@ In "Videos":
 
 ## Video download and play messages
 
-- "Not enough free space on this phone.": free space.
+- "Not enough free space on this device.": free space.
 - "The file did not arrive intact. Try again."
 - "Download stopped." or "The download failed.": tap "Continue download" (on the video) or "Continue" (in "Saved videos").
 - "Wait for Wi-Fi": you're on mobile data and "Mobile data downloads" is off.
@@ -409,7 +409,7 @@ When linking fails, the sharing engine says why:
 ## Storage messages
 
 In ["Settings" > "Storage"](cache://settings/storage):
-- "free space unknown": the phone didn't say. Downloads still check first.
+- "free space unknown": the device didn't say. Downloads still check first.
 - "Wait for the downloads to finish, then clean up.": wait, then try again.
 - "Nothing to clean up": nothing to remove.
 - "Freed [size]": "Clean up" finished.
@@ -420,14 +420,14 @@ In ["Settings" > "Credits and licences"](cache://settings/credits):
 ## Notebook messages
 
 In "Notebooks":
-- "Notebooks could not open. Your entries are still on this phone.": tap "Try again". If it repeats, restart Cache.
+- "Notebooks could not open. Your entries are still on this device.": tap "Try again". If it repeats, restart Cache.
 - "Could not make it: [reason]": check free space and try again.
 - "No notebooks yet. Make one with New notebook.": tap the + button ("Add"), then "New notebook".
 - "Reading file…": a file is being read. Wait.
 - "Could not read that file. It needs to be a RepeaterBook KML or a CHIRP CSV.": pick another file.
 - "No repeaters found in that file.": tap "Choose another file".
 - "This list could not be read.": use "Update from a file".
-- "Not saved. Your phone may be out of space.": free space and tap "Try again". Your text is kept.
+- "Not saved. Your device may be out of space.": free space and tap "Try again". Your text is kept.
 - "This notebook is gone": remove its shortcut from "Home".
 - "You already have a notebook with this name.": choose another.
 - "Could not attach the file: [reason]": try again.
@@ -469,7 +469,7 @@ Weather and alerts always update. If weather is old, see Weather status messages
 
 ## Storage full
 
-When the phone is low on space, the download pop-up is titled "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Cache keeps 10% of storage free, at least 5 GB and at most 20 GB, and you can't change that.
+When the device is low on space, the download pop-up is titled "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the device." Cache keeps 10% of storage free, at least 5 GB and at most 20 GB, and you can't change that.
 
 ![The Storage page](shot:settings-storage)
 
@@ -483,7 +483,7 @@ Then continue the download.
 
 ## A download stopped
 
-Most downloads continue where they stopped. Fix the cause first: the connection dropped, mobile data is off, the phone is full, or Cache was closed.
+Most downloads continue where they stopped. Fix the cause first: the connection dropped, mobile data is off, the device is full, or Cache was closed.
 
 ![A region that stopped](shot:region-row)
 
@@ -503,7 +503,7 @@ While it builds:
 - a ZIM opens, but search inside it says "This ZIM is still being indexed. Text search works when that is done.";
 - the assistant may say sources are still being indexed.
 
-Leave Cache open and keep the phone charged for big ones.
+Leave Cache open and keep the device charged for big ones.
 
 - If indexing fails ("Indexing failed" or "The search index could not be built"), delete the item and add it again.
 - An updated ZIM keeps the old copy working until the new one is indexed.

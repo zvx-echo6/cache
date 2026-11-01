@@ -42,7 +42,7 @@ To get a Kagi key, see Web search with Kagi in chapter 4.
 
 "Use my location" is the same switch as in the + menu in "Ask". The line under it says "Cache finds things near you".
 
-- If the phone blocks location, the row says "Blocked in the phone's settings" or "The phone's location is switched off". Tap "Phone settings".
+- If the device blocks location, the row says "Blocked in the device's settings" or "The device's location is switched off". Tap "Device settings".
 
 ## Conversations in Settings
 
@@ -59,7 +59,7 @@ This page lists your regions and your map layers.
 ![Settings, Maps](shot:settings-maps)
 
 1. Go to ["Settings" > "Maps"](cache://settings/maps).
-2. Under "Regions", each region on the phone has one row. A downloading region shows its parts, for example `Map stopped at 80% · Places 40% · Off-road waiting`, with "Carry on".
+2. Under "Regions", each region on the device has one row. A downloading region shows its parts, for example `Map stopped at 80% · Places 40% · Off-road waiting`, with "Carry on".
 3. Tap a region to open its page. Press and hold it for "Carry on", "Check for update" and "Delete".
 4. Tap "Download another region" to get more ("Directions, map, places and off-road for an area").
 5. Under "Layers", tap "Layers" for the full list. It shows how many layers exist, how many are on, and the space they use.
@@ -113,7 +113,7 @@ At the top of ["Settings" > "Weather and alerts"](cache://settings/weather), "Wh
 4. Under "Saved places", turn a saved place on or off. It shows "None yet" if you have none. With more than 8 saved places, a "Search places" box shows.
 
 - If "Your location" says "Location is blocked" in red, tap "Open settings" and allow location.
-- If the phone refuses when you turn on "Your location", the switch goes back. Cache says "Could not turn on. Location is blocked." with "Open settings".
+- If the device refuses when you turn on "Your location", the switch goes back. Cache says "Could not turn on. Location is blocked." with "Open settings".
 - If nothing is on, the top line says "Nothing switched on yet".
 
 A saved place's own page has the same "Weather and alerts" switch.
@@ -134,7 +134,7 @@ Cache checks the key with one real download. If it works, the key is saved and t
 
 - If it fails, the sheet says why and nothing is saved.
 
-Keys stay on this phone, in secure storage. They are never shown again and are not shared to your other devices. For where to get each key, see chapter 4.
+Keys stay on this device, in secure storage. They are never shown again and are not shared to your other devices. For where to get each key, see chapter 4.
 
 ## Replace or remove a key
 
@@ -162,7 +162,7 @@ New sources stay off until you switch them on. Only add links from people you tr
 
 ## Manage catalogues
 
-"Catalogues in use" is at the bottom of the "More sources" list. It lists every catalogue on the phone.
+"Catalogues in use" is at the bottom of the "More sources" list. It lists every catalogue on the device.
 
 - Tap "Remove" on one you added to take its sources off.
 - The main catalogue has "Address" instead, to change where it comes from.
@@ -188,7 +188,7 @@ The same alert from the Weather Service and IPAWS pops up once. One alert near s
 Every alert is listed in "Weather" either way.
 
 - If you choose "None", Cache asks "No pop-ups at all?". It won't interrupt you, even for an evacuation order. Tap "Turn off" or "Keep pop-ups".
-- If you refused notifications, allow them for Cache in your phone's settings.
+- If you refused notifications, allow them for Cache in your device's settings.
 
 ## Quiet hours
 
@@ -210,11 +210,11 @@ This page shows what Cache uses and lets you free space.
 ![The Storage page](shot:settings-storage)
 
 1. Go to ["Settings" > "Storage"](cache://settings/storage).
-2. Read the usage bar and the line such as "118 GB used by Cache · 103 GB free on the phone".
+2. Read the usage bar and the line such as "118 GB used by Cache · 103 GB free on this device".
 3. Open a row to see its items: "Library", "Models", "Regions", "Notebooks" or "Videos and weather".
 4. Remove an item. A pop-up shows what it frees. Confirm.
 
-The page also has "Clean up", "Mobile data downloads" and "Kept free for the phone". Each has its own section below.
+The page also has "Clean up", "Mobile data downloads" and "Kept free for the device". Each has its own section below.
 
 - If a download won't fit, the "Not enough space" pop-up has "Free up space". It opens this page.
 
@@ -236,7 +236,7 @@ Open "Regions" in ["Settings" > "Storage"](cache://settings/storage) to see an "
 
 ![Storage, Regions](shot:storage-regions)
 
-A note explains: "Each state's off-road data is downloaded once and kept while a region that uses it is on this phone."
+A note explains: "Each state's off-road data is downloaded once and kept while a region that uses it is on this device."
 
 ## Mobile data downloads
 
@@ -254,14 +254,14 @@ It covers models, Library items, regions, videos, libraries from a link, and sha
 
 ## Room kept free for the phone
 
-Cache never uses the last part of your storage, so the phone keeps working. You can't change this.
+Cache never uses the last part of your storage, so the device keeps working. You can't change this.
 
-The row "Kept free for the phone" shows "10% of storage, 5 to 20 GB" and the current amount.
+The row "Kept free for the device" shows "10% of storage, 5 to 20 GB" and the current amount.
 
 - It keeps 10% of total storage free, never less than 5 GB and never more than 20 GB.
 - On iPhone, Cache also stays within what iOS says is available. The stricter limit wins.
 
-- If a download won't fit, the pop-up is titled "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Tap "Free up space".
+- If a download won't fit, the pop-up is titled "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the device." Tap "Free up space".
 
 ## Sharing and sync: set up and link devices
 
@@ -275,7 +275,7 @@ Sharing keeps your own Cache devices the same. They talk to each other directly.
 4. Tap "Copy code" and get the text to the other device.
 5. On the other device, tap "Enter a link code", then "Paste", then "Link".
 
-Cache names the other device, for example "Linked with Android phone". To rename this device, tap its name under "This device".
+Cache names the other device, for example "Linked with Android device". To rename this device, tap its name under "This device".
 
 Under "Linked devices", each device shows whether it is connected directly or through a relay. To stop one, tap it, then "Unlink". Files already here stay.
 
