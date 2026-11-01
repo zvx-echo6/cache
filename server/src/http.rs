@@ -14,10 +14,18 @@
 //!   GET  /auth/check                        -> 204 signed in, 401 not
 //!   POST /api/core      {"op","args"}       -> the core helper's {"ok":true,"result"} or {"ok":false,"error"} (200 either way);
 //!                                              "open", "close" and "setSources" are answered here, not forwarded: the server owns the
-//!                                              one engine and its source list
+//!                                              one engine and its source list; "sources.rescan" is refused (only the server calls it)
 //!   GET  /api/status                        -> the same, for the "status" op
 //!   /api/settings/...                       -> the sign-in setting and the keys (signed in): GET|PUT signin, POST security-keys/start|finish,
 //!                                              DELETE security-keys/<id>, POST key-files (the file), DELETE key-files/<id>
+//!   POST /api/library/download {url,kind:"zim"|"library",name?,sha256?,origin?,icon_url?} -> the job (queued; see `library`)
+//!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
+//!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
+//!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
+//!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
+//!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
+//!   GET  /api/fetch?url=<encoded>           -> the answer of a catalogue host (allow-list in `fetch`), streamed, at most 50 MB
+//!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
 //!   GET  /settings/keys                     -> the keys settings page (signed in)
 //!   anything else (GET/HEAD)                -> signed in: a file from the web folder. Not signed in: the sign-in page (200) for a page
 //!                                              request ("/", "*.html", a path with no extension), 401 for anything else (assets)
@@ -31,15 +39,19 @@ use crate::keys::KeyError;
 use crate::pages;
 use crate::helper::Helper;
 use crate::webfiles::{self, Resolved};
+use crate::library::{ApiErr, Library};
+use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, Limited};
-use hyper::body::{Bytes, Incoming};
+use hyper::body::{Body, Bytes, Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -53,21 +65,37 @@ pub struct App {
     /// `None` only in tests that never reach the core.
     pub helper: Option<Arc<Helper>>,
     pub web: PathBuf,
+    /// Library downloads, uploads, installed items and the catalogue fetch.
+    pub library: Arc<Library>,
 }
 
 pub struct Reply {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,
     pub body: Vec<u8>,
+    /// A body that arrives in pieces (the catalogue fetch); when set, `body` is empty and the pieces are sent as they come.
+    pub stream: Option<tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>>,
+}
+
+/// A response body fed from a channel.
+struct ChannelBody(tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>);
+
+impl Body for ChannelBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, std::io::Error>>> {
+        self.0.poll_recv(cx).map(|item| item.map(|r| r.map(Frame::data)))
+    }
 }
 
 impl Reply {
     fn empty(status: u16) -> Reply {
-        Reply { status, headers: vec![], body: vec![] }
+        Reply { status, headers: vec![], body: vec![], stream: None }
     }
 
     fn json(status: u16, body: String) -> Reply {
-        Reply { status, headers: vec![("Content-Type", "application/json".into())], body: body.into_bytes() }
+        Reply { status, headers: vec![("Content-Type", "application/json".into())], body: body.into_bytes(), stream: None }
     }
 
     fn error(status: u16, code: &str, message: impl AsRef<str>) -> Reply {
@@ -96,8 +124,54 @@ async fn core_call(app: &App, op: &str, args: Value) -> Reply {
     }
 }
 
-async fn api(app: &App, method: &str, path: &str, body: &[u8]) -> Reply {
+/// An `ApiErr` from the library as the server's error reply.
+fn api_error(e: ApiErr) -> Reply {
+    Reply::error(e.status, e.code, e.message)
+}
+
+fn library_reply(r: Result<Value, ApiErr>) -> Reply {
+    match r {
+        Ok(v) => ok(v),
+        Err(e) => api_error(e),
+    }
+}
+
+/// `/api/library/...` and `/api/fetch` (the caller has checked the session). `None` when the path is not one of these.
+async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Option<Reply> {
+    let lib = &app.library;
+    Some(match (method, path) {
+        ("POST", "/api/library/download") => library_reply(lib.add_download(body)),
+        ("GET", "/api/library/jobs") => ok(lib.list_jobs()),
+        ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
+        ("GET", "/api/library/items") => ok(Value::Array(lib.items().await)),
+        ("DELETE", p) if p.starts_with("/api/library/items/") => library_reply(lib.remove_item(&p["/api/library/items/".len()..]).await),
+        // A body that came whole (the real server streams it: see `handle`).
+        ("POST", "/api/library/upload") => {
+            let b = Full::new(Bytes::copy_from_slice(body));
+            library_reply(lib.upload(query, Some(body.len() as u64), b).await)
+        }
+        ("GET", "/api/fetch") => match lib.fetch(query).await {
+            Ok(s) => Reply {
+                status: 200,
+                headers: vec![
+                    ("Content-Type", s.content_type.unwrap_or_else(|| "application/octet-stream".into())),
+                    // whatever the catalogue sends is data for the app to read, never a page of this origin
+                    ("Content-Security-Policy", "default-src 'none'; sandbox".into()),
+                ],
+                body: vec![],
+                stream: Some(s.rx),
+            },
+            Err(e) => api_error(e),
+        },
+        _ => return None,
+    })
+}
+
+async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> Reply {
     if let Some(r) = settings(app, method, path, body) {
+        return r;
+    }
+    if let Some(r) = library(app, method, path, query, body).await {
         return r;
     }
     match (method, path) {
@@ -114,6 +188,10 @@ async fn api(app: &App, method: &str, path: &str, body: &[u8]) -> Reply {
             // The server owns the one shared engine and its source list, so a tab can neither replace, close nor re-source it.
             if op == "open" || op == "close" || op == "setSources" {
                 return Reply::json(200, json!({"ok": true, "result": null}).to_string());
+            }
+            // The rescan is the server's own call, after it changes the library folders; a tab may not make the engine re-read them.
+            if op == "sources.rescan" {
+                return Reply::error(403, "forbidden", "only the server may do that");
             }
             core_call(app, op, args).await
         }
@@ -262,6 +340,7 @@ fn settings(app: &App, method: &str, path: &str, body: &[u8]) -> Option<Reply> {
                         ("Content-Disposition", format!("attachment; filename=\"{}\"", key_file_name(&name))),
                     ],
                     body: bytes,
+                    stream: None,
                 },
                 Err(e) => settings_error(e),
             }
@@ -294,11 +373,14 @@ fn html(body: &'static str, head: bool) -> Reply {
             ("Referrer-Policy", "no-referrer".into()),
         ],
         body: if head { vec![] } else { body.as_bytes().to_vec() },
+        stream: None,
     }
 }
 
 /// One request to one reply.
-pub async fn route(app: &App, method: &str, path: &str, cookie: Option<&str>, body: &[u8]) -> Reply {
+pub async fn route(app: &App, method: &str, target: &str, cookie: Option<&str>, body: &[u8]) -> Reply {
+    // `target` is the path and, after a `?`, the query.
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let token = cookie.and_then(token_from_cookie);
     let half = cookie.and_then(half_from_cookie);
     let signed_in = token.is_some_and(|t| app.auth.is_signed_in(t));
@@ -321,7 +403,7 @@ pub async fn route(app: &App, method: &str, path: &str, cookie: Option<&str>, bo
             if !signed_in {
                 return Reply::error(401, "unauthorized", "sign in first");
             }
-            api(app, method, path, body).await
+            api(app, method, path, query, body).await
         }
         ("GET" | "HEAD", _) if !signed_in => {
             // Nobody gets a file without a session: a browser navigating gets the sign-in page, an asset gets a 401.
@@ -343,7 +425,7 @@ pub async fn route(app: &App, method: &str, path: &str, cookie: Option<&str>, bo
             .await;
             match found {
                 Ok(Ok((ct, bytes))) => {
-                    Reply { status: 200, headers: vec![("Content-Type", ct.into())], body: if head { vec![] } else { bytes } }
+                    Reply { status: 200, headers: vec![("Content-Type", ct.into())], body: if head { vec![] } else { bytes }, stream: None }
                 }
                 Ok(Err(code)) => Reply::empty(code),
                 Err(_) => Reply::empty(500),
@@ -353,10 +435,14 @@ pub async fn route(app: &App, method: &str, path: &str, cookie: Option<&str>, bo
     }
 }
 
-async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<Full<Bytes>> {
+/// The response body: whole, or arriving in pieces.
+type ResponseBody = UnsyncBoxBody<Bytes, std::io::Error>;
+
+async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<ResponseBody> {
     let started = Instant::now();
     let method = req.method().as_str().to_string();
     let path = req.uri().path().to_string();
+    let target = req.uri().path_and_query().map_or(path.clone(), |p| p.as_str().to_string());
     let cookie = req.headers().get(hyper::header::COOKIE).and_then(|v| v.to_str().ok()).map(str::to_string);
     // The big limit is for signed-in /api/core calls only; everyone else gets the small one before anything is read.
     let signed_in = cookie.as_deref().and_then(token_from_cookie).is_some_and(|t| app.auth.is_signed_in(t));
@@ -367,12 +453,23 @@ async fn handle(app: Arc<App>, req: Request<Incoming>) -> Response<Full<Bytes>> 
     } else {
         MAX_BODY
     };
-    let reply = match Limited::new(req.into_body(), limit).collect().await {
-        Ok(b) => route(&app, &method, &path, cookie.as_deref(), &b.to_bytes()).await,
-        Err(_) => Reply::empty(413),
+    let reply = if signed_in && method == "POST" && path == "/api/library/upload" {
+        // An upload is streamed to disk as it arrives, whatever its size: it is never collected here.
+        let len = req.headers().get(hyper::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+        let query = req.uri().query().unwrap_or("").to_string();
+        library_reply(app.library.upload(&query, len, req.into_body()).await)
+    } else {
+        match Limited::new(req.into_body(), limit).collect().await {
+            Ok(b) => route(&app, &method, &target, cookie.as_deref(), &b.to_bytes()).await,
+            Err(_) => Reply::empty(413),
+        }
     };
     eprintln!("{method} {path} {} {}ms", reply.status, started.elapsed().as_millis());
-    let mut resp = Response::new(Full::new(Bytes::from(reply.body)));
+    let body: ResponseBody = match reply.stream {
+        Some(rx) => ChannelBody(rx).boxed_unsync(),
+        None => Full::new(Bytes::from(reply.body)).map_err(|never| match never {}).boxed_unsync(),
+    };
+    let mut resp = Response::new(body);
     *resp.status_mut() = hyper::StatusCode::from_u16(reply.status).unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR);
     let h = resp.headers_mut();
     for (k, v) in reply.headers {
@@ -408,7 +505,7 @@ mod tests {
 
     fn app(dir: &TempDir) -> App {
         let auth = Auth::new(None, Sessions::load(&dir.0.join("sessions.json")), true);
-        App { auth: Arc::new(auth), helper: None, web: dir.0.join("web") }
+        App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None) }
     }
 
     #[tokio::test]
@@ -461,7 +558,7 @@ mod tests {
         std::fs::write(dir.0.join("web/index.html"), b"the app").unwrap();
         std::fs::write(dir.0.join("web/main.dart.js"), b"js").unwrap();
         std::fs::write(dir.0.join("secret.txt"), b"no").unwrap();
-        App { auth: Arc::new(Auth::load(&dir.0, true).unwrap()), helper: None, web: dir.0.join("web") }
+        App { auth: Arc::new(Auth::load(&dir.0, true).unwrap()), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None) }
     }
 
     fn set_cookies(r: &Reply) -> Vec<String> {

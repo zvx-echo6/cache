@@ -8,6 +8,7 @@ use base64::Engine;
 use cache_server::auth::{Auth, AuthFile, StoredPassword};
 use cache_server::http::{route, App, Reply};
 use cache_server::keys::build_webauthn;
+use cache_server::library::Library;
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
@@ -135,7 +136,7 @@ fn rig(tag: &str, origin: Option<&str>) -> Rig {
     file.save(&dir.0.join("auth.json")).unwrap();
     let wa = build_webauthn(origin).unwrap();
     let auth = Auth::load(&dir.0, true).unwrap().with_webauthn(wa);
-    Rig { app: App { auth: Arc::new(auth), helper: None, web: dir.0.join("web") }, dir }
+    Rig { app: App { auth: Arc::new(auth), helper: None, web: dir.0.join("web"), library: Library::new(dir.0.clone(), None) }, dir }
 }
 
 fn cookie(r: &Reply, name: &str) -> String {

@@ -2,13 +2,16 @@
 //!
 //! The core lives in a Dart helper process (server/helper) that this server supervises (`helper`); `/api/core` forwards the
 //! browser app's calls to it. The rest is the web side: sign-in (`auth`, `keys`), the sign-in and settings pages (`pages`), the routes (`http`), the files of the browser app
-//! (`webfiles`), the certificate (`tls`) and the data folders (`config`).
+//! (`webfiles`), the certificate (`tls`) and the data folders (`config`). Libraries on the server (downloads, uploads, what is
+//! installed) are `library`; its outbound HTTP and the catalogue fetch rules are `fetch`.
 
 pub mod auth;
 pub mod config;
+pub mod fetch;
 pub mod helper;
 pub mod http;
 pub mod keys;
+pub mod library;
 pub mod pages;
 pub mod tls;
 pub mod webfiles;

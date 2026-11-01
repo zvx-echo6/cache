@@ -44,6 +44,36 @@ class OpenOp implements OpHandler {
   }
 }
 
+/// The helper's `sources.rescan`, which only cache-server may call (the server's `/api/core` refuses it from browsers, as it does
+/// `open`, `close` and `setSources`). The server sends it after it has put a ZIM or a library on disk, or removed one:
+/// `sources.rescan {"sources": <array or null>}`. As with [OpenOp], the array is the server's `sources.json` and `null` means
+/// scan the app folders ([scanSources]). The core gets the new list with its own `setSources`.
+/// Replies `{"sources": N}` and logs "sources rescanned (N)".
+class RescanOp implements OpHandler {
+  RescanOp(this.dirs, this.dispatcher, {this.log});
+
+  final AppDirs dirs;
+  final CoreDispatcher dispatcher;
+  final void Function(String message)? log;
+
+  @override
+  bool handles(String op) => op == 'sources.rescan';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) {
+    final given = a['sources'];
+    final List<Map<String, dynamic>> sources;
+    if (given is List) {
+      sources = [for (final s in given) (s as Map).cast<String, dynamic>()];
+    } else {
+      sources = scanSources(dirs);
+    }
+    dispatcher.handle('setSources', {'sources': sources});
+    log?.call('sources rescanned (${sources.length})');
+    return {'sources': sources.length};
+  }
+}
+
 /// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS).
 class AppDirs {
   AppDirs(this.support, this.docs);
