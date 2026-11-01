@@ -46,7 +46,7 @@ void main() {
     d.handle('open', {'sources': <Object>[], 'extra': null});
     driver = IndexDriver(d, every: const Duration(hours: 1));
   });
-  tearDown(driver.stop);
+  tearDown(() => driver.stop());
 
   List<String> jobs() => fake.calls.where((c) => c.startsWith('jobStart:')).toList();
 
