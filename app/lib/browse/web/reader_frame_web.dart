@@ -25,8 +25,7 @@ Widget buildZimFrame({
 
 /// Opens [url] in a new tab, with no link back to this app. Only web addresses and mail links.
 void openInNewTab(String url) {
-  final u = Uri.tryParse(url);
-  if (u == null || !(u.scheme == 'https' || u.scheme == 'http' || u.scheme == 'mailto')) return;
+  if (!isOpenableExternalUrl(url)) return;
   web.window.open(url, '_blank', 'noopener,noreferrer');
 }
 
@@ -80,13 +79,14 @@ class _ZimFrameViewState extends State<_ZimFrameView> {
     _listener = ((web.MessageEvent e) {
       // Only what this frame says; its page has no origin, so the source is the one thing that can be checked.
       if (!identical(e.source, _frame.contentWindow)) return;
-      final d = e.data.dartify();
-      if (d is! Map) return;
-      switch (d['cacheZim']) {
-        case 'page':
-          widget.onPage((d['href'] ?? '').toString(), (d['title'] ?? '').toString());
-        case 'external':
-          widget.onExternal((d['url'] ?? '').toString());
+      final m = parseZimFrameMessage(e.data.dartify());
+      switch (m) {
+        case ZimFramePage():
+          widget.onPage(m.href, m.title);
+        case ZimFrameExternal():
+          widget.onExternal(m.url);
+        case null:
+          break;
       }
     }).toJS;
     web.window.addEventListener('message', _listener);
