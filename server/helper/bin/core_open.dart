@@ -4,6 +4,7 @@ import 'dart:io';
 import '../../../app/lib/search/core_config.dart';
 import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/models.dart';
+import 'index_driver.dart';
 import 'line_protocol.dart';
 
 /// The helper's own `open`. The Rust server sends `open {"sources": <array or null>}` when it starts the helper; this builds the
@@ -16,11 +17,14 @@ import 'line_protocol.dart';
 /// - The sources are the array the server sent (from `<data>/sources.json`), or, when it sent none, [scanSources].
 /// Replies `{"sources": N, "extras": [keys]}` (the server logs "core opened (N sources)").
 class OpenOp implements OpHandler {
-  OpenOp(this.dirs, this.dispatcher, {this.log});
+  OpenOp(this.dirs, this.dispatcher, {this.log, this.indexer});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
+
+  /// Starts the index jobs of the sources just opened (null in tests that do not index).
+  final IndexDriver? indexer;
 
   @override
   bool handles(String op) => op == 'open';
@@ -40,6 +44,7 @@ class OpenOp implements OpHandler {
     log?.call('skipped on the server for now: ICU data install, starter map layers');
     log?.call('core extras: ${(extra.keys.toList()..sort()).join(', ')}');
     dispatcher.handle('open', {'sources': sources, 'extra': extra});
+    indexer?.useSources(sources);
     return {'sources': sources.length, 'extras': extra.keys.toList()..sort()};
   }
 }
@@ -50,11 +55,14 @@ class OpenOp implements OpHandler {
 /// scan the app folders ([scanSources]). The core gets the new list with its own `setSources`.
 /// Replies `{"sources": N}` and logs "sources rescanned (N)".
 class RescanOp implements OpHandler {
-  RescanOp(this.dirs, this.dispatcher, {this.log});
+  RescanOp(this.dirs, this.dispatcher, {this.log, this.indexer});
 
   final AppDirs dirs;
   final CoreDispatcher dispatcher;
   final void Function(String message)? log;
+
+  /// Starts the index jobs of the sources just listed (null in tests that do not index).
+  final IndexDriver? indexer;
 
   @override
   bool handles(String op) => op == 'sources.rescan';
@@ -69,9 +77,28 @@ class RescanOp implements OpHandler {
       sources = scanSources(dirs);
     }
     dispatcher.handle('setSources', {'sources': sources});
+    indexer?.useSources(sources);
     log?.call('sources rescanned (${sources.length})');
     return {'sources': sources.length};
   }
+}
+
+/// The helper's `index.state`, which a browser may call through `/api/core`: what the helper's index jobs are doing, by source path,
+/// `{"<path>": {"fraction": 0..1 or null, "error": null}}` for a source being indexed or one whose index failed. The core's status
+/// says a source is being built; this adds how far it is and why one stopped.
+class IndexStateOp implements OpHandler {
+  IndexStateOp(this.indexer);
+
+  final IndexDriver indexer;
+
+  @override
+  bool handles(String op) => op == 'index.state';
+
+  @override
+  Object? handle(String op, Map<String, dynamic> a) => {
+        for (final e in indexer.progress.entries) e.key: {'fraction': e.value, 'error': null},
+        for (final e in indexer.failures.entries) e.key: {'fraction': null, 'error': e.value},
+      };
 }
 
 /// The server's two app folders (CACHE_APP_SUPPORT and CACHE_APP_DOCS).

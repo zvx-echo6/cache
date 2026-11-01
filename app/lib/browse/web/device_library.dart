@@ -214,10 +214,21 @@ class DeviceLibrary extends ChangeNotifier {
       problem = null;
       final first = !loaded;
       loaded = true;
-      // Something arrived or went while this tab was looking elsewhere (a download ended): the app reads its sources again.
-      if (!first && !(before.length == items.length && before.containsAll(items.map((i) => i.id)))) await onItemsChanged?.call();
+      final arrivedOrGone = !first && !(before.length == items.length && before.containsAll(items.map((i) => i.id)));
+      // What was read is shown at once: the Library must not keep a finished transfer's card on screen while the app catches up.
+      if (!_disposed) notifyListeners();
+      // Something arrived or went while this tab was looking elsewhere (a download ended): the app reads its sources again. That
+      // may be slow or fail; neither holds back the next read.
+      if (arrivedOrGone) {
+        try {
+          await onItemsChanged?.call().timeout(const Duration(seconds: 20));
+        } catch (_) {}
+      }
     } on DeviceException catch (e) {
       problem = e.code == 'unauthorized' ? 'Sign in again to see the Library.' : 'This device could not be reached.';
+    } catch (_) {
+      // An answer that could not be read must not end the reading for good.
+      problem = 'This device could not be reached.';
     }
     await _writeSeen();
     if (!_disposed) notifyListeners();

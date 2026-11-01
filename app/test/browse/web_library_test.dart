@@ -203,6 +203,14 @@ void main() {
       expect(find.textContaining('partly uploaded'), findsNothing);
     });
 
+    testWidgets('with something in the Library and nothing going on, the line about changing icons is not there (a browser cannot)', (tester) async {
+      File('${sources.zimsDir!.path}/one.zim').writeAsBytesSync(List.filled(2048, 0));
+      await sources.refresh();
+      await show(tester);
+      expect(find.byKey(const ValueKey('zim-one.zim')), findsOneWidget);
+      expect(find.textContaining('Icons come from'), findsNothing);
+    });
+
     testWidgets('a library package that was downloaded waits as a card with Add', (tester) async {
       api.jobList = [job('p1', 'done', kind: 'library', name: 'pack.cache-library')];
       await show(tester);
