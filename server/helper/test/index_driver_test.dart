@@ -154,6 +154,52 @@ void main() {
     expect(params['settings'], {'keyword_index': 'auto'});
   });
 
+  test('a library still opening on the first tick is indexed once it is ready (the timer keeps running)', () async {
+    var opening = true;
+    status['l1'] = _st('l1', kind: 'library');
+    fake.statusFn = () => jsonEncode({
+          'sources': [
+            {..._st('l1', kind: 'library'), 'opening': opening, 'id': opening ? null : 'id-l1'},
+          ],
+        });
+    fake.progressScript.add(_done);
+    final fast = IndexDriver(d, every: const Duration(milliseconds: 20));
+    addTearDown(fast.stop);
+    fast.useSources([_src('l1', kind: 'library')]);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(jobs(), isEmpty, reason: 'still opening');
+    opening = false;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(jobs(), hasLength(1));
+    expect(jobs().single, startsWith('jobStart:index_library:'));
+  });
+
+  test('a ZIM still opening on the first tick is indexed once it is ready', () async {
+    var opening = true;
+    fake.statusFn = () => jsonEncode({
+          'sources': [
+            {..._st('a.zim'), 'opening': opening, 'id': opening ? null : 'id-a.zim'},
+          ],
+        });
+    fake.progressScript.add(_done);
+    final fast = IndexDriver(d, every: const Duration(milliseconds: 20));
+    addTearDown(fast.stop);
+    fast.useSources([_src('a.zim')]);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(jobs(), isEmpty);
+    opening = false;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(jobs(), hasLength(1));
+    expect(jobs().single, startsWith('jobStart:index_zim:'));
+  });
+
+  test('the tick stops once every source is settled and indexed', () {
+    status['a.zim'] = _st('a.zim', indexed: true);
+    driver.useSources([_src('a.zim')]);
+    driver.tick();
+    expect(driver.running, isFalse);
+  });
+
   test('open and sources.rescan hand the list to the driver', () {
     status['a.zim'] = _st('a.zim');
     fake.progressScript.add(_done);
