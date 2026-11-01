@@ -43,11 +43,11 @@ const MAX_REDIRECTS: usize = 5;
 const TITLE_CHARS: usize = 150;
 
 /// The schema of `web_search`, verbatim from docs/TOOLS.md.
-const WEB_SEARCH_SCHEMA: &str = r#"{"type": "function", "function": {
+pub(crate) const WEB_SEARCH_SCHEMA: &str = r#"{"type": "function", "function": {
   "name": "web_search",
   "description": "Search the web. Only for what the offline library cannot answer or for current information (news, prices, recent events). Search the offline library first.",
   "parameters": {"type": "object", "properties": {
-    "query": {"type": "string", "minLength": 1, "maxLength": 200,
+    "query": {"type": "string", "minLength": 1,
               "description": "What to search for, in plain words."}},
     "required": ["query"], "additionalProperties": false}}}"#;
 

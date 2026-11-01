@@ -20,6 +20,27 @@ use tantivy::{DocAddress, DocSet, Searcher, TantivyDocument, Term};
 /// A keyword hit: its score, where it is in the index, and its key.
 type ScoredDoc = (f32, DocAddress, String);
 
+/// The id of the app's own guide library (tools/guide/BUILD.md: the `library_id` is always `cache-guide`).
+pub const GUIDE_LIBRARY_ID: &str = "cache-guide";
+
+/// PLACEHOLDER, to be tuned by the training session. The guide gate: a query whose best cosine to the guide library's
+/// stored vectors (the top score of the guide's dense list) is below this is not about the app, so guide hits are put
+/// below every other hit before the cut to the results shown. At or above it the ranking is unchanged.
+pub const GUIDE_GATE: f32 = 0.5;
+
+/// `order` with the entries for which `is_guide` holds moved below all the others (each group keeps its order), when
+/// `gate_score` is below `gate`. Unchanged when `gate_score` is None (no guide dense list: nothing to measure) or at or
+/// above `gate`.
+fn demote_guide<T>(order: Vec<T>, gate_score: Option<f32>, gate: f32, is_guide: impl Fn(&T) -> bool) -> Vec<T> {
+    match gate_score {
+        Some(s) if s < gate => {
+            let (guide, rest): (Vec<T>, Vec<T>) = order.into_iter().partition(|e| is_guide(e));
+            rest.into_iter().chain(guide).collect()
+        }
+        _ => order,
+    }
+}
+
 /// Reciprocal rank fusion constant.
 pub const RRF_K: f64 = 60.0;
 
@@ -435,6 +456,21 @@ pub(crate) fn top_deterministic(
 }
 
 impl Handle {
+    /// The guide gate score of a query vector: the best cosine to the vectors of the `cache-guide` library (the top score of
+    /// its dense list, the same number `search` gates on). None when there is no such library or it does not accept the
+    /// vector. For tuning `GUIDE_GATE` (`cs guide-gate`); not part of the C ABI.
+    pub fn guide_gate_score(&mut self, model: &str, vector: &[f32]) -> Option<f32> {
+        self.poll_opening();
+        let snippet_chars = self.snippet_chars as usize;
+        self.sources.iter().find_map(|s| match s {
+            Source::Library(l) if l.id().eq_ignore_ascii_case(GUIDE_LIBRARY_ID) && l.accepts_vector(model, vector.len()) => l
+                .dense_search(vector, 1, 1, snippet_chars)
+                .ok()
+                .and_then(|hits| hits.iter().map(|h| h.score).fold(None, |m: Option<f32>, x| Some(m.map_or(x, |m| m.max(x))))),
+            _ => None,
+        })
+    }
+
     pub fn search(&mut self, query: &str, options_json: Option<&str>) -> Result<String> {
         self.poll_opening();
         self.last_cites.clear();
@@ -592,6 +628,21 @@ impl Handle {
             }
             rrf(&rank_lists).into_iter().filter_map(|(a, _)| by_addr.remove(&a)).collect()
         };
+
+        // The guide gate: the app's guide is a library like any other, but a query that is not about the app should not
+        // see its sections ahead of the user's own libraries. The score is the best cosine of the query to the guide's
+        // vectors, which is the top of the guide's dense list computed above (none when the guide had no vector list).
+        let is_guide = |src_i: usize| matches!(&self.sources[src_i], Source::Library(l) if l.id().eq_ignore_ascii_case(GUIDE_LIBRARY_ID));
+        let gate_score = libs
+            .iter()
+            .filter(|(src_i, _)| is_guide(*src_i))
+            .flat_map(|(_, hits)| hits.iter().map(|h| h.score))
+            .fold(None, |m: Option<f32>, x| Some(m.map_or(x, |m| m.max(x))));
+        let order = demote_guide(order, gate_score, GUIDE_GATE, |e| match e {
+            Entry::Zim(..) => false,
+            Entry::Lib(li, _) => is_guide(libs[*li].0),
+            Entry::LibKw(ki, _) => is_guide(lib_kw[*ki].src_i),
+        });
 
         // Collapse duplicate library hits after the merge (same document value + title, or without a document
         // field the same title + snippet): the best-ranked stays (on an exact tie the smaller address, which the
@@ -864,6 +915,18 @@ mod tests {
         let (mut an, st) = stems(&["flood"]);
         let s = main_snippet(&text, &mut an, &st, 100);
         assert!(s.starts_with("flood insurance") || s.contains("flood"), "{s}");
+    }
+
+    #[test]
+    fn the_guide_gate_demotes_guide_entries_only_below_the_gate() {
+        let order = vec!["g1", "a", "g2", "b", "c"];
+        let g = |e: &&str| e.starts_with('g');
+        // below the gate: non-guide first in their order, then the guide entries in theirs
+        assert_eq!(demote_guide(order.clone(), Some(0.49), GUIDE_GATE, g), ["a", "b", "c", "g1", "g2"]);
+        // at the gate, above it, or with nothing measured: unchanged
+        assert_eq!(demote_guide(order.clone(), Some(GUIDE_GATE), GUIDE_GATE, g), order);
+        assert_eq!(demote_guide(order.clone(), Some(0.9), GUIDE_GATE, g), order);
+        assert_eq!(demote_guide(order.clone(), None, GUIDE_GATE, g), order);
     }
 
     #[test]

@@ -302,7 +302,7 @@ fn web_search_is_offered_only_with_a_key_and_online() {
     assert_eq!(f["name"], "web_search");
     assert_eq!(f["parameters"]["required"], json!(["query"]));
     assert_eq!(f["parameters"]["additionalProperties"], false);
-    assert_eq!(f["parameters"]["properties"]["query"]["maxLength"], 200);
+    assert!(f["parameters"]["properties"]["query"].get("maxLength").is_none());
     assert!(f["description"].as_str().unwrap().starts_with("Search the web."));
 
     // a bad provider name or a bad online value is refused and changes nothing
@@ -377,6 +377,27 @@ fn search_returns_up_to_five_lines_in_the_search_form() {
     assert!(r.header("content-type").unwrap().starts_with("application/json"));
     assert!(r.header("user-agent").unwrap().starts_with("Cache/"), "{:?}", r.header("user-agent"));
     c.assert_no_key();
+}
+
+#[test]
+fn a_query_of_any_length_is_searched_and_sent_whole() {
+    let s = Server::start(|_| Resp::json(&kagi(&[("https://a.example/1", "Hit", "s1")])));
+    let mut c = Core::with_web(&search_url(&s));
+    let q = "burn ban ".repeat(120);
+    assert!(q.chars().count() > 1000);
+    let out = c.tool("web_search", json!({"query": q}));
+    let content = out["content"].as_str().unwrap();
+    assert!(content.starts_with("[1] Hit (web, fetched 2026-10-25 14:20)"), "{content}");
+    assert!(!content.to_lowercase().contains("trunc") && !content.contains("bad_arguments"), "{content}");
+    // the whole query went to the server
+    assert_eq!(serde_json::from_str::<Value>(&s.requests()[0].body).unwrap()["query"], json!(q));
+    // the schema has no length limit
+    let schemas = take(unsafe { cs_tool_schemas(c.h) }).unwrap();
+    let sv: Value = serde_json::from_str(&schemas).unwrap();
+    let web = sv.as_array().unwrap().iter().find(|x| x["function"]["name"] == "web_search").unwrap();
+    assert!(web["function"]["parameters"]["properties"]["query"].get("maxLength").is_none());
+    // an empty query is still refused
+    assert!(c.content("web_search", json!({"query": ""})).contains("bad_arguments"));
 }
 
 #[test]

@@ -30,7 +30,7 @@ const SEARCH_SCHEMA: &str = r#"{"type": "function", "function": {
   "name": "search",
   "description": "Search the offline library and reference articles (encyclopedias, manuals, medical and how-to guides) on this phone. Returns up to 5 numbered results. Use it before answering any question about facts or how to do something.",
   "parameters": {"type": "object", "properties": {
-    "query": {"type": "string", "minLength": 1, "maxLength": 200,
+    "query": {"type": "string", "minLength": 1,
               "description": "What to search for, in plain words."}},
     "required": ["query"], "additionalProperties": false}}}"#;
 
@@ -654,7 +654,7 @@ mod tests {
     fn built_in_schemas_are_toolsmd_verbatim() {
         let s = Builtin::Search.schema();
         assert_eq!(s["function"]["name"], "search");
-        assert_eq!(s["function"]["parameters"]["properties"]["query"]["maxLength"], 200);
+        assert!(s["function"]["parameters"]["properties"]["query"].get("maxLength").is_none());
         let r = Builtin::Read.schema();
         assert_eq!(r["function"]["parameters"]["required"], json!(["n"]));
         // search is validated with its own schema
@@ -663,6 +663,19 @@ mod tests {
     }
 
     // ---- dispatch ----
+
+    #[test]
+    fn a_search_query_of_any_length_is_accepted_and_the_schema_text_is_unchanged() {
+        assert!(SEARCH_SCHEMA.contains(r#""query": {"type": "string", "minLength": 1,"#));
+        assert!(crate::web::WEB_SEARCH_SCHEMA.contains(r#""query": {"type": "string", "minLength": 1,"#));
+        let mut h = handle();
+        let mut c = Conversation::new();
+        let long = "x".repeat(1000);
+        let v = call(&mut h, &mut c, "search", &json!({"query": long}).to_string());
+        assert_eq!(v["content"], "No results found.");
+        // other fields keep their limits
+        assert!(validate_args(&params(), &json!({"s": "abcde"})).is_err());
+    }
 
     #[test]
     fn bad_arguments_come_back_as_content() {

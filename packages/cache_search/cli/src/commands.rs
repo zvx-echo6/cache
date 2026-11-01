@@ -19,6 +19,8 @@ cs: command line and HTTP wrapper over the cache_search core
   cs library-manifest --library <dir> [--out <file>]
   cs update-library  --library <dir> --snapshot <file> --manifest <file>
   cs search          --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [EMBED] [--open-timeout 600]
+  cs guide-gate      --config <sources.json> (--query <text> | --queries <file.jsonl of {\"text\"}>) EMBED [--open-timeout 600]
+                     (prints {\"text\",\"score\",\"gate\",\"about_app\"} per query: the best cosine to the guide library; for tuning GUIDE_GATE)
   cs read            --config <sources.json> --address <addr> [--max-chars 6000] [--open-timeout 600]
   cs status          --config <sources.json> [--open-timeout 600]
   cs tool <name>     --config <sources.json> [--args '<json>'] [--now <iso8601>] [--lat <deg> --lon <deg> [--accuracy <m>]]
@@ -305,6 +307,31 @@ pub fn search(argv: &[String]) -> Result<(), ApiError> {
     } else {
         let f: Value = serde_json::from_str(&formatted).map_err(|e| ApiError::new("internal", e.to_string()))?;
         print(f["tool_message"].as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
+/// The guide gate score of each query: the best cosine between the query's embedding and the `cache-guide` library's
+/// stored vectors, which `search` compares with `GUIDE_GATE`. One JSON line per query. For tuning the gate.
+pub fn guide_gate(argv: &[String]) -> Result<(), ApiError> {
+    let a = parse(argv, &["config", "query", "queries", "open-timeout"], &[], true)?;
+    let mut texts: Vec<String> = Vec::new();
+    match (a.get("query"), a.get("queries")) {
+        (Some(q), None) => texts.push(q.to_string()),
+        (None, Some(f)) => {
+            let t = std::fs::read_to_string(f).map_err(|e| ApiError::new("io", format!("reading {f}: {e}")))?;
+            for (i, line) in t.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+                let v: Value = serde_json::from_str(line).map_err(|e| usage_err(format!("{f} line {}: {e}", i + 1)))?;
+                texts.push(v["text"].as_str().ok_or_else(|| usage_err(format!("{f} line {}: no \"text\"", i + 1)))?.to_string());
+            }
+        }
+        _ => return Err(usage_err("give --query or --queries")),
+    }
+    let mut e = open_engine(&a)?;
+    for text in texts {
+        let score = e.guide_gate(&text)?;
+        let about = score.map(|s| s >= cache_search::search::GUIDE_GATE);
+        print(&json!({"text": text, "score": score, "gate": cache_search::search::GUIDE_GATE, "about_app": about}).to_string());
     }
     Ok(())
 }
@@ -796,6 +823,7 @@ pub fn main_with(argv: Vec<String>) -> i32 {
         "library-manifest" => library_manifest(rest),
         "update-library" => update_library(rest),
         "search" => search(rest),
+        "guide-gate" => guide_gate(rest),
         "read" => read(rest),
         "status" => status(rest),
         "tool" => tool(rest),

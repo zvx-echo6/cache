@@ -61,7 +61,7 @@ known, into the system prompt. When the location is known, tools that take a pla
   "name": "search",
   "description": "Search the offline library and reference articles (encyclopedias, manuals, medical and how-to guides) on this phone. Returns up to 5 numbered results. Use it before answering any question about facts or how to do something.",
   "parameters": {"type": "object", "properties": {
-    "query": {"type": "string", "minLength": 1, "maxLength": 200,
+    "query": {"type": "string", "minLength": 1,
               "description": "What to search for, in plain words."}},
     "required": ["query"], "additionalProperties": false}}}
 ```
@@ -913,7 +913,7 @@ calls.
   "name": "web_search",
   "description": "Search the web. Only for what the offline library cannot answer or for current information (news, prices, recent events). Search the offline library first.",
   "parameters": {"type": "object", "properties": {
-    "query": {"type": "string", "minLength": 1, "maxLength": 200,
+    "query": {"type": "string", "minLength": 1,
               "description": "What to search for, in plain words."}},
     "required": ["query"], "additionalProperties": false}}}
 ```
