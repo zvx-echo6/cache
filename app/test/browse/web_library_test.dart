@@ -292,7 +292,7 @@ void main() {
         await browse.init();
         await device.refresh();
       });
-      await tester.pumpWidget(screen(Builder(
+      await tester.pumpWidget(app(Builder(
         builder: (ctx) => Column(children: [
           Expanded(child: FromThisComputer(device: device, onChoose: () {})),
           TextButton(onPressed: () => addFromComputer(ctx, device: device, dropped: file), child: const Text('drop')),

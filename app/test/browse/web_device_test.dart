@@ -314,7 +314,7 @@ void main() {
           case 'POST /api/library/rescan':
             return http.Response(jsonEncode({'ok': true, 'result': {}}), 200);
           case 'GET /api/fetch':
-            return r.url.queryParameters['url'] == 'https://opds.library.kiwix.org/a b' ? http.Response('feed', 200) : http.Response(jsonEncode({'ok': false, 'error': {'code': 'host_not_allowed', 'message': 'no'}}), 403);
+            return r.url.queryParameters['url'] == 'https://opds.library.kiwix.org/a%20b' ? http.Response('feed', 200) : http.Response(jsonEncode({'ok': false, 'error': {'code': 'host_not_allowed', 'message': 'no'}}), 403);
           default:
             return http.Response('', 401);
         }
@@ -330,7 +330,7 @@ void main() {
       expect(utf8.decode(await a.fetch(Uri.parse('https://opds.library.kiwix.org/a b'))), 'feed');
       await expectLater(a.fetch(Uri.parse('https://evil.example/')), throwsA(isA<DeviceException>().having((e) => e.code, 'code', 'host_not_allowed')));
       await expectLater(a.removeItem('x'), throwsA(isA<DeviceException>().having((e) => e.code, 'code', 'unauthorized')));
-      expect(seen, contains('GET /api/fetch?url=https%3A%2F%2Fopds.library.kiwix.org%2Fa%20b'));
+      expect(seen, contains('GET /api/fetch?url=https%3A%2F%2Fopds.library.kiwix.org%2Fa%2520b'));
     });
   });
 

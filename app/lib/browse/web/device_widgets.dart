@@ -258,7 +258,12 @@ class DeviceStorageFooter extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Device storage', style: TextStyle(fontSize: 12, color: k.secondary)),
-              Text.rich(
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text.rich(
+                textAlign: TextAlign.end,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 TextSpan(
                   style: TextStyle(fontSize: 12, color: k.secondary),
                   children: [
@@ -266,6 +271,7 @@ class DeviceStorageFooter extends StatelessWidget {
                     TextSpan(text: ' free of ${formatBytes(total)}'),
                   ],
                 ),
+              ),
               ),
             ],
           );
