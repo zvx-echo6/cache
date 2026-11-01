@@ -172,8 +172,10 @@ jobs:
         run: |
           ls -l build-llama/libcache_llama.so
           ldd build-llama/libcache_llama.so || true
+          # (the output is read whole: grep -q ending a pipe early would fail the step under pipefail)
+          symbols=$(nm -D --defined-only build-llama/libcache_llama.so)
           for s in cl_embed_load cl_embed_info cl_embed cl_embed_free; do
-            nm -D --defined-only build-llama/libcache_llama.so | grep -q " T $s\$" || { echo "::error::libcache_llama.so has no $s"; exit 1; }
+            grep -q " T $s\$" <<< "$symbols" || { echo "::error::libcache_llama.so has no $s"; exit 1; }
           done
           echo "max glibc: $(objdump -T build-llama/libcache_llama.so | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)"
       # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
