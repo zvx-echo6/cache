@@ -29,6 +29,10 @@ class IndexDriver {
   final Map<String, String> failures = {};
   Timer? _timer;
 
+  /// Set by [_next] when a source that will want indexing is still opening, building or updating: the timer must keep running
+  /// until it settles, or the index is never started (the library is usually still opening on the first tick after a rescan).
+  bool _waiting = false;
+
   /// The running job's key in the dispatcher, its source path and what it is.
   int? _job;
   String? _jobPath;
@@ -52,6 +56,9 @@ class IndexDriver {
 
   bool get busy => _job != null;
 
+  /// Whether the timer is running (it stops when nothing is left to start or wait for).
+  bool get running => _timer != null;
+
   void stop() {
     _timer?.cancel();
     _timer = null;
@@ -66,7 +73,8 @@ class IndexDriver {
       }
       final next = _next();
       if (next == null) {
-        stop();
+        // Nothing to start now. Keep ticking while a source is still settling; stop only when all are done or not wanted.
+        if (!_waiting) stop();
         return;
       }
       _start(next.source, next.kind, next.params);
@@ -115,13 +123,19 @@ class IndexDriver {
     final status = <String, Map<String, dynamic>>{
       for (final s in (dispatcher.handle('status', const {}) as List)) (s as Map)['path'] as String: s.cast<String, dynamic>(),
     };
+    _waiting = false;
     for (final src in _sources) {
       final path = src['path'] as String;
       if (_tried.contains(path) || failures.containsKey(path)) continue;
       final s = status[path];
-      if (s == null || s['error'] != null || s['building'] == true || s['opening'] == true || s['updating'] == true) continue;
+      if (s == null || s['error'] != null) continue;
+      final settings = (src['settings'] as Map?)?.cast<String, dynamic>();
+      if (s['building'] == true || s['opening'] == true || s['updating'] == true) {
+        // Not ready to look at yet; look again on the next tick (unless its keyword index is switched off).
+        if (src['kind'] != 'library' || (settings?['keyword_index'] ?? 'auto') != 'off') _waiting = true;
+        continue;
+      }
       if (src['kind'] == 'library') {
-        final settings = (src['settings'] as Map?)?.cast<String, dynamic>();
         if (s['id'] == null || s['indexed'] == true || (settings?['keyword_index'] ?? 'auto') == 'off') continue;
         return (
           source: src,
