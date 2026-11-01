@@ -133,6 +133,8 @@ class _CrisisCardState extends State<CrisisCard> {
       return Semantics(
         label: spoken,
         button: true,
+        // The spoken label ("Call nine eight eight") replaces the button's own; its tap comes with it.
+        onTap: onTap,
         excludeSemantics: true,
         child: filled
             ? FilledButton(key: key, style: style, onPressed: onTap, child: text)
@@ -387,6 +389,7 @@ class NeedHelpLink extends StatelessWidget {
   Widget build(BuildContext context) => Semantics(
     label: 'Need help now? Opens support options',
     button: true,
+    onTap: () => showCrisisSheet(context, help),
     excludeSemantics: true,
     child: TextButton(
       key: const ValueKey('need-help'),

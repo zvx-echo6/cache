@@ -303,4 +303,17 @@ void main() {
       await server.close(force: true);
     }
   });
+
+  test('with a language chosen, collections tagged with that language and others ("eng,jpn") are not listed', () async {
+    final b = make();
+    await b.init();
+    b.language = 'eng';
+    CatalogEntry e(String lang) => CatalogEntry(id: lang, title: lang, summary: '', language: lang, name: 'x', flavour: '', category: 'other', tags: const [], updated: '2026-10-01', size: 1, articleCount: 1, downloadUrl: Uri.parse('https://example.org/x.zim'), iconUrl: null);
+    expect(b.inLanguage(e('eng')), isTrue);
+    expect(b.inLanguage(e('eng,jpn')), isFalse, reason: 'the Japanese Stack Overflow is tagged eng,jpn');
+    expect(b.inLanguage(e('rus')), isFalse);
+    expect(b.inLanguage(e('')), isTrue, reason: 'no language given: kept');
+    b.language = '';
+    expect(b.inLanguage(e('eng,jpn')), isTrue, reason: 'All languages lists every collection');
+  });
 }

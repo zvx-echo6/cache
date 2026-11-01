@@ -178,7 +178,7 @@ Future<void> _askAddParts(BuildContext context, RegionsState regions, RegionReco
     summary: [
       if (have.isNotEmpty) '$have ${have.contains(' and ') ? 'are' : 'is'} already here.',
       if (o.offroad && o.offroadShared) "The state's off-road data is already on this phone; only this area's terrain is new.",
-      '${sizeWords(o.bytes)} to download.',
+      o.bytes == null ? 'Its size is not known yet.' : '${sizeWords(o.bytes)} to download.',
     ],
     bytes: o.bytes,
     name: rec.name,
@@ -189,6 +189,13 @@ Future<void> _askAddParts(BuildContext context, RegionsState regions, RegionReco
   tell(m, 'Adding $adds to ${rec.name}');
   await _run(m, 'add $adds to ${rec.name}', () => regions.addParts(rec, offroad: o.offroad, places: o.places, anyway: choice == DownloadChoice.now),
       retry: () => _askAddParts(context, regions, rec, o));
+}
+
+/// Adds places to a region downloaded before they were published for its area (its page's "Now available" row).
+Future<void> askAddPlaces(BuildContext context, RegionsState regions, String id) async {
+  final rec = await regions.recordOf(id);
+  if (rec == null || !context.mounted) return;
+  await _askAddParts(context, regions, rec, RegionOffer(RegionOfferKind.addParts, places: true, bytes: regions.costOf(rec).places));
 }
 
 /// Adds off-road to a region on the phone, from its page or its menu.
@@ -268,7 +275,7 @@ Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRe
 Future<void> checkRegionUpdate(BuildContext context, RegionsState regions, LocalRegion l, {bool anyway = false}) async {
   final m = ScaffoldMessenger.of(context);
   tell(m, 'Checking ${l.name} for updates');
-  final noPlaces = l.placesNotAvailable;
+  final noPlaces = l.placesNotAvailable || (!l.hasPlaces && !l.isArea);
   try {
     await regions.checkUpdates();
     await regions.updateRegion(l.id, anyway: anyway);

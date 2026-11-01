@@ -700,6 +700,12 @@ class RegionsState extends ChangeNotifier {
   /// was downloaded gets them as soon as they are (they were asked for then). Nothing is downloaded that was not asked for, and
   /// the mobile data rule applies as to any download.
   Future<void> recheckPublished() async {
+    // A region without places (downloaded before they were published for its area): ask the server whether they are now.
+    if (!placesPublished && local.any((l) => !l.isArea && (!l.hasPlaces || l.placesNotAvailable))) {
+      try {
+        await checkUpdates();
+      } catch (_) {}
+    }
     if (!placesPublished) return;
     for (final l in local) {
       if (l.isArea || !l.placesNotAvailable) continue;
@@ -1452,9 +1458,16 @@ class RegionsState extends ChangeNotifier {
 
   /// Asks the core whether a newer road routing or places build is out.
   Future<void> checkUpdates() async {
-    await _core?.call('check_update');
+    final r = await _core?.call('check_update');
+    // The places server's build, read even when no region has places yet (the core's status names a build only once one does):
+    // a region downloaded before places were published can then add them.
+    final pb = (r?['places'] as Map?)?['build'];
+    if (pb is String && pb.isNotEmpty) _placesServerBuild = pb;
     await refresh();
   }
+
+  /// The places build the server published, as the last check_update read it (null: not read yet).
+  String? _placesServerBuild;
 
   /// Fetches the region's map again and, when a newer road routing or places build is out, that too. A region downloaded before
   /// places were part of regions gets its places part here.
@@ -1482,7 +1495,10 @@ class RegionsState extends ChangeNotifier {
 
   /// The places server has a build (the core read its current.json). Until places are published, no region is offered them: a
   /// part asked for then could only fail.
-  bool get placesPublished => placesAvailable && (status['places'] as Map?)?['build'] != null;
+  bool get placesPublished => placesAvailable && ((status['places'] as Map?)?['build'] != null || _placesServerBuild != null);
+
+  /// Places were published after region [l] was downloaded (it has none): its page offers them ("Now available", Add).
+  bool placesNowAvailable(LocalRegion l) => placesPublished && !l.isArea && !l.hasPlaces;
 
   Future<void> _addPlaces(LocalRegion l) async {
     final core = _core;

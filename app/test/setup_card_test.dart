@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:cache/app_state.dart';
+import 'package:cache/browse/browse_state.dart';
+import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/model_downloads.dart';
@@ -229,6 +233,20 @@ void main() {
     await tester.runAsync(again.init);
     expect(again.isOn(HomeBlock.setup), isFalse, reason: 'kept in layout.json');
     again.dispose();
+    await r.dispose(tester);
+  });
+
+  testWidgets('the Cache guide that ships with the app does not tick "Add a library"; a library the person added does', (tester) async {
+    await rig(tester);
+    final libs = LibrariesState(sources: r.sources);
+    libs.libraries = [LibraryItem(dir: Directory('${r.dir.path}/libraries/guide'), settings: const {'library_id': kGuideLibraryId, 'title': 'Cache guide'})];
+    final browse = BrowseState(sources: r.sources, policy: r.policy, libraries: libs, settingsDirOverride: r.dir, phoneLanguage: 'en');
+    SetupCache withBrowse() => SetupCache(app: r.app, weather: r.weather, sources: r.sources, browse: browse, chooseModel: (_) {}, getArea: (_) {}, turnOnWeather: (_) {}, addLibrary: (_) {});
+    expect(withBrowse().libraryLine.phase, SetupPhase.todo, reason: 'only the built-in guide is there');
+    libs.libraries = [...libs.libraries, LibraryItem(dir: Directory('${r.dir.path}/libraries/family-plan'), settings: const {'library_id': 'family-plan', 'title': 'Family plan'})];
+    expect(withBrowse().libraryLine.phase, SetupPhase.done);
+    expect(withBrowse().libraryLine.detail, '1 library');
+    browse.dispose();
     await r.dispose(tester);
   });
 }

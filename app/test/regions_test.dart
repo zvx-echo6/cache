@@ -10,6 +10,7 @@ import 'package:cache/nav/nav_state.dart';
 import 'package:cache/nav/ui/search_panel.dart';
 import 'package:cache/nav/units.dart';
 import 'package:cache/regions/region_catalogue.dart';
+import 'package:cache/regions/ui/region_page.dart';
 import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/regions_state.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
@@ -49,11 +50,14 @@ class _Rig {
     WidgetTester tester, {
     ConnectionKind connection = ConnectionKind.wifi,
     bool places = false,
+    bool placesBuildOnlyWithRegion = false,
     Future<void> Function()? onPlacesChanged,
   }) async {
     final r = _Rig();
     r.s = await SettingsRig.create(tester, connection: connection);
-    r.core = FakeRegions(tileDir: '${r.s.dir.path}/regions/tiles/2026-10')..placesEnabled = places;
+    r.core = FakeRegions(tileDir: '${r.s.dir.path}/regions/tiles/2026-10')
+      ..placesEnabled = places
+      ..placesBuildOnlyWithRegion = placesBuildOnlyWithRegion;
     Directory(r.core.tileDir).createSync(recursive: true);
     final web = regionWeb();
     r.catalogue = RegionCatalogue(dir: () async => Directory('${r.s.dir.path}/region-catalogue'), fetch: web.fetch);
@@ -451,6 +455,31 @@ void main() {
       expect(placesNotPublished('HTTP 410 from https://x/places/current.json'), isTrue);
       expect(placesNotPublished('HTTP 404 from https://x/places/index-b1.json.gz'), isFalse);
       expect(placesNotPublished(null), isFalse);
+    });
+
+    testWidgets('places published after a region was downloaded: Check for update finds them, its page offers them, Update adds them', (tester) async {
+      final r = await _Rig.boot(tester, places: true, placesBuildOnlyWithRegion: true);
+      await tester.runAsync(() async {
+        await r.regions.download(r.us['us-id']!, routing: true, map: false);
+        r.core.finish('us-id');
+        await r.regions.refresh();
+      });
+      expect(r.regions.regionOf('us-id')!.hasPlaces, isFalse);
+      expect(r.regions.placesPublished, isFalse, reason: 'the core names a places build only once a region has places');
+      expect(r.regions.placesNowAvailable(r.regions.regionOf('us-id')!), isFalse);
+      await tester.runAsync(r.regions.checkUpdates);
+      expect(r.regions.placesNowAvailable(r.regions.regionOf('us-id')!), isTrue, reason: 'check_update read the server: places are published');
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.light), home: RegionPage(regions: r.regions, id: 'us-id')));
+      await r.settle(tester);
+      expect(find.byKey(const ValueKey('part-places-add')), findsOneWidget);
+      expect(find.text('Now available'), findsOneWidget);
+      expect(find.byKey(const ValueKey('add-places')), findsOneWidget);
+      await tester.runAsync(() => r.regions.updateRegion('us-id', anyway: true));
+      await r.settle(tester);
+      expect(r.regions.regionOf('us-id')!.hasPlaces, isTrue, reason: 'Update adds the newly published part');
+      expect(find.byKey(const ValueKey('part-places-add')), findsNothing);
+      expect(find.byKey(const ValueKey('part-places')), findsOneWidget);
+      await r.dispose(tester);
     });
 
     testWidgets('a part waiting for a core that does not list the region is stopped and offers Carry on, which asks again', (tester) async {

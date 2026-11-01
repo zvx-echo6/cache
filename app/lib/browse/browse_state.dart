@@ -205,9 +205,22 @@ class BrowseState extends ChangeNotifier {
     await loadFirstPage();
   }
 
+  /// How many catalogue entries were read so far (the list can hold fewer: see [inLanguage]).
+  int _fetched = 0;
+
+  /// An entry for the chosen language. Kiwix's `lang` filter also returns collections tagged with several languages that include
+  /// it ("eng,jpn" for the Japanese Stack Overflow, whose pages are Japanese), so with a language chosen only collections in that
+  /// language alone are listed; they stay under All languages.
+  bool inLanguage(CatalogEntry e) {
+    if (language.isEmpty || e.language.isEmpty) return true;
+    final codes = [for (final c in e.language.split(',')) if (c.trim().isNotEmpty) c.trim()];
+    return codes.length == 1 && codes.single == language;
+  }
+
   Future<void> loadFirstPage() async {
     final gen = ++_generation;
     entries.clear();
+    _fetched = 0;
     total = 0;
     loading = true;
     catalogError = null;
@@ -220,7 +233,8 @@ class BrowseState extends ChangeNotifier {
         tag: tag,
       );
       if (gen != _generation) return;
-      entries.addAll(p.entries);
+      _fetched += p.entries.length;
+      entries.addAll(p.entries.where(inLanguage));
       total = p.total;
     } on CatalogException catch (e) {
       if (gen != _generation) return;
@@ -233,7 +247,7 @@ class BrowseState extends ChangeNotifier {
     }
   }
 
-  bool get hasMore => entries.isNotEmpty && entries.length < total;
+  bool get hasMore => _fetched > 0 && _fetched < total;
 
   Future<void> loadMore() async {
     if (loading || !hasMore) return;
@@ -246,10 +260,11 @@ class BrowseState extends ChangeNotifier {
         language: language,
         category: category,
         tag: tag,
-        start: entries.length,
+        start: _fetched,
       );
       if (gen != _generation) return;
-      entries.addAll(p.entries);
+      _fetched += p.entries.length;
+      entries.addAll(p.entries.where(inLanguage));
       total = p.total;
     } on CatalogException catch (e) {
       if (gen == _generation) catalogError = e.message;

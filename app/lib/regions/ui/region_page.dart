@@ -148,6 +148,7 @@ class RegionPage extends StatelessWidget {
         };
         final layers = _layerGroups(l);
         final canAddOffroad = !l.hasOffroad && !l.isArea && regions.offroadCatalogue != null;
+        final canAddPlaces = regions.placesNowAvailable(l);
         return Scaffold(
           appBar: AppBar(leading: paneShowButton(context), 
             title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -185,6 +186,14 @@ class RegionPage extends StatelessWidget {
                           if (sizeOf(p).isNotEmpty) [Part(sizeOf(p))],
                         ]),
                         trailing: trailingFor(p, p.kind.name),
+                      ),
+                    // Published since this region was downloaded: offered here.
+                    if (canAddPlaces)
+                      SettingsRow(
+                        key: const ValueKey('part-places-add'),
+                        title: 'Places',
+                        status: const [Part('Now available')],
+                        trailing: RowButton(key: const ValueKey('add-places'), label: 'Add', onPressed: () => askAddPlaces(context, regions, l.id)),
                       ),
                     if (canAddOffroad)
                       SettingsRow(

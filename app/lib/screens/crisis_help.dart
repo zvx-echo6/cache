@@ -14,6 +14,11 @@ import 'crisis_card.dart';
 /// "Get guides" until they are listed here.
 const Set<String> kCrisisGuideIds = {};
 
+/// A search result that is an emergency room (or a hospital, which likely has one) the card can show: a real place with a name and
+/// a position. The search's category row ("Emergency room", what a category search offers to list) is never one.
+bool isRealEmergencyRoom(MapPlace p) =>
+    p.type == 'place' && !p.isCategory && p.name.trim().isNotEmpty && (p.lat != 0 || p.lon != 0) && (p.category == 'emergency_room' || p.category == 'hospital');
+
 /// [CrisisHelp] on the phone: the phone's own dialer and messages (through the system, never dialled for the person), the nearest
 /// emergency room from the offline places (the map search's emergency room category, nearest first), and the Library.
 class AppCrisisHelp implements CrisisHelp {
@@ -75,8 +80,8 @@ class AppCrisisHelp implements CrisisHelp {
     try {
       final r = await nav.backend.search('emergency room', near: GeoPoint(f.lat, f.lon), limit: 5, meaning: false);
       if (r.places != null && !r.places!.installed) return const NearestEr(ErState.noMap);
-      final er = r.results.where((p) => p.category == 'emergency_room' || p.category == 'hospital').firstOrNull;
-      if (er == null) return NearestEr(r.places?.covers == false ? ErState.noMap : ErState.noEr);
+      final er = r.results.where(isRealEmergencyRoom).firstOrNull;
+      if (er == null) return NearestEr(r.places == null || !r.places!.installed || !r.places!.covers ? ErState.noMap : ErState.noEr);
       return NearestEr(ErState.found, place: er, distance: er.distanceM == null ? null : nav.fmt.distance(er.distanceM!));
     } catch (_) {
       return const NearestEr(ErState.noMap);

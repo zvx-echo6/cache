@@ -60,8 +60,9 @@ class RegionSizes {
   }
 }
 
-/// When the catalogue first carried sizes: a country's file kept on the phone from before is read again once.
-final DateTime kRegionSizesSince = DateTime.utc(2026, 10, 31);
+/// When the catalogue's sizes last gained a part (places, republished 2026-11-01 00:20:41 UTC): a country's file kept on the phone
+/// from before is read again once, so places are offered straight away.
+final DateTime kRegionSizesSince = DateTime.utc(2026, 11, 1, 0, 21);
 
 /// One region of the catalogue, at any scale: a country, a state, several states, part of a state, a valley, a metro area, a
 /// county or a city. Regions overlap freely; [parents] are every region it sits in.

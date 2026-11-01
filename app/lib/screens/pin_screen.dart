@@ -75,6 +75,7 @@ class _PinPadState extends State<PinPad> {
             child: Semantics(
               button: true,
               label: semantic ?? label,
+              onTap: onTap,
               excludeSemantics: true,
               child: Material(
                 color: k.surface,

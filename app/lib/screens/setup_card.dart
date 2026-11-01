@@ -12,6 +12,7 @@ import '../maps/ui/format.dart';
 import '../models/model_downloads.dart';
 import '../regions/regions_state.dart';
 import '../regions/ui/region_page.dart' show openRegionPage;
+import '../sources/libraries_state.dart' show LibraryItem;
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../weather/weather_state.dart';
@@ -149,7 +150,9 @@ class SetupCache {
   /// A ZIM or a library on the phone is done; a ZIM downloading or a library being added runs.
   SetupLine get libraryLine {
     final zims = sources.zims;
-    final libs = browse?.libraries?.libraries ?? const [];
+    // The Cache guide ships with the app: it is not a library the person added.
+    final state = browse?.libraries;
+    final libs = [for (final l in state?.libraries ?? const <LibraryItem>[]) if (!state!.isGuide(l)) l];
     final n = zims.length + libs.length;
     if (n > 0) {
       final first = zims.isNotEmpty ? sources.titleOf(zims.first) : null;

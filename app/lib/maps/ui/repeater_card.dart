@@ -110,27 +110,27 @@ class RepeaterCard extends StatelessWidget {
             Divider(height: 18, color: k.secondary.withValues(alpha: 0.25), endIndent: 8),
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      key: const ValueKey('repeater-directions'),
-                      onPressed: r.located ? onDirections : null,
-                      icon: const Icon(Icons.directions),
-                      label: const Text('Directions'),
-                    ),
-                  ),
-                  if (onOpenList != null) ...[
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton(
-                        key: const ValueKey('repeater-open-list'),
-                        onPressed: onOpenList,
-                        child: const Text('Open in notebook', maxLines: 1, overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
-                  ],
-                ],
+              // Side by side when both fit at their full words; else one above the other (a phone), never cut.
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  final directions = FilledButton.icon(
+                    key: const ValueKey('repeater-directions'),
+                    onPressed: r.located ? onDirections : null,
+                    icon: const Icon(Icons.directions),
+                    label: const Text('Directions'),
+                  );
+                  final open = onOpenList == null
+                      ? null
+                      : OutlinedButton(key: const ValueKey('repeater-open-list'), onPressed: onOpenList, child: const Text('Open in notebook'));
+                  if (open == null) return SizedBox(width: double.infinity, child: directions);
+                  if (c.maxWidth >= 420 * MediaQuery.textScalerOf(context).scale(1)) {
+                    return Row(children: [Expanded(child: directions), const SizedBox(width: 8), Expanded(child: open)]);
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [directions, const SizedBox(height: 8), open],
+                  );
+                },
               ),
             ),
           ],
