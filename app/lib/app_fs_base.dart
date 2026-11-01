@@ -26,6 +26,11 @@ abstract class AppFs {
   Future<void> writeStringAtomic(AppRoot root, String path, String text);
   Future<void> writeBytesAtomic(AppRoot root, String path, List<int> bytes);
 
+  /// A plain write: the text straight into the file, not through a temp file (File.writeAsStringSync on a phone, so nothing
+  /// waits on the disk but the folder lookup; in a browser it is [writeStringAtomic]). For a small store that was always written
+  /// that way; use [writeStringAtomic] in new code.
+  Future<void> writeString(AppRoot root, String path, String text);
+
   /// The write older code did by hand: the text into `<path>.tmp`, flushed, then renamed over the file. On a phone it is exactly
   /// that (so the temp file keeps its name); in a browser it is [writeStringAtomic]. Use [writeStringAtomic] in new code.
   Future<void> writeStringViaTmp(AppRoot root, String path, String text);

@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../app_fs.dart';
 import '../theme.dart';
 
 /// One adaptive system, two width classes, measured on the window (not the device), so iPad Split View and Android multi-window
@@ -226,13 +226,13 @@ class PanePrefs {
 
   final Directory? _dir;
 
-  Future<File> _file() async => File('${(_dir ?? testDir ?? await getApplicationSupportDirectory()).path}/panes.json');
+  AppFs get _fs => createAppFs(supportOverride: _dir ?? testDir);
 
   Future<Map<String, dynamic>> _read() async {
     try {
-      final f = await _file();
-      if (!f.existsSync()) return {};
-      final j = jsonDecode(f.readAsStringSync());
+      final text = await _fs.readString(AppRoot.support, 'panes.json');
+      if (text == null) return {};
+      final j = jsonDecode(text);
       return j is Map ? j.cast<String, dynamic>() : {};
     } catch (_) {
       return {};
@@ -245,7 +245,7 @@ class PanePrefs {
     try {
       final m = await _read();
       m[id] = hidden;
-      (await _file()).writeAsStringSync(jsonEncode(m));
+      await _fs.writeString(AppRoot.support, 'panes.json', jsonEncode(m));
     } catch (_) {}
   }
 }
@@ -262,13 +262,13 @@ class RailPrefs {
 
   final Directory? _dir;
 
-  Future<File> _file() async => File('${(_dir ?? await getApplicationSupportDirectory()).path}/rail.json');
+  AppFs get _fs => createAppFs(supportOverride: _dir);
 
   Future<bool> hidden() async {
     try {
-      final f = await _file();
-      if (!f.existsSync()) return false;
-      final j = jsonDecode(f.readAsStringSync());
+      final text = await _fs.readString(AppRoot.support, 'rail.json');
+      if (text == null) return false;
+      final j = jsonDecode(text);
       return j is Map && j['hidden'] == true;
     } catch (_) {
       return false;
@@ -277,7 +277,7 @@ class RailPrefs {
 
   Future<void> setHidden(bool hidden) async {
     try {
-      (await _file()).writeAsStringSync(jsonEncode({'hidden': hidden}));
+      await _fs.writeString(AppRoot.support, 'rail.json', jsonEncode({'hidden': hidden}));
     } catch (_) {}
   }
 }
