@@ -56,8 +56,6 @@ jobs:
           workspaces: packages/cache_search/native -> target
           # A cancelled or failed run still saves what it built, so the next push starts warm.
           cache-on-failure: true
-      - name: Clippy cache_server (temporary)
-        run: cargo clippy -p cache_server --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
       - name: Clippy
