@@ -268,9 +268,12 @@ fn bad_arguments_and_unknown_tools_are_content() {
         );
         assert_eq!(v["ids"], json!([]));
     }
-    let long = "x".repeat(201);
+    // a query has no length limit: a long one is searched, not refused
+    let long = format!("sesquipedalian {}", "x".repeat(1000));
     let v = f.tool("search", &json!({"query": long}).to_string());
-    assert!(v["content"].as_str().unwrap().contains("query: must be at most 200 characters"));
+    let content = v["content"].as_str().unwrap();
+    assert!(!content.contains("bad_arguments") && !content.contains("at most"), "{content}");
+    assert!(content.starts_with("[1] Doc "), "{content}");
 }
 
 #[test]

@@ -11,6 +11,8 @@ import '../problem_words.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
 import 'region_actions.dart';
+import 'region_download.dart';
+import '../../downloads/download_row.dart';
 
 /// Opens the page of region [id] (each part with where it stands and its fix).
 /// Beside the list on a tablet (Regions' two panes), else as a page of its own.
@@ -47,9 +49,9 @@ String regionBarLabel(RegionsState regions, LocalRegion l) {
   ].join(' · ');
 }
 
-/// A region on the phone as one row, the same wherever it is listed (Regions > Local, Settings > Maps): its name, the parts not ready
-/// yet (on up to two lines), a labelled bar while it downloads, and, when it stopped or failed, its fix as a button on the row. Tap
-/// opens its page; press and hold opens its menu.
+/// A region on the phone as one row, the same wherever it is listed (Regions > Local, Settings > Maps), in the download pattern:
+/// its name, one line (the whole region's progress, speed and time left while it downloads), one bar, and Pause, Resume or Free
+/// space. Tap opens its page in every state; press and hold opens Pause, Resume and Remove while it downloads, else its menu.
 class RegionRow extends StatelessWidget {
   const RegionRow({super.key, required this.regions, required this.region});
 
@@ -59,44 +61,18 @@ class RegionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = region;
-    final busy = l.phase == RegionPhase.downloading || l.phase == RegionPhase.paused;
-    final fix = switch (l.phase) {
-      RegionPhase.stopped => 'Carry on',
-      RegionPhase.failed => 'Try again',
-      _ => null,
-    };
-    return SettingsRow(
+    final s = regionDl(regions, l);
+    return DownloadRow(
       key: ValueKey('local-${l.id}'),
-      selected: isPaneSelected(context, 'region-${l.id}'),
+      keyBase: 'local-${l.id}',
       title: l.name,
-      statusLines: 2,
-      statusWidget: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          statusText(context, regionStatusParts(regions, l), maxLines: 2),
-          if (busy) ...[
-            const SizedBox(height: 6),
-            Semantics(
-              label: regionBarLabel(regions, l),
-              child: ExcludeSemantics(
-                child: ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: l.fraction, minHeight: 5)),
-              ),
-            ),
-            const SizedBox(height: 4),
-            ExcludeSemantics(child: Text(regionBarLabel(regions, l), key: ValueKey('local-bar-${l.id}'), style: TextStyle(fontSize: 12, color: context.t.secondary))),
-          ],
-        ],
-      ),
-      trailing: fix == null
-          ? null
-          : RowButton(
-              key: ValueKey('local-fix-${l.id}'),
-              label: fix,
-              onPressed: () => carryOnNow(ScaffoldMessenger.of(context), regions, l.id, name: l.name, again: l.phase == RegionPhase.failed),
-            ),
-      chevron: fix == null,
-      onTap: () => openRegionPage(context, regions, l.id),
-      onHold: () => showRegionActions(context, regions, l),
+      state: s,
+      actions: regionDlActions(context, regions, l),
+      selected: isPaneSelected(context, 'region-${l.id}'),
+      doneLine: regionDoneLine(l, placesNote: kPlacesNotAvailableShort),
+      doneAction: Icon(Icons.chevron_right, color: context.t.secondary),
+      onOpen: () => openRegionPage(context, regions, l.id),
+      onDoneHold: () => showRegionActions(context, regions, l),
       holdLabel: 'Region options',
     );
   }
@@ -140,13 +116,8 @@ class RegionPage extends StatelessWidget {
           PartState.failed => Tone.danger,
           _ => Tone.normal,
         };
-        String sizeOf(RegionPartStatus p) => switch (p.state) {
-          PartState.ready => formatBytes(p.bytes),
-          _ when p.totalBytes != null && p.totalBytes! > p.bytes => '${formatBytes(p.totalBytes! - p.bytes)} to go',
-          _ when p.bytes > 0 => '${formatBytes(p.bytes)} so far',
-          _ => '',
-        };
         final layers = _layerGroups(l);
+        final parts = l.parts;
         final canAddOffroad = !l.hasOffroad && !l.isArea && regions.offroadCatalogue != null;
         final canAddPlaces = regions.placesNowAvailable(l);
         return Scaffold(
@@ -167,26 +138,26 @@ class RegionPage extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
               children: [
-                if (l.phase == RegionPhase.paused && regions.paused != null) ...[
-                  Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: statusText(context, [Part(regions.paused!, Tone.warn)], maxLines: 3)),
-                  const SizedBox(height: 10),
+                if (l.phase != RegionPhase.ready) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+                    child: Text(regionSummary(l), key: const ValueKey('region-summary'), style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: k.text)),
+                  ),
                 ],
                 SettingsGroup(
                   rows: [
-                    for (final p in l.parts)
+                    for (final p in parts)
                       if (p.state == PartState.notAvailable)
                         _NotAvailableRow(key: ValueKey('part-${p.kind.name}'), part: p.name, region: l.name)
+                      else if (p.complete)
+                        SettingsRow(
+                          key: ValueKey('part-${p.kind.name}'),
+                          title: p.name,
+                          status: [Part('Ready · ${formatBytes(p.bytes)}')],
+                          trailing: trailingFor(p, p.kind.name),
+                        )
                       else
-                      SettingsRow(
-                        key: ValueKey('part-${p.kind.name}'),
-                        title: p.name,
-                        statusLines: 2,
-                        status: joinParts([
-                          [Part(partStateWords(p), toneOf(p.state))],
-                          if (sizeOf(p).isNotEmpty) [Part(sizeOf(p))],
-                        ]),
-                        trailing: trailingFor(p, p.kind.name),
-                      ),
+                        _PartRow(key: ValueKey('part-${p.kind.name}'), regions: regions, region: l, part: p, parts: parts),
                     // Published since this region was downloaded: offered here.
                     if (canAddPlaces)
                       SettingsRow(
@@ -223,6 +194,9 @@ class RegionPage extends StatelessWidget {
                     label: 'Map layers in this region',
                     rows: [
                       for (final g in layers)
+                        if (!g.status.complete)
+                          _PartRow(key: ValueKey('layer-${g.key}'), regions: regions, region: l, part: g.status, title: g.title, own: true, keyBase: 'layer-${g.key}')
+                        else
                         SettingsRow(
                           key: ValueKey('layer-${g.key}'),
                           title: g.title,
@@ -353,4 +327,52 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
     RegionOfferKind.onPhone => 'On this device · ${formatBytes(o.already)}',
   };
   return '$kind · $what';
+}
+
+/// A part of a region that is not complete, in the download pattern: the running part's line, bar and Pause; a waiting part
+/// "Waiting for Map to finish"; a paused or failed part its Resume (or Free space) and Remove.
+class _PartRow extends StatelessWidget {
+  const _PartRow({super.key, required this.regions, required this.region, required this.part, this.title, this.own = false, this.parts, this.keyBase});
+
+  /// The keys' start for its controls ("part-map", "layer-hillshade"); the part's by default.
+  final String? keyBase;
+
+  /// The list [part] came from.
+  final List<RegionPartStatus>? parts;
+
+  final RegionsState regions;
+  final LocalRegion region;
+  final RegionPartStatus part;
+
+  /// The row's title when it is not the part's name (a map layer: "Hillshade, Contours").
+  final String? title;
+
+  /// A map layer of the region: it pauses and resumes as itself, not in the parts' order.
+  final bool own;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final s = partDl(regions, region, part, own: own, parts: parts);
+    final a = regionDlActions(context, regions, region);
+    final key = keyBase ?? 'part-${part.kind.name}';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title ?? part.name, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+                DlStatus(state: s, actions: a, keyBase: key),
+              ],
+            ),
+          ),
+          // Only the running part pauses, and only the part that stopped resumes: the region is one download, not two ways.
+          dlControl(context, s, s.phase == DlPhase.waiting ? const DlActions() : a, keyBase: key),
+        ],
+      ),
+    );
+  }
 }

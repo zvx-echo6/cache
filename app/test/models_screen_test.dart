@@ -62,26 +62,63 @@ void main() {
   }
 
   group('recommendations file', () {
-    test('the built-in copy is docs/models-recommended.json, and lists the three tool-capable models', () {
+    test('the built-in copy is docs/models-recommended.json: Recommended (E2B tuned for Cache, stock E4B) and Experimental (the two uncensored)', () {
       final docs = File('../docs/models-recommended.json').readAsStringSync();
       expect(File('assets/models/recommended.json').readAsStringSync(), docs,
           reason: 'copy docs/models-recommended.json to app/assets/models/recommended.json when it changes');
       final r = parseRecommendations(docs)!;
-      expect(r.map((m) => '${m.repo}/${m.file}'), [
-        'unsloth/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_K_M.gguf',
-        'unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf',
-        'unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf',
+      String where(ModelRecommendation m) => m.url != null ? '${m.url}' : '${m.repo}@${m.revision}/${m.file}';
+      expect(r.map(where), [
+        'https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q4_K_M.gguf',
+        'unsloth/gemma-4-E4B-it-GGUF@bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf',
+        'https://data.cached.info/models/cache-1.0/e2b-trevorjs-cache-1.0-Q4_K_M.gguf',
+        'TrevorJS/gemma-4-E4B-it-uncensored-GGUF@771f130d4c49735ace331f68a80f7ae31387e51c/gemma-4-E4B-it-uncensored-Q4_K_M.gguf',
       ]);
-      for (final m in r) {
-        expect(m.kind, RecommendationKind.worksNotTuned);
-        expect(m.sha256, hasLength(64));
-        expect(m.size, greaterThan(_gb));
-        expect(m.note, isNotEmpty);
-      }
+      expect(r.map((m) => m.section), [
+        RecommendationSection.recommended,
+        RecommendationSection.recommended,
+        RecommendationSection.experimental,
+        RecommendationSection.experimental,
+      ]);
+      expect(r.map((m) => m.sha256), [
+        'bd342122ed2381d4b3d2aa87b0e4273cbfdf79058a72b126975baa0509c2ab2f',
+        '85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87',
+        'cf255f6f71b6415c66fae529fb52f659c14d82741e98e07e38dabb685bccd0b8',
+        'b2a89ec2df7f13440c723fb3fda2c531696cbe8e20ed2f1122f97a43aaafcb50',
+      ]);
+      expect(r.map((m) => m.size), [3427879936, 4977171584, 3427873312, 5335285280]);
+      expect(r[0].kind, RecommendationKind.tunedForCache);
+      expect(r[0].licence, 'Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache');
+      expect(r.any((m) => m.file.contains('Qwen')), isFalse);
+      // A direct entry downloads from its own address; a Hugging Face entry from its pinned commit.
+      final hub = HfHub();
+      expect('${hub.downloadUrl(r[0].hfFile)}', 'https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q4_K_M.gguf');
+      expect('${hub.downloadUrl(r[1].hfFile)}', 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf');
+      expect(r[0].hfFile.fileName, 'e2b-stock-cache-1.0-Q4_K_M.gguf');
+    });
+
+    test('an entry may carry its own settings; the four listed carry none (the usual ones apply)', () {
+      final r = parseRecommendations(File('../docs/models-recommended.json').readAsStringSync())!;
+      expect(r.every((m) => m.settings.isEmpty && !m.settings.fetchFirst), isTrue);
+      expect(r.first.settings.requestExtras, isEmpty, reason: 'requests go out exactly as today');
+      final s = ModelSettings.fromJson({'temp': 1.0, 'top_k': 64, 'top_p': 0.95, 'min_p': 0.05, 'repeat_penalty': 1.0, 'n_ctx': 8192, 'max_tokens': 2048, 'stop': ['<x>'], 'fetch_first': true});
+      expect([s.temp, s.topK, s.topP, s.minP, s.repeatPenalty, s.nCtx, s.maxTokens, s.stop, s.fetchFirst], [1.0, 64, 0.95, 0.05, 1.0, 8192, 2048, ['<x>'], true]);
+      expect(s.requestExtras, {'temperature': 1.0});
+    });
+
+    test('a direct entry needs https and its checksum; a format 1 file is still read', () {
+      Map<String, Object?> direct(String url, {String? sha}) => {'name': 'd', 'url': url, 'file': 'd.gguf', 'size': 10, 'sha256': sha, 'kind': 'tuned_for_cache'};
+      final r = parseRecommendations(jsonEncode({
+        'format': 2,
+        'models': [direct('https://x.test/d.gguf', sha: 'a' * 64), direct('http://x.test/d.gguf', sha: 'a' * 64), direct('https://x.test/d.gguf')],
+      }))!;
+      expect(r, hasLength(1));
+      expect(r.single.url, Uri.parse('https://x.test/d.gguf'));
+      expect(parseRecommendations(_list([_entry('a', 'a.gguf', 10)], format: 1))!.single.section, RecommendationSection.recommended);
     });
 
     test('another format is not used; entries this app cannot use are left out', () {
-      expect(parseRecommendations(_list([_entry('a', 'a.gguf', 10)], format: 2)), isNull);
+      expect(parseRecommendations(_list([_entry('a', 'a.gguf', 10)], format: 3)), isNull);
       expect(parseRecommendations('not json'), isNull);
       final r = parseRecommendations(_list([
         _entry('ok', 'ok.gguf', 10, sha: 'f' * 64),
@@ -147,7 +184,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pumpAndSettle();
     expect(d.started.map((f) => '${f.repo}/${f.path}'), ['acme/Small-GGUF/small-Q4_K_M.gguf']);
-    await tester.tap(find.byKey(const ValueKey('download-recommended-big-Q4_K_M.gguf')));
+    await tester.tap(find.byKey(const ValueKey('model-big-Q4_K_M.gguf-download')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-download')));
     await tester.pumpAndSettle();
@@ -155,15 +192,17 @@ void main() {
     expect(app.active, isNull, reason: 'no model is ever chosen for the user');
   });
 
-  testWidgets('a model tuned for Cache says so', (tester) async {
+  testWidgets('a model tuned for Cache says so in its name and licence line, not in a second line', (tester) async {
     ModelDownloads.shared = _RecordingDownloads(app: app);
     final recs = RecommendedModels(
-      builtIn: () async => _list([_entry('Tuned', 't.gguf', _gb, kind: 'tuned_for_cache')]),
+      builtIn: () async => _list([{..._entry('Gemma 4 E2B · tuned for Cache', 't.gguf', _gb, kind: 'tuned_for_cache'), 'licence': 'Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache'}]),
       fetch: () async => throw const SocketException('offline'),
     );
     await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
     await tester.pumpAndSettle();
-    expect(find.text('Tuned for Cache'), findsOneWidget);
+    expect(find.text('Gemma 4 E2B · tuned for Cache'), findsOneWidget);
+    expect(find.text('Tuned for Cache'), findsNothing);
+    expect(find.text('Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache'), findsOneWidget);
   });
 
   testWidgets('the active model can be unloaded; Ask then shows the no-model state with "Choose a model"', (tester) async {

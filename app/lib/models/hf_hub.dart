@@ -20,9 +20,13 @@ class HfModel {
   String get name => id.contains('/') ? id.substring(id.indexOf('/') + 1) : id;
 }
 
-/// One downloadable model file (a single .gguf) in a repository.
+/// One downloadable model file (a single .gguf): in a Hugging Face repository, or at a direct address ([url]: a file Cache
+/// publishes itself, such as its tuned models). Either way it is checked against its SHA-256 when one is given.
 class HfFile {
-  const HfFile({required this.repo, required this.path, required this.size, this.sha256, this.revision = 'main'});
+  const HfFile({required this.repo, required this.path, required this.size, this.sha256, this.revision = 'main', this.url});
+
+  /// A file at a direct address (https) instead of in [repo]; [repo] is then empty.
+  final Uri? url;
 
   final String repo;
 
@@ -125,6 +129,7 @@ class HfHub {
 
   /// Where [f] downloads from (Hugging Face redirects to its file store).
   Uri downloadUrl(HfFile f) =>
+      f.url ??
       base.replace(path: '/${f.repo}/resolve/${f.revision}/${f.path.split('/').map(Uri.encodeComponent).join('/')}');
 
   /// The repository's page, for "Open on Hugging Face".

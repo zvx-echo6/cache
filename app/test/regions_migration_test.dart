@@ -66,8 +66,9 @@ void main() {
     await _show(tester, o, MapsPage(deps: o.s.deps));
     expect(find.byKey(const ValueKey('local-us-id')), findsOneWidget);
     expect(find.text('Idaho'), findsOneWidget, reason: 'seven "Idaho" rows in 1.0.27');
-    expect(find.byKey(const ValueKey('local-fix-us-id')), findsOneWidget);
-    expect(find.text('Carry on'), findsOneWidget);
+    // Stopped part way: Paused, with Resume (the download pattern).
+    expect(find.byKey(const ValueKey('local-us-id-resume')), findsOneWidget);
+    expect(find.text('Resume'), findsOneWidget);
     expect(find.textContaining('Hillshade'), findsNothing);
     expect(find.textContaining('Stopped before it finished'), findsNothing);
     // The note about the duplicate, once.
@@ -96,13 +97,11 @@ void main() {
     final line = tester.widgetList<Text>(find.byKey(ValueKey('region-line-${county.id}'))).firstOrNull?.data;
     expect(line, isNotNull, reason: 'the sheet shows: $lines');
     expect(line, 'County · ${formatBytes(o.regions.offer(county).bytes!)} · off-road shared with Idaho');
-    expect(find.byKey(const ValueKey('region-fix-us-id')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('region-fix-us-id')));
-    await o.settle(tester);
-    expect(find.text('Carry on with Idaho?'), findsOneWidget);
+    // Idaho stopped part way: its row is the download pattern, Paused with Resume, which carries on at once (no pop-up).
+    expect(find.byKey(const ValueKey('region-us-id-resume')), findsOneWidget);
     expect(find.byType(CheckboxListTile), findsNothing, reason: 'the old per-part sheet is gone');
     final usfs = o.legacy['usfs']!;
-    await tester.tap(find.byKey(const ValueKey('confirm-download')));
+    await tester.tap(find.byKey(const ValueKey('region-us-id-resume')));
     await tester.pump();
     expect(find.text('Carrying on with Idaho'), findsOneWidget, reason: 'the tap says what it did at once');
     await o.settle(tester);
@@ -117,7 +116,7 @@ void main() {
     for (final k in ['part-map', 'part-routing', 'part-places', 'part-offroad']) {
       expect(find.byKey(ValueKey(k.replaceFirst('routing', 'directions'))), findsOneWidget, reason: k);
     }
-    expect(find.byKey(const ValueKey('fix-map')), findsOneWidget);
+    expect(find.byKey(const ValueKey('part-map-resume')), findsOneWidget, reason: 'the part that stopped resumes; the others wait for it');
     expect(find.text('Forest Service trails and roads'), findsOneWidget);
     expect(find.byKey(const ValueKey('region-delete')), findsOneWidget);
     await o.dispose(tester);

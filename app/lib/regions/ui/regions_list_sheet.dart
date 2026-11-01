@@ -8,6 +8,8 @@ import '../../theme.dart';
 import '../region_catalogue.dart';
 import '../regions_state.dart';
 import 'region_actions.dart';
+import 'region_download.dart';
+import '../../downloads/download_row.dart';
 import 'region_page.dart';
 
 /// The Regions sheet: one list of the regions at a place on the map (smallest first), each with its kind and size at once (the sizes
@@ -166,6 +168,9 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
     final l = r.regionOf(rec.id);
     final waiting = r.waitingIds.contains(rec.id);
     final pickable = o.kind == RegionOfferKind.download;
+    // A region on its way is one download row's worth: its line, its bar and its Pause or Resume.
+    final dl = l == null ? null : regionDl(r, l);
+    final downloading = dl != null && dl.active && !waiting;
     final Widget trailing;
     if (_selecting) {
       trailing = Checkbox(
@@ -174,6 +179,8 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
       );
     } else if (waiting) {
       trailing = RowBadge('Waiting for Wi-Fi', color: k.warning);
+    } else if (downloading) {
+      trailing = dlControl(context, dl, regionDlActions(context, r, l!), keyBase: 'region-${rec.id}');
     } else {
       trailing = switch (o.kind) {
         RegionOfferKind.carryOn || RegionOfferKind.tryAgain => RowButton(
@@ -234,7 +241,10 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
                     children: [
                       Text(rec.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: k.text)),
                       const SizedBox(height: 2),
-                      Text(line, key: ValueKey('region-line-${rec.id}'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
+                      if (downloading)
+                        DlStatus(state: dl, actions: regionDlActions(context, r, l!), keyBase: 'region-${rec.id}')
+                      else
+                        Text(line, key: ValueKey('region-line-${rec.id}'), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
                     ],
                   ),
                 ),

@@ -1,6 +1,9 @@
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
+import '../../downloads/download_row.dart';
+import 'video_dl.dart';
+
 import '../../theme.dart';
 import '../../video/format.dart';
 import '../../video/video_state.dart';
@@ -151,19 +154,14 @@ class _VideoScreenState extends State<VideoScreen> {
 
   Widget _downloadArea(BuildContext context, VideoDetails d, DownloadedVideo? saved, DownloadTask? task) {
     final k = context.t;
-    if (task != null && task.isActive) {
-      return _Progress(video: widget.video, task: task);
-    }
-    if (task != null && (task.phase == DownloadPhase.failed || task.phase == DownloadPhase.cancelled)) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    if (task != null && task.phase != DownloadPhase.done) {
+      final s = videoDl(task);
+      final a = videoActions(widget.video, task);
+      return Row(
         children: [
-          Text(task.phase == DownloadPhase.cancelled ? 'Download stopped.' : (task.error ?? 'The download failed.'), style: TextStyle(fontSize: 15, color: task.phase == DownloadPhase.failed ? k.emergency : k.secondary)),
-          const SizedBox(height: 8),
-          if (task.blockedByMobile)
-            FilledButton.icon(key: const ValueKey('download-anyway'), onPressed: () => widget.video.retry(task, anyway: true), icon: const Icon(Icons.download), label: const Text('Download anyway'))
-          else
-            OutlinedButton.icon(onPressed: () => widget.video.retry(task), icon: const Icon(Icons.refresh), label: const Text('Continue download')),
+          Expanded(child: DlStatus(state: s, actions: a, keyBase: 'video-${task.uuid}')),
+          const SizedBox(width: 8),
+          dlControl(context, s, a, keyBase: 'video-${task.uuid}'),
         ],
       );
     }
@@ -241,37 +239,6 @@ class _ChoiceSheetState extends State<_ChoiceSheet> {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// A running download: bar, size, Stop.
-class _Progress extends StatelessWidget {
-  const _Progress({required this.video, required this.task});
-
-  final VideoState video;
-  final DownloadTask task;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        LinearProgressIndicator(value: task.fraction),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                task.total > 0 ? 'Downloading ${task.label} · ${formatBytes(task.done)} of ${formatBytes(task.total)}' : 'Downloading ${task.label}…',
-                style: TextStyle(fontSize: 15, color: k.secondary),
-              ),
-            ),
-            TextButton(onPressed: () => video.cancel(task), child: const Text('Stop')),
-          ],
-        ),
-      ],
     );
   }
 }

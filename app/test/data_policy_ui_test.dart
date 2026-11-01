@@ -60,7 +60,7 @@ void main() {
       expect(r.browse.transfers[entry.id]!.phase, TransferPhase.blockedByMobileData);
       await r.show(tester, BrowseScreen(browse: r.browse, active: true));
       expect(find.textContaining('Waiting for Wi-Fi'), findsOneWidget);
-      expect(find.byKey(const ValueKey('download-now')), findsOneWidget);
+      expect(find.byKey(const ValueKey('transfer-e-1-download-now')), findsOneWidget);
       // Wi-Fi comes: it starts without being asked.
       r.probe.change(ConnectionKind.wifi);
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));

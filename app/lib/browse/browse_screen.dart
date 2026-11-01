@@ -10,13 +10,14 @@ import '../guide/guide_reader.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' as modules show addToHome;
 import '../screens/hold.dart';
-import '../screens/libraries_screen.dart';
 import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
 import '../video/format.dart';
 import 'catalogue_screen.dart' show AddToLibraryScreen;
 import 'browse_state.dart';
+import 'zim_dl.dart';
+import '../downloads/download_row.dart';
 import 'library_actions.dart';
 import 'reader_screen.dart';
 import 'web/device_api.dart' show DeviceJob;
@@ -334,91 +335,23 @@ class _BrowseScreenState extends State<BrowseScreen> {
 
   Widget _transferRow(CacheTokens k, ZimTransfer t) {
     final e = t.entry;
-    final waiting = t.phase == TransferPhase.blockedByMobileData;
-    final paused = t.phase == TransferPhase.paused;
-    final failed = t.phase == TransferPhase.failed;
-    final line = switch (t.phase) {
-      TransferPhase.blockedByMobileData => 'Waiting for Wi-Fi · ${formatBytes(e.size)}',
-      TransferPhase.paused => 'Paused · ${formatBytes(t.done)} of ${formatBytes(t.total)}',
-      TransferPhase.failed => t.error ?? 'The download stopped',
-      TransferPhase.starting => 'Starting…',
-      TransferPhase.verifying => 'Checking the file…',
-      TransferPhase.adding => 'Adding to your library…',
-      TransferPhase.downloading => '${formatBytes(t.done)} of ${formatBytes(t.total)}',
-    };
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Material(
-        color: k.surface,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(t.replaces == null ? e.title : 'Updating ${e.title}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                        Text(line, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: failed || waiting ? k.warning : k.secondary)),
-                      ],
-                    ),
-                  ),
-                  if (waiting)
-                    TextButton(key: const ValueKey('download-now'), onPressed: () => b.download(e, replaces: t.replaces, allowMobile: true), child: const Text('Download now'))
-                  else if (failed)
-                    TextButton(onPressed: () => b.download(e, replaces: t.replaces), child: const Text('Try again'))
-                  else if (paused)
-                    IconButton(key: const ValueKey('resume-download'), tooltip: 'Resume', icon: const Icon(Icons.play_arrow), onPressed: () => b.resume(e))
-                  else if (t.phase == TransferPhase.downloading || t.phase == TransferPhase.starting)
-                    IconButton(key: const ValueKey('pause-download'), tooltip: 'Pause', icon: const Icon(Icons.pause), onPressed: () => b.pause(e)),
-                  IconButton(key: const ValueKey('cancel-download'), tooltip: 'Cancel', icon: const Icon(Icons.close), onPressed: () => b.cancel(e)),
-                ],
-              ),
-              if (!waiting && !failed)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8, top: 2),
-                  child: LinearProgressIndicator(value: t.phase == TransferPhase.downloading || paused ? t.fraction : null, minHeight: 3),
-                ),
-            ],
-          ),
-        ),
-      ),
+    return DownloadRow(
+      key: ValueKey('transfer-${e.id}'),
+      keyBase: 'transfer-${e.id}',
+      title: t.replaces == null ? e.title : 'Updating ${e.title}',
+      state: zimDl(t),
+      actions: zimActions(context, b, e),
     );
   }
 
   Widget _taskRow(CacheTokens k, AddTask t) {
     final s = libs!;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Material(
-        color: k.surface,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Adding ${t.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                    Text(t.running ? addStepText(t) : t.error!, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: t.running ? k.secondary : k.warning)),
-                    if (t.running) Padding(padding: const EdgeInsets.only(top: 4, right: 8), child: LinearProgressIndicator(value: t.fraction, minHeight: 3)),
-                  ],
-                ),
-              ),
-              if (t.running)
-                IconButton(key: const ValueKey('cancel-add'), tooltip: 'Cancel', icon: const Icon(Icons.close), onPressed: s.cancelAdd)
-              else
-                IconButton(tooltip: 'Dismiss', icon: const Icon(Icons.close), onPressed: s.dismissTask),
-            ],
-          ),
-        ),
-      ),
+    return DownloadRow(
+      key: const ValueKey('add-task'),
+      keyBase: 'add-task',
+      title: 'Adding ${t.name}',
+      state: addDl(t),
+      actions: addActions(s, t),
     );
   }
 }

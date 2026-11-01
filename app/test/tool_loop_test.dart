@@ -1,6 +1,7 @@
 import 'package:cache/chat/citations.dart';
 import 'package:cache/chat/model_backend.dart';
 import 'package:cache/chat/tool.dart';
+import 'package:cache/chat/tool_call_text.dart';
 import 'package:cache/chat/tool_loop.dart';
 import 'package:cache_llama/cache_llama.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -116,6 +117,16 @@ void main() {
       expect(loop.results.keys, [1, 2, 3]);
     });
 
+    test('every request caps what it generates at the eval\'s 2048 tokens', () async {
+      final backend = FakeBackend([(_) => toolCall('x'), (_) => answer('Done.')]);
+      final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);
+      await loop.ask('x?').toList();
+      expect(backend.requests, hasLength(2));
+      for (final r in backend.requests) {
+        expect(r['max_tokens'], 2048);
+      }
+    });
+
     test('empty search gives No results and no sources', () async {
       final backend = FakeBackend([(_) => toolCall('x'), (_) => answer('Not in your sources.')]);
       final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);
@@ -205,6 +216,37 @@ void main() {
       final toolMsg = (backend.requests[1]['messages'] as List).last as Map;
       expect(toolMsg['content'], contains('no tool called nope'));
       expect(updates.last.error, isNull);
+    });
+  });
+
+  group('tool calls written as text', () {
+    const call = '<|tool_call>call:search{query:<|"|>water<|"|>}<tool_call|>';
+    test('a complete call is taken out of the shown text', () {
+      expect(stripToolCalls('Boil it.$call Then cool it.'), 'Boil it. Then cool it.');
+    });
+    test('back to back calls go too', () {
+      expect(stripToolCalls('$call$call Answer.'), ' Answer.');
+    });
+    test('an opening marker with no closing one takes the rest of the text', () {
+      expect(stripToolCalls('Answer. <|tool_call>call:search{query:<|"|>wat'), 'Answer. ');
+    });
+    test('text with no call is unchanged', () {
+      expect(stripToolCalls('Plain <b> answer.'), 'Plain <b> answer.');
+    });
+    test('the shown answer is stripped; the conversation keeps what the model wrote', () async {
+      final backend = FakeBackend([(_) => answer('Boil it.$call')]);
+      final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);
+      final updates = await loop.ask('water?').toList();
+      expect(updates.last.text, 'Boil it.');
+      expect(loop.messages.last['content'], 'Boil it.$call');
+    });
+    test('an answer that is only calls shows nothing (the screen says "No answer was produced.")', () async {
+      final backend = FakeBackend([(_) => answer('  $call\n$call  ')]);
+      final loop = ToolLoop(backend: backend, tools: [FakeSearch([[]])]);
+      final updates = await loop.ask('water?').toList();
+      expect(updates.last.text, isEmpty);
+      expect(updates.last.error, isNull);
+      expect(loop.messages.last['content'], '  $call\n$call  ');
     });
   });
 }

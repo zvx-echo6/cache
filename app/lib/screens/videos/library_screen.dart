@@ -1,6 +1,9 @@
 import 'package:cache_search/cache_search.dart';
 import 'package:flutter/material.dart';
 
+import '../../downloads/download_row.dart';
+import 'video_dl.dart';
+
 import '../../theme.dart';
 import '../../video/format.dart';
 import '../../video/video_state.dart';
@@ -91,36 +94,12 @@ class LibraryScreen extends StatelessWidget {
     );
   }
 
-  Widget _task(BuildContext context, DownloadTask t) {
-    final k = context.t;
-    final failed = t.phase == DownloadPhase.failed;
-    return VideoTile(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(t.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
-            const SizedBox(height: 4),
-            if (t.isActive) ...[
-              LinearProgressIndicator(value: t.fraction),
-              const SizedBox(height: 4),
-              Row(children: [
-                Expanded(child: Text(t.total > 0 ? '${t.label} · ${formatBytes(t.done)} of ${formatBytes(t.total)}' : '${t.label} · starting…', style: TextStyle(fontSize: 14, color: k.secondary))),
-                TextButton(onPressed: () => video.cancel(t), child: const Text('Stop')),
-              ]),
-            ] else
-              Row(children: [
-                Expanded(child: Text(failed ? (t.error ?? 'The download failed.') : 'Stopped', style: TextStyle(fontSize: 14, color: failed ? k.emergency : k.secondary))),
-                if (t.blockedByMobile)
-                  TextButton(key: const ValueKey('download-anyway'), onPressed: () => video.retry(t, anyway: true), child: const Text('Download anyway'))
-                else
-                  TextButton(onPressed: () => video.retry(t), child: const Text('Continue')),
-                IconButton(tooltip: 'Dismiss', icon: const Icon(Icons.close), onPressed: () => video.dismiss(t)),
-              ]),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _task(BuildContext context, DownloadTask t) => DownloadRow(
+        key: ValueKey('video-task-${t.key}'),
+        keyBase: 'video-${t.uuid}',
+        title: t.title,
+        subtitle: t.label,
+        state: videoDl(t),
+        actions: videoActions(video, t),
+      );
 }

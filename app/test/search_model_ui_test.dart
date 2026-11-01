@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
+import 'package:cache/downloads/download_row.dart';
 import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/model_downloads.dart';
 import 'package:cache/models/search_model.dart';
@@ -23,22 +24,20 @@ void main() {
   const searchFile = HfFile(repo: 'acme/bge-GGUF', path: 'bge-m3-Q8_0.gguf', size: 10, revision: 'abc123');
   const chatFile = HfFile(repo: 'acme/chat-GGUF', path: 'chat-Q4.gguf', size: 10);
 
-  testWidgets('the bar shows the search model waiting under the chat model, and a stopped one with Try again', (tester) async {
+  test('the search model waits for the chat model in its own row, and a stopped one says why with Resume', () {
     final app = AppState(settingsDirOverride: dir, modelsDirOverride: dir);
     final d = ModelDownloads(app: app, searchModel: searchFile);
     d.queue.add(searchFile);
     d.current = chatFile;
     d.total = 100;
-    await tester.pumpWidget(wrap(ModelDownloadBar(downloads: d)));
-    expect(find.textContaining('Downloading chat-Q4.gguf'), findsOneWidget);
-    expect(find.text('Next: Search model, 605 MB'), findsOneWidget);
+    expect(dlLine(d.stateOf(searchFile)), 'Waiting for chat-Q4.gguf to finish');
     d.current = null;
-    d.searchModelError = 'the connection dropped';
-    d.cancel(); // tells the bar
-    await tester.pump();
-    expect(find.text('Next: Search model, 605 MB'), findsNothing);
-    expect(find.text('Search model: download stopped (the connection dropped)'), findsOneWidget);
-    expect(find.byKey(const ValueKey('search-model-retry')), findsOneWidget);
+    d.queue.clear();
+    d.failed[searchFile.fileName] = 'The connection failed: connection reset';
+    final s = d.stateOf(searchFile);
+    expect(s.phase, DlPhase.failed);
+    expect(dlLine(s), 'Stopped: no connection');
+    d.dispose();
   });
 
   testWidgets('the line says meaning search needs the search model, with Get it', (tester) async {
