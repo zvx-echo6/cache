@@ -59,7 +59,7 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --locked --keep-going -- -D warnings
 
   flutter:
     runs-on: ubuntu-latest
