@@ -40,13 +40,13 @@ class IoAppFs implements AppFs {
   @override
   Future<String?> readString(AppRoot root, String path) async {
     final f = File(await _path(root, path));
-    return await f.exists() ? f.readAsString() : null;
+    return f.existsSync() ? f.readAsStringSync() : null;
   }
 
   @override
   Future<Uint8List?> readBytes(AppRoot root, String path) async {
     final f = File(await _path(root, path));
-    return await f.exists() ? f.readAsBytes() : null;
+    return f.existsSync() ? f.readAsBytesSync() : null;
   }
 
   @override
@@ -84,7 +84,7 @@ class IoAppFs implements AppFs {
 
   @override
   Future<bool> exists(AppRoot root, String path) async =>
-      await FileSystemEntity.type(await _path(root, path)) != FileSystemEntityType.notFound;
+      FileSystemEntity.typeSync(await _path(root, path)) != FileSystemEntityType.notFound;
 
   @override
   Future<List<AppFsEntry>> list(AppRoot root, String path) async {
@@ -106,7 +106,7 @@ class IoAppFs implements AppFs {
   @override
   Future<AppFsEntry?> stat(AppRoot root, String path) async {
     final p = await _path(root, path);
-    final s = await FileStat.stat(p);
+    final s = FileStat.statSync(p);
     if (s.type == FileSystemEntityType.notFound) return null;
     return AppFsEntry(
       name: p.split(RegExp(r'[\\/]')).last,
