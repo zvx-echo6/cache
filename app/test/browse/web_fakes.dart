@@ -81,8 +81,8 @@ class FakeDeviceApi implements DeviceApi {
   }
 }
 
-DeviceJob job(String id, String state, {String kind = 'zim', String? name, int bytes = 0, int total = 0, String? error, String? url}) =>
-    DeviceJob(id: id, url: url ?? 'https://dl.example/$id.zim', kind: kind, name: name ?? '$id.zim', bytes: bytes, total: total, state: state, error: error);
+DeviceJob job(String id, String state, {String kind = 'zim', String? name, int bytes = 0, int total = 0, String? error, String? url, DateTime? createdAt, DateTime? finishedAt}) =>
+    DeviceJob(id: id, url: url ?? 'https://dl.example/$id.zim', kind: kind, name: name ?? '$id.zim', bytes: bytes, total: total, state: state, error: error, createdAt: createdAt, finishedAt: finishedAt);
 
 DeviceItem item(String name, {String kind = 'zim', int bytes = 1000}) =>
     DeviceItem(id: '$kind-$name', kind: kind, name: name, title: name, bytes: bytes, path: 'app/docs/${kind == 'zim' ? 'zims' : 'libraries'}/$name');

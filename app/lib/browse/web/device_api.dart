@@ -53,6 +53,8 @@ class DeviceJob {
     required this.total,
     required this.state,
     this.error,
+    this.createdAt,
+    this.finishedAt,
   });
 
   final String id;
@@ -65,6 +67,10 @@ class DeviceJob {
   /// `queued`, `running`, `done`, `failed` or `cancelled`.
   final String state;
   final String? error;
+
+  /// When the server took the job and when it finished, failed or was cancelled (UTC); null when not known or not yet.
+  final DateTime? createdAt;
+  final DateTime? finishedAt;
 
   bool get active => state == 'queued' || state == 'running';
   bool get failed => state == 'failed';
@@ -80,6 +86,8 @@ class DeviceJob {
         total: (j['total'] as num?)?.toInt() ?? 0,
         state: (j['state'] ?? 'failed') as String,
         error: j['error'] as String?,
+        createdAt: DateTime.tryParse((j['created_at'] ?? '') as String),
+        finishedAt: DateTime.tryParse((j['finished_at'] ?? '') as String),
       );
 }
 

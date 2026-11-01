@@ -132,6 +132,34 @@ void main() {
       expect(find.byKey(const ValueKey('job-j2')), findsOneWidget);
     });
 
+    testWidgets('"While this tab was closed" says when it finished or stopped, and when the running one started, in local time', (tester) async {
+      final n = DateTime.now();
+      final yesterday = DateTime(n.year, n.month, n.day - 1, 22, 10).toUtc();
+      final early = DateTime(n.year, n.month, n.day, 3, 12).toUtc();
+      final stop = DateTime(n.year, n.month, n.day, 9, 5).toUtc();
+      api.jobList = [job('j1', 'running', name: 'WikiMed.zim'), job('j2', 'running', name: 'Wikipedia.zim'), job('j3', 'running', name: 'Guides.zim')];
+      await tester.runAsync(device.start);
+      api.jobList = [
+        job('j1', 'done', name: 'WikiMed.zim', createdAt: yesterday, finishedAt: early),
+        job('j2', 'running', bytes: 5, total: 9, name: 'Wikipedia.zim', createdAt: yesterday),
+        job('j3', 'failed', name: 'Guides.zim', error: 'x', createdAt: yesterday, finishedAt: stop),
+      ];
+      browse.dispose();
+      device.dispose();
+      device = DeviceLibrary(api: api, fs: fs, uploader: uploader, leaveWarning: (_) {});
+      browse = BrowseState(sources: sources, catalog: catalogWith(recorded), settingsDirOverride: Directory('${tmp.path}/s'), phoneLanguage: 'en', device: device);
+      await tester.runAsync(device.start);
+      wide(tester);
+      await tester.pumpWidget(screen(BrowseScreen(browse: browse, active: true)));
+      await tester.pumpAndSettle();
+      expect(find.text('•  WikiMed.zim finished at 03:12.'), findsOneWidget);
+      expect(find.text('•  Wikipedia.zim is still downloading, started yesterday 22:10.'), findsOneWidget);
+      expect(find.text('•  Guides.zim stopped at 09:05.'), findsOneWidget);
+      expect(find.textContaining('started yesterday 22:10'), findsNWidgets(2), reason: 'the running card says it too');
+      expect(startedWords(early, now: DateTime(n.year, n.month, n.day, 12)), '03:12');
+      expect(startedWords(DateTime(2026, 10, 3, 22, 10), now: DateTime(2026, 11, 1, 12)), '3 Oct 22:10');
+    });
+
     testWidgets('an upload is a card with the name, bytes and Cancel; the hint and the footer say to keep the tab open', (tester) async {
       await show(tester);
       final sent = device.send(FakeLocalFile('wikipedia_fr_all_nopic_2026-09.zim', 4000));

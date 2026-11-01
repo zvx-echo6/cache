@@ -168,15 +168,33 @@ class DeviceLibraryTop extends StatelessWidget {
       );
     }
     final waiting = j.state == 'queued';
+    final since = j.createdAt == null ? '' : ' · started ${startedWords(j.createdAt!)}';
     return _Card(
       cardKey: ValueKey('job-${j.id}'),
       title: title,
-      line: waiting ? 'Waiting its turn…' : (j.total > 0 ? 'Downloading · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}' : 'Downloading · ${formatBytes(j.bytes)}'),
+      line: waiting ? 'Waiting its turn…' : (j.total > 0 ? 'Downloading · ${formatBytes(j.bytes)} of ${formatBytes(j.total)}$since' : 'Downloading · ${formatBytes(j.bytes)}$since'),
       fraction: waiting ? null : j.fraction,
       indeterminate: waiting || j.total <= 0,
       actions: [_cancel(ValueKey('cancel-${j.id}'), 'Cancel', () => device.cancelJob(j))],
     );
   }
+}
+
+/// "03:12": a time of day in the browser's own time zone, on a 24-hour clock.
+String clockTime(DateTime t) {
+  final l = t.toLocal();
+  return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+}
+
+/// "22:10" for today, "yesterday 22:10" for the day before and "3 Oct 22:10" for anything older ([now] is for tests).
+String startedWords(DateTime t, {DateTime? now}) {
+  final l = t.toLocal();
+  final n = (now ?? DateTime.now()).toLocal();
+  final days = DateTime(n.year, n.month, n.day).difference(DateTime(l.year, l.month, l.day)).inDays;
+  if (days <= 0) return clockTime(l);
+  if (days == 1) return 'yesterday ${clockTime(l)}';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${l.day} ${months[l.month - 1]} ${clockTime(l)}';
 }
 
 /// "While this tab was closed": what finished, still runs or stopped since the tab was last open, with Dismiss.
@@ -187,11 +205,13 @@ class WhileClosedCard extends StatelessWidget {
 
   String _line(DeviceJob j) {
     final name = device.titleOfJob(j);
+    final end = j.finishedAt == null ? '' : ' at ${clockTime(j.finishedAt!)}';
+    final begin = j.createdAt == null ? '' : ', started ${startedWords(j.createdAt!)}';
     return switch (j.state) {
-      'done' => '$name finished.',
-      'failed' => '$name stopped.',
+      'done' => '$name finished$end.',
+      'failed' => '$name stopped$end.',
       'cancelled' => '$name was cancelled.',
-      _ => '$name is still downloading.',
+      _ => '$name is still downloading$begin.',
     };
   }
 

@@ -90,13 +90,41 @@ struct Job {
     sha256: Option<String>,
     origin: Option<Value>,
     icon_url: Option<String>,
+    /// When the job was asked for, RFC 3339 UTC. Null in entries written before this was kept.
+    #[serde(default)]
+    created_at: Option<String>,
+    /// When it finished, failed or was cancelled, RFC 3339 UTC; null until then.
+    #[serde(default)]
+    finished_at: Option<String>,
+}
+
+/// Now as RFC 3339 UTC, to the second (`2026-11-01T03:12:09Z`).
+fn now_rfc3339() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    rfc3339_of(secs)
+}
+
+fn rfc3339_of(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // civil-from-days (proleptic Gregorian)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3_600, rem % 3_600 / 60, rem % 60)
 }
 
 impl Job {
     /// What the API shows.
     fn view(&self) -> Value {
         json!({"id": self.id, "url": self.url, "kind": self.kind, "name": self.name, "bytes": self.bytes, "total": self.total,
-               "state": self.state, "error": self.error})
+               "state": self.state, "error": self.error, "created_at": self.created_at, "finished_at": self.finished_at})
     }
 }
 
@@ -443,6 +471,7 @@ impl Library {
                 if j.state == State::Cancelled && res.is_err() {
                     return;
                 }
+                j.finished_at = Some(now_rfc3339());
                 match res {
                     Ok(()) => {
                         j.state = State::Done;
@@ -719,7 +748,7 @@ impl Library {
             if let Some(j) = jobs.iter().find(|j| j.state.active() && j.url == url) {
                 return j.view();
             }
-            let j = Job { id: random_hex(), url, kind: kind.to_string(), name, bytes: 0, total: 0, state: State::Queued, error: None, sha256, origin, icon_url };
+            let j = Job { id: random_hex(), url, kind: kind.to_string(), name, bytes: 0, total: 0, state: State::Queued, error: None, sha256, origin, icon_url, created_at: Some(now_rfc3339()), finished_at: None };
             let view = j.view();
             jobs.push(j);
             view
@@ -743,6 +772,7 @@ impl Library {
             if jobs[i].state.active() {
                 jobs[i].state = State::Cancelled;
                 jobs[i].error = None;
+                jobs[i].finished_at = Some(now_rfc3339());
                 Some((jobs[i].view(), true))
             } else {
                 Some((jobs.remove(i).view(), false))
@@ -1091,5 +1121,26 @@ mod tests {
         assert_eq!(a, item_id("zim", "a b.zim"));
         assert_ne!(a, item_id("library", "a b.zim"));
         assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    #[test]
+    fn job_times_are_rfc3339_and_old_entries_load_with_null() {
+        assert_eq!(rfc3339_of(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_of(1_782_958_329), "2026-07-02T02:12:09Z");
+        assert_eq!(rfc3339_of(951_782_400), "2000-02-29T00:00:00Z");
+        let now = now_rfc3339();
+        assert_eq!(now.len(), 20);
+        assert!(now.ends_with('Z') && now.as_bytes()[10] == b'T', "{now}");
+        // an entry written before the times were kept
+        let old: Job = serde_json::from_str(
+            r#"{"id":"a","url":"u","kind":"zim","name":"n.zim","bytes":1,"total":2,"state":"done","error":null,"sha256":null,"origin":null,"icon_url":null}"#,
+        )
+        .unwrap();
+        let v = old.view();
+        assert!(v["created_at"].is_null() && v["finished_at"].is_null());
+        let j = Job { created_at: Some(now.clone()), finished_at: None, ..old };
+        let back: Job = serde_json::from_str(&serde_json::to_string(&j).unwrap()).unwrap();
+        assert_eq!(back.created_at.as_deref(), Some(now.as_str()));
+        assert!(back.view()["finished_at"].is_null());
     }
 }
