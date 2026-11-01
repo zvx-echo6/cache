@@ -554,12 +554,15 @@ async fn an_upload_is_refused_with_507_unless_the_disk_has_its_size_and_a_gigaby
 async fn space_tells_free_and_total_bytes_and_a_library_package_waits_in_the_docs_root() {
     let _g = LOCK.lock().await;
     let mut setup = Setup::new();
-    setup.options.free_bytes = Some(Arc::new(|_| Some(1234)));
+    let free = Arc::new(AtomicU64::new(1234));
+    let f2 = free.clone();
+    setup.options.free_bytes = Some(Arc::new(move |_| Some(f2.load(Ordering::Relaxed))));
     setup.options.total_bytes = Some(Arc::new(|_| Some(5678)));
     let rig = rig("space", setup).await;
     let (s, v) = rig.call("GET", "/api/library/space", "").await;
     assert_eq!((s, v["result"].clone()), (200, json!({"free_bytes": 1234, "total_bytes": 5678})), "{v}");
     assert_eq!(route(&rig.app, "GET", "/api/library/space", None, b"").await.status, 401);
+    free.store(10 << 30, Ordering::Relaxed);
     // a download of a library package ends in docs/incoming, is not rescanned and does not become an item
     let job = rig.download(json!({"url": rig.origin.url("/big.zim"), "kind": "library", "name": "pack.cache-library"})).await;
     let done = rig.wait_state(job["id"].as_str().unwrap(), &["done", "failed"]).await;
