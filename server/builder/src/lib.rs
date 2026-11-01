@@ -6,6 +6,7 @@ pub mod chunk;
 pub mod embed;
 pub mod error;
 pub mod extract;
+pub mod fingerprint;
 pub mod incremental;
 pub mod layout;
 pub mod library;

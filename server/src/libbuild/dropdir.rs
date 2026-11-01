@@ -99,7 +99,7 @@ pub fn unique_name(dir: &Path, name: &str) -> String {
 }
 
 /// Move `src` into `dir` under a free name; the name it got.
-fn move_unique(src: &Path, dir: &Path, name: &str) -> std::io::Result<String> {
+pub(crate) fn move_unique(src: &Path, dir: &Path, name: &str) -> std::io::Result<String> {
     std::fs::create_dir_all(dir)?;
     let final_name = unique_name(dir, name);
     let dest = dir.join(&final_name);
@@ -123,6 +123,8 @@ fn mtime_secs(m: &std::fs::Metadata) -> u64 {
 
 struct Entry {
     name: String,
+    /// Relative to the folder listed (the same as `name` unless the tree is walked).
+    rel: String,
     path: PathBuf,
     size: u64,
     mtime: u64,
@@ -141,10 +143,36 @@ fn list_files(dir: &Path) -> std::io::Result<Vec<Entry>> {
         if !md.is_file() {
             continue;
         }
-        out.push(Entry { name, path: e.path(), size: md.len(), mtime: mtime_secs(&md) });
+        out.push(Entry { rel: name.clone(), name, path: e.path(), size: md.len(), mtime: mtime_secs(&md) });
     }
     out.sort_by(|a, b| a.mtime.cmp(&b.mtime).then(a.name.cmp(&b.name)));
     Ok(out)
+}
+
+/// Every visible file under `dir` (`complete/` is a tree of class and division folders), oldest first; `rel` is the path below `dir`.
+fn list_tree(dir: &Path) -> Vec<Entry> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<Entry>, depth: usize) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name.ends_with(".why.txt") {
+                continue;
+            }
+            let Ok(md) = e.metadata() else { continue };
+            if md.is_dir() {
+                if depth < 4 {
+                    walk(base, &e.path(), out, depth + 1);
+                }
+            } else if md.is_file() {
+                let rel = e.path().strip_prefix(base).map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_else(|_| name.clone());
+                out.push(Entry { name, rel, path: e.path(), size: md.len(), mtime: mtime_secs(&md) });
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(dir, dir, &mut out, 0);
+    out.sort_by(|a, b| a.mtime.cmp(&b.mtime).then(a.rel.cmp(&b.rel)));
+    out
 }
 
 fn has_gzip_magic(p: &Path) -> bool {
@@ -158,6 +186,11 @@ impl BuildService {
         lock(&self.drop.settings).clone()
     }
 
+    /// The drop folder's path.
+    pub(crate) fn drop_folder(&self) -> String {
+        self.drop_settings().folder
+    }
+
     /// The library the drop folder fills has been deleted: PDFs wait until another is chosen.
     pub(crate) fn forget_drop_library(&self, id: &str) {
         let mut s = lock(&self.drop.settings);
@@ -167,7 +200,7 @@ impl BuildService {
         }
     }
 
-    fn poke_drop(&self) {
+    pub(crate) fn poke_drop(&self) {
         *lock(&self.drop.wake.0) = true;
         self.drop.wake.1.notify_all();
     }
@@ -265,7 +298,8 @@ impl BuildService {
         Ok(())
     }
 
-    /// After a drop-folder book is done, skipped, failed or needs OCR: move its file out of `ingest/`.
+    /// After a drop-folder book is done, skipped, failed or needs OCR: move its file out of `ingest/`. A built book's file is filed in
+    /// `complete/` like its source copy (`<class>/<division>/<call number>  <title>.pdf`); a copy that was not kept goes to Removed.
     pub(crate) fn settle_drop_item(&self, id: &str) {
         let Some(it) = lock(&self.st).items.iter().find(|i| i.id == id).cloned() else { return };
         let src = PathBuf::from(&it.path);
@@ -273,8 +307,28 @@ impl BuildService {
             return;
         }
         let Some(root) = src.parent().and_then(|p| p.parent()).map(Path::to_path_buf) else { return };
-        let result = match it.state {
-            S::Done | S::SkippedDuplicate => move_unique(&src, &root.join("complete"), &it.file_name),
+        let result: std::io::Result<String> = match it.state {
+            S::Done => {
+                let filed = it.doc_id.as_deref().and_then(|d| self.book_of(&it.library_id, d));
+                match filed {
+                    Some(b) => {
+                        let cls = self.classes();
+                        let dir = root.join("complete").join(cls.folder_rel(b.division.as_deref()));
+                        let name = super::classify::file_name(&b.call_number(), &b.title);
+                        move_unique(&src, &dir, &name).map(|n| {
+                            let rel = format!("{}/{}", cls.folder_rel(b.division.as_deref()).to_string_lossy().replace('\\', "/"), n);
+                            self.note_drop_copy(&it.library_id, &b.doc_id, &dir.join(&n), &root);
+                            rel
+                        })
+                    }
+                    None => move_unique(&src, &root.join("complete"), &it.file_name),
+                }
+            }
+            S::SkippedDuplicate => {
+                let why = it.result.clone().unwrap_or_else(|| "Not kept".into());
+                self.to_removed(&src, &it.file_name, &why, "drop", &it.library_id).map_err(std::io::Error::other).map(|_| String::new())
+            }
+            S::NeedsDecision => return,
             _ => {
                 let reason = it.error.clone().unwrap_or_else(|| "The book could not be built.".into());
                 move_unique(&src, &root.join("failed"), &it.file_name).inspect(|n| {
@@ -285,6 +339,7 @@ impl BuildService {
         let mut st = lock(&self.st);
         if let Some(x) = st.items.iter_mut().find(|i| i.id == id) {
             match result {
+                Ok(n) if n.is_empty() => {}
                 Ok(n) => x.moved_to = Some(n),
                 Err(e) => {
                     x.state = S::Failed;
@@ -392,11 +447,11 @@ impl BuildService {
                 "zim" | "cache-library" | "gz" => {
                     found += 1;
                     let r = self.drop_install(e, &ext);
-                    self.file_away(&root, e, r);
+                    self.file_away(&root, e, if ext == "zim" { "ZIM files" } else { "Library files" }, r);
                 }
                 _ => {
                     found += 1;
-                    self.file_away(&root, e, Err(NOT_USABLE.to_string()));
+                    self.file_away(&root, e, "", Err(NOT_USABLE.to_string()));
                 }
             }
         }
@@ -408,10 +463,10 @@ impl BuildService {
     }
 
     /// Move a handled file to `complete/` (on Ok) or `failed/` with its note (on Err).
-    fn file_away(&self, root: &Path, e: &Entry, r: Result<(), String>) {
+    fn file_away(&self, root: &Path, e: &Entry, sub: &str, r: Result<(), String>) {
         match r {
             Ok(()) => {
-                if let Err(x) = move_unique(&e.path, &root.join("complete"), &e.name) {
+                if let Err(x) = move_unique(&e.path, &root.join("complete").join(sub), &e.name) {
                     eprintln!("cache-server: moving {} to complete/: {x}", e.name);
                 }
             }
@@ -458,7 +513,7 @@ impl BuildService {
 
     fn files_view(&self, root: &Path) -> std::io::Result<(Vec<Value>, Value)> {
         let ing = list_files(&ingest(root))?;
-        let complete = list_files(&root.join("complete")).unwrap_or_default();
+        let complete = list_tree(&root.join("complete"));
         let failed = list_files(&root.join("failed")).unwrap_or_default();
         let st = lock(&self.st);
         let mut files: Vec<Value> = vec![];
@@ -481,19 +536,36 @@ impl BuildService {
         }
         for e in ing.iter().filter(|e| !in_queue.iter().any(|(_, q)| q.path == e.path)) {
             let stuck = st.items.iter().find(|i| i.origin == Origin::Drop && i.path.as_str() == e.path.to_str().unwrap_or("") && !i.state.live());
+            let waiting = stuck.is_some_and(|i| i.state == S::NeedsDecision);
             files.push(json!({
-                "name": e.name, "folder": "ingest", "state": if stuck.is_some() { "failed" } else { "new" }, "position": null, "size": e.size,
-                "progress": null, "item_id": stuck.map(|i| i.id.clone()), "reason": stuck.and_then(|i| i.error.clone()), "can_retry": false,
+                "name": e.name, "folder": "ingest", "state": if waiting { "needs_decision" } else if stuck.is_some() { "failed" } else { "new" },
+                "position": null, "size": e.size, "progress": null, "item_id": stuck.map(|i| i.id.clone()),
+                "reason": stuck.and_then(|i| if waiting { i.result.clone() } else { i.error.clone() }), "can_retry": false,
             }));
         }
+        let cls = self.classes();
         for e in complete.iter().rev().take(LIST_CAP) {
-            let dup = st.items.iter().find(|i| i.origin == Origin::Drop && i.state == S::SkippedDuplicate && i.moved_to.as_deref() == Some(e.name.as_str()));
-            let done = st.items.iter().find(|i| i.origin == Origin::Drop && i.state == S::Done && i.moved_to.as_deref() == Some(e.name.as_str()));
+            let item = st.items.iter().find(|i| i.origin == Origin::Drop && i.moved_to.as_deref() == Some(e.rel.as_str()) && matches!(i.state, S::Done | S::SkippedDuplicate));
+            let dup = item.filter(|i| i.state == S::SkippedDuplicate);
+            let done = item.filter(|i| i.state == S::Done);
+            let book = done.and_then(|i| i.doc_id.as_deref().and_then(|d| st.libs.iter().find(|l| l.id == i.library_id).and_then(|l| l.books.iter().find(|b| b.doc_id == d))));
+            let (class, division) = book.and_then(|b| b.division.as_deref()).and_then(|d| cls.find(d)).map_or((None, None), |(c, d)| (Some(c.number.clone()), Some(d.number.clone())));
+            let place = e.rel.rsplit_once('/').map(|(p, _)| p.to_string());
             files.push(json!({
-                "name": e.name, "folder": "complete", "state": if dup.is_some() { "duplicate" } else { "done" }, "position": null, "size": e.size,
-                "progress": null, "item_id": null, "can_retry": false,
-                "reason": dup.map(|i| format!("Duplicate: the same content is already in {}", i.duplicate_of.clone().unwrap_or_default())),
+                "name": e.name, "path": e.rel, "where": place, "folder": "complete", "state": if dup.is_some() { "duplicate" } else { "done" },
+                "position": null, "size": e.size, "progress": null, "item_id": null, "can_retry": false,
+                "reason": dup.map(|i| format!("Duplicate: the same content is already in {}", i.duplicate_of.clone().unwrap_or_default())).or_else(|| done.and_then(|i| i.result.clone())),
                 "note": done.and_then(|i| i.note.clone()),
+                "class": class, "division": division, "call_number": book.map(|b| b.call_number()), "title": book.map(|b| b.title.clone()),
+                "moved_from": book.and_then(|b| b.moved_from.clone()),
+            }));
+        }
+        // Copies Cache did not keep (an exact copy, a worse copy) are in Removed; their results are shown here too.
+        let removed: Vec<&Item> = st.items.iter().rev().filter(|i| i.origin == Origin::Drop && i.state == S::SkippedDuplicate && i.moved_to.is_none()).take(LIST_CAP).collect();
+        for i in &removed {
+            files.push(json!({
+                "name": i.file_name, "folder": "removed", "state": "duplicate", "position": null, "size": i.size, "progress": null,
+                "item_id": i.id, "reason": i.result, "can_retry": false,
             }));
         }
         for e in failed.iter().rev().take(LIST_CAP) {
@@ -504,7 +576,7 @@ impl BuildService {
                 "progress": null, "item_id": null, "reason": why, "can_retry": !unsupported,
             }));
         }
-        let counts = json!({"all": ing.len() + complete.len() + failed.len(), "queue": ing.len(), "complete": complete.len(), "failed": failed.len()});
+        let counts = json!({"all": ing.len() + complete.len() + failed.len(), "queue": ing.len(), "complete": complete.len(), "failed": failed.len(), "removed": removed.len()});
         Ok((files, counts))
     }
 
@@ -520,7 +592,7 @@ impl BuildService {
                     stale = status.error.is_some();
                     (v["files"].clone(), v["counts"].clone())
                 }
-                None => (json!([]), json!({"all": 0, "queue": 0, "complete": 0, "failed": 0})),
+                None => (json!([]), json!({"all": 0, "queue": 0, "complete": 0, "failed": 0, "removed": 0})),
             }
         } else {
             match self.files_view(&root) {
@@ -532,7 +604,7 @@ impl BuildService {
                     stale = true;
                     match lock(&self.drop.last_files).clone() {
                         Some(v) => (v["files"].clone(), v["counts"].clone()),
-                        None => (json!([]), json!({"all": 0, "queue": 0, "complete": 0, "failed": 0})),
+                        None => (json!([]), json!({"all": 0, "queue": 0, "complete": 0, "failed": 0, "removed": 0})),
                     }
                 }
             }

@@ -4,7 +4,8 @@ use crate::chunk::{chunk, CHUNKER_VERSION, MAX_WORDS, TARGET_WORDS};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, EXTRACTOR_NAME, EXTRACTOR_VERSION};
-use crate::layout::{layout, Element};
+use crate::fingerprint::{class_vector, fingerprint, mean_vector};
+use crate::layout::{layout, Element, MIN_PAGE_CHARS};
 use crate::pack::{valid_doc_id, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Source, Tool, PACK_FORMAT};
 use crate::text::word_count;
 
@@ -20,11 +21,14 @@ pub struct BuildOptions {
     pub file_name: String,
     /// Recorded as is (the builder never reads the clock, so equal inputs give equal packs).
     pub created_at: String,
+    /// Choose the title the way the library does: the PDF's metadata title when it is a real one, else its first big heading,
+    /// else the file name tidied. Off by default: the title is then the metadata title or the file name without its extension.
+    pub smart_title: bool,
 }
 
 impl BuildOptions {
     pub fn new(file_name: &str, created_at: &str) -> Self {
-        BuildOptions { doc_id: None, doc_version: 1, title: None, https: None, file_name: file_name.to_string(), created_at: created_at.to_string() }
+        BuildOptions { doc_id: None, doc_version: 1, title: None, https: None, file_name: file_name.to_string(), created_at: created_at.to_string(), smart_title: false }
     }
 }
 
@@ -41,6 +45,55 @@ pub struct Report {
     /// The first headings found (level, text) and how many there are in all.
     pub headings: Vec<(u8, String)>,
     pub heading_count: usize,
+    /// Pages with real text on them.
+    pub text_pages: usize,
+    /// Words in the text of all the pieces.
+    pub words: usize,
+    /// Typical page-image resolution in pixels per inch, when the PDF has page images.
+    pub ppi: Option<u32>,
+    /// The year in the PDF's creation date.
+    pub year: Option<u32>,
+    /// The MinHash fingerprint of the text (see `fingerprint`); empty for a very short text.
+    pub minhash: Vec<u32>,
+    /// The mean vector of all the pieces, length 1.
+    pub mean_vector: Vec<f32>,
+    /// The mean vector of the book's opening pages, length 1 (what filing by subject compares).
+    pub class_vector: Vec<f32>,
+    /// The first big heading near the start, when there is one.
+    pub first_heading: Option<String>,
+}
+
+/// The first big (top level) heading in the first five pages.
+fn first_big_heading(elements: &[Element]) -> Option<String> {
+    elements.iter().find_map(|e| match e {
+        Element::Heading { level: 1, text, page } if *page < 5 && (3..=120).contains(&text.chars().count()) => Some(text.clone()),
+        _ => None,
+    })
+}
+
+/// A metadata title that names a real title, not a file the PDF was made from ("Microsoft Word - notes.doc").
+fn usable_metadata_title(t: &str) -> Option<String> {
+    let t = t.trim();
+    let t = t.strip_prefix("Microsoft Word - ").or_else(|| t.strip_prefix("Microsoft Word- ")).unwrap_or(t).trim();
+    let lower = t.to_lowercase();
+    let file_like = [".doc", ".docx", ".pdf", ".indd", ".qxd", ".pmd", ".pub", ".rtf", ".odt", ".tex", ".ps", ".txt", ".htm", ".html"].iter().any(|e| lower.ends_with(e));
+    if t.chars().count() < 3 || file_like || lower == "untitled" || t.chars().all(|c| c.is_ascii_digit()) {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// A file name as a title: no extension, underscores as spaces, one space between words.
+pub fn tidy_file_title(file_name: &str) -> String {
+    let stem = std::path::Path::new(file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| file_name.to_string());
+    let t = stem.replace('_', " ");
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.is_empty() {
+        file_name.to_string()
+    } else {
+        t
+    }
 }
 
 /// Pieces embedded per call (the server's build service batches the same way).
@@ -97,11 +150,19 @@ pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder,
         return Err(Error::new("the embedder returned vectors of different sizes"));
     }
     let label = |i: usize| ext.pages.get(i).map(|p| p.label.clone()).unwrap_or_else(|| (i + 1).to_string());
-    let title = opts
-        .title
-        .clone()
-        .or_else(|| ext.title.clone())
-        .unwrap_or_else(|| std::path::Path::new(&opts.file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| opts.file_name.clone()));
+    let first_heading = first_big_heading(&lay.elements);
+    let title = if opts.smart_title {
+        opts.title
+            .clone()
+            .or_else(|| ext.title.as_deref().and_then(usable_metadata_title))
+            .or_else(|| first_heading.clone())
+            .unwrap_or_else(|| tidy_file_title(&opts.file_name))
+    } else {
+        opts.title
+            .clone()
+            .or_else(|| ext.title.clone())
+            .unwrap_or_else(|| std::path::Path::new(&opts.file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| opts.file_name.clone()))
+    };
     let words: Vec<usize> = pieces.iter().map(|p| word_count(&p.text)).collect();
     let headings_all: Vec<(u8, String)> = lay
         .elements
@@ -138,6 +199,7 @@ pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder,
         ocr_pages: ocr_pages.clone(),
         pieces: pack_pieces.len(),
     };
+    let print = fingerprint(pack_pieces.iter().map(|p| p.text.as_str()));
     let report = Report {
         pages: ext.pages.len(),
         pieces: pack_pieces.len(),
@@ -147,6 +209,14 @@ pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder,
         ocr_pages,
         headings: headings_all.iter().take(15).cloned().collect(),
         heading_count: headings_all.len(),
+        text_pages: ext.pages.iter().filter(|p| p.text_chars() >= MIN_PAGE_CHARS).count(),
+        words: print.words,
+        ppi: ext.ppi,
+        year: ext.year,
+        minhash: print.minhash,
+        mean_vector: mean_vector(&pack_pieces),
+        class_vector: class_vector(&pack_pieces),
+        first_heading,
     };
     Ok((Pack { header, pieces: pack_pieces }, report))
 }

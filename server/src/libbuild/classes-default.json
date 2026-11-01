@@ -1,0 +1,517 @@
+{
+ "version": 1,
+ "unsure_below": 0.4,
+ "min_margin": 0.015,
+ "classes": [
+  {
+   "number": "000",
+   "name": "Knowledge and Reference",
+   "divisions": [
+    {
+     "number": "010",
+     "name": "Encyclopedias and almanacs",
+     "description": "General reference works that cover many subjects at once: encyclopedias, almanacs, dictionaries of facts, fact books and yearbooks."
+    },
+    {
+     "number": "020",
+     "name": "General manuals and guides",
+     "description": "Broad how-to manuals and handbooks that span many practical skills, such as all-purpose self-reliance, homesteading and field manuals."
+    },
+    {
+     "number": "030",
+     "name": "Preparedness planning",
+     "description": "Planning for emergencies and disasters: prepping guides, bug-in and bug-out plans, checklists, supplies, family emergency plans and survival strategy."
+    },
+    {
+     "number": "040",
+     "name": "Education and homeschooling",
+     "description": "Teaching and learning: homeschool curricula, textbooks for children, study skills, lesson plans and how to educate."
+    },
+    {
+     "number": "050",
+     "name": "Language and writing",
+     "description": "Languages, grammar, vocabulary, translation, phrasebooks, writing, editing and style."
+    },
+    {
+     "number": "060",
+     "name": "(unassigned)",
+     "description": ""
+    },
+    {
+     "number": "070",
+     "name": "Philosophy and religion",
+     "description": "Philosophy, ethics, religion, scripture, theology, spirituality and belief."
+    },
+    {
+     "number": "080",
+     "name": "Literature and fiction",
+     "description": "Novels, short stories, poetry, plays, essays and other imaginative or literary writing."
+    },
+    {
+     "number": "090",
+     "name": "Arts, music and games",
+     "description": "Visual art, drawing, music, instruments, film, hobbies, tabletop and role-playing games and other recreation."
+    }
+   ]
+  },
+  {
+   "number": "100",
+   "name": "Science",
+   "divisions": [
+    {
+     "number": "110",
+     "name": "Mathematics and measurement",
+     "description": "Arithmetic, algebra, geometry, statistics, calculation, units, weights and measures, and how to measure things."
+    },
+    {
+     "number": "120",
+     "name": "Physics",
+     "description": "Mechanics, heat, light, sound, electricity and magnetism as physical science, energy, and the laws of matter and motion."
+    },
+    {
+     "number": "130",
+     "name": "Chemistry",
+     "description": "Chemical elements, compounds, reactions, laboratory methods, solutions and the chemistry of everyday materials."
+    },
+    {
+     "number": "140",
+     "name": "Earth science and geology",
+     "description": "Rocks, minerals, soil formation, landforms, earthquakes, volcanoes, fossils and the structure of the Earth."
+    },
+    {
+     "number": "150",
+     "name": "Weather and climate",
+     "description": "Weather, forecasting, clouds, storms, climate, seasons and reading the sky."
+    },
+    {
+     "number": "160",
+     "name": "Astronomy and timekeeping",
+     "description": "Stars, planets, the moon, the sun, telescopes, calendars, clocks and time."
+    },
+    {
+     "number": "170",
+     "name": "Biology and ecology",
+     "description": "Living things in general, cells, genetics, evolution, ecosystems, habitats and the natural environment."
+    },
+    {
+     "number": "180",
+     "name": "Plants and botany",
+     "description": "Plant identification and biology: trees, shrubs, flowers, grasses, ferns, mushrooms and how plants grow."
+    },
+    {
+     "number": "190",
+     "name": "Animals and insects",
+     "description": "Animal identification and biology: mammals, birds, reptiles, fish, insects, spiders and their behaviour."
+    }
+   ]
+  },
+  {
+   "number": "200",
+   "name": "Medicine and Health",
+   "divisions": [
+    {
+     "number": "210",
+     "name": "First aid and emergency care",
+     "description": "First aid, trauma care, wounds, bleeding, burns, fractures, CPR, shock, rescue and medical care when help is far away."
+    },
+    {
+     "number": "220",
+     "name": "Anatomy and physiology",
+     "description": "The human body, its organs and systems, how the body works, and basic physiology."
+    },
+    {
+     "number": "230",
+     "name": "Diseases and treatment",
+     "description": "Illnesses, infections, symptoms, diagnosis, surgery, treatment and clinical medicine."
+    },
+    {
+     "number": "240",
+     "name": "Medicines and pharmacology",
+     "description": "Drugs, medications, doses, antibiotics, pharmacy, side effects and stocking a medical kit."
+    },
+    {
+     "number": "250",
+     "name": "Herbal and traditional medicine",
+     "description": "Medicinal plants, herbal remedies, tinctures, folk medicine, natural healing and home remedies."
+    },
+    {
+     "number": "260",
+     "name": "Childbirth, women's and children's health",
+     "description": "Pregnancy, childbirth, midwifery, newborn care, women's health, infants, children's illnesses and growth."
+    },
+    {
+     "number": "270",
+     "name": "Nursing and long-term care",
+     "description": "Nursing, caring for the sick and elderly at home, patient care, rehabilitation, disability and hospice."
+    },
+    {
+     "number": "280",
+     "name": "Mental health",
+     "description": "Stress, trauma, anxiety, depression, psychology, resilience, coping and mental wellbeing."
+    },
+    {
+     "number": "290",
+     "name": "Hygiene and public health",
+     "description": "Personal hygiene, dental care, sanitation of the person, epidemics, quarantine, vaccination and community health."
+    }
+   ]
+  },
+  {
+   "number": "300",
+   "name": "Agriculture",
+   "divisions": [
+    {
+     "number": "310",
+     "name": "Gardening",
+     "description": "Vegetable and home gardening: beds, planting, watering, growing herbs, container and kitchen gardens, seed starting."
+    },
+    {
+     "number": "320",
+     "name": "Field crops, seeds and soil",
+     "description": "Growing grain and field crops, saving and storing seed, soil fertility, fertilizer, plowing and crop rotation."
+    },
+    {
+     "number": "330",
+     "name": "Orchards, forestry and woodlots",
+     "description": "Fruit and nut trees, orchards, pruning, grafting, forest management, firewood and woodlot care."
+    },
+    {
+     "number": "340",
+     "name": "Livestock, poultry and veterinary care",
+     "description": "Raising cattle, goats, sheep, pigs, chickens and rabbits, animal husbandry, feeding, breeding and veterinary care."
+    },
+    {
+     "number": "350",
+     "name": "Beekeeping",
+     "description": "Honey bees, hives, keeping bees, honey, wax and swarms."
+    },
+    {
+     "number": "360",
+     "name": "Aquaculture and aquaponics",
+     "description": "Fish farming, ponds, aquaponics, hydroponics and growing food in water."
+    },
+    {
+     "number": "370",
+     "name": "Permaculture and composting",
+     "description": "Permaculture design, composting, mulching, regenerative and sustainable land use, worm bins and homestead planning."
+    },
+    {
+     "number": "380",
+     "name": "Pests and plant disease",
+     "description": "Garden and crop pests, weeds, plant diseases, pest control and protecting plants."
+    },
+    {
+     "number": "390",
+     "name": "Farm tools and buildings",
+     "description": "Farm and homestead tools and machinery, barns, fences, coops, sheds and farm construction."
+    }
+   ]
+  },
+  {
+   "number": "400",
+   "name": "Food",
+   "divisions": [
+    {
+     "number": "410",
+     "name": "Cooking and recipes",
+     "description": "Recipes and cooking: meals, camp and field cooking, cookbooks, kitchen methods and meal planning."
+    },
+    {
+     "number": "420",
+     "name": "Baking and grains",
+     "description": "Bread, baking, flour, milling, sourdough, cereals, rice and cooking with grains."
+    },
+    {
+     "number": "430",
+     "name": "Nutrition",
+     "description": "Nutrition, diet, vitamins, calories, feeding a family and eating for health."
+    },
+    {
+     "number": "440",
+     "name": "Canning",
+     "description": "Home canning and preserving in jars, pressure canning, water-bath canning, pickling and jam."
+    },
+    {
+     "number": "450",
+     "name": "Drying, smoking and curing",
+     "description": "Dehydrating and drying food, smoking meat and fish, curing, jerky and salting."
+    },
+    {
+     "number": "460",
+     "name": "Fermentation, brewing and wine",
+     "description": "Fermenting vegetables, cheese and yogurt, brewing beer, making wine, cider, mead and distilling."
+    },
+    {
+     "number": "470",
+     "name": "Food storage and root cellars",
+     "description": "Long-term food storage, stockpiling, pantry, root cellars, storing grain, rotation and shelf life."
+    },
+    {
+     "number": "480",
+     "name": "Butchering and meat",
+     "description": "Slaughtering and butchering animals, cutting up and processing meat, dressing game and rendering fat."
+    },
+    {
+     "number": "490",
+     "name": "Food safety",
+     "description": "Food safety, spoilage, foodborne illness, safe temperatures and keeping food from going bad."
+    }
+   ]
+  },
+  {
+   "number": "500",
+   "name": "Water and Energy",
+   "divisions": [
+    {
+     "number": "510",
+     "name": "Water sources and wells",
+     "description": "Finding and developing water: wells, springs, boreholes, water tables, digging and drilling wells."
+    },
+    {
+     "number": "520",
+     "name": "Rainwater harvesting",
+     "description": "Collecting rainwater, roofs, cisterns, rain barrels and catchment."
+    },
+    {
+     "number": "530",
+     "name": "Water treatment",
+     "description": "Making water safe to drink: purification, filtration, disinfection, boiling and chlorination, water quality."
+    },
+    {
+     "number": "540",
+     "name": "Pumping, storage and plumbing",
+     "description": "Pumps, pipes, plumbing, tanks, gravity-fed water systems, valves and water storage."
+    },
+    {
+     "number": "550",
+     "name": "Sanitation and waste",
+     "description": "Toilets, latrines, septic systems, sewage, greywater, garbage and waste disposal."
+    },
+    {
+     "number": "560",
+     "name": "Solar power",
+     "description": "Solar panels, photovoltaic systems, solar water heating, charge controllers and inverters, and off-grid solar."
+    },
+    {
+     "number": "570",
+     "name": "Wind, hydro and biogas",
+     "description": "Wind turbines, micro-hydro, water wheels, biogas digesters and other renewable energy."
+    },
+    {
+     "number": "580",
+     "name": "Batteries, generators and fuels",
+     "description": "Batteries, generators, fuel storage, gasoline, diesel, propane, charcoal, ethanol and power backup."
+    },
+    {
+     "number": "590",
+     "name": "Heating, cooling and lighting",
+     "description": "Heating a home, wood stoves, fireplaces, insulation, passive cooling, candles, lamps and lighting."
+    }
+   ]
+  },
+  {
+   "number": "600",
+   "name": "Building, Making and Repair",
+   "divisions": [
+    {
+     "number": "610",
+     "name": "Construction and carpentry",
+     "description": "Building houses and cabins, framing, roofs, carpentry, home repair and building materials."
+    },
+    {
+     "number": "620",
+     "name": "Masonry and concrete",
+     "description": "Stone, brick and block work, concrete, mortar, adobe, cob, earthen building and foundations."
+    },
+    {
+     "number": "630",
+     "name": "Shelters and fallout shelters",
+     "description": "Emergency and improvised shelters, fallout and blast shelters, safe rooms, bunkers and hardening a home."
+    },
+    {
+     "number": "640",
+     "name": "Woodworking",
+     "description": "Woodworking, joinery, hand tools, furniture making, carving, saws and wood finishing."
+    },
+    {
+     "number": "650",
+     "name": "Metalworking, welding and blacksmithing",
+     "description": "Blacksmithing, forging, welding, machining, casting, sheet metal and working metal."
+    },
+    {
+     "number": "660",
+     "name": "Electrical and electronics",
+     "description": "Electrical wiring, circuits, electronics, building and repairing electronic devices, components and soldering."
+    },
+    {
+     "number": "670",
+     "name": "Engines and machines",
+     "description": "Engines, small engine repair, mechanics, machines, gears, tools and machinery maintenance."
+    },
+    {
+     "number": "680",
+     "name": "Textiles, leather and crafts",
+     "description": "Sewing, weaving, spinning, knitting, leatherwork, tanning, clothing repair and handicrafts."
+    },
+    {
+     "number": "690",
+     "name": "Vehicles: cars, bikes and boats",
+     "description": "Car, truck, motorcycle and bicycle repair, boats and boat building, trailers and keeping vehicles running."
+    }
+   ]
+  },
+  {
+   "number": "700",
+   "name": "Communication",
+   "divisions": [
+    {
+     "number": "710",
+     "name": "Radio fundamentals",
+     "description": "How radio works: radio theory, receivers, transmitters, licences, bands, CB, FRS, GMRS and shortwave listening."
+    },
+    {
+     "number": "720",
+     "name": "Amateur radio operating",
+     "description": "Ham radio operating: call signs, nets, procedures, contesting, Morse code and operating practice."
+    },
+    {
+     "number": "730",
+     "name": "Antennas and propagation",
+     "description": "Antenna design and building, feed lines, grounding, propagation, HF, VHF and UHF reach."
+    },
+    {
+     "number": "740",
+     "name": "Mesh and digital radio",
+     "description": "Mesh networking and digital radio: Meshtastic, MeshCore, LoRa, packet radio, APRS and off-grid text messaging."
+    },
+    {
+     "number": "750",
+     "name": "Networks and the internet",
+     "description": "Computer networks, internet protocols, Wi-Fi, routers, servers, web hosting and local networking."
+    },
+    {
+     "number": "760",
+     "name": "Computing and programming",
+     "description": "Computers, operating systems, programming languages, software, Linux, databases and electronics for computers."
+    },
+    {
+     "number": "770",
+     "name": "Signals, codes and sign language",
+     "description": "Signalling, flags, semaphore, Morse, ciphers as codes, visual and sound signals, and sign language."
+    },
+    {
+     "number": "780",
+     "name": "Encryption and secure comms",
+     "description": "Cryptography, encryption, secure messaging, privacy tools, anonymity and protecting communications."
+    },
+    {
+     "number": "790",
+     "name": "Emergency communications",
+     "description": "Communicating in a disaster: emergency nets, ARES, SKYWARN, field communication plans and radio for emergency response."
+    }
+   ]
+  },
+  {
+   "number": "800",
+   "name": "Outdoors and Navigation",
+   "divisions": [
+    {
+     "number": "810",
+     "name": "Bushcraft and camping",
+     "description": "Wilderness survival, bushcraft, camping, backpacking, camp skills, outdoor living and wilderness shelters."
+    },
+    {
+     "number": "820",
+     "name": "Fire, knots, cordage and primitive tools",
+     "description": "Fire making, knots, rope and cordage, primitive tools, stone tools and primitive technology."
+    },
+    {
+     "number": "830",
+     "name": "Foraging and wild edibles",
+     "description": "Foraging, wild edible plants and mushrooms, identifying wild food and harvesting from the wild."
+    },
+    {
+     "number": "840",
+     "name": "Hunting, trapping and archery",
+     "description": "Hunting game, tracking prey, trapping, snares, bows and arrows, and field dressing."
+    },
+    {
+     "number": "850",
+     "name": "Fishing and fly tying",
+     "description": "Fishing, angling, lures, bait, nets, ice fishing and fly tying."
+    },
+    {
+     "number": "860",
+     "name": "Tracking and observation",
+     "description": "Animal tracking, reading sign, nature observation, awareness, observation skills and wildlife watching."
+    },
+    {
+     "number": "870",
+     "name": "Maps and land navigation",
+     "description": "Reading maps, compass, orienteering, GPS use, topographic maps and finding your way on land."
+    },
+    {
+     "number": "880",
+     "name": "Celestial and marine navigation",
+     "description": "Navigating by the stars, sun and moon, celestial navigation, sailing, charts and navigation at sea."
+    },
+    {
+     "number": "890",
+     "name": "Climbing, caving and water travel",
+     "description": "Climbing, mountaineering, caving, rope work, canoeing, kayaking and travelling by river."
+    }
+   ]
+  },
+  {
+   "number": "900",
+   "name": "Security and Society",
+   "divisions": [
+    {
+     "number": "910",
+     "name": "Firearms and marksmanship",
+     "description": "Firearms, rifles, pistols, shotguns, shooting, marksmanship, ballistics, sniping and gun safety."
+    },
+    {
+     "number": "920",
+     "name": "Firearm maintenance and reloading",
+     "description": "Cleaning and repairing firearms, gunsmithing, reloading ammunition and gun parts."
+    },
+    {
+     "number": "930",
+     "name": "Self-defense and martial arts",
+     "description": "Self-defense, unarmed combat, martial arts, personal protection, and defensive tactics."
+    },
+    {
+     "number": "940",
+     "name": "Security, OPSEC and threats",
+     "description": "Home and personal security, operational security, surveillance, privacy, threat awareness, crime prevention and protests."
+    },
+    {
+     "number": "950",
+     "name": "Military science and tactics",
+     "description": "Military manuals, small unit tactics, combat, field craft, strategy, doctrine and operations."
+    },
+    {
+     "number": "960",
+     "name": "Chemical, biological and radiation hazards",
+     "description": "Nuclear, biological and chemical hazards, radiation, fallout, decontamination, protective equipment and hazardous materials."
+    },
+    {
+     "number": "970",
+     "name": "Leadership, organization and logistics",
+     "description": "Leading groups, community organizing, incident command, logistics, supply, planning and teamwork."
+    },
+    {
+     "number": "980",
+     "name": "Law, government and economics",
+     "description": "Law, government, constitution, politics, economics, money, barter, trade and finance."
+    },
+    {
+     "number": "990",
+     "name": "History and biography",
+     "description": "History, wars, civilizations, biographies, memoirs and accounts of past events."
+    }
+   ]
+  }
+ ]
+}

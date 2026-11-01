@@ -601,6 +601,24 @@ fn names(root: &Path, folder: &str) -> Vec<String> {
     v
 }
 
+/// Every file below `dir`, as paths relative to it with '/'.
+fn tree_files(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            if e.path().is_dir() {
+                walk(base, &e.path(), out);
+            } else {
+                out.push(e.path().strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut v = vec![];
+    walk(dir, dir, &mut v);
+    v.sort();
+    v
+}
+
 fn settle(ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
 }
@@ -649,8 +667,11 @@ fn built_and_duplicate_pdfs_move_to_complete_and_failures_to_failed_with_a_note(
     assert!(names(&root, "ingest").len() == 4, "still in ingest/ while they wait");
     drain(&svc);
     assert_eq!(names(&root, "ingest"), Vec::<String>::new());
-    let complete = names(&root, "complete");
-    assert_eq!(complete.len(), 2, "{complete:?}");
+    let complete = tree_files(&root.join("complete"));
+    assert_eq!(complete.len(), 1, "the built book is filed in complete/; the exact copy is in Removed: {complete:?}");
+    assert!(complete[0].contains('/') && complete[0].ends_with(".pdf"), "{complete:?}");
+    assert_eq!(svc.removed_view()["count"], json!(1));
+    assert_eq!(svc.removed_view()["items"][0]["reason"], json!("Exact copy of Spring"));
     let failed = names(&root, "failed");
     assert_eq!(failed, vec!["Scan.PDF", "Scan.PDF.why.txt", "broken.pdf", "broken.pdf.why.txt"]);
     assert!(!std::fs::read_to_string(root.join("failed/broken.pdf.why.txt")).unwrap().trim().is_empty());
@@ -658,11 +679,11 @@ fn built_and_duplicate_pdfs_move_to_complete_and_failures_to_failed_with_a_note(
     // the table says why
     let v = svc.drop_view();
     let files = v["files"].as_array().unwrap();
-    let dup = files.iter().find(|f| f["folder"] == json!("complete") && f["state"] == json!("duplicate")).expect("a duplicate");
-    assert_eq!(dup["reason"], json!("Duplicate: the same content is already in Spring"));
+    let dup = files.iter().find(|f| f["folder"] == json!("removed") && f["state"] == json!("duplicate")).expect("a duplicate");
+    assert_eq!(dup["reason"], json!("Exact copy of Spring"));
     let broken = files.iter().find(|f| f["name"] == json!("broken.pdf")).unwrap();
     assert_eq!((broken["state"].as_str(), broken["can_retry"].as_bool()), (Some("failed"), Some(true)));
-    assert_eq!(v["status"]["counts"]["complete"], json!(2));
+    assert_eq!(v["status"]["counts"]["complete"], json!(1));
     assert_eq!(v["status"]["counts"]["failed"], json!(2));
     // the built book is in the library, with its PDF copy
     assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1);
@@ -679,7 +700,9 @@ fn zims_and_library_packages_are_installed_and_other_files_are_refused() {
     put(&root, "ingest", "notes.txt", b"hello");
     put(&root, "ingest", ".hidden.pdf", b"x");
     svc.scan();
-    assert_eq!(names(&root, "complete"), vec!["kit.cache-library", "kit2.tar.gz", "wiki.zim"]);
+    assert_eq!(names(&root, "complete"), vec!["Library files", "ZIM files"]);
+    assert_eq!(names(&root, "complete/Library files"), vec!["kit.cache-library", "kit2.tar.gz"]);
+    assert_eq!(names(&root, "complete/ZIM files"), vec!["wiki.zim"]);
     assert_eq!(names(&root, "failed"), vec!["fake.gz", "fake.gz.why.txt", "notes.txt", "notes.txt.why.txt"]);
     assert_eq!(std::fs::read_to_string(root.join("failed/notes.txt.why.txt")).unwrap().trim(), "Not a file Cache can use");
     assert_eq!(std::fs::read_to_string(root.join("failed/fake.gz.why.txt")).unwrap().trim(), "Not a file Cache can use");
@@ -689,7 +712,7 @@ fn zims_and_library_packages_are_installed_and_other_files_are_refused() {
     assert_eq!(std::fs::read(d.0.join("app/docs/incoming/kit.cache-library")).unwrap(), b"LIBDATA");
     assert!(d.0.join("app/docs/incoming/kit2.tar.gz").is_file());
     // the copies in complete/ are the files themselves
-    assert_eq!(std::fs::read(root.join("complete/wiki.zim")).unwrap(), b"ZIMDATA");
+    assert_eq!(std::fs::read(root.join("complete/ZIM files/wiki.zim")).unwrap(), b"ZIMDATA");
     // not usable files cannot be retried; the table says so
     let v = svc.drop_view();
     let notes = v["files"].as_array().unwrap().iter().find(|f| f["name"] == json!("notes.txt")).unwrap();
@@ -738,9 +761,9 @@ fn names_that_clash_in_complete_and_failed_get_a_number() {
         put(&root, "ingest", "wiki.zim", format!("z{i}").as_bytes());
         svc.scan();
     }
-    assert_eq!(names(&root, "complete"), vec!["wiki (2).zim", "wiki.zim"]);
-    assert_eq!(unique_name(&root.join("complete"), "none"), "none");
-    assert_eq!(unique_name(&root.join("complete"), "wiki.zim"), "wiki (3).zim");
+    assert_eq!(names(&root, "complete/ZIM files"), vec!["wiki (2).zim", "wiki.zim"]);
+    assert_eq!(unique_name(&root.join("complete/ZIM files"), "none"), "none");
+    assert_eq!(unique_name(&root.join("complete/ZIM files"), "wiki.zim"), "wiki (3).zim");
 }
 
 #[test]
@@ -755,7 +778,7 @@ fn a_file_taken_out_of_ingest_by_hand_leaves_the_queue() {
     svc.scan();
     assert_eq!(lock(&svc.st).items.len(), 1);
     drain(&svc);
-    assert_eq!(names(&root, "complete"), vec!["b.pdf"]);
+    assert_eq!(tree_files(&root.join("complete")).len(), 1);
     // a book whose file goes while it waits (and was not yet noticed by a check) is dropped quietly at its turn
     put(&root, "ingest", "c.pdf", &book("gone", 2, None));
     svc.scan();

@@ -231,7 +231,30 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             let id = id.to_string();
             blocking(move || b.delete_library(&id)).await
         }
-        ("GET", ["libraries", id, "books"]) => library_reply(b.books(id)),
+        ("GET", ["libraries", id, "books"]) => library_reply(b.books_q(id, query)),
+        ("POST", ["libraries", id, "books", doc, "place"]) => {
+            let (id, doc) = (id.to_string(), doc.to_string());
+            blocking(move || b.place_book(&id, &doc, &body_owned)).await
+        }
+        ("GET", ["classes"]) => {
+            let lib = crate::fetch::query_param(query, "library_id");
+            blocking(move || b.classes_view(lib.as_deref())).await
+        }
+        ("POST", ["classes", "reclassify"]) => blocking(move || b.reclassify(&body_owned)).await,
+        ("POST", ["queue", id, "decide"]) => {
+            let id = id.to_string();
+            blocking(move || b.decide(&id, &body_owned)).await
+        }
+        ("GET", ["removed"]) => ok(b.removed_view()),
+        ("POST", ["removed", id, "restore"]) => {
+            let id = id.to_string();
+            blocking(move || b.restore_removed(&id)).await
+        }
+        ("DELETE", ["removed", id]) => {
+            let id = id.to_string();
+            blocking(move || b.delete_removed(&id)).await
+        }
+        ("DELETE", ["removed"]) => blocking(move || b.delete_removed("")).await,
         ("PATCH", ["libraries", id, "books", doc]) => {
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.rename_book(&id, &doc, &body_owned)).await
