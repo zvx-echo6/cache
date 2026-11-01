@@ -1,5 +1,6 @@
 //! Tests of the build service: the queue, the library swap, the drop folder. The embedder is the builder crate's fake.
 
+use super::dropdir::unique_name;
 use super::testpdf::{book, make_pdf, picture_page, text_page};
 use super::*;
 use crate::TempDir;

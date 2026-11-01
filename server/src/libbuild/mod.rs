@@ -34,7 +34,7 @@
 use crate::embed::EmbedService;
 use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
-use cache_builder::pack::{read_pack, write_pack, Pack, PACK_EXT};
+use cache_builder::pack::{read_pack, write_pack, Pack};
 use cache_builder::{build_pack_with, BuildOptions, Embedder, Progress};
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
@@ -379,9 +379,6 @@ fn make_library_id(title: &str) -> String {
     }
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 80 && !id.starts_with(['.', '-']) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
 
 fn friendly_error(raw: &str) -> String {
     if raw.contains("encrypted") || raw.contains("password") {
@@ -614,7 +611,7 @@ impl BuildService {
     /// Handle the next waiting book, if any. The build thread calls this in a loop; tests call it directly.
     pub fn run_one(self: &Arc<Self>) -> Run {
         let picked = {
-            let mut st = lock(&self.st);
+            let st = lock(&self.st);
             if st.paused {
                 None
             } else {
@@ -1470,10 +1467,6 @@ impl BuildService {
         Ok(v)
     }
 
-    pub(crate) fn valid_library_id(id: &str) -> bool {
-        valid_id(id)
-    }
-
     pub(crate) fn has_library(&self, id: &str) -> bool {
         lock(&self.st).libs.iter().any(|l| l.id == id)
     }
@@ -1481,9 +1474,6 @@ impl BuildService {
     pub(crate) fn lib_title(&self, id: &str) -> Option<String> {
         lock(&self.st).libs.iter().find(|l| l.id == id).map(|l| l.title.clone())
     }
-
-    /// The pack file extension, for tests and docs.
-    pub const PACK_EXT: &'static str = PACK_EXT;
 }
 
 enum Outcome {
