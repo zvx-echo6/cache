@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../layout/adaptive.dart';
+import '../platform.dart' as plat;
 
 import '../guide/guide_book.dart';
 import '../guide/guide_reader.dart';
@@ -18,6 +19,10 @@ import 'catalogue_screen.dart' show AddToLibraryScreen;
 import 'browse_state.dart';
 import 'library_actions.dart';
 import 'reader_screen.dart';
+import 'web/device_api.dart' show DeviceJob;
+import 'web/device_flows.dart';
+import 'web/device_library.dart' show kUploadedAgain;
+import 'web/device_widgets.dart';
 import 'zim_urls.dart';
 
 /// The Library module: one list of everything (Kiwix ZIMs and your own libraries), each with its icon, name, a short description and
@@ -127,7 +132,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     openDetail(_pane ?? context, key: 'library:${l.folderName}', builder: (_) => LibraryItemScreen(libraries: libs!, item: l, menu: (ctx) => showLibraryMenu(ctx, _libraryActions(l))));
   }
 
-  int? get _free => b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
+  int? get _free => b.device != null ? b.device!.spaceForDialog.usable : b.downloader.freeSpace(sources.zimsDir?.path ?? '.');
 
   LibraryActions _zimActions(ZimFile z, {VoidCallback? addToHome}) {
     final id = sources.idOf(z);
@@ -144,7 +149,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
               final u = b.updates[z.path];
               _say(b.updateError ?? (u == null ? '${sources.titleOf(z)} is up to date' : 'Update ready: ${u.release}, ${formatBytes(u.size)}'));
             },
-      changeIcon: () async {
+      // A picture is kept beside the file on the phone; the browser has no such file to change.
+      changeIcon: b.device != null ? null : () async {
         final dest = File('${z.path}.icon.png');
         if (await pickIconInto(dest)) {
           await FileImage(dest).evict();
@@ -161,6 +167,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
                   if (mounted) modules.addToHome(context, layout, Shortcut.page(address: address, title: sources.titleOf(z), library: 'Library'));
                 }),
       delete: () => sources.remove(z),
+      again: b.device?.wasUploaded(z.fileName) == true ? kUploadedAgain : null,
     );
   }
 
@@ -168,8 +175,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
     title: libs!.titleOf(l),
     bytes: l.size,
     free: _free,
-    changeIcon: () async {
-      final dest = File('${l.dir.path}${Platform.pathSeparator}icon.png');
+    changeIcon: b.device != null ? null : () async {
+      final dest = File('${l.path}${Platform.pathSeparator}icon.png');
       if (await pickIconInto(dest)) {
         await FileImage(dest).evict();
         if (mounted) setState(() {});
@@ -181,25 +188,43 @@ class _BrowseScreenState extends State<BrowseScreen> {
     delete: libs!.isGuide(l) ? null : () => libs!.remove(l),
   );
 
+  /// A library package the device downloaded is added by the app, with the usual prompts.
+  Future<void> _addPackage(DeviceJob job) async {
+    final libraries = libs;
+    final device = b.device;
+    if (libraries == null || device == null) return;
+    await addPackageOnDevice(context, libraries, job.name);
+    // It no longer waits, whether it was added or not (a package that failed is deleted, as on a phone).
+    await device.packageHandled(job);
+  }
+
   void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
 
   @override
-  Widget build(BuildContext context) => TwoPane(
-    id: 'library',
-    listName: 'Library',
-    list: Builder(
-      builder: (c) {
-        _pane = c;
-        return _list(c);
-      },
-    ),
-  );
+  Widget build(BuildContext context) {
+    final pane = TwoPane(
+      id: 'library',
+      listName: 'Library',
+      list: Builder(
+        builder: (c) {
+          _pane = c;
+          return _list(c);
+        },
+      ),
+    );
+    final device = b.device;
+    // In a browser a file dropped anywhere on the Library is added from this computer.
+    return device == null
+        ? pane
+        : DropOverlay(onFile: (f) => addFromComputer(context, device: device, libraries: libs, dropped: f), child: pane);
+  }
 
   Widget _list(BuildContext context) {
     final k = context.t;
     return Scaffold(
       resizeToAvoidBottomInset: false,
       appBar: AppBar(title: const Text('Library'), actions: [?paneHideButton(context)]),
+      bottomNavigationBar: b.device == null ? null : DeviceStorageFooter(device: b.device!),
       body: ListenableBuilder(
         listenable: Listenable.merge([b, sources, ?libs]),
         builder: (context, _) {
@@ -207,7 +232,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           final transfers = b.transfers.values.toList();
           final task = libs?.task;
           final items = sources.zims.length + (libs?.libraries.length ?? 0);
-          final empty = items == 0 && transfers.isEmpty && task == null;
+          final empty = items == 0 && transfers.isEmpty && task == null && (b.device == null || (b.device!.jobs.isEmpty && b.device!.upload == null));
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
@@ -215,7 +240,10 @@ class _BrowseScreenState extends State<BrowseScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
                   child: Text(
-                    sources.unavailable ?? 'Nothing in your library yet. Add Wikipedia, medical guides, survival manuals or your own library, and read them with no signal.',
+                    sources.unavailable ??
+                        (b.device == null
+                            ? 'Nothing in your library yet. Add Wikipedia, medical guides, survival manuals or your own library, and read them with no signal.'
+                            : 'Nothing in your library yet. Add Wikipedia, medical guides, survival manuals or your own library. They are kept on this device and work with no internet.'),
                     key: const ValueKey('library-empty'),
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14, color: k.secondary),
@@ -224,8 +252,12 @@ class _BrowseScreenState extends State<BrowseScreen> {
               else
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                  child: Text('Icons come from each source\'s website; change one from the hold menu.', style: TextStyle(fontSize: 12, color: k.secondary)),
+                  child: Text(
+                    b.device?.activityHint ?? (b.device == null ? 'Icons come from each source\'s website; change one from the hold menu.' : 'Icons come from each source\'s website; change one from the item\'s menu.'),
+                    style: TextStyle(fontSize: 12, color: k.secondary),
+                  ),
                 ),
+              if (b.device != null) DeviceLibraryTop(device: b.device!, onAddPackage: _addPackage),
               for (final t in transfers) _transferRow(k, t),
               if (task != null) _taskRow(k, task),
               for (final z in sources.zims) _zimRow(k, z),
@@ -279,7 +311,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
   Widget _libraryRow(CacheTokens k, LibraryItem l) {
     final s = libs!;
     final phase = s.phaseOf(l);
-    final icon = File('${l.dir.path}${Platform.pathSeparator}icon.png');
+    final icon = b.device != null ? null : File('${l.path}${Platform.pathSeparator}icon.png');
     final Widget? badge = switch (phase) {
       LibraryPhase.indexing => RowBadge(s.indexFraction(l) == null ? 'Building index' : 'Building index ${(s.indexFraction(l)! * 100).toStringAsFixed(0)}%', color: k.secondary),
       LibraryPhase.failed => RowBadge("Can't be opened", color: k.warning),
@@ -289,7 +321,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     final n = s.docsOf(l);
     return LibraryRow(
       key: ValueKey('library-${l.folderName}'),
-      icon: icon.existsSync() ? icon : null,
+      icon: icon != null && icon.existsSync() ? icon : null,
       title: s.titleOf(l),
       // The guide ships inside the app; every other library is one the person added.
       detail: [s.isGuide(l) ? 'Built in' : 'Your own', if (n > 0) '$n ${n == 1 ? 'entry' : 'entries'}', formatBytes(l.size)].join(' · '),
@@ -405,12 +437,9 @@ class LibraryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Holdable(
-        onTap: onTap,
-        onHold: onHold,
-        child: ConstrainedBox(
+    // A mouse has no hold: in a browser the menu opens from a "..." that shows while the pointer is over the row.
+    final more = plat.isWeb && onHold != null;
+    Widget content(bool hover) => ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 52),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -428,10 +457,17 @@ class LibraryRow extends StatelessWidget {
                   ),
                 ),
                 if (badge != null) ...[const SizedBox(width: 8), badge!],
+                if (more) SizedBox(width: 36, height: 32, child: hover ? IconButton(key: const ValueKey('row-menu'), padding: EdgeInsets.zero, tooltip: 'More', icon: const Icon(Icons.more_horiz, size: 20), onPressed: onHold) : null),
               ],
             ),
           ),
-        ),
+        );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Holdable(
+        onTap: onTap,
+        onHold: onHold,
+        child: more ? HoverReveal(builder: content) : content(false),
       ),
     );
   }
@@ -477,7 +513,7 @@ class LibraryItemScreen extends StatelessWidget {
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
-        final l = s.libraries.where((x) => x.dir.path == item.dir.path).firstOrNull ?? item;
+        final l = s.libraries.where((x) => x.path == item.path).firstOrNull ?? item;
         final whole = s.wholeLibraryOnly(l);
         final rows = <(String, String)>[
           ('Entries', '${s.docsOf(l)}'),

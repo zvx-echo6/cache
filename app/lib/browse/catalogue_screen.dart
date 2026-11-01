@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
+import '../platform.dart' as plat;
 import '../screens/settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import 'browse_state.dart';
 import 'library_actions.dart';
 import 'opds.dart';
+import 'web/device_flows.dart';
+import 'web/device_widgets.dart' show FromThisComputer;
 
 String formatBytes(int bytes) {
   if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
@@ -217,6 +220,8 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
   List<Widget> _head(CacheTokens k) {
     final libraries = b.libraries;
     return [
+      // In a browser the first section is the computer the browser is on.
+      if (b.device != null) FromThisComputer(device: b.device!, onChoose: () => addFromComputer(context, device: b.device!, libraries: libraries)),
       if (libraries != null) ...[
         const GroupLabel('Your own'),
         Material(
@@ -339,7 +344,7 @@ class EntryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    final transfer = browse.transfers[entry.id];
+    final transfer = browse.transfers[entry.id] ?? browse.deviceTransfer(entry);
     final installed = browse.installedFor(entry);
     final installedRelease = installed == null ? null : browse.sources.originOf(installed)?.release;
     final newer = installed != null && installedRelease != null && installedRelease.compareTo(entry.release) < 0;
@@ -423,7 +428,10 @@ class EntryTile extends StatelessWidget {
         width: 32,
         height: 32,
         color: k.background,
-        child: url == null ? letter : Image.network(url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
+        // A page may not load pictures from other sites: in a browser the icon comes through this device.
+        child: url == null
+            ? letter
+            : Image.network(plat.isWeb ? '/api/fetch?url=${Uri.encodeComponent(url.toString())}' : url.toString(), fit: BoxFit.cover, errorBuilder: (_, _, _) => letter),
       ),
     );
   }

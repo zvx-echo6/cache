@@ -110,6 +110,52 @@ void main() {
     expect(Directory('${docs.path}/x').existsSync(), isFalse);
   });
 
+  test('rename moves a file or a folder inside a root and stays confined', () {
+    fs.handle('fs.write', {'root': 'docs', 'path': 'libraries/.add-1/shard/s', 'string': 'x'});
+    fs.handle('fs.write', {'root': 'docs', 'path': 'f.txt', 'string': 'one'});
+    fs.handle('fs.write', {'root': 'docs', 'path': 'g.txt', 'string': 'two'});
+    // a folder moves whole
+    fs.handle('fs.rename', {'root': 'docs', 'from': 'libraries/.add-1', 'to': 'libraries/guide'});
+    expect(fs.handle('fs.readString', {'root': 'docs', 'path': 'libraries/guide/shard/s'}), 'x');
+    expect(fs.handle('fs.exists', {'root': 'docs', 'path': 'libraries/.add-1'}), isFalse);
+    // a file replaces a file
+    fs.handle('fs.rename', {'root': 'docs', 'from': 'f.txt', 'to': 'g.txt'});
+    expect(fs.handle('fs.readString', {'root': 'docs', 'path': 'g.txt'}), 'one');
+    expect(fs.handle('fs.exists', {'root': 'docs', 'path': 'f.txt'}), isFalse);
+    // a folder does not replace a folder that has something in it, and nothing is lost
+    fs.handle('fs.write', {'root': 'docs', 'path': 'other/a', 'string': 'a'});
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'docs', 'from': 'other', 'to': 'libraries/guide'})), 'io_error');
+    expect(fs.handle('fs.readString', {'root': 'docs', 'path': 'other/a'}), 'a');
+    expect(fs.handle('fs.readString', {'root': 'docs', 'path': 'libraries/guide/shard/s'}), 'x');
+    // missing, and out of the root
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'docs', 'from': 'nope', 'to': 'z'})), 'not_found');
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'docs', 'from': 'g.txt', 'to': '../escaped.txt'})), 'bad_path');
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'docs', 'from': '../support', 'to': 'z'})), 'bad_path');
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'docs', 'from': '', 'to': 'z'})), 'bad_path');
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'other', 'from': 'a', 'to': 'b'})), 'bad_path');
+    expect(File('${tmp.path}/escaped.txt').existsSync(), isFalse);
+    expect(fs.handle('fs.readString', {'root': 'docs', 'path': 'g.txt'}), 'one');
+  });
+
+  test('rename does not follow a link out of the root', () {
+    final outside = Directory('${tmp.path}/outside')..createSync();
+    File('${outside.path}/secret').writeAsStringSync('s');
+    Link('${docs.path}/out').createSync(outside.path);
+    expect(codeOf(() => fs.handle('fs.rename', {'root': 'docs', 'from': 'out/secret', 'to': 'stolen'})), 'bad_path');
+    expect(File('${outside.path}/secret').existsSync(), isTrue);
+    // the link itself can be moved; what it points at stays
+    fs.handle('fs.rename', {'root': 'docs', 'from': 'out', 'to': 'out2'});
+    expect(File('${outside.path}/secret').existsSync(), isTrue);
+  }, skip: Platform.isWindows ? 'links need rights on Windows' : false);
+
+  test('roots are the absolute paths of the two folders', () {
+    final r = fs.handle('fs.roots', {}) as Map;
+    expect(r['support'], support.absolute.path);
+    expect(r['docs'], docs.absolute.path);
+    expect(Directory(r['docs'] as String).existsSync(), isTrue);
+    expect(fs.handles('fs.roots'), isTrue);
+  });
+
   test('over the line protocol: bytes travel as {"\$bytes"}, errors carry the code', () {
     final d = CoreDispatcher(() => FakeNative());
     String run(Map<String, dynamic> req) => handleLine(jsonEncode(req), d, handlers: [fs]);

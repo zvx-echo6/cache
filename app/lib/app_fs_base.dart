@@ -53,6 +53,14 @@ abstract class AppFs {
 
   Future<void> delete(AppRoot root, String path, {bool recursive = false});
 
+  /// Moves a file or a folder to [to] inside the same root, as dart:io renames it: a file replaces a file, a folder replaces only an
+  /// empty folder, and the folders above [to] must be there. Throws when [from] is not there.
+  Future<void> rename(AppRoot root, String from, String to);
+
+  /// The absolute path of the root on the machine that holds the files. A job of the search core takes paths of that machine, so
+  /// in a browser this is a path on Cache Server, not something the browser can open.
+  Future<String> rootPath(AppRoot root);
+
   /// Creates the folder and the folders above it. The empty path (the root) is only made sure of.
   Future<void> mkdir(AppRoot root, String path);
 }

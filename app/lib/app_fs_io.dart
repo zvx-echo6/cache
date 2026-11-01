@@ -129,6 +129,20 @@ class IoAppFs implements AppFs {
   }
 
   @override
+  Future<void> rename(AppRoot root, String from, String to) async {
+    final src = await _path(root, from);
+    final dst = await _path(root, to);
+    if (await FileSystemEntity.type(src) == FileSystemEntityType.directory) {
+      await Directory(src).rename(dst);
+    } else {
+      await File(src).rename(dst);
+    }
+  }
+
+  @override
+  Future<String> rootPath(AppRoot root) async => (await _root(root)).path;
+
+  @override
   Future<void> mkdir(AppRoot root, String path) async {
     await Directory(await _path(root, path)).create(recursive: true);
   }

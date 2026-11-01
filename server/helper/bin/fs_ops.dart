@@ -15,6 +15,9 @@ import 'line_protocol.dart';
 ///   fs.list {root,path} -> [{name,isDir,size,mtime (ms since epoch)}]           fs.stat {root,path} -> {isDir,size,mtime}
 ///   fs.exists {root,path} -> bool      fs.delete {root,path,recursive?} -> bool (false: nothing was there)
 ///   fs.mkdir {root,path} -> null (also makes parents)
+///   fs.rename {root,from,to} -> null   a file or a folder moves inside the root, as dart:io renames it (a file replaces a file;
+///       a folder replaces only an empty folder); missing parents of `to` are not made. not_found when `from` is not there.
+///   fs.roots {} -> {support,docs}      the absolute paths of the two roots, for core jobs that take device paths
 /// A write goes to a temp file beside the target and is renamed over it, and makes missing parent folders. Errors: not_found,
 /// bad_path, io_error.
 class FsOps implements OpHandler {
@@ -28,7 +31,9 @@ class FsOps implements OpHandler {
 
   @override
   Object? handle(String op, Map<String, dynamic> a) {
+    if (op == 'fs.roots') return {'support': support.absolute.path, 'docs': docs.absolute.path};
     final root = _root(a['root']);
+    if (op == 'fs.rename') return _rename(root, a);
     final rel = _segments(a['path']);
     switch (op) {
       case 'fs.read':
@@ -138,6 +143,29 @@ class FsOps implements OpHandler {
       default:
         throw CacheSearchException('internal', 'Unknown call $op');
     }
+  }
+
+  Object? _rename(Directory root, Map<String, dynamic> a) {
+    final from = _segments(a['from']);
+    final to = _segments(a['to']);
+    if (from.isEmpty || to.isEmpty) throw const CacheSearchException('bad_path', 'The root itself cannot be renamed');
+    final src = _join(root, from);
+    final dst = _join(root, to);
+    // Only the parents are checked: a link is moved as itself, never what it points at.
+    _checkInside(root, Directory(src).parent.path);
+    _checkInside(root, Directory(dst).parent.path);
+    final type = FileSystemEntity.typeSync(src, followLinks: false);
+    if (type == FileSystemEntityType.notFound) throw CacheSearchException('not_found', 'No such file: ${from.join('/')}');
+    _io(() {
+      if (type == FileSystemEntityType.directory) {
+        Directory(src).renameSync(dst);
+      } else if (type == FileSystemEntityType.link) {
+        Link(src).renameSync(dst);
+      } else {
+        File(src).renameSync(dst);
+      }
+    });
+    return null;
   }
 
   Directory _root(Object? name) {

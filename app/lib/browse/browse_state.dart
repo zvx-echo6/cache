@@ -11,6 +11,7 @@ import '../settings/space.dart';
 import '../sources/libraries_state.dart';
 import '../sources/sources_state.dart';
 import 'opds.dart';
+import 'web/device_library.dart';
 import 'zim_download.dart';
 import '../net/fetch.dart';
 
@@ -59,6 +60,7 @@ class BrowseState extends ChangeNotifier {
     this.settingsDirOverride,
     Future<Uint8List?> Function(Uri url)? iconFetch,
     String? phoneLanguage,
+    this.device,
   }) : catalog = catalog ?? KiwixCatalog(),
        downloader = downloader ?? ZimDownloader(freeSpace: usableBytesOnDisk),
        _iconFetch = iconFetch ?? _fetchIcon,
@@ -68,6 +70,21 @@ class BrowseState extends ChangeNotifier {
     // Downloads waiting for Wi-Fi start by themselves once the connection (or the switch) allows them.
     _net = policy?.probe.changes.listen((_) => _startWaiting());
     policy?.settings.addListener(_startWaiting);
+    device?.addListener(notifyListeners);
+  }
+
+  /// In a browser: the Library on the device, which downloads for this tab (it goes on with the tab closed). Null on a phone.
+  final DeviceLibrary? device;
+
+  /// The transfer the device runs for [e] (waiting, running or failed), shaped as a phone's transfer, or null.
+  ZimTransfer? deviceTransfer(CatalogEntry e) {
+    final j = device?.jobForUrl(e.downloadUrl.toString());
+    if (j == null) return null;
+    return ZimTransfer(e)
+      ..done = j.bytes
+      ..total = j.total > 0 ? j.total : e.size
+      ..phase = j.failed ? TransferPhase.failed : (j.state == 'queued' ? TransferPhase.starting : TransferPhase.downloading)
+      ..error = j.failed ? deviceJobWords(j) : null;
   }
 
   StreamSubscription<ConnectionKind>? _net;
@@ -360,6 +377,19 @@ class BrowseState extends ChangeNotifier {
     ZimFile? replaces,
     bool allowMobile = false,
   }) async {
+    final onDevice = device;
+    if (onDevice != null) {
+      // The device downloads it and puts it in place, with the tab open or not. An update is finished by [_onSources] once the new
+      // file is ready, as on a phone.
+      if (replaces != null) {
+        _replacements[entry.fileName] = replaces.path;
+        await _save();
+      }
+      await onDevice.downloadZim(entry);
+      updates.remove(replaces?.path);
+      notifyListeners();
+      return;
+    }
     final existing = transfers[entry.id];
     if (existing != null &&
         existing.phase != TransferPhase.failed &&
@@ -528,6 +558,7 @@ class BrowseState extends ChangeNotifier {
 
   @override
   void dispose() {
+    device?.removeListener(notifyListeners);
     _net?.cancel();
     policy?.settings.removeListener(_startWaiting);
     sources.removeListener(_onSources);

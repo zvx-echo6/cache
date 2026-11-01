@@ -8,6 +8,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../app_fs.dart';
+import '../browse/web/device_api.dart' show DeviceException;
+import '../browse/web/device_files.dart';
+import '../browse/web/device_library.dart';
+import '../browse/web/local_files.dart' show pickLocalFile;
 import '../browse/zim_download.dart';
 import '../files.dart';
 import '../settings/data_policy.dart';
@@ -31,21 +36,31 @@ const String kGuideVersion = '2026-11-01c';
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
 /// it the core works them out each time it opens the library).
 class LibraryItem {
-  LibraryItem({required this.dir, this.settings, this.size = 0});
+  LibraryItem({required Directory dir, this.settings, this.size = 0}) : path = dir.path;
 
-  final Directory dir;
+  /// A library in a browser, which has no Directory: only the path of its folder on the device.
+  LibraryItem.at({required this.path, this.settings, this.size = 0});
+
+  /// The library's folder (on the device, for a browser).
+  final String path;
+
+  /// The folder as a Directory (a phone; not in a browser).
+  Directory get dir => Directory(path);
   final Map<String, dynamic>? settings;
 
   /// Bytes on the disk, shard and index together.
   int size;
 
-  String get shardPath => '${dir.path}${Platform.pathSeparator}shard';
-  String get indexPath => '${dir.path}${Platform.pathSeparator}index';
-  String get folderName => dir.path.split(RegExp(r'[\\/]')).last;
+  String get shardPath => '$path${_pathSep}shard';
+  String get indexPath => '$path${_pathSep}index';
+  String get folderName => path.split(RegExp(r'[\\/]')).last;
 
   /// The source the core is given for this library.
   SourceConfig get config => SourceConfig.library(path: shardPath, indexDir: indexPath, settings: settings);
 }
+
+/// The path separator of the machine that holds the files. A browser has none of its own, and the device's paths are joined with '/'.
+String get _pathSep => plat.isWeb ? '/' : Platform.pathSeparator;
 
 /// Where a library stands.
 enum LibraryPhase { waiting, opening, indexing, ready, failed }
@@ -97,15 +112,27 @@ class LibrariesState extends ChangeNotifier {
     SaveBytes? saveBytes,
     this.pollInterval = const Duration(milliseconds: 250),
     this.bundledGuide,
+    this.device,
+    AppFs? appFs,
   })  : downloader = downloader ?? ZimDownloader(),
         _pickFile = pickFile ?? _pickWithPicker,
-        _saveBytes = saveBytes ?? _saveWithPicker {
+        _saveBytes = saveBytes ?? _saveWithPicker,
+        _dev = device == null ? null : DeviceFiles(appFs ?? createAppFs()) {
     sources.librarySources = () => [
           for (final l in libraries)
-            if (!_closed.contains(l.dir.path)) l.config,
+            if (!_closed.contains(l.path)) l.config,
         ];
     sources.addListener(_onSources);
+    device?.addListener(_onDeviceChanged);
   }
+
+  /// In a browser: the Library on the device. The app runs its own install procedure against the device's files and search core
+  /// (with the same prompts as on a phone), and what is installed is listed from the device. Null on a phone.
+  final DeviceLibrary? device;
+  final DeviceFiles? _dev;
+
+  /// The libraries folder on the device (a browser), once known.
+  String? _devBase;
 
   final SourcesState sources;
 
@@ -150,8 +177,13 @@ class LibrariesState extends ChangeNotifier {
   Future<void> whenIdle() => Future.wait(_pending.toList());
 
   Future<void> init() async {
-    if (plat.isWeb) {
-      // In a browser the server owns the libraries' folders: nothing is scanned or created here, and there is no guide to copy out.
+    if (plat.isWeb || _dev != null) {
+      // In a browser the device owns the libraries' folders: nothing is scanned or created here, and there is no guide to copy out.
+      if (_dev != null) {
+        await _devRecoverLeftovers();
+        await device!.refresh();
+        await _devScan();
+      }
       notifyListeners();
       final core = await sources.whenCoreReady();
       if (core == null) {
@@ -239,7 +271,108 @@ class LibrariesState extends ChangeNotifier {
 
   Directory get _partialDir => Directory('${dir!.path}${Platform.pathSeparator}.partial');
 
-  String _child(String name) => '${dir!.path}${Platform.pathSeparator}$name';
+  String _child(String name) => '${_devBase ?? dir!.path}$_pathSep$name';
+
+  // ---- the same file steps, on the device in a browser (they are the phone's own steps on a phone)
+
+  Future<void> _mkdirs(String path) async {
+    if (_dev != null) return _dev.mkdirs(path);
+    await Directory(path).create(recursive: true);
+  }
+
+  Future<bool> _dirExists(String path) async {
+    if (_dev != null) return _dev.exists(path);
+    return Directory(path).existsSync();
+  }
+
+  Future<void> _deleteQuietlyPath(String path) async {
+    if (_dev != null) return _dev.deleteQuietly(path);
+    _deleteQuietly(Directory(path));
+  }
+
+  Future<String> _readText(String path) async {
+    if (_dev != null) return await _dev.readText(path) ?? (throw const CacheSearchException('not_found', 'The file could not be found'));
+    return File(path).readAsString();
+  }
+
+  Future<void> _writeText(String path, String text) async {
+    if (_dev != null) return _dev.writeText(path, text);
+    await writeStringAtomic(File(path), text);
+  }
+
+  /// What a change in the libraries folder needs: the phone reads the folder and gives the core the list; the device's core is told
+  /// to read the folders (a browser may not hand it a list) and the list is read from the device.
+  Future<void> _afterChange() async {
+    if (_dev != null) {
+      await _syncSources();
+      return;
+    }
+    await _scan();
+    await sources.refresh();
+  }
+
+  /// A browser: the device's core reads the library folders again, then this list and the sources' status follow.
+  Future<void> _syncSources() async {
+    await device!.rescan();
+    await device!.refresh();
+    await _devScan();
+    await sources.refresh();
+  }
+
+  String _devSignature = '';
+
+  void _onDeviceChanged() {
+    final sig = [for (final i in device!.items) if (i.kind == 'library') '${i.name}:${i.bytes}'].join('|');
+    if (sig == _devSignature) return;
+    unawaited(_devScan());
+  }
+
+  /// A browser: the libraries are the device's library items; their settings are read from their folders.
+  Future<void> _devScan() async {
+    final d = device!;
+    final base = _devBase = await _dev!.librariesBase();
+    _devSignature = [for (final i in d.items) if (i.kind == 'library') '${i.name}:${i.bytes}'].join('|');
+    final found = <LibraryItem>[];
+    for (final it in d.items.where((i) => i.kind == 'library')) {
+      Map<String, dynamic>? settings;
+      try {
+        final text = await _dev.readText('$base/${it.name}/$kLibrarySettingsFile');
+        if (text != null) settings = (jsonDecode(text) as Map).cast<String, dynamic>();
+      } catch (e) {
+        debugPrint('Library settings of ${it.name}: $e');
+      }
+      found.add(LibraryItem.at(path: '$base/${it.name}', settings: settings, size: it.bytes));
+    }
+    found.sort((a, b) => titleOf(a).toLowerCase().compareTo(titleOf(b).toLowerCase()));
+    if (_disposed) return;
+    libraries = found;
+    notifyListeners();
+  }
+
+  /// What an add or a swap that was cut off left on the device (the same recovery as [_recoverLeftovers]).
+  Future<void> _devRecoverLeftovers() async {
+    try {
+      final base = _devBase = await _dev!.librariesBase();
+      for (final name in await _dev.folderNames(base)) {
+        if (name.startsWith('.add-')) {
+          await _dev.deleteQuietly('$base/$name');
+        } else if (name.startsWith('.') && name.endsWith('.old')) {
+          final real = '$base/${name.substring(1, name.length - 4)}';
+          if (await _dev.exists(real)) {
+            await _dev.deleteQuietly('$base/$name');
+          } else {
+            try {
+              await _dev.rename('$base/$name', real);
+            } catch (e) {
+              debugPrint('Could not restore $base/$name: $e');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Libraries folder: $e');
+    }
+  }
 
   /// What an add or a swap that was cut off (the app closed or crashed) left in the folder: a half-made new library is
   /// deleted; the old copy of a library being swapped comes back if the new one did not get into place, else it is deleted.
@@ -345,20 +478,20 @@ class LibrariesState extends ChangeNotifier {
   bool _keywordOff(LibraryItem l) => (l.settings?['keyword_index'] ?? 'auto') == 'off';
 
   LibraryPhase phaseOf(LibraryItem l) {
-    if (_indexFailed.containsKey(l.dir.path)) return LibraryPhase.failed;
+    if (_indexFailed.containsKey(l.path)) return LibraryPhase.failed;
     final s = statusOf(l);
     if (s == null) return LibraryPhase.waiting;
     if (s.error != null) return LibraryPhase.failed;
     if (s.opening || s.updating) return LibraryPhase.opening;
-    if (_indexJobs.containsKey(l.dir.path) || s.building) return LibraryPhase.indexing;
+    if (_indexJobs.containsKey(l.path) || s.building) return LibraryPhase.indexing;
     if (s.indexed || _keywordOff(l)) return LibraryPhase.ready;
     return LibraryPhase.waiting;
   }
 
-  double? indexFraction(LibraryItem l) => _indexProgress[l.dir.path];
+  double? indexFraction(LibraryItem l) => _indexProgress[l.path];
 
   /// Why the library cannot be used, in words for people.
-  String? failureOf(LibraryItem l) => _indexFailed[l.dir.path] ?? statusOf(l)?.error?.message;
+  String? failureOf(LibraryItem l) => _indexFailed[l.path] ?? statusOf(l)?.error?.message;
 
   /// The line for the Library screen's Libraries row.
   String get summary {
@@ -376,7 +509,7 @@ class LibrariesState extends ChangeNotifier {
     for (final l in libraries) {
       final s = statusOf(l);
       if (s == null || s.id == null || s.error != null || s.opening || s.updating || s.indexed || s.building) continue;
-      if (_keywordOff(l) || _indexJobs.containsKey(l.dir.path) || _indexFailed.containsKey(l.dir.path)) continue;
+      if (_keywordOff(l) || _indexJobs.containsKey(l.path) || _indexFailed.containsKey(l.path)) continue;
       final f = _indexInstalled(core, l);
       _pending.add(f);
       unawaited(f.whenComplete(() => _pending.remove(f)));
@@ -386,19 +519,19 @@ class LibrariesState extends ChangeNotifier {
   Future<void> _indexInstalled(SearchCore core, LibraryItem l) async {
     try {
       final job = await core.startJob('index_library', _indexParams(l.shardPath, l.indexPath, l.settings));
-      _indexJobs[l.dir.path] = job;
-      _indexProgress[l.dir.path] = null;
+      _indexJobs[l.path] = job;
+      _indexProgress[l.path] = null;
       notifyListeners();
       final p = await _wait(job, (f) {
-        _indexProgress[l.dir.path] = f;
+        _indexProgress[l.path] = f;
         notifyListeners();
       });
-      if (p.state == JobState.failed) _indexFailed[l.dir.path] = p.errorMessage ?? 'The search index could not be built';
+      if (p.state == JobState.failed) _indexFailed[l.path] = p.errorMessage ?? 'The search index could not be built';
     } on CacheSearchException catch (e) {
-      if (e.code != 'busy') _indexFailed[l.dir.path] = e.message;
+      if (e.code != 'busy') _indexFailed[l.path] = e.message;
     } finally {
-      _indexJobs.remove(l.dir.path);
-      _indexProgress.remove(l.dir.path);
+      _indexJobs.remove(l.path);
+      _indexProgress.remove(l.path);
       if (!_disposed) {
         await sources.refresh();
         notifyListeners();
@@ -461,7 +594,7 @@ class LibrariesState extends ChangeNotifier {
   Future<void> addFile(File file, {required ConfirmUpdate confirmUpdate, required AskSettings askSettings}) async {
     final t = task = AddTask(_nameOf(file.path));
     notifyListeners();
-    await _install(t, file, confirmUpdate: confirmUpdate, askSettings: askSettings);
+    await _install(t, file.path, confirmUpdate: confirmUpdate, askSettings: askSettings);
   }
 
   /// Downloads the library at [link] (https only), then adds it. A download cut off is continued by adding the same link
@@ -474,6 +607,7 @@ class LibrariesState extends ChangeNotifier {
     bool anyway = false,
   }) async {
     if (task != null && task!.running) return;
+    if (_dev != null) return _addLinkOnDevice(link);
     final uri = Uri.tryParse(link.trim());
     if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
       task = AddTask(link.trim())
@@ -518,9 +652,66 @@ class LibrariesState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final ok = await _install(t, part, confirmUpdate: confirmUpdate, askSettings: askSettings);
+    final ok = await _install(t, part.path, confirmUpdate: confirmUpdate, askSettings: askSettings);
     // A file that turned out not to be a library is not kept; one added (or not wanted) is not needed any more.
     if (ok || t.error == null || !t.error!.startsWith('Not enough free space')) _deleteQuietly(part);
+  }
+
+  /// A browser: adds the library package that waits on the device as `incoming/<name>` in the documents folder (it was uploaded from
+  /// this computer or downloaded from a link). The app runs the install itself, with the same prompts as on a phone; the package is
+  /// deleted afterwards unless the device ran out of space (then it waits for another try, as a partly downloaded file does on a phone).
+  Future<void> addDeviceFile(String name, {required ConfirmUpdate confirmUpdate, required AskSettings askSettings}) async {
+    final dev = _dev;
+    if (dev == null || (task != null && task!.running)) return;
+    _devBase = await dev.librariesBase();
+    final archive = '${await dev.docsRoot()}/incoming/$name';
+    final t = task = AddTask(name);
+    notifyListeners();
+    final ok = await _install(t, archive, confirmUpdate: confirmUpdate, askSettings: askSettings);
+    if (ok || t.error == null || !t.error!.startsWith('Not enough free space')) await dev.deleteQuietly(archive);
+    final settings = _devSettingsFile;
+    if (settings != null) {
+      _devSettingsFile = null;
+      await dev.deleteQuietly(settings);
+    }
+  }
+
+  /// The settings file waiting on the device, from [pickSettingsOnDevice].
+  String? _devSettingsFile;
+
+  /// A browser: lets the person choose the settings file (cache-library.json) on this computer, puts it on the device and returns
+  /// its path there (null when nothing was chosen). Call it straight from a tap.
+  Future<String?> pickSettingsOnDevice() async {
+    final dev = _dev;
+    if (dev == null) return null;
+    final file = await pickLocalFile(accept: const ['.json']);
+    if (file == null) return null;
+    if (file.size > 4 << 20) return null;
+    final path = '${await dev.docsRoot()}/incoming/.settings-${DateTime.now().microsecondsSinceEpoch}.json';
+    await dev.writeBytes(path, await file.readAll());
+    _devSettingsFile = path;
+    return path;
+  }
+
+  /// A browser: the device downloads the library package at [link] (it keeps going with the tab closed) and keeps it, ready to add.
+  Future<void> _addLinkOnDevice(String link) async {
+    final uri = Uri.tryParse(link.trim());
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+      task = AddTask(link.trim())
+        ..link = link.trim()
+        ..error = 'Use a link that starts with https://';
+      notifyListeners();
+      return;
+    }
+    try {
+      await device!.downloadLibrary(uri.toString());
+    } on DeviceException catch (e) {
+      debugPrint('Libraries: ${e.code}: ${e.message}');
+      task = AddTask(uri.pathSegments.where((s) => s.isNotEmpty).lastOrNull ?? uri.host)
+        ..link = uri.toString()
+        ..error = e.code == 'invalid_name' ? 'That link does not give a usable file name.' : 'The download could not be started. Try again.';
+      notifyListeners();
+    }
   }
 
   /// Stops the add under way: a download keeps what it has (the same link continues it), anything after it is undone.
@@ -564,9 +755,19 @@ class LibrariesState extends ChangeNotifier {
     return e.toString().replaceFirst('Bad state: ', '');
   }
 
-  /// Why [archive] could not be unpacked, in plain words: the blank template (which has no entries yet), or a file that is
-  /// not a library (not a tar, or a tar that is not a library snapshot). Running out of space says so.
-  String _unpackWords(File archive, CacheSearchException e) {
+  /// Why the archive at [archivePath] could not be unpacked, in plain words: the blank template (which has no entries yet), or a file
+  /// that is not a library (not a tar, or a tar that is not a library snapshot). Running out of space says so.
+  String _unpackWords(String archivePath, CacheSearchException e) {
+    if (_dev != null) {
+      // The browser cannot read the archive's inside; the blank template is known by the name it is saved under.
+      if (_nameOf(archivePath) == kLibraryTemplateName) return kEmptyTemplate;
+      if (e.code == 'unsupported' || e.code == 'io') {
+        debugPrint('Libraries: ${e.code}: ${e.message}');
+        return kNotALibrary;
+      }
+      return _words(e);
+    }
+    final archive = File(archivePath);
     final names = tarEntryNames(archive);
     if (names != null && names.contains(kTemplateSnapshotName)) return kEmptyTemplate;
     if (e.code == 'unsupported' || e.code == 'io') {
@@ -576,32 +777,33 @@ class LibrariesState extends ChangeNotifier {
     return _words(e);
   }
 
-  /// Unpacks [archive] into a hidden new folder, works out its settings (asking only for a settings file the core cannot do
-  /// without), offers an update when a library with the same id is here, builds its keyword index and puts it in place.
-  /// Nothing installed is touched until the new copy has opened and its index is built. True when it was added.
-  Future<bool> _install(AddTask t, File archive, {required ConfirmUpdate confirmUpdate, required AskSettings askSettings}) async {
+  /// Unpacks the archive at [archivePath] into a hidden new folder, works out its settings (asking only for a settings file the core
+  /// cannot do without), offers an update when a library with the same id is here, builds its keyword index and puts it in place.
+  /// Nothing installed is touched until the new copy has opened and its index is built. True when it was added. In a browser the
+  /// paths are paths on the device, and the files are changed through [AppFs].
+  Future<bool> _install(AddTask t, String archivePath, {required ConfirmUpdate confirmUpdate, required AskSettings askSettings}) async {
     final core = sources.core;
     if (core == null) {
       t.error = sources.unavailable ?? 'Search is not ready yet. Try again in a moment.';
       notifyListeners();
       return false;
     }
-    final stage = Directory(_child('.add-${DateTime.now().microsecondsSinceEpoch}'));
-    final shard = '${stage.path}${Platform.pathSeparator}shard';
-    final index = '${stage.path}${Platform.pathSeparator}index';
+    final stagePath = _child('.add-${DateTime.now().microsecondsSinceEpoch}');
+    final shard = '$stagePath${_pathSep}shard';
+    final index = '$stagePath${_pathSep}index';
     var installed = false;
     try {
-      await stage.create(recursive: true);
+      await _mkdirs(stagePath);
       t
         ..step = AddStep.unpacking
         ..fraction = 0;
       notifyListeners();
       JobProgress? p;
       try {
-        p = await _job(t, core, 'unpack_library', {'snapshot_path': archive.path, 'dir': shard},
-            words: (e) => _unpackWords(archive, e));
+        p = await _job(t, core, 'unpack_library', {'snapshot_path': archivePath, 'dir': shard},
+            words: (e) => _unpackWords(archivePath, e));
       } on CacheSearchException catch (e) {
-        t.error = _unpackWords(archive, e);
+        t.error = _unpackWords(archivePath, e);
         return false;
       }
       if (p == null) return false;
@@ -616,7 +818,7 @@ class LibrariesState extends ChangeNotifier {
           return false;
         }
         try {
-          settings = (jsonDecode(await File(path).readAsString()) as Map).cast<String, dynamic>();
+          settings = (jsonDecode(await _readText(path)) as Map).cast<String, dynamic>();
         } catch (e) {
           t.error = 'That settings file could not be read: $e';
           return false;
@@ -654,24 +856,23 @@ class LibrariesState extends ChangeNotifier {
         if (p == null) return false;
       }
       if (settings != null) {
-        await writeStringAtomic(File('${stage.path}${Platform.pathSeparator}$kLibrarySettingsFile'), const JsonEncoder.withIndent('  ').convert(settings));
+        await _writeText('$stagePath$_pathSep$kLibrarySettingsFile', const JsonEncoder.withIndent('  ').convert(settings));
       }
       t
         ..step = AddStep.swapping
         ..fraction = null;
       notifyListeners();
       if (existing == null) {
-        await stage.rename(_child(await _freeFolderName(id.isEmpty ? title : id)));
+        await _renameRetry(stagePath, _child(await _freeFolderName(id.isEmpty ? title : id)), once: true);
       } else {
-        final err = await _swap(existing, stage);
+        final err = await _swap(existing, stagePath);
         if (err != null) {
           t.error = err;
           return false;
         }
       }
       installed = true;
-      await _scan();
-      await sources.refresh();
+      await _afterChange();
       task = null;
       return true;
     } on CacheSearchException catch (e) {
@@ -680,8 +881,12 @@ class LibrariesState extends ChangeNotifier {
     } on FileSystemException catch (e) {
       t.error = 'Could not write the library: ${e.message}';
       return false;
+    } on DeviceException catch (e) {
+      debugPrint('Libraries: ${e.code}: ${e.message}');
+      t.error = 'This device could not be reached. Try again.';
+      return false;
     } finally {
-      if (!installed) _deleteQuietly(stage);
+      if (!installed) await _deleteQuietlyPath(stagePath);
       if (t.cancelled && !installed) task = null;
       notifyListeners();
     }
@@ -710,43 +915,45 @@ class LibrariesState extends ChangeNotifier {
     var base = id.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_-]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
     if (base.isEmpty) base = 'library';
     var name = base;
-    for (var i = 2; Directory(_child(name)).existsSync(); i++) {
+    for (var i = 2; await _dirExists(_child(name)); i++) {
       name = '$base-$i';
     }
     return name;
   }
 
-  /// Swaps the checked new copy [stage] in for [old]: the old one is closed and moved aside, the new one put in its place
-  /// and opened; if it does not open, the old one is put back. Null when it worked, else what went wrong.
-  Future<String?> _swap(LibraryItem old, Directory stage) async {
-    final path = old.dir.path;
-    final aside = Directory(_child('.${old.folderName}.old'));
-    _deleteQuietly(aside);
+  /// Swaps the checked new copy at [stagePath] in for [old]: the old one is closed and moved aside, the new one put in its place
+  /// and opened; if it does not open, the old one is put back. Null when it worked, else what went wrong. In a browser the old
+  /// copy is closed by moving it out of the libraries folder and telling the device's core to read the folders again.
+  Future<String?> _swap(LibraryItem old, String stagePath) async {
+    final path = old.path;
+    final asidePath = _child('.${old.folderName}.old');
+    await _deleteQuietlyPath(asidePath);
     _closed.add(path);
     try {
-      await sources.refresh();
-      await _renameRetry(old.dir, aside.path);
+      if (_dev == null) await sources.refresh();
+      await _renameRetry(path, asidePath);
+      if (_dev != null) await _syncSources();
       try {
-        await _renameRetry(stage, path);
+        await _renameRetry(stagePath, path);
       } catch (e) {
-        await _renameRetry(aside, path);
+        await _renameRetry(asidePath, path);
+        if (_dev != null) await _syncSources();
         return 'Could not put the new copy in place, so ${titleOf(old)} was kept as it was.';
       }
       _closed.remove(path);
-      await _scan();
-      await sources.refresh();
-      final s = await _whenOpened(LibraryItem(dir: Directory(path)).shardPath);
+      await _afterChange();
+      final s = await _whenOpened(LibraryItem.at(path: path).shardPath);
       if (s == null || s.error != null) {
         _closed.add(path);
-        await sources.refresh();
-        await _renameRetry(Directory(path), stage.path);
-        await _renameRetry(aside, path);
+        if (_dev == null) await sources.refresh();
+        await _renameRetry(path, stagePath);
+        if (_dev != null) await _syncSources();
+        await _renameRetry(asidePath, path);
         _closed.remove(path);
-        await _scan();
-        await sources.refresh();
+        await _afterChange();
         return 'The new copy could not be opened, so the library was kept as it was.';
       }
-      _deleteQuietly(aside);
+      await _deleteQuietlyPath(asidePath);
       return null;
     } finally {
       _closed.remove(path);
@@ -764,14 +971,15 @@ class LibrariesState extends ChangeNotifier {
     return null;
   }
 
-  /// Windows can refuse a rename for a moment while a just-closed library's files are still held.
-  static Future<void> _renameRetry(Directory from, String to) async {
+  /// Windows can refuse a rename for a moment while a just-closed library's files are still held. [once]: no second try.
+  Future<void> _renameRetry(String from, String to, {bool once = false}) async {
+    if (_dev != null) return _dev.rename(from, to);
     for (var i = 0;; i++) {
       try {
-        await from.rename(to);
+        await Directory(from).rename(to);
         return;
       } on FileSystemException {
-        if (i >= 20) rethrow;
+        if (once || i >= 20) rethrow;
         await Future<void>.delayed(Duration(milliseconds: 50 * (i + 1)));
       }
     }
@@ -782,14 +990,15 @@ class LibrariesState extends ChangeNotifier {
   /// Removes the library and its index from the device.
   Future<void> remove(LibraryItem l) async {
     error = null;
-    final job = _indexJobs.remove(l.dir.path);
+    if (_dev != null) return _removeOnDevice(l);
+    final job = _indexJobs.remove(l.path);
     if (job != null) {
       try {
         await job.cancel();
       } catch (_) {}
     }
-    _indexFailed.remove(l.dir.path);
-    _closed.add(l.dir.path);
+    _indexFailed.remove(l.path);
+    _closed.add(l.path);
     try {
       await sources.refresh();
       for (var i = 0;; i++) {
@@ -804,8 +1013,22 @@ class LibrariesState extends ChangeNotifier {
     } catch (e) {
       error = 'Could not remove the library: $e';
     } finally {
-      _closed.remove(l.dir.path);
+      _closed.remove(l.path);
       await _scan();
+      await sources.refresh();
+      notifyListeners();
+    }
+  }
+
+  /// A browser: the device removes the library's files and index and reads its folders again.
+  Future<void> _removeOnDevice(LibraryItem l) async {
+    try {
+      await device!.remove('library', l.folderName);
+    } on DeviceException catch (e) {
+      debugPrint('Libraries: ${e.code}: ${e.message}');
+      error = 'Could not remove the library.';
+    } finally {
+      await _devScan();
       await sources.refresh();
       notifyListeners();
     }
@@ -820,6 +1043,7 @@ class LibrariesState extends ChangeNotifier {
     makingTemplate = true;
     error = null;
     notifyListeners();
+    if (_dev != null) return _saveTemplateOnDevice(core);
     final tmp = await (tempDirOverride ?? await getTemporaryDirectory()).createTemp('template');
     try {
       final out = File('${tmp.path}${Platform.pathSeparator}$kLibraryTemplateName');
@@ -839,9 +1063,38 @@ class LibrariesState extends ChangeNotifier {
     }
   }
 
+  /// A browser: the device makes the template in its documents folder; the app reads it and hands it to the browser's save.
+  Future<bool> _saveTemplateOnDevice(SearchCore core) async {
+    final dev = _dev!;
+    final folder = '${await dev.docsRoot()}/incoming/.template-${DateTime.now().microsecondsSinceEpoch}';
+    try {
+      await dev.mkdirs(folder);
+      final out = '$folder/$kLibraryTemplateName';
+      final p = await _wait(await core.startJob('library_template', {'out_path': out}), (_) {});
+      if (p.state != JobState.done) {
+        error = 'Could not make the template: ${_words(CacheSearchException(p.errorCode ?? 'internal', p.errorMessage ?? ''))}';
+        return false;
+      }
+      final bytes = await dev.readBytes(out);
+      if (bytes == null) {
+        error = 'Could not make the template.';
+        return false;
+      }
+      return await _saveBytes(kLibraryTemplateName, bytes);
+    } catch (e) {
+      error = 'Could not make the template: ${_words(e)}';
+      return false;
+    } finally {
+      await dev.deleteQuietly(folder);
+      makingTemplate = false;
+      notifyListeners();
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    device?.removeListener(_onDeviceChanged);
     sources.removeListener(_onSources);
     super.dispose();
   }

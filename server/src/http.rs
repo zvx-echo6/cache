@@ -22,6 +22,8 @@
 //!   GET  /api/library/jobs                  -> [{id,url,kind,name,bytes,total,state,error}]
 //!   DELETE /api/library/jobs/<id>           -> cancels a waiting or running job, or takes a finished one off the list
 //!   POST /api/library/upload?kind=zim&name=<file name>  <the file, streamed, any size> -> {name,bytes,id}; 507 when the disk is short
+//!   GET  /api/library/space                 -> {free_bytes,total_bytes} of the disk the data is on (null when not known)
+//!   POST /api/library/rescan                -> {sources}: the core reads the library folders again
 //!   GET  /api/library/items                 -> [{id,kind,name,title,bytes,path}] what is installed on the server
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
 //!   GET  /api/fetch?url=<encoded>           -> the answer of a catalogue host (allow-list in `fetch`), streamed, at most 50 MB
@@ -143,6 +145,8 @@ async fn library(app: &App, method: &str, path: &str, query: &str, body: &[u8]) 
         ("POST", "/api/library/download") => library_reply(lib.add_download(body)),
         ("GET", "/api/library/jobs") => ok(lib.list_jobs()),
         ("DELETE", p) if p.starts_with("/api/library/jobs/") => library_reply(lib.cancel_job(&p["/api/library/jobs/".len()..])),
+        ("GET", "/api/library/space") => ok(lib.space()),
+        ("POST", "/api/library/rescan") => library_reply(lib.rescan_api().await),
         ("GET", "/api/library/items") => ok(Value::Array(lib.items().await)),
         ("DELETE", p) if p.starts_with("/api/library/items/") => library_reply(lib.remove_item(&p["/api/library/items/".len()..]).await),
         // A body that came whole (the real server streams it: see `handle`).
