@@ -314,6 +314,14 @@ pub fn search(argv: &[String]) -> Result<(), ApiError> {
 /// The guide gate score of each query: the best cosine between the query's embedding and the `cache-guide` library's
 /// stored vectors, which `search` compares with `GUIDE_GATE`. One JSON line per query. For tuning the gate.
 pub fn guide_gate(argv: &[String]) -> Result<(), ApiError> {
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "cs guide-gate --config <sources.json> (--query <text> | --queries <file.jsonl of {{\"text\"}}>)\n  \
+             --embed-lib <cache_llama.dll> --embed-model <bge-m3-Q8_0.gguf> [--open-timeout 600]\n\
+             Prints one JSON line per query: {{\"text\",\"score\",\"gate\",\"about_app\"}}. The score is the best cosine to the cache-guide library."
+        );
+        return Ok(());
+    }
     let a = parse(argv, &["config", "query", "queries", "open-timeout"], &[], true)?;
     let mut texts: Vec<String> = Vec::new();
     match (a.get("query"), a.get("queries")) {
