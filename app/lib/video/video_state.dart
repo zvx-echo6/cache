@@ -63,6 +63,9 @@ class DownloadTask {
   /// Stopped before it began because the phone is on mobile data and downloads on mobile data are off.
   bool blockedByMobile = false;
 
+  /// Pause was tapped and the download is still stopping.
+  bool pausing = false;
+
   double? get fraction => total <= 0 ? null : (done / total).clamp(0.0, 1.0);
   bool get isActive => phase == DownloadPhase.running;
   String get key => '$instance/$uuid';
@@ -326,6 +329,28 @@ class VideoState extends ChangeNotifier {
   Future<void> cancel(DownloadTask task) async {
     await task.job?.cancel();
     await pollOnce();
+  }
+
+  /// Pauses a running download: it stops and keeps what it has (its row reads Paused); [retry] continues it.
+  Future<void> pause(DownloadTask task) async {
+    task.pausing = true;
+    notifyListeners();
+    try {
+      await cancel(task);
+    } finally {
+      task.pausing = false;
+      notifyListeners();
+    }
+  }
+
+  /// Removes a download and what it saved: a running one stops first; the partial file goes with it.
+  Future<void> remove(DownloadTask task) async {
+    if (task.isActive) await cancel(task);
+    try {
+      await core.delete(task.instance, task.uuid);
+    } catch (_) {}
+    tasks.remove(task);
+    notifyListeners();
   }
 
   /// Removes a finished or failed task from the list.

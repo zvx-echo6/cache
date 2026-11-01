@@ -1,33 +1,50 @@
 {
-  "format": 1,
-  "updated": "2026-10-28",
+  "format": 2,
+  "updated": "2026-11-01",
   "models": [
     {
-      "name": "Gemma 4 E2B · Q4_K_M",
-      "repo": "unsloth/gemma-4-E2B-it-GGUF",
-      "file": "gemma-4-E2B-it-Q4_K_M.gguf",
-      "size": 3106738272,
-      "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
-      "kind": "works_not_tuned",
-      "note": "Small and quick."
+      "name": "Gemma 4 E2B · tuned for Cache",
+      "url": "https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q4_K_M.gguf",
+      "file": "e2b-stock-cache-1.0-Q4_K_M.gguf",
+      "size": 3427879936,
+      "sha256": "bd342122ed2381d4b3d2aa87b0e4273cbfdf79058a72b126975baa0509c2ab2f",
+      "kind": "tuned_for_cache",
+      "section": "recommended",
+      "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
+      "note": "Small and quick, and tuned to answer from your sources."
     },
     {
       "name": "Gemma 4 E4B · Q4_K_M",
       "repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "revision": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
       "file": "gemma-4-E4B-it-Q4_K_M.gguf",
       "size": 4977171584,
       "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
       "kind": "works_not_tuned",
+      "section": "recommended",
       "note": "Larger than E2B and slower. Needs more memory."
     },
     {
-      "name": "Qwen3 8B · Q4_K_M",
-      "repo": "unsloth/Qwen3-8B-GGUF",
-      "file": "Qwen3-8B-Q4_K_M.gguf",
-      "size": 5027784512,
-      "sha256": "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4",
+      "name": "Gemma 4 E2B uncensored · tuned for Cache",
+      "url": "https://data.cached.info/models/cache-1.0/e2b-trevorjs-cache-1.0-Q4_K_M.gguf",
+      "file": "e2b-trevorjs-cache-1.0-Q4_K_M.gguf",
+      "size": 3427873312,
+      "sha256": "cf255f6f71b6415c66fae529fb52f659c14d82741e98e07e38dabb685bccd0b8",
+      "kind": "tuned_for_cache",
+      "section": "experimental",
+      "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
+      "note": "An uncensored E2B, tuned for Cache."
+    },
+    {
+      "name": "Gemma 4 E4B uncensored · Q4_K_M",
+      "repo": "TrevorJS/gemma-4-E4B-it-uncensored-GGUF",
+      "revision": "771f130d4c49735ace331f68a80f7ae31387e51c",
+      "file": "gemma-4-E4B-it-uncensored-Q4_K_M.gguf",
+      "size": 5335285280,
+      "sha256": "b2a89ec2df7f13440c723fb3fda2c531696cbe8e20ed2f1122f97a43aaafcb50",
       "kind": "works_not_tuned",
-      "note": "The largest here. Needs a phone with plenty of memory."
+      "section": "experimental",
+      "note": "An uncensored E4B. Larger and slower."
     }
   ]
 }

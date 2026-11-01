@@ -593,6 +593,7 @@ class RegionsState extends ChangeNotifier {
         }
         final r = j['routing'];
         if (r is Map) _routingKey = r['key'] as String?;
+        held = j['held'] == true;
       }
     } catch (_) {}
     try {
@@ -633,8 +634,8 @@ class RegionsState extends ChangeNotifier {
   Future<void> _applyPolicy() async {
     final kind = _kind = await policy.probe.current();
     final ok = _networkOk = kind != ConnectionKind.none && !(kind == ConnectionKind.mobile && !policy.settings.mobileForDownloads);
-    await _core?.call('set_policy', {'network': ok});
-    if (ok) unawaited(_resumePacks());
+    await _core?.call('set_policy', {'network': ok, 'hold': held});
+    if (ok && !held) unawaited(_resumePacks());
     if (ok && _carryOnWaiting.isNotEmpty) {
       final go = List.of(_carryOnWaiting);
       _carryOnWaiting.clear();
@@ -1075,6 +1076,7 @@ class RegionsState extends ChangeNotifier {
       _packRuns.remove(p.path);
       return;
     }
+    if (held) return;
     final run = _packRuns[p.path] = _PackRun();
     notifyListeners();
     try {
@@ -1107,8 +1109,66 @@ class RegionsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The person paused the region downloads (Pause on a region): the core fetches no tiles, the off-road packs and the map areas
+  /// stop and keep what they have. Kept across restarts; [resumeAll] carries on in order.
+  bool held = false;
+
+  /// Pause was tapped and the downloads are still stopping (the row says "Pausing…").
+  bool pausing = false;
+
+  /// Resume was tapped and nothing has moved yet (the row says "Starting…").
+  bool resuming = false;
+
+  /// Pauses every region download: the running part stops and the others wait.
+  Future<void> pauseAll() async {
+    if (held) return;
+    held = true;
+    pausing = true;
+    notifyListeners();
+    try {
+      await _core?.call('set_policy', {'hold': true});
+      for (final r in List.of(_packRuns.values)) {
+        r.cancel.cancel();
+      }
+      for (final l in local) {
+        for (final a in [...l.areas, ...l.terrain]) {
+          if (a.phase == AreaPhase.running) await maps.engine.pause(a.id);
+        }
+      }
+      await _save();
+      await refresh();
+    } finally {
+      pausing = false;
+      notifyListeners();
+    }
+  }
+
+  /// Carries on every paused region download, in the order they were added.
+  Future<void> resumeAll({bool anyway = false}) async {
+    if (!held) return;
+    await policy.checkDownload(anyway: anyway);
+    held = false;
+    resuming = true;
+    notifyListeners();
+    try {
+      await _core?.call('set_policy', {'hold': false});
+      for (final l in local) {
+        for (final a in [...l.areas, ...l.terrain]) {
+          if (a.phase == AreaPhase.failed) await maps.engine.update(a.id, anyway: anyway);
+        }
+      }
+      if (_networkOk) unawaited(_resumePacks());
+      await _save();
+      await refresh();
+    } finally {
+      resuming = false;
+      notifyListeners();
+    }
+  }
+
   /// The packs kept regions want that are not on the phone and not downloading: started again (on a connection downloads may use).
   Future<void> _resumePacks() async {
+    if (held) return;
     _offroadPath ??= (await offroadDir()).path;
     for (final k in _kept.values) {
       for (final p in k.offroad) {
@@ -1533,6 +1593,7 @@ class RegionsState extends ChangeNotifier {
       final ready = [for (final r in _routingRegions) if (_routingOf(r)?['state'] == 'ready') r['name'] as String? ?? r['id'] as String];
       await writeStringAtomic(f, jsonEncode({
         'regions': {for (final k in _kept.values) k.id: k.toJson()},
+        if (held) 'held': true,
         'routing': {
           'key': _routingKey,
           if (status['tile_dir'] is String && ready.isNotEmpty) 'tile_dir': status['tile_dir'],

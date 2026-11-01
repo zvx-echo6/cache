@@ -99,8 +99,9 @@ class FakeRegions implements RegionsCoreLike {
     for (final r in regions.values) {
       final parts = r['parts'] as Map<String, dynamic>?;
       for (final p in parts == null ? [r] : parts.values.cast<Map<String, dynamic>>()) {
-        if (!network && p['state'] == 'downloading') p['state'] = 'paused';
-        if (network && p['state'] == 'paused') p['state'] = 'downloading';
+        final go = network && !held;
+        if (!go && p['state'] == 'downloading') p['state'] = 'paused';
+        if (go && p['state'] == 'paused') p['state'] = 'downloading';
       }
       if (parts != null) _combine(r);
     }
@@ -110,6 +111,9 @@ class FakeRegions implements RegionsCoreLike {
     ...r,
     if (r['parts'] is Map) 'parts': {for (final e in (r['parts'] as Map).entries) e.key: Map<String, dynamic>.of(e.value as Map<String, dynamic>)},
   };
+
+  /// The person's Pause (`set_policy` `hold`).
+  bool held = false;
 
   @override
   Future<Map<String, dynamic>> call(String method, [Map<String, dynamic> args = const {}]) async {
@@ -122,7 +126,7 @@ class FakeRegions implements RegionsCoreLike {
           'regions': [for (final r in regions.values) _copy(r)],
           'stream': {'tiles': 0, 'bytes': 0, 'cap': 1 << 30},
           'update': update,
-          'paused': network ? null : 'No network it may use',
+          'paused': held ? 'Paused' : (network ? null : 'No network it may use'),
           if (placesEnabled) ...{
             'places': {
               'build': placesBuildOnlyWithRegion && !regions.values.any((r) => (r['parts'] as Map?)?.containsKey('places') ?? false) ? null : 'na-places-2026-11-15',
@@ -137,7 +141,8 @@ class FakeRegions implements RegionsCoreLike {
         };
       case 'set_policy':
         policies.add(Map.of(args));
-        network = args['network'] == true;
+        if (args.containsKey('network')) network = args['network'] == true;
+        if (args.containsKey('hold')) held = args['hold'] == true;
         _applyNetwork();
         return {'ok': true};
       case 'plan':

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../downloads/download_row.dart';
 import '../models/hf_hub.dart';
 import '../models/model_downloads.dart';
 import '../models/search_model.dart';
@@ -17,81 +18,15 @@ String _count(int n) {
   return '$n';
 }
 
-/// The bar at the bottom of the model screens while a model downloads, or after it stopped or finished. A download waiting
-/// its turn (the search model after the chat model) has its own row under the running one, and so has a stopped search
-/// model download, with Try again.
-class ModelDownloadBar extends StatelessWidget {
-  const ModelDownloadBar({super.key, required this.downloads});
-
-  final ModelDownloads downloads;
-
-  @override
-  Widget build(BuildContext context) {
-    final k = context.t;
-    return ListenableBuilder(
-      listenable: downloads,
-      builder: (context, _) {
-        final d = downloads;
-        final rows = <Widget>[];
-        if (d.current != null) {
-          final f = d.current!;
-          final p = d.total == 0 ? null : d.done / d.total;
-          final name = d.labelOf(f);
-          rows.add(Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      d.verifying ? 'Checking $name…' : 'Downloading $name: ${_size(d.done)} of ${_size(d.total)}',
-                      style: TextStyle(fontSize: 15, color: k.secondary),
-                    ),
-                  ),
-                  if (!d.verifying)
-                    TextButton(key: const ValueKey('model-download-stop'), onPressed: d.cancel, child: const Text('Stop')),
-                ],
-              ),
-              LinearProgressIndicator(value: d.verifying ? null : p),
-            ],
-          ));
-          for (final q in d.queue) {
-            rows.add(Padding(
-              key: ValueKey('model-download-next-${q.fileName}'),
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                d.isSearchModel(q) ? 'Next: Search model, ${kSearchModel.sizeLabel}' : 'Next: ${q.fileName}',
-                style: TextStyle(fontSize: 15, color: k.secondary),
-              ),
-            ));
-          }
-        } else if (d.error != null) {
-          rows.add(Text(d.error!, style: TextStyle(fontSize: 15, color: k.emergency)));
-        }
-        if (d.current == null && d.searchModelError != null && d.searchModel != null) {
-          rows.add(Row(
-            key: const ValueKey('search-model-stopped'),
-            children: [
-              Expanded(
-                child: Text('Search model: download stopped (${d.searchModelError})', style: TextStyle(fontSize: 15, color: k.emergency)),
-              ),
-              TextButton(
-                key: const ValueKey('search-model-retry'),
-                onPressed: () => d.start(d.searchModel!),
-                child: const Text('Try again'),
-              ),
-            ],
-          ));
-        }
-        if (rows.isEmpty) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows),
-        );
-      },
+/// What a model row's controls do: Download asks first (the pop-up), Pause and Resume act at once, Remove asks the row's way, and a
+/// full device opens Storage.
+DlActions modelActions(BuildContext context, ModelDownloads d, HfFile f) => DlActions(
+      download: () => downloadModel(context, d, f),
+      pause: () => d.pause(f),
+      resume: () => d.resume(f),
+      remove: () => d.remove(f),
+      freeSpace: openStorageForSpace == null ? null : () => openStorageForSpace!(context),
     );
-  }
-}
 
 /// Find a model on Hugging Face: search, pick a repository, pick a file. Shows each file's size and whether it fits
 /// this phone; downloads resume where they stopped and are checked against Hugging Face's checksum.
@@ -202,7 +137,6 @@ class _ModelSearchScreenState extends State<ModelSearchScreen> {
                       },
                     ),
             ),
-            ModelDownloadBar(downloads: widget.downloads),
           ],
         ),
       ),
@@ -317,56 +251,31 @@ class _ModelFilesScreenState extends State<ModelFilesScreen> {
                           ),
                         ),
                       for (final f in files)
-                        Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(f.fileName, style: const TextStyle(fontSize: 16)),
-                                      const SizedBox(height: 2),
-                                      Builder(builder: (context) {
-                                        final fit = ModelFit.of(f.size, _memory);
-                                        final colour = switch (fit) {
-                                          ModelFit.fits => k.ok,
-                                          ModelFit.tight => k.warning,
-                                          ModelFit.tooBig => k.emergency,
-                                          ModelFit.unknown => k.secondary,
-                                        };
-                                        final part = d.partBytes(f);
-                                        return Text.rich(TextSpan(children: [
-                                          TextSpan(text: _size(f.size), style: TextStyle(color: k.secondary)),
-                                          if (fit != ModelFit.unknown) TextSpan(text: ' · ${fit.label}', style: TextStyle(color: colour)),
-                                          if (part > 0 && d.current?.path != f.path)
-                                            TextSpan(text: ' · ${_size(part)} downloaded, continues', style: TextStyle(color: k.secondary)),
-                                        ]), style: const TextStyle(fontSize: 14));
-                                      }),
-                                    ],
-                                  ),
-                                ),
-                                if (d.isInstalled(f))
-                                  Padding(padding: const EdgeInsets.all(12), child: Icon(Icons.check_circle, color: k.ok))
-                                else
-                                  IconButton(
-                                    key: ValueKey('download-${f.fileName}'),
-                                    tooltip: 'Download',
-                                    icon: const Icon(Icons.download),
-                                    onPressed: d.busy ? null : () => _download(f),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
+                        Builder(builder: (context) {
+                          final fit = ModelFit.of(f.size, _memory);
+                          final colour = switch (fit) {
+                            ModelFit.fits => k.ok,
+                            ModelFit.tight => k.warning,
+                            ModelFit.tooBig => k.emergency,
+                            ModelFit.unknown => k.secondary,
+                          };
+                          return DownloadRow(
+                            key: ValueKey('file-${f.fileName}'),
+                            keyBase: 'download-${f.fileName}',
+                            title: f.fileName,
+                            state: d.stateOf(f),
+                            actions: modelActions(context, d, f),
+                            idleSpan: TextSpan(children: [
+                              TextSpan(text: _size(f.size), style: TextStyle(color: k.secondary)),
+                              if (fit != ModelFit.unknown) TextSpan(text: ' · ${fit.label}', style: TextStyle(color: colour)),
+                            ]),
+                          );
+                        }),
                     ],
                   );
                 },
               ),
             ),
-            ModelDownloadBar(downloads: widget.downloads),
           ],
         ),
       ),

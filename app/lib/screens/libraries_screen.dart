@@ -1,6 +1,9 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../browse/zim_dl.dart';
+import '../downloads/download_row.dart';
+
 import '../sources/libraries_state.dart';
 import '../theme.dart';
 
@@ -175,44 +178,13 @@ class _LibrariesScreenState extends State<LibrariesScreen> {
     ),
   );
 
-  Widget _taskCard(CacheTokens k, AddTask t) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Material(
-          color: k.surface,
-          borderRadius: BorderRadius.circular(14),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Adding ${t.name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                const SizedBox(height: 4),
-                if (t.running) ...[
-                  Text(addStepText(t), style: TextStyle(fontSize: 13, color: k.secondary)),
-                  const SizedBox(height: 6),
-                  LinearProgressIndicator(value: t.fraction, minHeight: 3),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(key: const ValueKey('cancel-add'), onPressed: s.cancelAdd, child: const Text('Cancel')),
-                  ),
-                ] else ...[
-                  Text(t.error!, style: TextStyle(fontSize: 13, color: k.warning)),
-                  Row(
-                    children: [
-                      if (t.blockedByMobileData && t.link != null)
-                        TextButton(
-                          key: const ValueKey('download-now'),
-                          onPressed: () => s.addLink(t.link!, confirmUpdate: _confirmUpdate, askSettings: _askSettings, anyway: true),
-                          child: const Text('Download now'),
-                        ),
-                      TextButton(onPressed: s.dismissTask, child: const Text('OK')),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
+  Widget _taskCard(CacheTokens k, AddTask t) => DownloadRow(
+        key: const ValueKey('add-task'),
+        keyBase: 'add-task',
+        title: 'Adding ${t.name}',
+        state: addDl(t),
+        actions: addActions(s, t,
+            downloadNow: t.link == null ? null : () => s.addLink(t.link!, confirmUpdate: _confirmUpdate, askSettings: _askSettings, anyway: true)),
       );
 }
 

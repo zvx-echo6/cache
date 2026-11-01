@@ -6,8 +6,9 @@ import '../models/recommendations.dart';
 import '../theme.dart';
 import 'model_search_screen.dart';
 import '../browse/zim_download.dart' show freeBytesOnDisk;
+import '../downloads/download_row.dart';
+import '../models/search_model.dart' show kSearchModel;
 import 'download_confirm.dart';
-import 'hold.dart';
 import 'settings/widgets.dart' show GroupLabel;
 
 String _size(int bytes) {
@@ -51,6 +52,17 @@ class _ModelsScreenState extends State<ModelsScreen> {
     _memory = widget.memory;
     if (_memory == null) totalMemoryBytes().then((m) => mounted ? setState(() => _memory = m) : null);
     if (ModelDownloads.shared != null) _recommended.load();
+    // A waiting row names the download it waits for by the name its own row shows.
+    final d = ModelDownloads.shared;
+    if (d != null) {
+      d.nameOf = (f) {
+        if (d.isSearchModel(f)) return 'Search model';
+        for (final r in _recommended.models) {
+          if (r.file == f.fileName) return r.name;
+        }
+        return f.fileName.replaceFirst(RegExp(r'\.gguf$', caseSensitive: false), '');
+      };
+    }
   }
 
   @override
@@ -77,9 +89,25 @@ class _ModelsScreenState extends State<ModelsScreen> {
                           style: TextStyle(fontSize: 13, color: k.secondary),
                         ),
                       ),
-                      for (final r in _recommended.models) _recommendedTile(context, downloads, r),
+                      for (final r in _recommended.models)
+                        if (r.section == RecommendationSection.recommended) _recommendedTile(context, downloads, r),
                       const SizedBox(height: 8),
                     ],
+                    if (downloads != null && _recommended.models.any((r) => r.section == RecommendationSection.experimental)) ...[
+                      const GroupLabel('Experimental'),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+                        child: Text(
+                          'These models are uncensored. They are not recommended.',
+                          key: const ValueKey('experimental-note'),
+                          style: TextStyle(fontSize: 13, color: k.secondary),
+                        ),
+                      ),
+                      for (final r in _recommended.models)
+                        if (r.section == RecommendationSection.experimental) _recommendedTile(context, downloads, r),
+                      const SizedBox(height: 8),
+                    ],
+                    if (downloads != null) ?_searchModelRow(context, downloads),
                     Wrap(
                       spacing: 8,
                       runSpacing: 4,
@@ -130,7 +158,6 @@ class _ModelsScreenState extends State<ModelsScreen> {
                     ],
                   ),
                 ),
-              if (downloads != null) SafeArea(top: false, child: ModelDownloadBar(downloads: downloads)),
             ],
           );
         },
@@ -141,7 +168,6 @@ class _ModelsScreenState extends State<ModelsScreen> {
   Widget _recommendedTile(BuildContext context, ModelDownloads d, ModelRecommendation r) {
     final k = context.t;
     final f = r.hfFile;
-    final installed = d.isInstalled(f);
     final fit = ModelFit.of(r.size, _memory);
     final colour = switch (fit) {
       ModelFit.fits => k.ok,
@@ -149,54 +175,34 @@ class _ModelsScreenState extends State<ModelsScreen> {
       ModelFit.tooBig => k.emergency,
       ModelFit.unknown => k.secondary,
     };
-    final canDownload = !installed && !d.busy;
-    return Padding(
+    return DownloadRow(
       key: ValueKey('recommended-${r.file}'),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Material(
-        color: k.surface,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: canDownload ? () => downloadModel(context, d, f) : null,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
-                      if (r.note.isNotEmpty) Text(r.note, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: k.secondary)),
-                      Text.rich(TextSpan(children: [
-                        TextSpan(text: _size(r.size), style: TextStyle(color: k.secondary)),
-                        if (fit != ModelFit.unknown) TextSpan(text: ' · ${fit.label}', style: TextStyle(color: colour)),
-                      ]), style: const TextStyle(fontSize: 13)),
-                      Text(r.kind.label, style: TextStyle(fontSize: 12, color: k.secondary)),
-                    ],
-                  ),
-                ),
-                if (installed)
-                  RowBadge('On this device', color: k.ok)
-                else
-                  IconButton(
-                    key: ValueKey('download-recommended-${r.file}'),
-                    tooltip: 'Download',
-                    icon: Container(
-                      width: 30,
-                      height: 30,
-                      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: canDownload ? k.accent : k.secondary, width: 1.5)),
-                      child: Icon(Icons.download, size: 17, color: canDownload ? k.accent : k.secondary),
-                    ),
-                    onPressed: canDownload ? () => downloadModel(context, d, f) : null,
-                  ),
-              ],
-            ),
-          ),
-        ),
+      keyBase: 'model-${r.file}',
+      title: r.name,
+      subtitle: r.note,
+      state: d.stateOf(f),
+      actions: modelActions(context, d, f),
+      idleSpan: TextSpan(children: [
+        TextSpan(text: _size(r.size), style: TextStyle(color: k.secondary)),
+        if (fit != ModelFit.unknown) TextSpan(text: ' · ${fit.label}', style: TextStyle(color: colour)),
+      ]),
+      extra: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(r.kind.label, style: TextStyle(fontSize: 12, color: r.kind == RecommendationKind.tunedForCache ? k.ok : k.secondary)),
+          if (r.licence != null) Text(r.licence!, style: TextStyle(fontSize: 12, color: k.secondary)),
+        ],
       ),
     );
+  }
+
+  /// The search model's row while it downloads, waits, is paused or stopped (it follows the first chat model on its own).
+  Widget? _searchModelRow(BuildContext context, ModelDownloads d) {
+    final sm = d.searchModel;
+    if (sm == null) return null;
+    final s = d.stateOf(sm);
+    if (!s.active) return null;
+    return DownloadRow(key: const ValueKey('search-model-row'), keyBase: 'search-model', title: 'Search model · ${kSearchModel.sizeLabel}', state: s, actions: modelActions(context, d, sm));
   }
 
   Future<void> _confirmDelete(BuildContext context, ModelEntry m) async {

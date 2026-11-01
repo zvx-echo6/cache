@@ -216,7 +216,7 @@ void main() {
 
   testWidgets('on mobile data with downloads off it asks first, then pauses and goes on when allowed', (tester) async {
     final r = await _Rig.boot(tester, connection: ConnectionKind.mobile);
-    expect(r.core.policies.last, {'network': false}, reason: 'the same rule as sharing: no mobile data unless downloads may use it');
+    expect(r.core.policies.last, {'network': false, 'hold': false}, reason: 'the same rule as sharing: no mobile data unless downloads may use it');
     await r.s.show(tester, RegionsScreen(regions: r.regions));
     await _openCountySheet(tester);
     await r.settle(tester);
@@ -234,7 +234,7 @@ void main() {
 
     r.s.settings.setMobileForDownloads(true);
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
-    expect(r.core.policies.last, {'network': true});
+    expect(r.core.policies.last, {'network': true, 'hold': false});
     await tester.runAsync(r.regions.refresh);
     await tester.pump();
     expect(r.core.regions[_county]!['state'], 'downloading');

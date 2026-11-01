@@ -67,7 +67,20 @@ class AddTask {
   bool cancelled = false;
   CancelToken? token;
   CoreJobHandle? job;
-  bool get running => error == null;
+
+  /// Downloads only: the bytes so far and in all (0 when not known).
+  int done = 0;
+  int total = 0;
+
+  /// Downloads only: paused by the person (the partly downloaded file stays; [LibrariesState.resumeAdd] continues it).
+  bool paused = false;
+
+  /// Remove was tapped: the partly downloaded file goes once the download has stopped.
+  bool removing = false;
+
+  /// Starts this add again the way it was started (Resume, Try again).
+  Future<void> Function()? again;
+  bool get running => error == null && !paused;
 }
 
 /// Picks a file on the device and returns its path (or null when the person cancelled).
@@ -474,6 +487,7 @@ class LibrariesState extends ChangeNotifier {
     final t = task = AddTask(name)
       ..link = uri.toString()
       ..step = AddStep.downloading;
+    t.again = () => addLink(link, confirmUpdate: confirmUpdate, askSettings: askSettings, anyway: anyway);
     notifyListeners();
     try {
       await policy?.checkDownload(anyway: anyway);
@@ -494,12 +508,17 @@ class LibrariesState extends ChangeNotifier {
         cancel: token,
         onProgress: (done, total) {
           t.fraction = total <= 0 ? null : done / total;
+          t
+            ..done = done
+            ..total = total;
           notifyListeners();
         },
       );
     } on DownloadException catch (e) {
       if (e.code == 'cancelled') {
-        task = null;
+        if (t.removing) _deleteQuietly(part);
+        // A paused add stays, to resume; a stopped one is gone.
+        if (!t.paused && task == t) task = null;
       } else {
         t.error = e.message;
       }
@@ -520,6 +539,46 @@ class LibrariesState extends ChangeNotifier {
     try {
       await t.job?.cancel();
     } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Pauses the download of the add under way: it stops and keeps what it has; [resumeAdd] continues it.
+  void pauseAdd() {
+    final t = task;
+    if (t == null || t.step != AddStep.downloading || !t.running) return;
+    t.paused = true;
+    t.token?.cancel();
+    notifyListeners();
+  }
+
+  /// Continues a paused or failed add from what it has.
+  Future<void> resumeAdd() async {
+    final again = task?.again;
+    if (again == null) return;
+    task = null;
+    notifyListeners();
+    await again();
+  }
+
+  /// Removes the add under way, or a paused or failed one, and the partly downloaded file.
+  Future<void> removeAdd() async {
+    final t = task;
+    if (t == null) return;
+    if (t.running && t.step == AddStep.downloading) {
+      t.removing = true;
+      await cancelAdd();
+      return;
+    }
+    if (t.running) {
+      await cancelAdd();
+      return;
+    }
+    final link = t.link;
+    task = null;
+    if (link != null) {
+      final uri = Uri.tryParse(link);
+      if (uri != null) _deleteQuietly(File('${_partialDir.path}${Platform.pathSeparator}${sha256.convert(utf8.encode(uri.toString())).toString().substring(0, 16)}.part'));
+    }
     notifyListeners();
   }
 
