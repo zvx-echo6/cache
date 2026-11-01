@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:cache/screens/settings/sharing_page.dart';
+import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/sharing/sharing_state.dart';
+import 'package:cache/sources/libraries_state.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -54,6 +56,33 @@ void main() {
     await tester.runAsync(again.init);
     expect(again.running, isTrue);
     again.dispose();
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+  });
+
+  testWidgets("a library's search index is built on each device and never syncs", (tester) async {
+    final r = await SettingsRig.create(tester);
+    final libs = Directory('${r.dir.path}/libraries')..createSync();
+    Map<String, Object?>? config;
+    final sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: [
+        DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'libraries': libs}, notShared: const {'libraries': kLibraryNotShared}),
+        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': Directory('${r.dir.path}/Shared')}),
+      ],
+      opener: (c) async {
+        config = c;
+        return r.sync;
+      },
+    );
+    await tester.runAsync(sharing.setUp);
+    // The engine is told at its start, before its first round, so nothing of an index goes out or comes in even once.
+    expect(config?['exclude'], {'libraries': ['*/index']});
+    // The pattern names exactly where a library keeps its index: <libraries>/<library>/index.
+    final item = LibraryItem(dir: Directory('${libs.path}${Platform.pathSeparator}first-aid'), size: 0);
+    expect(item.indexPath.substring(libs.path.length + 1).replaceAll(Platform.pathSeparator, '/'), 'first-aid/index');
+    sharing.dispose();
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });

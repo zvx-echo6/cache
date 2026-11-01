@@ -77,6 +77,8 @@ release notes).
 - Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
+- Library: source icons from the Kiwix catalogue show again (they were asked for at a size the catalogue does not serve)
+- Sharing and sync: a library's search index is no longer copied to your linked devices; each device builds its own, and a copy an earlier version sent is kept or rebuilt
 - Regions: places not published for an area yet say "not available yet" instead of failing; the region counts as done
 - Regions: a part left waiting with nothing downloading offers Carry on; places published after a region was downloaded are added at the next start
 - Weather: Home no longer says "Not set up yet" for weather that is on while Cache is still starting after an update; an update never resets your settings

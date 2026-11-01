@@ -200,10 +200,12 @@ pub fn lock_is_live(dir: &Path) -> bool {
     if info.pid == std::process::id() {
         return active_contains(dir);
     }
-    if let (Some(a), Some(b)) = (&info.boot_id, boot_id()) {
-        if *a != b {
-            return false;
-        }
+    match (&info.boot_id, boot_id()) {
+        (Some(a), Some(b)) if *a != b => return false,
+        // Written where a boot id could be read, read where none can: another system (a lock copied from another device by an
+        // earlier version's sync), so its owner is not running here.
+        (Some(_), None) => return false,
+        _ => {}
     }
     if !Path::new("/proc/self/stat").exists() {
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
