@@ -454,7 +454,8 @@ fn libraries_are_created_renamed_and_deleted() {
 #[test]
 fn the_core_only_ever_sees_a_whole_shard() {
     let d = TempDir::new("b15");
-    let seen: Arc<Mutex<Vec<(bool, Option<usize>)>>> = Arc::new(Mutex::new(vec![]));
+    type Seen = Vec<(bool, Option<usize>)>;
+    let seen: Arc<Mutex<Seen>> = Arc::new(Mutex::new(vec![]));
     let live = Arc::new(Mutex::new(PathBuf::new()));
     let (seen2, live2) = (seen.clone(), live.clone());
     let hook: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
