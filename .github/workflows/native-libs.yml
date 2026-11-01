@@ -78,6 +78,8 @@ jobs:
         run: |
           apt-get update -q
           apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip file
+          # mupdf-sys (cache_builder, pulled in by the server crate) generates its bindings with bindgen, which needs libclang.
+          apt-get install -y -q libclang-dev clang
           gcc --version | sed -n 1p
           cmake --version | sed -n 1p
           ldd --version | sed -n 1p
