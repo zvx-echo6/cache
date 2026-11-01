@@ -77,7 +77,7 @@ The search model (605 MB) lets Cache search by meaning.
 
 - "Waiting for [name] to finish": the search model starts when that download is done.
 - "Also downloads: Search model, 605 MB": it comes with the model you're downloading.
-- "Search model: download stopped ([reason])": in the download bar on the Models screen, tap "Try again". If the reason is mobile data, connect to Wi-Fi first.
+- The search model's row on the Models screen says Stopped, with the reason: tap "Resume". If it says "Waiting for Wi-Fi", connect to Wi-Fi or tap "Download now".
 - "Meaning search needs the model [name].": shown under search results in the reader when a library wants a different model. It has no button. Cache can't download that model and searches by keywords.
 - "Matching words only: the meaning search is not available": places search by words only.
 

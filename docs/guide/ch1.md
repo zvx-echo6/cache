@@ -50,8 +50,10 @@ It comes with your first model. The download pop-up has the line "Search model (
 
 If its download stops:
 1. Open the Models screen.
-2. In the download bar, find "Search model: download stopped ([reason])".
-3. Tap "Try again".
+2. Find the search model's row. It says Stopped, then the reason and how much is downloaded.
+3. Tap "Resume".
+
+While another model is downloading, the search model's row says it is waiting for that model to finish. It starts by itself when that download is done.
 
 - If a library needs a different model, a search in it says "Meaning search needs the model [name]." Cache can't download that model. It searches by keywords instead.
 
