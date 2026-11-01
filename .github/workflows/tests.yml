@@ -1,0 +1,89 @@
+# Routine checks for every pushed branch (except main) and every pull request, so builders push a branch and read the result
+# here instead of running the suites on the shared Windows desktop. No secrets are used.
+#
+#   rust     the whole Rust workspace in packages/cache_search/native: cargo test (every crate, including cache_search's FFI
+#            and parity tests, cache_places' S14 golden tests, cache_regions), then cargo clippy -D warnings
+#   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
+#            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it)
+#
+# The core builds on Linux without libzim: build.rs compiles the C++ shim over the official prebuilt libzim only for Windows,
+# Android and iOS, so the `xapian` feature is on (the default) but has no effect here, and the zimx tests (cfg(zimx)) run on
+# the desktop only. The Guide check and Identity guard run as their own workflows on every push.
+#
+# Toolchains are the desktop's: Rust 1.99.1 and Flutter 3.44.8 (as android-play.yml and ios-testflight.yml).
+name: Tests
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+  RUST_VERSION: 1.99.1
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: packages/cache_search/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free disk space
+        working-directory: .
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy
+          rustup default "$RUST_VERSION"
+          rustc --version
+          cargo clippy --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          # A cancelled or failed run still saves what it built, so the next push starts warm.
+          cache-on-failure: true
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Packages
+        working-directory: app
+        run: |
+          flutter --version
+          flutter pub get
+      - name: Analyze
+        working-directory: app
+        run: flutter analyze
+      - name: App tests
+        working-directory: app
+        run: flutter test --no-pub
+      - name: Plugin tests (cache_search)
+        working-directory: packages/cache_search
+        run: |
+          flutter pub get
+          flutter test --no-pub
