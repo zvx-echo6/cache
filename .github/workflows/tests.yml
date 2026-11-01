@@ -6,9 +6,10 @@
 #   flutter  flutter analyze and flutter test in app/ (the app tests use fakes for the core, no native library), then the
 #            cache_search plugin's own Dart tests from its folder (its fixture paths are relative to it)
 #
-# The core builds on Linux without libzim: build.rs compiles the C++ shim over the official prebuilt libzim only for Windows,
-# Android and iOS, so the `xapian` feature is on (the default) but has no effect here, and the zimx tests (cfg(zimx)) run on
-# the desktop only. The Guide check and Identity guard run as their own workflows on every push.
+# The core builds on Linux with libzim, as on the phone: build.rs compiles the C++ shim over Kiwix's official prebuilt libzim
+# (the `xapian` feature, on by default), so the rust job fetches it (.github/actions/libzim-prebuilt, pinned by sha256) and the
+# zimx tests (cfg(zimx)) run here too, tests/zimx_small.rs on a small pinned ZIM (the ready.gov ZIM tests need a 2.4 GB file and
+# skip). The Guide check and Identity guard run as their own workflows on every push.
 #
 # Toolchains are the desktop's: Rust 1.99.1 and Flutter 3.44.8 (as android-play.yml and ios-testflight.yml).
 name: Tests
@@ -51,6 +52,17 @@ jobs:
           rustup default "$RUST_VERSION"
           rustc --version
           cargo clippy --version
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: x86_64
+      - name: Small ZIM with Xapian indexes (openZIM testing suite, pinned)
+        run: |
+          line=$(bash zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')
+          echo "$line" >> "$GITHUB_ENV"
+          echo "CS_TEST_REQUIRE_SMALL_ZIM=1" >> "$GITHUB_ENV"
+          # the core's unit-test executable finds libzim through this (the integration tests have a run path)
+          echo "LD_LIBRARY_PATH=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/cache_search/native -> target

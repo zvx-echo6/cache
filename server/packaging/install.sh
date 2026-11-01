@@ -4,7 +4,8 @@
 #   install.sh --rollback
 #
 # The tarball holds `cache-server` (the program), `helper/cache-core-helper` (the Dart helper that hosts the core),
-# `lib/libcache_search.so` (the core library the helper loads), `lib/libcache_llama.so` (llama.cpp behind cl_embed: the server
+# `lib/libcache_search.so` (the core library the helper loads), `lib/libzim.so.9` (libzim with Xapian and ICU, which
+# the core links and finds next to itself), `lib/libcache_llama.so` (llama.cpp behind cl_embed: the server
 # loads it to embed text with the search model, which it downloads into the data folder on first need), `web/` (the browser app)
 # and a `VERSION` file.
 # Running this again with a newer tarball is an update: the data folder and the password stay.
@@ -109,10 +110,12 @@ esac
 [ -f "$STAGE/helper/cache-core-helper" ] || die "the tarball has no helper/cache-core-helper"
 [ -f "$STAGE/lib/libcache_search.so" ] || die "the tarball has no lib/libcache_search.so"
 [ -f "$STAGE/lib/libcache_llama.so" ] || die "the tarball has no lib/libcache_llama.so"
+# libzim (with Xapian and ICU) sits next to the core, which finds it through its run path $ORIGIN
+[ -f "$STAGE/lib/libzim.so.9" ] || die "the tarball has no lib/libzim.so.9"
 chown -R root:root "$STAGE"
 # the service runs as the cache user: it must execute the program and the helper and read the library and the web files
 chmod 755 "$STAGE/cache-server" "$STAGE/helper/cache-core-helper"
-chmod 644 "$STAGE/lib/libcache_search.so" "$STAGE/lib/libcache_llama.so"
+chmod 644 "$STAGE/lib/libcache_search.so" "$STAGE/lib/libcache_llama.so" "$STAGE/lib/libzim.so.9"
 chmod -R u=rwX,go=rX "$STAGE/web" "$STAGE/helper" "$STAGE/lib"
 chmod 755 "$STAGE"
 

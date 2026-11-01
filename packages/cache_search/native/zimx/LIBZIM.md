@@ -11,10 +11,14 @@ The binaries are downloaded into the build directory by the fetch scripts and ar
 | Source | https://download.openzim.org/release/libzim/ |
 | Windows x86_64 | `libzim_win-x86_64-9.8.2-1.zip`, md5 `6fec1bb98a7a628a2c38270414c521c1`, 15,626,882 bytes |
 | Android arm64 | `libzim_android-arm64-9.8.2-1.tar.gz`, md5 `59a6b769847b77dc0ace69c3b9727445` |
+| Linux x86_64 | `libzim_linux-x86_64-9.8.2-1.tar.gz`, md5 `32099d4f377645ba8723e69359a4aa14`, sha256 `6dc2d70cbe0e8d584ab70b489f82429dd9a6e9d509ea96b5a0c8da0fea0d7bbe`, 8,817,670 bytes |
+| Linux aarch64 | `libzim_linux-aarch64-9.8.2-1.tar.gz`, md5 `50cdc6d48c6cb95d613a39728d2248d3`, sha256 `a5bb8ffbb92e93302f49fcfeb2f01545234eee08127b4daff9e504d8abe1be7d`, 8,614,820 bytes |
 | Published checksum | the `.md5` file next to each archive (no signature is published) |
 
 URLs:
 
+- https://download.openzim.org/release/libzim/libzim_linux-x86_64-9.8.2-1.tar.gz
+- https://download.openzim.org/release/libzim/libzim_linux-aarch64-9.8.2-1.tar.gz
 - https://download.openzim.org/release/libzim/libzim_win-x86_64-9.8.2-1.zip
 - https://download.openzim.org/release/libzim/libzim_android-arm64-9.8.2-1.tar.gz
 
@@ -27,6 +31,12 @@ URLs:
   `share/icu/73.2/icudt73l.dat` (ICU data, 11 MB; the ICU inside `libzim.so` has no data of its own, the app sets `ICU_DATA` to the
   folder that holds the file). It needs `libc++_shared.so` from the NDK next to it. Built with cargo-ndk on 2026-10-26 (sizes and
   what to ship: DESIGN.md "Android build"); not yet run on a device.
+
+- Linux (x86_64, aarch64): `lib/x86_64-linux-gnu/libzim.so.9.8.2` (21 MB) or `lib/aarch64-rpi3-linux-gnu/libzim.so.9.8.2` (21 MB),
+  headers. Xapian and ICU 73 **with its data** are inside the one file (no `ICU_DATA` step); it needs only libc, libm, libgcc_s and
+  libstdc++ (x86_64 also ld-linux). Requirements (objdump): glibc 2.34 (x86_64) or 2.29 (aarch64), GLIBCXX 3.4.30 (GCC 12's
+  libstdc++: Ubuntu 22.04+, Debian 12+, Raspberry Pi OS bookworm+), so the prebuilt is used and libzim is not built from source.
+  The Linux core links `libzim.so.9` with RPATH `$ORIGIN`, so it ships next to `libcache_search.so` (Cache Server: `lib/libzim.so.9`).
 
 ## Fetch and build
 
@@ -44,6 +54,16 @@ Android (bash):
 native/zimx/fetch-libzim.sh /path/to/build-dir
 export LIBZIM_DIR=/path/to/build-dir/libzim/android-arm64-9.8.2-1
 cargo ndk --platform 28 -t arm64-v8a build --release -p cache_search
+```
+
+Linux (bash; x86_64 or aarch64, glibc 2.35 or older when built in an ubuntu:22.04 container, as the native-libs and server-release
+workflows do):
+
+```
+native/zimx/fetch-libzim-linux.sh /path/to/build-dir        # prints LIBZIM_DIR=...
+export LIBZIM_DIR=/path/to/build-dir/libzim/linux-x86_64-9.8.2-1
+cargo build --release -p cache_search                        # then copy libzim.so.9 next to libcache_search.so
+native/zimx/fetch-test-zim.sh /path/to/zim-dir               # prints CS_TEST_SMALL_ZIM=... for tests/zimx_small.rs
 ```
 
 On a Windows machine without bash on the path, run the script with Git for Windows: `set PATH=C:\Program Files\Git\usr\bin;%PATH%`,
