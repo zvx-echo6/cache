@@ -68,6 +68,16 @@ class SearchCore {
     return ZimBytes(r[0] as Uint8List, r[1] as String);
   }
 
+  /// Cache Server only (the phone's core does not have this call): what the server's own index jobs are doing, by source path:
+  /// `fraction` (0..1, or null while the total is not known) for a source being indexed, `error` for one whose index failed.
+  Future<Map<String, ({double? fraction, String? error})>> indexState() async => {
+        for (final e in ((await _call('index.state')) as Map).entries)
+          e.key as String: (
+            fraction: ((e.value as Map)['fraction'] as num?)?.toDouble(),
+            error: (e.value as Map)['error'] as String?,
+          ),
+      };
+
   Future<String> zimMainPage(String zimId) async => (await _call('zimMainPage', {'zimId': zimId})) as String;
 
   Future<List<Suggestion>> suggest(String prefix, {int k = 10, List<String>? sources}) async => [

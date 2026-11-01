@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../layout/adaptive.dart' show paneShowButton;
+import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../screens/search_model_line.dart';
@@ -14,6 +15,8 @@ import '../sources/sources_state.dart';
 import '../theme.dart';
 import 'zim_urls.dart';
 import 'reader_resources.dart';
+import 'web/reader_frame.dart';
+import 'web/zim_token.dart';
 
 /// What the system back does in the reader, in order: close the search, close find in page, go a page back while there is
 /// history, then leave the reader.
@@ -66,7 +69,19 @@ class ZimReaderScreen extends StatefulWidget {
     this.layout,
     this.itemMenu,
     this.debugHasHistory = false,
+    this.debugWeb,
+    this.zimTokens,
+    this.frameBuilder,
   });
+
+  /// Tests only: behave as in a browser (or not), whatever the platform is.
+  final bool? debugWeb;
+
+  /// A browser only: where the token for the page addresses comes from (the app's own when null).
+  final ZimTokens? zimTokens;
+
+  /// A browser only: builds the frame that shows the page (the real one when null). Tests give their own.
+  final ZimFrameBuilder? frameBuilder;
 
   /// Tests and renders only: start as if the page had history (there is no web view in a test).
   final bool debugHasHistory;
@@ -142,6 +157,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   /// A page back, over any landing page (none there: nothing to do).
   Future<void> _pageBack() async {
+    if (_isWeb) {
+      _frameHistory.requested('back');
+      _frame?.back();
+      return;
+    }
     final steps = _backSteps;
     if (steps == null) return;
     await _web?.goBackOrForward(steps: steps);
@@ -153,6 +173,13 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   Uri? _start;
   String? _startError;
+
+  // ---- in a browser: the page is a sandboxed frame served by the device (web/reader_frame_web.dart); the app bar, the back and
+  // forward buttons, the title search and the main page are this same screen. inappwebview is never touched.
+  ZimFrameHandle? _frame;
+  final FrameHistory _frameHistory = FrameHistory();
+  bool get _isWeb => widget.debugWeb ?? plat.isWeb;
+  ZimTokens get _tokens => widget.zimTokens ?? ZimTokens.shared;
 
   /// The page's renderer died (Android ends it when memory runs low): the WebView is gone and Reload makes a new one.
   bool _pageGone = false;
@@ -189,13 +216,47 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     }
     try {
       final address = widget.address ?? await widget.sources.zimMainPage(id);
+      if (_isWeb) {
+        final token = await _tokens.get();
+        final framed = zimFrameUrl(token, address);
+        if (framed == null) throw StateError('Not a ZIM address');
+        _currentAddress = address;
+        if (mounted) setState(() => _start = Uri.parse(framed));
+        return;
+      }
       final url = readerUrl(address, customScheme: _customScheme);
       if (url == null) throw StateError('Not a ZIM address');
       if (mounted) setState(() => _start = url);
     } on CacheSearchException catch (e) {
       if (mounted) setState(() => _startError = e.message);
+    } on ZimTokenException catch (e) {
+      if (mounted) setState(() => _startError = e.message);
     } catch (e) {
       if (mounted) setState(() => _startError = '$e');
+    }
+  }
+
+  /// The frame settled on a page: its address and title.
+  void _onFramePage(String framePath, String title) {
+    final address = addressOfFramePath(framePath);
+    if (address == null || !mounted) return;
+    _frameHistory.reported(address);
+    setState(() {
+      _currentAddress = address;
+      if (title.isNotEmpty) _pageTitle = title;
+      _canBack = _frameHistory.canBack;
+      _canForward = _frameHistory.canForward;
+    });
+  }
+
+  /// Opens [address] in the frame (a browser).
+  Future<void> _openInFrame(String address) async {
+    try {
+      final token = await _tokens.get();
+      final framed = zimFrameUrl(token, address);
+      if (framed != null) _frame?.load(framed);
+    } on ZimTokenException catch (e) {
+      if (mounted) setState(() => _startError = e.message);
     }
   }
 
@@ -247,6 +308,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
 
   /// A new WebView at the page that was on screen.
   void _reload() {
+    if (_isWeb) {
+      setState(() => _webGeneration++);
+      return;
+    }
     setState(() {
       _start = reloadUrl(_currentAddress, _start, customScheme: _customScheme);
       _pageGone = false;
@@ -260,6 +325,16 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   }
 
   void _open(String address) {
+    if (_isWeb) {
+      if (!isZimAddress(address)) return;
+      setState(() {
+        _searching = false;
+        _hits = null;
+        _query.clear();
+      });
+      unawaited(_openInFrame(address));
+      return;
+    }
     final u = readerUrl(address, customScheme: _customScheme);
     if (u == null) return;
     setState(() {
@@ -432,13 +507,15 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                   _finding = false;
                 }),
               ),
-              IconButton(
-                tooltip: 'Find in page',
-                icon: Icon(
-                  _finding ? Icons.find_in_page : Icons.find_in_page_outlined,
+              // The browser's own find (Ctrl+F) reaches into the frame; the page has no origin, so the app cannot search it.
+              if (!_isWeb)
+                IconButton(
+                  tooltip: 'Find in page',
+                  icon: Icon(
+                    _finding ? Icons.find_in_page : Icons.find_in_page_outlined,
+                  ),
+                  onPressed: _toggleFind,
                 ),
-                onPressed: _toggleFind,
-              ),
               if (widget.itemMenu != null)
                 IconButton(
                   key: const ValueKey('item-menu'),
@@ -503,7 +580,16 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
                 key: const ValueKey('reader-page-forward'),
                 tooltip: 'Forward',
                 icon: const Icon(Icons.arrow_forward),
-                onPressed: _canForward ? () => _web?.goForward() : null,
+                onPressed: _canForward
+                    ? () {
+                        if (_isWeb) {
+                          _frameHistory.requested('forward');
+                          _frame?.forward();
+                        } else {
+                          _web?.goForward();
+                        }
+                      }
+                    : null,
               ),
               IconButton(
                 tooltip: 'Main page',
@@ -533,6 +619,15 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     if (_pageGone) return ReaderPageGone(onReload: _reload);
     final start = _start;
     if (start == null) return const Center(child: CircularProgressIndicator());
+    if (_isWeb) {
+      return (widget.frameBuilder ?? buildZimFrame)(
+        key: ValueKey('reader-frame-$_webGeneration'),
+        initialUrl: start.toString(),
+        onCreated: (h) => _frame = h,
+        onPage: _onFramePage,
+        onExternal: openInNewTab,
+      );
+    }
     return Listener(
       // A touch on the page: it has settled (anything it adds to the history from now on is the person's own).
       onPointerDown: (_) => _settleNow(),

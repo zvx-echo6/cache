@@ -3,6 +3,8 @@
 //!   env     -> {support, docs}: CACHE_APP_SUPPORT and CACHE_APP_DOCS as the server set them
 //!   version -> "fake-1"      status -> [] (or the JSON in FAKE_STATUS)      echo -> the args
 //!   sources.rescan -> {sources: the length of args.sources, or 0}      (anything else -> ok, null)
+//!   zimGet  -> an entry by address: ends in .html: a page that names the address; .png: 5 bytes of image/png; contains "missing":
+//!              not_found; else text/plain
 //!   crash   -> exits without replying the first time (the marker file FAKE_MARKER is created), then replies "back"
 //!   open    -> fails with ok:false when FAKE_OPEN_FAILS is set
 //! Every op it receives is appended to the file FAKE_LOG, one `op args` line each. FAKE_NO_READY makes it exit at once.
@@ -43,6 +45,22 @@ fn main() {
             "echo" => json!({"id": id, "ok": true, "result": args}),
             "open" if std::env::var_os("FAKE_OPEN_FAILS").is_some() => {
                 json!({"id": id, "ok": false, "error": {"code": "bad_config", "message": "no"}})
+            }
+            "zimGet" => {
+                use base64::Engine;
+                let a = args["address"].as_str().unwrap_or("");
+                let enc = |b: &[u8]| json!({"$bytes": base64::engine::general_purpose::STANDARD.encode(b)});
+                let base = a.split('?').next().unwrap_or("");
+                if a.contains("missing") {
+                    json!({"id": id, "ok": false, "error": {"code": "not_found", "message": "no such entry"}})
+                } else if base.ends_with(".html") {
+                    let page = format!("<html><head><title>T</title></head><body>page {a}</body></html>");
+                    json!({"id": id, "ok": true, "result": [enc(page.as_bytes()), "text/html"]})
+                } else if base.ends_with(".png") {
+                    json!({"id": id, "ok": true, "result": [enc(&[0, 1, 2, 250, 255]), "image/png"]})
+                } else {
+                    json!({"id": id, "ok": true, "result": [enc(b"plain"), "text/plain"]})
+                }
             }
             "boom" => json!({"id": id, "ok": false, "error": {"code": "not_found", "message": "nothing here"}}),
             "crash" => {

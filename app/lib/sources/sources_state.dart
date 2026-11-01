@@ -383,7 +383,60 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   }
 
   /// Indexing progress 0..1, or null if not known.
-  double? indexFraction(ZimFile z) => _progress[z.path]?.fraction;
+  double? indexFraction(ZimFile z) => _progress[z.path]?.fraction ?? _serverFraction[z.path];
+
+  // ---- in a browser: the server indexes, this only watches
+
+  /// The server's index jobs (server/helper/bin/index_driver.dart) are started and driven there, after it opens and after every
+  /// rescan; a browser does not start index jobs. It reads the core's status again every 2 seconds while a ZIM or library is
+  /// still waiting for its index, and asks the server how far each job is (`index.state`), so the Library moves from "Waiting to
+  /// index" to the progress to ready by itself. A job the server could not finish is shown as "Can't be read".
+  Timer? _serverWatch;
+  bool _watchReading = false;
+  final Map<String, double?> _serverFraction = {};
+
+  bool get _serverWorkLeft => _status.values.any((s) {
+        if (s.building || s.opening || s.updating) return true;
+        return s.kind == 'zim' && s.error == null && !s.searchable && !_failed.containsKey(s.path);
+      });
+
+  void _watchServerIndexing() {
+    if (!plat.isWeb) return;
+    if (!_serverWorkLeft) {
+      _serverWatch?.cancel();
+      _serverWatch = null;
+      return;
+    }
+    _serverWatch ??= Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_readServerIndexing()));
+  }
+
+  Future<void> _readServerIndexing() async {
+    final core = _core;
+    if (core == null || _watchReading) return;
+    _watchReading = true;
+    try {
+      await _readStatus(core);
+      try {
+        final state = await core.indexState();
+        _serverFraction
+          ..clear()
+          ..addEntries([for (final e in state.entries) if (e.value.error == null) MapEntry(e.key, e.value.fraction)]);
+        // On a browser nothing else puts a ZIM in _failed: it mirrors what the server says.
+        _failed
+          ..clear()
+          ..addEntries([for (final e in state.entries) if (e.value.error != null) MapEntry(e.key, e.value.error!)]);
+      } on CacheSearchException {
+        // A server older than index.state: only the status is read.
+      }
+      _scan();
+    } catch (e) {
+      error = _words(e);
+    } finally {
+      _watchReading = false;
+      _watchServerIndexing();
+      notifyListeners();
+    }
+  }
 
   /// Why a ZIM failed, in words for people.
   String? failureOf(ZimFile z) =>
@@ -443,6 +496,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
         // The server keeps the source list and builds the indexes; only its status is read.
         await _readStatus(core);
         _scan();
+        _watchServerIndexing();
         return;
       }
       await core.setSources(_configs());
@@ -851,6 +905,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   @override
   void dispose() {
     _poll?.cancel();
+    _serverWatch?.cancel();
     _core?.close();
     super.dispose();
   }

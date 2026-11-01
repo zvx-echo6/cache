@@ -173,3 +173,51 @@ async fn a_bad_sources_file_is_reported_not_ignored() {
     assert!(cache_server::helper::read_sources(&dir.0.join("sources.json")).is_err());
     assert_eq!(cache_server::helper::read_sources(&dir.0.join("none.json")).unwrap(), Value::Null);
 }
+
+const ZID: &str = "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b";
+
+fn header<'a>(r: &'a Reply, k: &str) -> Option<&'a str> {
+    r.headers.iter().find(|(h, _)| h.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str())
+}
+
+#[tokio::test]
+async fn zim_serves_entries_sandboxed_with_the_token_alone() {
+    let _g = LOCK.lock().await;
+    let rig = rig("zim", None).await;
+    let r = route(&rig.app, "POST", "/api/zim/token", Some(&rig.cookie), b"").await;
+    let v: Value = serde_json::from_slice(&r.body).unwrap();
+    let t = v["result"]["token"].as_str().unwrap().to_string();
+
+    // a page: its own mime type, the sandbox, and the frame script added; no cookie is sent
+    let r = route(&rig.app, "GET", &format!("/zim/{t}/{ZID}/A/Some%20Page.html"), None, b"").await;
+    assert_eq!(r.status, 200);
+    assert_eq!(header(&r, "Content-Type"), Some("text/html; charset=utf-8"));
+    assert_eq!(header(&r, "Content-Security-Policy"), Some("sandbox allow-scripts allow-popups"));
+    assert!(!header(&r, "Content-Security-Policy").unwrap().contains("allow-same-origin"));
+    let body = String::from_utf8(r.body).unwrap();
+    assert!(body.contains(&format!("page zim:{ZID}/A/Some%20Page.html")), "{body}");
+    assert!(body.contains("cacheZim") && body.find("cacheZim").unwrap() < body.find("</body>").unwrap(), "{body}");
+
+    // the query goes to the core as the phone's address has it; a picture's bytes are not touched
+    let r = route(&rig.app, "GET", &format!("/zim/{t}/{}/I/pic.png?x=1", ZID.to_uppercase()), None, b"").await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body, vec![0, 1, 2, 250, 255]);
+    assert_eq!(header(&r, "Content-Type"), Some("image/png"));
+    assert_eq!(header(&r, "Content-Security-Policy"), Some("sandbox allow-scripts allow-popups"));
+    assert!(rig.log().iter().any(|l| l == &format!("zimGet {{\"address\":\"zim:{ZID}/I/pic.png?x=1\"}}")), "{:?}", rig.log());
+
+    // text that is not HTML is left alone; a missing entry is a 404; HEAD has no body
+    let r = route(&rig.app, "GET", &format!("/zim/{t}/{ZID}/-/style.css"), None, b"").await;
+    assert_eq!((r.status, r.body.as_slice(), header(&r, "Content-Type")), (200, &b"plain"[..], Some("text/plain; charset=utf-8")));
+    assert_eq!(route(&rig.app, "GET", &format!("/zim/{t}/{ZID}/A/missing.html"), None, b"").await.status, 404);
+    let r = route(&rig.app, "HEAD", &format!("/zim/{t}/{ZID}/A/x.html"), None, b"").await;
+    assert_eq!((r.status, r.body.len()), (200, 0));
+
+    // the token never reaches the core: the helper saw only addresses
+    assert!(rig.log().iter().all(|l| !l.contains(&t)), "{:?}", rig.log());
+    // a wrong token reaches nothing
+    let before = rig.log().len();
+    assert_eq!(route(&rig.app, "GET", &format!("/zim/wrong/{ZID}/A/x.html"), Some(&rig.cookie), b"").await.status, 401);
+    assert_eq!(rig.log().len(), before);
+    rig.app.helper.as_ref().unwrap().shutdown().await;
+}
