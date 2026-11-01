@@ -278,6 +278,8 @@ jobs:
       # (The ready.gov tests in zimx_ffi.rs print that CS_TEST_ZIM_DIR is not set and return: that ZIM is 2.4 GB.)
       - name: Test (zim, zimx)
         run: |
+          # the unit-test executable of the core has no run path to libzim: the integration tests do (build.rs), this covers both
+          export LD_LIBRARY_PATH="$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")"
           cargo test --locked -p cache_search --lib --test zimx_ffi --test zimx_small --test zim_ffi --test zim_open_closes \
             --test zim_budget_ffi --test zim_read_identity --test zim_main_text --test search_ffi --test library_ffi --test conv_suggest_ffi \
             -- --nocapture 2>&1 | tee "$RUNNER_TEMP/zim-tests.log"

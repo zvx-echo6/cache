@@ -61,6 +61,8 @@ jobs:
           line=$(bash zimx/fetch-test-zim.sh "$RUNNER_TEMP/testzim" | grep '^CS_TEST_SMALL_ZIM=')
           echo "$line" >> "$GITHUB_ENV"
           echo "CS_TEST_REQUIRE_SMALL_ZIM=1" >> "$GITHUB_ENV"
+          # the core's unit-test executable finds libzim through this (the integration tests have a run path)
+          echo "LD_LIBRARY_PATH=$(dirname "$(ls "$LIBZIM_DIR"/lib/*/libzim.so)")" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: packages/cache_search/native -> target
