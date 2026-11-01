@@ -28,6 +28,12 @@
 //!   DELETE /api/library/items/<id>          -> removes it (files, sidecars, index), then rescans; 409 while it is being downloaded
 //!   GET  /api/fetch?url=<encoded>           -> the answer of a catalogue host (allow-list in `fetch`), streamed, at most 50 MB
 //!                                              (all of these answer {"ok":true,"result":...} except /api/fetch, which is the body)
+//!   POST /api/zim/token                     -> {"token","ttl"}: a token for /zim/ (12 h, tied to this session, gone when it signs out)
+//!   GET  /zim/<token>/<zim id>/<entry path>[?query] -> the entry's bytes with its own mime type, redirects followed by the core.
+//!                                              Third-party content: sent with `Content-Security-Policy: sandbox allow-scripts
+//!                                              allow-popups` (no allow-same-origin), so a page in it has no origin and cannot use the
+//!                                              session. The URL's token is the only credential here (the cookie is not read), and the
+//!                                              token opens nothing under /api/. 401 for a missing, wrong or expired token.
 //!   GET  /settings/keys                     -> the keys settings page (signed in)
 //!   anything else (GET/HEAD)                -> signed in: a file from the web folder. Not signed in: the sign-in page (200) for a page
 //!                                              request ("/", "*.html", a path with no extension), 401 for anything else (assets)
@@ -200,6 +206,82 @@ async fn api(app: &App, method: &str, path: &str, query: &str, body: &[u8]) -> R
             core_call(app, op, args).await
         }
         _ => Reply::error(404, "not_found", format!("no such endpoint: {method} {path}")),
+    }
+}
+
+
+/// The script added to every HTML page under /zim/. The page runs in a sandboxed frame (no origin), so the app cannot reach into
+/// it: the script tells the app where the frame is and what the page is called, takes "back" and "forward" from it, and sends
+/// a click on a link that leaves the ZIM to the app, which opens it in a new tab. Links inside the ZIM are left to the browser.
+const ZIM_FRAME_SCRIPT: &str = r#"<script>(function(){
+var post=function(m){try{parent.postMessage(m,'*')}catch(e){}};
+var report=function(){post({cacheZim:'page',href:location.pathname+location.search+location.hash,title:document.title||''})};
+addEventListener('load',report);addEventListener('hashchange',report);addEventListener('popstate',report);
+addEventListener('message',function(e){if(e.source!==parent||!e.data)return;if(e.data.cacheZim==='back')history.back();else if(e.data.cacheZim==='forward')history.forward()});
+document.addEventListener('click',function(e){
+var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a||e.defaultPrevented)return;
+var u;try{u=new URL(a.href,location.href)}catch(x){return}
+if(u.origin===location.origin&&(u.protocol==='https:'||u.protocol==='http:'))return;
+e.preventDefault();if(u.protocol==='https:'||u.protocol==='http:'||u.protocol==='mailto:')post({cacheZim:'external',url:u.href})},true);
+})();</script>"#;
+
+/// `html` with [ZIM_FRAME_SCRIPT] before its last `</body>` (at the end when it has none).
+fn with_frame_script(html: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(html);
+    let at = text.to_ascii_lowercase().rfind("</body").unwrap_or(text.len());
+    let mut out = String::with_capacity(text.len() + ZIM_FRAME_SCRIPT.len());
+    out.push_str(&text[..at]);
+    out.push_str(ZIM_FRAME_SCRIPT);
+    out.push_str(&text[at..]);
+    out.into_bytes()
+}
+
+/// `GET /zim/<token>/<zim id>/<entry path>`: one entry of a ZIM, for the reader's frame. The token in the path is the only
+/// credential (see the module doc): the session cookie is neither needed nor looked at.
+async fn zim(app: &App, method: &str, path: &str, query: &str) -> Reply {
+    if method != "GET" && method != "HEAD" {
+        return Reply::empty(405);
+    }
+    let rest = &path["/zim/".len()..];
+    let Some((token, rest)) = rest.split_once('/') else { return Reply::empty(404) };
+    if !app.auth.zim_token_valid(token) {
+        return Reply::empty(401);
+    }
+    let Some((id, entry)) = rest.split_once('/') else { return Reply::empty(404) };
+    let id_ok = id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+    if !id_ok || entry.is_empty() {
+        return Reply::empty(404);
+    }
+    let address = if query.is_empty() { format!("zim:{}/{entry}", id.to_ascii_lowercase()) } else { format!("zim:{}/{entry}?{query}", id.to_ascii_lowercase()) };
+    let Some(helper) = app.helper.clone() else { return Reply::empty(503) };
+    let reply = match helper.call("zimGet", json!({"address": address})).await {
+        Ok(r) => r,
+        Err(_) => return Reply::empty(503),
+    };
+    if reply["ok"] != json!(true) {
+        return Reply::empty(if reply["error"]["code"] == json!("not_found") { 404 } else { 502 });
+    }
+    use base64::Engine;
+    let result = &reply["result"];
+    let bytes = result[0]["$bytes"].as_str().and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok());
+    let (Some(bytes), Some(mime)) = (bytes, result[1].as_str()) else { return Reply::empty(502) };
+    let essence = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let is_html = essence == "text/html";
+    let content_type = if mime.to_ascii_lowercase().contains("charset") || !essence.starts_with("text/") { mime.to_string() } else { format!("{essence}; charset=utf-8") };
+    let body = if is_html { with_frame_script(&bytes) } else { bytes };
+    Reply {
+        status: 200,
+        headers: vec![
+            ("Content-Type", content_type),
+            // Third-party content: a page here has no origin of its own, so it cannot use this site's session or call /api/.
+            ("Content-Security-Policy", "sandbox allow-scripts allow-popups".into()),
+            ("Referrer-Policy", "no-referrer".into()),
+            // The frame has no origin, so its page reads its own style sheets and fonts as another site's: allowed, without cookies.
+            ("Access-Control-Allow-Origin", "*".into()),
+            ("Cache-Control", "private, max-age=600".into()),
+        ],
+        body: if method == "HEAD" { vec![] } else { body },
+        stream: None,
     }
 }
 
@@ -403,9 +485,17 @@ pub async fn route(app: &App, method: &str, target: &str, cookie: Option<&str>, 
             Reply::empty(204).with("Set-Cookie", app.auth.cookie("", 0))
         }
         ("GET", "/auth/check") => Reply::empty(if signed_in { 204 } else { 401 }),
+        // ZIM pages: the token in the path is the credential; the session cookie plays no part.
+        _ if path.starts_with("/zim/") => zim(app, method, path, query).await,
         _ if path == "/api" || path.starts_with("/api/") => {
             if !signed_in {
                 return Reply::error(401, "unauthorized", "sign in first");
+            }
+            if let (Some(t), "POST", "/api/zim/token") = (token, method, path) {
+                return match app.auth.create_zim_token(t) {
+                    Ok(z) => ok(json!({"token": z, "ttl": app.auth.zim_secs})),
+                    Err(_) => Reply::error(500, "internal", "no token could be made"),
+                };
             }
             api(app, method, path, query, body).await
         }
@@ -873,5 +963,98 @@ mod tests {
         assert_eq!(route(&a, "POST", "/auth/webauthn/finish", None, br#"{"id":"x","credential":{}}"#).await.status, 400);
         assert_eq!(route(&a, "POST", "/auth/webauthn/finish", None, b"junk").await.status, 400);
         assert_eq!(serde_json::from_slice::<Value>(&route(&a, "GET", "/auth/state", None, b"").await.body).unwrap()["security_key_available"], false);
+    }
+
+    const ID: &str = "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b";
+
+    async fn zim_token(a: &App, cookie: &str) -> String {
+        let r = route(a, "POST", "/api/zim/token", Some(cookie), b"").await;
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(v["result"]["ttl"], 12 * 3600);
+        v["result"]["token"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_zim_token_needs_a_session_to_be_made() {
+        let d = TempDir::new("zimtok");
+        let a = file_app(&d);
+        assert_eq!(route(&a, "POST", "/api/zim/token", None, b"").await.status, 401);
+        assert_eq!(route(&a, "POST", "/api/zim/token", Some("cache_session=forged"), b"").await.status, 401);
+        let c = sign_in(&a).await;
+        let t = zim_token(&a, &c).await;
+        assert!(t.len() >= 40 && t != c.trim_start_matches("cache_session="));
+        assert_ne!(t, zim_token(&a, &c).await, "every call makes a new one");
+    }
+
+    #[tokio::test]
+    async fn a_zim_token_opens_zim_and_nothing_under_api() {
+        let d = TempDir::new("zimonly");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let t = zim_token(&a, &c).await;
+        // as a path with no cookie: /zim/ accepts it (503: the token is good, there is no helper in this test)
+        assert_eq!(route(&a, "GET", &format!("/zim/{t}/{ID}/A/x.html"), None, b"").await.status, 503);
+        // sent in place of the session cookie, it is not a session anywhere
+        let as_cookie = format!("cache_session={t}");
+        for (m, p) in [("GET", "/api/status"), ("POST", "/api/core"), ("POST", "/api/zim/token"), ("GET", "/api/library/items"), ("POST", "/api/library/upload"), ("GET", "/api/fetch")] {
+            assert_eq!(route(&a, m, p, Some(&as_cookie), br#"{"op":"version"}"#).await.status, 401, "{m} {p} with the token as the cookie");
+            assert_eq!(route(&a, m, p, None, br#"{"op":"version"}"#).await.status, 401, "{m} {p} with no cookie");
+        }
+        // carried in the path of an /api/ request, it does not sign anything in
+        for p in [format!("/api/core/{t}"), format!("/api/status/{t}"), format!("/api/zim/{t}/status")] {
+            assert_eq!(route(&a, "GET", &p, None, b"").await.status, 401, "{p}");
+        }
+        assert_eq!(route(&a, "GET", "/auth/check", Some(&as_cookie), b"").await.status, 401);
+        assert_eq!(route(&a, "GET", "/main.dart.js", Some(&as_cookie), b"").await.status, 401);
+        // and the session does not open /zim/ without the token
+        assert_eq!(route(&a, "GET", &format!("/zim/{ID}/A/x.html"), Some(&c), b"").await.status, 401);
+    }
+
+    #[tokio::test]
+    async fn zim_refuses_a_bad_or_expired_token() {
+        let d = TempDir::new("zimbad");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let t = zim_token(&a, &c).await;
+        for bad in ["nope".to_string(), String::new(), format!("{t}x"), t.to_uppercase(), c.trim_start_matches("cache_session=").to_string()] {
+            let r = route(&a, "GET", &format!("/zim/{bad}/{ID}/A/x.html"), Some(&c), b"").await;
+            assert_eq!(r.status, 401, "token {bad:?}");
+        }
+        assert_eq!(route(&a, "GET", "/zim/", Some(&c), b"").await.status, 404);
+        assert_eq!(route(&a, "GET", &format!("/zim/{t}"), None, b"").await.status, 404);
+        assert_eq!(route(&a, "GET", &format!("/zim/{t}/not-a-uuid/x"), None, b"").await.status, 404);
+        assert_eq!(route(&a, "POST", &format!("/zim/{t}/{ID}/x"), None, b"").await.status, 405);
+        // expiry: good until the end of its 12 hours, gone after
+        let at = crate::auth::now();
+        assert!(a.auth.zim_token_valid_at(&t, at + crate::auth::ZIM_TOKEN_SECS - 5));
+        assert!(!a.auth.zim_token_valid_at(&t, at + crate::auth::ZIM_TOKEN_SECS + 1));
+        // a server told to make them short-lived
+        let d2 = TempDir::new("zimshort");
+        let mut short = file_app(&d2);
+        let mut auth = Auth::load(&d2.0, true).unwrap();
+        auth.zim_secs = 0;
+        short.auth = Arc::new(auth);
+        let c2 = sign_in(&short).await;
+        let t2 = zim_token(&short, &c2).await;
+        assert_eq!(route(&short, "GET", &format!("/zim/{t2}/{ID}/A/x.html"), None, b"").await.status, 401);
+    }
+
+    #[tokio::test]
+    async fn zim_tokens_end_with_their_session() {
+        let d = TempDir::new("zimlogout");
+        let a = file_app(&d);
+        let c = sign_in(&a).await;
+        let c_other = sign_in(&a).await;
+        let t = zim_token(&a, &c).await;
+        let t_other = zim_token(&a, &c_other).await;
+        let page = |t: &str| format!("/zim/{t}/{ID}/A/x.html");
+        assert_eq!(route(&a, "GET", &page(&t), None, b"").await.status, 503);
+        assert_eq!(route(&a, "POST", "/auth/logout", Some(&c), b"").await.status, 204);
+        assert_eq!(route(&a, "GET", &page(&t), None, b"").await.status, 401, "its session signed out");
+        assert_eq!(route(&a, "GET", &page(&t_other), None, b"").await.status, 503, "another session's token is untouched");
+        // a session cleared by `set-password --sign-out-all` takes its tokens along
+        crate::auth::Sessions::clear_file(&d.0.join("sessions.json")).unwrap();
+        assert_eq!(route(&a, "GET", &page(&t_other), None, b"").await.status, 401);
     }
 }

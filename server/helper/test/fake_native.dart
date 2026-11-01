@@ -28,8 +28,33 @@ class FakeNative implements CsNative, CsLiveNative {
 
   int setSourcesResult = 0;
 
+  /// When set, the status the core reports now (a test changes it as the "index" gets built).
+  String? Function()? statusFn;
+
   @override
-  String? status(int handle) => replies['status'];
+  String? status(int handle) => statusFn != null ? statusFn!() : replies['status'];
+
+  /// Jobs: `jobStart` fails with [startError] (a core error JSON) when set; `jobProgress` answers these in order, then repeats the last.
+  String? startError;
+  int nextJob = 100;
+  final List<String> progressScript = [];
+
+  @override
+  int jobStart(String kind, String paramsJson) {
+    if (startError != null) {
+      error = startError;
+      return 0;
+    }
+    calls.add('jobStart:$kind:$paramsJson');
+    return nextJob++;
+  }
+
+  @override
+  String? jobProgress(int job) => progressScript.length > 1 ? progressScript.removeAt(0) : progressScript.single;
+  @override
+  int jobCancel(int job) => 0;
+  @override
+  void jobFree(int job) => calls.add('jobFree:$job');
   @override
   String? lastError(int handle) => error;
   @override
