@@ -219,6 +219,41 @@ pub fn body_size(pages: &[RawPage]) -> f32 {
     weighted_median(v).map(|k| k as f32 / 10.0).unwrap_or(10.0)
 }
 
+/// Whether a line of text can be a heading at all, whatever its size or weight: it does not start in lowercase, has at
+/// least three letters that are most of its characters, is not a page or figure reference, a time or a "NOTE:"-style
+/// callout, and does not end in a sentence period (unless it is a short numbered title such as "3-17. EFFECTS OF HUMIDITY.").
+pub fn plausible_heading(text: &str) -> bool {
+    let t = text.trim();
+    let Some(first) = t.chars().next() else { return false };
+    if first.is_lowercase() {
+        return false;
+    }
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    let non_space = t.chars().filter(|c| !c.is_whitespace()).count();
+    if letters < 3 || letters * 2 < non_space {
+        return false;
+    }
+    let word = t.split(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_ascii_uppercase();
+    if matches!(word.as_str(), "NOTE" | "NOTES" | "CAUTION" | "WARNING" | "DANGER") && t[word.len()..].trim_start().starts_with(':') {
+        return false;
+    }
+    if t.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | '–' | ':' | '.' | ' ' | '/')) {
+        return false;
+    }
+    let low = t.to_lowercase();
+    if (low.starts_with("figure ") || low.starts_with("fig.") || low.starts_with("fig ")) && t.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let end = t.trim_end_matches(['"', '”', '’', ')']);
+    if end.ends_with('.') {
+        let tok = t.split_whitespace().next().unwrap_or("");
+        let numbered = tok.chars().any(|c| c.is_ascii_digit()) && tok.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | '.' | '–'));
+        let all_caps = !t.chars().any(|c| c.is_lowercase());
+        return (numbered || all_caps) && t.split_whitespace().count() <= 8;
+    }
+    true
+}
+
 struct Style {
     body: f32,
     /// Heading sizes (rounded to half points), largest first; only sizes that occur on 3 or more lines.
@@ -278,10 +313,12 @@ impl Style {
             let rank = self.levels.iter().filter(|&&x| x > s + 0.01).count() + 1;
             return Some(rank.min(3) as u8);
         }
+        // A bold line at body size is a heading only when it is short, stands alone (the next line starts a new block, or
+        // is bold too, as in a title wrapped over two lines) and is not the first line of a paragraph that carries on.
         let words = l.text.split_whitespace().count();
-        // A bold line whose next line carries on in lowercase is the first line of a wrapped paragraph, not a heading.
         let wrapped = next.is_some_and(|n| n.text.trim_start().chars().next().is_some_and(|c| c.is_lowercase()));
-        if self.bold_rule && l.bold && !wrapped && !block_all_bold_long && l.size >= self.body * 0.95 && chars <= 80 && words <= 12 && !l.text.trim_end().ends_with(',') {
+        let alone = next.is_none_or(|n| n.bold);
+        if self.bold_rule && l.bold && alone && !wrapped && !block_all_bold_long && l.size >= self.body * 0.95 && chars <= 80 && words <= 8 && !l.text.trim_end().ends_with(',') {
             return Some(4);
         }
         None
@@ -562,6 +599,8 @@ pub fn layout(ext: &Extracted) -> Layout {
                     j += 1;
                 }
                 let run: Vec<&Line> = b.lines[i..j].iter().collect();
+                // The candidate heading must also read as one (see `plausible_heading`); otherwise it is body text.
+                let lvl = lvl.filter(|_| plausible_heading(&normalize_ws(&join_lines(run.iter().map(|l| l.text.as_str())))));
                 match lvl {
                     Some(level) => {
                         let text = normalize_ws(&join_lines(run.iter().map(|l| l.text.as_str())));
@@ -606,4 +645,40 @@ pub fn layout(ext: &Extracted) -> Layout {
         _ => true,
     });
     Layout { elements, ocr_pages, body_size: style.body }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn false_headings_are_rejected() {
+        // started lowercase
+        assert!(!plausible_heading("equivalent camouflage to improve concealment."));
+        assert!(!plausible_heading("and hospitalization of sick and wounded"));
+        // a sentence period
+        assert!(!plausible_heading("Clarification of terms."));
+        assert!(!plausible_heading("The team will not initiate contact."));
+        // but a short numbered title may end in one
+        assert!(plausible_heading("3-17. EFFECTS OF HUMIDITY."));
+        assert!(plausible_heading("3-17. EFFECTS OF HUMIDITY"));
+        assert!(plausible_heading("1. General"));
+        // a short all-capitals title may end in a period ("CHAPTER III.")
+        assert!(plausible_heading("CHAPTER III."));
+        // too few letters, mostly punctuation
+        assert!(!plausible_heading(".\u{201C}.\u{2014}"));
+        assert!(!plausible_heading("A1"));
+        assert!(!plausible_heading("-- 12 --"));
+        // page, figure and time references
+        assert!(!plausible_heading("6-7"));
+        assert!(!plausible_heading("0800"));
+        assert!(!plausible_heading("Figure 3-2"));
+        assert!(!plausible_heading("Figure A-4"));
+        // callouts
+        assert!(!plausible_heading("NOTE: The team will not initiate contact"));
+        assert!(!plausible_heading("CAUTION: Do not touch"));
+        assert!(!plausible_heading("WARNING: Hot"));
+        assert!(plausible_heading("NOTES ON THE TEXT"));
+        assert!(plausible_heading("MARKSMANSHIP"));
+    }
 }

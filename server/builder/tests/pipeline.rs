@@ -190,6 +190,25 @@ fn a_paragraph_in_large_type_is_not_a_heading() {
 }
 
 #[test]
+fn callouts_times_and_references_are_not_headings() {
+    let mut p = Page::new();
+    let body = wrap(&"Ordinary text runs along the page in the regular face for many lines. ".repeat(30), 70);
+    let body: Vec<&str> = body.iter().map(|s| s.as_str()).collect();
+    p.block(45.0, 40.0, 10.0, Font::Regular, &body[..6]);
+    p.line(45.0, 140.0, 10.0, Font::Bold, "NOTE: The team will not initiate contact");
+    p.block(45.0, 170.0, 10.0, Font::Regular, &body[6..12]);
+    p.line(45.0, 270.0, 10.0, Font::Bold, "0800");
+    p.line(45.0, 300.0, 10.0, Font::Bold, "6-7");
+    p.line(45.0, 330.0, 10.0, Font::Bold, "Figure 4-1");
+    p.block(45.0, 360.0, 10.0, Font::Regular, &body[12..18]);
+    p.line(45.0, 460.0, 10.0, Font::Bold, "MARKSMANSHIP");
+    p.block(45.0, 490.0, 10.0, Font::Regular, &body[18..24]);
+    let lay = layout(&extract_pdf(&make_pdf(&[p], None)).unwrap());
+    let heads: Vec<&str> = lay.elements.iter().filter_map(|e| if let Element::Heading { text, .. } = e { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(heads, vec!["MARKSMANSHIP"]);
+}
+
+#[test]
 fn running_heads_and_page_numbers_are_removed() {
     let mut pages = Vec::new();
     for n in 1..=9 {

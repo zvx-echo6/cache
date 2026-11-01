@@ -172,27 +172,87 @@ fn chunk_section(paras: &[(String, usize, bool, bool)], path: &[String], out: &m
     }
 }
 
+/// A section shorter than this (in words) is folded forward into the next section's piece.
+pub const SMALL_PIECE_WORDS: usize = 100;
+
+/// How a section began: whether a major heading (H1 or H2) is among those above its text, and the text of the headings
+/// since the previous section's text (kept inline when a small piece is merged forward).
+struct Start {
+    major: bool,
+    inline: String,
+}
+
 /// Chunk a document's elements (in reading order) into pieces.
+///
+/// A piece never crosses a heading, except that a piece under 100 words is merged forward into the first piece of the next
+/// section when the two fit in 300 words and no major heading (H1/H2) lies between them. The merged piece keeps the first
+/// section's heading path, and the next section's heading text stays inline in its text.
 pub fn chunk(elements: &[Element]) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
+    let mut starts: std::collections::HashMap<usize, Start> = std::collections::HashMap::new();
     let mut stack: Vec<(u8, String)> = Vec::new();
     let mut paras: Vec<(String, usize, bool, bool)> = Vec::new();
     let mut path: Vec<String> = Vec::new();
+    let mut run = Start { major: false, inline: String::new() };
+    let mut flush = |paras: &mut Vec<(String, usize, bool, bool)>, path: &[String], run: &mut Start, out: &mut Vec<Piece>| {
+        let before = out.len();
+        chunk_section(paras, path, out);
+        paras.clear();
+        if out.len() > before {
+            starts.insert(before, Start { major: run.major, inline: std::mem::take(&mut run.inline) });
+            run.major = false;
+        }
+    };
     for el in elements {
         match el {
             Element::Heading { level, text, .. } => {
-                chunk_section(&paras, &path, &mut out);
-                paras.clear();
+                if !paras.is_empty() {
+                    flush(&mut paras, &path, &mut run, &mut out);
+                    run.inline.clear();
+                    run.major = false;
+                }
                 while stack.last().is_some_and(|(l, _)| l >= level) {
                     stack.pop();
                 }
                 stack.push((*level, text.clone()));
                 path = stack.iter().map(|(_, t)| t.clone()).collect();
+                if !run.inline.is_empty() {
+                    run.inline.push(' ');
+                }
+                run.inline.push_str(text);
+                run.major |= *level <= 2;
             }
             Element::Para { text, page, bullet, aside } => paras.push((text.clone(), *page, *bullet, *aside)),
         }
     }
-    chunk_section(&paras, &path, &mut out);
+    flush(&mut paras, &path, &mut run, &mut out);
+    merge_small(out, &starts)
+}
+
+fn merge_small(pieces: Vec<Piece>, starts: &std::collections::HashMap<usize, Start>) -> Vec<Piece> {
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    let mut i = 0;
+    while i < pieces.len() {
+        let mut cur = pieces[i].clone();
+        let mut j = i + 1;
+        while word_count(&cur.text) < SMALL_PIECE_WORDS && j < pieces.len() {
+            let Some(s) = starts.get(&j) else { break };
+            if s.major {
+                break;
+            }
+            let next = &pieces[j];
+            let joined = if s.inline.is_empty() { next.text.clone() } else { format!("{} {}", s.inline, next.text) };
+            if word_count(&cur.text) + word_count(&joined) > MAX_WORDS {
+                break;
+            }
+            cur.text = format!("{} {}", cur.text, joined);
+            cur.page_end = cur.page_end.max(next.page_end);
+            j += 1;
+        }
+        cur.index = out.len() as u32;
+        out.push(cur);
+        i = j;
+    }
     out
 }
 
@@ -299,6 +359,38 @@ mod tests {
         let p = chunk(&[Element::Para { text, page: 0, bullet: false, aside: false }]);
         assert!(p.len() >= 3);
         assert!(p.iter().all(|x| word_count(&x.text) <= MAX_WORDS));
+    }
+
+    fn h(level: u8, text: &str) -> Element {
+        Element::Heading { level, text: text.into(), page: 0 }
+    }
+
+    fn p(words: usize) -> Element {
+        Element::Para { text: sentence(0, words), page: 0, bullet: false, aside: false }
+    }
+
+    #[test]
+    fn small_sections_merge_forward_and_keep_their_headings() {
+        let els = vec![h(1, "Part"), h(3, "Alpha"), p(20), h(3, "Beta"), p(15), h(3, "Gamma"), p(120)];
+        let pieces = chunk(&els);
+        assert_eq!(pieces.len(), 1, "{pieces:?}");
+        assert_eq!(pieces[0].heading_path, vec!["Part", "Alpha"]);
+        assert!(pieces[0].text.contains(" Beta S0 ") && pieces[0].text.contains(" Gamma S0 "), "{}", pieces[0].text);
+        assert!(word_count(&pieces[0].text) <= MAX_WORDS);
+    }
+
+    #[test]
+    fn small_sections_do_not_merge_across_a_major_heading_or_past_the_cap() {
+        // the next section sits under an H2: the small piece before it stays alone
+        let pieces = chunk(&[h(1, "Part"), h(3, "Alpha"), p(20), h(2, "Next chapter"), p(100)]);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].heading_path, vec!["Part", "Alpha"]);
+        // the next piece is too large to join
+        let pieces = chunk(&[h(1, "Part"), h(3, "Alpha"), p(20), h(3, "Beta"), p(290)]);
+        assert_eq!(pieces.len(), 2);
+        assert!(pieces.iter().all(|x| word_count(&x.text) <= MAX_WORDS));
+        // a whole document that is small stays one piece
+        assert_eq!(chunk(&[p(20)]).len(), 1);
     }
 
     #[test]
