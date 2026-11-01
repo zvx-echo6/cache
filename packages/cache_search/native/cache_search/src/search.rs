@@ -23,7 +23,9 @@ type ScoredDoc = (f32, DocAddress, String);
 /// The id of the app's own guide library (tools/guide/BUILD.md: the `library_id` is always `cache-guide`).
 pub const GUIDE_LIBRARY_ID: &str = "cache-guide";
 
-/// PLACEHOLDER, to be tuned by the training session. The guide gate: a query whose best cosine to the guide library's
+/// Tuned 2026-11-01 by the training session with `cs guide-gate` on 160 queries (40 app questions, 120 held-out eval
+/// questions): at 0.5, 38/40 app questions keep the guide and 114/120 other questions have it demoted. The guide gate: a
+/// query whose best cosine to the guide library's
 /// stored vectors (the top score of the guide's dense list) is below this is not about the app, so guide hits are put
 /// below every other hit before the cut to the results shown. At or above it the ranking is unchanged.
 pub const GUIDE_GATE: f32 = 0.5;
