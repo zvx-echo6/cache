@@ -165,7 +165,7 @@ While a region downloads, its row shows each part and where it stands. A part th
 
 - The parts are map, directions, places and off-road.
 - A stopped part reads `Map stopped at 80%`.
-- If it stopped, tap "Carry on". See A region's own page.
+- If it stopped, tap "Resume". See A region's own page.
 
 ## Off-road data in regions
 
@@ -187,13 +187,13 @@ Tap a region on the "Local" tab, or in "Settings" > "Maps", to open its page. It
 
 1. Open the region. The parts are "Map", "Directions", "Places" and "Off-road".
 2. Read each state: "Ready", a percentage with `to go`, waiting, or "Stopped".
-3. Fix a part right there. A stopped part has "Carry on". A failed one has "Try again". Missing off-road says "Not on this device", with "Add".
+3. Fix a part right there. A stopped or failed part has "Resume", or "Free space" if the device is full. Missing off-road says "Not on this device", with "Add".
 
 Below the parts, "Map layers in this region" lists each layer the same way.
 
 To remove the region, tap "Delete [region]" at the bottom. The "Region options" menu is at the top right.
 
-- If a part says "Couldn't finish", tap "Try again". If it keeps failing, remove the region and download it again.
+- If a part says "Couldn't finish", tap "Resume". If it keeps failing, remove the region and download it again.
 - If you're offline, connect first.
 
 If places are not published for the region yet:
@@ -204,7 +204,7 @@ If places are not published for the region yet:
 If a part failed because the device is full:
 - The part's fix button is "Free space".
 
-If "Try again" fails twice:
+If "Resume" fails twice:
 1. Tap "Delete and start again" on the region's page.
 2. In the pop-up, read "What is on this device for [region] is deleted, then downloaded again."
 3. Tap "Start again". Cache says "Starting [region] again".
