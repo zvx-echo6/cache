@@ -3,7 +3,7 @@
 #
 # The tarball is what server/packaging/install.sh unpacks: cache-server (the program), helper/cache-core-helper (the Dart helper
 # that hosts the core, compiled with `dart compile exe` on each architecture's own runner), lib/libcache_search.so (the core
-# library the helper loads), web/ (the real Flutter web build), VERSION and cache-server.service, with install.sh beside them.
+# library the helper loads), lib/libzim.so.9 (the libzim the core links), web/ (the real Flutter web build), VERSION and cache-server.service, with install.sh beside them.
 #
 # The web build bundles canvaskit (--no-web-resources-cdn) and serves its fonts from web/fontfallback, so Cache Server works with no internet.
 #
@@ -17,12 +17,15 @@
 # its sha256), embeds three fixed texts with cache_embed's own example (the program the places pack builder uses) and through the
 # server, requires cosine >= 0.9999 between them, and prints load time, memory and texts/s.
 #
-# The core builds on Linux without libzim: the C++ shim over libzim is built only for Windows, Android and iOS (see
-# packages/cache_search/native/cache_search/build.rs), so LIBZIM_DIR is not needed here.
+# The core is built with libzim and the C++ shim over it (the `xapian` feature, build.rs), as on the phone: Kiwix's official prebuilt
+# libzim 9.8.2-1 (pinned by sha256 in packages/cache_search/native/zimx/fetch-libzim-linux.sh, fetched by the composite action
+# .github/actions/libzim-prebuilt, which sets LIBZIM_DIR), so a ZIM's own Xapian index is searched exactly as on the phone. libzim.so.9
+# (Xapian and ICU inside) ships in lib/ next to libcache_search.so, which finds it through RPATH $ORIGIN. The native-libs workflow
+# (native-libs.yml) builds and tests the same two libraries on their own.
 #
 # The build jobs run inside an ubuntu:22.04 container (on the same native runners) so the binaries need glibc 2.35 or older and
 # run on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+. A step after the build fails the job if any of the
-# binaries needs a newer glibc.
+# binaries needs a newer glibc. (libzim.so.9 also needs GCC 12's libstdc++, GLIBCXX_3.4.30: Ubuntu 22.04+, Debian 12+, bookworm+.)
 name: Cache Server build
 
 on:
@@ -35,6 +38,7 @@ on:
       - 'packages/cache_search/native/**'
       - 'packages/cache_llama/**'
       - '.github/workflows/server-release.yml'
+      - '.github/actions/libzim-prebuilt/**'
   workflow_dispatch:
 
 permissions:
@@ -121,6 +125,12 @@ jobs:
           . "$HOME/.cargo/env"
           echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           rustc --version
+      # The official prebuilt libzim for this architecture; sets LIBZIM_DIR for the core's build below.
+      - name: Pinned libzim 9.8.2-1 (official prebuilt)
+        uses: ./.github/actions/libzim-prebuilt
+        with:
+          arch: ${{ matrix.arch }}
+          dir: ${{ runner.temp }}/zimbuild
       # The Dart SDK Flutter 3.44.8 bundles; setup-dart has Linux x64 and arm64 builds of it.
       - uses: dart-lang/setup-dart@v1
         with:
@@ -157,28 +167,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build-llama/libcache_llama.so
-          key: libcache-llama-${{ matrix.arch }}-${{ steps.llama.outputs.rev }}-${{ hashFiles('packages/cache_llama/src/**') }}-g2235-1
+          key: libcache-llama-${{ matrix.arch }}-${{ steps.llama.outputs.rev }}-${{ hashFiles('packages/cache_llama/src/**', 'packages/cache_llama/scripts/build-linux.sh') }}-g2235-2
       - name: Build libcache_llama
         if: steps.llama-cache.outputs.cache-hit != 'true'
         working-directory: .
-        run: |
-          avx2=""
-          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then avx2="-DCACHE_LLAMA_X86_AVX2=ON"; fi
-          # libstdc++ and libgcc are linked in, so the installed library needs nothing but libc.
-          cmake -S packages/cache_llama/src -B build-llama -DCMAKE_BUILD_TYPE=Release $avx2 \
-            -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
-          cmake --build build-llama --target cache_llama -j "$(nproc)"
-          strip --strip-unneeded build-llama/libcache_llama.so
+        # The same script native-libs.yml uses: CMake (AVX2 on x86_64, baseline Armv8-A on aarch64), libstdc++ and libgcc linked in,
+        # stripped, and the cl_embed symbols checked.
+        run: bash packages/cache_llama/scripts/build-linux.sh "$PWD/build-llama"
       - name: Check libcache_llama
         working-directory: .
         run: |
           ls -l build-llama/libcache_llama.so
           ldd build-llama/libcache_llama.so || true
-          # (the output is read whole: grep -q ending a pipe early would fail the step under pipefail)
-          symbols=$(nm -D --defined-only build-llama/libcache_llama.so)
-          for s in cl_embed_load cl_embed_info cl_embed cl_embed_free; do
-            grep -q " T $s\$" <<< "$symbols" || { echo "::error::libcache_llama.so has no $s"; exit 1; }
-          done
           echo "max glibc: $(objdump -T build-llama/libcache_llama.so | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)"
       # The embedding model, cached by its sha256 (the app's pinned file: app/lib/models/search_model.dart).
       - name: Embedding model cache
@@ -263,7 +263,8 @@ jobs:
         run: |
           limit="2.35"
           fail=0
-          for f in packages/cache_search/native/target/release/cache-server packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper"; do
+          zimlib=$(ls "$LIBZIM_DIR"/lib/*/libzim.so.9)
+          for f in packages/cache_search/native/target/release/cache-server packages/cache_search/native/target/release/libcache_search.so build-llama/libcache_llama.so "$RUNNER_TEMP/helper/cache-core-helper" "$zimlib"; do
             max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
             echo "$f: max GLIBC_${max:-none}"
             if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
@@ -290,6 +291,12 @@ jobs:
           install -m 755 "$RUNNER_TEMP/helper/cache-core-helper" "$stage/helper/cache-core-helper"
           install -m 644 packages/cache_search/native/target/release/libcache_search.so "$stage/lib/libcache_search.so"
           install -m 644 build-llama/libcache_llama.so "$stage/lib/libcache_llama.so"
+          # libzim (Xapian and ICU inside): the core finds it next to itself (RPATH $ORIGIN); the real file under the soname the core needs.
+          cp -L "$LIBZIM_DIR"/lib/*/libzim.so.9 "$stage/lib/libzim.so.9"
+          chmod 644 "$stage/lib/libzim.so.9"
+          readelf -d "$stage/lib/libcache_search.so" | grep -q 'NEEDED.*\[libzim.so.9\]' || { echo "::error::libcache_search.so was built without libzim"; exit 1; }
+          if env -u LD_LIBRARY_PATH ldd "$stage/lib/libcache_search.so" | grep 'not found'; then echo "::error::the core has a missing library"; exit 1; fi
+          env -u LD_LIBRARY_PATH ldd "$stage/lib/libcache_search.so" | grep libzim
           cp -R "$RUNNER_TEMP/web-build/." "$stage/web/"
           if [[ ! -f "$stage/web/index.html" ]]; then echo "::error::the web build has no index.html"; exit 1; fi
           printf '%s\n' "$version" > "$stage/VERSION"
