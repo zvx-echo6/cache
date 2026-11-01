@@ -58,8 +58,10 @@ jobs:
           cache-on-failure: true
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
+      # Every crate and target except the two the desktop has never linted, which carry known clippy debt (cache_search_cli:
+      # an unused import and an unneeded to_string; offroad_pack: 12 lints). Drop an --exclude once its crate is clean.
       - name: Clippy
-        run: cargo clippy --workspace --locked --keep-going -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --keep-going --exclude cache_search_cli --exclude offroad_pack -- -D warnings
 
   flutter:
     runs-on: ubuntu-latest
