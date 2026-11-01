@@ -67,7 +67,6 @@ import 'package:cache/regions/ui/region_page.dart';
 import 'package:cache/regions/ui/regions_list_sheet.dart';
 import 'package:cache/regions/ui/regions_screen.dart';
 import 'package:cache/screens/download_confirm.dart' show confirmDownload, openStorageForSpace;
-import 'package:cache/screens/crisis_card.dart';
 import 'package:cache/screens/home_screen.dart';
 import 'package:cache/screens/setup_card.dart';
 import 'package:cache/search/app_search.dart';
@@ -539,7 +538,7 @@ void main() {
   }
 
   // The app's Ask has "Need help now?" in its top bar (1.0.29); the sheet itself is not shown here.
-  Widget askScreen(_AskRig a) => AskScreen(app: a.r.app, chat: a.chat, location: a.r.location, layout: a.layout, onOpenSource: (_) {}, onOpenNavigation: (_) {}, crisisHelp: _NoHelp());
+  Widget askScreen(_AskRig a) => AskScreen(app: a.r.app, chat: a.chat, location: a.r.location, layout: a.layout, onOpenSource: (_) {}, onOpenNavigation: (_) {});
 
   testWidgets('ask, ask-sources, ask-plus-menu, ask-model-menu, ask-report', (tester) async {
     final a = await askRig(tester);
@@ -1364,26 +1363,3 @@ class _MapRig {
   NotebookState? notebooks;
 }
 
-/// "Need help now?" needs something to open; the guide's pictures never open it.
-class _NoHelp implements CrisisHelp {
-  @override
-  Future<bool> canPlaceCalls() async => true;
-  @override
-  Future<bool?> hasSignal() async => true;
-  @override
-  Future<bool> launch(Uri uri) async => false;
-  @override
-  Future<NearestEr> nearestEr() async => const NearestEr(ErState.noMap);
-  @override
-  Future<bool> guidesInstalled() async => false;
-  @override
-  void openGuides(BuildContext context) {}
-  @override
-  void getGuides(BuildContext context) {}
-  @override
-  void getMap(BuildContext context) {}
-  @override
-  Future<void> turnOnLocation() async {}
-  @override
-  void directions(BuildContext context, MapPlace place) {}
-}

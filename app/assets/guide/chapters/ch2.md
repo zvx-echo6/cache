@@ -201,29 +201,6 @@ The assistant can be wrong, even with sources. For anything about your safety, r
 
 - If you see "No answer was produced.", ask again in other words, or tap "New chat".
 
-## Need help now?
-
-"Need help now?" is a link in the top bar of "Ask". It opens a sheet with ways to get help. It covers the US and Canada.
-
-1. Open "Ask".
-2. Tap "Need help now?" in the top bar.
-3. Read the card, "You don't have to go through this alone".
-4. Tap "Close" when you are done.
-
-The card has:
-- "Call 988" and "Text 988": "Suicide & Crisis Lifeline. Needs a phone signal.";
-- "Call 911": "If you're in danger right now.";
-- "Nearest emergency room": its name and distance, its phone number and "Directions". While it searches it says "Looking in your map…";
-- "Right now": three steps. 1. Put distance between you and anything you could use to hurt yourself. 2. Go where other people are. 3. Reach one person you trust, even with one message.;
-- "Crisis guides": "In your Library, works offline".
-
-When the card is closed, one line stays: "Help is available: 988 · nearest ER".
-
-- If the guides are not in your Library, it says "Not in your Library yet" with "Get guides".
-- If the device can't call, it says "This device can't place calls. Use another phone." The numbers show as text.
-- If the phone app won't open, it says "Couldn't open the phone app. Dial 988 yourself." For 911 it asks you to dial 911 yourself.
-- If there is no signal, it says "No signal right now. Calls and texts need a signal."
-
 ## Report this answer
 
 Use this when an answer is wrong, made up or harmful.

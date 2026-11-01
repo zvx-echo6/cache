@@ -14,7 +14,6 @@ import '../browse/zim_urls.dart';
 import '../chat/ask_about.dart';
 import '../chat/chat_controller.dart';
 import '../chat/chat_location.dart';
-import '../chat/crisis.dart';
 import '../chat/navigation_action.dart';
 import '../guide/app_links.dart';
 import '../guide/guide_book.dart';
@@ -44,8 +43,6 @@ import '../video/video_state.dart';
 import '../weather/alert_notifier.dart';
 import '../weather/alert_watch.dart';
 import 'ask_screen.dart';
-import 'crisis_card.dart' show CrisisHelp;
-import 'crisis_help.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
 import 'models_screen.dart';
@@ -561,32 +558,8 @@ class _ShellState extends State<Shell> {
     onOpenLibrary: () => _goModule(ModuleId.library),
   );
 
-  /// The safety card's turns in Ask (no detector yet: only "Need help now?" opens the card).
-  final CrisisWatch _crisis = CrisisWatch();
-
-  late final CrisisHelp _crisisHelp = AppCrisisHelp(
-    nav: widget.nav,
-    location: widget.location,
-    policy: widget.hub.policy,
-    installedIds: () => {for (final z in widget.sources.zims) ?widget.sources.originOf(z)?.name, for (final l in widget.browse.libraries?.libraries ?? const <LibraryItem>[]) l.folderName},
-    onOpenGuides: (_) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      _goModule(ModuleId.library);
-    },
-    onGetGuides: (_) => showAddToLibrary(context, widget.browse),
-    onGetMap: (_) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      _getArea(context);
-    },
-    onDirections: (_, place) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      _goModule(ModuleId.maps);
-      if (widget.nav.phase == NavPhase.browsing) widget.nav.openDirections(place);
-    },
-  );
-
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, crisis: _crisis, crisisHelp: _crisisHelp),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video),

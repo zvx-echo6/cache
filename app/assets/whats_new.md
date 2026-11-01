@@ -5,7 +5,6 @@ written by the owner (lead words in **bold**). A version with no lines shows no 
 
 ## 1.0.29
 - **Emergency alerts:** official IPAWS alerts for your area, along with the weather alerts.
-- **Crisis help:** "Need help now?" in Ask opens 988, 911 and the nearest ER, any time.
 - **Faster downloads:** region maps download many times faster, with speed and time left shown.
 - **Faster places:** places and addresses are ready in seconds after a download, not minutes.
 - **Read about it:** places with a Wikipedia article show a short summary, and open the article.

@@ -1,8 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../chat/crisis.dart';
-import 'crisis_card.dart';
-
 import '../app_state.dart';
 import '../chat/answer_markdown.dart';
 import '../chat/answer_reports.dart';
@@ -35,15 +32,7 @@ class AskScreen extends StatefulWidget {
     this.location,
     this.chatLocation,
     this.reports,
-    this.crisis,
-    this.crisisHelp,
   });
-
-  /// The safety card's turns (which user messages showed one); null: no inline card.
-  final CrisisWatch? crisis;
-
-  /// What the safety card does (calls, the nearest emergency room, the guides); null leaves "Need help now?" out.
-  final CrisisHelp? crisisHelp;
 
   /// Where "Report this answer" keeps its reports (on this phone); the app's store when null.
   final AnswerReports? reports;
@@ -107,15 +96,7 @@ class _AskScreenState extends State<AskScreen> {
     super.dispose();
   }
 
-  /// The last user message shows its safety card open: the answer does not pull it out of view.
-  bool get _cardOpen {
-    final c = widget.crisis;
-    final last = widget.chat.messages.where((m) => m.isUser).lastOrNull;
-    return c != null && last != null && (c.turnOf(last)?.open ?? false);
-  }
-
   void _scrollDown() {
-    if (_cardOpen) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
       final pos = _scroll.position;
@@ -130,9 +111,6 @@ class _AskScreenState extends State<AskScreen> {
     if (text.trim().isEmpty || !widget.chat.canSend) return;
     _input.clear();
     widget.chat.send(text);
-    // The message is in the chat now (send adds it before it waits): the safety check reads it with the user turn before it.
-    final sent = widget.chat.messages.where((m) => m.isUser).lastOrNull;
-    if (sent != null) widget.crisis?.checkSent(widget.chat.messages, sent);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
     });
@@ -315,15 +293,7 @@ class _AskScreenState extends State<AskScreen> {
             );
           },
         ),
-        // "Need help now?": always there, quiet; with large text it takes a row of its own under the bar.
-        bottom: widget.crisisHelp != null && _bigText(context)
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(48),
-                child: Align(alignment: Alignment.centerLeft, child: Padding(padding: const EdgeInsets.only(left: 8), child: NeedHelpLink(help: widget.crisisHelp!))),
-              )
-            : null,
         actions: [
-          if (widget.crisisHelp != null && !_bigText(context)) NeedHelpLink(help: widget.crisisHelp!),
           ListenableBuilder(
             listenable: widget.chat,
             builder: (context, _) => widget.chat.activeId == null || widget.chat.busy
@@ -351,7 +321,7 @@ class _AskScreenState extends State<AskScreen> {
           children: [
             Expanded(
               child: ListenableBuilder(
-                listenable: Listenable.merge([widget.chat, widget.app, ?widget.crisis]),
+                listenable: Listenable.merge([widget.chat, widget.app]),
                 builder: (context, _) {
                   final msgs = widget.chat.messages;
                   if (msgs.isEmpty) {
@@ -387,7 +357,7 @@ class _AskScreenState extends State<AskScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                     itemCount: msgs.length,
                     itemBuilder: (_, i) => msgs[i].isUser
-                        ? _userTurn(msgs[i])
+                        ? _UserBubble(msgs[i].text)
                         : _AssistantBlock(
                             msgs[i],
                             onOpenSource: widget.onOpenSource,
@@ -405,27 +375,6 @@ class _AskScreenState extends State<AskScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  static bool _bigText(BuildContext context) => MediaQuery.textScalerOf(context).scale(1) > 1.3;
-
-  /// A user message, and under it its safety card when it triggered one (in full, or its one line).
-  Widget _userTurn(ChatMessage m) {
-    final c = widget.crisis, help = widget.crisisHelp;
-    final t = c?.turnOf(m);
-    if (c == null || help == null || t == null) return _UserBubble(m.text);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _UserBubble(m.text),
-        const SizedBox(height: 8),
-        AnimatedSize(
-          duration: MediaQuery.disableAnimationsOf(context) ? Duration.zero : const Duration(milliseconds: 200),
-          alignment: Alignment.topCenter,
-          child: t.open ? CrisisCard(key: ValueKey(m), help: help, onClose: () => c.setOpen(m, false)) : CrisisLine(onOpen: () => c.setOpen(m, true)),
-        ),
-      ],
     );
   }
 
