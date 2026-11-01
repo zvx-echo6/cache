@@ -318,7 +318,7 @@ void main() {
       await tester.runAsync(device.refresh);
       await tester.pumpWidget(screen(AddToLibraryScreen(browse: browse)));
       await tester.pumpAndSettle();
-      expect(find.text('Downloading 100 B of 1000 B'), findsOneWidget);
+      expect(find.text('100 of 1000 B'), findsOneWidget);
     });
   });
 
