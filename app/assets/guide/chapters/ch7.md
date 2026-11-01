@@ -1,17 +1,17 @@
 # 7. Privacy
 
-## What stays on your phone
+## What stays on your device
 
-Cache works on your phone, with no account and no Cache server in the middle.
+Cache works on your device, with no account and no Cache server in the middle.
 
-These stay on your phone:
+These stay on your device:
 - the assistant and its model, so your questions and answers are worked out there;
 - your chats, and your reports from "Report this answer";
 - your notebooks, places, Home layout and settings;
 - your Library, libraries, maps, regions, models and saved videos;
-- your keys, in the phone's secure storage.
+- your keys, in the device's secure storage.
 
-Cache has no sign-in. The phone's own encryption and screen lock protect the data. Keep a screen lock on.
+Cache has no sign-in. The device's own encryption and screen lock protect the data. Keep a screen lock on.
 
 ## Remove what Cache keeps
 
@@ -39,7 +39,7 @@ Cache goes online only for these, each talking directly to the service named:
 
 ## Your location
 
-Cache uses your location whenever your phone allows it. It never asks in "Ask". "Find me" in "Maps" and "Turn on weather" ask the first time, only while you use the app.
+Cache uses your location whenever your device allows it. It never asks in "Ask". "Find me" in "Maps" and "Turn on weather" ask the first time, only while you use the app.
 
 It is used for:
 - showing you on the map and following you in directions;
@@ -55,11 +55,11 @@ When you search a place in an area you haven't downloaded, Cache's data server s
 - Turn off "Use my location" to keep your position out of your questions. It is in ["Settings" > "Cache model and web search"](cache://settings/assistant) and the + menu in "Ask".
 - Turn off "Your location" under "What weather watches" in ["Settings" > "Weather and alerts"](cache://settings/weather). Add a nearby town as a place instead.
 - Turn off "Show my position" in "Maps" > "Layers". Cache then stops reading your position and forgets the last one.
-- Refuse location in the phone's settings. Maps, Ask and weather keep working. You choose places by hand.
+- Refuse location in the device's settings. Maps, Ask and weather keep working. You choose places by hand.
 
 ## Keys and logins
 
-Keys and logins are stored in the phone's secure storage (Android Keystore or iOS Keychain). They are never shown again after saving.
+Keys and logins are stored in the device's secure storage (Android Keystore or iOS Keychain). They are never shown again after saving.
 
 - Kagi key: entered in ["Settings" > "Cache model and web search"](cache://settings/assistant).
 - Data source keys: entered on the source's row in ["Settings" > "Weather and alerts"](cache://settings/weather).
@@ -77,7 +77,7 @@ Keys aren't shared between devices. Add them on each device.
 
 ## The assistant and web search
 
-The assistant runs on your phone. It reads your Library, libraries, notebooks, downloaded places and maps, and weather data. None of this is sent anywhere to answer you.
+The assistant runs on your device. It reads your Library, libraries, notebooks, downloaded places and maps, and weather data. None of this is sent anywhere to answer you.
 
 It goes online only for:
 - Web search: Kagi gets the search words the assistant writes, not your whole chat. This needs a Kagi key and "Search the web when online" on.
@@ -86,16 +86,16 @@ It goes online only for:
 
 To never search the web, leave "Search the web when online" off, or remove the Kagi key.
 
-When "Use my location" is on, your position goes to the assistant on the phone, to answer about nearby places.
+When "Use my location" is on, your position goes to the assistant on the device, to answer about nearby places.
 
-"Report this answer" stays on your phone.
+"Report this answer" stays on your device.
 
 ## Private notebooks
 
 "Private" leaves a notebook or entry out of sharing and sync by default. It doesn't hide it from the assistant.
 
 - A private notebook isn't sent to your other devices unless you include it. Open "Edit notebook" and turn on "Include in sync and sharing". It's off by default.
-- Once Cache is open, the assistant can read everything in your notebooks, private ones too. It does this on your phone.
+- Once Cache is open, the assistant can read everything in your notebooks, private ones too. It does this on your device.
 - Private is not encryption or a lock. Keep a screen lock on.
 
 Obsidian and Logseq are an exception. If you connect a folder in ["Notebooks" > "Connections"](cache://notebooks), private entries are written to it too, with a private mark in their properties. Any app that can open that folder can read them as plain Markdown.

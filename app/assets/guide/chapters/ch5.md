@@ -2,7 +2,7 @@
 
 ## What notebooks are
 
-"Notebooks" is where you write things down on your phone. You keep several notebooks. Each is made from a template:
+"Notebooks" is where you write things down on your device. You keep several notebooks. Each is made from a template:
 - "Journal": dated entries about what happened.
 - "Log": something you do again and again, such as a generator test.
 - "Notes": plans, checklists and lists you keep updating.
@@ -56,7 +56,7 @@ Once entries have places, "Show on map" puts them on the map. It is a switch in 
 
 - If you leave before "Done", the journal shows "Unfinished entry · Tue 4:12 PM" (the time varies) with "Continue".
 - If there's no position yet, the entry says "No position yet" and still saves.
-- If you see "Not saved. Your phone may be out of space.", free space and tap "Try again". Your text is kept.
+- If you see "Not saved. Your device may be out of space.", free space and tap "Try again". Your text is kept.
 
 To delete an entry, open it and choose "Delete". Tap "Undo" on "Entry deleted" to bring it back.
 
@@ -114,7 +114,7 @@ The Places notebook holds your saved places and shows them on the map.
 
 Each place has its own marker colour. Tap a marker to show or hide the place on the map. A hidden place has an outlined marker with a slash.
 
-Weather for where the phone is is set by "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
+Weather for where the device is is set by "Your location" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 You can also save a place from the map. Press and hold the map and choose "Save", or tap "Save place" on a place's card.
 
@@ -165,7 +165,7 @@ Tap the centre to open the spot's coordinate card. It shows latitude and longitu
 "From here" starts directions at the spot.
 
 1. Press and hold the map and choose "From here".
-2. Choose where to go in the search that opens. A chip says the route starts at the spot. Tap it to go back to the phone's position.
+2. Choose where to go in the search that opens. A chip says the route starts at the spot. Tap it to go back to the device's position.
 
 If a route is already shown, it is worked out again from the spot.
 
@@ -262,7 +262,7 @@ To include it:
 2. Turn on "Include in sync and sharing". It's off by default.
 
 - Private doesn't hide a notebook from the assistant. Once Cache is open, it can read everything in your notebooks.
-- Private is not a lock. Keep a screen lock on your phone.
+- Private is not a lock. Keep a screen lock on your device.
 - Obsidian and Logseq folders still get private notebooks. See Write notebooks to Obsidian or Logseq.
 
 Some starter logs, such as medication and health, start private. You can switch it off.
