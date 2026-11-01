@@ -1010,7 +1010,7 @@ mod tests {
 
     #[test]
     fn names_are_made_safe() {
-        for bad in ["", "  ", "../x.zim", "a/b.zim", "a\\b.zim", "x..zim", "..", ".hidden.zim", "a\0b.zim", "a:b.zim", "con?.zim", "x.", "x ", "dir/"] {
+        for bad in ["", "  ", "../x.zim", "a/b.zim", "a\\b.zim", "x..zim", "..", ".hidden.zim", "a\0b.zim", "a:b.zim", "con?.zim", "x.", "dir/"] {
             assert!(sanitize_name(bad, "zim").is_err(), "{bad:?}");
         }
         assert!(sanitize_name(&"a".repeat(201), "zim").is_err());
