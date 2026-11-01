@@ -114,9 +114,18 @@ fn cache_library(snapshot: &Path, settings: &Value, out: &Path) {
     let mut a = tar::Archive::new(std::fs::File::open(snapshot).unwrap());
     for e in a.entries().unwrap() {
         let mut e = e.unwrap();
-        let mut h = e.header().clone();
         let p = e.path().unwrap().into_owned();
-        b.append_data(&mut h, p, &mut e).unwrap();
+        // On Linux tar's Builder writes the blank snapshot's preallocated (zero) files as GNU sparse entries; the entry reads
+        // back expanded, so it is copied as a plain file of that length (a cloned sparse header with the expanded bytes
+        // corrupts the archive, and the reader stops at the first run of zero blocks, before cache-library.json).
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut e, &mut data).unwrap();
+        let src = e.header();
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(if src.entry_type().is_dir() { tar::EntryType::Directory } else { tar::EntryType::Regular });
+        h.set_mode(src.mode().unwrap());
+        h.set_size(data.len() as u64);
+        b.append_data(&mut h, p, &data[..]).unwrap();
     }
     let bytes = serde_json::to_vec(settings).unwrap();
     let mut h = tar::Header::new_gnu();
