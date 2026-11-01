@@ -5,6 +5,7 @@ written by the owner (lead words in **bold**). A version with no lines shows no 
 
 ## 1.0.29
 - **Emergency alerts:** official IPAWS alerts for your area, along with the weather alerts.
+- **Faster downloads:** region maps download many times faster, with speed and time left shown.
 - **Downloads:** every download shows what it is doing, with speed and time left, and can be paused and resumed.
 - **Models:** Gemma 4 E2B tuned for Cache is now recommended; uncensored models are listed apart, under Experimental.
 - **Faster places:** places and addresses are ready in seconds after a download, not minutes.
