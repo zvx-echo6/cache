@@ -35,7 +35,6 @@ import '../search/app_search_providers.dart';
 import '../search/notebook_search_providers.dart';
 import '../regions/ui/regions_screen.dart';
 import '../settings/hub.dart';
-import '../sources/libraries_state.dart' show LibraryItem;
 import '../sources/sources_state.dart';
 import '../update/app_update.dart' show ReleaseFileSource;
 import '../update/update_ui.dart';

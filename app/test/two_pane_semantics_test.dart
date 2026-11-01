@@ -7,7 +7,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A two-pane page as Settings, Regions, Notebooks, Library and the guide build one: a list with "Hide list" in its top bar
-/// and rows that open their page in the detail pane, whose top bar has "Show <list>" while the list is hidden.
+/// and rows that open their page in the detail pane, whose top bar has "Show Things" while the list is hidden.
 class _List extends StatelessWidget {
   const _List();
 
@@ -53,7 +53,7 @@ List<String> _reachable(WidgetTester tester) {
     return true;
   }
 
-  visit(tester.binding.pipelineOwner.semanticsOwner!.rootSemanticsNode!);
+  visit(tester.getSemantics(find.byType(Navigator).first).owner!.rootSemanticsNode!);
   return out;
 }
 
@@ -86,14 +86,14 @@ void main() {
       // and they work: a row opens its page in the detail pane
       final bravo = tester.getSemantics(find.bySemanticsLabel('Bravo'));
       expect(bravo.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
-      tester.binding.pipelineOwner.semanticsOwner!.performAction(bravo.id, SemanticsAction.tap);
+      bravo.owner!.performAction(bravo.id, SemanticsAction.tap);
       await tester.pumpAndSettle();
       expect(find.bySemanticsLabel('Bravo page'), findsOneWidget);
       expect(find.bySemanticsLabel('Alpha'), findsOneWidget, reason: 'the list is still there after the detail page changed');
 
       // "Hide list" hides it: its rows and button leave the tree, "Show Things" comes.
       final hide = _button(tester, 'pane-hide', 'Hide list')!;
-      tester.binding.pipelineOwner.semanticsOwner!.performAction(hide.id, SemanticsAction.tap);
+      hide.owner!.performAction(hide.id, SemanticsAction.tap);
       await tester.pumpAndSettle();
       expect(_reachable(tester), isNot(anyOf(contains('Alpha'), contains('Bravo'), contains('Hide list'))));
       expect(_reachable(tester), contains('Bravo page'));
@@ -102,7 +102,7 @@ void main() {
 
       // "Show Things" brings it back, in the tree again.
       final show = _button(tester, 'pane-show', 'Show Things')!;
-      tester.binding.pipelineOwner.semanticsOwner!.performAction(show.id, SemanticsAction.tap);
+      show.owner!.performAction(show.id, SemanticsAction.tap);
       await tester.pumpAndSettle();
       expect(_reachable(tester), containsAll(['Alpha', 'Bravo', 'Hide list']));
       expect(_button(tester, 'pane-hide', 'Hide list'), isNotNull);
