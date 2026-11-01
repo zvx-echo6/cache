@@ -186,7 +186,7 @@ class _RegionsListSheetState extends State<RegionsListSheet> {
           height: 44,
           child: Padding(padding: const EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2.5, value: l?.fraction)),
         ),
-        RegionOfferKind.onPhone => Icon(Icons.check_circle, color: k.ok, semanticLabel: 'On this phone'),
+        RegionOfferKind.onPhone => Icon(Icons.check_circle, color: k.ok, semanticLabel: 'On this device'),
         RegionOfferKind.download || RegionOfferKind.addParts => IconButton(
           key: ValueKey('region-download-${rec.id}'),
           tooltip: o.kind == RegionOfferKind.download ? 'Download ${rec.name}' : 'Add off-road to ${rec.name}',

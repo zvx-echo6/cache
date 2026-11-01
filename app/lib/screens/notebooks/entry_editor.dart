@@ -198,7 +198,7 @@ class _EntryEditorState extends State<EntryEditor> {
           children: [
             if (_failed)
               MaterialBanner(
-                content: const Text('Not saved. Your phone may be out of space.'),
+                content: const Text('Not saved. Your device may be out of space.'),
                 actions: [TextButton(onPressed: () => _save(), child: const Text('Try again'))],
               ),
             TextField(

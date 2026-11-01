@@ -75,7 +75,7 @@ class _InstanceSheetState extends State<_InstanceSheet> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Remove ${widget.instance.name}?'),
-        content: Text(keep == 0 ? 'It is taken off your list.' : 'You have $keep video${keep == 1 ? '' : 's'} saved from it. They can stay on this phone, or go too.'),
+        content: Text(keep == 0 ? 'It is taken off your list.' : 'You have $keep video${keep == 1 ? '' : 's'} saved from it. They can stay on this device, or go too.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           if (keep > 0) TextButton(onPressed: () => Navigator.pop(ctx, 'all'), child: const Text('Remove and delete videos')),

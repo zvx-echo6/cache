@@ -172,7 +172,7 @@ class _VideoScreenState extends State<VideoScreen> {
         children: [
           Icon(Icons.download_done, color: k.ok),
           const SizedBox(width: 8),
-          Expanded(child: Text('Saved on this phone · ${saved.resolutionLabel} · ${formatBytes(saved.size)}', style: TextStyle(fontSize: 15, color: k.ok))),
+          Expanded(child: Text('Saved on this device · ${saved.resolutionLabel} · ${formatBytes(saved.size)}', style: TextStyle(fontSize: 15, color: k.ok))),
           TextButton(onPressed: () => widget.video.deleteSaved(saved), child: const Text('Delete')),
         ],
       );
@@ -219,7 +219,7 @@ class _ChoiceSheetState extends State<_ChoiceSheet> {
           children: [
             Text('Download', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text)),
             const SizedBox(height: 4),
-            Text('Smaller sizes save space on the phone.', style: TextStyle(fontSize: 14, color: k.secondary)),
+            Text('Smaller sizes save space on this device.', style: TextStyle(fontSize: 14, color: k.secondary)),
             const SizedBox(height: 8),
             RadioGroup<VideoOption>(
               groupValue: _picked,

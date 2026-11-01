@@ -208,7 +208,7 @@ Future<NbPhoto?> choosePhoto(BuildContext context, NotebookState notebook) async
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(minTileHeight: 56, leading: const Icon(Icons.photo_camera_outlined), title: const Text('Take photo'), onTap: () => Navigator.pop(ctx, true)),
-          ListTile(minTileHeight: 56, leading: const Icon(Icons.photo_library_outlined), title: const Text('Choose from phone'), onTap: () => Navigator.pop(ctx, false)),
+          ListTile(minTileHeight: 56, leading: const Icon(Icons.photo_library_outlined), title: const Text('Choose from device'), onTap: () => Navigator.pop(ctx, false)),
         ],
       ),
     ),

@@ -257,7 +257,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
     // Videos is on screen: its own screen title, and the bar shows it is under Modules (it is not pinned)
-    expect(find.text('Saved on this phone'), findsOneWidget);
+    expect(find.text('Saved on this device'), findsOneWidget);
     await r.stop(tester);
   });
 

@@ -103,7 +103,7 @@ class _MapsPageState extends State<MapsPage> {
                   status: [
                     Part(
                       maps.engine.problem ??
-                          '${layers.length} ${layers.length == 1 ? 'layer' : 'layers'} · $on on the map · ${formatBytes(maps.engine.storageTotal)} on this phone',
+                          '${layers.length} ${layers.length == 1 ? 'layer' : 'layers'} · $on on the map · ${formatBytes(maps.engine.storageTotal)} on this device',
                       maps.engine.problem == null ? Tone.normal : Tone.warn,
                     ),
                   ],

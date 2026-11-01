@@ -499,7 +499,7 @@ class CoreLayerEngine extends LayerEngine {
       final bytes = (plan['estimated_bytes'] as num?)?.toInt() ?? 0;
       final problems = [for (final p in (plan['problems'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
       if (problems.any((p) => p['code'] == 'no_space')) {
-        problem = 'There is not enough free space on this phone for this download.';
+        problem = 'There is not enough free space on this device for this download.';
         break;
       }
       final ok = plan['ok_to_start'] == true && bytes <= maxDownloadBytes;
@@ -522,7 +522,7 @@ class CoreLayerEngine extends LayerEngine {
     }
     final problems = [for (final p in (plan['problems'] as List? ?? const [])) (p as Map).cast<String, dynamic>()];
     if (problems.any((p) => p['code'] == 'no_space')) {
-      return _estimateOf(plan, zoom, false, 'There is not enough free space on this phone for this download.');
+      return _estimateOf(plan, zoom, false, 'There is not enough free space on this device for this download.');
     }
     final ok = plan['ok_to_start'] == true;
     return _estimateOf(plan, zoom, ok, ok ? null : (problems.isNotEmpty ? problems.first['message'] as String? : null) ?? 'This area is too big for one download.');
@@ -678,7 +678,7 @@ class CoreLayerEngine extends LayerEngine {
 
   @visibleForTesting
   static String words(String? code, String? message) => switch (code) {
-        'no_space' => 'There is not enough free space on this phone.',
+        'no_space' => 'There is not enough free space on this device.',
         'limit_exceeded' => "This area is too big for the layer's source.",
         'offline' || 'fetch_failed' => 'No connection. Connect and tap Update to continue.',
         // A message that holds an address (an HTTP failure) is for the log, not the row.

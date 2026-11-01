@@ -53,7 +53,7 @@ class _ReportSheetState extends State<_ReportSheet> {
             Text('Report this answer', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 6),
             Text(
-              'The report is saved on this phone with the question, the answer and the model. Nothing is sent anywhere; '
+              'The report is saved on this device with the question, the answer and the model. Nothing is sent anywhere; '
               'you can share reports yourself from Settings > Assistant.',
               style: TextStyle(fontSize: 15, color: k.secondary, height: 1.4),
             ),
@@ -136,7 +136,7 @@ class ReportedAnswersPage extends StatelessWidget {
                 )
               else ...[
                 SettingsGroup(
-                  label: 'Saved on this phone',
+                  label: 'Saved on this device',
                   rows: [
                     for (final r in items)
                       SettingsRow(

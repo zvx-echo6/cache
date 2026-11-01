@@ -172,7 +172,7 @@ void main() {
         await searchWith(tester, 'no_places', const []);
         expect(nav.placesState, PlacesState.none);
         expect(find.byKey(const ValueKey('no-places')), findsOneWidget);
-        expect(find.text('No places on this phone.'), findsOneWidget);
+        expect(find.text('No places on this device.'), findsOneWidget);
         expect(find.text('Download a region to search places and addresses.'), findsOneWidget);
         expect(find.text('Nothing found for "pharmacy"'), findsNothing);
         expect(find.text('free text for older apps'), findsNothing, reason: 'the 13 px note is only for words-only search');
@@ -185,7 +185,7 @@ void main() {
         expect(find.text('Cassia Regional Hospital'), findsOneWidget);
         expect(find.text('No places downloaded here.'), findsOneWidget);
         expect(tester.getTopLeft(find.text('No places downloaded here.')).dy, greaterThan(tester.getTopLeft(find.text('Cassia Regional Hospital')).dy));
-        expect(find.text('No places on this phone.'), findsNothing);
+        expect(find.text('No places on this device.'), findsNothing);
         expect(tester.takeException(), isNull);
       });
 

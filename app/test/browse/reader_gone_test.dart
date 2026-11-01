@@ -27,7 +27,7 @@ void main() {
       theme: buildTheme(CacheThemeId.dark),
       home: Scaffold(body: ReaderPageGone(onReload: () => reloads++)),
     ));
-    expect(find.text('This page stopped. The phone may be low on memory.'), findsOneWidget);
+    expect(find.text('This page stopped. The device may be low on memory.'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reader-reload')));
     expect(reloads, 1);
   });

@@ -335,7 +335,7 @@ class WeatherState extends ChangeNotifier {
     try {
       await secrets.write(secretName(alias), key);
     } catch (_) {
-      return const KeyCheck.failed("The key was accepted but couldn't be saved on this phone.");
+      return const KeyCheck.failed("The key was accepted but couldn't be saved on this device.");
     }
     _keys.add(alias);
     if (switchOn) settings.setLiveSourcesOn({..._same(forSource.id)}, true);
@@ -681,7 +681,7 @@ class WeatherState extends ChangeNotifier {
         id: kWatchHere,
         kind: PlaceKind.here,
         name: 'Where I am',
-        subtitle: p == null ? 'Follows the phone · position not known yet' : 'Follows the phone',
+        subtitle: p == null ? 'Follows this device · position not known yet' : 'Follows this device',
         lat: p?.lat,
         lon: p?.lon,
         key: p == null ? null : _hereKey(p.lat, p.lon),

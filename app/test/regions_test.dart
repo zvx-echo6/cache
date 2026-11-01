@@ -569,7 +569,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('region-action-delete')));
       await tester.pumpAndSettle();
-      expect(find.text('Its map, directions, places and off-road data are removed from this phone. Parts another region uses stay.'), findsOneWidget);
+      expect(find.text('Its map, directions, places and off-road data are removed from this device. Parts another region uses stay.'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await r.dispose(tester);
@@ -662,7 +662,7 @@ void main() {
       await tester.enterText(find.byKey(const ValueKey('map-search-field')), 'pharmacy');
       await tester.pump(const Duration(milliseconds: 20));
       await tester.pump();
-      expect(find.text('No places on this phone.'), findsOneWidget);
+      expect(find.text('No places on this device.'), findsOneWidget);
       expect(find.text('Download a region to search places and addresses.'), findsOneWidget);
       expect(find.text('Nothing found for "pharmacy"'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('get-region')));

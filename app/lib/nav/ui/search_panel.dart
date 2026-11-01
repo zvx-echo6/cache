@@ -167,7 +167,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('No places on this phone.', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
+              Text('No places on this device.', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
               const SizedBox(height: 4),
               Text('Download a region to search places and addresses.', style: TextStyle(fontSize: 16, color: k.secondary)),
               if (widget.regions != null) ...[
@@ -184,7 +184,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
         ),
       for (final p in rows) _ResultRow(place: p, nav: nav, fmt: widget.fmt),
       if (rows.isNotEmpty && places == PlacesState.none)
-        _placesLine(context, 'No places on this phone.', 'Get a region', _getRegion, const ValueKey('get-region')),
+        _placesLine(context, 'No places on this device.', 'Get a region', _getRegion, const ValueKey('get-region')),
       if (places == PlacesState.notHere)
         _placesLine(context, 'No places downloaded here.', 'Get this area', _getThisArea, const ValueKey('get-this-area')),
       if (places == PlacesState.fetching)

@@ -317,7 +317,7 @@ class _ShellState extends State<Shell> {
   void _getArea(BuildContext context) {
     final regions = widget.hub.regions;
     if (regions == null) {
-      _say('Regions are not available on this phone');
+      _say('Regions are not available on this device');
       return;
     }
     // A download that stopped (on iPhone, Cache was closed or put away while it ran) is carried on, not offered again.
@@ -449,7 +449,7 @@ class _ShellState extends State<Shell> {
         final id = address == null ? null : zimIdOfAddress(address);
         final z = id == null ? null : widget.sources.zimById(id);
         if (address == null || z == null) {
-          _say('That page is not on this phone any more');
+          _say('That page is not on this device any more');
           return;
         }
         Navigator.of(context).push(
@@ -564,7 +564,7 @@ class _ShellState extends State<Shell> {
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video),
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
-        ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this phone'))) : NotebooksScreen(deps: _notebookDeps!),
+        ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
 

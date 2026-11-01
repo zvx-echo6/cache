@@ -270,7 +270,7 @@ class _CacheAppState extends State<CacheApp> {
   late final SharingState sharing = SharingState(
     policy: policy,
     supportDir: getApplicationSupportDirectory,
-    deviceName: Platform.isAndroid ? 'Android phone' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
+    deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
     kinds: dataKinds,
   );
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing

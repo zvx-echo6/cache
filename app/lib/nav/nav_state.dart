@@ -529,7 +529,7 @@ class NavState extends ChangeNotifier {
       } else {
         routes = [r, ...r.alternatives];
         if (r.warnings.any((w) => w.code == 'offroad_unavailable')) {
-          _events.add(const NavNotice('Part of this trip is off the roads, and the off-road map data is not on this phone'));
+          _events.add(const NavNotice('Part of this trip is off the roads, and the off-road map data is not on this device'));
         }
       }
     } catch (e) {

@@ -189,7 +189,7 @@ void main() {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
       await tester.pump(const Duration(milliseconds: 50));
     }
-    expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('already on this phone')), findsOneWidget);
+    expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('already on this device')), findsOneWidget);
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Cancel')));
     await tester.pump();
     await tester.runAsync(() => regions.download(idahoState, routing: false, map: false, offroad: true, anyway: true));

@@ -88,7 +88,7 @@ void main() {
     // The satellite layer is online only, and it says so.
     expect(find.text('Online only'), findsOneWidget);
     // Storage used is on the screen.
-    expect(find.textContaining('Layers use 0 B on this phone'), findsOneWidget);
+    expect(find.textContaining('Layers use 0 B on this device'), findsOneWidget);
     // Advanced is closed.
     expect(find.text('Add a layer definition'), findsNothing);
     await tester.tap(find.text('Advanced'));

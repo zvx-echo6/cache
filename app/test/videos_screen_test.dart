@@ -29,7 +29,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(theme: buildTheme(CacheThemeId.dark), home: VideosScreen(video: v)));
     expect(find.text('Videos'), findsOneWidget);
     await tester.pumpAndSettle();
-    expect(find.text('Saved on this phone'), findsOneWidget);
+    expect(find.text('Saved on this device'), findsOneWidget);
     expect(find.textContaining('No instances yet'), findsOneWidget);
 
     await tester.tap(find.text('Add an instance'));

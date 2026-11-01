@@ -127,7 +127,7 @@ enum RegionPart { routing, places }
 /// like "HTTP 404 from https://…". A file the server does not have (404 or 410) is a part not published for the area yet.
 String regionPartWords(RegionPart part, String? code, String message) {
   if (code == 'offline') return 'Needs a connection.';
-  if (code == 'no_space') return 'There is not enough free space on this phone.';
+  if (code == 'no_space') return 'There is not enough free space on this device.';
   // The core's HTTP failure reads "HTTP <status> from <address>" (cache_regions/src/http.rs).
   final status = int.tryParse(RegExp(r'^HTTP (\d{3}) ').firstMatch(message)?.group(1) ?? '');
   if (status == 404 || status == 410) {

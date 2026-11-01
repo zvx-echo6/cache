@@ -470,7 +470,7 @@ void main() {
       h.regions = const [WatchRegion(name: 'Idaho', lat: 44.4, lon: -114.6)];
       final c = await h.weather.placeChoices();
       expect(c.map((p) => p.id), ['here', 'place:cabin', 'place:work', 'region:Idaho']);
-      expect(c[0].subtitle, 'Follows the phone');
+      expect(c[0].subtitle, 'Follows this device');
       expect(c[1].subtitle, 'Near Stanley');
       expect(c[2].subtitle, '42.50, -113.80');
       expect(c[3].subtitle, 'Downloaded region');

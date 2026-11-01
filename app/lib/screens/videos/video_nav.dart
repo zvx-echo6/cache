@@ -13,7 +13,7 @@ Future<void> openVideoCitation(BuildContext context, VideoState state, {required
     await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => PlayerScreen(target: target)));
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("This video isn't saved on the phone and can't be reached right now.\n${videoErrorText(e)}")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("This video isn't saved on this device and can't be reached right now.\n${videoErrorText(e)}")));
     }
   }
 }

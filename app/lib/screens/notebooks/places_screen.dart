@@ -671,7 +671,7 @@ class _PlaceFormState extends State<PlaceForm> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = 'Not saved. Your phone may be out of space.';
+          _error = 'Not saved. Your device may be out of space.';
         });
       }
     }

@@ -363,7 +363,7 @@ class EntryTile extends StatelessWidget {
         ),
       );
     } else if (installed != null && !newer) {
-      action = RowBadge('On this phone', color: k.ok);
+      action = RowBadge('On this device', color: k.ok);
     } else {
       action = IconButton(
         key: ValueKey('download-${entry.id}'),

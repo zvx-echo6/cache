@@ -21,7 +21,7 @@ String downloadProblemWords(Object e, {required String what}) {
       'offline' || 'fetch_failed' => "Couldn't $what: no connection. Connect, then try again.",
       'no_space' => "Couldn't $what: there is not enough free space. Free some space in Settings > Storage, then try again.",
       'busy' => "Couldn't $what just now: another download is starting. Try again in a moment.",
-      'not_found' => "Couldn't $what: part of it is no longer on the phone. Remove it and download it again.",
+      'not_found' => "Couldn't $what: part of it is no longer on this device. Remove it and download it again.",
       _ => "Couldn't $what. Try again; if it happens again, remove it and download it again.",
     };
   }

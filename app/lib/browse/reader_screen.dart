@@ -747,7 +747,7 @@ class ReaderPageGone extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'This page stopped. The phone may be low on memory.',
+              'This page stopped. The device may be low on memory.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 18, color: k.text),
             ),

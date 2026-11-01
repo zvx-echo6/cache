@@ -85,7 +85,7 @@ class _AskScreenState extends State<AskScreen> {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(const SnackBar(content: Text('Report saved on this phone. Find it in Settings > Assistant.')));
+    messenger.showSnackBar(const SnackBar(content: Text('Report saved on this device. Find it in Settings > Assistant.')));
   }
 
   @override
@@ -132,9 +132,9 @@ class _AskScreenState extends State<AskScreen> {
           final blocked = location.permission == LocationPermissionState.deniedForever || location.problem == LocationProblem.permissionBlocked;
           final serviceOff = location.problem == LocationProblem.serviceOff;
           final why = blocked
-              ? "Blocked in the phone's settings"
+              ? "Blocked in the device's settings"
               : serviceOff
-              ? "The phone's location is switched off"
+              ? "The device's location is switched off"
               : 'Cache finds things near you';
           return SafeArea(
             child: Padding(
@@ -155,7 +155,7 @@ class _AskScreenState extends State<AskScreen> {
                       alignment: Alignment.centerLeft,
                       child: TextButton(
                         onPressed: blocked ? location.openAppSettings : location.openLocationSettings,
-                        child: const Text("Open the phone's settings"),
+                        child: const Text("Open the device's settings"),
                       ),
                     ),
                 ],

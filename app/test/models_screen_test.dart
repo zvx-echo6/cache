@@ -130,11 +130,11 @@ void main() {
     await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
     await tester.pumpAndSettle();
     expect(find.text('RECOMMENDED'), findsOneWidget);
-    expect(find.text('The model is the AI that answers your questions. It runs on this phone, so it works with no signal.'), findsOneWidget);
+    expect(find.text('The model is the AI that answers your questions. It runs on this device, so it works with no signal.'), findsOneWidget);
     expect(find.text('Small'), findsOneWidget);
     expect(find.text('A note about Small.'), findsOneWidget);
-    expect(find.text('3.0 GB · Fits this phone', findRichText: true), findsOneWidget);
-    expect(find.text('5.0 GB · May be tight on this phone', findRichText: true), findsOneWidget);
+    expect(find.text('3.0 GB · Fits this device', findRichText: true), findsOneWidget);
+    expect(find.text('5.0 GB · May be tight on this device', findRichText: true), findsOneWidget);
     expect(find.text('Works with Cache, not tuned'), findsNWidgets(2));
     expect(find.text('Search Hugging Face'), findsOneWidget);
     expect(find.text('Choose a file'), findsOneWidget);
@@ -172,7 +172,7 @@ void main() {
     app.active = app.models.single;
     final generation = app.modelGeneration;
     await show(tester, ModelsScreen(app: app, memory: 8 * _gb));
-    expect(find.text('ON THIS PHONE'), findsOneWidget);
+    expect(find.text('ON THIS DEVICE'), findsOneWidget);
     expect(find.textContaining('Active'), findsOneWidget);
     await tester.runAsync(() async {
       await tester.tap(find.byKey(const ValueKey('unload-model')));

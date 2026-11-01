@@ -247,7 +247,7 @@ class _ReadAboutState extends State<ReadAbout> {
               label: const Text('Get Wikipedia'),
             ),
             const SizedBox(height: 4),
-            Text('Wikipedia is not on this phone.', key: const ValueKey('place-no-wikipedia'), style: TextStyle(fontSize: 13, color: k.secondary)),
+            Text('Wikipedia is not on this device.', key: const ValueKey('place-no-wikipedia'), style: TextStyle(fontSize: 13, color: k.secondary)),
           ],
         ),
       );
