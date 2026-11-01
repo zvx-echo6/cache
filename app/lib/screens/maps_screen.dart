@@ -118,12 +118,21 @@ class _MapsScreenState extends State<MapsScreen> {
     widget.userLayers?.addListener(_pushUser);
     widget.userLayers?.selectedRepeater.addListener(_onRepeater);
     _lifecycle;
+    // Maps opens on the phone's position when it is known (at the remembered zoom); the remembered view is for when it is
+    // not (no fix yet, location off). The search box searches around what the map shows, so it starts there too.
     final c = maps.savedCamera;
     if (c != null) {
       _lat = c.lat;
       _lon = c.lon;
       _zoom = c.zoom;
     }
+    final fix = location.fix;
+    if (fix != null) {
+      _lat = fix.lat;
+      _lon = fix.lon;
+      if (c == null) _zoom = 14;
+    }
+    if (fix != null || c != null) nav.setMapCentre(_lat, _lon);
     // A draw asked for before this screen was first built (the Regions sheet opened from Home) starts it now.
     if (maps.drawRequest) {
       maps.clearDrawRequest();
@@ -748,7 +757,7 @@ class _MapsScreenState extends State<MapsScreen> {
         title: const Text('Use your location?'),
         content: const Text(
           'Cache uses your location to show where you are and to answer questions about places near you. '
-          'It stays on this phone.',
+          'It stays on this device.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
@@ -783,8 +792,8 @@ class _MapsScreenState extends State<MapsScreen> {
     final text = switch (location.problem) {
       LocationProblem.off => 'Location is off. Switch on "Show my position" in Layers.',
       LocationProblem.permissionDenied => 'Cache was not allowed to read your location.',
-      LocationProblem.permissionBlocked => 'Location is blocked for Cache. Allow it in the phone\'s settings.',
-      LocationProblem.serviceOff => 'Your phone\'s location is switched off.',
+      LocationProblem.permissionBlocked => 'Location is blocked for Cache. Allow it in the device\'s settings.',
+      LocationProblem.serviceOff => 'Your device\'s location is switched off.',
       LocationProblem.noFix => 'Could not get a position yet. Try again outdoors.',
       null => 'No position yet.',
     };
@@ -900,7 +909,7 @@ class _MapsScreenState extends State<MapsScreen> {
           const SizedBox(height: 8),
           Text(
             maps.networkRefused
-                ? 'Network access is switched off for Cache. Allow it in the settings of this phone to see the map.'
+                ? 'Network access is switched off for Cache. Allow it in the settings of this device to see the map.'
                 : 'Cache streams map tiles when you are online and keeps downloaded areas for when you are not. '
                     'The map cannot start without network access.',
             textAlign: TextAlign.center,

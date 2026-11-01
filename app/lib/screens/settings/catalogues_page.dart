@@ -67,7 +67,7 @@ class _CataloguesPageState extends State<CataloguesPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Remove ${c.catalogue.title}?'),
-        content: const Text('Its sources are taken off this phone. You can add the link again later.'),
+        content: const Text('Its sources are taken off this device. You can add the link again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(key: const ValueKey('confirm-remove-catalogue'), onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),

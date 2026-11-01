@@ -138,7 +138,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                 else if (places.isEmpty && w.waitingForPosition)
                   // "Where I am" is watched and the phone does not know where it is yet: weather is on, so this is not the
                   // "Turn on weather" page (which read as the settings), it is what Home's card says.
-                  _empty(context, 'Waiting for your position.', 'The forecast and alerts for where you are show here once the phone knows where it is.', offerTurnOn: false)
+                  _empty(context, 'Waiting for your position.', 'The forecast and alerts for where you are show here once the device knows where it is.', offerTurnOn: false)
                 else if (places.isEmpty)
                   widget.turnOn == null
                       ? _empty(context, 'No place is being watched.', 'Choose places under Settings > Weather and alerts > Places.')

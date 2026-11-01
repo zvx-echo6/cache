@@ -146,7 +146,7 @@ class WebSearchSetup extends ChangeNotifier {
     try {
       await secrets.write(keyName, key);
     } catch (_) {
-      return const KeyCheck.failed("The key was accepted but couldn't be saved on this phone.");
+      return const KeyCheck.failed("The key was accepted but couldn't be saved on this device.");
     }
     _hasKey = true;
     settings.setWebSearchOn(true);

@@ -286,8 +286,8 @@ void main() {
     final sw = tester.widget<SwitchListTile>(find.byKey(const ValueKey('use-my-location')));
     expect(sw.onChanged, isNull);
     expect(sw.value, isFalse);
-    expect(find.text("Blocked in the phone's settings"), findsOneWidget);
-    await tester.tap(find.text("Open the phone's settings"));
+    expect(find.text("Blocked in the device's settings"), findsOneWidget);
+    await tester.tap(find.text("Open the device's settings"));
     await tester.pumpAndSettle();
     expect(source.settingsOpened, 1);
     expect(source.prompts, 0);

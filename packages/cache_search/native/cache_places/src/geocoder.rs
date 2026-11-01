@@ -323,7 +323,7 @@ const ADDRESS_EXACT: f64 = 100.0;
 const ADDRESS_PLACED: f64 = 70.0;
 const ADDRESS_STREET: f64 = 60.0;
 /// A street row outside the town named after the comma still counts when it is this close to that town.
-const ADDRESS_AREA_KM: f64 = 15.0;
+pub(crate) const ADDRESS_AREA_KM: f64 = 15.0;
 /// Street rows read per query.
 const ADDRESS_ROWS: usize = 40;
 

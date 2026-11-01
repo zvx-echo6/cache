@@ -381,10 +381,12 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           automaticallyImplyLeading: false,
           // Leaves the reader for where it was opened from (Library, a citation, a search result), whatever the page history.
           // Beside a list on a tablet the reader is the pane's own page: there is nothing to leave to.
+          // A screen reader says "Close <library>", and can press it (the label's node carries the tap).
           leading: nav.canPop()
               ? Semantics(
                   label: 'Close $title',
                   button: true,
+                  onTap: () => nav.pop(),
                   excludeSemantics: true,
                   child: IconButton(
                     key: const ValueKey('reader-close'),
@@ -745,7 +747,7 @@ class ReaderPageGone extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'This page stopped. The phone may be low on memory.',
+              'This page stopped. The device may be low on memory.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 18, color: k.text),
             ),

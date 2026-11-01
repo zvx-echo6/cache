@@ -104,7 +104,7 @@ class _LibrariesScreenState extends State<LibrariesScreen> {
               ),
               if (t != null) _taskCard(k, t),
               if (s.sources.copyProgress != null) _copyCard(k),
-              _row(k, key: 'add-from-file', icon: Icons.folder_open_outlined, title: 'From a file on this phone', detail: 'A .cache-library file, a library snapshot or a .zim', onTap: busy || !ready ? null : _fromFile),
+              _row(k, key: 'add-from-file', icon: Icons.folder_open_outlined, title: 'From a file on this device', detail: 'A .cache-library file, a library snapshot or a .zim', onTap: busy || !ready ? null : _fromFile),
               _row(k, key: 'add-from-link', icon: Icons.link, title: 'From a download link', detail: 'A link to a library file', onTap: busy || !ready ? null : _fromLink),
               if (s.error != null || s.sources.error != null)
                 Padding(

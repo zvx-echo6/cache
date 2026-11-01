@@ -291,6 +291,10 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'settings-weather');
 
+    // The watch list (1.0.29) sits above the sources: the row with Get key is further down the page.
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('get-key-firms-viirs-near')), 300, scrollable: find.byType(Scrollable).first);
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('get-key-firms-viirs-near')));
     await tester.pumpAndSettle();
     await shot(tester, 'key-sheet', crop: _sheet);
@@ -533,6 +537,7 @@ void main() {
     return a;
   }
 
+  // The app's Ask has "Need help now?" in its top bar (1.0.29); the sheet itself is not shown here.
   Widget askScreen(_AskRig a) => AskScreen(app: a.r.app, chat: a.chat, location: a.r.location, layout: a.layout, onOpenSource: (_) {}, onOpenNavigation: (_) {});
 
   testWidgets('ask, ask-sources, ask-plus-menu, ask-model-menu, ask-report', (tester) async {
@@ -1357,3 +1362,4 @@ class _MapRig {
   FakeNotebookBackend? store;
   NotebookState? notebooks;
 }
+

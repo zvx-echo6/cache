@@ -72,7 +72,7 @@ class _StoragePageState extends State<StoragePage> {
                 Text(
                   [
                     u.measured ? '${formatBytes(u.usedBytes)} used by Cache' : 'Measuring…',
-                    free == null ? 'free space unknown' : '${formatBytes(free)} free on the phone',
+                    free == null ? 'free space unknown' : '${formatBytes(free)} free on this device',
                   ].join(' · '),
                   key: const ValueKey('storage-line'),
                   maxLines: 1,
@@ -101,7 +101,7 @@ class _StoragePageState extends State<StoragePage> {
                 SettingsRow(
                   key: const ValueKey('kept-free'),
                   icon: Icons.phone_android,
-                  title: 'Kept free for the phone',
+                  title: 'Kept free for the device',
                   status: const [Part('10% of storage, 5 to 20 GB')],
                   trailing: Text(formatBytes(u.reserveBytes), style: TextStyle(fontSize: 14, color: k.secondary)),
                 ),

@@ -27,7 +27,7 @@ String videoErrorText(Object e) {
       case 'unsupported':
         return e.message;
       case 'no_space':
-        return 'Not enough free space on this phone.';
+        return 'Not enough free space on this device.';
       case 'bad_response':
         return "That address doesn't look like a PeerTube instance.";
       case 'bad_json':

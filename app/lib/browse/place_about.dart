@@ -70,7 +70,7 @@ class LibraryPlaceAbout implements PlaceAbout {
   Future<void> open(String address) async {
     final id = RegExp(r'^zim:([^/]+)/').firstMatch(address)?.group(1);
     final z = id == null ? null : sources.zimById(id.toLowerCase());
-    if (z == null) throw StateError('not on this phone');
+    if (z == null) throw StateError('not on this device');
     await openReader(z, address);
   }
 

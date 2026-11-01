@@ -28,7 +28,7 @@ class LibraryScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete this video?'),
-        content: Text('${d.title}\n\nIt is deleted from this phone (${formatBytes(d.size)}). You can download it again later.'),
+        content: Text('${d.title}\n\nIt is deleted from this device (${formatBytes(d.size)}). You can download it again later.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),

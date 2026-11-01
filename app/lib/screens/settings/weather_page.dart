@@ -27,8 +27,8 @@ Future<void> addKeyFor(BuildContext context, SettingsDeps d, Connector c, {bool 
     onSave: (key) => w.saveKey(c, key, switchOn: !replace),
     openUrl: d.hub.openUrl,
     savedNote: replace
-        ? "Saving checks the new key with one real download and replaces the old one. The key stays on this phone and isn't shown again."
-        : "Saving checks the key with one real download and turns on ${title ?? c.title}. The key stays on this phone and isn't shown again.",
+        ? "Saving checks the new key with one real download and replaces the old one. The key stays on this device and isn't shown again."
+        : "Saving checks the key with one real download and turns on ${title ?? c.title}. The key stays on this device and isn't shown again.",
   );
   if (saved == true && context.mounted) say(context, replace ? 'Key replaced' : '${title ?? c.title} is on');
 }

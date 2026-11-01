@@ -119,7 +119,7 @@ class RegionPage extends StatelessWidget {
         if (l == null) {
           return Scaffold(
             appBar: AppBar(leading: paneShowButton(context), title: const Text('Region')),
-            body: const Padding(padding: EdgeInsets.all(18), child: NoteText('This region is no longer on this phone.')),
+            body: const Padding(padding: EdgeInsets.all(18), child: NoteText('This region is no longer on this device.')),
           );
         }
         final k = context.t;
@@ -148,6 +148,7 @@ class RegionPage extends StatelessWidget {
         };
         final layers = _layerGroups(l);
         final canAddOffroad = !l.hasOffroad && !l.isArea && regions.offroadCatalogue != null;
+        final canAddPlaces = regions.placesNowAvailable(l);
         return Scaffold(
           appBar: AppBar(leading: paneShowButton(context), 
             title: Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -186,11 +187,19 @@ class RegionPage extends StatelessWidget {
                         ]),
                         trailing: trailingFor(p, p.kind.name),
                       ),
+                    // Published since this region was downloaded: offered here.
+                    if (canAddPlaces)
+                      SettingsRow(
+                        key: const ValueKey('part-places-add'),
+                        title: 'Places',
+                        status: const [Part('Now available')],
+                        trailing: RowButton(key: const ValueKey('add-places'), label: 'Add', onPressed: () => askAddPlaces(context, regions, l.id)),
+                      ),
                     if (canAddOffroad)
                       SettingsRow(
                         key: const ValueKey('part-offroad-add'),
                         title: 'Off-road',
-                        status: const [Part('Not on this phone')],
+                        status: const [Part('Not on this device')],
                         trailing: RowButton(key: const ValueKey('add-offroad'), label: 'Add', onPressed: () => askAddOffroad(context, regions, l.id)),
                       ),
                   ],
@@ -339,9 +348,9 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
     RegionOfferKind.download => '${sizeWords(o.bytes)}$shared',
     RegionOfferKind.carryOn => o.bytes == null ? 'Stopped' : '${formatBytes(o.bytes!)} to go',
     RegionOfferKind.tryAgain => "Couldn't finish",
-    RegionOfferKind.addParts => 'On this phone · off-road not added',
+    RegionOfferKind.addParts => 'On this device · off-road not added',
     RegionOfferKind.busy => 'Downloading',
-    RegionOfferKind.onPhone => 'On this phone · ${formatBytes(o.already)}',
+    RegionOfferKind.onPhone => 'On this device · ${formatBytes(o.already)}',
   };
   return '$kind · $what';
 }

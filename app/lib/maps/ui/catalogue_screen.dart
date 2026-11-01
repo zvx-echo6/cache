@@ -29,7 +29,7 @@ class CatalogueScreen extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
-                'Layers use ${formatBytes(engine.storageTotal)} on this phone.',
+                'Layers use ${formatBytes(engine.storageTotal)} on this device.',
                 style: TextStyle(fontSize: 15, color: k.secondary),
               ),
             ),
@@ -70,7 +70,7 @@ class _LayerCard extends StatelessWidget {
             _fact(context, Icons.public, def.coverage),
             _fact(context, Icons.gavel, def.licence),
             if (def.onlineOnly) _fact(context, Icons.cloud_outlined, 'Online only'),
-            if (stored > 0) _fact(context, Icons.sd_storage_outlined, '${formatBytes(stored)} on this phone'),
+            if (stored > 0) _fact(context, Icons.sd_storage_outlined, '${formatBytes(stored)} on this device'),
             // A layer is kept offline by downloading a region (every region has its map); areas from before are still listed here.
             for (final a in areas) _AreaRow(engine: engine, area: a),
           ],
@@ -106,7 +106,7 @@ class _AreaRow extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete ${area.label}?'),
-        content: const Text('The downloaded tiles are removed from this phone.'),
+        content: const Text('The downloaded tiles are removed from this device.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),

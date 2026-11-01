@@ -20,7 +20,7 @@ class SourcesScreen extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: Text('Remove ${sources.titleOf(z)}?'),
         content: const Text(
-          'The file and its index are deleted from this phone.',
+          'The file and its index are deleted from this device.',
         ),
         actions: [
           TextButton(

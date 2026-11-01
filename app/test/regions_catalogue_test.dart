@@ -86,6 +86,25 @@ void main() {
     expect((await stale.index()).countries, hasLength(3));
   });
 
+  test('a country file kept from before the places sizes were published (2026-11-01 00:20 UTC) is read again; one from after is not', () async {
+    final web = regionWeb();
+    final now = DateTime.utc(2026, 11, 2);
+    final c = RegionCatalogue(dir: () async => dir, fetch: web.fetch, now: () => now);
+    await c.shard('us');
+    final f = File('${dir.path}/us.json');
+    // Kept the evening before the republish: younger than a month, yet read again.
+    f.setLastModifiedSync(DateTime.utc(2026, 10, 31, 22));
+    web.requested.clear();
+    await RegionCatalogue(dir: () async => dir, fetch: web.fetch, now: () => now).shard('us');
+    expect(web.requested.map((u) => u.path), contains('/regions/us.json'));
+    // Kept after it: read from the phone.
+    f.setLastModifiedSync(DateTime.utc(2026, 11, 1, 6));
+    web.requested.clear();
+    await RegionCatalogue(dir: () async => dir, fetch: web.fetch, now: () => now).shard('us');
+    expect(web.requested.map((u) => u.path), isNot(contains('/regions/us.json')));
+    expect(kRegionSizesSince.isAfter(DateTime.utc(2026, 11, 1, 0, 20, 41)), isTrue, reason: 'after the republish of us, ca and mx');
+  });
+
   test('never read and offline: it says so', () async {
     final web = regionWeb()..offline = true;
     final c = RegionCatalogue(dir: () async => dir, fetch: web.fetch);

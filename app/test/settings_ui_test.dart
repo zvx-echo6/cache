@@ -138,7 +138,7 @@ void main() {
       // The sheet is closed and the key is nowhere on screen.
       expect(find.byKey(const ValueKey('key-field')), findsNothing);
       expect(find.textContaining('kagi-secret-123'), findsNothing);
-      expect(find.text('Set up · Kagi key saved on this phone'), findsOneWidget);
+      expect(find.text('Set up · Kagi key saved on this device'), findsOneWidget);
       expect(switchIn(tester, 'Search the web when online').onChanged, isNotNull);
       expect(switchIn(tester, 'Search the web when online').value, isTrue);
       // The key is not in the saved preferences either.
@@ -235,7 +235,7 @@ void main() {
       r.store.create(title: 'Water purification');
       r.chat.historyRevision.value++;
       await r.show(tester, AssistantPage(deps: r.deps));
-      expect(find.text('2 on this phone'), findsOneWidget);
+      expect(find.text('2 on this device'), findsOneWidget);
       await tester.tap(find.text('Saved conversations'));
       await tester.pumpAndSettle();
       expect(find.text('Treating burns'), findsOneWidget);
@@ -359,8 +359,8 @@ void main() {
       await tester.runAsync(r.location.init);
       await r.show(tester, AssistantPage(deps: r.deps));
       await tester.scrollUntilVisible(find.byKey(const ValueKey('use-my-location-row')), 200);
-      expect(find.text("Blocked in the phone's settings"), findsOneWidget);
-      await tester.tap(find.text('Phone settings'));
+      expect(find.text("Blocked in the device's settings"), findsOneWidget);
+      await tester.tap(find.text('Device settings'));
       await tester.pump();
       expect(r.position.settingsOpened, 1);
       expect(r.position.asked, 0);
@@ -390,14 +390,14 @@ void main() {
       }
       expect(r.storage.measured, isTrue);
       await tester.pump();
-      expect(find.text('12.0 MB used by Cache · 41.0 GB free on the phone'), findsOneWidget);
+      expect(find.text('12.0 MB used by Cache · 41.0 GB free on this device'), findsOneWidget);
       Finder kindText(String id, String s) => find.descendant(of: find.byKey(ValueKey('kind-$id')), matching: find.textContaining(s));
       expect(kindText('library', '6.0 MB'), findsOneWidget);
       expect(kindText('regions', '3.0 MB'), findsOneWidget);
       expect(kindText('models', '1 · 2.0 MB'), findsOneWidget);
       expect(kindText('videos', '1.0 MB'), findsOneWidget);
       // The space kept for the phone is information: 10% of a 128 GB phone.
-      expect(find.text('Kept free for the phone'), findsOneWidget);
+      expect(find.text('Kept free for the device'), findsOneWidget);
       expect(find.text('10% of storage, 5 to 20 GB'), findsOneWidget);
       expect(find.text('12.8 GB'), findsOneWidget);
       // Clean up empties the unfinished downloads.

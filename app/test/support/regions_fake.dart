@@ -33,6 +33,10 @@ class FakeRegions implements RegionsCoreLike {
   /// The places part is on (the config has a places address and the core knows the part).
   bool placesEnabled = false;
 
+  /// As the real core: the places build is in status only once a region has places (before that, only check_update reads the
+  /// server's current.json).
+  bool placesBuildOnlyWithRegion = false;
+
   /// Bytes a region's places take (default 20 MB), and what of them is already on the phone (default 4 MB).
   int placesBytes = 20 << 20;
   int placesAlready = 4 << 20;
@@ -121,7 +125,7 @@ class FakeRegions implements RegionsCoreLike {
           'paused': network ? null : 'No network it may use',
           if (placesEnabled) ...{
             'places': {
-              'build': 'na-places-2026-11-15',
+              'build': placesBuildOnlyWithRegion && !regions.values.any((r) => (r['parts'] as Map?)?.containsKey('places') ?? false) ? null : 'na-places-2026-11-15',
               'db': '$tileDir/../places/na-places-2026-11-15.sqlite',
               'tiles': 4,
               'generation': generation,
@@ -185,6 +189,8 @@ class FakeRegions implements RegionsCoreLike {
         final r = regions.remove(args['id']);
         if ((r?['parts'] as Map?)?.containsKey('places') ?? false) generation++;
         return {'ok': true};
+      case 'check_update':
+        return {'build': build, 'update': update, if (placesEnabled) 'places': {'build': 'na-places-2026-11-15', 'update': null}};
       case 'update':
         final c = args['component'];
         if (c == null || c == 'routing') {

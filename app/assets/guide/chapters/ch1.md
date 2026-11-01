@@ -19,18 +19,20 @@ To hide the card, tap "Hide". Cache says "Set up Cache hidden. Bring it back in 
 
 - If "Get your area" shows the region and its parts, the download is running. For example `Idaho · Map stopped at 80% · Places 40% · Off-road waiting. Tap to carry on`.
 - If it says to tap to carry on, tap the row. A pop-up asks "Carry on with [region]?"
+- When a line starts a download, the row shows "Starting…" at once.
+- When the area is done, the row reads `Idaho · Ready`.
 
 ## Choose a model
 
-The model is the AI that answers in "Ask". You pick it, and Cache runs it on your phone.
+The model is the AI that answers in "Ask". You pick it, and Cache runs it on your device.
 
 ![The Models screen](shot:models-screen)
 
 1. Tap the model name at the top of "Ask" and choose "Manage models". You can also go to ["Settings" > "Cache model and web search"](cache://settings/assistant) and tap the model row.
-2. Look under "Recommended". Each card says how well it fits your phone: "Fits this phone", "May be tight on this phone" or "Too big for this phone".
+2. Look under "Recommended". Each card says how well it fits your device: "Fits this device", "May be tight on this device" or "Too big for this device".
 3. Pick one that fits. If you're unsure, take the smallest.
 4. Tap its download button, then "Download" in the pop-up.
-5. When it finishes, tap the model under "On this phone". Its line says "Loading…", then "Active".
+5. When it finishes, tap the model under "On this device". Its line says "Loading…", then "Active".
 
 A model is about 3 to 5 GB.
 
@@ -71,7 +73,7 @@ Use this when the model you want isn't under "Recommended".
 
 1. Open the Models screen and tap "Search Hugging Face".
 2. Type a model name. Only single-file .gguf models are shown.
-3. Tap a result to see its files and sizes. Each says whether it fits this phone.
+3. Tap a result to see its files and sizes. Each says whether it fits this device.
 4. Tap "Download" next to the file you want, then confirm.
 
 - If a model needs a Hugging Face account, Cache can't download it. Get the file in a browser, then use Use a model file you already have.
@@ -79,13 +81,13 @@ Use this when the model you want isn't under "Recommended".
 
 ## Use a model file you already have
 
-You can copy a .gguf file from your phone into Cache.
+You can copy a .gguf file from your device into Cache.
 
 ![The Models screen](shot:models-screen)
 
 1. Open the Models screen and tap "Choose a file".
 2. Pick the .gguf file. Cache copies it into its models folder.
-3. Tap the model under "On this phone" to load it.
+3. Tap the model under "On this device" to load it.
 
 If the model can't use tools, it is marked "Not supported: Cache needs a model that can use tools".
 
@@ -105,7 +107,7 @@ Weather and alerts always update, on any connection.
 
 - If you're on mobile data with that switch off, the pop-up offers "Wait for Wi-Fi". It is the default. The download starts when you're on Wi-Fi.
 - If you want it now, tap "Download now".
-- If it won't fit, the pop-up is "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." Tap "Free up space" to open "Storage". See Storage full in chapter 6.
+- If it won't fit, the pop-up is "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the device." Tap "Free up space" to open "Storage". See Storage full in chapter 6.
 - If a download stops, it picks up where it left off. See A download stopped in chapter 6.
 
 ## Download a region
@@ -140,9 +142,9 @@ One pop-up asks before every region download. Its title says which case it is.
 - Several regions: "Download 3 regions?" with each size.
 - A region partly here: "Carry on with [region]?" It says how much is to go and how much is already here.
 - Off-road missing: "Add off-road to [region]?" It says what is already here and what is to download.
-- Not enough room: "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the phone." The buttons are "Cancel" and "Free up space".
+- Not enough room: "Not enough space". It says "[Name] needs [X]. You have [Y] to use; Cache keeps [Z] free for the device." The buttons are "Cancel" and "Free up space".
 
-Every pop-up also shows "Phone storage", with the free space before and after.
+Every pop-up also shows "Device storage", with the free space before and after.
 
 Tap "Download", "Carry on" or "Free up space" to go ahead, or "Cancel".
 
@@ -173,9 +175,9 @@ Off-road routing needs a state's off-road data and the terrain heights of your a
 - Each region adds its own terrain heights.
 - The "Local" tab lists it under "Off-road data", with `used by` the regions that use it.
 
-It says "Each state's off-road data is downloaded once and kept while a region that uses it is on this phone."
+It says "Each state's off-road data is downloaded once and kept while a region that uses it is on this device."
 
-- If a region says `On this phone · off-road not added`, open it and tap "Add".
+- If a region says `On this device · off-road not added`, open it and tap "Add".
 
 ## A region's own page
 
@@ -183,7 +185,7 @@ Tap a region on the "Local" tab, or in "Settings" > "Maps", to open its page. It
 
 1. Open the region. The parts are "Map", "Directions", "Places" and "Off-road".
 2. Read each state: "Ready", a percentage with `to go`, waiting, or "Stopped".
-3. Fix a part right there. A stopped part has "Carry on". A failed one has "Try again". Missing off-road says "Not on this phone", with "Add".
+3. Fix a part right there. A stopped part has "Carry on". A failed one has "Try again". Missing off-road says "Not on this device", with "Add".
 
 Below the parts, "Map layers in this region" lists each layer the same way.
 
@@ -191,6 +193,19 @@ To remove the region, tap "Delete [region]" at the bottom. The "Region options" 
 
 - If a part says "Couldn't finish", tap "Try again". If it keeps failing, remove the region and download it again.
 - If you're offline, connect first.
+
+If places are not published for the region yet:
+- The region row says "Places not available yet" after its size. The "Regions" sheet row says the same.
+- On the region's page, the "Places" row says "Not available yet for this area". Tap it for the reason, which ends "Cache will check again when you check for updates."
+- After "Check for updates", Cache says "Places are now available for [region]." when they are.
+
+If a part failed because the device is full:
+- The part's fix button is "Free space".
+
+If "Try again" fails twice:
+1. Tap "Delete and start again" on the region's page.
+2. In the pop-up, read "What is on this device for [region] is deleted, then downloaded again."
+3. Tap "Start again". Cache says "Starting [region] again".
 
 ## Press and hold a region
 
@@ -256,7 +271,7 @@ A library is a set of passages Cache searches and cites. You add one from a file
 
 1. [Open "Library" and tap "Add to Library"](cache://library/add).
 2. Tap "Your own library".
-3. Choose "From a file on this phone" and pick the file. Or choose "From a download link", paste an https:// link and tap "Download".
+3. Choose "From a file on this device" and pick the file. Or choose "From a download link", paste an https:// link and tap "Download".
 4. Watch the card. It shows each step. "Cancel" stops it.
 5. When it's done, the library appears in your Library.
 
@@ -302,7 +317,7 @@ This switches on a forecast, weather alerts and wildfires for where you are, in 
 3. If Cache asks "Use your location?", tap "Continue" and allow it.
 4. Wait for the short message that says how the update went.
 
-This switches on "Weather forecast", "Weather alerts" and "Wildfires". The first time, Cache asks to send notifications.
+This switches on "Weather forecast", "Weather alerts", "Wildfires" and "Emergency alerts". The first time, Cache asks to send notifications.
 
 - If you're offline, Cache shows the last data and its age.
 - If location can't be found, see Pick a place for weather.
@@ -318,7 +333,7 @@ Use this if you'd rather not share your location, or it can't be found.
 
 Cache watches that place and switches on the same three sources.
 
-To keep a place for good, add it to the Places notebook. Each place has its own "Weather and alerts" switch.
+To keep a place for good, add it to the Places notebook. Each place has its own "Weather and alerts" switch. The same switch is under "Saved places" in ["Settings" > "Weather and alerts"](cache://settings/weather).
 
 ## Add more weather sources
 
@@ -335,7 +350,7 @@ You choose which alerts pop up in ["Settings" > "Notifications"](cache://setting
 
 ## Let Cache use your location
 
-Cache uses your location for the map, directions, nearby places, and weather where you are. It does this whenever your phone allows it.
+Cache uses your location for the map, directions, nearby places, and weather where you are. It does this whenever your device allows it.
 
 ![The + menu in Ask](shot:ask-plus-menu)
 
@@ -346,20 +361,20 @@ To turn it off or on:
 Cache doesn't ask for location in "Ask" and has no location button there.
 
 - If you refuse, Cache keeps working. Chat goes on without your location, and you can choose a place by hand for weather.
-- If the phone blocks location, see If location is blocked.
+- If the device blocks location, see If location is blocked.
 
 ## If location is blocked
 
-When your phone blocks location, "Use my location" says why.
+When your device blocks location, "Use my location" says why.
 
 ![The Use my location row, blocked](shot:settings-location-blocked)
 
-- "Blocked in the phone's settings": location is blocked for Cache.
-- "The phone's location is switched off": the phone's own location is off.
+- "Blocked in the device's settings": location is blocked for Cache.
+- "The device's location is switched off": the device's own location is off.
 
 To fix it:
-1. In "Settings", tap "Phone settings" on the "Use my location" row. In "Ask", tap "Open the phone's settings" in the + menu.
-2. Allow location for Cache, or turn the phone's location on.
+1. In "Settings", tap "Device settings" on the "Use my location" row. In "Ask", tap "Open the device's settings" in the + menu.
+2. Allow location for Cache, or turn the device's location on.
 
 ## Location on the map
 
@@ -367,8 +382,8 @@ The map has its own location controls.
 
 1. Open "Maps" and tap the locate button ("Find me").
 2. When Cache asks "Use your location?", tap "Continue".
-3. Allow it in your phone's prompt.
+3. Allow it in your device's prompt.
 
 "Show my position" in "Maps" > "Layers" turns your dot on or off. When it is off, Cache doesn't read your position and forgets the last one.
 
-"Where I am" is the first row of the Places notebook ("Follows the phone"). Its weather switch decides whether Cache keeps weather for where you are.
+"Your location" under "What weather watches" in ["Settings" > "Weather and alerts"](cache://settings/weather) decides whether Cache keeps weather for where you are. See What weather watches in chapter 3.

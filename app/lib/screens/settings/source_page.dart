@@ -91,7 +91,7 @@ class _SourcePageState extends State<SourcePage> {
                 if (hasKey) ...[
                   SettingsRow(
                     title: 'Key',
-                    status: const [Part('Saved on this phone, not shown again')],
+                    status: const [Part('Saved on this device, not shown again')],
                     trailing: RowButton(label: 'Replace', onPressed: () => addKeyFor(context, d, c, replace: true)),
                   ),
                   SettingsRow(key: const ValueKey('remove-key'), title: 'Remove the key', danger: true, chevron: false, onTap: () => _removeKey(c.keyAlias!)),
@@ -110,7 +110,7 @@ class _SourcePageState extends State<SourcePage> {
               ],
             ),
             SettingsGroup(
-              label: 'On this phone',
+              label: 'On this device',
               rows: [
                 _fact('Last update', i == null ? '…' : (i.age == null ? 'Nothing downloaded yet' : i.age!)),
                 if (i?.age != null) _fact('Data', i!.expired ? 'Out of date' : 'Current', tone: i.expired ? Tone.warn : Tone.ok),

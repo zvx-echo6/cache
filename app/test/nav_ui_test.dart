@@ -172,7 +172,7 @@ void main() {
         await searchWith(tester, 'no_places', const []);
         expect(nav.placesState, PlacesState.none);
         expect(find.byKey(const ValueKey('no-places')), findsOneWidget);
-        expect(find.text('No places on this phone.'), findsOneWidget);
+        expect(find.text('No places on this device.'), findsOneWidget);
         expect(find.text('Download a region to search places and addresses.'), findsOneWidget);
         expect(find.text('Nothing found for "pharmacy"'), findsNothing);
         expect(find.text('free text for older apps'), findsNothing, reason: 'the 13 px note is only for words-only search');
@@ -185,7 +185,7 @@ void main() {
         expect(find.text('Cassia Regional Hospital'), findsOneWidget);
         expect(find.text('No places downloaded here.'), findsOneWidget);
         expect(tester.getTopLeft(find.text('No places downloaded here.')).dy, greaterThan(tester.getTopLeft(find.text('Cassia Regional Hospital')).dy));
-        expect(find.text('No places on this phone.'), findsNothing);
+        expect(find.text('No places on this device.'), findsNothing);
         expect(tester.takeException(), isNull);
       });
 
@@ -202,6 +202,22 @@ void main() {
         expect(nav.placesState, PlacesState.ok);
         expect(find.text('Getting places for this area…'), findsNothing);
         expect(find.text('Cassia Regional Hospital'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('search rows give the distance from where the search was centred, as they were ranked', (tester) async {
+        // The map looks at Idaho Falls while the phone is near Burley: the core measured from the map's centre.
+        nav.setMapCentre(43.49, -112.03);
+        backend.onSearch = (q, {near, meaning}) async => MapSearchResponse(query: q, kind: 'text', meaning: 'off', results: const [
+              MapPlace(id: 'place:osm:n9', type: 'place', name: 'Maverik', kind: 'Gas station', address: 'Idaho Falls, ID', lat: 43.50, lon: -112.02, distanceM: 1609, direction: 'NE'),
+            ]);
+        await tester.pumpWidget(host(theme, NavSearchBar(nav: nav, fmt: fmt)));
+        await tester.enterText(find.byKey(const ValueKey('map-search-field')), 'Maverik');
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pump();
+        expect(find.text('Maverik'), findsWidgets);
+        expect(find.textContaining('1.0 mi NE'), findsOneWidget);
+        expect(find.textContaining('113 mi'), findsNothing, reason: 'not the distance from the phone, 113 mi');
         expect(tester.takeException(), isNull);
       });
 

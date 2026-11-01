@@ -52,7 +52,7 @@ void main() {
       space: const Space(free: 103 * _gb, reserve: 20 * _gb),
     ));
     expect(find.text('Not enough space'), findsOneWidget);
-    expect(find.text('Wikipedia (full) needs 111.0 GB. You have 83.0 GB to use; Cache keeps 20.0 GB free for the phone.'), findsOneWidget);
+    expect(find.text('Wikipedia (full) needs 111.0 GB. You have 83.0 GB to use; Cache keeps 20.0 GB free for the device.'), findsOneWidget);
     expect(find.textContaining('Cache always leaves'), findsNothing, reason: 'the old line under the bar is gone');
     expect(find.byKey(const ValueKey('confirm-download')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('free-up-space')));
@@ -69,7 +69,7 @@ void main() {
       space: const Space(free: 22 * _gb, reserve: 20 * _gb),
     ));
     expect(find.text('Not enough space'), findsOneWidget);
-    expect(find.text('This download needs 4.0 GB. You have 2.0 GB to use; Cache keeps 20.0 GB free for the phone.'), findsOneWidget);
+    expect(find.text('This download needs 4.0 GB. You have 2.0 GB to use; Cache keeps 20.0 GB free for the device.'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(chosen, DownloadChoice.cancel);

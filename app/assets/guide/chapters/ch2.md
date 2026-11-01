@@ -17,11 +17,23 @@ The gear at the top right opens "Settings".
 The "Weather and alerts" card shows the temperature and any active alerts. A red triangle is a warning. A fire icon is a fire, with its distance. Tap the card to open "Weather".
 
 - If it says "Not set up yet", tap "Turn on weather".
+- If it says "Weather is off", every source is off. Tap "Turn on". It opens ["Settings" > "Weather and alerts"](cache://settings/weather).
 - If you're offline, it shows the last data and its age.
+
+## New version banner and What's new
+
+When a newer Cache is out, "Home" shows a banner.
+
+- On Android it says "New version available" with "Open Play Store".
+- On iPhone it says "New version available: open TestFlight" with "Open TestFlight".
+
+Swipe the banner away to dismiss it. It stays gone after a restart. It comes back when an even newer build is out.
+
+To see what changed, open ["Settings" > "Credits and licences"](cache://settings/credits) and tap "What's new in [version]". See Credits and licences in chapter 3.
 
 ## Search Cache from Home
 
-The search box finds things on your phone, or starts a chat.
+The search box finds things on your device, or starts a chat.
 
 ![Home search results](shot:home-search)
 
@@ -63,7 +75,7 @@ A shortcut puts something you use often on "Home". Use "Add to Home" on:
 
 ![A shortcut's options](shot:home-shortcut-menu)
 
-- If a shortcut says "That chat is gone" or "That page is not on this phone any more", remove it.
+- If a shortcut says "That chat is gone" or "That page is not on this device any more", remove it.
 
 ## The bar and Modules
 
@@ -81,6 +93,20 @@ To pin or unpin a module:
 
 For bigger icons, go to ["Settings" > "Appearance"](cache://settings/appearance) and choose "Large" under "Module icons".
 
+## Tablets
+
+On a tablet Cache changes its layout. The screens are the same.
+
+1. Hold the tablet upright. Cache uses the bottom bar, as on a phone.
+2. Turn it sideways. Cache uses a rail at the side instead.
+3. On the rail, tap "Hide menu" at its top to hide it. Tap "Show menu" at the top left of the page to bring it back.
+
+Settings, Regions, Notebooks, Library and the guide contents show a list beside the open page.
+1. Tap "Hide list" at the top of the list to hide it.
+2. Tap the button left of the page's title to show it again. It reads "Show Settings", "Show Regions", "Show Notebooks", "Show Library" or "Show contents".
+
+- Before you choose anything, the page says "Choose an item" ("Choose a section" in the guide). The list can't be hidden then.
+
 ## Select several items, and press and hold
 
 Lists have no tick boxes until you ask for them.
@@ -96,13 +122,13 @@ To act on several items:
 2. Tick the items.
 3. Tap the button at the bottom, for example "Download 2 · 730 MB". Then confirm.
 
-Every press-and-hold action is also in your phone's accessibility actions menu.
+Every press-and-hold action is also in your device's accessibility actions menu.
 
 Delete always asks first. The pop-up shows what it frees and says "You can download it again later." Tap the red "Delete" to go ahead.
 
 ## Ask a question
 
-"Ask" answers questions using your phone's sources. It runs on your phone.
+"Ask" answers questions using your device's sources. It runs on your device.
 
 ![The Ask screen](shot:ask)
 
@@ -120,7 +146,7 @@ To start fresh, tap "New chat".
 
 ## Ask with your location
 
-Cache uses your location in "Ask" whenever your phone allows it. It never asks.
+Cache uses your location in "Ask" whenever your device allows it. It never asks.
 
 ![The + menu in Ask](shot:ask-plus-menu)
 
@@ -128,7 +154,7 @@ To turn it off for your questions:
 1. Tap the + button left of the box where you type.
 2. Turn off "Use my location".
 
-- If the phone blocks location, the switch is greyed out. It says "Blocked in the phone's settings" or "The phone's location is switched off".
+- If the device blocks location, the switch is greyed out. It says "Blocked in the device's settings" or "The device's location is switched off".
 
 ## Open a route from Ask
 
@@ -169,7 +195,7 @@ Answers show where they came from.
 - Each source shows its number, title and a short passage.
 - A Library source has "Open the article". Tap it to read the page.
 
-"Not from your sources" means the answer came from nothing on your phone or a search. Check it before you rely on it.
+"Not from your sources" means the answer came from nothing on your device or a search. Check it before you rely on it.
 
 The assistant can be wrong, even with sources. For anything about your safety, read the source.
 
@@ -186,9 +212,9 @@ Use this when an answer is wrong, made up or harmful.
 3. Optional: type in "What was wrong (optional)".
 4. Tap "Save report".
 
-The report holds the question, the answer and the model. It stays on your phone.
+The report holds the question, the answer and the model. It stays on your device.
 
-Cache says "Report saved on this phone. Find it in Settings > Assistant." That page is now "Cache model and web search".
+Cache says "Report saved on this device. Find it in Settings > Assistant." That page is now "Cache model and web search".
 
 ## See or share reports
 
@@ -198,7 +224,7 @@ Cache says "Report saved on this phone. Find it in Settings > Assistant." That p
 
 ## Find and open a chat
 
-Every chat is saved on your phone, even after a restart.
+Every chat is saved on your device, even after a restart.
 
 ![The chat list](shot:chat-list)
 
@@ -234,7 +260,7 @@ Search finds a place, town, address or coordinates.
 2. Tap "Search places or coordinates" and type.
 3. Tap a result. The map moves there and the place card opens.
 
-- If you see "No places on this phone.", tap "Get a region".
+- If you see "No places on this device.", tap "Get a region".
 - If you see "No places downloaded here.", tap "Get this area".
 - If you see "Getting places for this area…", wait. The search runs again by itself.
 
@@ -249,6 +275,12 @@ The card has:
 - "Save place": keeps it in your Places notebook;
 - "Add to Home": adds a shortcut;
 - "Close".
+
+When the place has a Wikipedia summary, the card shows it with "Read about it".
+- Tap "Read about it". The button says "Opening…", then the article opens in your Wikipedia.
+- A place with no Wikipedia match shows no summary and no button.
+- If Wikipedia is not on the device, the card shows "Get Wikipedia" and "Wikipedia is not on this device." Tap "Get Wikipedia" to open "Add to Library" and choose a Wikipedia to download.
+- If you see "That article is not in your Wikipedia. Update Wikipedia in Library.", tap "Open Library".
 
 Press and hold on the map for the ring menu. It has "Add stop" and "Measure". See The map ring menu in chapter 5.
 
@@ -311,6 +343,7 @@ The "Layers" button on the right of "Maps" opens the layers sheet.
 - "Show my position" turns your dot on or off.
 - "Download a region" opens "Regions".
 - "Get more layers" lists every layer.
+- Under "My layers", "Add from a file" adds a file of places or repeaters. See Add a repeater list from a file in chapter 5.
 
 Layers stream while you're online and keep what you viewed. To keep a whole area offline, download its region. See Download a region in chapter 1.
 
@@ -332,7 +365,7 @@ The guide that comes with Cache shows "Built in". Your own libraries show "Your 
 - Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete".
 - Tap "Add to Library" for more. See Add to your Library in chapter 1.
 
-"Change icon" picks a picture from your phone.
+"Change icon" picks a picture from your device.
 
 The built-in guide has no "Delete". Anything else asks first and shows what it frees.
 
@@ -342,7 +375,8 @@ The reader opens a Library item.
 
 - "Search this ZIM" searches inside the open work.
 - "Find in page" finds words, with "Previous" and "Next".
-- "Back", "Forward" and "Main page" are at the bottom.
+- "Back", "Forward" and "Main page" are at the bottom. "Back" and "Forward" move through the pages you read.
+- The arrow at the top left leaves the reader. Its label reads "Close [library name]".
 - "More" > "Add to Home" puts the page on "Home".
 
 - If you see "This ZIM is still being indexed. Text search works when that is done.", you can still read pages.
@@ -376,11 +410,11 @@ In the player:
 
 1. On the video, tap "Download".
 2. Pick a size. Smaller sizes save space.
-3. When it says "Saved on this phone", tap "Play saved copy" to watch with no connection.
+3. When it says "Saved on this device", tap "Play saved copy" to watch with no connection.
 
 ![Saving a video](shot:video-download)
 
-Saved videos are under "Saved on this phone" at the top of "Videos".
+Saved videos are under "Saved on this device" at the top of "Videos".
 
 To remove them, delete them in "Videos", or go to ["Settings" > "Storage" > "Videos and weather"](cache://settings/storage).
 
@@ -402,10 +436,10 @@ The same sheet has "Log out" and "Remove this instance".
 
 ![The Weather screen](shot:weather)
 
-- What's already on the phone shows at once, with its age.
+- What's already on the device shows at once, with its age.
 - When you open Cache and the last update is over 30 minutes old, it updates.
 - The box at the top says when data was last updated. Tap "Update now", or pull the screen down.
-- "Happening nearby" lists alerts, fires and other sources you switched on.
+- "Happening nearby" lists alerts, fires and other sources you switched on. Weather Service alerts and "Emergency alerts" from FEMA IPAWS show together. The same alert from both shows once.
 - With more than one place, tap a place's chip to switch.
 
 Tap any item for details. "Ask about this" starts a chat about what it means for you.
@@ -418,7 +452,9 @@ The tune button ("Weather and alerts settings") opens the source settings.
 
 Every alert is listed in "Weather", whatever you chose under "Pop up for" in "Notifications".
 
+An emergency alert shows "Event", "Severity", "Issued by", "Area" and "Expires", then "Instructions" or "Details". Severity is written as for Weather Service alerts.
+
 - If an alert notification opens Cache, it goes straight to that alert.
 - If it says "That alert has ended or is no longer in the data.", the alert is over.
-- If you see "Waiting for your position." the phone doesn't know where it is yet. Wait for it.
+- If you see "Waiting for your position." the device doesn't know where it is yet. Wait for it.
 - If you see "Weather is off." or "No place is being watched.", tap "Turn on weather" or "Choose a place instead".

@@ -24,7 +24,7 @@ class AssistantPage extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete all conversations?'),
-        content: const Text('Every saved chat is removed from this phone. This cannot be undone.'),
+        content: const Text('Every saved chat is removed from this device. This cannot be undone.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(
@@ -50,7 +50,7 @@ class AssistantPage extends StatelessWidget {
       steps: const ['Sign in to Kagi and add search credit', 'Create a key on that page and copy it'],
       onSave: deps.hub.webSearch.saveKey,
       openUrl: deps.hub.openUrl,
-      savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this phone and isn\'t shown again.',
+      savedNote: 'Saving checks the key with one real web search and turns on web search. The key stays on this device and isn\'t shown again.',
     );
     if (saved == true && context.mounted) say(context, 'Web search is on');
   }
@@ -127,7 +127,7 @@ class AssistantPage extends StatelessWidget {
             : m == null
             ? const [Part('No model chosen', Tone.warn)]
             : joinParts([
-                const [Part('On this phone')],
+                const [Part('On this device')],
                 [Part(formatBytes(m.size))],
                 const [Part('Ready', Tone.ok)],
               ]);
@@ -153,7 +153,7 @@ class AssistantPage extends StatelessWidget {
                   status: web.hasKey
                       ? joinParts(const [
                           [Part('Set up', Tone.ok)],
-                          [Part('Kagi key saved on this phone')],
+                          [Part('Kagi key saved on this device')],
                         ])
                       : joinParts(const [
                           [Part('Not set up', Tone.warn)],
@@ -177,7 +177,7 @@ class AssistantPage extends StatelessWidget {
               rows: [
                 SettingsRow(
                   title: 'Saved conversations',
-                  status: [Part('$count on this phone')],
+                  status: [Part('$count on this device')],
                   onTap: () => _openConversations(context),
                 ),
                 FutureBuilder<int>(
@@ -185,7 +185,7 @@ class AssistantPage extends StatelessWidget {
                   builder: (context, snap) => SettingsRow(
                     key: const ValueKey('reported-answers'),
                     title: 'Reported answers',
-                    status: [Part(snap.hasData ? (snap.data == 0 ? 'None' : '${snap.data} on this phone') : '…')],
+                    status: [Part(snap.hasData ? (snap.data == 0 ? 'None' : '${snap.data} on this device') : '…')],
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(builder: (_) => ReportedAnswersPage(reports: reports)),
                     ),
@@ -224,8 +224,8 @@ class UseMyLocationRow extends StatelessWidget {
         return SettingsRow(
           key: const ValueKey('use-my-location-row'),
           title: 'Use my location',
-          status: [Part(blocked ? "Blocked in the phone's settings" : "The phone's location is switched off", Tone.warn)],
-          trailing: RowButton(label: 'Phone settings', onPressed: blocked ? location.openAppSettings : location.openLocationSettings),
+          status: [Part(blocked ? "Blocked in the device's settings" : "The device's location is switched off", Tone.warn)],
+          trailing: RowButton(label: 'Device settings', onPressed: blocked ? location.openAppSettings : location.openLocationSettings),
         );
       }
       return SwitchRow(

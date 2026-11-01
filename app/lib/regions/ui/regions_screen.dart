@@ -428,7 +428,7 @@ class _LocalTabState extends State<LocalTab> {
                   ),
               ],
             ),
-          if (regions.offroadPacks.isNotEmpty) const NoteText('Each state\'s off-road data is downloaded once and kept while a region that uses it is on this phone.'),
+          if (regions.offroadPacks.isNotEmpty) const NoteText('Each state\'s off-road data is downloaded once and kept while a region that uses it is on this device.'),
         ]);
       },
     );

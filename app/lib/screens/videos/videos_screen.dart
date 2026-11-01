@@ -50,7 +50,7 @@ class VideosScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Saved on this phone', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+                            Text('Saved on this device', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
                             const SizedBox(height: 2),
                             Text(
                               video.saved.isEmpty && active == 0

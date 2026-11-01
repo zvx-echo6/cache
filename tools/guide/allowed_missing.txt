@@ -15,3 +15,6 @@ Alerts for
 # The Places list's button is a + icon and the words "Add place"; the guide quotes what it looks like.
 + Add place
 
+
+# Maps > Layers section heading: the code has MY LAYERS (shown in capitals); the guide quotes it in normal case.
+My layers

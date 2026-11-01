@@ -104,7 +104,7 @@ Future<bool> confirmDelete(
             _SizeLine(name: 'Frees', bytes: bytes),
             if (free != null) ...[
               const SizedBox(height: 8),
-              _small(ctx, 'Phone storage', '${formatBytes(free)} free now, ${formatBytes(free + bytes)} after'),
+              _small(ctx, 'Device storage', '${formatBytes(free)} free now, ${formatBytes(free + bytes)} after'),
             ],
             const SizedBox(height: 8),
             Text(again, style: TextStyle(fontSize: 13, color: k.secondary)),
@@ -202,7 +202,7 @@ class _DownloadDialog extends StatelessWidget {
         title: const Text('Not enough space'),
         content: Text(
           '${what ?? 'This download'} needs ${formatBytes(total)}. You have ${formatBytes(usable)} to use; Cache keeps '
-          '${formatBytes(space.reserve)} free for the phone.',
+          '${formatBytes(space.reserve)} free for the device.',
           key: const ValueKey('download-short'),
           style: body,
         ),
@@ -235,7 +235,7 @@ class _DownloadDialog extends StatelessWidget {
             const SizedBox(height: 10),
             _Bar(free: free, bytes: total, fits: fits),
             const SizedBox(height: 6),
-            _small(context, 'Phone storage', fits ? '${formatBytes(free)} free, ${formatBytes(free - total)} after' : '${formatBytes(free)} free, needs ${formatBytes(total)}'),
+            _small(context, 'Device storage', fits ? '${formatBytes(free)} free, ${formatBytes(free - total)} after' : '${formatBytes(free)} free, needs ${formatBytes(total)}'),
           ],
           if (mobileBlocked) ...[
             const SizedBox(height: 8),

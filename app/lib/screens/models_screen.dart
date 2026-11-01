@@ -73,7 +73,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
                         child: Text(
-                          'The model is the AI that answers your questions. It runs on this phone, so it works with no signal.',
+                          'The model is the AI that answers your questions. It runs on this device, so it works with no signal.',
                           style: TextStyle(fontSize: 13, color: k.secondary),
                         ),
                       ),
@@ -106,7 +106,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                       )
                     else if (app.models.isNotEmpty) ...[
                       const SizedBox(height: 12),
-                      const GroupLabel('On this phone'),
+                      const GroupLabel('On this device'),
                       for (final m in app.models) _tile(context, m),
                     ],
                   ],
@@ -178,7 +178,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                   ),
                 ),
                 if (installed)
-                  RowBadge('On this phone', color: k.ok)
+                  RowBadge('On this device', color: k.ok)
                 else
                   IconButton(
                     key: ValueKey('download-recommended-${r.file}'),

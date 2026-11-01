@@ -218,7 +218,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('check-and-save')));
       await tester.pumpAndSettle();
       expect(find.text('Replace'), findsOneWidget);
-      expect(find.text('Saved on this phone, not shown again'), findsOneWidget);
+      expect(find.text('Saved on this device, not shown again'), findsOneWidget);
       expect(find.textContaining(secret), findsNothing);
       expect(switchIn(tester, 'Use this source').value, isTrue);
       await r.dispose(tester);

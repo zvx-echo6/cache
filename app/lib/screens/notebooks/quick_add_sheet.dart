@@ -122,7 +122,7 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = 'Not saved. Your phone may be out of space.';
+          _error = 'Not saved. Your device may be out of space.';
         });
       }
     }

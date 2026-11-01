@@ -326,6 +326,44 @@ fn map_search_gives_address_rows() {
 }
 
 #[test]
+fn map_search_for_an_address_in_a_named_town_gives_only_that_towns_addresses() {
+    let t = Tmp::new("intown");
+    let db = merged(&t.0, None);
+    // Burley's Overland Ave again in Stanley, 200 km away: the same numbers on a street of the same name in another town
+    let c = Connection::open(&db).unwrap();
+    c.execute(
+        "INSERT INTO addr_streets(id, uid, street, street_expanded, locality, postal_city, postcode, state, country, lat, lon, min_lat, max_lat, \
+         min_lon, max_lon, n, numbers) SELECT 5001, uid || '-stanley', street, street_expanded, 'Stanley', 'Stanley', '83278', state, country, \
+         lat + 1.682, lon - 1.149, min_lat + 1.682, max_lat + 1.682, min_lon - 1.149, max_lon - 1.149, n, numbers FROM addr_streets \
+         WHERE street = 'Overland Ave' AND id > 1000 LIMIT 1",
+        [],
+    )
+    .unwrap();
+    c.execute("INSERT INTO addr_rt SELECT id, min_lat, max_lat, min_lon, max_lon FROM addr_streets WHERE id = 5001", []).unwrap();
+    c.execute("INSERT INTO addr_fts(rowid, street, street_expanded) SELECT id, street, street_expanded FROM addr_streets WHERE id = 5001", []).unwrap();
+    drop(c);
+    let core = core(&db);
+    let towns = |v: &Value| v["results"].as_array().unwrap().iter().map(|r| format!("{} {}", r["type"].as_str().unwrap(), r["address"].as_str().unwrap())).collect::<Vec<_>>();
+    // each town's own, with or without the comma, wherever the map is
+    for (q, at) in [("1414 Overland Ave, Stanley", BURLEY), ("1414 Overland Ave Stanley", BURLEY), ("1414 Overland Ave, Burley", STANLEY), ("1414 Overland Ave Burley", STANLEY)] {
+        let v = search(&core, q, near(at));
+        let town = q.rsplit([',', ' ']).next().unwrap();
+        let got = towns(&v);
+        assert!(!got.is_empty(), "{q}: {v}");
+        assert!(got.iter().all(|r| r == &format!("address 1414 Overland Ave, {town}, ID")), "{q}: {got:?}");
+    }
+    // a town with no such address: nothing, not the street of that name in Burley or Stanley
+    for (q, town) in [("1414 Overland Ave, Boise", "Boise"), ("1414 Overland Ave Boise", "Boise"), ("1414 Overland Ave, Twin Falls", "Twin Falls")] {
+        let v = search(&core, q, near(BURLEY));
+        assert_eq!(towns(&v), Vec::<String>::new(), "{q}: {v}");
+        assert_eq!(v["interpreted"]["anchor"]["name"], town, "{q}");
+    }
+    // with no town named, both are addresses, the nearer first
+    let got = towns(&search(&core, "1414 Overland Ave", near(STANLEY)));
+    assert_eq!(got[..2], ["address 1414 Overland Ave, Stanley, ID".to_string(), "address 1414 Overland Ave, Burley, ID".to_string()]);
+}
+
+#[test]
 fn warning_codes() {
     let t = Tmp::new("warn");
     let code = |v: &Value| v.get("warning_code").and_then(Value::as_str).map(str::to_string);

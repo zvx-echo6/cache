@@ -279,6 +279,7 @@ class _PlacesNotebookScreenState extends State<PlacesNotebookScreen> {
           toggled: e.onMap,
           label: '${color.spoken} marker, ${e.onMap ? 'shown on the map' : 'hidden on the map'}',
           onTapHint: e.onMap ? 'Hide on the map' : 'Show on the map',
+          onTap: () => _toggleMap(book, e),
           excludeSemantics: true,
           child: InkResponse(
             key: ValueKey('marker-${e.id}'),
@@ -670,7 +671,7 @@ class _PlaceFormState extends State<PlaceForm> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = 'Not saved. Your phone may be out of space.';
+          _error = 'Not saved. Your device may be out of space.';
         });
       }
     }
@@ -766,6 +767,7 @@ class _PlaceFormState extends State<PlaceForm> {
                     button: true,
                     selected: c.id == _color.id,
                     label: c.spoken,
+                    onTap: () => setState(() => _color = c),
                     excludeSemantics: true,
                     child: InkResponse(
                       key: ValueKey('swatch-${c.id}'),

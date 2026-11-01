@@ -96,7 +96,7 @@ void main() {
     await tester.runAsync(b.init);
     await tester.pumpWidget(app(AddToLibraryScreen(browse: b)));
     await tester.pumpAndSettle();
-    expect(find.text('On this phone'), findsOneWidget);
+    expect(find.text('On this device'), findsOneWidget);
     expect(find.byTooltip('Download Wikivoyage - Europe'), findsOneWidget); // the other variant
   });
 

@@ -18,7 +18,7 @@ To add it to Cache:
 2. Under "Web search", tap "Set up" next to "Search service".
 3. Paste the key into "Key" and tap "Check and save".
 
-Cache checks the key with one real search, turns web search on and says "Web search is on". The key stays on this phone and is never shown again.
+Cache checks the key with one real search, turns web search on and says "Web search is on". The key stays on this device and is never shown again.
 
 - If saving fails, Cache says why. For example, "Kagi didn't accept this key. Check you copied all of it." or "Couldn't reach Kagi. Check your connection."
 - If it says "Kagi says this account has no search credit left, or has reached its limit. Check your balance, then try again.", add credit.
@@ -91,7 +91,7 @@ Open-Meteo provides Cache's forecast: current conditions, tonight, and up to 16 
 To switch it on:
 1. Go to ["Settings" > "Weather and alerts"](cache://settings/weather).
 2. Turn on "Weather forecast".
-3. Choose the places to watch in the Places notebook (chapter 5).
+3. Choose the places to watch under "What weather watches" on that page.
 
 Forecasts download while online and stay for offline use until they expire. Cache says how old they are.
 
@@ -109,9 +109,23 @@ An empty list means only that the Weather Service lists none for that place. It 
 
 ## Emergency alerts from FEMA (IPAWS)
 
-IPAWS is FEMA's public alert feed. The phone would read it directly. It is free and needs no key.
+IPAWS is FEMA's public alert feed. The device reads it directly from FEMA. It is free and needs no key.
 
-This is coming in a later update. It is not in this version of Cache yet, so there is nothing to switch on today.
+Cache shows it as the "Emergency alerts" source. Its provider is FEMA IPAWS.
+
+To switch it on:
+1. Tap "Turn on weather". It switches on "Emergency alerts" with "Weather alerts".
+2. Or go to ["Settings" > "Weather and alerts"](cache://settings/weather) and turn on "Emergency alerts".
+
+If "Weather alerts" was already on, Cache switches it on once when the catalogue offers it. After that it is your switch.
+
+The same alert can come from the Weather Service and from IPAWS. Cache shows and pops it up once.
+
+Each alert shows "Event", "Severity", "Issued by", "Area" and "Expires". It also shows "Instructions" when the alert carries them, or "Details" when it carries only a description.
+
+An alert matches your place, or a region's whole area.
+
+An empty list means only that no active emergency alerts are listed for that place.
 
 ## Wildfires with WFIGS
 
@@ -195,12 +209,12 @@ Each new ZIM is indexed in the background, which can take a while.
 
 ## Models from Hugging Face
 
-Cache's assistant runs a model on your phone. Models download from Hugging Face.
+Cache's assistant runs a model on your device. Models download from Hugging Face.
 
 1. Tap the model name at the top of "Ask" and choose "Manage models".
 2. Tap "Search Hugging Face", or "Choose a file" for a .gguf file you already have.
 
-Cache shows each file's size and whether it fits this phone. It lists single-file GGUF models only.
+Cache shows each file's size and whether it fits this device. It lists single-file GGUF models only.
 
 - If a model is marked "Not supported: Cache needs a model that can use tools", pick another.
 - If a model needs a Hugging Face account, get it in a browser, then use "Choose a file".

@@ -135,6 +135,9 @@ class ModulesScreen extends StatelessWidget {
                 button: true,
                 label: layout.isPinned(m) ? '${m.label}, on the bar' : m.label,
                 onLongPressHint: 'Options',
+                // The spoken label replaces the tile's own; its actions come with it, so a screen reader can open it.
+                onTap: () => onOpen(m),
+                onLongPress: () => _actions(context, m),
                 excludeSemantics: true,
                 child: InkWell(
                   key: ValueKey('module-${m.name}'),

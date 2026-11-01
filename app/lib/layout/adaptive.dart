@@ -123,10 +123,16 @@ class TwoPaneState extends State<TwoPane> {
               children: [
                 SizedBox(
                   width: width >= kWideWidth ? kWideListWidth : kListWidth,
-                  // A hidden list is out of reach: no taps, and a screen reader skips it.
-                  child: ExcludeSemantics(
-                    excluding: hidden,
-                    child: IgnorePointer(ignoring: hidden, child: _PaneScope(state: this, inList: true, selected: _key, hidden: hidden, child: widget.list)),
+                  // A hidden list is out of reach: no taps, and a screen reader skips it. Shown, it is a semantics container of its
+                  // own beside the detail's (below), so the detail page's route barrier, which blocks the semantics of whatever
+                  // was painted before it in its container, cannot take the list out of the screen reader's reach.
+                  child: Semantics(
+                    container: true,
+                    explicitChildNodes: true,
+                    child: ExcludeSemantics(
+                      excluding: hidden,
+                      child: IgnorePointer(ignoring: hidden, child: _PaneScope(state: this, inList: true, selected: _key, hidden: hidden, child: widget.list)),
+                    ),
                   ),
                 ),
                 VerticalDivider(width: 1, thickness: 1, color: k.secondary.withValues(alpha: 0.2)),
@@ -141,22 +147,27 @@ class TwoPaneState extends State<TwoPane> {
               child: ConstrainedBox(
                 // With the list hidden the detail takes the whole width.
                 constraints: BoxConstraints(maxWidth: hidden ? double.infinity : kDetailMaxWidth),
-                child: _PaneScope(
-                  state: this,
-                  inList: false,
-                  selected: _key,
-                  hidden: hidden,
-                  child: b == null
-                      ? Scaffold(
-                          key: const ValueKey('pane-placeholder'),
-                          body: Center(child: Text(widget.placeholder, style: TextStyle(fontSize: 15, color: k.secondary))),
-                        )
-                      : HeroControllerScope.none(
-                          child: Navigator(
-                            key: ValueKey(_key),
-                            onGenerateRoute: (_) => MaterialPageRoute<void>(builder: b),
+                // The detail's own Navigator: its page's barrier blocks semantics only inside this container (see the list's).
+                child: Semantics(
+                  container: true,
+                  explicitChildNodes: true,
+                  child: _PaneScope(
+                    state: this,
+                    inList: false,
+                    selected: _key,
+                    hidden: hidden,
+                    child: b == null
+                        ? Scaffold(
+                            key: const ValueKey('pane-placeholder'),
+                            body: Center(child: Text(widget.placeholder, style: TextStyle(fontSize: 15, color: k.secondary))),
+                          )
+                        : HeroControllerScope.none(
+                            child: Navigator(
+                              key: ValueKey(_key),
+                              onGenerateRoute: (_) => MaterialPageRoute<void>(builder: b),
+                            ),
                           ),
-                        ),
+                  ),
                 ),
               ),
             ),

@@ -157,7 +157,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Notebooks could not open. Your entries are still on this phone.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17, color: k.text)),
+                    Text('Notebooks could not open. Your entries are still on this device.', textAlign: TextAlign.center, style: TextStyle(fontSize: 17, color: k.text)),
                     const SizedBox(height: 12),
                     FilledButton(key: const ValueKey('notebooks-retry'), onPressed: nb.reload, child: const Text('Try again')),
                   ],

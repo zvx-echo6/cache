@@ -93,7 +93,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
     final id = zimIdOfAddress(address);
     final z = id == null ? null : sources.zimById(id);
     if (z == null) {
-      _say('That source is not on this phone any more.');
+      _say('That source is not on this device any more.');
       return;
     }
     _openZim(z, address: address);

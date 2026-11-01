@@ -79,7 +79,7 @@ Future<void> askDownloadRegions(BuildContext context, RegionsState regions, List
       partsSentence(map: one.$2.map, routing: one.$2.routing, places: one.$2.places, offroad: one.$2.offroad)
     else
       [for (final t in todo) t.$1.name].join(', '),
-    if (shared) "Off-road data for the state is already on this phone; only this area's terrain is new.",
+    if (shared) "Off-road data for the state is already on this device; only this area's terrain is new.",
     sizeWords(bytes),
   ].where((l) => l.isNotEmpty).toList();
   final m = ScaffoldMessenger.of(context);
@@ -128,7 +128,7 @@ Future<void> askCarryOn(BuildContext context, RegionsState regions, String id, {
     summary: [
       if (left != null) '${formatBytes(left)} to go.' else 'The size of what is left is not known.',
       if ((o?.already ?? 0) > 0) '${formatBytes(o!.already)} is already here.',
-      if (addOffroad) "Off-road is not on this phone yet${o!.addBytes > 0 ? ' (${formatBytes(o.addBytes)})' : ''}. Add it from $name's page.",
+      if (addOffroad) "Off-road is not on this device yet${o!.addBytes > 0 ? ' (${formatBytes(o.addBytes)})' : ''}. Add it from $name's page.",
     ],
     bytes: left,
     name: name,
@@ -177,8 +177,8 @@ Future<void> _askAddParts(BuildContext context, RegionsState regions, RegionReco
     title: 'Add $adds to ${rec.name}?',
     summary: [
       if (have.isNotEmpty) '$have ${have.contains(' and ') ? 'are' : 'is'} already here.',
-      if (o.offroad && o.offroadShared) "The state's off-road data is already on this phone; only this area's terrain is new.",
-      '${sizeWords(o.bytes)} to download.',
+      if (o.offroad && o.offroadShared) "The state's off-road data is already on this device; only this area's terrain is new.",
+      o.bytes == null ? 'Its size is not known yet.' : '${sizeWords(o.bytes)} to download.',
     ],
     bytes: o.bytes,
     name: rec.name,
@@ -189,6 +189,13 @@ Future<void> _askAddParts(BuildContext context, RegionsState regions, RegionReco
   tell(m, 'Adding $adds to ${rec.name}');
   await _run(m, 'add $adds to ${rec.name}', () => regions.addParts(rec, offroad: o.offroad, places: o.places, anyway: choice == DownloadChoice.now),
       retry: () => _askAddParts(context, regions, rec, o));
+}
+
+/// Adds places to a region downloaded before they were published for its area (its page's "Now available" row).
+Future<void> askAddPlaces(BuildContext context, RegionsState regions, String id) async {
+  final rec = await regions.recordOf(id);
+  if (rec == null || !context.mounted) return;
+  await _askAddParts(context, regions, rec, RegionOffer(RegionOfferKind.addParts, places: true, bytes: regions.costOf(rec).places));
 }
 
 /// Adds off-road to a region on the phone, from its page or its menu.
@@ -225,7 +232,7 @@ Future<void> askStartAgain(BuildContext context, RegionsState regions, LocalRegi
   final choice = await askToDownload(
     context,
     title: 'Delete and start again with ${l.name}?',
-    summary: ['What is on this phone for ${l.name} is deleted, then downloaded again.', sizeWords(bytes)],
+    summary: ['What is on this device for ${l.name} is deleted, then downloaded again.', sizeWords(bytes)],
     bytes: bytes,
     name: l.name,
     action: 'Start again',
@@ -250,7 +257,7 @@ Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRe
     context,
     name: l.name,
     bytes: l.bytes,
-    again: l.isArea ? 'Its map is removed from this phone.' : 'Its map, directions, places and off-road data are removed from this phone. Parts another region uses stay.',
+    again: l.isArea ? 'Its map is removed from this device.' : 'Its map, directions, places and off-road data are removed from this device. Parts another region uses stay.',
   );
   if (!yes || !context.mounted) return false;
   final m = ScaffoldMessenger.of(context);
@@ -268,7 +275,7 @@ Future<bool> askDeleteRegion(BuildContext context, RegionsState regions, LocalRe
 Future<void> checkRegionUpdate(BuildContext context, RegionsState regions, LocalRegion l, {bool anyway = false}) async {
   final m = ScaffoldMessenger.of(context);
   tell(m, 'Checking ${l.name} for updates');
-  final noPlaces = l.placesNotAvailable;
+  final noPlaces = l.placesNotAvailable || (!l.hasPlaces && !l.isArea);
   try {
     await regions.checkUpdates();
     await regions.updateRegion(l.id, anyway: anyway);
