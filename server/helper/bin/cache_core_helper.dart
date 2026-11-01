@@ -5,6 +5,7 @@ import '../../../packages/cache_search/lib/src/core_dispatch.dart';
 import '../../../packages/cache_search/lib/src/native_io.dart';
 import 'core_open.dart';
 import 'fs_ops.dart';
+import 'index_driver.dart';
 import 'line_protocol.dart';
 
 /// Cache Server's core helper. CACHE_CORE_LIB is the absolute path of libcache_search.so (cache_search.dll on Windows).
@@ -34,6 +35,7 @@ Future<void> main() async {
   }
   final dispatcher = CoreDispatcher(() => FfiCsNative(lib));
   void log(String m) => stderr.writeln('cache_core_helper: $m');
+  final indexer = IndexDriver(dispatcher, log: log);
   await serveLines(
     stdin,
     (line) async {
@@ -42,8 +44,14 @@ Future<void> main() async {
     },
     dispatcher,
     log: log,
-    handlers: [OpenOp(dirs, dispatcher, log: log), RescanOp(dirs, dispatcher, log: log), FsOps(support: dirs.support, docs: dirs.docs)],
+    handlers: [
+      OpenOp(dirs, dispatcher, log: log, indexer: indexer),
+      RescanOp(dirs, dispatcher, log: log, indexer: indexer),
+      IndexStateOp(indexer),
+      FsOps(support: dirs.support, docs: dirs.docs),
+    ],
   );
+  indexer.stop();
   await stdout.flush();
   exit(0);
 }

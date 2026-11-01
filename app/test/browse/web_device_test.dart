@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -49,6 +50,50 @@ void main() {
       await d.refresh();
       expect(d.problem, 'This device could not be reached.');
       expect(d.items, isNotEmpty, reason: 'what was known stays on screen');
+      d.dispose();
+    });
+
+    test('a finished transfer leaves the list when its read ends, whether the app catches up slowly or fails', () async {
+      api.jobList = [job('j1', 'running', bytes: 0, total: 418000)];
+      final slow = Completer<void>();
+      var mode = 'fail';
+      final d = DeviceLibrary(
+        api: api,
+        fs: fs,
+        uploader: uploader,
+        leaveWarning: warnings.add,
+        onItemsChanged: () async {
+          if (mode == 'fail') throw StateError('the sources could not be read');
+          await slow.future;
+        },
+      );
+      var notified = 0;
+      await d.start();
+      expect(d.anyActive, isTrue);
+      d.addListener(() => notified++);
+
+      // The app's catch-up fails: the card still goes, and the next read is still scheduled.
+      api.jobList = [job('j1', 'done', bytes: 418000, total: 418000)];
+      api.itemList = [item('a.zim', bytes: 418000)];
+      await d.refresh();
+      expect(d.anyActive, isFalse);
+      expect(d.jobs.single.done, isTrue);
+      expect(notified, greaterThan(0));
+      expect(d.problem, isNull);
+
+      // The app's catch-up is slow: what was read is on screen before it ends.
+      mode = 'slow';
+      api.jobList = [job('j2', 'running', bytes: 0, total: 9)];
+      await d.refresh();
+      api.jobList = [job('j2', 'done', bytes: 9, total: 9)];
+      api.itemList = [item('a.zim', bytes: 418000), item('b.zim', bytes: 9)];
+      notified = 0;
+      final reading = d.refresh();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(d.jobs.single.done, isTrue);
+      expect(notified, greaterThan(0), reason: 'shown before the app is done');
+      slow.complete();
+      await reading;
       d.dispose();
     });
 

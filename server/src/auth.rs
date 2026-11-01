@@ -37,6 +37,8 @@ pub const COOKIE_NAME: &str = "cache_session";
 pub const HALF_COOKIE_NAME: &str = "cache_half";
 /// How long the password step of `both` stays good, in seconds.
 pub const HALF_SECS: u64 = 300;
+/// How long a /zim/ token lasts, in seconds (12 hours).
+pub const ZIM_TOKEN_SECS: u64 = 12 * 3600;
 /// The largest key file taken, in bytes.
 pub const KEYFILE_MAX: usize = 4096;
 /// The first line of a key file.
@@ -318,6 +320,12 @@ impl Sessions {
         self.entries.get(&token_hash(token)).is_some_and(|exp| *exp > now)
     }
 
+    /// True when the session whose token hashes to `hash` is still valid at `now` (a /zim/ token is tied to one).
+    fn has_hash(&mut self, hash: &str, now: u64) -> bool {
+        self.refresh();
+        self.entries.get(hash).is_some_and(|exp| *exp > now)
+    }
+
     pub fn remove(&mut self, token: &str) -> io::Result<()> {
         self.refresh();
         if self.entries.remove(&token_hash(token)).is_some() {
@@ -413,6 +421,11 @@ pub struct Auth {
     /// Password steps of mode `both` that wait for a key: hash of the half token -> expiry. Memory only.
     halves: Mutex<HashMap<String, u64>>,
     failures: Mutex<u32>,
+    /// Tokens for /zim/ (ZIM pages shown in a sandboxed frame): hash of the token -> (hash of the session token it belongs to,
+    /// expiry). Memory only, so a restart ends them. They open nothing but /zim/.
+    zim_tokens: Mutex<HashMap<String, (String, u64)>>,
+    /// How long a /zim/ token lasts, in seconds (a field so a test can shorten it).
+    pub zim_secs: u64,
     /// Whether the cookie is marked Secure (everything but `--no-tls`).
     pub secure_cookie: bool,
     /// How long the half cookie lasts, in seconds (a field so a test can shorten it).
@@ -434,6 +447,8 @@ impl Auth {
             sessions: Mutex::new(sessions),
             halves: Mutex::new(HashMap::new()),
             failures: Mutex::new(0),
+            zim_tokens: Mutex::new(HashMap::new()),
+            zim_secs: ZIM_TOKEN_SECS,
             secure_cookie,
             half_secs: HALF_SECS,
             webauthn: None,
@@ -549,7 +564,31 @@ impl Auth {
     }
 
     pub fn logout(&self, token: &str) -> io::Result<()> {
+        let hash = token_hash(token);
+        lock(&self.zim_tokens).retain(|_, (session, _)| *session != hash);
         lock(&self.sessions).remove(token)
+    }
+
+    // ---- /zim/ tokens
+
+    /// A token for /zim/, tied to the signed-in session `session` (its cookie value). It is not a session: no `/api/` call takes it.
+    pub fn create_zim_token(&self, session: &str) -> io::Result<String> {
+        let at = now();
+        let token = URL_SAFE_NO_PAD.encode(random_bytes::<32>()?);
+        let mut t = lock(&self.zim_tokens);
+        t.retain(|_, (_, exp)| *exp > at);
+        t.insert(token_hash(&token), (token_hash(session), at + self.zim_secs));
+        Ok(token)
+    }
+
+    /// True when `token` is a /zim/ token that has not expired at time `at` and whose session is still signed in.
+    pub fn zim_token_valid_at(&self, token: &str, at: u64) -> bool {
+        let Some((session, exp)) = lock(&self.zim_tokens).get(&token_hash(token)).cloned() else { return false };
+        exp > at && lock(&self.sessions).has_hash(&session, at)
+    }
+
+    pub fn zim_token_valid(&self, token: &str) -> bool {
+        self.zim_token_valid_at(token, now())
     }
 
     // ---- the half session of mode `both`

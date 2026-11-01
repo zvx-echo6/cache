@@ -249,11 +249,12 @@ class _BrowseScreenState extends State<BrowseScreen> {
                     style: TextStyle(fontSize: 14, color: k.secondary),
                   ),
                 )
-              else
+              // In a browser the icons cannot be changed, so the line about changing them is left out; the line about what is going on stays.
+              else if (b.device == null || b.device!.activityHint != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
                   child: Text(
-                    b.device?.activityHint ?? (b.device == null ? 'Icons come from each source\'s website; change one from the hold menu.' : 'Icons come from each source\'s website; change one from the item\'s menu.'),
+                    b.device?.activityHint ?? 'Icons come from each source\'s website; change one from the hold menu.',
                     style: TextStyle(fontSize: 12, color: k.secondary),
                   ),
                 ),

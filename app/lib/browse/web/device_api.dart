@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -126,6 +127,10 @@ abstract class DeviceApi {
   Future<List<int>> fetch(Uri url);
 }
 
+/// How long a call to the device may take before it counts as not answering. Without a limit one call that never ends would stop the
+/// Library from being read again, and its cards would stay as they were.
+const Duration kDeviceCallTimeout = Duration(seconds: 30);
+
 /// The browser's [DeviceApi]: Cache Server's `/api/library/...` and `/api/fetch`, same origin, so the session goes along.
 class HttpDeviceApi implements DeviceApi {
   HttpDeviceApi({http.Client? client}) : _client = client ?? http.Client();
@@ -137,11 +142,13 @@ class HttpDeviceApi implements DeviceApi {
     try {
       switch (method) {
         case 'GET':
-          return await _client.get(uri);
+          return await _client.get(uri).timeout(kDeviceCallTimeout);
         case 'DELETE':
-          return await _client.delete(uri);
+          return await _client.delete(uri).timeout(kDeviceCallTimeout);
         default:
-          return await _client.post(uri, headers: const {'content-type': 'application/json'}, body: body == null ? null : jsonEncode(body));
+          return await _client
+              .post(uri, headers: const {'content-type': 'application/json'}, body: body == null ? null : jsonEncode(body))
+              .timeout(kDeviceCallTimeout);
       }
     } catch (e) {
       throw DeviceException('unreachable', 'This device could not be reached.');
