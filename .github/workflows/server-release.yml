@@ -13,6 +13,10 @@
 #
 # The core builds on Linux without libzim: the C++ shim over libzim is built only for Windows, Android and iOS (see
 # packages/cache_search/native/cache_search/build.rs), so LIBZIM_DIR is not needed here.
+#
+# The build jobs run inside an ubuntu:22.04 container (on the same native runners) so the binaries need glibc 2.35 or older and
+# run on Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS bookworm (64-bit)+. A step after the build fails the job if any of the
+# binaries needs a newer glibc.
 name: Cache Server build
 
 on:
@@ -65,42 +69,38 @@ jobs:
             arch: aarch64
             rustflags: '-C link-arg=-fuse-ld=lld'
     runs-on: ${{ matrix.runner }}
+    # Building on the oldest supported distribution keeps the glibc requirement at 2.35.
+    container: ubuntu:22.04
     timeout-minutes: 90
     env:
       # aarch64 links with lld: GNU ld rejects the cdylib version script combined with rustc's own; x86_64 already uses Rust's bundled lld.
       RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
+        # A job container defaults to sh; the steps use bash features.
+        shell: bash
         working-directory: packages/cache_search/native
     steps:
       - uses: actions/checkout@v4
       - name: Build tools
         working-directory: .
-        # The runner images ship a C/C++ compiler, cmake and pkg-config; they are added only if one is missing (aws-lc-sys, ring,
-        # lzma-sys, zstd-sys and the bundled SQLite build C code).
+        # The container is a bare ubuntu:22.04 with no sudo; everything the core and the actions need is installed here
+        # (aws-lc-sys, ring, lzma-sys, zstd-sys and the bundled SQLite build C code; vendored OpenSSL needs perl and make).
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          missing=""
-          for tool in gcc g++ cmake pkg-config; do command -v "$tool" > /dev/null || missing="$missing $tool"; done
-          if [[ -n "$missing" ]]; then
-            echo "missing:$missing"
-            sudo apt-get update -q && sudo apt-get install -y -q build-essential cmake pkg-config
-          fi
-          # lld is needed on aarch64 (see RUSTFLAGS); use one already on the runner, else install it.
-          if ! command -v ld.lld > /dev/null; then
-            found=$(ls /usr/bin/ld.lld-* /usr/lib/llvm-*/bin/ld.lld 2> /dev/null | head -n 1 || true)
-            if [[ -n "$found" ]]; then
-              sudo ln -s "$found" /usr/local/bin/ld.lld
-            else
-              sudo apt-get update -q && sudo apt-get install -y -q lld
-            fi
-          fi
+          apt-get update -q
+          apt-get install -y -q build-essential cmake pkg-config perl curl git ca-certificates unzip xz-utils zstd tar gzip lld
           ld.lld --version
+          gcc --version | sed -n 1p
+          ldd --version | sed -n 1p
       - name: Rust
         id: rust
         working-directory: .
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
           echo "id=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           rustc --version
       # The Dart SDK Flutter 3.44.8 bundles; setup-dart has Linux x64 and arm64 builds of it.
@@ -125,8 +125,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: packages/cache_search/native/target
-          key: cargo-target-server-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: cargo-target-server-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+          key: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-server-g2235-${{ matrix.arch }}-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
       # The release version is <Cargo version>+<short git sha>; cache-server embeds it at build time (CACHE_SERVER_VERSION) and
       # prints it at start-up and for --version. The tarball name carries the Cargo version and the sha.
       - name: Version
@@ -163,6 +163,21 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/helper"
           dart compile exe bin/cache_core_helper.dart -o "$RUNNER_TEMP/helper/cache-core-helper"
+      # Fails the job if any binary needs a glibc newer than 2.35 (Ubuntu 22.04, the oldest supported system).
+      - name: Check the glibc requirement
+        working-directory: .
+        run: |
+          limit="2.35"
+          fail=0
+          for f in packages/cache_search/native/target/release/cache-server packages/cache_search/native/target/release/libcache_search.so "$RUNNER_TEMP/helper/cache-core-helper"; do
+            max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
+            echo "$f: max GLIBC_${max:-none}"
+            if [[ -n "$max" && "$(printf '%s\n%s\n' "$max" "$limit" | sort -V | tail -n 1)" != "$limit" ]]; then
+              echo "::error::$f needs GLIBC_$max, newer than $limit"
+              fail=1
+            fi
+          done
+          exit $fail
       - name: Download the web build
         uses: actions/download-artifact@v4
         with:
