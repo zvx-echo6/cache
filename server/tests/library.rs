@@ -45,10 +45,12 @@ fn enc(s: &str) -> String {
 
 // ---- a small web server that behaves like a download host
 
+/// (path, Range header) of every request.
+type ReqLog = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
 struct Origin {
     port: u16,
-    /// (path, Range header) of every request.
-    log: Arc<Mutex<Vec<(String, Option<String>)>>>,
+    log: ReqLog,
     /// When above zero, /big.zim sends only this many body bytes and then drops the connection.
     cut: Arc<AtomicU64>,
 }
@@ -77,7 +79,7 @@ impl Origin {
     }
 }
 
-fn serve(mut s: TcpStream, port: u16, log: Arc<Mutex<Vec<(String, Option<String>)>>>, cut: Arc<AtomicU64>) {
+fn serve(mut s: TcpStream, port: u16, log: ReqLog, cut: Arc<AtomicU64>) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
     while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -244,10 +246,12 @@ impl Rig {
 
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+type Seed = Box<dyn FnOnce(&Path, &Origin)>;
+
 struct Setup {
     options: LibraryOptions,
     status: Option<String>,
-    seed: Option<Box<dyn FnOnce(&Path, &Origin)>>,
+    seed: Option<Seed>,
 }
 
 impl Setup {
