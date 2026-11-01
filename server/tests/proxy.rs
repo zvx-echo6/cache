@@ -57,7 +57,7 @@ async fn rig(tag: &str, sources: Option<&str>) -> Rig {
     cfg.stop_wait = Duration::from_secs(5);
     let helper = Helper::start(cfg).await;
     let auth = Auth::new(Some(StoredPassword::new("pw").unwrap()), Sessions::load(&dir.0.join("sessions.json")), false);
-    let app = App { auth: Arc::new(auth), helper: Some(helper.clone()), web: dir.0.join("web"), library: Library::new(dir.0.clone(), Some(helper)) };
+    let app = App { auth: Arc::new(auth), helper: Some(helper.clone()), web: dir.0.join("web"), library: Library::new(dir.0.clone(), Some(helper)), embed: cache_server::embed::EmbedService::new(dir.0.clone(), dir.0.join("none.so")) };
     let r: Reply = route(&app, "POST", "/auth/login", None, br#"{"password":"pw"}"#).await;
     assert_eq!(r.status, 204);
     let cookie = r.headers.iter().find(|(k, _)| *k == "Set-Cookie").unwrap().1.split(';').next().unwrap().to_string();

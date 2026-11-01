@@ -19,6 +19,22 @@ The program is `target/release/cache-server`. It also needs the helper and the c
 below), whose paths are the `--helper` and `--core-lib` options; by default they are `helper/cache-core-helper` and
 `lib/libcache_search.so` beside the program.
 
+### The text embedder
+
+The server embeds text with the same model the phone uses (bge-m3 Q8_0, the pinned `lm-kit/bge-m3-gguf` revision in
+`app/lib/models/search_model.dart`), for the library builder and for the browser's search by meaning. `src/embed.rs` loads
+`lib/libcache_llama.so` (llama.cpp behind `cl_embed`, built from `packages/cache_llama`; `--embed-lib` overrides the path)
+through the `cache_embed` crate, so a vector is the phone's vector. The model (634,553,856 bytes, sha256 checked) is not in
+the tarball: it is downloaded into `<data>/models/` on first need, resuming a `.part` file after an interruption.
+
+    GET  /api/models/embedder             -> {state: missing | downloading {bytes,total} | ready | error {error}, file, size, library_found}
+    POST /api/models/embedder/download    -> the same; starts or continues the download
+    POST /api/embed {texts:[...]}         -> {vectors, model, dims}; 1 to 64 texts; 503 model_missing until the model is there
+
+Both need a signed-in session. The loaded model takes about 700 MB and is let go after two minutes without a call. On x86_64
+the library uses AVX2, FMA and F16C; a CPU without them gets `embed_unavailable`. In Rust, the builder calls
+`EmbedService::embed_batch(&[String])`.
+
 Security keys use OpenSSL (through webauthn-rs). On Linux it is built from source and linked statically, so the installed
 server needs no libssl; the build needs `perl` and `make`. On Windows the build links a static OpenSSL from vcpkg instead:
 `vcpkg install openssl:x64-windows-static-md`, then set `OPENSSL_DIR` to `<vcpkg>\installed\x64-windows-static-md`,
