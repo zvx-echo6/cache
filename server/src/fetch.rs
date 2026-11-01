@@ -46,10 +46,8 @@ pub fn parse_url(s: &str) -> Option<Parsed> {
     }
     let (https, rest) = if let Some(r) = s.strip_prefix("https://") {
         (true, r)
-    } else if let Some(r) = s.strip_prefix("http://") {
-        (false, r)
     } else {
-        return None;
+        (false, s.strip_prefix("http://")?)
     };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let auth = &rest[..end];

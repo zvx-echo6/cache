@@ -551,8 +551,7 @@ mod tests {
 
     /// An app whose `auth.json` holds the password "pw" (cheap hash), with WebAuthn off, signed-in session not yet made.
     fn file_app(dir: &TempDir) -> App {
-        let mut f = crate::auth::AuthFile::default();
-        f.password = Some(StoredPassword::with_iterations("pw", 1000).unwrap());
+        let f = crate::auth::AuthFile { password: Some(StoredPassword::with_iterations("pw", 1000).unwrap()), ..Default::default() };
         f.save(&dir.0.join("auth.json")).unwrap();
         std::fs::create_dir_all(dir.0.join("web")).unwrap();
         std::fs::write(dir.0.join("web/index.html"), b"the app").unwrap();

@@ -332,7 +332,7 @@ pub fn delay_for(n: u32) -> Duration {
     if n < 2 {
         return Duration::ZERO;
     }
-    let secs = if n - 1 >= 5 { MAX_DELAY_SECS } else { (1u64 << (n - 1)).min(MAX_DELAY_SECS) };
+    let secs = if n > 5 { MAX_DELAY_SECS } else { (1u64 << (n - 1)).min(MAX_DELAY_SECS) };
     Duration::from_secs(secs)
 }
 
