@@ -24,6 +24,11 @@ server needs no libssl; the build needs `perl` and `make`. On Windows the build 
 `vcpkg install openssl:x64-windows-static-md`, then set `OPENSSL_DIR` to `<vcpkg>\installed\x64-windows-static-md`,
 `OPENSSL_STATIC=1` and `OPENSSL_NO_VENDOR=1` before `cargo build`.
 
+## Supported systems
+
+The release binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+ and Raspberry Pi OS
+bookworm (64-bit)+, on x86_64 and aarch64. Older systems are not supported. The build fails if a binary needs a newer glibc.
+
 ## Install (Linux, systemd)
 
 The release tarball (built by `.github/workflows/server-release.yml`) holds `cache-server`, `helper/cache-core-helper`,
