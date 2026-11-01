@@ -192,15 +192,17 @@ void main() {
     expect(app.active, isNull, reason: 'no model is ever chosen for the user');
   });
 
-  testWidgets('a model tuned for Cache says so', (tester) async {
+  testWidgets('a model tuned for Cache says so in its name and licence line, not in a second line', (tester) async {
     ModelDownloads.shared = _RecordingDownloads(app: app);
     final recs = RecommendedModels(
-      builtIn: () async => _list([_entry('Tuned', 't.gguf', _gb, kind: 'tuned_for_cache')]),
+      builtIn: () async => _list([{..._entry('Gemma 4 E2B · tuned for Cache', 't.gguf', _gb, kind: 'tuned_for_cache'), 'licence': 'Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache'}]),
       fetch: () async => throw const SocketException('offline'),
     );
     await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
     await tester.pumpAndSettle();
-    expect(find.text('Tuned for Cache'), findsOneWidget);
+    expect(find.text('Gemma 4 E2B · tuned for Cache'), findsOneWidget);
+    expect(find.text('Tuned for Cache'), findsNothing);
+    expect(find.text('Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache'), findsOneWidget);
   });
 
   testWidgets('the active model can be unloaded; Ask then shows the no-model state with "Choose a model"', (tester) async {

@@ -189,7 +189,8 @@ class _ModelsScreenState extends State<ModelsScreen> {
       extra: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(r.kind.label, style: TextStyle(fontSize: 12, color: r.kind == RecommendationKind.tunedForCache ? k.ok : k.secondary)),
+          // A tuned model's name already says so ("· tuned for Cache"): only the others say how they stand.
+          if (r.kind != RecommendationKind.tunedForCache) Text(r.kind.label, style: TextStyle(fontSize: 12, color: k.secondary)),
           if (r.licence != null) Text(r.licence!, style: TextStyle(fontSize: 12, color: k.secondary)),
         ],
       ),
