@@ -971,7 +971,6 @@ mod tests {
         let r = route(a, "POST", "/api/zim/token", Some(cookie), b"").await;
         assert_eq!(r.status, 200);
         let v: Value = serde_json::from_slice(&r.body).unwrap();
-        assert_eq!(v["result"]["ttl"], 12 * 3600);
         v["result"]["token"].as_str().unwrap().to_string()
     }
 
@@ -982,6 +981,8 @@ mod tests {
         assert_eq!(route(&a, "POST", "/api/zim/token", None, b"").await.status, 401);
         assert_eq!(route(&a, "POST", "/api/zim/token", Some("cache_session=forged"), b"").await.status, 401);
         let c = sign_in(&a).await;
+        let r = route(&a, "POST", "/api/zim/token", Some(&c), b"").await;
+        assert_eq!(serde_json::from_slice::<Value>(&r.body).unwrap()["result"]["ttl"], 12 * 3600);
         let t = zim_token(&a, &c).await;
         assert!(t.len() >= 40 && t != c.trim_start_matches("cache_session="));
         assert_ne!(t, zim_token(&a, &c).await, "every call makes a new one");
