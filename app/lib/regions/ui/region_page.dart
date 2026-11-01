@@ -195,7 +195,7 @@ class RegionPage extends StatelessWidget {
                     rows: [
                       for (final g in layers)
                         if (!g.status.complete)
-                          _PartRow(key: ValueKey('layer-${g.key}'), regions: regions, region: l, part: g.status, title: g.title, own: true)
+                          _PartRow(key: ValueKey('layer-${g.key}'), regions: regions, region: l, part: g.status, title: g.title, own: true, keyBase: 'layer-${g.key}')
                         else
                         SettingsRow(
                           key: ValueKey('layer-${g.key}'),
@@ -332,7 +332,10 @@ String offerLine(RegionRecord r, RegionOffer o, {List<String> offroadFrom = cons
 /// A part of a region that is not complete, in the download pattern: the running part's line, bar and Pause; a waiting part
 /// "Waiting for Map to finish"; a paused or failed part its Resume (or Free space) and Remove.
 class _PartRow extends StatelessWidget {
-  const _PartRow({super.key, required this.regions, required this.region, required this.part, this.title, this.own = false, this.parts});
+  const _PartRow({super.key, required this.regions, required this.region, required this.part, this.title, this.own = false, this.parts, this.keyBase});
+
+  /// The keys' start for its controls ("part-map", "layer-hillshade"); the part's by default.
+  final String? keyBase;
 
   /// The list [part] came from.
   final List<RegionPartStatus>? parts;
@@ -352,7 +355,7 @@ class _PartRow extends StatelessWidget {
     final k = context.t;
     final s = partDl(regions, region, part, own: own, parts: parts);
     final a = regionDlActions(context, regions, region);
-    final key = 'part-${part.kind.name}';
+    final key = keyBase ?? 'part-${part.kind.name}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
       child: Row(
