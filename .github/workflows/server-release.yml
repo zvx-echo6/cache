@@ -17,7 +17,7 @@ name: Cache Server build
 
 on:
   push:
-    branches: [server]
+    branches: [server, 'server-*']
     paths:
       - 'server/**'
       - 'app/**'
@@ -143,6 +143,8 @@ jobs:
         run: |
           free -m
           nproc
+      - name: Clippy (cache_server)
+        run: cargo clippy -p cache_server --all-targets -- -D warnings
       # Tests do not need the release profile's fat LTO.
       - name: Test
         run: cargo test -p cache_server
