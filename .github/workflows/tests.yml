@@ -60,6 +60,7 @@ jobs:
         run: cargo test --workspace --locked --no-fail-fast
       # The crates the desktop lints, with every target (tests too), as the desktop runs it.
       - name: Clippy (the desktop's crates, all targets)
+        if: ${{ !cancelled() }}
         run: >-
           cargo clippy --locked --keep-going --all-targets
           -p cache_search -p cache_places -p cache_regions -p cache_navigate -p cache_tool -p places_pack -p cache_layers
@@ -69,6 +70,7 @@ jobs:
       # cache_search_cli and offroad_pack (their libraries or programs), and the test targets of cache_act, cache_video and
       # cache_offroad. Drop an exclusion once its crate is clean.
       - name: Clippy (the rest of the workspace, libraries and programs)
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --locked --keep-going --exclude cache_search_cli --exclude offroad_pack -- -D warnings
 
   flutter:
