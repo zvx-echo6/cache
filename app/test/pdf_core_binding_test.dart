@@ -59,6 +59,9 @@ void main() {
       ],
       'pieces': 3,
     });
-    expect((s.session, s.done, s.skipped, s.pieces), (7, {'a.pdf'}, {'b.pdf'}, 3));
+    expect(s.session, 7);
+    expect(s.done, {'a.pdf'});
+    expect(s.skipped, {'b.pdf'});
+    expect(s.pieces, 3);
   });
 }
