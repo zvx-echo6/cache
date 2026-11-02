@@ -251,6 +251,10 @@ jobs:
       - name: Build (x86_64)
         if: matrix.arch != 'aarch64'
         run: cargo build -p cache_server -p cache_search --release
+      # The library builder's program, uploaded on its own (below) so a build of a PDF can be run from this exact commit.
+      - name: Build (cache-build)
+        if: matrix.arch != 'aarch64'
+        run: cargo build -p cache_builder --bin cache-build --release
       - name: Compile the helper
         working-directory: server/helper
         run: |
@@ -311,5 +315,18 @@ jobs:
         with:
           name: ${{ steps.pack.outputs.name }}
           path: ${{ steps.pack.outputs.path }}
+          retention-days: 14
+          if-no-files-found: error
+      - name: Stage cache-build
+        if: matrix.arch != 'aarch64'
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/cache-build"
+          install -m 755 packages/cache_search/native/target/release/cache-build "$RUNNER_TEMP/cache-build/cache-build"
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch != 'aarch64'
+        with:
+          name: cache-build-x86_64-${{ github.sha }}
+          path: ${{ runner.temp }}/cache-build/cache-build
           retention-days: 14
           if-no-files-found: error
