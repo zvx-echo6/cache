@@ -7,6 +7,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show Point;
+import 'dart:typed_data';
 
 import 'package:cache/location/position_source.dart' show LocationPermissionState;
 import 'package:cache/settings/data_policy.dart' show ConnectionKind;
@@ -25,7 +26,9 @@ import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
+import 'package:cache/notebook/sync/folder.dart' show FolderFile, SyncFolder;
 import 'package:cache/notebook/sync/sync_engine.dart' show SyncKind;
+import 'package:cache/screens/notebooks/entry_editor.dart' show EntryEditor;
 import 'package:cache/notebook/templates.dart';
 import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/screens/notebooks/connections_screen.dart';
@@ -976,6 +979,72 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  // ---- Import by tag (Obsidian) ---------------------------------------------------------------------------
+
+  /// Notebooks with an Obsidian vault connected (a folder in memory), [notes] in the vault before the first sync.
+  Future<(NotebookState, _MemFolder, NotebookConnections)> tagRig(WidgetTester tester, {Map<String, String> notes = const {}}) async {
+    final nb = fakeNotebook(FakeNotebookBackend());
+    final mem = _MemFolder()..text.addAll(notes);
+    final dir = Directory.systemTemp.createTempSync('guide-tagsync');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final c = NotebookConnections(notebook: nb, dir: () async => dir, folderFor: (_) => mem);
+    await tester.runAsync(() async {
+      await nb.start();
+      await nb.saveNotebook(template: 'notes', def: const NotebookDef(name: 'Camping trip', fields: [], sort: NotebookSort.recent));
+      await c.init();
+      await c.connect(SyncKind.obsidian, '/storage/Vault', display: 'Vault');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await c.syncAll();
+      while (c.syncing) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    return (nb, mem, c);
+  }
+
+  testWidgets('import-tag-row, import-tag-sheet', (tester) async {
+    final (_, _, c) = await tagRig(tester);
+    await show(tester, ConnectionsScreen(connections: c, pickFolder: () async => null, phone: true));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('import-tag-obsidian')), findsOneWidget);
+    await shot(tester, 'import-tag-row', crop: find.byKey(const ValueKey('connection-obsidian')), pad: 8);
+
+    await tester.tap(find.byKey(const ValueKey('import-tag-obsidian')));
+    await settle(tester);
+    await tester.enterText(find.byKey(const ValueKey('import-tag-field')), '#camping');
+    await settle(tester);
+    await shot(tester, 'import-tag-sheet', crop: _sheet);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('stop-syncing-note, note-sync-off', (tester) async {
+    final (nb, mem, c) = await tagRig(tester, notes: {'Trips/Camping list.md': '---\ntags:\n  - cachesync/Camping-trip\n---\nWater filter, stove, two fuel cans.\n'});
+    final id = RegExp(r'cache_id: (\S+)').firstMatch(mem.text['Trips/Camping list.md']!)!.group(1)!;
+    Future<Widget> editor() async {
+      final e = (await tester.runAsync(() => nb.entry(id)))!;
+      return EntryEditor(notebook: nb, book: nb.notebook(e.notebookId)!, places: PlaceChoices.none, entry: e, connections: c, now: () => DateTime(2026, 10, 29, 17, 2));
+    }
+
+    await show(tester, await editor());
+    await tester.tap(find.byKey(const ValueKey('editor-menu')));
+    await settle(tester);
+    expect(find.text('Stop syncing this note'), findsOneWidget);
+    await shot(tester, 'stop-syncing-note');
+
+    await tester.tap(find.text('Stop syncing this note'));
+    await settle(tester);
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('stop-sync-confirm')));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await settle(tester, rounds: 20);
+    // The entry opened again (no snackbar): its "Not syncing with Obsidian" mark.
+    await show(tester, await editor());
+    expect(find.byTooltip('Not syncing with Obsidian'), findsOneWidget);
+    await shot(tester, 'note-sync-off');
+    await tester.pumpWidget(const SizedBox());
+  });
+
   // ---- Library --------------------------------------------------------------------------------------------
 
   testWidgets('library, library-add, library-own', (tester) async {
@@ -1518,6 +1587,43 @@ class _CountingSync extends FakeSync {
       ],
     };
   }
+}
+
+/// An Obsidian vault in memory (the connection's folder).
+class _MemFolder implements SyncFolder {
+  final Map<String, String> text = {};
+
+  @override
+  String get display => 'Vault';
+
+  @override
+  Future<bool> reachable() async => true;
+
+  @override
+  Future<List<FolderFile>> list(String dir) async => [
+    for (final p in (text.keys.toList()..sort()))
+      if (dir.isEmpty || p.startsWith('$dir/')) FolderFile(p, 0, text[p]!.length),
+  ];
+
+  @override
+  Future<String?> readText(String path) async => text[path];
+
+  @override
+  Future<Uint8List?> readBytes(String path) async => null;
+
+  @override
+  Future<void> writeText(String path, String t) async {
+    text[path] = t;
+  }
+
+  @override
+  Future<void> writeBytes(String path, Uint8List b) async {}
+
+  @override
+  Future<void> delete(String path) async => text.remove(path);
+
+  @override
+  Future<bool> exists(String path) async => text.containsKey(path);
 }
 
 /// The index scheduler as Settings reads it: only its status line, set by the picture (no work is run).
