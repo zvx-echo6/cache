@@ -7,7 +7,7 @@ use cache_builder::build::{build_pack, BuildOptions};
 use cache_builder::docs::{Docs, DOCS_FILE};
 use cache_builder::embed::FakeEmbedder;
 use cache_builder::library::{build_library, LibraryOptions, SETTINGS_FILE, SUMS_FILE};
-use cache_builder::pack::{f16_to_f32, f32_to_f16, pack_bytes, read_pack, read_pack_bytes, write_pack, Division, Pack, Samebook};
+use cache_builder::pack::{f16_to_f32, f32_to_f16, pack_bytes, read_pack, read_pack_bytes, write_pack, Division, Pack};
 use cache_builder::samebook::{best_copy, CopyQuality};
 use common::*;
 use serde_json::{json, Value};
@@ -402,7 +402,8 @@ fn f16_vs_f32(tmp: &Path) -> (u64, u64) {
         for q in [&v, &near] {
             let ha = sa.dense_search(q, 1, 1, 200).unwrap();
             let hb = sb.dense_search(q, 1, 1, 200).unwrap();
-            assert_eq!(ha[0].address, hb[0].address, "top-1 differs for {t:.40}");
+            // the test books repeat their sentences, so equal pieces tie exactly: compare what the hit says, not its point id
+            assert_eq!((&ha[0].title, &ha[0].snippet), (&hb[0].title, &hb[0].snippet), "top-1 differs for {t:.40}");
         }
     }
     (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")))
