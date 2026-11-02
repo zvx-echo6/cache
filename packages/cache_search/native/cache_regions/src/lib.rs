@@ -559,6 +559,7 @@ impl Inner {
         let body = self.get(&format!("{}current.json", self.base), timeout)?;
         let c: Current = serde_json::from_slice(&body).map_err(|e| Error::new("bad_response", format!("current.json is not valid: {e}")))?;
         c.check_routing().map_err(|m| Error::new("bad_response", m))?;
+        self.store.note(&c);
         let text = serde_json::to_string(&c).unwrap_or_default();
         let mut st = self.st();
         if st.current.as_ref() != Some(&c) {
@@ -1612,6 +1613,10 @@ impl Regions {
             base.push('/');
         }
         let ua = cfg.user_agent.clone().filter(|u| !u.trim().is_empty()).unwrap_or_else(http::default_user_agent);
+        let store = snap::IndexStore::new(cfg.indexes_dir.as_deref(), false, cfg.dir.join("index"));
+        if let Some(c) = &st.current {
+            store.note(c);
+        }
         let inner = Arc::new(Inner {
             dir: cfg.dir.clone(),
             base,
@@ -1621,7 +1626,7 @@ impl Regions {
             db: Mutex::new(db),
             st: Mutex::new(st),
             indexes: Mutex::new(HashMap::new()),
-            store: snap::IndexStore::new(cfg.indexes_dir.as_deref(), false, cfg.dir.join("index")),
+            store,
             network: AtomicBool::new(true),
             held: AtomicBool::new(false),
             stop: AtomicBool::new(false),

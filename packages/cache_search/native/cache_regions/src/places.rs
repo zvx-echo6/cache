@@ -176,6 +176,9 @@ impl PlacesPart {
         st.p.build = build.clone();
         st.p.updating = meta("places.updating")?.filter(|b| index::safe_build(b)).filter(|b| Some(b) != build.as_ref());
         st.p.current = meta("places.current")?.and_then(|c| serde_json::from_str(&c).ok());
+        if let Some(c) = &st.p.current {
+            self.store.note(c);
+        }
         st.p.update = meta("places.update")?.and_then(|u| serde_json::from_str::<(String, u64)>(&u).ok());
         let keep: Vec<String> = [build, st.p.updating.clone()].into_iter().flatten().collect();
         if let Ok(rd) = std::fs::read_dir(&self.dir) {
@@ -285,6 +288,7 @@ impl Inner {
         let body = self.p_get(&format!("{}current.json", p.base), timeout)?;
         let c: Current = serde_json::from_slice(&body).map_err(|e| Error::new("bad_response", format!("places current.json is not valid: {e}")))?;
         let common = c.check_places(TILE_SCHEMA).map_err(|m| Error::new("bad_response", m))?;
+        p.store.note(&c);
         let text = serde_json::to_string(&c).unwrap_or_default();
         let mut st = self.st();
         if st.p.current.as_ref() != Some(&c) {

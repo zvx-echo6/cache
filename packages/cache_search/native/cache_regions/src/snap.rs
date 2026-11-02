@@ -14,7 +14,9 @@
 use crate::index::Current;
 use cache_snapshot::{self as snapshot, Compat, Manifest};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub(crate) const KIND_REGION: &str = "region-index";
 pub(crate) const KIND_PLACES: &str = "places-index";
@@ -71,6 +73,8 @@ pub(crate) struct IndexStore {
     places: bool,
     /// `<dir>/index` (routing) or `<dir>/places/index`.
     legacy: PathBuf,
+    /// The `index_sha256` of each build's index as the last current.json known here named it (lower case).
+    expect: Mutex<HashMap<String, String>>,
 }
 
 impl IndexStore {
@@ -80,7 +84,43 @@ impl IndexStore {
             kind: if places { KIND_PLACES } else { KIND_REGION },
             places,
             legacy,
+            expect: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Remembers what current.json says the build's index checksum is (from the server, or cached in regions.sqlite).
+    pub fn note(&self, c: &Current) {
+        let mut m = self.expect.lock().unwrap_or_else(|e| e.into_inner());
+        m.insert(c.build.clone(), c.index_sha256.to_ascii_lowercase());
+    }
+
+    /// The earliest-created usable snapshot of the build that matches the checksum current.json names, when it is known and
+    /// the snapshot recorded one. A snapshot of another publish is skipped, not deleted. Of the matching ones every device
+    /// picks the same (the `pick` rule). `Picked.usable` lists only the matching ones, so `gc` never removes the others.
+    fn pick(&self, sd: &Path, build: &str) -> Option<snapshot::Picked> {
+        let want = self.expect.lock().unwrap_or_else(|e| e.into_inner()).get(build).cloned();
+        let mut ok: Vec<(String, String, Manifest)> = Vec::new();
+        for name in snapshot::list(sd) {
+            let Ok(m) = snapshot::verify(&sd.join(snapshot::SNAP_DIR).join(&name), self.kind, build, self.compat())
+            else {
+                continue;
+            };
+            let recorded = m.extra.get("index_sha256").and_then(Value::as_str);
+            if let (Some(w), Some(r)) = (&want, recorded) {
+                if !r.eq_ignore_ascii_case(w) {
+                    continue;
+                }
+            }
+            ok.push((m.created.clone(), name, m));
+        }
+        ok.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        let usable: Vec<(String, String)> = ok.iter().map(|(c, n, _)| (c.clone(), n.clone())).collect();
+        ok.into_iter().next().map(|(_, name, manifest)| snapshot::Picked {
+            dir: sd.join(snapshot::SNAP_DIR).join(&name),
+            name,
+            manifest,
+            usable,
+        })
     }
 
     fn compat(&self) -> Compat {
@@ -104,7 +144,7 @@ impl IndexStore {
     /// parse is removed (this device only), a legacy file that does not parse is left to be overwritten by the next fetch.
     pub fn find<T>(&self, build: &str, seq: u64, parse: &dyn Fn(&str) -> Option<T>) -> Option<T> {
         if let Some(sd) = self.source_dir(build) {
-            while let Some(p) = snapshot::pick(&sd, self.kind, build, self.compat()) {
+            while let Some(p) = self.pick(&sd, build) {
                 let parsed = std::fs::read_to_string(p.dir.join(FILE)).ok().and_then(|t| parse(&t));
                 match parsed {
                     Some(v) => {

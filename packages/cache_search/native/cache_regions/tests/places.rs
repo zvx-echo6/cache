@@ -738,3 +738,61 @@ fn a_half_copied_snapshot_is_ignored_and_the_index_is_fetched_again() {
         assert_eq!(index_location(&e, "routing", "r1")["location"], "snapshot");
     }
 }
+
+#[test]
+fn a_snapshot_of_another_publish_is_ignored_when_current_json_is_known() {
+    let srv = Server::start("snap-sha");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-sha");
+    let ix = t.0.join("ix");
+    {
+        let e = engine(&t.0.join("dev1"), &srv, json!({"indexes_dir": ix}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+    }
+    // A copy whose snapshots record a checksum the server's current.json does not name (a different publish of the build).
+    let tamper = |ix: &Path| {
+        for (kind, build) in [("region-index", "r1"), ("places-index", "p1")] {
+            let m = snaps(ix, kind, build)[0].join("manifest.json");
+            let mut v: Value = serde_json::from_slice(&std::fs::read(&m).unwrap()).unwrap();
+            v["index_sha256"] = json!("0".repeat(64));
+            std::fs::write(&m, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+        }
+    };
+    let ix2 = t.0.join("ix2");
+    copy_tree(&ix, &ix2);
+    tamper(&ix2);
+
+    // Online (current.json known): the mismatching snapshot is skipped, the index is fetched, a good snapshot is published,
+    // and the synced-in one is not deleted.
+    let e = engine(&t.0.join("dev2"), &srv, json!({"indexes_dir": ix2}));
+    let before = srv.hits_of("/routing/r1/index.tsv.gz");
+    let p_before = srv.hits_of("/places/p1/index.tsv.gz");
+    assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+    assert_eq!(srv.hits_of("/routing/r1/index.tsv.gz"), before + 1, "fetched, not trusted");
+    let p = call(&e, "plan", json!({"geometry": region_a(), "parts": ["places"]}));
+    assert_eq!(p["parts"]["places"]["tiles"], 1);
+    assert_eq!(srv.hits_of("/places/p1/index.tsv.gz"), p_before + 1);
+    for (kind, build) in [("region-index", "r1"), ("places-index", "p1")] {
+        assert_eq!(snaps(&ix2, kind, build).len(), 2, "{kind}: the other publish's snapshot is kept");
+    }
+    drop(e);
+    // The next start knows current.json from regions.sqlite: still the matching one, no new fetch.
+    let e = engine(&t.0.join("dev2"), &srv, json!({"indexes_dir": ix2}));
+    let hits = srv.hits_of("/routing/r1/index.tsv.gz");
+    call(&e, "set_policy", json!({"network": false}));
+    assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+    assert_eq!(srv.hits_of("/routing/r1/index.tsv.gz"), hits);
+    drop(e);
+
+    // Offline with no current.json known: the verified manifest is trusted, as before.
+    let ix3 = t.0.join("ix3");
+    copy_tree(&ix, &ix3);
+    tamper(&ix3);
+    let e = engine(&t.0.join("dev3"), &srv, json!({"indexes_dir": ix3}));
+    call(&e, "set_policy", json!({"network": false}));
+    let before = srv.total();
+    assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+    assert_eq!(srv.total(), before);
+}
