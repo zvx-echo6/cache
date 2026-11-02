@@ -136,7 +136,7 @@ fn scan_state(uuid: &str, path: &Path) -> Option<(u64, u64)> {
     let spawned = std::thread::Builder::new().name("cs-scan-zim".into()).spawn(move || {
         let _one = SCAN_ONE.lock().unwrap_or_else(|e| e.into_inner());
         let found = zimsrc::ZimSource::open(&p)
-            .and_then(|z| kwbuild::scan_zim(&z))
+            .and_then(|z| kwbuild::scan_zim(&z, true))
             .map(|m| (m.captions.len() as u64, m.epubs.len() as u64));
         let (captions, epubs) = found.unwrap_or((0, 0));
         SCANS
@@ -149,6 +149,18 @@ fn scan_state(uuid: &str, path: &Path) -> Option<(u64, u64)> {
         map.insert(uuid.to_string(), Scan::Done { captions: 0, epubs: 0 });
     }
     None
+}
+
+/// Whether the one-time look at the ZIM's entries (for status) has finished.
+pub fn scan_finished(uuid: &str) -> bool {
+    matches!(
+        SCANS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|m| m.get(uuid)),
+        Some(Scan::Done { .. })
+    )
 }
 
 // ---------------------------------------------------------------------------------------------------------
