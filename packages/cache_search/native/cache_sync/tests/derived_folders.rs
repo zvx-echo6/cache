@@ -16,7 +16,7 @@ fn app_patterns() -> Value {
     })
 }
 
-fn engine(dir: &Path, name: &str, port: u16, exclude: bool) -> SyncEngine {
+fn engine(dir: &Path, name: &str, port: Option<u16>, exclude: bool) -> SyncEngine {
     let ex = if exclude { app_patterns() } else { json!({}) };
     let cfg: Config = serde_json::from_value(json!({
         "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false,
@@ -30,8 +30,9 @@ fn call(e: &SyncEngine, m: &str, a: Value) -> Value {
     e.call(m, &a).unwrap_or_else(|err| panic!("{m}: {err:#}"))
 }
 
-fn port() -> u16 {
-    std::net::UdpSocket::bind("0.0.0.0:0").unwrap().local_addr().unwrap().port()
+/// The port an engine was given (or chose): a device found again only by its address is opened again on it.
+fn port_of(e: &SyncEngine) -> u16 {
+    e.port().expect("the engine listens on a port")
 }
 
 /// Runs sync rounds on both until `ok` (files only count once they have settled, so this takes a few seconds).
@@ -112,9 +113,9 @@ fn region_caches_never_travel() {
     // B has its own caches already (as copies an earlier version brought would be): they stay B's.
     write(&rb.join("index/2026-10.tsv"), "B's index");
     write(&mb.join("tiles.sqlite"), "B's cache");
-    let (pa, pb) = (port(), port());
-    let a = engine(&da, "Desk", pa, true);
-    let b = engine(&db, "Phone", pb, true);
+    // No restart in this test: any free port.
+    let a = engine(&da, "Desk", None, true);
+    let b = engine(&db, "Phone", None, true);
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
     call(&b, "link", json!({"code": code}));
     for (e, r, m) in [(&a, &ra, &ma), (&b, &rb, &mb)] {
@@ -153,15 +154,17 @@ fn a_library_index_never_travels() {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let (fa, fb) = (tmp.path().join("libs-a"), tmp.path().join("libs-b"));
-    let (pa, pb) = (port(), port());
+
     write(&fa.join("lib1/cache-library.json"), "{}");
     write(&fa.join("lib1/shard/seg.bin"), "segment one");
     write(&fa.join("lib1/index/meta.json"), "index of A");
     std::fs::create_dir_all(&fb).unwrap();
 
     // 1.0.29: neither excludes anything, so A's index arrives on B with the library.
-    let a = engine(&da, "Desk", pa, false);
-    let b = engine(&db, "Phone", pb, false);
+    // Each takes any free port and keeps it for its restarts below (a port picked beforehand could be taken meanwhile).
+    let a = engine(&da, "Desk", None, false);
+    let b = engine(&db, "Phone", None, false);
+    let (pa, pb) = (Some(port_of(&a)), Some(port_of(&b)));
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
     call(&b, "link", json!({"code": code}));
     call(&a, "share_add", json!({"id": "libraries", "name": "Library (libraries)", "path": fa}));
