@@ -658,27 +658,20 @@ fn cancelling_keeps_the_build_and_a_later_run_continues() {
     p["hold_ms"] = json!(30_000);
     let j = start(p.clone());
     let t0 = Instant::now();
-    let mut phases: Vec<String> = Vec::new();
+    // wait until the job holds in the merge phase (the hold keeps it there); the phases it went through are the job's own
+    // record ("phases" in the progress JSON), not what a poll happened to see: "read" can be over between two polls
     loop {
         let pr: Value = serde_json::from_str(&j.progress_json()).unwrap();
-        if let Some(ph) = pr["phase"].as_str() {
-            if phases.last().map(String::as_str) != Some(ph) {
-                phases.push(ph.to_string());
-            }
-            if ph == "merge" {
-                break;
-            }
+        if pr["phase"] == "merge" {
+            break;
         }
-        assert!(
-            t0.elapsed() < Duration::from_secs(60),
-            "never reached the merge: {phases:?}"
-        );
+        assert!(t0.elapsed() < Duration::from_secs(60), "never reached the merge: {pr}");
         std::thread::sleep(Duration::from_millis(5));
     }
     j.cancel();
     let p1 = wait(&j);
     assert_eq!(p1["state"], "cancelled", "{p1}");
-    assert_eq!(phases, ["read", "index", "merge"], "the phases in order");
+    assert_eq!(p1["phases"], json!(["read", "index", "merge"]), "the phases in order: {p1}");
     let src_dir = idx.join("captions").join(format!("{HOST}%2F{VIDEO}"));
     assert!(src_dir.join(".build").is_dir() && snap_dirs(&src_dir).is_empty());
     p.as_object_mut().unwrap().remove("hold_ms");
