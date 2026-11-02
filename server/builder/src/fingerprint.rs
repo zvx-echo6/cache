@@ -1,5 +1,5 @@
-//! Content fingerprints: a MinHash of a book's words (to tell the same book in two files), and the mean meaning vectors the
-//! server compares and files books by. Nothing here reads a clock or a random source, so the same text gives the same bytes.
+//! Content fingerprints: a MinHash of a book's words (to tell the same book in two files), and the mean meaning vector the
+//! server compares books by. Nothing here reads a clock or a random source, so the same text gives the same bytes.
 //!
 //! The MinHash is 128 minimums over 5-word shingles of the normalised text (lowercase, letters and digits only). The share of
 //! equal positions in two fingerprints estimates the Jaccard similarity of the two shingle sets.
@@ -11,8 +11,6 @@ use base64::Engine;
 pub const HASHES: usize = 128;
 /// Words in a shingle.
 pub const SHINGLE: usize = 5;
-/// A book is filed by the meaning of its first pages: the pieces that start in the first this many pages.
-pub const CLASS_PAGES: u32 = 15;
 
 fn splitmix(x: u64) -> u64 {
     let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -137,17 +135,6 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// The mean meaning of the whole book.
 pub fn mean_vector(pieces: &[PackPiece]) -> Vec<f32> {
     mean_unit(pieces.iter().map(|p| p.vector.as_slice()))
-}
-
-/// The meaning of a book's opening: the pieces that start in its first [`CLASS_PAGES`] pages (the first ten pieces when fewer than
-/// three do).
-pub fn class_vector(pieces: &[PackPiece]) -> Vec<f32> {
-    let early: Vec<&PackPiece> = pieces.iter().filter(|p| p.pdf_page <= CLASS_PAGES).collect();
-    if early.len() >= 3 {
-        mean_unit(early.iter().map(|p| p.vector.as_slice()))
-    } else {
-        mean_unit(pieces.iter().take(10).map(|p| p.vector.as_slice()))
-    }
 }
 
 #[cfg(test)]

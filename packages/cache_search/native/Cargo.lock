@@ -977,6 +977,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "cache_builder",
+ "cache_classify",
  "cache_embed",
  "http-body-util",
  "hyper",

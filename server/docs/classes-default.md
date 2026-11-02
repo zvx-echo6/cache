@@ -1,6 +1,6 @@
 # Default classes and division descriptions
 
-These are the drafts the classifier compares each book's opening pages against (Cache Decimal Classification, `vault/projects/cache-classification.md`). They are written for the embedder and are never shown to the assistant. The device copy is `<data>/build/classes.json`; edit it there. Division 060 is unassigned.
+These are the divisions and their drafted descriptions (Cache Decimal Classification, `vault/projects/cache-classification.md`). The folder names come from them, and a division with no description is not in use. Which division a book goes in is decided by the trained classifier (a model file), not by comparing against these descriptions. They are never shown to the assistant. The device copy is `<data>/build/classes.json`; edit it there. Division 060 is unassigned.
 
 
 ## 000 Knowledge and Reference

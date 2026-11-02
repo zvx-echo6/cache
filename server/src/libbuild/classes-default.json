@@ -1,7 +1,5 @@
 {
  "version": 1,
- "unsure_below": 0.4,
- "min_margin": 0.015,
  "classes": [
   {
    "number": "000",

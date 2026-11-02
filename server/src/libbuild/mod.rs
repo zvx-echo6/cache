@@ -32,7 +32,7 @@
 //! counted ("partial: N pages need OCR"); a PDF with no text layer at all is `ocr_needed`, never `failed`.
 
 use crate::embed::EmbedService;
-use classify::{call_letters, ClassVectors, Classes, Suggestion};
+use classify::{call_letters, Classes, ModelStore, Suggestion};
 use filing::decision_view;
 use removed::RemovedEntry;
 use same::{Match, Quality};
@@ -322,9 +322,12 @@ pub struct Book {
     pub suffix: Option<String>,
     #[serde(default)]
     pub suggestions: Vec<Suggestion>,
-    /// Why the book is in Unsorted: `low`, `close`, `no_text`, `not_classified`.
+    /// Why the book is in Unsorted: `low` (the sorter was not confident), `no_text`, `not_classified` (no classifier model yet).
     #[serde(default)]
     pub unsure: Option<String>,
+    /// The version of the classifier that last looked at the book (none while it has not been classified).
+    #[serde(default)]
+    pub classifier_version: Option<u32>,
     /// The person placed it.
     #[serde(default)]
     pub placed: bool,
@@ -455,6 +458,8 @@ pub struct BuildService {
     stopping: AtomicBool,
     pub(crate) removed: Mutex<Vec<RemovedEntry>>,
     class_cache: Mutex<ClassCache>,
+    /// The classifier model files in `<data>/models/`.
+    models: ModelStore,
     last_maintenance: Mutex<Instant>,
     classify_retry: Mutex<Option<Instant>>,
 }
@@ -462,7 +467,6 @@ pub struct BuildService {
 struct ClassCache {
     mtime: Option<std::time::SystemTime>,
     classes: Arc<Classes>,
-    vectors: Option<Arc<ClassVectors>>,
 }
 
 fn write_json(path: &Path, v: &impl Serialize) -> std::io::Result<()> {
@@ -581,6 +585,7 @@ impl BuildService {
         }
         let drop = dropdir::DropState::load(&data);
         let data_for_removed = data.clone();
+        let data_for_models = data.clone();
         // The clock for "publish at most every so often" starts now for every library.
         let last_publish: HashMap<String, Instant> = libs.iter().map(|l| (l.id.clone(), Instant::now())).collect();
         let svc = Arc::new(BuildService {
@@ -604,7 +609,8 @@ impl BuildService {
             drop,
             stopping: AtomicBool::new(false),
             removed: Mutex::new(removed::load(&data_for_removed)),
-            class_cache: Mutex::new(ClassCache { mtime: None, classes: Arc::new(Classes::default_classes()), vectors: None }),
+            class_cache: Mutex::new(ClassCache { mtime: None, classes: Arc::new(Classes::default_classes()) }),
+            models: ModelStore::new(&data_for_models),
             last_maintenance: Mutex::new(Instant::now()),
             classify_retry: Mutex::new(None),
         });
@@ -910,7 +916,7 @@ impl BuildService {
                 }
                 let place = match &replacing {
                     Some(old) => Placement::of(old),
-                    None => self.plan_new(&pack.header.title, &report, edition, &item.library_id),
+                    None => self.plan_new(&pack.header.title, &pack.pieces, report.year, edition, &item.library_id),
                 };
                 match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref(), &report, place, replaced_because.as_deref()) {
                     Ok(()) => match replaced_because {
@@ -1044,6 +1050,7 @@ impl BuildService {
             suffix: place.suffix,
             suggestions: place.suggestions,
             unsure: place.unsure,
+            classifier_version: place.classifier_version,
             placed: place.placed,
             classified: place.classified,
             moved_from: place.moved_from,
@@ -1096,17 +1103,17 @@ impl BuildService {
     }
 
     /// Where a new book goes: its three letters, and the division by meaning (or Unsorted when unsure).
-    fn plan_new(&self, title: &str, rep: &Report, edition: bool, lib: &str) -> Placement {
+    fn plan_new(&self, title: &str, pieces: &[cache_builder::pack::PackPiece], year: Option<u32>, edition: bool, lib: &str) -> Placement {
         let letters = call_letters(title);
-        let (division, suggestions, unsure, classified) = match self.class_vectors() {
-            Ok((cls, vecs)) => {
-                let v = classify::classify(&rep.class_vector, &vecs, &cls);
-                (v.division, v.top, v.unsure, true)
-            }
-            Err(e) => {
-                eprintln!("cache-server: classifying: {e}");
-                (None, vec![], Some("not_classified".to_string()), false)
-            }
+        // With no classifier model (or one that cannot score this book) the book waits in Unsorted, unclassified, with no
+        // suggestions; it is looked at when a model appears.
+        let verdict = match self.models.current() {
+            Some(model) => classify::classify(&model, pieces).map_err(|e| eprintln!("cache-server: classifying: {e}")).ok(),
+            None => None,
+        };
+        let (division, suggestions, unsure, classified, classifier_version) = match verdict {
+            Some(v) => (v.division, v.top, v.unsure, true, Some(v.version)),
+            None => (None, vec![], Some("not_classified".to_string()), false, None),
         };
         let suffix = edition.then(|| {
             let st = lock(&self.st);
@@ -1116,56 +1123,12 @@ impl BuildService {
                 .find(|l| l.id == lib)
                 .map(|l| l.books.iter().filter(|b| b.division == division && (if b.letters.is_empty() { call_letters(&b.title) } else { b.letters.clone() }) == letters).collect())
                 .unwrap_or_default();
-            match rep.year.filter(|y| beside.iter().all(|b| b.year != Some(*y))) {
+            match year.filter(|y| beside.iter().all(|b| b.year != Some(*y))) {
                 Some(y) => y.to_string(),
                 None => format!("{}e", beside.len() + 1),
             }
         });
-        Placement { division, letters, suffix, suggestions, unsure, placed: false, classified, moved_from: None }
-    }
-
-    /// The classes with the vectors of their descriptions, made now when the file or the model changed.
-    fn class_vectors(&self) -> Result<(Arc<Classes>, Arc<ClassVectors>), String> {
-        let cls = self.classes();
-        let digest = cls.digest(&self.embed.name());
-        if let Some(v) = lock(&self.class_cache).vectors.clone().filter(|v| v.digest == digest) {
-            return Ok((cls, v));
-        }
-        let path = self.data.join("build/classes-vectors.json");
-        let from_disk = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).filter(|v| v["digest"].as_str() == Some(digest.as_str())).and_then(|v| {
-            let map = v["vectors"].as_object()?;
-            let mut out = vec![];
-            for d in cls.assigned_divisions() {
-                out.push((d.number.clone(), cache_builder::pack::decode_vector(map.get(&d.number)?.as_str()?).ok()?));
-            }
-            Some(out)
-        });
-        let vectors = match from_disk {
-            Some(v) => v,
-            None => {
-                let divs: Vec<&classify::Division> = cls.assigned_divisions().collect();
-                let texts: Vec<String> = divs.iter().map(|d| d.embed_text()).collect();
-                let mut all: Vec<Vec<f32>> = vec![];
-                for chunk in texts.chunks(16) {
-                    let v = self.embed.embed(chunk).map_err(|e| match e {
-                        EmbedErr::Waiting(m) | EmbedErr::Failed(m) => m,
-                    })?;
-                    if v.len() != chunk.len() {
-                        return Err("the embedder returned a different number of vectors than texts".into());
-                    }
-                    all.extend(v);
-                }
-                let out: Vec<(String, Vec<f32>)> = divs.iter().map(|d| d.number.clone()).zip(all).collect();
-                let map: serde_json::Map<String, Value> = out.iter().map(|(n, v)| (n.clone(), json!(cache_builder::pack::encode_vector(v)))).collect();
-                if let Err(e) = write_json(&path, &json!({"model": self.embed.name(), "digest": digest, "vectors": map})) {
-                    eprintln!("cache-server: saving the division vectors: {e}");
-                }
-                out
-            }
-        };
-        let cv = Arc::new(ClassVectors { digest, vectors });
-        lock(&self.class_cache).vectors = Some(cv.clone());
-        Ok((cls, cv))
+        Placement { division, letters, suffix, suggestions, unsure, classifier_version, placed: false, classified, moved_from: None }
     }
 
     /// The classes: `build/classes.json` (made from the built-in default when missing, read again when it changes).
@@ -1181,7 +1144,6 @@ impl BuildService {
                 match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<Classes>(&t).map_err(|e| e.to_string())) {
                     Ok(cl) => {
                         c.classes = Arc::new(cl);
-                        c.vectors = None;
                     }
                     Err(e) => eprintln!("cache-server: build/classes.json is not usable ({e}); the last good classes stay"),
                 }
@@ -1943,6 +1905,7 @@ struct Placement {
     suffix: Option<String>,
     suggestions: Vec<Suggestion>,
     unsure: Option<String>,
+    classifier_version: Option<u32>,
     placed: bool,
     classified: bool,
     moved_from: Option<String>,
@@ -1957,6 +1920,7 @@ impl Placement {
             suffix: b.suffix.clone(),
             suggestions: b.suggestions.clone(),
             unsure: b.unsure.clone(),
+            classifier_version: b.classifier_version,
             placed: b.placed,
             classified: b.classified,
             moved_from: b.moved_from.clone(),

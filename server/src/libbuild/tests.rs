@@ -868,10 +868,57 @@ fn drop_settings_are_checked_and_remembered() {
 
 // ---- filing by subject, the same book in another file, Removed
 
-/// A small set of classes whose descriptions use the words the test books are about (the fake embedder reads words).
+/// A small set of classes whose descriptions use the words the test books are about (the fake embedder reads words), and a
+/// classifier model that knows them.
 fn small_classes(d: &TempDir) {
+    small_classes_without_model(d);
+    small_model(d);
+}
+
+/// A classifier model file for the small classes (version 1): each division's column is the fake embedder's vector of its name
+/// and description, scaled; the threshold sits between the books about the divisions and a book about nothing here.
+fn small_model(d: &TempDir) {
+    use cache_classify::{encode, Class, ModelSpec, Recipe, Weights};
+    let divs = [(510u16, "Wells", "well well wells digging"), (520, "Rain", "rainwater cistern barrel"), (710, "Radio", "radio antenna transmitter")];
+    let texts: Vec<String> = divs.iter().map(|(_, n, t)| format!("{n}. {t}")).collect();
+    let cols = FakeEmbedder.embed_batch(&texts);
+    let (dims, n) = (cols[0].len(), cols.len());
+    let mut w = vec![0f32; dims * n];
+    for (j, c) in cols.iter().enumerate() {
+        for (i, x) in c.iter().enumerate() {
+            w[i * n + j] = 25.0 * x;
+        }
+    }
+    let top = |topic: &str| -> f32 {
+        let page = text_page(topic, 1, 120).lines.join(" ");
+        let v = FakeEmbedder.embed_batch(&[page]).remove(0);
+        let e: Vec<f32> = (0..n).map(|j| (0..dims).map(|i| v[i] * w[i * n + j]).sum::<f32>()).collect();
+        let m = e.iter().cloned().fold(f32::MIN, f32::max);
+        1.0 / e.iter().map(|x| (x - m).exp()).sum::<f32>()
+    };
+    let (pos, neg) = (top("well").min(top("radio")), top("kiln"));
+    assert!(pos > neg + 0.05, "the test model cannot tell the topics apart: {pos} {neg}");
+    let mut sha = [0u8; 32];
+    for (i, b) in sha.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&cache_embed::DECIDED_MODEL_SHA256[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    let bytes = encode(&ModelSpec {
+        classifier_version: 1,
+        embedding_sha256: sha,
+        dims: dims as u32,
+        threshold: ((pos + neg) / 2.0) as f64,
+        recipe: Recipe { first_pieces: 8, spread_pieces: 16 },
+        classes: divs.iter().map(|(d, n, _)| Class { division: *d, label: n.to_string() }).collect(),
+        bias: vec![0.0; n],
+        weights: Weights::F32(w),
+    });
+    std::fs::create_dir_all(d.0.join("models")).unwrap();
+    std::fs::write(d.0.join("models/cache-classifier-1.bin"), bytes).unwrap();
+}
+
+fn small_classes_without_model(d: &TempDir) {
     std::fs::create_dir_all(d.0.join("build")).unwrap();
-    let c = json!({"version": 1, "unsure_below": 0.12, "min_margin": 0.02, "classes": [
+    let c = json!({"version": 1, "classes": [
         {"number": "500", "name": "Water and Energy", "divisions": [
             {"number": "510", "name": "Wells", "description": "well well wells digging"},
             {"number": "520", "name": "Rain", "description": "rainwater cistern barrel"}]},
@@ -1080,18 +1127,13 @@ fn the_classes_are_written_on_first_start_and_edits_are_picked_up() {
     assert!(d.0.join("build/classes.json").is_file());
     let v = svc.classes_view(None).unwrap();
     assert_eq!(v["classes"].as_array().unwrap().len(), 10);
-    let (cls, vecs) = svc.class_vectors().unwrap();
-    assert_eq!(vecs.vectors.len(), 89, "060 has no description and is not scored");
-    assert!(d.0.join("build/classes-vectors.json").is_file());
-    let first = vecs.digest.clone();
-    assert_eq!(cls.classes.len(), 10);
-    // the vectors are kept on disk: a restart does not embed them again
-    let calls = fake.calls.load(Ordering::Relaxed);
+    // no description vectors are made or kept: the classifier is a model file
+    assert_eq!(fake.calls.load(Ordering::Relaxed), 0);
+    assert!(!d.0.join("build/classes-vectors.json").exists());
+    assert_eq!(svc.classes_view(None).unwrap()["settings"]["classifier_version"], Value::Null);
     let (svc2, fake2) = rig(&d);
-    assert_eq!(svc2.class_vectors().unwrap().1.digest, first);
     assert_eq!(fake2.calls.load(Ordering::Relaxed), 0);
-    assert!(calls > 0);
-    // an edit to the file is picked up (a description changes the vectors); a broken file keeps the last good classes
+    // an edit to the file is picked up; a broken file keeps the last good classes
     std::thread::sleep(Duration::from_millis(50));
     let path = d.0.join("build/classes.json");
     let mut c: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1099,10 +1141,132 @@ fn the_classes_are_written_on_first_start_and_edits_are_picked_up() {
     std::fs::write(&path, c.to_string()).unwrap();
     let v = svc2.classes_view(None).unwrap();
     assert_eq!(v["classes"][5]["divisions"][0]["description"], json!("Wells, springs and boreholes, and how to find water underground."));
-    assert_ne!(svc2.class_vectors().unwrap().1.digest, first);
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(&path, "not json").unwrap();
     assert_eq!(svc2.classes_view(None).unwrap()["classes"].as_array().unwrap().len(), 10);
+}
+
+#[test]
+fn with_no_model_file_every_book_waits_in_unsorted_and_a_model_dropped_in_files_them() {
+    let d = TempDir::new("m1");
+    small_classes_without_model(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "a.pdf", &book("well", 3, Some("The Well Handbook")));
+    add(&svc, &lib, "b.pdf", &book("radio", 3, Some("Antenna Notes")));
+    drain(&svc);
+    // built and searchable, but not sorted: no suggestions, no classifier version, nothing broken
+    let books = svc.books(&lib).unwrap();
+    for t in ["The Well Handbook", "Antenna Notes"] {
+        let b = by_title(&books, t);
+        assert_eq!((b["unsorted"].as_bool(), b["suggestions"].as_array().map(|a| a.len()), b["classifier_version"].is_null()), (Some(true), Some(0), true), "{b}");
+    }
+    assert!(src_file(&d, &lib, "Unsorted/WEL  The Well Handbook.pdf").is_file());
+    assert!(lock(&svc.st).libs[0].books.iter().all(|b| !b.classified));
+    svc.maintenance();
+    assert!(lock(&svc.st).libs[0].books.iter().all(|b| !b.classified), "nothing to do without a model");
+    assert_eq!(svc.reclassify(b"{}").unwrap_err().code, "classifier_missing");
+    // the place-it list is empty, not an error
+    let doc = by_title(&books, "The Well Handbook")["id"].as_str().unwrap().to_string();
+    let s = svc.suggestions(&lib, &doc).unwrap();
+    assert_eq!((s["unsorted"].as_bool(), s["suggestions"].as_array().map(|a| a.len())), (Some(true), Some(0)));
+    // a damaged or foreign model file changes nothing
+    std::fs::create_dir_all(d.0.join("models")).unwrap();
+    std::fs::write(d.0.join("models/cache-classifier-7.bin"), b"damaged").unwrap();
+    assert_eq!(svc.reclassify(b"{}").unwrap_err().code, "classifier_missing");
+    // the model file is dropped into the data folder: the waiting books are filed when the queue is idle
+    small_model(&d);
+    svc.maintenance();
+    svc.maintenance();
+    let books = svc.books(&lib).unwrap();
+    let w = by_title(&books, "The Well Handbook");
+    assert_eq!((w["division"].as_str(), w["classifier_version"].as_u64()), (Some("510"), Some(1)));
+    assert_eq!(by_title(&books, "Antenna Notes")["division"], json!("710"));
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf").is_file());
+}
+
+#[test]
+fn an_unsure_book_keeps_the_top_three_with_probabilities_and_the_version() {
+    let d = TempDir::new("m2");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "a.pdf", &book("well", 3, Some("The Well Handbook")));
+    add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
+    drain(&svc);
+    let books = svc.books(&lib).unwrap();
+    let k = by_title(&books, "Kiln Craft");
+    assert_eq!((k["unsorted"].as_bool(), k["classifier_version"].as_u64()), (Some(true), Some(1)));
+    let doc = k["id"].as_str().unwrap();
+    // stored in the build record
+    let rec = lock(&svc.st).libs[0].books.iter().find(|b| b.doc_id == doc).cloned().unwrap();
+    assert_eq!((rec.classifier_version, rec.unsure.as_deref(), rec.classified, rec.suggestions.len()), (Some(1), Some("low"), true, 3));
+    // "Place it" offers them, best first, each with its probability and name; the three probabilities add up to 1
+    let s = svc.suggestions(&lib, doc).unwrap();
+    assert_eq!((s["unsorted"].as_bool(), s["classifier_version"].as_u64()), (Some(true), Some(1)));
+    assert!(s["unsure_reason"].as_str().is_some_and(|m| !m.is_empty()));
+    let list = s["suggestions"].as_array().unwrap();
+    assert_eq!(list.len(), 3);
+    let scores: Vec<f64> = list.iter().map(|x| x["score"].as_f64().unwrap()).collect();
+    assert!(scores[0] >= scores[1] && scores[1] >= scores[2] && (scores.iter().sum::<f64>() - 1.0).abs() < 1e-4, "{scores:?}");
+    let mut divs: Vec<&str> = list.iter().map(|x| x["division"].as_str().unwrap()).collect();
+    divs.sort();
+    assert_eq!(divs, vec!["510", "520", "710"]);
+    assert!(list.iter().all(|x| x["name"].is_string() && x["class"].is_string()));
+    // a filed book lists its three too, and says it is not in Unsorted
+    let w = by_title(&books, "The Well Handbook")["id"].as_str().unwrap().to_string();
+    let sw = svc.suggestions(&lib, &w).unwrap();
+    assert_eq!((sw["unsorted"].as_bool(), sw["suggestions"][0]["division"].as_str()), (Some(false), Some("510")));
+    assert!(sw["unsure_reason"].is_null());
+    assert_eq!(svc.suggestions(&lib, "nope").unwrap_err().status, 404);
+    // the choices survive a restart; the pack (what the search payloads are made of) carries none of it
+    let (svc2, _) = rig(&d);
+    assert_eq!(svc2.suggestions(&lib, doc).unwrap()["suggestions"].as_array().unwrap().len(), 3);
+    let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
+    let header = serde_json::to_string(&p.header).unwrap();
+    assert!(!header.contains("classifier") && !header.contains("suggestions"), "{header}");
+}
+
+#[test]
+fn every_placement_by_hand_is_logged_for_retraining_outside_the_search_data() {
+    let d = TempDir::new("m3");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
+    drain(&svc);
+    let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let log = svc.corrections_path(&lib);
+    assert!(!log.exists(), "the classifier's own filing is not a correction");
+    svc.place_book(&lib, &doc, br#"{"division":"510","device":"  tablet 2 "}"#).unwrap();
+    svc.place_book(&lib, &doc, br#"{"division":"520"}"#).unwrap();
+    // refused placements are not logged
+    assert!(svc.place_book(&lib, &doc, br#"{"division":"999"}"#).is_err());
+    assert!(svc.place_book(&lib, "nope", br#"{"division":"510"}"#).is_err());
+    svc.place_book(&lib, &doc, br#"{"division":"unsorted"}"#).unwrap();
+    let text = std::fs::read_to_string(&log).unwrap();
+    let rows: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(rows.len(), 3, "{text}");
+    let key = |r: &Value| (r["from"].as_str().unwrap().to_string(), r["to"].as_str().unwrap().to_string());
+    assert_eq!(rows.iter().map(key).collect::<Vec<_>>(), vec![("unsorted".into(), "510".into()), ("510".into(), "520".into()), ("520".into(), "unsorted".into())]);
+    assert!(rows.iter().all(|r| r["doc_id"] == json!(doc) && r["classifier_version"] == json!(1) && r["time"].as_str().is_some_and(|t| t.len() >= 20)));
+    assert_eq!((rows[0]["device"].as_str(), rows[1]["device"].is_null()), (Some("tablet 2"), true));
+    // it sits at the library's root beside packs/ and shard/, not in either, so no search payload carries it
+    assert_eq!(log, svc.live_dir(&lib).join("corrections.jsonl"));
+    assert!(!svc.packs_dir(&lib).join("corrections.jsonl").exists());
+    svc.publish(&lib).unwrap();
+    assert!(log.is_file());
+    assert_eq!(live_docs(&svc, &lib), 1);
+    let found = std::fs::read_dir(svc.live_dir(&lib).join("shard")).unwrap().flatten().count();
+    assert!(found > 0);
+    for e in std::fs::read_dir(svc.live_dir(&lib).join("shard")).unwrap().flatten() {
+        assert_ne!(e.file_name().to_string_lossy(), "corrections.jsonl");
+    }
+    // it is appended to, never rewritten, and goes with the library
+    svc.place_book(&lib, &doc, br#"{"division":"710"}"#).unwrap();
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 4);
+    svc.delete_library(&lib).unwrap();
+    assert!(!log.exists());
 }
 
 #[test]

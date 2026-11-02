@@ -32,9 +32,10 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 | `POST /api/build/libraries` | `{"title"}` | the new library; 409 `name_taken` ("You already have a library called "X". Choose another name, or add to it.") |
 | `PATCH /api/build/libraries/{id}` | `{"title"}` | the library; 404, 409 `name_taken` |
 | `DELETE /api/build/libraries/{id}` | | `{removed:true,id}`; deletes books, packs, PDF copies and search data. 409 `busy` while a book of it is being built. Confirm in the UI. |
-| `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,unsure_reason,placed_by_hand,moved_from,filed_in}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
+| `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
 | `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number keeps its letters; the filed PDF takes the new title in its name. |
-| `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530"}` (`"unsorted"` or null puts it back) | the book (as listed). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
+| `GET /api/build/libraries/{id}/books/{doc}/suggestions` | | "Place it": `{id,unsorted,classifier_version,suggestions:[{division,name,class,score}],unsure_reason}`: the sorter's top 3 divisions for the book as stored when it was sorted, best first (`score` is the probability; the list is empty for a book that has not been sorted, e.g. with no model file). 404. |
+| `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530", "device"?: "Kitchen tablet"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to the corrections log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
 | `DELETE /api/build/libraries/{id}/books/{doc}` | | `{removed:true,id}`. The person's own PDF is not touched. |
 | `POST /api/build/libraries/{id}/books/{doc}/replace?name=<file name>` | the PDF, streamed, `Content-Length` required | the queue item (`replace` set). The old book stays searchable until the new one is published; `doc_version` + 1. |
 
@@ -130,14 +131,24 @@ Default folder: `<data>/drop`, off, no library chosen. Deleting the chosen libra
 
 The classes are Cache Decimal Classification (`vault/projects/cache-classification.md`): 10 classes of 9 divisions (060 is unassigned). They are
 `<data>/build/classes.json`, written from the built-in default (see `server/docs/classes-default.md`) when missing, and read again when the
-file changes. A division has a `number`, a `name` and a `description`; the descriptions are for the embedder only and are never shown to the
-assistant. The file also has `unsure_below` and `min_margin`.
+file changes. A division has a `number`, a `name` and a `description`; the file names the folders and says which divisions are in use (an empty
+description means not in use). The descriptions are not used to sort books, and are never shown to the assistant.
 
-How a book is filed: the book's vector is the normalised mean of the vectors of its pieces from its first 15 pages (the first ten pieces
-when fewer than three start there); it is compared by cosine with the embedding of each division's name and description (cached in
-`build/classes-vectors.json`, made again when the file or the model changes). The top 3 are kept as `suggestions` (`{division,name,class,score}`).
-The book goes in the best division unless the best score is under `unsure_below`, or the best beats the second by less than `min_margin`: then it
-is unsure and goes to Unsorted (`unsure_reason` is a plain sentence: nothing matched clearly / two matched about equally). There are no keyword rules.
+How a book is filed: a trained classifier (the shared `cache_classify` crate, a softmax scorer over the search model's vectors) decides. Its
+weights are a versioned data file, never part of the app: `<data>/models/cache-classifier-<version>.bin` (the highest version that loads, and
+that was trained on the search model the server uses, is used; a new file takes effect without a restart). The book's vector is the mean of
+the vectors of up to 24 of its pieces (the first 8 pieces of real text, then 16 spread evenly over the rest), made unit length. The scorer gives
+a probability for each division. When the best probability is at least the model's threshold the book is filed in that division; otherwise it
+is unsure and goes to Unsorted (`unsure_reason` is a plain sentence). Either way the top 3 divisions with their probabilities are kept as
+`suggestions` (`{division,name,class,score}`, `score` is the probability) with `classifier_version` in the book's record (`GET .../books` shows
+both). Nothing of this is in the pack or the search payloads. With no usable model file every new book is left in Unsorted with no suggestions
+and no `classifier_version` (`unsure_reason`: "This book has not been looked at yet."), and is sorted when a model file appears and the queue is idle.
+There are no keyword rules.
+
+Every placement by hand (`place`, below) is appended to the library's corrections log, `<data>/app/docs/libraries/<library_id>/corrections.jsonl`
+(the library's root, beside `packs/` and `shard/`, so no search payload carries it): one JSON line `{"doc_id","from","to","classifier_version","time","device"}`,
+`from` and `to` a division number or `"unsorted"`, `classifier_version` the version that sorted the book (null if none), `time` RFC 3339, `device` the
+optional `"device"` name sent with the placement (null when not sent). It is kept for training future versions; it is appended to and goes with the library.
 
 A call number is the division and three letters of the clean title, skipping a leading "The", "A" or "An": `530 · WAT`. In Unsorted it is just
 the letters. The clean title is the PDF's metadata title when it names a real title (not "Microsoft Word - notes.doc"), else its first big heading
@@ -145,8 +156,8 @@ in the first five pages, else the file name tidied. It can be edited with the bo
 
 | Call | Result |
 |---|---|
-| `GET /api/build/classes[?library_id=]` | `{classes:[{number,name,count,divisions:[{number,name,description,assigned,count}]}], unsorted:{name,count}, libraries:[{id,title,books,unsorted,classes:{"500":n},divisions:{"530":n}}], settings:{unsure_below,min_margin}}`; with `library_id` the counts and `libraries` are that library's. |
-| `POST /api/build/classes/reclassify` | `{"library_id"?, "scope"?: "all"\|"unsorted"}` looks at the books again (after the file was edited); books placed by hand stay. `{checked,moved,failed}`. 409 `model_missing` without the search model. |
+| `GET /api/build/classes[?library_id=]` | `{classes:[{number,name,count,divisions:[{number,name,description,assigned,count}]}], unsorted:{name,count}, libraries:[{id,title,books,unsorted,classes:{"500":n},divisions:{"530":n}}], settings:{classifier_version,threshold}}`; with `library_id` the counts and `libraries` are that library's. |
+| `POST /api/build/classes/reclassify` | `{"library_id"?, "scope"?: "all"\|"unsorted"}` looks at the books again (after a new classifier model file was installed); books placed by hand stay. `{checked,moved,failed}`. 409 `classifier_missing` without a classifier model file. |
 
 ## Same book, different file
 

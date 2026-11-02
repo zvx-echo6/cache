@@ -434,7 +434,6 @@ fn a_build_reports_what_the_server_compares() {
     assert!(rep.words > 20);
     assert_eq!(rep.minhash.len(), cache_builder::fingerprint::HASHES);
     assert!((rep.mean_vector.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-3);
-    assert!((rep.class_vector.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-3);
     assert_eq!(pack.header.page_count, 2);
     // the same PDF always gives the same fingerprint
     let (_, again) = build(&two_page_doc());

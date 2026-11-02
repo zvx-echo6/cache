@@ -2,8 +2,9 @@
 //! not classified at build time, and the choice for a possible new edition.
 
 use super::*;
-use cache_builder::fingerprint::class_vector;
 use classify::{Classes, Verdict};
+
+pub const CORRECTIONS_FILE: &str = "corrections.jsonl";
 
 pub(crate) fn decision_view(d: &Decision) -> Value {
     let side = |s: &Side| json!({"pages": s.pages, "text_pages": s.text_pages, "year": s.year, "size": s.size, "ppi": s.ppi});
@@ -48,6 +49,7 @@ impl BuildService {
             "division": found.map(|(_, d)| d.number.clone()), "division_name": found.map(|(_, d)| d.name.clone()),
             "call_number": b.call_number(), "unsorted": found.is_none(),
             "suggestions": suggestions,
+            "classifier_version": b.classifier_version,
             "unsure_reason": if found.is_none() { b.unsure.as_deref().map(classify::unsure_message) } else { None },
             "placed_by_hand": b.placed, "moved_from": b.moved_from,
             "filed_in": b.source_rel.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d),
@@ -139,7 +141,7 @@ impl BuildService {
             "classes": classes,
             "unsorted": {"name": classify::UNSORTED, "count": libs.iter().map(|m| m.books.iter().filter(|b| !known(b)).count()).sum::<usize>()},
             "libraries": libraries,
-            "settings": {"unsure_below": cls.unsure_below, "min_margin": cls.min_margin},
+            "settings": {"classifier_version": self.models.current().map(|m| m.version()), "threshold": self.models.current().map(|m| m.threshold())},
         }))
     }
 
@@ -239,13 +241,66 @@ impl BuildService {
                 return Err(err(400, "invalid", "There is no such division."));
             }
         }
+        let device = v.get("device").and_then(Value::as_str).map(|d| d.trim().chars().take(64).collect::<String>()).filter(|d| !d.is_empty());
         let _g = lock(&self.ops);
-        if self.book_of(lib, doc).is_none() {
-            return Err(err(404, "not_found", "no such book"));
-        }
+        let Some(before) = self.book_of(lib, doc) else { return Err(err(404, "not_found", "no such book")) };
         self.refile(lib, doc, division, true).map_err(|e| err(500, "server_error", e))?;
         let b = self.book_of(lib, doc).ok_or_else(|| err(404, "not_found", "no such book"))?;
+        // Every placement by hand is kept as training data for the next classifier. A log that cannot be written never fails
+        // the placement itself.
+        if let Err(e) = self.log_correction(lib, &before, &b, device.as_deref()) {
+            eprintln!("cache-server: corrections log: {e}");
+        }
         Ok(self.book_json(&cls, &b, false))
+    }
+
+    /// The library's corrections log: one JSON line per placement by hand, kept at the library's root beside `packs/` and
+    /// `shard/` (never inside either, so it is in no search payload). `from` and `to` are division numbers or `"unsorted"`.
+    pub fn corrections_path(&self, lib: &str) -> PathBuf {
+        self.live_dir(lib).join(CORRECTIONS_FILE)
+    }
+
+    fn log_correction(&self, lib: &str, before: &Book, after: &Book, device: Option<&str>) -> std::io::Result<()> {
+        let div = |d: &Option<String>| d.clone().unwrap_or_else(|| "unsorted".to_string());
+        let line = json!({
+            "doc_id": after.doc_id,
+            "from": div(&before.division),
+            "to": div(&after.division),
+            "classifier_version": before.classifier_version,
+            "time": now_rfc3339(),
+            "device": device,
+        });
+        let path = self.corrections_path(lib);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let mut f = opts.open(path)?;
+        f.write_all(format!("{line}\n").as_bytes())?;
+        f.sync_data()
+    }
+
+    /// `GET /api/build/libraries/{id}/books/{doc}/suggestions`: what "Place it" offers. The sorter's top 3 divisions for the book, as
+    /// stored when it was classified (best first), with the reason when the book is in Unsorted.
+    pub fn suggestions(&self, lib: &str, doc: &str) -> Result<Value, ApiErr> {
+        let cls = self.classes();
+        let b = self.book_of(lib, doc).ok_or_else(|| err(404, "not_found", "no such book"))?;
+        let unsorted = b.division.as_deref().and_then(|d| cls.find(d)).is_none();
+        let suggestions: Vec<Value> = b
+            .suggestions
+            .iter()
+            .filter_map(|s| {
+                let (c, d) = cls.find(&s.division).filter(|(_, d)| d.assigned())?;
+                Some(json!({"division": s.division, "name": d.name, "class": c.number, "score": s.score}))
+            })
+            .collect();
+        Ok(json!({
+            "id": b.doc_id, "unsorted": unsorted, "classifier_version": b.classifier_version, "suggestions": suggestions,
+            "unsure_reason": if unsorted { b.unsure.as_deref().map(classify::unsure_message) } else { None },
+        }))
     }
 
     /// Record the classifier's verdict for a book and move its files if the division changed. Books placed by hand are left alone.
@@ -255,10 +310,11 @@ impl BuildService {
         if book.placed {
             return Ok(false);
         }
-        let (top, unsure) = (v.top.clone(), v.unsure.clone());
+        let (top, unsure, version) = (v.top.clone(), v.unsure.clone(), v.version);
         self.update_book(lib, doc, |b| {
             b.suggestions = top;
             b.unsure = unsure;
+            b.classifier_version = Some(version);
             b.classified = true;
         })?;
         let before = book.division.clone();
@@ -266,18 +322,18 @@ impl BuildService {
         Ok(before != self.book_of(lib, doc).and_then(|b| b.division))
     }
 
-    fn verdict_for(&self, lib: &str, b: &Book, cls_vecs: &(Arc<Classes>, Arc<ClassVectors>)) -> Result<Verdict, String> {
+    fn verdict_for(&self, lib: &str, b: &Book, model: &cache_classify::Model) -> Result<Verdict, String> {
         let pack = read_pack(&self.packs_dir(lib).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version))).map_err(|e| e.to_string())?;
-        Ok(classify::classify(&class_vector(&pack.pieces), &cls_vecs.1, &cls_vecs.0))
+        classify::classify(model, &pack.pieces)
     }
 
-    /// `POST /api/build/classes/reclassify {"library_id"?, "scope"?: "all"|"unsorted"}`: look at the books again (after the classes were
-    /// edited). Books the person placed are left where they are.
+    /// `POST /api/build/classes/reclassify {"library_id"?, "scope"?: "all"|"unsorted"}`: look at the books again (after a new classifier
+    /// model was installed). Books the person placed are left where they are.
     pub fn reclassify(&self, body: &[u8]) -> Result<Value, ApiErr> {
         let v: Value = if body.is_empty() { json!({}) } else { serde_json::from_slice(body).map_err(|_| err(400, "bad_json", "the body is not JSON"))? };
         let library = v["library_id"].as_str().map(str::to_string);
         let only_unsorted = v["scope"].as_str() == Some("unsorted");
-        let vecs = self.class_vectors().map_err(|m| err(409, "model_missing", format!("The search model is not ready: {m}")))?;
+        let model = self.models.current().ok_or_else(|| err(409, "classifier_missing", "There is no classifier model file yet, so books cannot be sorted."))?;
         let todo: Vec<(String, Book)> = lock(&self.st)
             .libs
             .iter()
@@ -286,7 +342,7 @@ impl BuildService {
             .collect();
         let (mut checked, mut moved, mut failed) = (0, 0, 0);
         for (lib, b) in &todo {
-            match self.verdict_for(lib, b, &vecs).and_then(|vd| self.apply_verdict(lib, &b.doc_id, &vd)) {
+            match self.verdict_for(lib, b, &model).and_then(|vd| self.apply_verdict(lib, &b.doc_id, &vd)) {
                 Ok(m) => {
                     checked += 1;
                     moved += usize::from(m);
@@ -311,12 +367,14 @@ impl BuildService {
                 self.purge_removed(epoch());
             }
         }
-        if lock(&self.classify_retry).is_some_and(|t| Instant::now() < t) || self.embed.ready().is_err() {
+        if lock(&self.classify_retry).is_some_and(|t| Instant::now() < t) {
             return;
         }
+        // Nothing to do until a classifier model file is there.
+        let Some(model) = self.models.current() else { return };
         let next: Option<(String, Book)> = lock(&self.st).libs.iter().find_map(|l| l.books.iter().find(|b| !b.classified && !b.placed).map(|b| (l.id.clone(), b.clone())));
         let Some((lib, b)) = next else { return };
-        let done = self.class_vectors().and_then(|vecs| self.verdict_for(&lib, &b, &vecs)).and_then(|vd| self.apply_verdict(&lib, &b.doc_id, &vd));
+        let done = self.verdict_for(&lib, &b, &model).and_then(|vd| self.apply_verdict(&lib, &b.doc_id, &vd));
         if let Err(e) = done {
             eprintln!("cache-server: classifying {}: {e}", b.doc_id);
             let _ = self.update_book(&lib, &b.doc_id, |x| x.classified = true);

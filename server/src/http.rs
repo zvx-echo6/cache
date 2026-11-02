@@ -232,6 +232,10 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             blocking(move || b.delete_library(&id)).await
         }
         ("GET", ["libraries", id, "books"]) => library_reply(b.books_q(id, query)),
+        ("GET", ["libraries", id, "books", doc, "suggestions"]) => {
+            let (id, doc) = (id.to_string(), doc.to_string());
+            library_reply(b.suggestions(&id, &doc))
+        }
         ("POST", ["libraries", id, "books", doc, "place"]) => {
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.place_book(&id, &doc, &body_owned)).await
@@ -1335,6 +1339,7 @@ mod tests {
             ("DELETE", "/api/build/removed"),
             ("POST", "/api/build/queue/x/decide"),
             ("POST", "/api/build/libraries/x/books/y/place"),
+            ("GET", "/api/build/libraries/x/books/y/suggestions"),
         ] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
@@ -1425,7 +1430,9 @@ mod tests {
         assert_eq!(json_call(&a, "GET", "/api/build/classes?library_id=nope", &c, "").await.0, 404);
         assert_eq!(json_call(&a, "POST", &format!("/api/build/libraries/{lib}/books/nope/place"), &c, r#"{"division":"510"}"#).await.0, 404);
         assert_eq!(json_call(&a, "POST", "/api/build/queue/nope/decide", &c, r#"{"action":"keep_both"}"#).await.0, 404);
-        assert_eq!(json_call(&a, "POST", "/api/build/classes/reclassify", &c, "{}").await.0, 200);
+        // no classifier model file in this data folder
+        assert_eq!(json_call(&a, "POST", "/api/build/classes/reclassify", &c, "{}").await.0, 409);
+        assert_eq!(json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books/nope/suggestions"), &c, "").await.0, 404);
         let (s, v) = json_call(&a, "GET", "/api/build/removed", &c, "").await;
         assert!(s == 200 && v["result"]["count"].is_u64() && v["result"]["items"].is_array());
         assert_eq!(json_call(&a, "POST", "/api/build/removed/nope/restore", &c, "").await.0, 404);

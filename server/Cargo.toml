@@ -42,6 +42,8 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 base64 = "0.22"
 # The library builder (PDFs to packs, packs to a shard) and the BLAKE3 of each PDF; both already in Cargo.lock.
 cache_builder = { path = "builder" }
+# The division classifier (pure Rust, shared with the core); its weights are a data file in <data>/models/.
+cache_classify = { path = "../packages/cache_classify" }
 blake3 = "1.8"
 # Security keys (WebAuthn). 0.5.5 is the newest stable release at least two weeks old (0.6.2 is a day old). The feature lets a
 # key sign in with one touch (user presence) instead of also demanding a PIN.

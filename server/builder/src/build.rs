@@ -4,7 +4,7 @@ use crate::chunk::{chunk, CHUNKER_VERSION, MAX_WORDS, TARGET_WORDS};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, EXTRACTOR_NAME, EXTRACTOR_VERSION};
-use crate::fingerprint::{class_vector, fingerprint, mean_vector};
+use crate::fingerprint::{fingerprint, mean_vector};
 use crate::layout::{layout, Element, MIN_PAGE_CHARS};
 use crate::pack::{valid_doc_id, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Source, Tool, PACK_FORMAT};
 use crate::text::word_count;
@@ -57,8 +57,6 @@ pub struct Report {
     pub minhash: Vec<u32>,
     /// The mean vector of all the pieces, length 1.
     pub mean_vector: Vec<f32>,
-    /// The mean vector of the book's opening pages, length 1 (what filing by subject compares).
-    pub class_vector: Vec<f32>,
     /// The first big heading near the start, when there is one.
     pub first_heading: Option<String>,
 }
@@ -216,7 +214,6 @@ pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder,
         year: ext.year,
         minhash: print.minhash,
         mean_vector: mean_vector(&pack_pieces),
-        class_vector: class_vector(&pack_pieces),
         first_heading,
     };
     Ok((Pack { header, pieces: pack_pieces }, report))
