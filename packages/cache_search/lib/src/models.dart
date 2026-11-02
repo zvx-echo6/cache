@@ -225,13 +225,14 @@ class SourceStatus {
 /// One of cs_status's "rejected_snapshots": a snapshot the core found unusable and removed on this device (kept in
 /// `<indexes_dir>/.local/rejected.json`), which sync then never fetches again.
 class RejectedSnapshot {
-  const RejectedSnapshot({required this.kind, required this.sourceId, required this.buildId, this.reason});
+  const RejectedSnapshot({required this.kind, required this.sourceId, required this.buildId, this.reason, this.path});
 
   factory RejectedSnapshot.fromJson(Map<String, dynamic> j) => RejectedSnapshot(
     kind: (j['kind'] ?? '') as String,
     sourceId: (j['source_id'] ?? '') as String,
     buildId: (j['build_id'] ?? '') as String,
     reason: j['reason'] as String?,
+    path: j['path'] as String?,
   );
 
   final String kind;
@@ -239,7 +240,11 @@ class RejectedSnapshot {
   final String buildId;
   final String? reason;
 
-  Map<String, dynamic> toJson() => {'kind': kind, 'source_id': sourceId, 'build_id': buildId, 'reason': reason};
+  /// The snapshot's folder relative to the indexes folder, as the core writes it: "<kind>/<source id, as a folder name>/snap/
+  /// <build id>".
+  final String? path;
+
+  Map<String, dynamic> toJson() => {'kind': kind, 'source_id': sourceId, 'build_id': buildId, 'reason': reason, 'path': path};
 }
 
 /// cs_status's `captionsindex` or `epubindex` of a ZIM: its caption files' or EPUBs' keyword index.

@@ -70,7 +70,11 @@ List<String> indexesFetchOnly(Iterable<SourceStatus> sources, {Iterable<String> 
 
 /// What this device never fetches of the indexes folder: the snapshots its core found unusable and removed. Sync already keeps
 /// a snapshot this device deleted from coming back (the delete stays here); this holds even when that record is gone.
+/// The core's own "path" when it gives one (the folder name exactly as it wrote it), else built the same way.
 List<String> indexesNeverFetch(Iterable<RejectedSnapshot> rejected) => {
   for (final r in rejected)
-    if (r.kind.isNotEmpty && r.sourceId.isNotEmpty && r.buildId.isNotEmpty) '${r.kind}/${encodeSourceId(r.sourceId)}/snap/${r.buildId}',
+    if (r.path != null && r.path!.isNotEmpty)
+      r.path!
+    else if (r.kind.isNotEmpty && r.sourceId.isNotEmpty && r.buildId.isNotEmpty)
+      '${r.kind}/${encodeSourceId(r.sourceId)}/snap/${r.buildId}',
 }.toList()..sort();
