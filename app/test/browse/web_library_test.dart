@@ -55,7 +55,8 @@ void main() {
   });
 
   void wide(WidgetTester tester) {
-    tester.view.physicalSize = const Size(4000, 1600);
+    // Two panes, just under the desktop width class (1280), which opens on Add to Library and has its own tests (web_desktop_test.dart).
+    tester.view.physicalSize = const Size(1200, 1600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
   }

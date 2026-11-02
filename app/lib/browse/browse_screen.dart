@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../pdf/open_pdf.dart';
+import '../pdf/pdf_address.dart';
 import '../layout/adaptive.dart';
 import '../platform.dart' as plat;
 
@@ -20,7 +22,11 @@ import 'zim_dl.dart';
 import '../downloads/download_row.dart';
 import 'library_actions.dart';
 import 'reader_screen.dart';
+import 'web/build_common.dart' show buildBadge, builtLibraryLine;
+import 'web/build_library_page.dart' show BuiltLibraryPage;
+import 'web/build_page.dart' show BuildPage;
 import 'web/device_api.dart' show DeviceJob;
+import 'web/local_files.dart' show LocalFile;
 import 'web/device_flows.dart';
 import 'web/device_library.dart' show kUploadedAgain;
 import 'web/device_widgets.dart';
@@ -76,30 +82,40 @@ class _BrowseScreenState extends State<BrowseScreen> {
     super.dispose();
   }
 
-  /// Looks for updates once, the first time the tab is shown and there are ZIMs to check.
+  /// Looks for updates once, the first time the tab is shown and there are ZIMs to check. After the frame: this runs while the tab
+  /// builds, and the check tells the state's listeners at once (others may be on screen, Add to Library beside the list).
   void _maybeCheck() {
     if (!widget.active || _checked || sources.zims.isEmpty) return;
     _checked = true;
-    b.checkUpdates();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) b.checkUpdates();
+    });
   }
 
   /// A citation asked for an article.
   void _onBrowse() {
     final a = b.requestedAddress;
     if (a == null || !widget.active) return;
+    final quote = b.requestedQuote;
     b.requestedAddress = null;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openAddress(a));
+    b.requestedQuote = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openAddress(a, quote: quote));
   }
 
   void _say(String text) => ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(text)));
 
-  void _openAddress(String address) {
+  void _openAddress(String address, {String? quote}) {
     final id = zimIdOfAddress(address);
     final z = id == null ? null : sources.zimById(id);
     if (z == null) {
       _say('That source is not on this device any more.');
+      return;
+    }
+    // A PDF entry takes the whole window, not the pane beside the list.
+    if (isPdfAddress(address)) {
+      openZimPdf(context, sources, address, quote: quote);
       return;
     }
     _openZim(z, address: address);
@@ -109,6 +125,8 @@ class _BrowseScreenState extends State<BrowseScreen> {
   BuildContext? _pane;
 
   void _openZim(ZimFile z, {String? address}) {
+    // A browser on a desktop window opens a ZIM in the full window: the list slides away (rail stays), its Show button brings it back.
+    if (plat.isWeb && _pane != null && isDesktop(context)) _pane!.findAncestorStateOfType<TwoPaneState>()?.setListHidden(true);
     openDetail(
       _pane ?? context,
       key: 'zim:${z.path}',
@@ -199,13 +217,44 @@ class _BrowseScreenState extends State<BrowseScreen> {
     await device.packageHandled(job);
   }
 
-  void _add() => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  /// Add to Library: in the detail pane on a desktop window (where it is the page Library opens on), else a page of its own.
+  void _add() {
+    final pane = _pane;
+    if (pane != null && pane.mounted && isDesktop(context)) {
+      openDetail(pane, key: _kAddKey, builder: (_) => AddToLibraryScreen(browse: b));
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AddToLibraryScreen(browse: b)));
+  }
+
+  static const _kAddKey = 'add-to-library';
+
+  /// A library built from PDFs (a browser): its own page beside the list, or a page of its own.
+  void _openBuilt(String id) {
+    final bc = b.device?.build;
+    if (bc == null) return;
+    openDetail(_pane ?? context, key: 'built:$id', builder: (_) => BuiltLibraryPage(build: bc, libraryId: id));
+  }
+
+  /// PDFs (or a folder of them) dropped anywhere on the Library: the build page holds them until the person says where they go.
+  void _dropPdfs(List<LocalFile> files) {
+    final bc = b.device?.build;
+    if (bc == null) return;
+    final sink = bc.sink;
+    if (sink != null) {
+      sink(files);
+      return;
+    }
+    openDetail(_pane ?? context, key: 'build', builder: (_) => BuildPage(build: bc, initialFiles: files));
+  }
 
   @override
   Widget build(BuildContext context) {
     final pane = TwoPane(
       id: 'library',
       listName: 'Library',
+      // A desktop window opens on Add to Library while nothing is chosen (only while the tab shows: it reads the catalogue).
+      desktopInitial: widget.active ? (_) => AddToLibraryScreen(browse: b) : null,
       list: Builder(
         builder: (c) {
           _pane = c;
@@ -214,10 +263,14 @@ class _BrowseScreenState extends State<BrowseScreen> {
       ),
     );
     final device = b.device;
-    // In a browser a file dropped anywhere on the Library is added from this computer.
+    // In a browser a file dropped anywhere on the Library is added from this computer; PDFs build a library.
     return device == null
         ? pane
-        : DropOverlay(onFile: (f) => addFromComputer(context, device: device, libraries: libs, dropped: f), child: pane);
+        : DropOverlay(
+            onFile: (f) => addFromComputer(context, device: device, libraries: libs, dropped: f),
+            onPdfs: device.build == null ? null : _dropPdfs,
+            child: pane,
+          );
   }
 
   Widget _list(BuildContext context) {
@@ -232,7 +285,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           _maybeCheck();
           final transfers = b.transfers.values.toList();
           final task = libs?.task;
-          final items = sources.zims.length + (libs?.libraries.length ?? 0);
+          final items = sources.zims.length + (libs?.libraries.length ?? 0) + (b.device?.build?.libraries.length ?? 0);
           final empty = items == 0 && transfers.isEmpty && task == null && (b.device == null || (b.device!.jobs.isEmpty && b.device!.upload == null));
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
@@ -259,11 +312,13 @@ class _BrowseScreenState extends State<BrowseScreen> {
                     style: TextStyle(fontSize: 12, color: k.secondary),
                   ),
                 ),
-              if (b.device != null) DeviceLibraryTop(device: b.device!, onAddPackage: _addPackage),
+              if (b.device != null) DeviceLibraryTop(device: b.device!, onAddPackage: _addPackage, onOpenBuilt: _openBuilt),
               for (final t in transfers) _transferRow(k, t),
               if (task != null) _taskRow(k, task),
               for (final z in sources.zims) _zimRow(k, z),
-              for (final l in libs?.libraries ?? const <LibraryItem>[]) _libraryRow(k, l),
+              for (final l in libs?.libraries ?? const <LibraryItem>[])
+                if (b.device?.build?.library(l.folderName) == null) _libraryRow(k, l),
+              ..._builtRows(k),
               if (b.updateError != null && items > 0)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -308,6 +363,26 @@ class _BrowseScreenState extends State<BrowseScreen> {
       onTap: canOpen ? () => _openZim(z) : null,
       onHold: () => showLibraryMenu(context, _zimActions(z)),
     );
+  }
+
+  /// The libraries built from PDFs on the device (a browser): their own rows, with a badge while they are being built.
+  List<Widget> _builtRows(CacheTokens k) {
+    final bc = b.device?.build;
+    if (bc == null) return const [];
+    return [
+      for (final l in bc.libraries)
+        LibraryRow(
+          key: ValueKey('built-${l.id}'),
+          title: l.title,
+          detail: builtLibraryLine(l, b.device!.items.where((i) => i.kind == 'library' && i.name == l.id).firstOrNull?.bytes),
+          badge: switch (buildBadge(bc, l)) {
+            final String t => RowBadge(t, color: t.endsWith('failed') || t == 'Paused' ? k.warning : k.secondary),
+            _ => null,
+          },
+          selected: isPaneSelected(context, 'built:${l.id}'),
+          onTap: () => _openBuilt(l.id),
+        ),
+    ];
   }
 
   Widget _libraryRow(CacheTokens k, LibraryItem l) {
@@ -359,7 +434,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
 /// One row of the Library: the icon (the source's own, or a letter), the name on one line, the description and size on one line,
 /// and a badge for an exception. The size always stays visible; a long name ends in an ellipsis.
 class LibraryRow extends StatelessWidget {
-  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold});
+  const LibraryRow({super.key, required this.title, required this.detail, this.icon, this.badge, this.onTap, this.onHold, this.selected = false});
 
   final String title;
   final String detail;
@@ -367,6 +442,9 @@ class LibraryRow extends StatelessWidget {
   final Widget? badge;
   final VoidCallback? onTap;
   final VoidCallback? onHold;
+
+  /// The item whose page is open beside the list.
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -399,6 +477,7 @@ class LibraryRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Holdable(
+        color: selected ? Color.alphaBlend(k.accent.withValues(alpha: 0.16), k.surface) : null,
         onTap: onTap,
         onHold: onHold,
         child: more ? HoverReveal(builder: content) : content(false),

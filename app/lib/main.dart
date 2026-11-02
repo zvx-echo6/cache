@@ -19,7 +19,9 @@ import 'browse/browse_state.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
-import 'browse/web/local_files.dart' show createBrowserUploader;
+import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'browse/web/build_state.dart' show BuildController;
+import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
@@ -120,7 +122,14 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) return null;
     final api = HttpDeviceApi();
     deviceFetchApi = api;
-    final d = DeviceLibrary(api: api, fs: createAppFs(), uploader: createBrowserUploader(), onItemsChanged: () => sources.refresh());
+    final fs = createAppFs();
+    final d = DeviceLibrary(
+      api: api,
+      fs: fs,
+      uploader: createBrowserUploader(),
+      onItemsChanged: () => sources.refresh(),
+      build: BuildController(api: HttpBuildApi(), uploader: createRawUploader(), fs: fs),
+    );
     sources.removeOnDevice = (z) => d.remove('zim', z.fileName);
     d.addListener(() => sources.setDeviceSizes({for (final i in d.items) if (i.kind == 'zim') i.name: i.bytes}));
     return d;
@@ -234,8 +243,9 @@ class _CacheAppState extends State<CacheApp> {
       label: 'Library',
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
-      // Search indexes are built on each device.
+      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir],
+      notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
     ),
@@ -256,6 +266,8 @@ class _CacheAppState extends State<CacheApp> {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
       },
+      // What each device makes for itself in those folders (fetched indexes, the viewed-tile cache, SQLite's -shm) never syncs.
+      notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
     ),

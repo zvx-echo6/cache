@@ -31,6 +31,8 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # The source PDF's hash (the same BLAKE3 cache_sync uses).
 blake3 = "1.8"
 base64 = "0.22"
+# SHA256SUMS of a written library folder (the same sha2 the other crates use).
+sha2 = "0.10"
 # Point ids (UUIDv5, docs/LIBRARY-FORMAT.md).
 uuid = { version = "1", features = ["v5"] }
 # Appends cache-library.json to the packed snapshot (the same tar crate cache_search uses).

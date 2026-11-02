@@ -163,4 +163,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AddToLibraryScreen), findsOneWidget);
   });
+
+  testWidgets('a desktop window opens Library on Add to Library beside the list; narrower windows do not', (tester) async {
+    final b = make(recorded);
+    await tester.runAsync(b.init);
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(app(BrowseScreen(browse: b, active: true)));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget, reason: 'the list stays');
+    expect(find.byType(AddToLibraryScreen), findsOneWidget);
+    expect(find.text('Choose an item'), findsNothing);
+    // The button opens it in the detail pane too, not as a page over the list.
+    await tester.tap(find.byKey(const ValueKey('add-to-library')));
+    await tester.pumpAndSettle();
+    expect(find.byType(AddToLibraryScreen), findsOneWidget);
+    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget);
+
+    tester.view.physicalSize = const Size(1279, 800);
+    await tester.pumpWidget(app(BrowseScreen(key: UniqueKey(), browse: b, active: true)));
+    await tester.pumpAndSettle();
+    expect(find.byType(AddToLibraryScreen), findsNothing);
+    expect(find.text('Choose an item'), findsOneWidget);
+  });
 }

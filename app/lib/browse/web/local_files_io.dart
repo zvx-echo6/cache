@@ -6,9 +6,16 @@ Future<LocalFile?> pickLocalFile({List<String> accept = const []}) async => null
 /// No uploads outside a browser: the tests give their own [Uploader].
 Uploader createBrowserUploader() => throw UnsupportedError('Uploads from this computer need a browser');
 
-/// Listens for files dropped on the page; nothing is dropped outside a browser.
+/// No file picker outside a browser: several files, or a whole folder with [directory].
+Future<List<LocalFile>> pickLocalFiles({List<String> accept = const [], bool directory = false}) async => const [];
+
+/// No uploads outside a browser: the tests give their own [RawUploader].
+RawUploader createRawUploader() => throw UnsupportedError('Uploads from this computer need a browser');
+
+/// Listens for files dropped on the page; nothing is dropped outside a browser. [onDrop] gets every file dropped, and the files inside
+/// the folders dropped.
 class DropListener {
-  DropListener({required void Function(bool active) onActive, required void Function(LocalFile file) onDrop});
+  DropListener({required void Function(bool active) onActive, required void Function(List<LocalFile> files) onDrop});
 
   void dispose() {}
 }

@@ -655,6 +655,54 @@ fn index_library_builds_and_skips_leave_out_points() {
     assert_eq!(index_docs(&idx), expected_indexed());
 }
 
+/// A device index that is only partly there, as when an earlier version's sync copied some of another device's index into the
+/// library: the library still opens and searches (without keyword search), and the next index_library builds it again.
+#[test]
+fn a_partly_copied_index_is_built_again() {
+    let f = make_fixture("idxpartial");
+    let idx = f._tmp.0.join("index");
+    assert_eq!(build_index(&f.dir, &idx, 300)["state"], "done");
+    let ours = |n: &str| n == "cache_search_index.json" || n == "meta.json" || n == ".managed.json";
+    // 1: the records came, some of the index's files did not
+    let mut gone = 0;
+    for e in std::fs::read_dir(&idx).unwrap().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !ours(&n) && (n.ends_with(".idx") || n.ends_with(".term")) {
+            std::fs::remove_file(e.path()).unwrap();
+            gone += 1;
+        }
+    }
+    assert!(gone > 0, "the fixture index has segment files");
+    let h = open_idx(&f.dir, Some(settings(default_leave_out(), true)), idx.to_str().unwrap());
+    assert_eq!(status(h)["sources"][0]["indexed"], false, "a broken index is not used");
+    let r = ksearch(h, "xylophonic", 5);
+    assert!(r["results"].is_array(), "{r}");
+    unsafe { cs_close(h) };
+    let p = build_index(&f.dir, &idx, 300);
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(index_docs(&idx), expected_indexed());
+    let h = open_idx(&f.dir, Some(settings(default_leave_out(), true)), idx.to_str().unwrap());
+    assert_eq!(status(h)["sources"][0]["indexed"], true);
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), vec!["lib:t/1234"]);
+    unsafe { cs_close(h) };
+    // 2: only the record came (it says done), none of the index
+    for e in std::fs::read_dir(&idx).unwrap().flatten() {
+        if e.file_name() != "cache_search_index.json" {
+            std::fs::remove_file(e.path()).unwrap();
+        }
+    }
+    let p = build_index(&f.dir, &idx, 300);
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(index_docs(&idx), expected_indexed());
+    // 3: another device's build lock came along (another system's boot id): it does not hold the build up
+    let lock = idx.join("cache_search_index.lock");
+    std::fs::write(&lock, r#"{"pid":1,"start_ticks":1,"boot_id":"another-device","started":4102444800}"#).unwrap();
+    std::fs::remove_file(idx.join("meta.json")).unwrap();
+    let p = build_index(&f.dir, &idx, 300);
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(index_docs(&idx), expected_indexed());
+}
+
 #[test]
 fn keyword_query_finds_a_rare_word_and_skips_left_out_points() {
     let k = shared_kw();

@@ -6,10 +6,47 @@ import 'package:flutter/material.dart';
 import '../app_fs.dart';
 import '../theme.dart';
 
-/// One adaptive system, two width classes, measured on the window (not the device), so iPad Split View and Android multi-window
+/// One adaptive system, three width classes, measured on the window (not the device), so iPad Split View and Android multi-window
 /// behave: under [kRegularWidth] the phone layout (bottom bar, one pane); from it on, a left rail and two panes where a list has a
-/// detail. One threshold, so there is no middle layout.
+/// detail; from [kDesktopMinWidth] the same frame with a wider list and a detail that fills the window (see [WidthClass.desktop]).
 const double kRegularWidth = 640;
+
+/// The window's width class (see [widthClassOf]).
+enum WidthClass {
+  /// Under [kRegularWidth]: the phone layout.
+  compact,
+
+  /// From [kRegularWidth]: the rail and two panes, the detail at most [kDetailMaxWidth] wide.
+  regular,
+
+  /// From [kDesktopMinWidth] (a computer's window, a 12.9" iPad Pro held sideways): the list [kDesktopListWidth] wide and the
+  /// detail up to [kDesktopDetailMaxWidth], so a wide window has no empty bands; pages may lay out in a [TwoColumn], and reading
+  /// text keeps to a [ReadingWidth]. Below it nothing changes.
+  desktop,
+}
+
+/// From this window width the desktop class: two columns of about 380 need about 800 for the detail, and with the rail (80) and
+/// a 380 list that is 1260.
+const double kDesktopMinWidth = 1280;
+
+/// The list pane on a desktop window (340 from [kWideWidth], 280 under it).
+const double kDesktopListWidth = 380;
+
+/// The detail pane on a desktop window at most (the page tint shows beyond it).
+const double kDesktopDetailMaxWidth = 1400;
+
+/// The width class of a window [width] wide.
+WidthClass widthClassFor(double width) => width >= kDesktopMinWidth
+    ? WidthClass.desktop
+    : width >= kRegularWidth
+    ? WidthClass.regular
+    : WidthClass.compact;
+
+/// The width class of the window [context] is in.
+WidthClass widthClassOf(BuildContext context) => widthClassFor(MediaQuery.sizeOf(context).width);
+
+/// The window is in the desktop class.
+bool isDesktop(BuildContext context) => widthClassOf(context) == WidthClass.desktop;
 
 /// From this width the list pane is wider ([kWideListWidth] instead of [kListWidth]).
 const double kWideWidth = 900;
@@ -31,8 +68,9 @@ const double kDetailMaxWidth = 640;
 /// The window is wide enough for the rail and two panes.
 bool isRegular(BuildContext context) => MediaQuery.sizeOf(context).width >= kRegularWidth;
 
-/// A list with its detail beside it on a regular window: the list on the left (280, or 340 from 900), the chosen item's page on the
-/// right (at most 640 wide, centred), "Choose an item" while nothing is chosen. On a compact window it is just the list, and an item
+/// A list with its detail beside it on a regular window: the list on the left (280, or 340 from 900, 380 on a desktop window), the
+/// chosen item's page on the right (at most 640 wide, 1400 on a desktop window, centred), "Choose an item" while nothing is chosen
+/// (or [desktopInitial]'s page on a desktop window). On a compact window it is just the list, and an item
 /// opens as a page of its own. The list's rows open items with [openDetail] and mark the chosen one with [isPaneSelected]; a page
 /// opened inside the detail stacks there (with its back arrow); the item's own page has none, the list stays.
 class TwoPane extends StatefulWidget {
@@ -41,6 +79,7 @@ class TwoPane extends StatefulWidget {
     required this.list,
     this.initialKey,
     this.initial,
+    this.desktopInitial,
     this.placeholder = 'Choose an item',
     this.id,
     this.listName = 'list',
@@ -52,6 +91,10 @@ class TwoPane extends StatefulWidget {
   /// The item chosen at first on a regular window (Settings opens on its first page); null shows the placeholder.
   final Object? initialKey;
   final WidgetBuilder? initial;
+
+  /// The page the detail shows on a desktop window while nothing is chosen, instead of the placeholder (Library opens on Add to
+  /// Library); no row is marked for it. Narrower windows show the placeholder as before.
+  final WidgetBuilder? desktopInitial;
   final String placeholder;
 
   /// The page's name for remembering whether its list is hidden ("settings", "regions"...); null: it is not remembered.
@@ -104,9 +147,11 @@ class TwoPaneState extends State<TwoPane> {
   Widget _panes(BuildContext context, double width) {
     if (MediaQuery.sizeOf(context).width < kRegularWidth || width < kTwoPaneMinWidth) return widget.list;
     final k = context.t;
-    final b = _builder;
-    // Nothing chosen yet: the list stays (there would be nothing to show).
-    final hidden = _listHidden && b != null;
+    final desktop = isDesktop(context);
+    // Nothing chosen yet: the list stays (there would be nothing to show), and a desktop window may show the starting page.
+    final hidden = _listHidden && _builder != null;
+    final b = _builder ?? (desktop ? widget.desktopInitial : null);
+    final Object? navKey = _builder == null ? const _DesktopInitial() : _key;
     final reduce = MediaQuery.disableAnimationsOf(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -122,7 +167,7 @@ class TwoPaneState extends State<TwoPane> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SizedBox(
-                  width: width >= kWideWidth ? kWideListWidth : kListWidth,
+                  width: desktop ? kDesktopListWidth : (width >= kWideWidth ? kWideListWidth : kListWidth),
                   // A hidden list is out of reach: no taps, and a screen reader skips it. Shown, it is a semantics container of its
                   // own beside the detail's (below), so the detail page's route barrier, which blocks the semantics of whatever
                   // was painted before it in its container, cannot take the list out of the screen reader's reach.
@@ -146,7 +191,7 @@ class TwoPaneState extends State<TwoPane> {
             child: Center(
               child: ConstrainedBox(
                 // With the list hidden the detail takes the whole width.
-                constraints: BoxConstraints(maxWidth: hidden ? double.infinity : kDetailMaxWidth),
+                constraints: BoxConstraints(maxWidth: hidden ? double.infinity : (desktop ? kDesktopDetailMaxWidth : kDetailMaxWidth)),
                 // The detail's own Navigator: its page's barrier blocks semantics only inside this container (see the list's).
                 child: Semantics(
                   container: true,
@@ -163,7 +208,7 @@ class TwoPaneState extends State<TwoPane> {
                           )
                         : HeroControllerScope.none(
                             child: Navigator(
-                              key: ValueKey(_key),
+                              key: ValueKey(navKey),
                               onGenerateRoute: (_) => MaterialPageRoute<void>(builder: b),
                             ),
                           ),
@@ -177,6 +222,99 @@ class TwoPaneState extends State<TwoPane> {
     );
   }
 }
+
+/// The key of the detail's Navigator while it shows [TwoPane.desktopInitial].
+class _DesktopInitial {
+  const _DesktopInitial();
+}
+
+/// Two columns for a page in a desktop window's detail pane, opt in: [left] about 36% of the width (at least
+/// [kTwoColumnLeftMinWidth]), [right] the rest, [gap] between. Where they do not fit (any window under [kDesktopMinWidth], or a
+/// page narrower than [kTwoColumnMinWidth]) it shows [narrow], the page's one-column layout, so nothing changes there.
+class TwoColumn extends StatelessWidget {
+  const TwoColumn({super.key, required this.left, required this.right, required this.narrow, this.gap = kTwoColumnGap});
+
+  final Widget left;
+  final Widget right;
+  final Widget narrow;
+  final double gap;
+
+  /// Whether two columns fit a page [width] wide in the window [context] is in.
+  static bool fits(BuildContext context, double width) => isDesktop(context) && width >= kTwoColumnMinWidth;
+
+  /// The left column's width on a page [width] wide.
+  static double leftWidth(double width) => (width * kTwoColumnLeftFraction).clamp(kTwoColumnLeftMinWidth, double.infinity).toDouble();
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, c) {
+      if (!fits(context, c.maxWidth)) return narrow;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(key: const ValueKey('two-column-left'), width: leftWidth(c.maxWidth), child: left),
+          SizedBox(width: gap),
+          Expanded(key: const ValueKey('two-column-right'), child: right),
+        ],
+      );
+    },
+  );
+}
+
+/// The share of the page [TwoColumn]'s left column takes.
+const double kTwoColumnLeftFraction = 0.36;
+const double kTwoColumnLeftMinWidth = 380;
+const double kTwoColumnGap = 24;
+
+/// The narrowest page that takes two columns: two of 380 and the gap.
+const double kTwoColumnMinWidth = 2 * kTwoColumnLeftMinWidth + kTwoColumnGap;
+
+/// Reading text (an article, search results with their snippets, a long answer) kept to about [chars] characters a line on a
+/// desktop window, where the detail can be 1400 wide; placed by [alignment] in the room it has. Narrower windows are not touched.
+/// A character is the width of "0" in [style] (the surrounding text style when null), as CSS's `ch`.
+class ReadingWidth extends StatelessWidget {
+  const ReadingWidth({super.key, required this.child, this.chars = kReadingChars, this.style, this.alignment = Alignment.topCenter});
+
+  final Widget child;
+  final double chars;
+  final TextStyle? style;
+  final AlignmentGeometry alignment;
+
+  /// The widest reading text may be in the window [context] is in: infinity under [kDesktopMinWidth]. For a scrolling list, pad
+  /// it with [padFor] so it scrolls from anywhere across the page.
+  static double maxWidthOf(BuildContext context, {double chars = kReadingChars, TextStyle? style}) {
+    if (!isDesktop(context)) return double.infinity;
+    final base = DefaultTextStyle.of(context).style.merge(style);
+    final tp = TextPainter(
+      text: TextSpan(text: '0', style: base),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final w = tp.width * chars;
+    tp.dispose();
+    return w;
+  }
+
+  /// Side padding that keeps a list's content to the reading width on a page [width] wide, at least [min] each side.
+  static EdgeInsets padFor(BuildContext context, double width, {double min = 16, double chars = kReadingChars, TextStyle? style}) {
+    final cap = maxWidthOf(context, chars: chars, style: style);
+    final side = cap.isFinite ? ((width - cap) / 2).clamp(min, double.infinity).toDouble() : min;
+    return EdgeInsets.symmetric(horizontal: side);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cap = maxWidthOf(context, chars: chars, style: style);
+    if (!cap.isFinite) return child;
+    return Align(
+      alignment: alignment,
+      child: ConstrainedBox(constraints: BoxConstraints(maxWidth: cap), child: child),
+    );
+  }
+}
+
+/// Characters a line of reading text keeps to on a desktop window.
+const double kReadingChars = 70;
 
 class _PaneScope extends InheritedWidget {
   const _PaneScope({required this.state, required this.inList, required this.selected, required this.hidden, required super.child});

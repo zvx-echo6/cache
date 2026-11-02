@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../layout/adaptive.dart';
 import '../screens/hold.dart';
 import '../screens/libraries_screen.dart';
 import '../platform.dart' as plat;
@@ -13,6 +14,7 @@ import '../downloads/download_row.dart';
 import 'library_actions.dart';
 import 'opds.dart';
 import 'web/device_flows.dart';
+import 'web/build_list.dart' show buildAddRows;
 import 'web/device_widgets.dart' show FromThisComputer;
 
 String formatBytes(int bytes) {
@@ -36,6 +38,9 @@ const List<_Topic> _topics = [
   _Topic('Medicine', 'medicine'),
   _Topic('Preparedness', 'preppers'),
 ];
+
+/// The narrowest a catalogue entry is drawn two to a row (Add to Library on a desktop window).
+const double kCatalogueTileMinWidth = 300;
 
 /// Add to Library: the one screen for adding anything. Your own library (from a file or a download link), then Kiwix's ready-made
 /// collections, searchable and filtered by language and category, each with its own download button and the download pop-up.
@@ -126,88 +131,109 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
       body: ListenableBuilder(
         listenable: b,
         builder: (context, _) {
-          return Column(
+          final own = _own(k);
+          final narrow = Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _search,
-                        textInputAction: TextInputAction.search,
-                        decoration: InputDecoration(
-                          hintText: 'Search the catalogue',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: _search.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  icon: const Icon(Icons.close),
-                                  onPressed: () {
-                                    _search.clear();
-                                    b.setFilter(query: '');
-                                  },
-                                ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(28),
-                            borderSide: BorderSide.none,
-                          ),
-                          filled: true,
-                          fillColor: k.surface,
-                        ),
-                        onChanged: (v) {
-                          setState(() {});
-                          _debounce?.cancel();
-                          _debounce = Timer(
-                            const Duration(milliseconds: 400),
-                            () => b.setFilter(query: v),
-                          );
-                        },
-                        onSubmitted: (v) => b.setFilter(query: v),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ActionChip(
-                      avatar: const Icon(Icons.language, size: 18),
-                      label: Text(_languageName()),
-                      onPressed: _pickLanguage,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                height: 48,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  children: [
-                    _chip(
-                      'All',
-                      b.category == null && b.tag == null,
-                      () => b.setFilter(clearCategory: true, clearTag: true),
-                    ),
-                    for (final c in b.categories)
-                      _chip(
-                        c.label,
-                        b.category == c.id,
-                        () => b.setFilter(category: c.id, clearTag: true),
-                      ),
-                    for (final t in _topics)
-                      _chip(
-                        t.label,
-                        b.tag == t.tag,
-                        () => b.setFilter(tag: t.tag, clearCategory: true),
-                      ),
-                  ],
-                ),
-              ),
-              Expanded(child: _list(context, k)),
+              _searchRow(k),
+              _chips(),
+              Expanded(child: _list(context, k, [...own, _readyLabel])),
             ],
+          );
+          // A desktop window: Your own on the left, the catalogue on the right (two to a row where they fit).
+          if (own.isEmpty) return narrow;
+          return TwoColumn(
+            narrow: narrow,
+            left: ListView(key: const ValueKey('add-left'), padding: const EdgeInsets.fromLTRB(12, 4, 0, 24), children: own),
+            right: Column(
+              children: [
+                Padding(padding: const EdgeInsets.only(right: 12), child: Align(alignment: Alignment.centerLeft, child: _readyLabel)),
+                _searchRow(k),
+                _chips(),
+                Expanded(
+                  child: LayoutBuilder(builder: (context, c) => _list(context, k, const [], perRow: c.maxWidth >= 2 * kCatalogueTileMinWidth + 24 ? 2 : 1)),
+                ),
+              ],
+            ),
           );
         },
       ),
     );
   }
+
+  Widget _searchRow(CacheTokens k) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+    child: Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _search,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search the catalogue',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        _search.clear();
+                        b.setFilter(query: '');
+                      },
+                    ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(28),
+                borderSide: BorderSide.none,
+              ),
+              filled: true,
+              fillColor: k.surface,
+            ),
+            onChanged: (v) {
+              setState(() {});
+              _debounce?.cancel();
+              _debounce = Timer(
+                const Duration(milliseconds: 400),
+                () => b.setFilter(query: v),
+              );
+            },
+            onSubmitted: (v) => b.setFilter(query: v),
+          ),
+        ),
+        const SizedBox(width: 8),
+        ActionChip(
+          avatar: const Icon(Icons.language, size: 18),
+          label: Text(_languageName()),
+          onPressed: _pickLanguage,
+        ),
+      ],
+    ),
+  );
+
+  Widget _chips() => SizedBox(
+    height: 48,
+    child: ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      children: [
+        _chip(
+          'All',
+          b.category == null && b.tag == null,
+          () => b.setFilter(clearCategory: true, clearTag: true),
+        ),
+        for (final c in b.categories)
+          _chip(
+            c.label,
+            b.category == c.id,
+            () => b.setFilter(category: c.id, clearTag: true),
+          ),
+        for (final t in _topics)
+          _chip(
+            t.label,
+            b.tag == t.tag,
+            () => b.setFilter(tag: t.tag, clearCategory: true),
+          ),
+      ],
+    ),
+  );
 
   Widget _chip(String label, bool selected, VoidCallback onTap) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
@@ -218,8 +244,8 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
     ),
   );
 
-  /// "Your own library", and the label over Kiwix's collections.
-  List<Widget> _head(CacheTokens k) {
+  /// "Your own library" (nothing when the libraries are not set up).
+  List<Widget> _own(CacheTokens k) {
     final libraries = b.libraries;
     return [
       // In a browser the first section is the computer the browser is on.
@@ -259,16 +285,21 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
         ),
         const SizedBox(height: 6),
       ],
-      const GroupLabel('Ready-made collections · free from Kiwix'),
+      // In a browser, building a library from PDFs and the drop folder.
+      if (b.device != null) ...buildAddRows(context, b.device!),
     ];
   }
 
-  Widget _list(BuildContext context, CacheTokens k) {
+  /// The label over Kiwix's collections.
+  static const Widget _readyLabel = GroupLabel('Ready-made collections · free from Kiwix');
+
+  /// [head], then the catalogue, [perRow] entries to a row.
+  Widget _list(BuildContext context, CacheTokens k, List<Widget> head, {int perRow = 1}) {
     if (b.entries.isEmpty) {
       return ListView(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
         children: [
-          ..._head(k),
+          ...head,
           if (b.loading)
             const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
           else
@@ -276,15 +307,15 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
         ],
       );
     }
-    final head = _head(k);
+    final rows = (b.entries.length + perRow - 1) ~/ perRow;
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-      itemCount: head.length + b.entries.length + 1,
+      itemCount: head.length + rows + 1,
       itemBuilder: (context, j) {
         if (j < head.length) return head[j];
         final i = j - head.length;
-        if (i == b.entries.length) {
+        if (i == rows) {
           if (b.loading) {
             return const Padding(
               padding: EdgeInsets.all(16),
@@ -310,7 +341,16 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
             ),
           );
         }
-        return EntryTile(browse: b, entry: b.entries[i]);
+        if (perRow == 1) return EntryTile(browse: b, entry: b.entries[i]);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var c = 0; c < perRow; c++) ...[
+              if (c > 0) const SizedBox(width: 8),
+              Expanded(child: i * perRow + c < b.entries.length ? EntryTile(browse: b, entry: b.entries[i * perRow + c]) : const SizedBox.shrink()),
+            ],
+          ],
+        );
       },
     );
   }

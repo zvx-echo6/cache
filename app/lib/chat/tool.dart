@@ -1,8 +1,9 @@
+import '../pdf/pdf_address.dart';
 import 'navigation_action.dart';
 
 /// One thing a tool found.
 class SourceResult {
-  const SourceResult({required this.title, required this.snippet, required this.address, this.link, this.time});
+  const SourceResult({required this.title, required this.snippet, required this.address, this.link, this.time, this.pdfPage, this.quote});
 
   final String title;
   final String snippet;
@@ -14,8 +15,16 @@ class SourceResult {
   final String? link;
   final double? time;
 
+  /// A passage of a PDF, when the core says so: its page (from 1) and its text as indexed (at most 300 words), to open the
+  /// PDF reader at that page with the passage highlighted. Never part of what the model reads.
+  final int? pdfPage;
+  final String? quote;
+
   /// A video moment: tapping it opens the player at [time].
   bool get isVideoMoment => link != null && time != null;
+
+  /// Where tapping the citation opens: [address], at [pdfPage] when the address names no page itself.
+  String get openAddress => pdfPage != null && pdfPageOfAddress(address) == null ? withPdfPage(address, pdfPage!) : address;
 }
 
 /// A tool result with its conversation-wide number.
@@ -63,7 +72,7 @@ abstract class ResultNumbering {
 }
 
 class NumberedAddress {
-  const NumberedAddress({required this.n, required this.address, required this.title, this.link, this.time});
+  const NumberedAddress({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote});
 
   final int n;
   final String address;
@@ -72,6 +81,10 @@ class NumberedAddress {
   /// See [SourceResult.link].
   final String? link;
   final double? time;
+
+  /// See [SourceResult.pdfPage].
+  final int? pdfPage;
+  final String? quote;
 }
 
 /// The tools run by the search core (cs_tool_schemas, cs_tool): every installed tool is offered to the model and

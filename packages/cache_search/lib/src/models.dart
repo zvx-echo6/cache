@@ -199,7 +199,7 @@ class CoreSourceError {
 
 /// One number of the conversation's id map.
 class ConversationId {
-  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time});
+  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote});
 
   factory ConversationId.fromJson(Map<String, dynamic> j) => ConversationId(
         n: j['n'] as int,
@@ -207,6 +207,8 @@ class ConversationId {
         title: (j['title'] ?? '') as String,
         link: j['link'] as String?,
         time: (j['time'] as num?)?.toDouble(),
+        pdfPage: (j['pdf_page'] as num?)?.toInt(),
+        quote: j['quote'] is String ? j['quote'] as String : null,
       );
 
   final int n;
@@ -218,7 +220,12 @@ class ConversationId {
   final String? link;
   final double? time;
 
-  Map<String, dynamic> toJson() => {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time};
+  /// A passage of a PDF, when the core gives one: its page (from 1) and its text, for the PDF reader to open at and highlight.
+  /// Absent from older cores. Kept beside the numbering; never part of what the model reads.
+  final int? pdfPage;
+  final String? quote;
+
+  Map<String, dynamic> toJson() => {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote};
 }
 
 /// What cs_format returns: the exact tool message and the id map so far.

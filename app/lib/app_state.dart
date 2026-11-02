@@ -11,6 +11,7 @@ import 'chat/model_name.dart';
 import 'files.dart';
 import 'models/recommendations.dart' show ModelSettings;
 import 'models/search_model.dart' show isSearchModelFile;
+import 'pdf/pdf_settings.dart' show pdfDarkPages;
 import 'theme.dart';
 import 'platform.dart' as plat;
 
@@ -45,6 +46,9 @@ class AppState extends ChangeNotifier {
 
   /// The Modules screen's icons: small, three across (false, the default), or large, two across.
   bool largeModuleIcons = false;
+
+  /// Settings > Appearance > "Dark pages": PDF pages drawn light on dark in a dark theme (off: dimmed). Off by default.
+  bool darkPdfPages = false;
   Directory? modelsDir;
   /// The chat models in the models folder (a search model's file is not one: see [searchModel]).
   List<ModelEntry> models = [];
@@ -139,6 +143,8 @@ class AppState extends ChangeNotifier {
       final t = j['theme'] as String?;
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
       largeModuleIcons = j['moduleIcons'] == 'large';
+      darkPdfPages = j['pdfDarkPages'] == true;
+      pdfDarkPages.value = darkPdfPages;
       _unsupported
         ..clear()
         ..addAll(((j['unsupported'] as List?) ?? const []).cast<String>());
@@ -158,6 +164,7 @@ class AppState extends ChangeNotifier {
         'lastModel': _lastModelFile,
         'theme': theme.name,
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
+        'pdfDarkPages': darkPdfPages,
         'unsupported': _unsupported.toList(),
         'names': _names,
       }));
@@ -166,6 +173,13 @@ class AppState extends ChangeNotifier {
 
   Future<void> setTheme(CacheThemeId id) async {
     theme = id;
+    notifyListeners();
+    await _writeSettings();
+  }
+
+  Future<void> setDarkPdfPages(bool on) async {
+    darkPdfPages = on;
+    pdfDarkPages.value = on;
     notifyListeners();
     await _writeSettings();
   }

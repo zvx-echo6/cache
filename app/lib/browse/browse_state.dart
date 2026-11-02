@@ -114,9 +114,13 @@ class BrowseState extends ChangeNotifier {
   /// A `zim:` address a citation asked to open; the Browse tab takes it and clears it.
   String? requestedAddress;
 
-  /// Asks the Browse tab to open the article at [address].
-  void openAddress(String address) {
+  /// The cited passage that goes with [requestedAddress] (a PDF page's quote), when the citation has one.
+  String? requestedQuote;
+
+  /// Asks the Browse tab to open the article at [address]; for a PDF entry, at its `#page=N` with [quote] highlighted.
+  void openAddress(String address, {String? quote}) {
     requestedAddress = address;
+    requestedQuote = quote;
     notifyListeners();
   }
 

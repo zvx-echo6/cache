@@ -51,6 +51,62 @@ Future<LocalFile?> pickLocalFile({List<String> accept = const []}) {
   return done.future;
 }
 
+/// A file that came out of a folder: it keeps its place in the folder.
+class WebPathedFile extends WebLocalFile implements PathedFile {
+  WebPathedFile(super.file, this.relativePath);
+
+  @override
+  final String relativePath;
+}
+
+/// Opens the browser's chooser for several files, or for a whole folder with [directory] (every file inside it, subfolders too). Call
+/// it straight from the tap. An empty list when the person closes the chooser.
+Future<List<LocalFile>> pickLocalFiles({List<String> accept = const [], bool directory = false}) {
+  final done = Completer<List<LocalFile>>();
+  final input = web.document.createElement('input') as web.HTMLInputElement
+    ..type = 'file'
+    ..multiple = true
+    ..accept = directory ? '' : accept.join(',');
+  if (directory) (input as JSObject)['webkitdirectory'] = true.toJS;
+  input.style.display = 'none';
+  void finish(List<LocalFile> f) {
+    if (!done.isCompleted) done.complete(f);
+    input.remove();
+  }
+
+  input.addEventListener(
+    'change',
+    ((web.Event _) {
+      final files = input.files;
+      final out = <LocalFile>[];
+      if (files != null) {
+        for (var i = 0; i < files.length; i++) {
+          final f = files.item(i)!;
+          final rel = (f as JSObject)['webkitRelativePath'];
+          final path = rel.isA<JSString>() ? (rel as JSString).toDart : '';
+          out.add(path.isEmpty ? WebLocalFile(f) : WebPathedFile(f, path));
+        }
+      }
+      finish(out);
+    }).toJS,
+  );
+  input.addEventListener('cancel', ((web.Event _) => finish(const [])).toJS);
+  web.document.body!.append(input);
+  input.click();
+  return done.future;
+}
+
+/// The upload of a file to any address on the device (the body is the file, streamed by the browser).
+RawUploader createRawUploader() => _RawXhrUploader();
+
+class _RawXhrUploader implements RawUploader {
+  @override
+  UploadTask post(LocalFile file, String url, UploadProgress onProgress) {
+    if (file is! WebLocalFile) throw ArgumentError('A browser upload needs a file from the browser');
+    return _XhrTask(file.file, url, onProgress);
+  }
+}
+
 /// The upload of a file to the device with an XMLHttpRequest: the `File` is the request body, so the browser streams it from the
 /// disk and never holds it in memory, and `upload.onprogress` says how much has gone.
 Uploader createBrowserUploader() => _XhrUploader();
@@ -116,8 +172,8 @@ class _XhrTask implements UploadTask {
   void cancel() => _xhr.abort();
 }
 
-/// Files dropped anywhere on the page. [onActive] says whether a file is being dragged over the page now; [onDrop] gets the first
-/// file dropped. The browser does not tell the name or size of a file until it is dropped.
+/// Files dropped anywhere on the page. [onActive] says whether a file is being dragged over the page now; [onDrop] gets every file
+/// dropped, and the files inside any folder dropped. The browser does not tell the name or size of a file until it is dropped.
 class DropListener {
   DropListener({required this.onActive, required this.onDrop}) {
     web.window.addEventListener('dragenter', _enter);
@@ -127,7 +183,7 @@ class DropListener {
   }
 
   final void Function(bool active) onActive;
-  final void Function(LocalFile file) onDrop;
+  final void Function(List<LocalFile> files) onDrop;
   int _depth = 0;
 
   static bool _hasFiles(web.DragEvent e) {
@@ -161,9 +217,55 @@ class DropListener {
     e.preventDefault();
     _depth = 0;
     onActive(false);
-    final files = e.dataTransfer?.files;
-    if (files != null && files.length > 0) onDrop(WebLocalFile(files.item(0)!));
+    final dt = e.dataTransfer;
+    if (dt == null) return;
+    // The entries of the drop are only valid until this handler returns, so they are taken now and walked afterwards.
+    final entries = <web.FileSystemEntry>[];
+    final items = dt.items;
+    for (var i = 0; i < items.length; i++) {
+      final entry = items[i].webkitGetAsEntry();
+      if (entry != null) entries.add(entry);
+    }
+    final plain = <LocalFile>[
+      for (var i = 0; i < dt.files.length; i++) WebLocalFile(dt.files.item(i)!),
+    ];
+    () async {
+      final out = <LocalFile>[];
+      try {
+        for (final entry in entries) {
+          await _walk(entry, '', out);
+        }
+      } catch (_) {
+        out.clear();
+      }
+      final files = out.isNotEmpty ? out : plain;
+      if (files.isNotEmpty) onDrop(files);
+    }();
   }).toJS;
+
+  static Future<void> _walk(web.FileSystemEntry entry, String parent, List<LocalFile> out) async {
+    final path = parent.isEmpty ? entry.name : '$parent/${entry.name}';
+    if (entry.isFile) {
+      final c = Completer<web.File>();
+      (entry as web.FileSystemFileEntry).file(((web.File f) => c.complete(f)).toJS, ((JSAny _) => c.completeError('unreadable')).toJS);
+      final f = await c.future;
+      out.add(parent.isEmpty ? WebLocalFile(f) : WebPathedFile(f, path));
+    } else if (entry.isDirectory) {
+      final reader = (entry as web.FileSystemDirectoryEntry).createReader();
+      while (true) {
+        final c = Completer<List<web.FileSystemEntry>>();
+        reader.readEntries(
+          ((JSArray<web.FileSystemEntry> a) => c.complete(a.toDart)).toJS,
+          ((JSAny _) => c.completeError('unreadable')).toJS,
+        );
+        final batch = await c.future;
+        if (batch.isEmpty) break;
+        for (final child in batch) {
+          await _walk(child, path, out);
+        }
+      }
+    }
+  }
 
   void dispose() {
     web.window.removeEventListener('dragenter', _enter);

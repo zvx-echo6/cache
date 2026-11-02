@@ -1,9 +1,9 @@
 //! Text embedding with cache_llama's `cl_embed`, loaded at run time with `libloading` (shared by the `cs` command line and the
 //! `places_pack embed` step, so a pack's vectors and a query's vector come from the same code and settings).
 //!
-//! Why loaded at run time and not linked: the core never links llama.cpp (DESIGN.md), and `cl_embed` lives on
-//! another branch (cl-embed). The wrapper therefore opens the built `libcache_llama.so` from a path given on the
-//! command line and looks up the five symbols it needs. The app calls the same C functions with the same
+//! Why loaded at run time and not linked: the core never links llama.cpp (DESIGN.md); `cl_embed` is part of
+//! cache_llama (packages/cache_llama/src/cache_llama.cpp), the app's llama.cpp wrapper. The wrapper therefore opens the
+//! built `libcache_llama.so` from a path given on the command line and looks up the five symbols it needs. The app calls the same C functions with the same
 //! settings, so a query gets the same vector on the phone and here.
 
 use libloading::Library;
