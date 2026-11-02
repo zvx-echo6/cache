@@ -312,6 +312,8 @@ To use another tag:
 2. Type the tag in the field "Import tag". It starts with `#` and has letters, numbers, `-`, `_` or `/`. No spaces. If it is wrong, it says "Use a tag like #cachesync. No spaces." and "Save" stays off.
 3. Tap "Save". Cache says "Import tag is #camping."
 
+![Choose your own import tag.](shot:import-tag-sheet)
+
 To go back, tap "Use #cachesync". Notes already in Cache keep syncing when you change the tag. The row says "Notes already in Cache keep syncing."
 
 To keep a note private in Cache, add `private: true` to its properties in Obsidian. In Logseq, add `private:: true` to the page's or block's properties. The row shows this hint too.
