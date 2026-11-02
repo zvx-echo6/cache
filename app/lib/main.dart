@@ -74,6 +74,7 @@ import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
 import 'settings/space.dart' show Space;
+import 'search/pdf_index_work.dart';
 import 'search/index_scheduler.dart';
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
@@ -297,12 +298,18 @@ class _CacheAppState extends State<CacheApp> {
   );
 
   /// The one scheduler of automatic index work (search/index_scheduler.dart): the core's builds and seals (behind
-  /// IndexCoreCalls.none until the core has index_source and index_seal) and, once it registers, the PDF loop. It runs while
-  /// the app is open, with the battery and storage rules, against the storage of the indexes folder.
+  /// IndexCoreCalls.none until the core has index_source and index_seal) and the ZIMs' PDFs (the PDF state queues nothing by
+  /// itself: its autoStart is null). It runs while the app is open, with the battery and storage rules, against the storage of
+  /// the indexes folder.
   late final IndexScheduler indexing = IndexScheduler(
-    sources: [CoreIndexWork(IndexCoreCalls.none)],
+    sources: [
+      CoreIndexWork(IndexCoreCalls.none),
+      PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
+    ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
+
+  void _kickIndexing() => unawaited(indexing.kick());
 
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
   void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
@@ -596,6 +603,8 @@ class _CacheAppState extends State<CacheApp> {
       }
     };
     sources.addListener(_syncIndexesOnly);
+    // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
+    sources.addListener(_kickIndexing);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
@@ -691,6 +700,8 @@ class _CacheAppState extends State<CacheApp> {
     browse.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
+    sources.removeListener(_kickIndexing);
+    indexing.dispose();
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
