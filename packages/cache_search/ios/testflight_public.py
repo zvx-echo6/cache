@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hands an uploaded build to the public TestFlight testers, through the App Store Connect API.
+"""Hands an uploaded build to a TestFlight group (the public testers by default), through the App Store Connect API.
 
 Usage: testflight_public.py <build number> [group name, default "Public"]
        testflight_public.py --check-newer <build number>   (fails unless it is higher than every build already uploaded)
@@ -8,7 +8,9 @@ Environment: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_B64 (the API key the upload u
 
 Steps: wait until Apple has processed the build (VALID), answer export compliance where the build has no answer yet (Cache uses
 only the system's encryption), set "What to test", add the build to the group, and submit it for TestFlight beta review when it
-is waiting for one (the first build of a version; later ones are usually approved at once). Every step that is already done is
+is waiting for one (the first build of a version; later ones are usually approved at once). An internal group that gets every build
+("Family", for a test build) is not added to and nothing goes to beta review: the build reaches only that group's testers, once
+processed and with export compliance answered. Every step that is already done is
 left as it is, so it can run again. Standard library and openssl only: nothing to install on the runner.
 """
 
@@ -146,7 +148,7 @@ def check_newer(number: str):
     asc = Asc()
     last = highest_build(asc, app_id(asc))
     if int(number) <= last:
-        fail(f"build {number} is not higher than the last TestFlight build ({last}): raise the version in app/pubspec.yaml")
+        fail(f"build {number} is not higher than the last TestFlight build ({last}): raise the build number (after the +) in app/pubspec.yaml")
     print(f"build {number} is higher than the last TestFlight build ({last})")
 
 
@@ -165,6 +167,9 @@ def main():
     group = next((g for g in groups.get("data", []) if g["attributes"]["name"] == group_name), None)
     if group is None:
         fail(f'no TestFlight group called "{group_name}"')
+
+    attrs = group["attributes"]
+    internal_all = bool(attrs.get("isInternalGroup")) and bool(attrs.get("hasAccessToAllBuilds"))
 
     # Apple processes an upload for 5 to 30 minutes; it shows up in the API only after a while.
     build = None
@@ -200,6 +205,19 @@ def main():
                              "attributes": {"locale": "en-US", "whatsNew": whats_new},
                              "relationships": {"build": {"data": {"type": "builds", "id": bid}}}}})
         print(f"what to test: {st}")
+
+    if internal_all:
+        # No group is added to and no beta review is asked for, so no external tester gets this build.
+        # The internal state follows the export compliance answer after a short while.
+        internal, deadline = None, time.time() + 10 * 60
+        while time.time() < deadline:
+            st, detail = asc.call("GET", f"/v1/builds/{bid}/buildBetaDetail")
+            internal = detail.get("data", {}).get("attributes", {}).get("internalBuildState")
+            print(f"{group_name} is an internal group that gets every build; internal state: {internal}", flush=True)
+            if internal in ("IN_BETA_TESTING", "READY_FOR_BETA_TESTING"):
+                return
+            time.sleep(30)
+        fail(f"build {number} is not ready for the {group_name} testers: {internal}")
 
     st, body = asc.call("POST", f"/v1/betaGroups/{group['id']}/relationships/builds", {"data": [{"type": "builds", "id": bid}]})
     if st not in (200, 204, 409):

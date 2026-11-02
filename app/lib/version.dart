@@ -5,6 +5,11 @@ const String kAppVersion = '1.0.30';
 const String kAppLicenceId = 'AGPL-3.0-or-later';
 const String kAppLicenceShort = 'AGPL-3.0';
 
+/// The build number (pubspec.yaml's `+31`, kept equal by a test), the same on both phones. It is its own counter, not the version's
+/// last number: every upload to Play or TestFlight needs a higher one, so a test build and the release of a version differ. The
+/// update check compares it; it is not shown.
+const int kAppBuild = 31;
+
 /// The installed app's version, read from the phone ("1.0.30"); [kAppVersion] when it cannot be read.
 Future<String> installedVersion() async {
   try {
@@ -15,10 +20,5 @@ Future<String> installedVersion() async {
   }
 }
 
-/// The version as shown: the version is `1.0.<build>` on both phones, so "1.0.28" already says the build; a build that is not the
-/// version's last number (an older build, a test build) is added: "1.0.0 (build 26)".
-String versionLabel(String version, String build) {
-  if (version.isEmpty) return kAppVersion;
-  if (build.isEmpty || version.split('.').last == build) return version;
-  return '$version (build $build)';
-}
+/// The version as shown: "1.0.30". The build number is not part of it (a test build and the release of 1.0.30 both show 1.0.30).
+String versionLabel(String version, String build) => version.isEmpty ? kAppVersion : version;
