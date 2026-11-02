@@ -686,6 +686,8 @@ To delete a video, tap "Delete from this device". The pop-up asks "Delete this v
 
 You only need this for videos a site keeps behind a sign-in.
 
+![Signing in to a video site](shot:video-sign-in)
+
 1. Open the site and tap the account button at the top right. Its tooltip is "Account and details", or your user name once you are signed in.
 2. Under "Sign in (optional)", look at what the site offers.
 3. If it has its own ways in, tap "Sign in with [name]". The site's page opens inside Cache. Finish there.
