@@ -670,13 +670,17 @@ class PdfIndexState extends ChangeNotifier {
         'built_uuid': z.uuid,
         'built_at': clock().toIso8601String(),
       });
+      // What is known of its snapshot is read again, and the core is given its sources again so it attaches the new one, before
+      // the run lets go: until then nothing may take the ZIM for one still needing its index.
+      _snaps.remove(z.path);
+      await onIndexReady?.call();
+      _snaps.remove(z.path);
     }
     _run = null;
     _runPath = null;
     switch (end) {
       case PdfRunEnd.finished:
         _cleanOldEditions(z, list);
-        await onIndexReady?.call();
       case PdfRunEnd.paused:
         // Held by the index scheduler: not a pause of its own (the scheduler starts it again), and not the battery's.
         final why = _holds.containsKey(z.path) ? 'held' : (run.stopped == PdfRunStop.battery ? 'battery' : 'person');
