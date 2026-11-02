@@ -43,8 +43,8 @@ abstract class IndexRun {
   /// Ends with true when the work is done, false when it stopped (paused, failed, or found it was not needed).
   Future<bool> get finished;
 
-  /// Stops the work, keeping what is done for the next start.
-  Future<void> pause();
+  /// Stops the work, keeping what is done for the next start; [why] is the scheduler's reason (what the work's own status says).
+  Future<void> pause([IndexWait why = IndexWait.none]);
 
   /// How the work may run from now on (the throttle's duty, every time it changes): a core job takes it through cs_job_set at
   /// its next checkpoint; the app's own loops follow the throttle through [indexPermit] and ignore this.
@@ -258,7 +258,7 @@ class IndexScheduler extends ChangeNotifier {
     _set(why);
     if (run != null) {
       try {
-        await run.pause();
+        await run.pause(why);
       } catch (e) {
         debugPrint('Index work could not pause: $e');
       }
@@ -279,7 +279,7 @@ class IndexScheduler extends ChangeNotifier {
     final run = _run;
     _run = null;
     _current = null;
-    if (run != null) unawaited(run.pause().catchError((_) {}));
+    if (run != null) unawaited(run.pause(IndexWait.closed).catchError((_) {}));
     super.dispose();
   }
 }

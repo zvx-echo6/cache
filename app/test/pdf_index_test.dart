@@ -389,13 +389,13 @@ void main() {
       expect((await until(z, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
     });
 
-    test('a low battery on battery pauses it ("Paused: low battery"); charging, it goes on by itself', () async {
+    test('a low battery on battery pauses it ("Paused, battery low"); charging, it goes on by itself', () async {
       batteryNow = const BatteryReading(percent: 10, charging: false);
       state = make();
       await state.init();
       final z = zims.single;
       final p = (await until(z, (p) => p.phase == PdfPartPhase.paused))!;
-      expect(pdfPartLine(p), 'Paused: low battery');
+      expect(pdfPartLine(p), 'Paused, battery low');
       batteryNow = const BatteryReading(percent: 10, charging: true);
       expect((await until(z, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
     });
@@ -465,7 +465,7 @@ void main() {
     test('every state has its line', () {
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768)), 'PDFs: searching ready');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340)), 'Making PDFs searchable: 340 of 5,768');
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery)), 'Paused: low battery');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery)), 'Paused, battery low');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.person)), 'Paused · 340 of 5,768');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189)), 'Needs 1.2 GB free');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.waiting, total: 5768)), 'Waiting to make PDFs searchable');
@@ -511,7 +511,7 @@ void main() {
       await tester.tap(find.text('Pause'));
       expect(paused, 1);
       await pump(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery));
-      expect(find.text('Paused: low battery'), findsOneWidget);
+      expect(find.text('Paused, battery low'), findsOneWidget);
       await tester.tap(find.text('Resume'));
       expect(resumed, 1);
       await pump(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189));

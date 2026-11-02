@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:cache/pdf/index/pdf_index_fake.dart';
 import 'package:cache/pdf/index/pdf_index_state.dart';
+import 'package:cache/pdf/index/pdf_index_ui.dart';
 import 'package:cache/platform/battery.dart';
 import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/search/index_throttle.dart';
 import 'package:cache/search/pdf_index_work.dart';
 import 'package:cache/settings/space.dart';
 import 'package:flutter/foundation.dart';
@@ -105,5 +107,72 @@ void main() {
       s.setOpen(true);
       expect(await until((p) => p == PdfPartPhase.done), PdfPartPhase.done);
     }
+  });
+
+  test("the PDF status gives the scheduler's reason, in the Settings line's words; low battery only when it is the battery", () async {
+    // Many PDFs, slowly, so the run is still going when it is held.
+    pdf.dispose();
+    pdf = PdfIndexState(
+      core: FakePdfIndexCore(zims: {
+        'u1': FakeZim(uuid: 'u1', name: 'guide', pdfs: [for (var i = 0; i < 40; i++) FakePdf('A/$i.pdf', pages: [_words(200)])]),
+      }, stepDelay: const Duration(milliseconds: 20)),
+      zims: () => zims,
+      changes: ValueNotifier(0),
+      indexesDir: () async => Directory('${dir.path}/shared-indexes'),
+      recordFile: () async => File('${dir.path}/pdf-index.json'),
+      readPages: (bytes, name) async {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        return readFakePdfPages(bytes, name);
+      },
+      battery: () async => battery,
+      space: (_) => const Space(free: 100 << 30, reserve: 0),
+      watchEvery: const Duration(hours: 1),
+    )..autoStart = null;
+    await pdf.init();
+    final z = zims.single;
+    for (var i = 0; i < 200 && pdf.needsIndex(z) == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    final task = (await PdfIndexWork(pdf, () => zims).pending()).single;
+    final run = await task.start();
+    for (var i = 0; i < 200 && pdf.partOf(z)?.phase != PdfPartPhase.running; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    // Slowed by heat while it runs.
+    run.setDuty(IndexDuty.share(0.3, hold: IndexHold.heat));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Slowed down, phone is warm · '));
+    run.setDuty(IndexDuty.share(2 / 3));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Making PDFs searchable: '));
+    // Held because it waits for charging: not "low battery".
+    await run.pause(IndexWait.charging);
+    expect(await run.finished.timeout(const Duration(seconds: 10)), isFalse);
+    for (var i = 0; i < 200 && pdf.partOf(z)?.phase != PdfPartPhase.paused; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final held = pdf.partOf(z)!;
+    expect(held.pause, PdfPause.held);
+    expect(pdfPartLine(held), startsWith('Waits for charging · '));
+    expect(File('${dir.path}/pdf-index.json').readAsStringSync(), contains('"pause":"held"'));
+    expect(pdf.needsIndex(z), isTrue, reason: 'the scheduler starts it again');
+    // The app went to the back: just waiting.
+    await pdf.hold(z, pdfHoldOf(IndexWait.closed));
+    expect(pdfPartLine(pdf.partOf(z)!), startsWith('Waiting · '));
+    // Started again: the reason goes.
+    await pdf.start(z);
+    expect(pdf.partOf(z)!.pause, isNot(PdfPause.held));
+    await pdf.hold(z);
+  });
+
+  test('the words for each reason', () {
+    expect(pdfHoldWords(PdfHold.waiting), 'Waiting');
+    expect(pdfHoldWords(PdfHold.charging), 'Waits for charging');
+    expect(pdfHoldWords(PdfHold.warm), 'Slowed down, phone is warm');
+    expect(pdfHoldWords(PdfHold.battery), 'Paused, battery low');
+    expect(pdfHoldWords(PdfHold.storage), 'Paused, not enough space');
+    expect(pdfHoldOf(IndexWait.storage), PdfHold.storage);
+    expect(pdfHoldOf(IndexWait.heat), PdfHold.warm);
+    expect(pdfHoldOf(IndexWait.battery), PdfHold.battery);
+    expect(pdfHoldOf(IndexWait.closed), PdfHold.waiting);
+    expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 10, handled: 3, pause: PdfPause.battery)), 'Paused, battery low');
   });
 }

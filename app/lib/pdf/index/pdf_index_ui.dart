@@ -20,16 +20,27 @@ String pdfPartLine(PdfPart p) => switch (p.phase) {
   PdfPartPhase.done => 'PDFs: searching ready',
   PdfPartPhase.waiting => 'Waiting to make PDFs searchable${_new(p)}',
   PdfPartPhase.starting => 'Making PDFs searchable…${_new(p)}',
+  PdfPartPhase.running when p.hold != null => '${pdfHoldWords(p.hold!)} · ${_of(p)}',
   PdfPartPhase.running => 'Making PDFs searchable: ${_of(p)}${_new(p)}',
   PdfPartPhase.pausing => 'Pausing…',
   PdfPartPhase.finishing => 'Making PDFs searchable: finishing',
   PdfPartPhase.paused => switch (p.pause) {
-    PdfPause.battery => 'Paused: low battery',
+    PdfPause.battery => 'Paused, battery low',
+    PdfPause.held => '${pdfHoldWords(p.hold ?? PdfHold.waiting)} · ${_of(p)}',
     PdfPause.closed => 'Paused: Cache was closed · ${_of(p)}',
     _ => 'Paused · ${_of(p)}',
   },
   PdfPartPhase.needsSpace => p.needBytes > 0 ? 'Needs ${formatBytes(p.needBytes)} free' : 'Needs more free space',
   PdfPartPhase.failed => 'Stopped: the library could not be read',
+};
+
+/// The index scheduler's reason, in the Settings line's words.
+String pdfHoldWords(PdfHold h) => switch (h) {
+  PdfHold.waiting => 'Waiting',
+  PdfHold.charging => 'Waits for charging',
+  PdfHold.warm => 'Slowed down, phone is warm',
+  PdfHold.battery => 'Paused, battery low',
+  PdfHold.storage => 'Paused, not enough space',
 };
 
 /// Why a run stopped, in plain words.
