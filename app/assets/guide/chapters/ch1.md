@@ -6,12 +6,14 @@ On a fresh install, "Home" shows a "Set up Cache" card. It gets Cache ready in f
 
 ![Home with the Set up Cache card](shot:home-setup-card)
 
-1. Tap "Choose a model" for the AI that answers your questions.
+1. Tap "Choose a model" to add the AI that answers in "Ask". It is optional. The row says "Optional. Lets you ask in plain words." If you only want to search, tap "Not now" on that row.
 2. Tap "Get your area" for maps, directions and places near you.
 3. Tap "Turn on weather" for forecasts and alerts.
 4. Tap "Add a library" for Wikipedia, medical and survival references.
 
 A tick shows on each row when it is done. When all four are done, the card goes away by itself.
+
+After "Not now", the model row is ticked and reads "Search only on this device. Tap to add one." Cache says "Ask is off. You can add a model any time." Tap "Undo" to take it back. Tap the row any time to choose a model. See Use Cache with no model in chapter 2.
 
 Nothing downloads or switches on until you tap. You can do the steps in any order. Press and hold a row to open its part of this guide.
 
@@ -24,7 +26,7 @@ To hide the card, tap "Hide". Cache says "Set up Cache hidden. Bring it back in 
 
 ## Choose a model
 
-The model is the AI that answers in "Ask". You pick it, and Cache runs it on your device.
+The model is the AI that answers in "Ask". You pick it, and Cache runs it on your device. A model is optional. Without one, Cache is search only. See Use Cache with no model in chapter 2.
 
 ![The Models screen](shot:models-screen)
 
@@ -33,6 +35,8 @@ The model is the AI that answers in "Ask". You pick it, and Cache runs it on you
 3. Pick one that fits. If you're unsure, take the smallest.
 4. Tap its download button, then "Download" in the pop-up.
 5. When it finishes, tap the model under "On this device". Its line says "Loading…", then "Active".
+
+When the first model reaches the device, Cache says "Ask is on." Tap "Open" to go to "Ask". Nothing opens by itself.
 
 A model is about 3 to 5 GB.
 
@@ -66,6 +70,8 @@ Unloading frees the memory a model uses. Deleting frees its storage.
 1. Open the Models screen.
 2. Tap "Unload" next to the active model, or "Delete" next to one you don't use.
 3. For a delete, confirm in the pop-up.
+
+If it is your last chat model, the pop-up adds "Ask will turn off. Saved chats stay readable." "Ask" then leaves the bar until you add a model. Your saved chats stay and open to read.
 
 You can also unload from the model name at the top of "Ask".
 
@@ -260,6 +266,8 @@ The Library holds offline copies of Wikipedia, medical guides and survival manua
 4. In the pop-up, check the size and storage bar, then tap "Download".
 
 When it finishes, Cache checks the file and adds it to your Library. Then it indexes it. The row says "Indexing". You can read straight away. Search inside it works when indexing ends.
+
+If the library holds PDFs or EPUBs, or videos with captions, Cache makes those searchable too, in the background. Nothing to switch on. See Search inside PDFs, EPUBs and captions in chapter 2.
 
 Versions without pictures are much smaller.
 
