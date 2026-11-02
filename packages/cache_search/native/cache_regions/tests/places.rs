@@ -796,3 +796,58 @@ fn a_snapshot_of_another_publish_is_ignored_when_current_json_is_known() {
     assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
     assert_eq!(srv.total(), before);
 }
+
+#[test]
+fn snapshots_this_version_cannot_read_are_removed_once_a_good_one_is_used_but_an_arriving_or_other_publish_one_stays() {
+    let srv = Server::start("snap-unusable");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-unusable");
+    let ix = t.0.join("ix");
+    {
+        let e = engine(&t.0.join("dev1"), &srv, json!({"indexes_dir": ix}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+    }
+    // As a peer on another version would have synced them in: an index of another format, places in another tile layout,
+    // one still arriving (no manifest), and one of another publish of the build (its checksum differs).
+    let goods: HashMap<&str, PathBuf> = [("region-index", "r1"), ("places-index", "p1")]
+        .into_iter()
+        .map(|(kind, build)| (kind, snaps(&ix, kind, build)[0].clone()))
+        .collect();
+    let planted = |kind: &str, build: &str, edit: &dyn Fn(&mut Value), name: &str, keep_manifest: bool| {
+        let good = goods[kind].clone();
+        let to = ix.join(kind).join(build).join("snap").join(name);
+        copy_tree(&good, &to);
+        if keep_manifest {
+            let m = to.join("manifest.json");
+            let mut v: Value = serde_json::from_slice(&std::fs::read(&m).unwrap()).unwrap();
+            edit(&mut v);
+            std::fs::write(&m, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+        } else {
+            std::fs::remove_file(to.join("manifest.json")).unwrap();
+        }
+    };
+    planted("region-index", "r1", &|v| v["format"] = json!(99), "20250101T000000Z-oldfmt", true);
+    planted("places-index", "p1", &|v| v["tile_schema"] = json!(99), "20250101T000000Z-oldlay", true);
+    planted("region-index", "r1", &|_| {}, "20261101T000000Z-arriving", false);
+    planted("region-index", "r1", &|v| v["index_sha256"] = json!("0".repeat(64)), "20250202T000000Z-otherpub", true);
+    // a start that uses the snapshots (offline: from the verified, matching one)
+    let e = engine(&t.0.join("dev2"), &srv, json!({"indexes_dir": ix}));
+    call(&e, "plan", json!({"geometry": region_a(), "parts": ["routing", "places"]}));
+    drop(e);
+    let names = |kind: &str, build: &str| -> Vec<String> {
+        snaps(&ix, kind, build).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    };
+    let r = names("region-index", "r1");
+    assert!(!r.contains(&"20250101T000000Z-oldfmt".to_string()), "another format goes: {r:?}");
+    assert!(r.contains(&"20261101T000000Z-arriving".to_string()), "one still arriving stays: {r:?}");
+    assert!(r.contains(&"20250202T000000Z-otherpub".to_string()), "another publish's snapshot stays: {r:?}");
+    assert!(!names("places-index", "p1").contains(&"20250101T000000Z-oldlay".to_string()), "another tile layout goes");
+    let rejected: Vec<Value> = serde_json::from_slice(&std::fs::read(ix.join(".local").join("rejected.json")).unwrap()).unwrap();
+    let ids: Vec<(&str, &str)> =
+        rejected.iter().map(|v| (v["kind"].as_str().unwrap(), v["build_id"].as_str().unwrap())).collect();
+    assert!(ids.contains(&("region-index", "20250101T000000Z-oldfmt")), "{ids:?}");
+    assert!(ids.contains(&("places-index", "20250101T000000Z-oldlay")), "{ids:?}");
+    assert!(!ids.iter().any(|(_, b)| b.contains("arriving") || b.contains("otherpub")), "{ids:?}");
+}

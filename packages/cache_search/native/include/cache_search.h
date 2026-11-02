@@ -234,6 +234,10 @@ void cs_close(cs_handle *h);
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
  *          "page", the printed label; no other result has that key)
+ *          (the snippet of a PDF, caption or EPUB result is cut around the part of the piece that matches the query best, from the
+ *          start of its sentence where that fits, at most the same length as before; the start of the piece when nothing
+ *          matches or when the piece is short. Results with the same title and the same snippet are one, the first, across
+ *          all sources; the dropped ones do not count toward "k" or "offset", so paging continues where it ended)
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);
 
