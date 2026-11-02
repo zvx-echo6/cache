@@ -4,10 +4,13 @@
 //!                                            [--created-at TEXT] [--pieces-out FILE]
 //!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive]
 //!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, documents.tsv, SHA256SUMS
+//!   cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]...
+//!       counts the ZIM's PDFs, pages, text layers and estimated pieces (JSON on stdout; nothing written, nothing embedded)
 //!   cache-build dump <in.pdf> <page>     (the blocks and lines MuPDF reports for a 1-based page; for debugging)
 
 use cache_builder::build::{build_pack, BuildOptions};
 use cache_builder::embed::FakeEmbedder;
+use cache_builder::zim::{survey as zim_survey, Survey, ZimPdfOptions};
 use cache_builder::library::{build_library, check_library_dir, LibraryOptions};
 use cache_builder::pack::write_pack;
 use std::path::PathBuf;
@@ -15,7 +18,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> --fake-embedder [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> --fake-embedder [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]...\n  cache-build dump <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -44,7 +47,7 @@ struct Args {
 }
 
 fn parse(args: &[String]) -> Args {
-    let flags = ["--fake-embedder", "--archive"];
+    let flags = ["--fake-embedder", "--archive", "--survey"];
     let mut pos = Vec::new();
     let mut opts = Vec::new();
     let mut i = 0;
@@ -86,6 +89,7 @@ fn main() {
     let code = match argv[0].as_str() {
         "pdf" => cmd_pdf(&a),
         "library" => cmd_library(&a),
+        "zim-pdfs" => cmd_zim_pdfs(&a),
         "dump" => cmd_dump(&a),
         _ => usage(),
     };
@@ -197,6 +201,45 @@ fn cmd_library(a: &Args) -> i32 {
             if let Some(p) = r.archive {
                 println!("archive {}", p.display());
             }
+            0
+        }
+        Err(e) => {
+            eprintln!("FAILED: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_zim_pdfs(a: &Args) -> i32 {
+    let Some(zim) = a.pos.first() else { usage() };
+    if !a.has("--survey") {
+        eprintln!("error: zim-pdfs only has the --survey mode");
+        return 2;
+    }
+    let limit = match a.get("--limit") {
+        Some(v) => match v.parse::<usize>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!("error: --limit needs a number");
+                return 2;
+            }
+        },
+        None => None,
+    };
+    let o = ZimPdfOptions { zim: PathBuf::from(zim), limit, skip: a.opts.iter().filter(|(k, _)| k == "--skip").filter_map(|(_, v)| v.clone()).collect() };
+    let t0 = Instant::now();
+    let mut last = Instant::now();
+    let mut progress = |s: &Survey| {
+        if last.elapsed().as_secs() >= 30 {
+            eprintln!("{} PDFs, {} pages, {} with text, {} pieces, {:.0}s", s.pdfs, s.pages, s.with_text, s.est_pieces, t0.elapsed().as_secs_f32());
+            last = Instant::now();
+        }
+    };
+    let mut skipped = |path: &str, why: &str| eprintln!("skipped {path}: {why}");
+    match zim_survey(&o, &mut progress, &mut skipped) {
+        Ok(s) => {
+            eprintln!("done in {:.1}s", t0.elapsed().as_secs_f32());
+            println!("{}", serde_json::to_string_pretty(&s.to_json()).unwrap_or_default());
             0
         }
         Err(e) => {
