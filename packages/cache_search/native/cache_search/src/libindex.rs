@@ -75,6 +75,8 @@ pub struct LibOpenIndex {
     pub fields: LibFields,
     pub docs: u64,
     stamp: Option<(SystemTime, u64)>,
+    /// Tells `index_seal` this folder is open (it may not move files out from under it).
+    _guard: crate::idxsnap::OpenGuard,
 }
 
 impl LibOpenIndex {
@@ -85,7 +87,7 @@ impl LibOpenIndex {
         let fields = fields_of(&index)?;
         let reader = tv(index.reader_builder().reload_policy(tantivy::ReloadPolicy::Manual).try_into())?;
         let docs = reader.searcher().num_docs();
-        Ok(LibOpenIndex { index, reader, fields, docs, stamp })
+        Ok(LibOpenIndex { index, reader, fields, docs, stamp, _guard: crate::idxsnap::OpenGuard::new(dir) })
     }
 
     /// True if the index files changed on disk since this was opened.

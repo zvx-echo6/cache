@@ -115,7 +115,8 @@ char *cs_version(void);
  *                                  cs_set_sources in the process sets it). What it holds is about 8 times larger once
  *                                  decompressed, and that is taken off the top of zim_budget_mb
  *   "zim_dirent_cache": 512        optional, default 512 (libzim's own default): dirents each open archive's dirent cache holds
- *   "indexes_dir": "<path>"        optional: the folder of the app's syncable indexes. A ZIM whose PDF index has a published
+ *   "indexes_dir": "<path>"        optional: the folder of the app's syncable indexes (kinds zim-pdf, zim and library; see the
+ *                                  index_zim, index_library and index_seal jobs). A ZIM whose PDF index has a published
  *                                  snapshot at <indexes_dir>/zim-pdf/<its uuid>/snap/<build-id>/ is searched together with
  *                                  that snapshot (see "PDF indexes" below); without indexes_dir no PDF index is attached.
  *                                  Each cs_set_sources replaces it. A snapshot of a ZIM that is not loaded is never attached.
@@ -156,7 +157,11 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * count, and has "keyword_source":"own" (placed after "embedding_model"); other ZIMs have no "keyword_source" field. A library that finished opening is reported as before.
  * Every source entry also has "source_id" (the id sync filters by: the ZIM's lowercase UUID; a library's library_id, with
  * "@<version>" when its settings give a version; null for a source that failed to open) and "index":{"kind":"zim"|"library",
- * "location":<its index_dir, or null>,"snapshot":null,"format":N} (snapshot is null until that kind publishes snapshots).
+ * "location":"snapshot"|"legacy"|"none","snapshot":<build id in use, or null>,"format":N,"dir":<folder in use, or null>,
+ * "needs_seal":true?}. "snapshot" means the keyword index is a published snapshot under "indexes_dir"; "legacy" an index in the
+ * source's "index_dir" and no snapshot (it keeps being used); "none" neither. "needs_seal" is present (true) only when
+ * "indexes_dir" is set and only a legacy index exists: the app starts an "index_seal" job for it. While a snapshot is being
+ * verified on a background thread the source keeps its legacy index (or has none).
  * A ZIM with a published PDF index snapshot has "pdfindex":{"state":"opening"|"ready"|"none","kind":"zim-pdf","snapshot":
  * "<build-id>","format":N,"pdfs":N,"pieces":N,"created":"..."} (the state-only forms for "opening" and "none"); other
  * sources have no "pdfindex" key.
@@ -888,6 +893,25 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
 /* kind "index_zim":  {"zim_path","index_dir","heap_mb":200}
  * kind "index_library": {"library_path","index_dir","heap_mb":200}
  *   builds the device Tantivy index from the library's mapped text field.
+ * Both also take "indexes_dir" (the folder of cs_open's "indexes_dir"; "index_dir" is then not needed and not used). The index
+ *   is then built in <indexes_dir>/zim/<zim uuid>/.build/ (index_zim) or <indexes_dir>/library/<library_id[@version]>/.build/
+ *   (index_library; the source id is cs_status's "source_id", so a library update with a new version is a new source and a new
+ *   snapshot), resumable as before, and published as snapshots/<build-id>/ with manifest.json written last (kind, source_id,
+ *   format, tantivy, tokenizer, core, created, files [path,size,sha256]) by one rename; .build is then removed. If a usable
+ *   snapshot of that source is already there (or arrives while building, synced from a peer) the job builds nothing more and
+ *   ends done. When done, "result":{"adopted":bool,"snapshot":"<build-id>","bytes"?}.
+ * kind "index_seal": {"indexes_dir","kind":"zim"|"library","source_id","index_dir"?}
+ *   moves an index from its old location (cs_open's "index_dir" of that source; "index_dir" here names it when no handle has
+ *   the source) into a snapshot without copying or merging: its files are HARD-LINKED into .build/publish-<id>/, hashed,
+ *   an empty .tantivy-meta.lock is added, manifest.json is written last and the folder is renamed to snap/<id>/. If hard
+ *   links fail the files are renamed instead, but only when no handle has the index open; otherwise the job fails "busy"
+ *   (try again later). If a usable snapshot of the source already exists (for example synced from a peer) nothing is sealed:
+ *   done with "result":{"adopted":true,"snapshot"}. An old index that is not finished or is of another format fails
+ *   "index_stale" (run index_zim / index_library with "indexes_dir" instead); none at all fails "index_missing". Progress
+ *   "phase":"link"|"verify"|"manifest"|"publish"; cs_job_cancel is honoured until "publish". When done "result":
+ *   {"adopted":false,"snapshot","files","bytes","method":"link"|"rename"}. A handle with "indexes_dir" uses the snapshot once it
+ *   has verified it (until then the old index, as before), and after its first successful open from a sealed snapshot removes
+ *   the old index's files from the old folder.
  * kind "update_library": {"library_path","snapshot_path","snapshot_manifest_path"}
  *   closes the library, applies a partial snapshot to a REAL COPY of its shard directory
  *   (<library_path>.cs-stage, beside it, no hard links), rewrites the copy's segments_manifest.json, swaps the copy

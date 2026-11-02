@@ -2,6 +2,7 @@
 //! (`unpack_library`, `check_library`, `library_template`) and the downloads run on their own threads and are polled.
 
 use crate::error::{Error, Result};
+use crate::idxsnap;
 use crate::index::{self, BuildParams, Lock, Outcome};
 use crate::libadd;
 use crate::libindex::{self, LibBuildParams};
@@ -61,6 +62,7 @@ impl Shared {
         }
         self.set_progress(d, t);
     }
+
 }
 
 /// Layer downloads running in this process, by layer and area: a second one for the same area is `busy`.
@@ -94,7 +96,12 @@ pub struct Job {
 #[derive(Deserialize)]
 struct IndexZimParams {
     zim_path: String,
+    /// The old index folder. Not needed (and not used) when `indexes_dir` is given.
+    #[serde(default)]
     index_dir: String,
+    /// The app's syncable indexes folder: the index is built in `<indexes_dir>/zim/<uuid>/.build/` and published as a snapshot.
+    #[serde(default)]
+    indexes_dir: Option<String>,
     #[serde(default = "default_heap")]
     heap_mb: usize,
     /// Not in the header: articles per checkpoint (default 2000). Tests use a small value.
@@ -105,7 +112,13 @@ struct IndexZimParams {
 #[derive(Deserialize)]
 struct IndexLibraryParams {
     library_path: String,
+    /// The old index folder. Not needed (and not used) when `indexes_dir` is given.
+    #[serde(default)]
     index_dir: String,
+    /// The app's syncable indexes folder: the index is built in `<indexes_dir>/library/<library_id@version>/.build/` and published
+    /// as a snapshot.
+    #[serde(default)]
+    indexes_dir: Option<String>,
     #[serde(default = "default_heap")]
     heap_mb: usize,
     /// The library's settings object, as in `cs_open`; guessed from the payload when absent. It must be the
@@ -196,6 +209,7 @@ impl Job {
             "video_download" => Self::start_video_download(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
+            "index_seal" => Self::start_index_seal(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -203,10 +217,20 @@ impl Job {
 
     fn start_index_zim(params_json: &str) -> Result<Job> {
         let p: IndexZimParams = serde_json::from_str(params_json)?;
-        if p.zim_path.is_empty() || p.index_dir.is_empty() {
-            return Err(Error::bad_json("zim_path and index_dir must not be empty"));
+        let root = p.indexes_dir.as_deref().filter(|d| !d.is_empty()).map(PathBuf::from);
+        if p.zim_path.is_empty() || (p.index_dir.is_empty() && root.is_none()) {
+            return Err(Error::bad_json("zim_path and index_dir (or indexes_dir) must not be empty"));
         }
         let zim = ZimSource::open(std::path::Path::new(&p.zim_path))?;
+        if let Some(root) = root {
+            // a snapshot build: .build/ of the ZIM's folder, resumable; published when finished
+            let sd = idxsnap::dir_for(&root, idxsnap::KIND_ZIM, &zim.id);
+            let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
+            let (heap_mb, checkpoint, total) = (p.heap_mb, p.checkpoint_articles, zim.entry_count());
+            return Self::spawn("cs-index-zim", lock, total, move |sh| {
+                idxsnap::run_zim(&zim, &sd, heap_mb, checkpoint, &Self::hooks(sh))
+            });
+        }
         let dir = PathBuf::from(&p.index_dir);
         let lock = Lock::acquire(&dir)?;
         let total = zim.entry_count();
@@ -237,10 +261,34 @@ impl Job {
         })
     }
 
+    /// Start an `index_seal` job: `{"indexes_dir","kind":"zim"|"library","source_id","index_dir"?}`. Seals the index in its old
+    /// folder into a snapshot by hard links (see idxsnap.rs), or adopts a usable snapshot that is already there. Progress phases
+    /// "link", "verify", "manifest", "publish"; cancel is honoured until "publish"; the result is in the progress JSON.
+    fn start_index_seal(params_json: &str) -> Result<Job> {
+        let mut req = idxsnap::prepare_seal(params_json)?;
+        let lock = req.lock.take();
+        Self::spawn("cs-index-seal", lock, 1, move |sh| idxsnap::seal(&req, &Self::hooks(sh)))
+    }
+
+    /// What a snapshot job reports to its poller.
+    fn hooks(sh: &Shared) -> idxsnap::Hooks<'_> {
+        idxsnap::Hooks {
+            progress: Box::new(|d, t| sh.set_progress(d, t)),
+            phase: Box::new(|ph, d, t| sh.set_phase(ph, d, t)),
+            cancelled: Box::new(|| sh.cancel.load(Ordering::SeqCst)),
+            set_result: Box::new(|v| {
+                if let Ok(mut g) = sh.result.lock() {
+                    *g = Some(v);
+                }
+            }),
+        }
+    }
+
     fn start_index_library(params_json: &str) -> Result<Job> {
         let p: IndexLibraryParams = serde_json::from_str(params_json)?;
-        if p.library_path.is_empty() || p.index_dir.is_empty() {
-            return Err(Error::bad_json("library_path and index_dir must not be empty"));
+        let root = p.indexes_dir.as_deref().filter(|d| !d.is_empty()).map(PathBuf::from);
+        if p.library_path.is_empty() || (p.index_dir.is_empty() && root.is_none()) {
+            return Err(Error::bad_json("library_path and index_dir (or indexes_dir) must not be empty"));
         }
         // a bad settings object and a missing folder are reported here; opening the (possibly huge) shard
         // happens on the job's thread
@@ -251,9 +299,36 @@ impl Job {
         if !lib_path.is_dir() {
             return Err(Error::not_found(format!("library folder {} not found", lib_path.display())));
         }
-        let dir = PathBuf::from(&p.index_dir);
         // an update owns the library while it runs: `busy`; and an update cannot start while this build runs
         let token = libreg::entry_for(&lib_path).begin_build()?;
+        if let Some(root) = root {
+            // a snapshot build: the library's source id is what cs_status reports ("library_id@version")
+            let (library_id, version) = match p.settings.as_ref().map(LibrarySettings::parse).transpose()? {
+                Some(st) => (st.library_id, st.version),
+                None => (crate::library::dir_name(&lib_path), None),
+            };
+            let source_id = idxsnap::library_source_id(&library_id, version.as_deref());
+            let sd = idxsnap::dir_for(&root, idxsnap::KIND_LIBRARY, &source_id);
+            let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
+            let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
+            return Self::spawn("cs-index-library", (lock, token), 0, move |sh| {
+                idxsnap::run_library(
+                    &LibBuildParams {
+                        library_path: &lib_path,
+                        settings: settings.as_ref(),
+                        index_dir: &sd,
+                        heap_mb,
+                        checkpoint_docs: checkpoint,
+                    },
+                    &sd,
+                    &source_id,
+                    &library_id,
+                    version.as_deref(),
+                    &Self::hooks(sh),
+                )
+            });
+        }
+        let dir = PathBuf::from(&p.index_dir);
         let lock = Lock::acquire(&dir)?;
         let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
         Self::spawn("cs-index-library", (lock, token), 0, move |sh| {
