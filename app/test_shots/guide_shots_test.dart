@@ -114,6 +114,7 @@ import '../test/support/sample_pdf.dart' show sampleHandbook;
 import '../test/support/notebook_fake.dart';
 import '../test/support/owner_state.dart';
 import '../test/support/regions_fake.dart';
+import '../test/support/sync_fake.dart' show FakeSync;
 import '../test/support/settings_rig.dart';
 import '../test/support/weather_fakes.dart';
 import 'shot_kit.dart';
@@ -330,6 +331,7 @@ void main() {
     final models = folder('models', {'gemma-4-E2B-it-Q4_K_M.gguf': 3200 << 20});
     final notebooks = folder('notebooks', {for (var i = 1; i <= 12; i++) 'Journal 2026-10-$i.md': 2 << 10});
     final shared = folder('shared', const {});
+    final sync = _CountingSync()..peers.addAll(r.sync.peers);
     final sharing = SharingState(
       policy: r.policy,
       supportDir: () async => r.dir,
@@ -340,7 +342,7 @@ void main() {
         DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': shared}, inStorage: false),
       ],
       deviceName: 'Android device',
-      opener: (_) async => r.sync,
+      opener: (_) async => sync,
     );
     await show(tester, SharingPage(sharing: sharing));
     await tester.runAsync(() => sharing.setUp());
@@ -1497,6 +1499,25 @@ Future<void> _until(WidgetTester tester, Finder f, {int max = 200}) async {
     await tester.pump(const Duration(milliseconds: 30));
   }
   expect(f, findsWidgets);
+}
+
+/// The sync engine's stand-in that counts each shared folder's files and bytes, as the real one reports them.
+class _CountingSync extends FakeSync {
+  @override
+  Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
+    final r = await super.call(method, args);
+    if (method != 'status') return r;
+    return {
+      ...r,
+      'shares': [
+        for (final sh in (r['shares'] as List).cast<Map<String, Object?>>())
+          () {
+            final files = Directory(sh['path']! as String).listSync(recursive: true).whereType<File>().toList();
+            return {...sh, 'files': files.length, 'bytes': files.fold<int>(0, (n, f) => n + f.lengthSync())};
+          }(),
+      ],
+    };
+  }
 }
 
 /// The index scheduler as Settings reads it: only its status line, set by the picture (no work is run).
