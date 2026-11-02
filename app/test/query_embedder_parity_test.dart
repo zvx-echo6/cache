@@ -2,7 +2,7 @@
 //
 // packages/cache_llama/test/fixtures/bge-m3-golden.json holds, for a few texts, the vector `places_pack embed` makes and
 // the int8 form it stores (made on the build host with the pinned model; places_pack/src/parity_tests.rs checks the
-// builder against it). Here the phone's own PhoneQueryEmbedder (CacheEmbedder, cl_embed) embeds the same texts: each
+// builder against it). Here the phone's own SearchEmbedder (CacheEmbedder, cl_embed) embeds the same texts: each
 // query vector must be the builder's vector, and score the stored form the way the core scores it (int8 times the
 // scale, dotted with the query) at 1 less the int8 rounding.
 //
@@ -16,7 +16,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:cache/nav/query_embedder.dart';
+import 'package:cache/models/search_model.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final String? _models = Platform.environment['CACHE_EMBED_MODELS_DIR'];
@@ -27,8 +27,8 @@ List<int> _unhex(String s) => [for (var i = 0; i < s.length; i += 2) int.parse(s
 void main() {
   Future<void> check(String goldenPath, double same) async {
     final golden = jsonDecode(File(goldenPath).readAsStringSync()) as Map<String, dynamic>;
-    expect(golden['model'], kQueryEmbedModelFile);
-    final e = PhoneQueryEmbedder(modelsDir: () async => Directory(_models!));
+    expect(golden['model'], kSearchModel.fileName);
+    final e = SearchEmbedder(modelsDir: () async => Directory(_models!), fileName: kSearchModel.fileName);
     try {
       for (final item in (golden['items'] as List).cast<Map<String, dynamic>>()) {
         final text = item['text'] as String;
