@@ -61,6 +61,170 @@ pub struct Header {
     /// 1-based PDF pages skipped because they have no text layer (OCR comes later).
     pub ocr_pages: Vec<usize>,
     pub pieces: usize,
+    /// Revision 3, optional: the division the document is filed in (absent in older packs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub division: Option<Division>,
+    /// Revision 3, optional: what is needed to tell whether two files are the same book and to pick the better copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samebook: Option<Samebook>,
+}
+
+/// Where a division came from: `label` (a hand/LLM-made label), `sorter` (the classifier) or `user`.
+pub const DIVISION_SOURCES: [&str; 3] = ["label", "sorter", "user"];
+
+/// The division a document is filed in (pack revision 3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Division {
+    /// The three-digit division code, e.g. `"440"`.
+    pub division: String,
+    pub label: String,
+    #[serde(default)]
+    pub score: Option<f32>,
+    #[serde(default)]
+    pub classifier_version: Option<u32>,
+    /// One of [`DIVISION_SOURCES`].
+    pub source: String,
+    #[serde(default)]
+    pub second_division: Option<String>,
+}
+
+impl Division {
+    fn check(&self) -> Result<()> {
+        if !DIVISION_SOURCES.contains(&self.source.as_str()) {
+            return Err(Error::new(format!("division source {:?} is not one of label, sorter, user", self.source)));
+        }
+        Ok(())
+    }
+}
+
+/// The fingerprint of a document for the same-book check (pack revision 3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Samebook {
+    /// The MinHash of the text (128 numbers; empty for a very short text).
+    pub minhash: Vec<u32>,
+    /// The mean vector of all the pieces, scaled to length 1. Stored as half precision (f16), so [`Samebook::new`] rounds it
+    /// the same way and a pack reads back equal to what was written.
+    pub mean_vector: Vec<f32>,
+    /// Pages with real text.
+    pub text_pages: u32,
+    pub pages: u32,
+    /// Typical page-image resolution (pixels per inch); `None` when the PDF has no page images.
+    pub ppi: Option<u32>,
+    /// Size of the source file in bytes.
+    pub source_size: u64,
+}
+
+impl Samebook {
+    pub fn new(minhash: Vec<u32>, mean_vector: &[f32], text_pages: u32, pages: u32, ppi: Option<u32>, source_size: u64) -> Samebook {
+        let mean_vector = mean_vector.iter().map(|x| f16_to_f32(f32_to_f16(*x))).collect();
+        Samebook { minhash, mean_vector, text_pages, pages, ppi, source_size }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SamebookLine {
+    minhash: Vec<u32>,
+    /// Base64 of little-endian f16 values.
+    mean_vector: String,
+    text_pages: u32,
+    pages: u32,
+    #[serde(default)]
+    ppi: Option<u32>,
+    source_size: u64,
+}
+
+impl Serialize for Samebook {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        SamebookLine {
+            minhash: self.minhash.clone(),
+            mean_vector: encode_vector_f16(&self.mean_vector),
+            text_pages: self.text_pages,
+            pages: self.pages,
+            ppi: self.ppi,
+            source_size: self.source_size,
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Samebook {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Samebook, D::Error> {
+        let l = SamebookLine::deserialize(d)?;
+        let mean_vector = decode_vector_f16(&l.mean_vector).map_err(serde::de::Error::custom)?;
+        Ok(Samebook { minhash: l.minhash, mean_vector, text_pages: l.text_pages, pages: l.pages, ppi: l.ppi, source_size: l.source_size })
+    }
+}
+
+/// f32 to IEEE 754 half-precision bits (round to nearest, ties to even).
+pub fn f32_to_f16(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xff) as i32;
+    let man = b & 0x7f_ffff;
+    if exp == 0xff {
+        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
+    }
+    let e = exp - 127 + 15;
+    if e >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if e <= 0 {
+        if e < -10 {
+            return sign;
+        }
+        let m = man | 0x80_0000;
+        let shift = (14 - e) as u32;
+        let half = m >> shift;
+        let rem = m & ((1 << shift) - 1);
+        let mid = 1 << (shift - 1);
+        let round = (rem > mid || (rem == mid && half & 1 == 1)) as u32;
+        return sign | (half + round) as u16;
+    }
+    let half = ((e as u32) << 10) | (man >> 13);
+    let rem = man & 0x1fff;
+    let round = (rem > 0x1000 || (rem == 0x1000 && half & 1 == 1)) as u32;
+    // a carry out of the mantissa correctly bumps the exponent (and to infinity at the top)
+    sign | (half + round) as u16
+}
+
+/// Half-precision bits to f32.
+pub fn f16_to_f32(h: u16) -> f32 {
+    let sign = ((h & 0x8000) as u32) << 16;
+    let exp = ((h >> 10) & 0x1f) as u32;
+    let man = (h & 0x3ff) as u32;
+    let bits = match (exp, man) {
+        (0, 0) => sign,
+        (0, m) => {
+            // subnormal: normalise
+            let mut e = 113;
+            let mut m = m;
+            while m & 0x400 == 0 {
+                m <<= 1;
+                e -= 1;
+            }
+            sign | ((e as u32) << 23) | ((m & 0x3ff) << 13)
+        }
+        (0x1f, 0) => sign | 0x7f80_0000,
+        (0x1f, m) => sign | 0x7f80_0000 | (m << 13),
+        (e, m) => sign | ((e + 127 - 15) << 23) | (m << 13),
+    };
+    f32::from_bits(bits)
+}
+
+pub fn encode_vector_f16(v: &[f32]) -> String {
+    let mut bytes = Vec::with_capacity(v.len() * 2);
+    for x in v {
+        bytes.extend_from_slice(&f32_to_f16(*x).to_le_bytes());
+    }
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+pub fn decode_vector_f16(s: &str) -> Result<Vec<f32>> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(s).map_err(|e| Error::ctx("a mean vector is not base64", e))?;
+    if bytes.len() % 2 != 0 {
+        return Err(Error::new("a mean vector is not a whole number of f16 values"));
+    }
+    Ok(bytes.as_chunks::<2>().0.iter().map(|c| f16_to_f32(u16::from_le_bytes(*c))).collect())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +296,9 @@ pub fn pack_bytes(pack: &Pack) -> Result<Vec<u8>> {
     if pack.header.pieces != pack.pieces.len() {
         return Err(Error::new("the header's piece count does not match the pieces"));
     }
+    if let Some(d) = &pack.header.division {
+        d.check()?;
+    }
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
     let h = serde_json::to_string(&pack.header).map_err(|e| Error::ctx("writing the header", e))?;
     writeln!(gz, "{h}").map_err(|e| Error::ctx("writing the pack", e))?;
@@ -175,6 +342,9 @@ pub fn read_pack_bytes(bytes: &[u8]) -> Result<Pack> {
     let header: Header = serde_json::from_str(&first).map_err(|e| Error::ctx("the pack header", e))?;
     if header.cdoc != PACK_FORMAT {
         return Err(Error::new(format!("pack format {} is not supported (this reads {PACK_FORMAT})", header.cdoc)));
+    }
+    if let Some(d) = &header.division {
+        d.check()?;
     }
     let mut pieces = Vec::with_capacity(header.pieces);
     for l in lines {

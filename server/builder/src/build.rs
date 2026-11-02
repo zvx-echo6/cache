@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, Extracted, EXTRACTOR_NAME, EXTRACTOR_VERSION};
 use crate::fingerprint::{fingerprint, mean_vector};
 use crate::layout::{layout, Element, MIN_PAGE_CHARS};
-use crate::pack::{valid_doc_id, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Source, Tool, PACK_FORMAT};
+use crate::pack::{valid_doc_id, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Samebook, Source, Tool, PACK_FORMAT};
 use crate::text::word_count;
 
 /// What the caller chooses for one document.
@@ -195,7 +195,7 @@ pub fn build_pack_with_extractor(
             vector: v,
         })
         .collect();
-    let header = Header {
+    let mut header = Header {
         cdoc: PACK_FORMAT,
         doc_id,
         doc_version: opts.doc_version,
@@ -208,6 +208,8 @@ pub fn build_pack_with_extractor(
         page_count: ext.pages.len(),
         ocr_pages: ocr_pages.clone(),
         pieces: pack_pieces.len(),
+        division: None,
+        samebook: None,
     };
     let print = fingerprint(pack_pieces.iter().map(|p| p.text.as_str()));
     let report = Report {
@@ -227,6 +229,15 @@ pub fn build_pack_with_extractor(
         mean_vector: mean_vector(&pack_pieces),
         first_heading,
     };
+    // Revision 3: the same-book fingerprint travels in the pack, so every device can compare copies without the PDF.
+    header.samebook = Some(Samebook::new(
+        report.minhash.clone(),
+        &report.mean_vector,
+        report.text_pages as u32,
+        report.pages as u32,
+        report.ppi,
+        pdf.len() as u64,
+    ));
     Ok((Pack { header, pieces: pack_pieces }, report))
 }
 

@@ -3,7 +3,7 @@
 
 use cache_builder::embed::{fake_vector, DIMS};
 use cache_builder::library::{
-    check_library_dir, doc_payload, library_settings, valid_zim_id, write_library, LibDoc, LibraryOptions, ZimRef, DOCUMENTS_FILE, SUMS_FILE,
+    check_library_dir, doc_payload, library_settings, library_settings_with_docs, valid_zim_id, write_library, LibDoc, LibraryOptions, ZimRef, DOCUMENTS_FILE, SUMS_FILE,
 };
 use cache_builder::pack::{pack_bytes, read_pack_bytes, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Source, Tool, PACK_FORMAT};
 use cache_builder::build_library;
@@ -37,6 +37,7 @@ fn doc(id: &str) -> LibDoc {
         zim: None,
         pages: Some(10),
         pieces: vec![piece(0, &format!("{id} first passage"), "iv", Some(6)), piece(1, &format!("{id} second passage"), "7", Some(9))],
+        entry: None,
     }
 }
 
@@ -115,6 +116,13 @@ fn settings_and_payload_fields_match_the_shipped_guide_library() {
     // cache-library.json: the same keys and values, apart from the library's own id, title and version
     let mine = library_settings(g["library_id"].as_str().unwrap(), g["title"].as_str().unwrap(), g["version"].as_str().unwrap());
     assert_eq!(mine, g, "the writer's cache-library.json differs from the shipped guide library's");
+    // a library written with a docs.json lists it: exactly one key is added, every other field is the guide's
+    let mut with = library_settings_with_docs(g["library_id"].as_str().unwrap(), g["title"].as_str().unwrap(), g["version"].as_str().unwrap());
+    assert_eq!(with["docs"], json!("docs.json"));
+    let added: Vec<&String> = with.as_object().unwrap().keys().filter(|k| !g.as_object().unwrap().contains_key(k.as_str())).collect();
+    assert_eq!(added, ["docs"], "the only key added to the guide's cache-library.json");
+    with.as_object_mut().unwrap().remove("docs");
+    assert_eq!(with, g, "the existing fields are untouched");
 
     // payloads: the mapped fields every entry of a Cache library has, with the same JSON types
     let mut full = doc("any");
@@ -243,6 +251,8 @@ fn pack_of(id: &str, pieces: Vec<PackPiece>) -> Pack {
             page_count: 12,
             ocr_pages: vec![],
             pieces: pieces.len(),
+            division: None,
+            samebook: None,
         },
         pieces,
     }

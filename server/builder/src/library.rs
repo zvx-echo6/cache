@@ -2,6 +2,7 @@
 //! with the ids and payload fields of docs/LIBRARY-FORMAT.md, and `cache-library.json`. The result is checked with the
 //! core's own `check_library`.
 
+use crate::docs::{write_docs, Applied, DocEntry, Docs, Overrides, DOCS_FILE};
 use crate::embed::DIMS;
 use crate::error::{Error, Result};
 use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
@@ -70,6 +71,8 @@ pub struct LibDoc {
     pub pages: Option<usize>,
     /// Each piece carries its own text, printed page label, PDF pages, heading path and vector.
     pub pieces: Vec<PackPiece>,
+    /// What `docs.json` says about the document (division, title before and after). `None`: no division, the title as it is.
+    pub entry: Option<DocEntry>,
 }
 
 impl LibDoc {
@@ -86,6 +89,7 @@ impl LibDoc {
             zim: None,
             pages: Some(h.page_count),
             pieces: pack.pieces.clone(),
+            entry: Some(DocEntry::new(&h.title, h.division.as_ref())),
         }
     }
 }
@@ -176,6 +180,14 @@ pub fn live_packs(dir: &Path) -> Result<Vec<Pack>> {
     Ok(best.into_values().collect())
 }
 
+/// The settings file of a library written with a `docs.json`: [`library_settings`] plus `"docs": "docs.json"` (the only key added to
+/// the shipped guide library's).
+pub fn library_settings_with_docs(id: &str, title: &str, version: &str) -> Value {
+    let mut s = library_settings(id, title, version);
+    s["docs"] = json!(DOCS_FILE);
+    s
+}
+
 /// The settings file of a library: the template with this library's id, title and version.
 pub fn library_settings(id: &str, title: &str, version: &str) -> Value {
     let mut s = cache_search::libadd::template_settings();
@@ -197,6 +209,7 @@ pub struct LibraryWriter {
     points: usize,
     ids: std::collections::HashSet<String>,
     rows: Vec<String>,
+    docs: Docs,
 }
 
 /// A tab-separated field: tabs and line breaks become spaces.
@@ -229,7 +242,7 @@ impl LibraryWriter {
             }
         };
         let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), archive: opts.archive };
-        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new() })
+        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), docs: Docs::default() })
     }
 
     /// Add one document's pieces.
@@ -277,6 +290,9 @@ impl LibraryWriter {
             up(batch)?;
         }
         self.points += doc.pieces.len();
+        let mut entry = doc.entry.clone().unwrap_or_else(|| DocEntry::new(&doc.title, None));
+        entry.title = doc.title.clone();
+        self.docs.docs.insert(doc.doc_id.clone(), entry);
         self.rows.push(format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
             doc.doc_id,
@@ -291,11 +307,11 @@ impl LibraryWriter {
 
     /// Flush the shard and write `cache-library.json`, `documents.tsv` and `SHA256SUMS` (and the archive, when asked).
     pub fn finish(self) -> Result<LibraryReport> {
-        let LibraryWriter { out, shard_dir, opts, shard, points, rows, .. } = self;
+        let LibraryWriter { out, shard_dir, opts, shard, points, rows, docs, .. } = self;
         shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
         drop(shard);
         cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
-        let settings = library_settings(&opts.id, &opts.title, &opts.version);
+        let settings = library_settings_with_docs(&opts.id, &opts.title, &opts.version);
         let settings_path = out.join(SETTINGS_FILE);
         let text = serde_json::to_string_pretty(&settings).map_err(|e| Error::ctx("settings", e))? + "\n";
         std::fs::write(&settings_path, &text).map_err(|e| Error::ctx(&format!("writing {}", settings_path.display()), e))?;
@@ -306,11 +322,12 @@ impl LibraryWriter {
         }
         let tsv_path = out.join(DOCUMENTS_FILE);
         std::fs::write(&tsv_path, tsv).map_err(|e| Error::ctx(&format!("writing {}", tsv_path.display()), e))?;
+        write_docs(&out, &docs)?;
         write_sha256sums(&out)?;
         let archive = if opts.archive {
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "library".into());
             let path = out.with_file_name(format!("{name}.cache-library"));
-            write_archive(&shard_dir, &text, &path)?;
+            write_archive(&shard_dir, &text, &docs.to_bytes()?, &path)?;
             Some(path)
         } else {
             None
@@ -382,6 +399,12 @@ pub fn write_sha256sums(dir: &Path) -> Result<()> {
 /// Build the library folder `out` from the packs in `packs_dir` (the live pack of each document): `shard/`,
 /// `cache-library.json`, `documents.tsv`, `SHA256SUMS`. A thin layer over [`write_library`].
 pub fn build_library(packs_dir: &Path, out: &Path, opts: &LibraryOptions) -> Result<LibraryReport> {
+    build_library_with(packs_dir, out, opts, &Overrides::default()).map(|(r, _)| r)
+}
+
+/// [`build_library`] with the labels and titles of a rebuild applied: each document's division and title in `docs.json` (and the
+/// title in the search payloads and `documents.tsv`) come from `over` where it has a match, else from the pack.
+pub fn build_library_with(packs_dir: &Path, out: &Path, opts: &LibraryOptions, over: &Overrides) -> Result<(LibraryReport, Applied)> {
     if opts.id.trim().is_empty() {
         return Err(Error::new("the library needs an id"));
     }
@@ -401,12 +424,23 @@ pub fn build_library(packs_dir: &Path, out: &Path, opts: &LibraryOptions) -> Res
             )));
         }
     }
-    write_library(out, opts, packs.iter().map(LibDoc::from_pack))
+    let mut applied = Applied::default();
+    let docs: Vec<LibDoc> = packs
+        .iter()
+        .map(|p| {
+            let mut d = LibDoc::from_pack(p);
+            let e = over.entry(&p.header, &mut applied);
+            d.title = e.title.clone();
+            d.entry = Some(e);
+            d
+        })
+        .collect();
+    write_library(out, opts, docs).map(|r| (r, applied))
 }
 
 /// Pack the shard with the core's `pack_snapshot`, then add `cache-library.json` at the archive's root (the core's
 /// snapshot packer writes only the shard; this appends one more tar entry before the end-of-archive marker).
-fn write_archive(shard_dir: &Path, settings: &str, out: &Path) -> Result<()> {
+fn write_archive(shard_dir: &Path, settings: &str, docs_json: &[u8], out: &Path) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     let tmp = out.with_file_name(format!(".{}.tmp", out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
     cache_search::libadd::pack_snapshot(shard_dir, &tmp).map_err(|e| Error::ctx("packing the library", e.message))?;
@@ -429,6 +463,12 @@ fn write_archive(shard_dir: &Path, settings: &str, out: &Path) -> Result<()> {
     h.set_mtime(0);
     h.set_cksum();
     b.append_data(&mut h, SETTINGS_FILE, settings.as_bytes()).map_err(|e| Error::ctx("adding the settings file", e))?;
+    let mut h = tar::Header::new_gnu();
+    h.set_size(docs_json.len() as u64);
+    h.set_mode(0o644);
+    h.set_mtime(0);
+    h.set_cksum();
+    b.append_data(&mut h, DOCS_FILE, docs_json).map_err(|e| Error::ctx("adding docs.json", e))?;
     b.finish().map_err(|e| Error::ctx("finishing the archive", e))?;
     drop(b);
     f.sync_all().map_err(|e| Error::ctx("snapshot", e))?;

@@ -1,4 +1,4 @@
-# Document pack format (`.cdoc`), version 1 (revision 2)
+# Document pack format (`.cdoc`), version 1 (revision 3)
 
 **Status: proposed; shared format pending owner/orchestrator approval.** Nothing outside `server/builder` reads or writes
 this format yet. Whole-library output (`cache-build library`) is a normal Cache library and does not depend on it.
@@ -37,6 +37,8 @@ Line 1, the header (one JSON object):
 | `page_count` | Pages in the PDF. |
 | `ocr_pages` | 1-based PDF pages skipped because they have no text layer (OCR comes later). |
 | `pieces` | The number of piece lines that follow. Readers check it. |
+| `division` | Optional (revision 3). The division the document is filed in; see below. |
+| `samebook` | Optional (revision 3). The same-book fingerprint; see below. |
 
 Every other line is a piece:
 
@@ -63,11 +65,107 @@ spans a page break only when a sentence does.
 Revision 2 makes `pdf_page` optional when reading and adds the optional piece key `pdf_page_end`. The header's `cdoc` stays
 1: a reader that ignores unknown piece keys reads revision 2 packs, and this reader reads packs of either revision.
 
+## Revision 3 (compatible)
+
+Revision 3 adds two optional header keys. The header's `cdoc` stays 1. A pack without them loads (both read as absent), and a
+reader that does not know them ignores them, so older and newer packs and readers mix freely.
+
+`division`: the division the document is filed in.
+
+| Key | Meaning |
+|---|---|
+| `division` | The three-digit code, as text, e.g. `"440"`. |
+| `label` | The division's name. |
+| `score` | The classifier's score, or `null` (a division from a label or a person has none). |
+| `classifier_version` | The classifier's version number, or `null`. |
+| `source` | `"label"` (a made label), `"sorter"` (the classifier) or `"user"` (a person chose it). Readers refuse other values. |
+| `second_division` | The second-best division code, or `null`. |
+
+`samebook`: what is needed to tell whether two files are the same book, and which copy to keep, without the PDF.
+
+| Key | Meaning |
+|---|---|
+| `minhash` | 128 unsigned 32-bit numbers: the MinHash of the text (`fingerprint.rs`). Empty for a text too short to fingerprint. |
+| `mean_vector` | The mean of all the pieces' vectors scaled to length 1, as base64 of little-endian **f16** (IEEE half precision), 1024 values (2048 bytes). Rounded to half precision before it is stored, so a pack reads back exactly as written. |
+| `text_pages` | Pages with real text on them. |
+| `pages` | Pages in the PDF. |
+| `ppi` | Typical resolution of the page images in pixels per inch, or `null` when the PDF has no page images. |
+| `source_size` | The source file's size in bytes. |
+
+Both `cache-build pdf` and the build service write `samebook` into every pack they build (`build_pack*` fills it in, so no caller
+has to). A pack changed afterwards, such as a rename, keeps it.
+
+### Which copy is better
+
+When two files are the same book, the copy to keep is chosen by this order, the first line that differs deciding. It is exact and
+it ends in a tie-break that cannot tie, so every device picks the same copy from the same packs:
+
+1. more pages with real text (`text_pages`);
+2. more pages (`pages`);
+3. higher ppi (sharper page images); a missing ppi ranks lowest;
+4. the smaller source file (`source_size`);
+5. the lower `doc_id` (compared as text, byte by byte).
+
+`cache_builder::samebook::{CopyQuality, compare_copies, best_copy}` implement it. A pack without `samebook` (an older pack) cannot
+be compared.
+
+## docs.json
+
+`docs.json` sits at the library root, beside `cache-library.json`, which lists it as `"docs": "docs.json"` (the only key added to
+the settings file; the rest is unchanged). It is never part of search payloads: the shard, the keyword index and the assistant do
+not see it. It is also inside the `.cache-library` archive, at its root. `cache-build library` writes it every time.
+
+```json
+{
+  "format": 1,
+  "docs": {
+    "b3f1...": {
+      "division": "440",
+      "label": "Canning",
+      "score": null,
+      "classifier_version": null,
+      "source": "label",
+      "second_division": "450",
+      "title": "How Water Moves",
+      "source_title": "Water cycle"
+    }
+  }
+}
+```
+
+- `docs` maps each `doc_id` (in doc_id order) to its entry. Every key is always present: `null` when unknown. A document with no
+  division has `division`, `label`, `score`, `classifier_version`, `source` and `second_division` all `null`.
+- `title` is the title the library uses (also in the search payloads and `documents.tsv`); `source_title` is the title before a
+  titles file replaced it, `null` when it was not replaced.
+- The writer builds it from the packs' `division` headers and titles. `--labels` and `--titles` (below) override them.
+- It is written atomically: a temporary file in the same folder is written and flushed, then renamed over `docs.json`, so a reader
+  sees the old file or the new one. `SHA256SUMS` covers it.
+- Readers apply the app's `overrides.json` on top of it (a person's own division or title for a document wins over `docs.json`).
+  Writing `overrides.json` is the app's job; the builder never writes or reads it.
+
+### `--labels` and `--titles`
+
+`cache-build library ... --labels labels.json --titles titles.jsonl [--classes classes.json]` fill `docs.json` (and the titles)
+for a rebuild:
+
+- `--labels`: a JSON array of `{id, path, final, second_division}` (what `final_labels_v2.json` holds; other keys are ignored).
+  `final` is the division (a record whose `final` is not three digits, such as `"unsure"`, is skipped). The document's division is
+  set with source `"label"`, no score and no classifier version. The label (name) comes from the record's optional `label`, else
+  from `--classes` (default: the server's `classes-default.json`), else the code itself.
+- `--titles`: JSON Lines `{id, path, title, source_title, method, ok}`. A line that is not `ok`, or has an empty title, is
+  skipped. Otherwise the document's title is the line's, and its old title is kept as `source_title`.
+- How a pack finds its record. A pack records its `doc_id`, its source's BLAKE3, and the source's file name (the last part of the
+  path, not the folder). A record is matched by, in order: (1) `doc_id` equal to the record's `id`; (2) the source BLAKE3 equal to
+  the record's optional `blake3`; (3) the file name equal to the last part of the record's `path`, **only when exactly one record
+  has that name**. Records that share a file name are matched only by (1) or (2). The command prints how many documents matched,
+  were ambiguous and were not found. For a rebuild that must match every document, give the records a `blake3` (or build with
+  `--doc-id` set to the record's `id`).
+
 ## From packs to a library
 
 `cache-build library <packs dir> --out <dir> --id ID --title TITLE` takes, for each `doc_id`, the pack with the highest
 `doc_version`, and writes `<dir>/shard/` (a Qdrant Edge shard: one unnamed 1024-dimension Cosine vector) and
-`<dir>/cache-library.json` (format 1), plus `<dir>/documents.tsv` (a header row, then `doc_id`, `version`, `title`, source
+`<dir>/cache-library.json` (format 1), `<dir>/docs.json` (see below), plus `<dir>/documents.tsv` (a header row, then `doc_id`, `version`, `title`, source
 BLAKE3, pieces, pages for each document) and `<dir>/SHA256SUMS` (the SHA-256 of every other file in the folder, `sha256sum -c`
 format). `--packs <dir>` names the packs folder (a first argument works too). No `index/` is written: the keyword index is built
 on the device when the library is added (`keyword_index` "auto"). Packs go through the general writer

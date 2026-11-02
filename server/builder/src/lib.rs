@@ -11,13 +11,15 @@ pub mod fingerprint;
 pub mod incremental;
 pub mod isolate;
 pub mod layout;
+pub mod docs;
 pub mod library;
 pub mod pack;
+pub mod samebook;
 pub mod text;
 pub mod zim;
 
 pub use build::{build_pack, build_pack_with, build_pack_with_extractor, BuildOptions, Progress, Report};
 pub use embed::{Embedder, FakeEmbedder};
 pub use error::{Error, Result};
-pub use library::{build_library, check_library_dir, write_library, LibDoc, LibraryOptions, LibraryWriter, ZimRef};
+pub use library::{build_library, build_library_with, check_library_dir, write_library, LibDoc, LibraryOptions, LibraryWriter, ZimRef};
 pub use pack::{read_pack, write_pack, Pack};

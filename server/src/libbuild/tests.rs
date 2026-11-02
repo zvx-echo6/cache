@@ -966,6 +966,8 @@ fn a_book_read_through_the_child_is_the_same_book_as_one_read_in_process() {
     let stored = cache_builder::read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
     let direct = cache_builder::build_pack(&pdf, &BuildOptions::new("aquifer.pdf", "2026-11-02T00:00:00Z"), &FakeEmbedder).unwrap().0;
     assert_eq!(stored.pieces, direct.pieces);
+    assert!(stored.header.samebook.is_some(), "the build service writes the same-book fingerprint (pack revision 3)");
+    assert_eq!(stored.header.samebook, direct.header.samebook);
     assert_eq!((stored.header.page_count, stored.header.ocr_pages, stored.header.title), (direct.header.page_count, direct.header.ocr_pages, direct.header.title));
 }
 
