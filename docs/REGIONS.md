@@ -25,7 +25,7 @@ index lists. Nothing is cut on the server per region.
 Tiles of one build fit together, so the tiles of any regions together make one map. Tiles of different builds are never
 mixed.
 
-Region outlines come from the region catalogue (`https://cache.echo6.co/regions/polygons/<id>.geojson`, a GeoJSON Feature
+Region outlines come from the region catalogue (`https://data.cached.info/regions/polygons/<id>.geojson`, a GeoJSON Feature
 with a Polygon or MultiPolygon, longitude and latitude). The app fetches them; the core takes the geometry as given.
 
 ## On the device

@@ -60,8 +60,8 @@ fn sqlite_pack_round_trip() {
 }
 
 #[test]
-fn terrarium_matches_navi_formula() {
-    // navi: (r*256.0 + g + b/256.0) - 32768.0 in float32
+fn terrarium_matches_reference_formula() {
+    // The reference server: (r*256.0 + g + b/256.0) - 32768.0 in float32
     let q = (130u32 << 16) | (45 << 8) | 200;
     let want = (130f32 * 256.0 + 45.0 + 200f32 / 256.0) - 32768.0;
     assert_eq!(cache_offroad::elevation::terrarium_f32(q).to_bits(), want.to_bits());

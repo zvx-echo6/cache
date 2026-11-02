@@ -1,11 +1,11 @@
-//! Turn-by-turn directions. Port of navi `directions.py` (`POST /api/directions`): one Valhalla road
+//! Turn-by-turn directions. Port of the reference server `directions.py` (`POST /api/directions`): one Valhalla road
 //! route; when an end is too far from the road network the off-road router runs between that end's road
 //! point and the requested point (last mile) and is stitched on; when Valhalla finds no edges the whole
 //! trip is off-road. Off-road runs become decision-point legs (`offroad_legs`).
 //!
-//! Differences from navi are listed in DESIGN-OFFROAD.md: no reverse-geocode of the ends (`near` is null),
+//! Differences from the reference server are listed in DESIGN-OFFROAD.md: no reverse-geocode of the ends (`near` is null),
 //! no PostGIS names for follow legs (null), and walk/bike use the same unified search with only that mode
-//! seeded (navi sends them through its A/B/C scenario handlers).
+//! seeded (the reference server sends them through its A/B/C scenario handlers).
 use crate::cost::Mode;
 use crate::elevation::ElevationSource;
 use crate::grid::haversine_m;
@@ -25,7 +25,7 @@ type OffroadPiece = (Vec<Step>, Vec<(f64, f64)>, f64);
 pub const DEFAULT_OFFROAD_SNAP_M: f64 = 150.0;
 pub const DEFAULT_MERGE_BEARING_DEG: f64 = 60.0;
 pub const DEFAULT_MIN_LEG_M: f64 = 150.0;
-/// Where the Valhalla tiles end, (S, W, N, E): navi's North America default.
+/// Where the Valhalla tiles end, (S, W, N, E): the reference server's North America default.
 /// The error message of an off-road mode where no off-road data covers an end (code `not_set_up`).
 pub const OFFROAD_DATA_MISSING: &str = "Off-road directions need off-road data for this area (the off-road pack and the elevation file), and none is installed for it";
 pub const COVERAGE_BBOX: (f64, f64, f64, f64) = (7.0, -169.0, 84.0, -52.0);
@@ -37,7 +37,7 @@ pub enum TravelMode {
     Bike,
     /// Off-road the whole way on foot: trails and open ground (the unified search with only foot seeded).
     OffroadFoot,
-    /// Off-road the whole way by vehicle: navi's unified Auto search over 4x4, ATV, two-wheeler and foot, switching at
+    /// Off-road the whole way by vehicle: the reference server's unified Auto search over 4x4, ATV, two-wheeler and foot, switching at
     /// parking lots, trailheads and road ends (on foot for the last part where no vehicle can go).
     OffroadVehicle,
 }
@@ -111,9 +111,9 @@ pub struct DirectionsRequest {
     pub offroad_snap_m: f64,
     pub merge_bearing_deg: f64,
     pub min_leg_m: f64,
-    /// Land-access mode of the off-road search (navi's directions always use pragmatic).
+    /// Land-access mode of the off-road search (the reference server's directions always use pragmatic).
     pub boundary: Boundary,
-    /// Optional OSM category hints of the two ends (seed the unified search like navi's start/end_category).
+    /// Optional OSM category hints of the two ends (seed the unified search like the reference server's start/end_category).
     pub from_category: Option<String>,
     pub to_category: Option<String>,
     /// The end is a place's arrival point from the places data (a terminal, an entrance, a parking): it is where people go,
@@ -190,7 +190,7 @@ pub struct Directions {
 }
 
 impl Directions {
-    /// navi's `/api/directions` response body.
+    /// The reference server's `/api/directions` response body.
     pub fn to_json(&self) -> Value {
         if !self.ok {
             return json!({"ok": false, "route_id": self.route_id, "mode": self.mode.name(), "costing": self.mode.costing(),
@@ -226,7 +226,7 @@ fn in_coverage(lat: f64, lon: f64) -> bool {
     s <= lat && lat <= n && w <= lon && lon <= e
 }
 
-/// navi's route id; a land access other than pragmatic (navi's only one) is part of the key, so the same trip under another
+/// The reference server's route id; a land access other than pragmatic (the reference server's only one) is part of the key, so the same trip under another
 /// land access is another route.
 fn route_id(frm: (f64, f64), to: (f64, f64), mode: &str, boundary: Boundary, version: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -333,9 +333,9 @@ pub struct Env<'a> {
     pub elevation: &'a dyn ElevationSource,
     pub valhalla: &'a dyn Valhalla,
     pub options: RouteOptions,
-    /// Names for follow legs (navi reads PostGIS entry_points; Cache has no such table, so None).
+    /// Names for follow legs (the reference server reads PostGIS entry_points; Cache has no such table, so None).
     pub namer: Option<Namer<'a>>,
-    /// Mixed into route_id (navi: the git sha).
+    /// Mixed into route_id (the reference server: the git sha).
     pub version: String,
 }
 

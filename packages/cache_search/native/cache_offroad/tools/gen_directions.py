@@ -1,7 +1,7 @@
-# Oracle for the directions port: navi's directions_offroad / directions assembly on routes of the synthetic
-# worlds (path detail recorded by navi's own router), with a deterministic fake Valhalla and a fake namer.
+# Oracle for the directions port: the reference server's directions_offroad / directions assembly on routes of the synthetic
+# worlds (path detail recorded by the reference server's own router), with a deterministic fake Valhalla and a fake namer.
 import sys, json, gzip, math
-sys.path.insert(0, 'navi')
+sys.path.insert(0, 'ref')
 import gen_fixtures as G
 import numpy as np
 import services.navi_offroute.router as R

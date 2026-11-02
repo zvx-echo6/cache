@@ -2,7 +2,7 @@
 //! Mapterhorn (Terrarium-encoded WebP, 512 px tiles, z12) as a local PMTiles file, and the same file drives
 //! hillshade and contours. The router reads it through [`ElevationSource`]. Cells are the global z12 pixel
 //! grid, exactly as before: elevation (row, col) = z12 tile (col/512, row/512) pixel (row%512, col%512),
-//! decoded with navi's float32 Terrarium formula.
+//! decoded with the reference server's float32 Terrarium formula.
 use crate::pmtiles::PmTiles;
 use rayon::prelude::*;
 use std::collections::VecDeque;
@@ -19,7 +19,7 @@ pub enum ElevError {
     Msg(String),
 }
 
-/// Terrarium decode, same f32 operations as navi's `terrarium_decode`: (R*256 + G + B/256) - 32768.
+/// Terrarium decode, same f32 operations as the reference server's `terrarium_decode`: (R*256 + G + B/256) - 32768.
 #[inline]
 pub fn terrarium_f32(q: u32) -> f32 {
     let r = ((q >> 16) & 255) as f32;

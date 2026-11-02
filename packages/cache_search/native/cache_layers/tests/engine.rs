@@ -622,7 +622,7 @@ fn catalogues_are_fetched_merged_with_starters_and_a_dead_one_is_reported() {
     assert_eq!(dead.refresh().unwrap_err().code, "offline");
     // the default catalogue address is Cache's
     let c: cache_layers::LayersCfg = serde_json::from_str(r#"{"dir":"x"}"#).unwrap();
-    assert_eq!(c.catalogue_urls, vec!["https://cache.echo6.co/catalogue.json".to_string()]);
+    assert_eq!(c.catalogue_urls, vec!["https://data.cached.info/catalogue.json".to_string()]);
     let c: cache_layers::LayersCfg = serde_json::from_str(r#"{"dir":"x","catalogue_urls":[]}"#).unwrap();
     assert!(c.catalogue_urls.is_empty());
 }

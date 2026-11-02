@@ -15,7 +15,7 @@ pub struct LocateSnap {
     pub use_: Option<String>,
 }
 
-/// One Valhalla maneuver, with the fields navi's directions code reads.
+/// One Valhalla maneuver, with the fields the reference server's directions code reads.
 #[derive(Debug, Clone, Default)]
 pub struct Maneuver {
     pub instruction: String,
@@ -30,7 +30,7 @@ pub struct Maneuver {
     pub bearing_before: Option<f64>,
 }
 
-/// First leg of a `/route` reply (navi only ever uses `legs[0]` of a two-location request).
+/// First leg of a `/route` reply (the reference server only ever uses `legs[0]` of a two-location request).
 #[derive(Debug, Clone)]
 pub struct Trip {
     /// (lat, lon)
@@ -54,7 +54,7 @@ impl ValhallaError {
     }
 }
 
-/// One `trace_attributes` edge (the attributes navi asks for).
+/// One `trace_attributes` edge (the attributes the reference server asks for).
 #[derive(Debug, Clone, Default)]
 pub struct TraceEdge {
     pub use_: Option<String>,
@@ -134,7 +134,7 @@ pub struct EdgeCandidate {
 }
 
 pub trait Valhalla: Send + Sync {
-    /// `costing` is "auto", "pedestrian" or "bicycle". None = the call failed (navi: snap distance inf).
+    /// `costing` is "auto", "pedestrian" or "bicycle". None = the call failed (the reference server: snap distance inf).
     fn locate(&self, lat: f64, lon: f64, costing: &str) -> Option<LocateSnap>;
     /// Two-location `/route` with distances in km.
     fn route(&self, from: (f64, f64), to: (f64, f64), costing: &str) -> Result<Trip, ValhallaError>;
@@ -147,7 +147,7 @@ pub trait Valhalla: Send + Sync {
     fn route_ends(&self, from: &RouteEnd, to: &RouteEnd, costing: &str) -> Result<Trip, ValhallaError> {
         self.route(from.point(), to.point(), costing)
     }
-    /// `/trace_attributes` of a polyline6 shape with auto costing and the attributes navi filters for.
+    /// `/trace_attributes` of a polyline6 shape with auto costing and the attributes the reference server filters for.
     fn trace_attributes(&self, encoded_polyline6: &str) -> Result<Trace, ValhallaError>;
     /// Up to `count` alternative routes besides the best one (Valhalla's `alternates`), best first; none when the router gives
     /// none or cannot ask. Only the map's route preview uses this.

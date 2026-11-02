@@ -1,4 +1,4 @@
-//! Surface-change candidates vs navi `mvum_surface_change` (classification table, chunk joining, boundary
+//! Surface-change candidates vs the reference server `mvum_surface_change` (classification table, chunk joining, boundary
 //! extraction) with a deterministic fake `trace_attributes`; polyline6 codec.
 use cache_offroad::surface::*;
 use cache_offroad::valhalla::*;
@@ -29,7 +29,7 @@ impl Valhalla for FakeTrace {
 }
 
 #[test]
-fn classify_and_chunks_match_navi() {
+fn classify_and_chunks_match_reference() {
     let j: Value = serde_json::from_str(include_str!("fixtures/surface_cases.json")).unwrap();
     for c in j["classify"].as_array().unwrap() {
         let e = TraceEdge {
@@ -52,7 +52,7 @@ fn classify_and_chunks_match_navi() {
 }
 
 #[test]
-fn polyline6_matches_navi() {
+fn polyline6_matches_reference() {
     let j: Value = serde_json::from_str(include_str!("fixtures/surface_cases.json")).unwrap();
     let pts = [(44.123456, -115.654321), (44.1235, -115.6542), (43.99, -115.7)];
     assert_eq!(encode_polyline6(&pts), j["poly"]["enc"].as_str().unwrap());

@@ -1,4 +1,4 @@
-//! `route()`: the unified Auto search. Port of navi `router.py::_route_auto` (+ `_auto_eligible_modes`,
+//! `route()`: the unified Auto search. Port of the reference server `router.py::_route_auto` (+ `_auto_eligible_modes`,
 //! `_spatial_eligible_modes`, `_eligible_modes_from_category`, `_auto_bbox`, `_check_cell_budget`,
 //! `_fetch_auto_rasters`, `_build_mvum_by_mode`, `_render_unified_path`). Explicit single-mode requests use the same search
 //! with only that mode seeded.
@@ -70,13 +70,13 @@ pub struct RouteRequest {
     pub boundary: Boundary,
     /// per-mode multiplier on on-network cells; missing = 1.0
     pub network_affinity: Option<HashMap<Mode, f64>>,
-    /// OSM "key:value" hints used to seed Auto (same table as navi); None = spatial probe via Valhalla.
+    /// OSM "key:value" hints used to seed Auto (same table as the reference server); None = spatial probe via Valhalla.
     pub start_category: Option<String>,
     pub end_category: Option<String>,
     /// Explicit seed modes (foot is always added); override the category / spatial seeding when set.
     pub start_modes: Option<Vec<Mode>>,
     pub end_modes: Option<Vec<Mode>>,
-    /// (month, day) for seasonal MVUM checks; None = no seasonal check (what navi's API does).
+    /// (month, day) for seasonal MVUM checks; None = no seasonal check (what the reference server's API does).
     pub mvum_on_date: Option<(u32, u32)>,
     /// Record per-cell path detail (elevation, class, trail, step time) for directions.
     pub collect_detail: bool,
@@ -89,7 +89,7 @@ impl RouteRequest {
 
 #[derive(Debug, Clone)]
 pub struct RouteOptions {
-    /// Grid cell cap (navi: 20M; the phone: about 8M).
+    /// Grid cell cap (the reference server: 20M; the phone: about 8M).
     pub max_cells: usize,
     pub bbox_pad_deg: f64,
     pub bbox_max_span_deg: f64,
@@ -178,7 +178,7 @@ pub struct RouteResult {
     pub auto_bypass: bool,
     pub network: Option<NetworkRoute>,
     pub meta: Option<GridMeta>,
-    /// per-cell detail of the travelled path (when requested): navi's `path_detail["unified"]`
+    /// per-cell detail of the travelled path (when requested): the reference server's `path_detail["unified"]`
     pub detail: Option<PathDetail>,
     pub stats: RouteStats,
 }
@@ -201,7 +201,7 @@ pub struct PathDetail {
 }
 
 impl RouteResult {
-    /// navi's `/api/offroute` response shape.
+    /// The reference server's `/api/offroute` response shape.
     pub fn to_json(&self) -> Value {
         if let Some(n) = &self.network {
             let coords: Vec<Value> = n.coords.iter().map(|&(x, y)| json!([x, y])).collect();
@@ -458,7 +458,7 @@ impl<'a> Router<'a> {
         let barriers = rd(Layer::Barriers).map_err(terr)?;
         let trails = rd(Layer::Trails).map_err(terr)?;
         let wilderness = if self.pack.has_layer(Layer::Wilderness) { Some(rd(Layer::Wilderness).map_err(terr)?) } else { None };
-        // MVUM per mode: 2w=mtb, 4w=atv, vehicle=vehicle (best effort, like navi)
+        // MVUM per mode: 2w=mtb, 4w=atv, vehicle=vehicle (best effort, like the reference server)
         let mvum_by_mode: Option<[Vec<u8>; 3]> = match self.pack.mvum_in_box(south, north, west, east) {
             Ok(f) => Some(mvum::access_grids(&f, &meta, req.mvum_on_date)),
             Err(_) => None,

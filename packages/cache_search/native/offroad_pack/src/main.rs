@@ -1,4 +1,4 @@
-//! offroad_pack: build and inspect cache_offroad region packs (offroad.sqlite) from navi's data.
+//! offroad_pack: build and inspect cache_offroad region packs (offroad.sqlite) from the reference server's data.
 //! Pure Rust (no GDAL): PMTiles + Terrarium WebP, GeoTIFF mosaics, SQLite tables.
 mod pmw;
 mod raster;
@@ -179,7 +179,7 @@ fn build(a: &Args) -> Result<(), String> {
     let trails = PathBuf::from(a.get("trails")?);
     let barriers = PathBuf::from(a.get("barriers")?);
     let wild = a.opt("wilderness").map(PathBuf::from);
-    let navi_db = PathBuf::from(a.get("navi-db")?);
+    let ref_db = PathBuf::from(a.get("ref-db")?);
     let parking_db = PathBuf::from(a.get("parking-db")?);
 
     let layers = Layers {
@@ -270,7 +270,7 @@ fn build(a: &Args) -> Result<(), String> {
     eprintln!("tiles done: {written} DEM tiles in {:.0}s", t0.elapsed().as_secs_f64());
 
     // point data
-    let (n_park, n_th, n_mvum) = write_points(&conn, &navi_db, &parking_db, bbox)?;
+    let (n_park, n_th, n_mvum) = write_points(&conn, &ref_db, &parking_db, bbox)?;
     eprintln!("parking {n_park}, trailheads {n_th}, mvum {n_mvum}");
 
     let mut layer_names = vec!["friction", "trails", "barriers"];
@@ -304,7 +304,7 @@ fn build(a: &Args) -> Result<(), String> {
         ("src_trails", file_version(&trails)),
         ("src_barriers", file_version(&barriers)),
         ("src_wilderness", wild.as_ref().map_or("none".into(), |w| file_version(w))),
-        ("src_navi_db", file_version(&navi_db)),
+        ("src_ref_db", file_version(&ref_db)),
         ("src_parking_db", file_version(&parking_db)),
         ("rows_parking", n_park.to_string()),
         ("rows_trailheads", n_th.to_string()),
@@ -318,10 +318,10 @@ fn build(a: &Args) -> Result<(), String> {
     inspect_path(&out)
 }
 
-fn write_points(conn: &Connection, navi_db: &Path, parking_db: &Path, bbox: (f64, f64, f64, f64)) -> Result<(i64, i64, i64), String> {
+fn write_points(conn: &Connection, ref_db: &Path, parking_db: &Path, bbox: (f64, f64, f64, f64)) -> Result<(i64, i64, i64), String> {
     let e = |x: rusqlite::Error| x.to_string();
     conn.execute_batch("BEGIN").map_err(e)?;
-    // parking (blocked access dropped, like navi's index)
+    // parking (blocked access dropped, like the reference server's index)
     let pk = Connection::open_with_flags(parking_db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(e)?;
     let mut st = pk.prepare("SELECT name, access, parking_type, lat, lon FROM parking WHERE lat IS NOT NULL AND lon IS NOT NULL").map_err(e)?;
     let mut rows = st.query([]).map_err(e)?;
@@ -346,7 +346,7 @@ fn write_points(conn: &Connection, navi_db: &Path, parking_db: &Path, bbox: (f64
     drop(rows);
     drop(st);
     // trailheads
-    let nv = Connection::open_with_flags(navi_db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(e)?;
+    let nv = Connection::open_with_flags(ref_db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(e)?;
     let mut st = nv.prepare("SELECT lat, lon, name, highway_class FROM trail_entry_points WHERE lat IS NOT NULL AND lon IS NOT NULL").map_err(e)?;
     let mut rows = st.query([]).map_err(e)?;
     let mut ins = conn.prepare("INSERT INTO trailheads(lat, lon, name, highway_class) VALUES (?1,?2,?3,?4)").map_err(e)?;
@@ -451,7 +451,7 @@ fn raster_info(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// Compare navi's per-query resample (rasterio window read onto the DEM-shaped grid) with the pack's one-time
+/// Compare the reference server's per-query resample (rasterio window read onto the DEM-shaped grid) with the pack's one-time
 /// global-grid resample, for a bbox, per layer.
 fn resample_check(a: &Args) -> Result<(), String> {
     let (south, north, west, east) = parse_bbox(a.get("bbox")?)?;
@@ -564,11 +564,11 @@ fn route_cmd(a: &Args) -> Result<(), String> {
         opts.max_cells = m.parse().map_err(|_| "bad --max-cells")?;
     }
     let t = Instant::now();
-    // Diagnostic: --navi-layers re-samples the u8 layers from the source rasters the way navi does per query
+    // Diagnostic: --ref-layers re-samples the u8 layers from the source rasters the way the reference server does per query
     // (window onto the requested bbox, nearest, scaled to the DEM-shaped grid), to measure how much of a
     // parity difference is layer alignment.
     let over;
-    let res = if a.opt("navi-layers").is_some() {
+    let res = if a.opt("ref-layers").is_some() {
         let (south, north, west, east) = cache_offroad::router::auto_bbox(start, end, opts.bbox_pad_deg, opts.bbox_max_span_deg);
         let meta = GridMeta::from_bbox(south, north, west, east);
         let mk = |m: raster::Mosaic| -> Result<Vec<u8>, String> {
@@ -746,7 +746,7 @@ impl PackSource for OverridePack<'_> {
 }
 
 /// Cut the tiles of a Mapterhorn-format PMTiles file (z12, 512 px Terrarium WebP) that touch a bbox into a
-/// new PMTiles file, bytes unchanged. For tests the source is navi's copy of the DEM; in the app the same
+/// new PMTiles file, bytes unchanged. For tests the source is the reference server's copy of the DEM; in the app the same
 /// file comes from range reads of Mapterhorn's planet.pmtiles.
 fn elevation_extract(a: &Args) -> Result<(), String> {
     let src = pmtiles::PmTiles::open(Path::new(a.get("src")?))?;
@@ -786,7 +786,7 @@ fn open_env(a: &Args) -> Result<(SqlitePack, cache_offroad::PmtilesElevation, Bo
     Ok((pack, elev, v))
 }
 
-/// navi-style directions on the pack (the /api/directions port).
+/// reference-style directions on the pack (the /api/directions port).
 fn directions_cmd(a: &Args) -> Result<(), String> {
     use cache_offroad::directions::{DirectionsRequest, Env, OffroadChoice, TravelMode};
     let (pack, elev, v) = open_env(a)?;

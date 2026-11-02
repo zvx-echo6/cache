@@ -141,7 +141,7 @@ fn r2_catalogue_layers_stream_and_download() {
         "defs_dirs": [concat!(env!("CARGO_MANIFEST_DIR"), "/../../layers")],
     }))
     .unwrap();
-    assert_eq!(cfg.catalogue_urls, vec!["https://cache.echo6.co/catalogue.json".to_string()]);
+    assert_eq!(cfg.catalogue_urls, vec!["https://data.cached.info/catalogue.json".to_string()]);
     let layers = cache_layers::Layers::new(cfg).unwrap();
     let inner = layers.inner.clone();
     let before = inner.list()["layers"].as_array().unwrap().len();

@@ -47,7 +47,7 @@ class Harness {
     h.secrets = again?.secrets ?? MemoryTokenStore();
     h.core = FakeLiveCore(h.liveDir);
     h.web = FakeWeb();
-    if (serve) h.web.serve('https://cache.echo6.co/connectors/', standardCatalogue());
+    if (serve) h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
     h.weather = h.build();
     if (start) {
       await h.weather.start();
@@ -155,7 +155,7 @@ void main() {
       h = await Harness.create(connection: ConnectionKind.none, serve: false);
       await h.weather.setRowOn(row('Weather forecast'), true);
       expect(h.inFolder, contains('weather.json'));
-      h.web.serve('https://cache.echo6.co/connectors/', standardCatalogue());
+      h.web.serve('https://data.cached.info/connectors/', standardCatalogue());
       h.probe.change(ConnectionKind.wifi);
       await h.weather.refreshCatalogues();
       expect(h.weather.rowIsOn(row('Weather forecast')), isTrue);
@@ -198,7 +198,7 @@ void main() {
       h = await Harness.create();
       await h.weather.setRowOn(row('Weather alerts'), true);
       expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
-      h.web.serve('https://cache.echo6.co/connectors/', withIpaws());
+      h.web.serve('https://data.cached.info/connectors/', withIpaws());
       await h.weather.refreshCatalogues();
       expect(h.weather.isOn('ipaws-alerts-near'), isTrue);
       expect(h.weather.sourceById('ipaws-alerts-near')!.featured, isTrue, reason: 'a row of its own on the Weather and alerts page');
@@ -211,7 +211,7 @@ void main() {
 
     test('stay off without "Weather alerts", and Turn on weather switches them on with it', () async {
       h = await Harness.create(serve: false);
-      h.web.serve('https://cache.echo6.co/connectors/', withIpaws());
+      h.web.serve('https://data.cached.info/connectors/', withIpaws());
       await h.weather.refreshCatalogues();
       expect(h.weather.isOn('ipaws-alerts-near'), isFalse);
       await h.weather.setRowOn(row('Weather alerts'), true);
@@ -232,7 +232,7 @@ void main() {
           entry('brand-new', 'weather', 'Brand new', provider: 'Somebody'),
         ],
       );
-      h.web.serve('https://cache.echo6.co/connectors/', files);
+      h.web.serve('https://data.cached.info/connectors/', files);
       await h.weather.refreshCatalogues();
       expect(h.weather.sourceById('usgs-quakes-near')!.title, 'Earthquakes (USGS), new title');
       expect(h.weather.sourceById('brand-new'), isNotNull);
@@ -297,7 +297,7 @@ void main() {
       h.web.serve(other, buildCatalogue(id: 'bad', title: 'Bad', base: other, connectors: [entry('x', 'weather', 'X')]));
       h.core.invalid.add('x');
       await expectLater(h.weather.previewCatalogue('${other}catalogue.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('None of the sources'))));
-      await expectLater(h.weather.previewCatalogue('https://cache.echo6.co/connectors/catalogue.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('already added'))));
+      await expectLater(h.weather.previewCatalogue('https://data.cached.info/connectors/catalogue.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('already added'))));
       await expectLater(h.weather.previewCatalogue('http://example.org/c.json'), throwsA(isA<Exception>().having((e) => '$e', 'text', contains('https'))));
     });
 

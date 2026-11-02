@@ -1,4 +1,4 @@
-//! The regions engine against a tiny local routing server that publishes like cache.echo6.co/routing/: current.json, a
+//! The regions engine against a tiny local routing server that publishes like data.cached.info/routing/: current.json, a
 //! gzipped index and gzipped tiles. Seven tiles with roads: three around Burley, Idaho (one per level), one more level 2 tile
 //! east of them, and three near North Platte, Nebraska.
 
