@@ -26,8 +26,11 @@ const String kGuideLibraryId = 'cache-guide';
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
 const String kGuideVersion = '2026-11-01d';
 
-/// What a library folder holds that the device builds for itself, as sync patterns over the libraries folder (see
-/// DataKind.notShared): its keyword index ([LibraryItem.indexPath]), rebuilt from the library on each device, so it never syncs.
+/// What a library folder holds that never syncs with the libraries folder (see DataKind.notShared): its old keyword index
+/// ([LibraryItem.indexPath]). Library indexes now build into the indexes folder and sync from there as snapshots
+/// (search/indexes_share.dart); this version only reads an old index/ until the core seals it into a snapshot and empties it,
+/// and only Cache 1.0.29 and earlier still write here, so it stays out (a file the core moved away would otherwise go out as a
+/// delete and remove an older device's own index).
 const List<String> kLibraryNotShared = ['*/index'];
 
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
@@ -411,12 +414,17 @@ class LibrariesState extends ChangeNotifier {
     }
   }
 
-  static Map<String, dynamic> _indexParams(String shard, String index, Map<String, dynamic>? settings) => {
-        'library_path': shard,
-        'index_dir': index,
-        'heap_mb': 200,
-        'settings': ?settings,
-      };
+  /// index_library's parameters: into the device's indexes folder when there is one ([SourcesState.syncIndexesDir]: a snapshot of
+  /// `library/<library_id[@version]>`, which syncs to every device with the library), else into the library's own index/.
+  Map<String, dynamic> _indexParams(String shard, String index, Map<String, dynamic>? settings) {
+    final shared = sources.syncIndexesDir;
+    return {
+      'library_path': shard,
+      if (shared != null) 'indexes_dir': shared else 'index_dir': index,
+      'heap_mb': 200,
+      'settings': ?settings,
+    };
+  }
 
   /// Polls [job] until it ends, reporting its fraction, then frees it.
   Future<JobProgress> _wait(CoreJobHandle job, void Function(double?) onProgress) async {

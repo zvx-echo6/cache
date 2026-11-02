@@ -1216,3 +1216,87 @@ fn library_index_seal_switch_and_update_make_new_snapshots() {
     assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
     unsafe { cs_close(h) };
 }
+
+/// All indexes sync (1.0.30): a library's keyword index built on device A into its indexes folder (index_library with
+/// indexes_dir) is published as a snapshot; the indexes folders sync (cache_sync, as the app shares them); device B, which has
+/// the same library, opens it with its own indexes folder and searches by keyword with A's snapshot, building nothing.
+#[test]
+fn a_library_index_built_on_one_device_is_used_on_another() {
+    let f = make_fixture("libidx-two-devices");
+    let root = f._tmp.0.clone();
+    let (idx_a, idx_b) = (root.join("idx-a"), root.join("idx-b"));
+    std::fs::create_dir_all(&idx_a).unwrap();
+    std::fs::create_dir_all(&idx_b).unwrap();
+
+    // A builds into its indexes folder: a snapshot of source "t" (the library id), no index in the old place.
+    let mut params = index_params(&f.dir, &root.join("unused-old-place"), 300);
+    params.as_object_mut().unwrap().remove("index_dir");
+    params["indexes_dir"] = json!(idx_a.to_str().unwrap());
+    let j = start_job(params);
+    assert!(!j.is_null(), "index_library with indexes_dir: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
+    let p = wait_not_running(j);
+    unsafe { cs_job_free(j) };
+    assert_eq!(p["state"], "done", "{p}");
+    let has_snapshot = |idx: &Path| {
+        std::fs::read_dir(idx.join("library").join("t").join("snap"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| e.path().join("manifest.json").exists())
+    };
+    assert!(has_snapshot(&idx_a), "A published a snapshot");
+    assert!(!root.join("unused-old-place").exists(), "nothing in the old place");
+
+    // The indexes folders sync, as the app sets them up (builds and the core's own notes stay; deletes stay; manifests last).
+    let sync = |dir: &Path, name: &str| {
+        let cfg: cache_sync::Config = serde_json::from_value(json!({
+            "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false, "interval_secs": 5,
+            "reserve_bytes": 0,
+            "exclude": {"indexes": ["*/*/.build", ".local", "**/*-shm", "**/*-wal", "**/*-journal"]},
+            "local_deletes": {"indexes": ["*/*/snap"]},
+            "last": {"indexes": ["*/*/snap/*/manifest.json"]},
+            "only": {"indexes": ["library/t"]},
+        }))
+        .unwrap();
+        cache_sync::SyncEngine::open(cfg).unwrap()
+    };
+    let sa = sync(&root.join("sync-a"), "Desk");
+    let sb = sync(&root.join("sync-b"), "Phone");
+    let code = sa.call("link_code", &json!({})).unwrap()["code"].as_str().unwrap().to_string();
+    sb.call("link", &json!({"code": code})).unwrap();
+    sa.call("share_add", &json!({"id": "indexes", "name": "Search indexes", "path": idx_a})).unwrap();
+    sb.call("share_add", &json!({"id": "indexes", "name": "Search indexes", "path": idx_b})).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    let t0 = std::time::Instant::now();
+    while !has_snapshot(&idx_b) {
+        assert!(t0.elapsed().as_secs() < 120, "A's snapshot did not reach B: {}", sb.call("status", &json!({})).unwrap()["log"]);
+        sa.call("sync_now", &json!({})).unwrap();
+        sb.call("sync_now", &json!({})).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    sa.close();
+    sb.close();
+
+    // B opens the library with its indexes folder and an empty old place: keyword search works at once, from A's snapshot.
+    let src = json!({"kind":"library","path":f.dir.to_str().unwrap(),"index_dir":root.join("b-old-place").to_str().unwrap(),
+                     "settings":settings(default_leave_out(), true)});
+    let cfg = cstr(&json!({"sources":[src],"indexes_dir":idx_b.to_str().unwrap()}).to_string());
+    let h = unsafe { cs_open(cfg.as_ptr()) };
+    assert!(!h.is_null(), "cs_open failed: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
+    let t0 = std::time::Instant::now();
+    let s = loop {
+        let v = status(h);
+        let s = v["sources"][0].clone();
+        if s["indexed"] == true || t0.elapsed().as_secs() > 60 {
+            break s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(s["indexed"], true, "{s}");
+    assert_eq!(s["keyword_source"], "device", "{s}");
+    assert_eq!(s["index"]["location"], "snapshot", "{s}");
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), vec!["lib:t/1234"]);
+    assert!(!idx_b.join("library").join("t").join(".build").exists(), "B built nothing");
+    assert!(!root.join("b-old-place").exists());
+    unsafe { cs_close(h) };
+}
