@@ -62,7 +62,7 @@ void main() {
   }
 
   group('recommendations file', () {
-    test('the built-in copy is docs/models-recommended.json: Recommended (E2B tuned for Cache, stock E4B) and Experimental (the two uncensored)', () {
+    test('the built-in copy is docs/models-recommended.json: Recommended (E2B tuned for Cache, stock E4B) and Experimental (the two uncensored, and the E2B Q6 tuned for Cache)', () {
       final docs = File('../docs/models-recommended.json').readAsStringSync();
       expect(File('assets/models/recommended.json').readAsStringSync(), docs,
           reason: 'copy docs/models-recommended.json to app/assets/models/recommended.json when it changes');
@@ -73,10 +73,12 @@ void main() {
         'unsloth/gemma-4-E4B-it-GGUF@bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf',
         'https://data.cached.info/models/cache-1.0/e2b-trevorjs-cache-1.0-Q4_K_M.gguf',
         'TrevorJS/gemma-4-E4B-it-uncensored-GGUF@771f130d4c49735ace331f68a80f7ae31387e51c/gemma-4-E4B-it-uncensored-Q4_K_M.gguf',
+        'https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q6_K.gguf',
       ]);
       expect(r.map((m) => m.section), [
         RecommendationSection.recommended,
         RecommendationSection.recommended,
+        RecommendationSection.experimental,
         RecommendationSection.experimental,
         RecommendationSection.experimental,
       ]);
@@ -85,8 +87,9 @@ void main() {
         '85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87',
         'cf255f6f71b6415c66fae529fb52f659c14d82741e98e07e38dabb685bccd0b8',
         'b2a89ec2df7f13440c723fb3fda2c531696cbe8e20ed2f1122f97a43aaafcb50',
+        '09694d33cbca622556148e5e56fe97f1ecfeadbbdfbd24c4df6ede0708a6e330',
       ]);
-      expect(r.map((m) => m.size), [3427879936, 4977171584, 3427873312, 5335285280]);
+      expect(r.map((m) => m.size), [3427879936, 4977171584, 3427873312, 5335285280, 3845346304]);
       expect(r[0].kind, RecommendationKind.tunedForCache);
       expect(r[0].licence, 'Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache');
       expect(r.any((m) => m.file.contains('Qwen')), isFalse);
@@ -95,9 +98,12 @@ void main() {
       expect('${hub.downloadUrl(r[0].hfFile)}', 'https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q4_K_M.gguf');
       expect('${hub.downloadUrl(r[1].hfFile)}', 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf');
       expect(r[0].hfFile.fileName, 'e2b-stock-cache-1.0-Q4_K_M.gguf');
+      expect(r[4].kind, RecommendationKind.tunedForCache);
+      expect(r[4].licence, 'Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache');
+      expect('${hub.downloadUrl(r[4].hfFile)}', 'https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q6_K.gguf');
     });
 
-    test('an entry may carry its own settings; the four listed carry none (the usual ones apply)', () {
+    test('an entry may carry its own settings; the five listed carry none (the usual ones apply)', () {
       final r = parseRecommendations(File('../docs/models-recommended.json').readAsStringSync())!;
       expect(r.every((m) => m.settings.isEmpty && !m.settings.fetchFirst), isTrue);
       expect(r.first.settings.requestExtras, isEmpty, reason: 'requests go out exactly as today');
