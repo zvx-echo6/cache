@@ -290,9 +290,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Model, LoadError> {
     }
     let raw = r.take(dims * n * wsize as usize)?;
     let weights: Vec<f32> = if weights_f16 {
-        raw.chunks_exact(2).map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]]))).collect()
+        raw.as_chunks::<2>().0.iter().map(|c| f16_to_f32(u16::from_le_bytes(*c))).collect()
     } else {
-        raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+        raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
     };
     if bias.iter().chain(weights.iter()).any(|x| x.is_nan() || x.is_infinite()) {
         return Err(LoadError::Corrupt("non-finite weight"));
