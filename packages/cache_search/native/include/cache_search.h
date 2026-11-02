@@ -190,9 +190,20 @@ void cs_close(cs_handle *h);
  *   "k": 5, "offset": 0,                      paging for Browse "See all"
  *   "sources": ["<id>", ...] | null,          null = all sources
  *   "query_vector": {"model":"<embedding model id>","vector":[...]} | null
+ *   "kinds": ["zim","library","zim-pdf","captions","zim-captions","zim-epub"] | null   null = all kinds; else only these
  * }
  * The vector is used only for libraries whose settings embedding.model matches this model id; other sources
  * are keyword-only.
+ * Caption and EPUB passages (see "Caption and EPUB indexes") take part like any other: the address is "cap:<host>/<video uuid>/
+ * <piece>" (a saved video), "zimcap:<zim uuid>/<piece>" or "zimepub:<zim uuid>/<piece>"; the title the model sees is
+ * "<video name>, at mm:ss" (h:mm:ss from an hour) for captions and "<book title>, <chapter heading>" for EPUBs (the chapter's file
+ * name without the heading); source_kind is "video" for a saved video's captions, else "zim"; source_id is "<host>/<uuid>" or the
+ * ZIM's id and a "sources" filter on the ZIM includes its indexes. cs_tool's "ids" entries for them carry:
+ *   caption:  "link":"https://<host>/w/<video uuid>" (a ZIM caption: "zim:<uuid>/<video entry path>", else the caption entry's path),
+ *             "time":<start, seconds>,"time_end":<seconds>,"quote":"<the passage>","lang":"<code>"
+ *   EPUB:     "link":"zim:<uuid>/<epub path>!/<chapter path>#cache-b<block>","quote":"<the piece, at most 300 words>"
+ * (whole seconds are integers). cs_read of a caption address returns the passages from 60 s before to 60 s after, one
+ * "[mm:ss] text" line each; of an EPUB address the chapter's text from a few blocks before the passage, after "Chapter: <heading>".
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);

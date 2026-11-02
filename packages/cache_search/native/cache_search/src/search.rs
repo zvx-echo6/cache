@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::conv::Cite;
 use crate::handle::{Handle, Source};
 use crate::library::{self, LibHit, LibKwHit};
+use crate::kwindex::{self, KwHit};
 use crate::pdfindex::{self, PdfHit};
 use crate::html;
 use crate::zimsrc;
@@ -56,6 +57,10 @@ struct Opts {
     offset: usize,
     #[serde(default)]
     sources: Option<Vec<String>>,
+    /// Only these kinds of index are searched: `zim` (a ZIM's own keyword index), `library`, `zim-pdf`, `captions`,
+    /// `zim-captions`, `zim-epub`. All of them when absent.
+    #[serde(default)]
+    kinds: Option<Vec<String>>,
     /// Used only by libraries whose settings `embedding.model` equals `model`; other sources are keyword-only.
     #[serde(default)]
     query_vector: Option<QueryVec>,
@@ -76,6 +81,17 @@ enum Entry {
     LibKw(usize, usize),
     /// A hit in a ZIM's PDF index: (index into `pdf_kw`, hit).
     Pdf(usize, usize),
+    /// A hit in a caption or EPUB index: (index into `kw_kw`, hit).
+    Kw(usize, usize),
+}
+
+/// One caption or EPUB index's keyword list.
+struct KwKw {
+    kind: &'static str,
+    source_id: String,
+    source_title: String,
+    hits: Vec<KwHit>,
+    count: usize,
 }
 
 /// One ZIM's PDF index keyword list.
@@ -499,10 +515,14 @@ impl Handle {
         let filter: Option<Vec<String>> =
             opts.sources.as_ref().map(|v| v.iter().map(|s| s.to_ascii_lowercase()).collect());
 
+        let want = |kind: &str| opts.kinds.as_ref().is_none_or(|v| v.iter().any(|k| k == kind));
         let words = query_words(query);
         let mut per: Vec<SrcHits> = Vec::new();
         for s in self.sources.iter_mut() {
             let Source::Zim(z) = s else { continue };
+            if !want("zim") {
+                continue;
+            }
             if let Some(f) = &filter {
                 if !f.contains(&z.src.id) {
                     continue;
@@ -551,6 +571,9 @@ impl Handle {
         let mut lib_kw: Vec<LibKw> = Vec::new();
         for (src_i, s) in self.sources.iter_mut().enumerate() {
             let Source::Library(l) = s else { continue };
+            if !want("library") {
+                continue;
+            }
             if let Some(f) = &filter {
                 if !f.contains(&l.id().to_ascii_lowercase()) {
                     continue;
@@ -565,6 +588,9 @@ impl Handle {
         let mut pdf_kw: Vec<PdfKw> = Vec::new();
         for s in self.sources.iter() {
             let Source::Pdf(p) = s else { continue };
+            if !want("zim-pdf") {
+                continue;
+            }
             if let Some(f) = &filter {
                 if !f.contains(&p.zim_id) {
                     continue;
@@ -573,6 +599,24 @@ impl Handle {
             let Some(idx) = p.index() else { continue };
             if let Ok((hits, count)) = idx.search(query, candidates) {
                 pdf_kw.push(PdfKw { zim_id: p.zim_id.clone(), zim_title: p.zim_title.clone(), hits, count });
+            }
+        }
+
+        // The caption and EPUB indexes (a `sources` filter on a ZIM includes its indexes; a saved video is its own source).
+        let mut kw_kw: Vec<KwKw> = Vec::new();
+        for s in self.sources.iter() {
+            let Source::Kw(p) = s else { continue };
+            if !want(p.kind) {
+                continue;
+            }
+            if let Some(f) = &filter {
+                if !f.contains(&p.source_id) {
+                    continue;
+                }
+            }
+            let Some(idx) = p.index() else { continue };
+            if let Ok((hits, count)) = idx.search(query, candidates, None) {
+                kw_kw.push(KwKw { kind: p.kind, source_id: p.source_id.clone(), source_title: p.title.clone(), hits, count });
             }
         }
 
@@ -602,6 +646,12 @@ impl Handle {
                 .map(|h| KwItem { addr: pdfindex::address_of(&k.zim_id, &h.pid), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
                 .collect()
         }));
+        lists.extend(kw_kw.iter().map(|k| {
+            k.hits
+                .iter()
+                .map(|h| KwItem { addr: kwindex::address_of(k.kind, &k.source_id, &h.piece.pid), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
+                .collect()
+        }));
         let need = opts.offset + opts.k;
         let merged = merge_keyword(&lists, min_cov, min_rel, need);
         let entry_of = |m: &Merged| {
@@ -609,8 +659,10 @@ impl Handle {
                 Entry::Zim(m.si, m.hi)
             } else if m.si < per.len() + lib_kw.len() {
                 Entry::LibKw(m.si - per.len(), m.hi)
-            } else {
+            } else if m.si < per.len() + lib_kw.len() + pdf_kw.len() {
                 Entry::Pdf(m.si - per.len() - lib_kw.len(), m.hi)
+            } else {
+                Entry::Kw(m.si - per.len() - lib_kw.len() - pdf_kw.len(), m.hi)
             }
         };
 
@@ -676,7 +728,7 @@ impl Handle {
             .flat_map(|(_, hits)| hits.iter().map(|h| h.score))
             .fold(None, |m: Option<f32>, x| Some(m.map_or(x, |m| m.max(x))));
         let order = demote_guide(order, gate_score, GUIDE_GATE, |e| match e {
-            Entry::Zim(..) | Entry::Pdf(..) => false,
+            Entry::Zim(..) | Entry::Pdf(..) | Entry::Kw(..) => false,
             Entry::Lib(li, _) => is_guide(libs[*li].0),
             Entry::LibKw(ki, _) => is_guide(lib_kw[*ki].src_i),
         });
@@ -689,6 +741,7 @@ impl Handle {
             Zim(usize, usize),
             Lib(usize, Box<LibHit>),
             Pdf(usize, usize),
+            Kw(usize, usize),
         }
         let mut seen: HashSet<String> = HashSet::new();
         let mut shown: Vec<Shown> = Vec::new();
@@ -699,6 +752,7 @@ impl Handle {
             match e {
                 Entry::Zim(si, hi) => shown.push(Shown::Zim(si, hi)),
                 Entry::Pdf(pi, hi) => shown.push(Shown::Pdf(pi, hi)),
+                Entry::Kw(ki, hi) => shown.push(Shown::Kw(ki, hi)),
                 Entry::Lib(li, hi) => {
                     let h = &libs[li].1[hi];
                     if seen.insert(h.key.clone()) {
@@ -754,6 +808,7 @@ impl Handle {
                             time: None,
                             pdf_page: Some(h.pdf_page),
                             quote: Some(pdfindex::first_words(&h.text, pdfindex::QUOTE_WORDS)),
+                            ..Default::default()
                         },
                     ));
                     results.push(json!({
@@ -764,6 +819,21 @@ impl Handle {
                         "source_kind": "zim",
                         "source_title": k.zim_title,
                         "page": page_value(&h.label),
+                    }));
+                    continue;
+                }
+                Shown::Kw(ki, hi) => {
+                    let (k, h) = (&kw_kw[ki], &kw_kw[ki].hits[hi]);
+                    let (address, cite, title) = kw_result(k.kind, &k.source_id, &h.piece);
+                    self.last_cites.push((address.clone(), cite));
+                    results.push(json!({
+                        "address": address,
+                        "title": title,
+                        "snippet": html::snippet_from_text(&h.piece.text, snippet_chars),
+                        "source_id": k.source_id,
+                        "source_kind": if k.kind == kwindex::CAPTIONS { "video" } else { "zim" },
+                        "source_title": k.source_title,
+                        "page": Value::Null,
                     }));
                     continue;
                 }
@@ -833,6 +903,7 @@ impl Handle {
             "total_estimate": per.iter().map(|p| p.count).sum::<usize>()
                 + lib_kw.iter().map(|k| k.count).sum::<usize>()
                 + pdf_kw.iter().map(|k| k.count).sum::<usize>()
+                + kw_kw.iter().map(|k| k.count).sum::<usize>()
                 + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
             "vector_sources": vector_sources,
             "keyword_only_sources": keyword_only,
@@ -908,9 +979,36 @@ impl Handle {
         if address.starts_with("zimpdf:") {
             return self.read_pdf_page(address, max_chars as usize);
         }
+        if address.starts_with("cap:") || address.starts_with("zimcap:") || address.starts_with("zimepub:") {
+            return self.read_kw(address, max_chars as usize);
+        }
         let e = self.zim_get(address)?;
         read_zim_entry(address, &e, max_chars)
     }
+}
+
+/// A caption or EPUB hit as a result: its address, where its citation opens, and the title the model sees.
+fn kw_result(kind: &str, source_id: &str, p: &kwindex::StoredPiece) -> (String, Cite, String) {
+    let address = kwindex::address_of(kind, source_id, &p.pid);
+    let quote = Some(kwindex::first_words(&p.text, kwindex::QUOTE_WORDS));
+    if kind == kwindex::ZIM_EPUB {
+        let link = format!("{}#cache-b{}", zimsrc::format_address(source_id, &format!("{}!/{}", p.item, p.chapter)), p.block);
+        return (address, Cite { link: Some(link), quote, ..Default::default() }, crate::kwslot::epub_title(p));
+    }
+    let link = if kind == kwindex::CAPTIONS {
+        kwindex::watch_link(source_id)
+    } else {
+        zimsrc::format_address(source_id, if p.video.is_empty() { &p.item } else { &p.video })
+    };
+    let cite = Cite {
+        link: Some(link),
+        time: Some(kwindex::secs(p.start_ms)),
+        quote,
+        time_end: Some(kwindex::secs(p.end_ms)),
+        lang: Some(p.lang.clone()).filter(|l| !l.is_empty()),
+        ..Default::default()
+    };
+    (address, cite, crate::kwslot::caption_title(p))
 }
 
 /// A page label as a result's `page`: a number when it is one, else its text, else null.
