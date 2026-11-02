@@ -33,8 +33,11 @@ def fetch():
         if not p["items"]["pageInfo"]["hasNextPage"]: return items, readme
         cur = p["items"]["pageInfo"]["endCursor"]
 
+# Retired product names: never published, whatever the blocklist secret says.
+RETIRED = re.compile(r"\bcache\s+server\b", re.I)
+
 def check(text, where):
-    m = BANNED.search(text)
+    m = BANNED.search(text) or RETIRED.search(text)
     if m: sys.exit(f"STOP: a blocked word was found in {where}; nothing was written")
 
 def describe(body):
@@ -184,7 +187,7 @@ footer .wrap {{ display:flex; gap:1rem 1.5rem; flex-wrap:wrap; }}
 <p class="kicker">Next release: Cache {RELEASE}</p>
 <h1>{html.escape(the_theme)}</h1>
 <p class="lede">What Cache {RELEASE} brings, and where each feature stands on each kind of device. Must-haves are the promise: {RELEASE} ships when they all work. Stretch features ride along if they are ready, and never hold the release.</p>
-<p class="platforms"><strong>Devices in {RELEASE}:</strong> Android, iPhone and iPad, and Linux and Raspberry Pi (Cache Server: the full app in a browser). Windows comes in 1.2.</p>
+<p class="platforms"><strong>Devices in {RELEASE}:</strong> Android, iPhone and iPad, and Linux and Raspberry Pi (the full app in a browser). Windows comes in 1.2.</p>
 </div></header>
 <main class="wrap">
 <section aria-labelledby="key"><h2 id="key">How to read this</h2><ul class="legend">{legend}</ul></section>
