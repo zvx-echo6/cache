@@ -1144,7 +1144,9 @@ cs_job *cs_job_start(const char *kind, const char *params_json);
 /* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"},
  *  "duty":{"work_ms","idle_ms","threads"},"effective":{"work_ms","idle_ms","threads"},"auto":bool,"paused":bool}
  * layer_download jobs add "detail":{"bytes":N} (bytes written so far). "duty" is what the app set, "effective" adds the
- * job's own back-off (see "Job pacing" below); "threads" is null when the job chooses its own. */
+ * job's own back-off (see "Job pacing" below); "threads" is null when the job chooses its own. A job that reports "phase"
+ * also has "phases":["read","index",...]: every phase it has entered, in order, so a poller that missed a short one still
+ * sees it. */
 char *cs_job_progress(cs_job *j);
 
 /* --- Job pacing (duty) ---
