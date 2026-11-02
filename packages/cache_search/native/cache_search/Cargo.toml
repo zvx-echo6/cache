@@ -63,6 +63,9 @@ tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # Free-space check of update_library: statvfs on unix, GetDiskFreeSpaceExW on Windows (both already in the lockfile).
+# sha256 of the PDF index snapshot files (manifest.json); already in the lockfile.
+sha2 = "0.10"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

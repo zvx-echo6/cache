@@ -69,7 +69,7 @@ impl Builtin {
 fn shown_kind(address: &str) -> Option<&'static str> {
     let prefix = address.split(':').next().unwrap_or("");
     Some(match prefix {
-        "lib" | "zim" | "web" => return None,
+        "lib" | "zim" | "zimpdf" | "web" => return None,
         "place" | "town" | "addr" | "layer" | "pack" => "a place",
         "nav" => "a route",
         "live" => "a live-data",
