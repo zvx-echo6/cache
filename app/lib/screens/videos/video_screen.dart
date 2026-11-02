@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../../video/captions.dart';
 import '../../video/format.dart';
 import '../../video/video_state.dart';
+import 'instance_sheet.dart';
 import 'video_dl.dart';
 import 'video_nav.dart';
 import 'widgets.dart';
@@ -76,6 +77,7 @@ class _VideoScreenState extends State<VideoScreen> {
         instance: widget.instanceId,
         captionUrls: _d?.captions ?? const [],
         qualities: _d?.qualities ?? const [],
+        qualitiesExpire: _d?.qualitiesExpire,
         channel: _d?.channel.displayName,
       );
     } catch (e) {
@@ -117,12 +119,23 @@ class _VideoScreenState extends State<VideoScreen> {
     if (mounted) setState(() => _captionsError = err);
   }
 
+  /// A private or internal video, and this site has no login on this device.
+  bool _needsLogin(VideoDetails? d) => d != null && d.needsAuth && widget.video.userOf(d.instance) == null;
+
+  /// Opens the site's login (the account sheet); the page is read again after, so the video plays with the login.
+  Future<void> _login() async {
+    final i = widget.video.instanceById(widget.instanceId);
+    if (i == null) return;
+    await showInstanceSheet(context, video: widget.video, instance: i);
+    if (mounted && widget.video.userOf(i.id) != null) await _load();
+  }
+
   /// Why the picture cannot play, or null when it can.
   String? _cannotPlay(VideoDetails? d, DownloadedVideo? saved) {
     if (saved != null) return null;
     if (d == null) return _loading ? null : (_error ?? '');
     if (d.isLive) return "A live stream can't be played here.";
-    if (d.needsAuth && widget.video.userOf(d.instance) == null) return 'This video needs you to log in to the site.';
+    if (_needsLogin(d)) return '';
     if (!d.canStream) return 'This video has no stream to play yet.';
     return null;
   }
@@ -192,6 +205,25 @@ class _VideoScreenState extends State<VideoScreen> {
         ),
         if (why != null && why.isNotEmpty)
           Padding(padding: const EdgeInsets.only(top: 8), child: Text(why, style: TextStyle(fontSize: 15, color: k.secondary))),
+        if (saved == null && _needsLogin(d))
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Icon(Icons.lock_outline, size: 20, color: k.secondary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Log in to ${widget.video.instanceById(widget.instanceId)?.name ?? 'the site'} to play this video',
+                    key: const ValueKey('video-login-line'),
+                    style: TextStyle(fontSize: 15, color: k.text),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(key: const ValueKey('video-login'), onPressed: _login, child: const Text('Log in')),
+              ],
+            ),
+          ),
         const SizedBox(height: 14),
         Text(title, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text)),
         const SizedBox(height: 4),

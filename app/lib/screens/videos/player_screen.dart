@@ -52,6 +52,8 @@ class PlayerScreen extends StatefulWidget {
     this.mobileOverride,
     this.frame,
     this.qualities = const [],
+    this.qualitiesExpire,
+    this.loadQualities,
     this.savedQuality,
   });
 
@@ -91,8 +93,14 @@ class PlayerScreen extends StatefulWidget {
   /// Test hook for pictures: drawn in place of the video's frames.
   final Widget? frame;
 
-  /// For a stream: the qualities it can be switched to (Auto is the stream [target] resolves to).
+  /// For a stream: the qualities it can be switched to (Auto is the stream [target] resolves to), and when a private video's
+  /// file token in their addresses expires.
   final List<VideoQuality> qualities;
+  final DateTime? qualitiesExpire;
+
+  /// For a stream: reads the video page again for its qualities (when none were given, in the background while it plays;
+  /// and for fresh addresses when a private video's file token has expired).
+  final Future<(List<VideoQuality>, DateTime?)?> Function()? loadQualities;
 
   /// For a saved copy: its quality ("480p"), shown in the settings as which copy this is.
   final String? savedQuality;
@@ -146,8 +154,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// What is playing: [t], or the quality chosen for a stream.
   late VideoTarget _src = t;
 
-  /// The stream quality chosen (a key of [PlayerScreen.qualities]); null: Auto.
+  /// The stream quality chosen (a key of [_qualities]); null: Auto.
   String? _quality;
+
+  /// The qualities known now (given, or loaded since), and when their file token expires.
+  late List<VideoQuality> _qualities = widget.qualities;
+  late DateTime? _qExpire = widget.qualitiesExpire;
   String get _key => VideoPrefs.keyOf(instance: t.instance, uuid: t.uuid);
 
   List<CaptionTrack> _tracksOf() => t.isLocal
@@ -170,7 +182,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // A stream starts at the quality last chosen on this device, when this video has it (else Auto).
     final kept = widget.prefs?.quality;
     if (!t.isLocal && kept != null && kept != 'auto') {
-      for (final q in widget.qualities) {
+      for (final q in _qualities) {
         if (q.key == kept) {
           _quality = q.key;
           _src = _sourceOf(q);
@@ -178,6 +190,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
     _start();
+    // Opened with no qualities (a citation): Auto plays now, the list fills in when the video page arrives.
+    if (!t.isLocal && _qualities.isEmpty && widget.loadQualities != null) unawaited(_reloadQualities());
+  }
+
+  Future<void> _reloadQualities() async {
+    try {
+      final got = await widget.loadQualities!();
+      if (got == null || !mounted) return;
+      setState(() {
+        _qualities = got.$1;
+        _qExpire = got.$2;
+      });
+    } catch (_) {
+      // no list: Auto stays the only choice
+    }
   }
 
   VideoPlayerController _make() {
@@ -396,7 +423,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   String get _qualityLabel {
-    for (final q in widget.qualities) {
+    for (final q in _qualities) {
       if (q.key == _quality) return q.label;
     }
     return 'Auto';
@@ -424,7 +451,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text('Quality', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: context.t.text)),
+              ),
               ListTile(
                 key: const ValueKey('quality-auto'),
                 minTileHeight: 48,
@@ -432,7 +464,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 trailing: _quality == null ? const Icon(Icons.check) : null,
                 onTap: () => Navigator.pop(ctx, 'auto'),
               ),
-              for (final q in widget.qualities)
+              for (final q in _qualities)
                 ListTile(
                   key: ValueKey('quality-${q.key}'),
                   minTileHeight: 48,
@@ -449,8 +481,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final key = picked == 'auto' ? null : picked;
     widget.prefs?.quality = picked;
     if (key == _quality) return;
+    // a private video's file token runs out: fresh addresses first
+    final exp = _qExpire;
+    if (key != null && exp != null && DateTime.now().isAfter(exp.subtract(const Duration(minutes: 1))) && widget.loadQualities != null) {
+      await _reloadQualities();
+      if (!mounted) return;
+    }
     VideoQuality? q;
-    for (final x in widget.qualities) {
+    for (final x in _qualities) {
       if (x.key == key) q = x;
     }
     await _switchTo(q == null ? t : _sourceOf(q), quality: key);
@@ -533,7 +571,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               trailing: Text(c.value.playbackSpeed == 1 ? 'Normal' : '${_speedText(c.value.playbackSpeed)}x'),
               onTap: () => Navigator.pop(ctx, 'speed'),
             ),
-            if (!t.isLocal && widget.qualities.isNotEmpty)
+            if (!t.isLocal && _qualities.isNotEmpty)
               ListTile(
                 key: const ValueKey('settings-quality'),
                 minTileHeight: 48,

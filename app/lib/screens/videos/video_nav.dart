@@ -35,6 +35,7 @@ Future<void> playVideo(
   String? lang,
   List<VideoCaptionInfo> captionUrls = const [],
   List<VideoQuality> qualities = const [],
+  DateTime? qualitiesExpire,
   String? channel,
 }) async {
   final target = await state.resolve(video, instance: instance, offsetS: offsetS);
@@ -51,6 +52,13 @@ Future<void> playVideo(
         cited: cited,
         citedLang: lang,
         qualities: target.isLocal ? const [] : qualities,
+        qualitiesExpire: qualitiesExpire,
+        loadQualities: target.isLocal || target.instance == null
+            ? null
+            : () async {
+                final d = await state.details(target.instance!, target.uuid);
+                return (d.qualities, d.qualitiesExpire);
+              },
         savedQuality: saved == null ? null : (saved.isAudio ? 'Audio only' : saved.resolutionLabel),
         channel: saved?.channelName ?? channel,
         onRedownload: saved == null ? null : () => _redownload(ctx, state, saved),

@@ -409,3 +409,16 @@ fn the_video_page_lists_the_stream_qualities() {
     assert_eq!((q[0]["key"].as_str().unwrap(), q[0]["format"].as_str().unwrap()), ("608", "mp4"));
     assert!(q[0]["url"].as_str().unwrap().ends_with("-608.mp4"));
 }
+
+#[test]
+fn a_private_video_signed_in_has_its_qualities_with_the_file_token() {
+    let (_t, m, v, id) = setup("private-q");
+    m.knobs.lock().unwrap().private_hls = true;
+    let d = j(v.get(&json!({"instance": id, "video": HLS_UUID, "token": "A1"}).to_string()));
+    let q = d["stream"]["qualities"].as_array().unwrap();
+    assert_eq!(q.len(), 1, "the 720p file has no sound; 360p plays");
+    assert_eq!(q[0]["key"], "360");
+    assert!(q[0]["url"].as_str().unwrap().ends_with("360-fragmented.mp4?videoFileToken=FT1"));
+    assert_eq!(d["stream"]["qualities_expire"], "2026-01-01T00:00:00.000Z");
+    assert!(m.hits_for("/token").iter().any(|h| h.method == "POST" && h.header("Authorization") == Some("Bearer A1")));
+}

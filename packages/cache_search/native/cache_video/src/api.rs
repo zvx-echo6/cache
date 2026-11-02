@@ -336,6 +336,13 @@ impl Video {
         let uuid = d["uuid"].as_str().unwrap_or(&r.video).to_string();
         let caps = self.fetch_captions(&inst, &uuid, token(&r.token));
         let downloaded = self.manifest(&inst.id, &uuid).ok().flatten().map(|m| json!({"kind": m["kind"], "resolution": m["resolution"], "size": m["size"], "downloaded_at": m["downloaded_at"]}));
-        Ok(model::details(&inst, &d, &caps, downloaded).to_string())
+        // a private video's qualities need PeerTube's file token, asked with the login (none without one: no qualities)
+        let ft = if model::needs_auth(&d) {
+            token(&r.token).and_then(|t| http::post_empty(&format!("{}/api/v1/videos/{}/token", inst.url, enc(&uuid)), t, "requesting the file token").ok())
+        } else {
+            None
+        };
+        let file_token = ft.as_ref().and_then(|v| v["files"]["token"].as_str().map(|t| (t, v["files"]["expires"].as_str())));
+        Ok(model::details(&inst, &d, &caps, downloaded, file_token).to_string())
     }
 }

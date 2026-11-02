@@ -36,12 +36,12 @@ List<Map<String, dynamic>> _library({int extra = 0}) => [
       for (var i = 0; i < extra; i++) savedManifest(uuid: 'x$i', title: 'Water filter part $i', channel: 'Medical Basics', at: '2026-09-0${i + 1}T10:00:00Z'),
     ];
 
-Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, bool captionFetchFails = false, Space? space}) async {
+Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, bool captionFetchFails = false, Space? space, bool private = false}) async {
   final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('video-ui')))!;
   addTearDown(() => dir.deleteSync(recursive: true));
   final v = VideoState(
     dirOverride: dir,
-    nativeFactory: seededVideoNative(saved, captionFetchFails: captionFetchFails),
+    nativeFactory: seededVideoNative(saved, captionFetchFails: captionFetchFails, private: private),
     tokens: MemoryTokenStore(),
     prefs: VideoPrefs(),
     captionSearch: search ?? const CaptionSearchMissing(),
@@ -241,6 +241,29 @@ void main() {
     expect(find.text('Audio only'), findsOneWidget);
     expect(find.text('Captions come with it: English (automatic).'), findsOneWidget);
     expect(find.text('Download 360p · 2.9 MB'), findsOneWidget, reason: 'the smallest video size is picked first');
+  });
+
+  testWidgets('A private video, not logged in: "Log in to <site> to play this video" and Log in; after it, it plays with its qualities', timeout: const Timeout(Duration(seconds: 60)), (tester) async {
+    final v = await _state(tester, const [], private: true);
+    await tester.runAsync(() => v.addInstance('tube.example.org'));
+    await _show(tester, VideoScreen(video: v, instanceId: 'tube.example.org', uuid: VideoFakeNative.uuid, title: 'Merry Christmas'));
+    expect(find.text('Log in to Example PeerTube to play this video'), findsOneWidget);
+    expect(find.byIcon(Icons.play_arrow), findsNothing, reason: 'the picture does not play yet');
+    await tester.tap(find.byKey(const ValueKey('video-login')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'User name'), 'alice');
+    await tester.enterText(find.widgetWithText(TextField, 'Password'), 'right');
+    await tester.tap(find.widgetWithText(FilledButton, 'Log in').last);
+    await settle(tester);
+    expect(find.text('Logged in as alice'), findsOneWidget);
+    await tester.tapAt(const Offset(20, 20));
+    await settle(tester);
+    await tester.pumpAndSettle();
+    expect(find.text('Log in to Example PeerTube to play this video'), findsNothing);
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+    final d = await tester.runAsync(() => v.details('tube.example.org', VideoFakeNative.uuid));
+    expect(d!.qualities.first.url, 'https://example.org/v-720.mp4?videoFileToken=FT1');
+    expect(d.qualitiesExpire, DateTime.utc(2026, 11, 2, 12));
   });
 
   testWidgets('Not enough room: the sheet says so with Open Storage in place of Download', timeout: const Timeout(Duration(seconds: 60)), (tester) async {

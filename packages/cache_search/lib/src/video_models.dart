@@ -195,6 +195,7 @@ class VideoDetails {
     this.needsAuth = false,
     this.downloadedResolution,
     this.qualities = const [],
+    this.qualitiesExpire,
   });
 
   factory VideoDetails.fromJson(Map<String, dynamic> j) {
@@ -220,6 +221,7 @@ class VideoDetails {
       needsAuth: (stream['needs_auth'] ?? false) as bool,
       downloadedResolution: dl is Map ? dl['resolution'] as String? : null,
       qualities: [for (final q in _list(stream['qualities'])) VideoQuality.fromJson(q)],
+      qualitiesExpire: stream['qualities_expire'] is String ? DateTime.tryParse(stream['qualities_expire'] as String) : null,
     );
   }
 
@@ -246,6 +248,9 @@ class VideoDetails {
 
   /// The qualities the stream can be switched to, high to low (none for a video whose files need a token).
   final List<VideoQuality> qualities;
+
+  /// When the file token in a private video's quality addresses expires (then the page is read again for new ones).
+  final DateTime? qualitiesExpire;
 
   bool get canStream => !isLive && (hlsUrl != null || mp4Url != null);
 }

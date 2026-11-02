@@ -85,12 +85,12 @@ List<Map<String, dynamic>> _library({int extra = 0, bool missing = false}) => [
         savedManifest(uuid: 'w$i', title: 'Water filter, part ${i + 1}', channel: 'Water', at: '2026-09-1${i}T10:00:00Z', size: (60 + 10 * i) * 1024 * 1024, durationS: 200 + 30 * i, thumb: _thumbs['water']),
     ];
 
-Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, Space? space, bool noCaptions = false, bool site = true}) async {
+Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, Space? space, bool noCaptions = false, bool site = true, bool private = false}) async {
   final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('video-shot')))!;
   addTearDown(() => dir.deleteSync(recursive: true));
   final v = VideoState(
     dirOverride: dir,
-    nativeFactory: seededVideoNative(saved, noCaptions: noCaptions),
+    nativeFactory: seededVideoNative(saved, noCaptions: noCaptions, private: private),
     tokens: MemoryTokenStore(),
     prefs: VideoPrefs(),
     captionSearch: search ?? const CaptionSearchMissing(),
@@ -322,6 +322,11 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('video-download')));
       await tester.pumpAndSettle();
       await _snap(tester, '7b-download-sheet-no-captions', theme);
+      await tester.pumpWidget(const SizedBox());
+
+      v = await _state(tester, const [], private: true);
+      await _show(tester, VideoScreen(video: v, instanceId: 'tube.example.org', uuid: VideoFakeNative.uuid, title: 'Merry Christmas'), theme);
+      await _snap(tester, '6f-page-private-log-in', theme);
       await tester.pumpWidget(const SizedBox());
 
       v = await _state(tester, const [], space: const Space(free: 1024 * 1024, reserve: 0));

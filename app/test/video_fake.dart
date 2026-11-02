@@ -8,11 +8,12 @@ CsNative fakeVideoNative() => VideoFakeNative();
 
 /// A factory of [VideoFakeNative]s with [saved] already on the device (the manifests as cs_video_downloads lists them; the
 /// closure is copied to the worker isolate). [captionFetchFails]: captions_fetch fetches nothing.
-CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false}) =>
+CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false, bool private = false}) =>
     () => VideoFakeNative()
       .._saved.addAll([for (final m in saved) {...m}])
       ..captionFetchFails = captionFetchFails
-      ..noCaptions = noCaptions;
+      ..noCaptions = noCaptions
+      ..private = private;
 
 /// A saved video's manifest for [seededVideos].
 Map<String, dynamic> savedManifest({
@@ -121,7 +122,18 @@ class VideoFakeNative implements CsNative {
             {'key': '360', 'label': '360p', 'kind': 'video', 'size': 3000000, 'source': 'web'},
             {'key': 'audio', 'label': 'Audio only', 'kind': 'audio', 'size': 500000, 'source': 'hls'},
           ],
-          'stream': {'hls': null, 'mp4': 'https://example.org/v.mp4', 'needs_auth': false},
+          'stream': {
+            'hls': null,
+            'mp4': 'https://example.org/v.mp4',
+            'needs_auth': private,
+            'qualities': [
+              if (!private || r['token'] != null) ...[
+                {'key': '720', 'label': '720p', 'url': 'https://example.org/v-720.mp4${private ? '?videoFileToken=FT1' : ''}', 'format': 'mp4'},
+                {'key': '360', 'label': '360p', 'url': 'https://example.org/v-360.mp4${private ? '?videoFileToken=FT1' : ''}', 'format': 'mp4'},
+              ],
+            ],
+            'qualities_expire': private && r['token'] != null ? '2026-11-02T12:00:00Z' : null,
+          },
           'downloaded': _saved.isEmpty ? null : {'kind': 'video', 'resolution': '360', 'size': 3000000, 'downloaded_at': 'x'},
         });
       case 'downloads':
@@ -218,6 +230,9 @@ class VideoFakeNative implements CsNative {
 
   /// The site's video has no captions.
   bool noCaptions = false;
+
+  /// The site's video is private: it needs a login, and its qualities come only with one (with the file token).
+  bool private = false;
 
   /// Makes the next token-carrying list call fail once, as an expired token does.
   void expireToken() => _accessValid = false;

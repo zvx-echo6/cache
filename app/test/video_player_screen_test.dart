@@ -401,6 +401,79 @@ void main() {
       await close(tester);
     });
 
+    testWidgets('Opened from a citation (no qualities): it plays at once on Auto; Quality appears when the page arrives', (tester) async {
+      final page = Completer<(List<VideoQuality>, DateTime?)?>();
+      final made = <String>[];
+      _size(tester, _phone);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(
+          target: playerTarget(local: false, offset: 12),
+          cited: true,
+          loadQualities: () => page.future,
+          mobileOverride: false,
+          controllerFactory: (t) {
+            made.add(t.location);
+            return RecordingController();
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      expect(made, ['https://video.example.test/video.mp4']);
+      expect(find.byTooltip('Pause'), findsOneWidget, reason: 'playing already');
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('settings-quality')), findsNothing, reason: 'not known yet');
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      page.complete((qualities, null));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: find.byKey(const ValueKey('settings-quality')), matching: find.text('Auto')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('settings-quality')));
+      await tester.pumpAndSettle();
+      expect(find.text('Quality'), findsOneWidget, reason: 'the sheet\'s heading');
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      await close(tester);
+    });
+
+    testWidgets('A private video whose file token has expired: picking a quality reads the page again for fresh addresses', (tester) async {
+      var loads = 0;
+      final made = <String>[];
+      _size(tester, _phone);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(
+          target: playerTarget(local: false),
+          qualities: const [VideoQuality(key: '360', label: '360p', url: 'https://video.example.test/v-360.mp4?videoFileToken=OLD')],
+          qualitiesExpire: DateTime.now().subtract(const Duration(minutes: 5)),
+          loadQualities: () async {
+            loads++;
+            return (const [VideoQuality(key: '360', label: '360p', url: 'https://video.example.test/v-360.mp4?videoFileToken=NEW')], DateTime.now().add(const Duration(hours: 1)));
+          },
+          mobileOverride: false,
+          controllerFactory: (t) {
+            made.add(t.location);
+            return RecordingController();
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('settings-quality')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('quality-360')));
+      await tester.pumpAndSettle();
+      expect(loads, 1);
+      expect(made.last, 'https://video.example.test/v-360.mp4?videoFileToken=NEW');
+      await close(tester);
+    });
+
     testWidgets('A saved copy: the gear says which quality it is, not a choice', (tester) async {
       _size(tester, _phone);
       final c = RecordingController();
