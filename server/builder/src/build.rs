@@ -3,7 +3,7 @@
 use crate::chunk::{chunk, CHUNKER_VERSION, MAX_WORDS, TARGET_WORDS};
 use crate::embed::Embedder;
 use crate::error::{Error, Result};
-use crate::extract::{extract_pdf, EXTRACTOR_NAME, EXTRACTOR_VERSION};
+use crate::extract::{extract_pdf, Extracted, EXTRACTOR_NAME, EXTRACTOR_VERSION};
 use crate::layout::{layout, Element};
 use crate::pack::{valid_doc_id, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Source, Tool, PACK_FORMAT};
 use crate::text::word_count;
@@ -62,6 +62,17 @@ pub fn build_pack(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder) -> R
 
 /// [`build_pack`] that tells `on` how far it has got.
 pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder, on: &mut dyn FnMut(Progress)) -> Result<(Pack, Report)> {
+    build_pack_with_extractor(pdf, opts, embedder, on, &extract_pdf)
+}
+
+/// [`build_pack_with`] with the PDF read by `extract` (in-process [`extract_pdf`], or the crash-proof child of `isolate`).
+pub fn build_pack_with_extractor(
+    pdf: &[u8],
+    opts: &BuildOptions,
+    embedder: &dyn Embedder,
+    on: &mut dyn FnMut(Progress),
+    extract: &dyn Fn(&[u8]) -> Result<Extracted>,
+) -> Result<(Pack, Report)> {
     let hash = blake3::hash(pdf).to_hex().to_string();
     let doc_id = opts.doc_id.clone().unwrap_or_else(|| hash.clone());
     if !valid_doc_id(&doc_id) {
@@ -70,7 +81,7 @@ pub fn build_pack_with(pdf: &[u8], opts: &BuildOptions, embedder: &dyn Embedder,
     if opts.doc_version == 0 {
         return Err(Error::new("doc_version starts at 1"));
     }
-    let ext = extract_pdf(pdf)?;
+    let ext = extract(pdf)?;
     let lay = layout(&ext);
     let pieces = chunk(&lay.elements);
     let ocr_pages: Vec<usize> = lay.ocr_pages.iter().map(|i| i + 1).collect();

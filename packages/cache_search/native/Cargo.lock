@@ -777,6 +777,7 @@ dependencies = [
  "cache_search",
  "edge",
  "flate2",
+ "libc",
  "mupdf",
  "serde",
  "serde_json",

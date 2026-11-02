@@ -178,3 +178,133 @@ fn extract_page(pdf: &PdfDocument, i: usize) -> Result<RawPage> {
     let label = pdf.page_label(i).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| (i + 1).to_string());
     Ok(RawPage { index: i, label, width: bounds.x1 - bounds.x0, height: bounds.y1 - bounds.y0, blocks, images })
 }
+
+// ---- wire format
+//
+// The child process that reads a PDF (see `isolate`) hands the extraction back as bytes. A hand-written little-endian layout rather than
+// JSON: every f32 comes back bit for bit (NaN and infinity included), so the output is identical to an in-process extraction.
+
+const WIRE_MAGIC: &[u8; 4] = b"CEX1";
+
+fn put_u32(out: &mut Vec<u8>, n: usize) {
+    out.extend_from_slice(&(n as u32).to_le_bytes());
+}
+
+fn put_f32(out: &mut Vec<u8>, f: f32) {
+    out.extend_from_slice(&f.to_bits().to_le_bytes());
+}
+
+fn put_str(out: &mut Vec<u8>, s: &str) {
+    put_u32(out, s.len());
+    out.extend_from_slice(s.as_bytes());
+}
+
+impl Extracted {
+    /// The extraction as bytes, for [`Extracted::from_wire`].
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(WIRE_MAGIC);
+        match &self.title {
+            Some(t) => {
+                o.push(1);
+                put_str(&mut o, t);
+            }
+            None => o.push(0),
+        }
+        put_u32(&mut o, self.pages.len());
+        for p in &self.pages {
+            o.extend_from_slice(&(p.index as u64).to_le_bytes());
+            put_str(&mut o, &p.label);
+            put_f32(&mut o, p.width);
+            put_f32(&mut o, p.height);
+            o.extend_from_slice(&(p.images as u64).to_le_bytes());
+            put_u32(&mut o, p.blocks.len());
+            for b in &p.blocks {
+                for f in [b.x0, b.y0, b.x1, b.y1] {
+                    put_f32(&mut o, f);
+                }
+                put_u32(&mut o, b.lines.len());
+                for l in &b.lines {
+                    put_str(&mut o, &l.text);
+                    for f in [l.x0, l.y0, l.x1, l.y1, l.size] {
+                        put_f32(&mut o, f);
+                    }
+                    o.push(l.bold as u8);
+                    o.push(l.italic as u8);
+                }
+            }
+        }
+        o
+    }
+
+    /// Read what [`Extracted::to_wire`] wrote. Any shortfall or leftover is an error (a child that died halfway writes nothing usable).
+    pub fn from_wire(bytes: &[u8]) -> Result<Extracted> {
+        struct R<'a>(&'a [u8]);
+        impl<'a> R<'a> {
+            fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+                if self.0.len() < n {
+                    return Err(Error::new("the extraction is cut short"));
+                }
+                let (a, b) = self.0.split_at(n);
+                self.0 = b;
+                Ok(a)
+            }
+            fn u8(&mut self) -> Result<u8> {
+                Ok(self.take(1)?[0])
+            }
+            fn u32(&mut self) -> Result<usize> {
+                Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize)
+            }
+            fn u64(&mut self) -> Result<usize> {
+                Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()) as usize)
+            }
+            fn f32(&mut self) -> Result<f32> {
+                Ok(f32::from_bits(u32::from_le_bytes(self.take(4)?.try_into().unwrap())))
+            }
+            fn str(&mut self) -> Result<String> {
+                let n = self.u32()?;
+                String::from_utf8(self.take(n)?.to_vec()).map_err(|_| Error::new("the extraction has invalid text"))
+            }
+            /// A count that cannot be bigger than the bytes left (each item takes at least `min` bytes), so a bad count cannot reserve gigabytes.
+            fn count(&mut self, min: usize) -> Result<usize> {
+                let n = self.u32()?;
+                if n.saturating_mul(min) > self.0.len() {
+                    return Err(Error::new("the extraction is cut short"));
+                }
+                Ok(n)
+            }
+        }
+        let mut r = R(bytes);
+        if r.take(4)? != WIRE_MAGIC {
+            return Err(Error::new("not an extraction"));
+        }
+        let title = if r.u8()? == 1 { Some(r.str()?) } else { None };
+        let np = r.count(24)?;
+        let mut pages = Vec::with_capacity(np);
+        for _ in 0..np {
+            let index = r.u64()?;
+            let label = r.str()?;
+            let (width, height) = (r.f32()?, r.f32()?);
+            let images = r.u64()?;
+            let nb = r.count(20)?;
+            let mut blocks = Vec::with_capacity(nb);
+            for _ in 0..nb {
+                let (x0, y0, x1, y1) = (r.f32()?, r.f32()?, r.f32()?, r.f32()?);
+                let nl = r.count(26)?;
+                let mut lines = Vec::with_capacity(nl);
+                for _ in 0..nl {
+                    let text = r.str()?;
+                    let (lx0, ly0, lx1, ly1, size) = (r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?);
+                    let (bold, italic) = (r.u8()? != 0, r.u8()? != 0);
+                    lines.push(Line { text, x0: lx0, y0: ly0, x1: lx1, y1: ly1, size, bold, italic });
+                }
+                blocks.push(Block { x0, y0, x1, y1, lines });
+            }
+            pages.push(RawPage { index, label, width, height, blocks, images });
+        }
+        if !r.0.is_empty() {
+            return Err(Error::new("the extraction has extra bytes"));
+        }
+        Ok(Extracted { title, pages })
+    }
+}

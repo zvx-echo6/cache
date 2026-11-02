@@ -2,11 +2,15 @@
 //!
 //!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder | --embed-url URL] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
 //!                                            [--created-at TEXT] [--pieces-out FILE]
+//!       Each PDF is read in a child process (this program run as the hidden `extract-pdf`), so a PDF that crashes MuPDF fails alone and
+//!       a long batch goes on; --in-process reads in this process instead (for debugging).
 //!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive]
 //!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, documents.tsv, SHA256SUMS
 //!   cache-build dump <in.pdf> <page>     (the blocks and lines MuPDF reports for a 1-based page; for debugging)
 
-use cache_builder::build::{build_pack, BuildOptions};
+use cache_builder::build::{build_pack_with_extractor, BuildOptions};
+use cache_builder::extract::extract_pdf;
+use cache_builder::isolate::ChildExtractor;
 use cache_builder::embed::{Embedder, FakeEmbedder};
 use cache_builder::embed_http::HttpEmbedder;
 use cache_builder::library::{build_library, check_library_dir, LibraryOptions};
@@ -16,7 +20,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -45,7 +49,7 @@ struct Args {
 }
 
 fn parse(args: &[String]) -> Args {
-    let flags = ["--fake-embedder", "--archive"];
+    let flags = ["--fake-embedder", "--archive", "--in-process"];
     let mut pos = Vec::new();
     let mut opts = Vec::new();
     let mut i = 0;
@@ -82,6 +86,10 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {
         usage();
+    }
+    if argv[0] == "extract-pdf" {
+        // Hidden: run by `pdf` for each PDF (see cache_builder::isolate).
+        std::process::exit(cache_builder::isolate::child_main());
     }
     let a = parse(&argv[1..]);
     let code = match argv[0].as_str() {
@@ -126,6 +134,8 @@ fn cmd_pdf(a: &Args) -> i32 {
         return 2;
     }
     let created = a.get("--created-at").unwrap_or_else(now_utc);
+    let child = ChildExtractor::current_exe(std::env::temp_dir());
+    let in_process = a.has("--in-process");
     let mut failed = 0;
     let mut pieces_out = String::new();
     for f in &a.pos {
@@ -146,7 +156,8 @@ fn cmd_pdf(a: &Args) -> i32 {
         if let Some(v) = a.get("--doc-version") {
             o.doc_version = v.parse().unwrap_or(0);
         }
-        match build_pack(&bytes, &o, embedder) {
+        let extract = |b: &[u8]| if in_process { extract_pdf(b) } else { child.extract(b) };
+        match build_pack_with_extractor(&bytes, &o, embedder, &mut |_| {}, &extract) {
             Ok((pack, r)) => {
                 let path = match write_pack(&pack, &PathBuf::from(&out)) {
                     Ok(p) => p,

@@ -837,3 +837,185 @@ fn drop_settings_are_checked_and_remembered() {
     assert_eq!(names(&folder, "ingest"), vec!["a.pdf"]);
     assert_eq!(svc2.drop_view()["status"]["error"]["code"], json!("no_library"));
 }
+
+// ---- reading PDFs in a child process, and the crash-loop guard
+
+/// The reading child for the tests below: this test program, told to act as `cache-server extract-pdf`. A PDF carrying the marker
+/// makes it crash the way MuPDF does on a damaged file; any other PDF is read by the real extraction.
+#[test]
+fn extract_child_entry() {
+    if std::env::var_os("CACHE_TEST_EXTRACT_CHILD").is_none() {
+        return; // an ordinary run of the suite: nothing to do
+    }
+    if let Some(path) = std::env::var_os("CACHE_EXTRACT_IN") {
+        if std::fs::read(path).is_ok_and(|b| b.windows(8).any(|w| w == b"CRASHME!")) {
+            std::process::abort();
+        }
+    }
+    std::process::exit(cache_builder::isolate::child_main());
+}
+
+fn child_reader(svc: &BuildService, fault: Option<&str>, timeout: Option<Duration>) {
+    let mut e = ChildExtractor::current_exe(svc.data.join("build/tmp"));
+    e.args = ["--exact", "libbuild::tests::extract_child_entry", "--nocapture", "--test-threads=1"].iter().map(Into::into).collect();
+    e.env = vec![("CACHE_TEST_EXTRACT_CHILD".into(), "1".into())];
+    e.fault = fault.map(String::from);
+    e.timeout = timeout;
+    svc.set_extractor(e);
+}
+
+/// A PDF that crashes the reading child.
+fn crashing(topic: &str) -> Vec<u8> {
+    let mut b = book(topic, 2, None);
+    b.extend_from_slice(b"\n%CRASHME!\n");
+    b
+}
+
+const DAMAGED: &str = "Cache couldn't read this PDF; it may be damaged.";
+
+#[test]
+fn a_pdf_that_crashes_the_reader_fails_its_book_and_the_queue_moves_on() {
+    let d = TempDir::new("x1");
+    let (svc, _) = rig(&d);
+    child_reader(&svc, None, None);
+    let lib = new_lib(&svc, "L");
+    let a = add(&svc, &lib, "first.pdf", &book("well", 2, Some("First")));
+    let bad = add(&svc, &lib, "bad.pdf", &crashing("tank"));
+    let c = add(&svc, &lib, "third.pdf", &book("pump", 2, Some("Third")));
+    drain(&svc);
+    assert_eq!((state(&svc, &a), state(&svc, &bad), state(&svc, &c)), (S::Done, S::Failed, S::Done));
+    assert_eq!(item(&svc, &bad).error.as_deref(), Some(DAMAGED));
+    assert_eq!(item(&svc, &bad).attempts, 0, "the attempt came back, so it does not count against the book");
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 2);
+    assert_eq!(std::fs::read_dir(d.0.join("build/tmp")).map(|r| r.count()).unwrap_or(0), 0, "no reading folders left");
+}
+
+#[test]
+fn a_crashing_pdf_in_the_drop_folder_goes_to_failed_with_its_reason() {
+    let d = TempDir::new("x2");
+    let (svc, _, _, root) = drop_rig(&d, 0);
+    child_reader(&svc, None, None);
+    put(&root, "ingest", "a.pdf", &book("spring", 2, Some("Spring")));
+    put(&root, "ingest", "bad.pdf", &crashing("river"));
+    put(&root, "ingest", "c.pdf", &book("creek", 2, Some("Creek")));
+    svc.scan();
+    svc.scan();
+    drain(&svc);
+    assert_eq!(names(&root, "ingest"), Vec::<String>::new());
+    assert_eq!(names(&root, "complete"), vec!["a.pdf", "c.pdf"]);
+    assert_eq!(names(&root, "failed"), vec!["bad.pdf", "bad.pdf.why.txt"]);
+    assert_eq!(std::fs::read_to_string(root.join("failed/bad.pdf.why.txt")).unwrap().trim(), DAMAGED);
+}
+
+#[test]
+fn a_reader_that_runs_out_of_time_fails_its_book_and_the_next_one_builds() {
+    let d = TempDir::new("x3");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    child_reader(&svc, Some("hang"), Some(Duration::from_millis(600)));
+    let slow = add(&svc, &lib, "slow.pdf", &book("flood", 2, None));
+    let t = Instant::now();
+    assert!(matches!(svc.run_one(), Run::Ran));
+    assert!(t.elapsed() < Duration::from_secs(20));
+    assert_eq!(state(&svc, &slow), S::Failed);
+    assert_eq!(item(&svc, &slow).error.as_deref(), Some("Cache couldn't read this PDF in time; it may be damaged or too large."));
+    child_reader(&svc, None, None);
+    let next = add(&svc, &lib, "next.pdf", &book("dry", 2, None));
+    drain(&svc);
+    assert_eq!(state(&svc, &next), S::Done);
+}
+
+#[test]
+fn a_book_read_through_the_child_is_the_same_book_as_one_read_in_process() {
+    let d = TempDir::new("x4");
+    let (svc, _) = rig(&d);
+    child_reader(&svc, None, None);
+    let lib = new_lib(&svc, "L");
+    let pdf = book("aquifer", 3, Some("Aquifer"));
+    let id = add(&svc, &lib, "aquifer.pdf", &pdf);
+    drain(&svc);
+    assert_eq!(state(&svc, &id), S::Done);
+    let doc = item(&svc, &id).doc_id.unwrap();
+    let stored = cache_builder::read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
+    let direct = cache_builder::build_pack(&pdf, &BuildOptions::new("aquifer.pdf", "2026-11-02T00:00:00Z"), &FakeEmbedder).unwrap().0;
+    assert_eq!(stored.pieces, direct.pieces);
+    assert_eq!((stored.header.page_count, stored.header.ocr_pages, stored.header.title), (direct.header.page_count, direct.header.ocr_pages, direct.header.title));
+}
+
+#[test]
+fn the_attempt_is_written_down_before_the_work_starts() {
+    let d = TempDir::new("x5");
+    let (svc, fake) = rig(&d);
+    let lib = new_lib(&svc, "L");
+    let id = add(&svc, &lib, "a.pdf", &book("well", 2, None));
+    let seen: Arc<Mutex<Option<(String, u64)>>> = Arc::new(Mutex::new(None));
+    let (s2, path) = (seen.clone(), d.0.join("build/queue.json"));
+    *lock(&fake.hook) = Some(Box::new(move || {
+        let q: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let it = &q["items"][0];
+        *lock(&s2) = Some((it["state"].as_str().unwrap().to_string(), it["attempts"].as_u64().unwrap()));
+    }));
+    drain(&svc);
+    let (st, attempts) = lock(&seen).clone().expect("the embedder ran");
+    assert_eq!((st.as_str(), attempts), ("reading", 1), "on disk while the book was being embedded");
+    assert_eq!((state(&svc, &id), item(&svc, &id).attempts), (S::Done, 0));
+}
+
+/// As if the service died on the first book of the queue: it stays marked mid-attempt in queue.json.
+fn die_on_first(svc: &BuildService, attempts: u32) {
+    let mut st = lock(&svc.st);
+    let it = &mut st.items[0];
+    it.state = S::Building;
+    it.attempts = attempts;
+    svc.save_queue_locked(&st);
+}
+
+#[test]
+fn a_book_that_kills_the_service_twice_is_failed_instead_of_tried_forever() {
+    let d = TempDir::new("x6");
+    let (id, lib);
+    {
+        let (svc, _) = rig(&d);
+        lib = new_lib(&svc, "L");
+        id = add(&svc, &lib, "killer.pdf", &book("flood", 2, None));
+        add(&svc, &lib, "fine.pdf", &book("dry", 2, None));
+        die_on_first(&svc, 1);
+    }
+    {
+        // first restart: one attempt so far, so it is tried again
+        let (svc, _) = rig(&d);
+        assert_eq!((state(&svc, &id), item(&svc, &id).attempts), (S::Queued, 1));
+        die_on_first(&svc, 2); // and it kills the service again
+    }
+    let (svc, _) = rig(&d);
+    let it = item(&svc, &id);
+    assert_eq!(it.state, S::Failed);
+    assert!(it.error.unwrap().contains("stopped unexpectedly twice"));
+    drain(&svc);
+    assert_eq!(svc.books(&lib).unwrap().as_array().unwrap().len(), 1, "the other book built");
+    assert_eq!(state(&svc, &id), S::Failed, "and the killer was not tried again");
+    // a retry from the list gives it a fresh start
+    svc.retry(&id).unwrap();
+    assert_eq!((state(&svc, &id), item(&svc, &id).attempts), (S::Queued, 0));
+}
+
+#[test]
+fn a_drop_folder_file_that_kills_the_service_twice_goes_to_failed_with_its_reason() {
+    let d = TempDir::new("x7");
+    let root;
+    {
+        let (svc, _, _, r) = drop_rig(&d, 0);
+        root = r;
+        put(&root, "ingest", "killer.pdf", &book("flood", 2, None));
+        svc.scan();
+        svc.scan();
+        assert_eq!(lock(&svc.st).items.len(), 1);
+        die_on_first(&svc, 2);
+    }
+    let (svc, _) = rig_with(&d, BuildConfig { settle: Duration::ZERO, ..cfg() });
+    let id = lock(&svc.st).items[0].id.clone();
+    assert_eq!(state(&svc, &id), S::Failed);
+    assert_eq!(names(&root, "ingest"), Vec::<String>::new());
+    assert_eq!(names(&root, "failed"), vec!["killer.pdf", "killer.pdf.why.txt"]);
+    assert!(std::fs::read_to_string(root.join("failed/killer.pdf.why.txt")).unwrap().contains("stopped unexpectedly twice"));
+}

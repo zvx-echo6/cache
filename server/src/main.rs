@@ -265,6 +265,8 @@ fn main() {
             println!("cache-server {VERSION}");
             return;
         }
+        // Hidden: the server re-runs itself as this to read one PDF, so a PDF that crashes MuPDF takes down only this process.
+        Some("extract-pdf") => std::process::exit(cache_builder::isolate::child_main()),
         Some("serve") => serve(&argv[1..]),
         Some("set-password") => set_password(&argv[1..]),
         Some("keys") => keys(&argv[1..]),

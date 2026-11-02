@@ -34,8 +34,9 @@
 use crate::embed::EmbedService;
 use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
+use cache_builder::isolate::ChildExtractor;
 use cache_builder::pack::{read_pack, write_pack, Pack};
-use cache_builder::{build_pack_with, BuildOptions, Embedder, Progress};
+use cache_builder::{build_pack_with_extractor, BuildOptions, Embedder, Progress};
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
 use serde::{Deserialize, Serialize};
@@ -215,6 +216,10 @@ pub struct Item {
     /// For a drop-folder file that has been moved out of `ingest/`: its name in `complete/` or `failed/`.
     #[serde(default)]
     pub moved_to: Option<String>,
+    /// How many times a build of this book has been started and not come back (written to `queue.json` before the work starts,
+    /// and cleared when the attempt ends). A book found still mid-attempt at startup means the service died while on it.
+    #[serde(default)]
+    pub attempts: u32,
     pub created_at: String,
     #[serde(default)]
     pub started_at: Option<String>,
@@ -246,6 +251,7 @@ impl Item {
             doc_id: None,
             duplicate_of: None,
             moved_to: None,
+            attempts: 0,
             created_at: now_rfc3339(),
             started_at: None,
             finished_at: None,
@@ -380,6 +386,10 @@ fn make_library_id(title: &str) -> String {
 }
 
 
+/// A book that was mid-attempt when the service died this many times is not tried again.
+const MAX_ATTEMPTS: u32 = 2;
+const CRASH_LOOP_MSG: &str = "Cache stopped unexpectedly twice while building this book, so it was set aside. The PDF may be damaged.";
+
 fn friendly_error(raw: &str) -> String {
     if raw.contains("encrypted") || raw.contains("password") {
         "This PDF is protected with a password. Remove the password and add it again, or retry.".into()
@@ -414,9 +424,21 @@ impl BuildService {
         }
         libs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
         let mut items = q.items;
+        let mut gave_up: Vec<String> = vec![];
         for it in &mut items {
             if it.state.working() {
-                it.state = S::Queued;
+                // The service died while on this book. Once is bad luck; the second time it is the book.
+                if it.attempts >= MAX_ATTEMPTS {
+                    it.state = S::Failed;
+                    it.error = Some(CRASH_LOOP_MSG.into());
+                    it.finished_at = Some(now_rfc3339());
+                    it.finished_epoch = Some(epoch());
+                    if it.origin == Origin::Drop {
+                        gave_up.push(it.id.clone());
+                    }
+                } else {
+                    it.state = S::Queued;
+                }
                 it.pages = None;
                 it.pieces_done = 0;
                 it.pieces_total = None;
@@ -424,6 +446,8 @@ impl BuildService {
             }
         }
         let drop = dropdir::DropState::load(&data);
+        let data_for_tmp = data.join("build/tmp");
+        let _ = std::fs::remove_dir_all(&data_for_tmp); // reading folders a crash left
         // The clock for "publish at most every so often" starts now for every library.
         let last_publish: HashMap<String, Instant> = libs.iter().map(|l| (l.id.clone(), Instant::now())).collect();
         let svc = Arc::new(BuildService {
@@ -446,10 +470,21 @@ impl BuildService {
             rt: Mutex::new(tokio::runtime::Handle::try_current().ok()),
             drop,
             stopping: AtomicBool::new(false),
+            extractor: Mutex::new(ChildExtractor::current_exe(data_for_tmp)),
         });
         svc.recover();
         svc.save_queue();
+        // a drop-folder file given up on goes to failed/ with its note, as any failed file does
+        for id in gave_up {
+            svc.settle_drop_item(&id);
+        }
         svc
+    }
+
+    /// How PDFs are read (tests point it at a stand-in reader).
+    #[cfg(test)]
+    pub(crate) fn set_extractor(&self, e: ChildExtractor) {
+        *lock(&self.extractor) = e;
     }
 
     /// Start the build thread and the drop-folder thread.
@@ -637,6 +672,7 @@ impl BuildService {
             }
             let it = &mut st.items[idx];
             it.state = S::Reading;
+            it.attempts += 1; // saved below, before any work: this is what a restart finds if the service dies on this book
             it.started_at = Some(now_rfc3339());
             it.error = None;
             let item = it.clone();
@@ -687,7 +723,8 @@ impl BuildService {
         let adapter = Adapter { embed: self.embed.as_ref(), error: Mutex::new(None) };
         let mut seen_text: Option<(usize, usize)> = None;
         let id = item.id.clone();
-        let result = build_pack_with(&bytes, &opts, &adapter, &mut |p| match p {
+        let extractor = lock(&self.extractor).clone();
+        let result = build_pack_with_extractor(&bytes, &opts, &adapter, &mut |p| match p {
             Progress::Extracted { pages, pieces, ocr_pages } => {
                 seen_text = Some((pieces, ocr_pages));
                 self.update_item(&id, |it| {
@@ -698,7 +735,7 @@ impl BuildService {
                 });
             }
             Progress::Embedded { done, .. } => self.update_item(&id, |it| it.pieces_done = done as u32),
-        });
+        }, &|pdf| extractor.extract(pdf));
         match result {
             Ok((pack, _)) => match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref()) {
                 Ok(()) => Outcome::Built(Box::new(pack)),
@@ -826,6 +863,7 @@ impl BuildService {
             if let Some(it) = st.items.iter_mut().find(|i| i.id == item.id) {
                 it.finished_at = Some(now_rfc3339());
                 it.finished_epoch = Some(epoch());
+                it.attempts = 0; // this attempt came back
                 match &outcome {
                     Outcome::Built(pack) => {
                         it.state = S::Done;
@@ -1140,6 +1178,7 @@ impl BuildService {
             if let Some(idx) = st.items.iter().position(|i| i.id == id) {
                 let mut x = st.items.remove(idx);
                 x.state = S::Queued;
+                x.attempts = 0;
                 x.error = None;
                 x.note = None;
                 x.pages = None;
