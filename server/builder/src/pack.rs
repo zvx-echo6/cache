@@ -69,9 +69,13 @@ pub struct PackPiece {
     pub text: String,
     /// The page label of the piece's first word.
     pub page: String,
-    /// The 1-based PDF page of the piece's first word.
-    pub pdf_page: u32,
+    /// The 1-based PDF page of the piece's first word. `None` in packs written before the field was required, and then
+    /// left out of the library payload.
+    pub pdf_page: Option<u32>,
+    /// The label of the last page, only when the piece crosses a page break.
     pub page_end: Option<String>,
+    /// The 1-based PDF page of the last word, only when the piece crosses a page break (`page_end`'s PDF page).
+    pub pdf_page_end: Option<u32>,
     pub heading_path: Vec<String>,
     pub vector: Vec<f32>,
 }
@@ -81,9 +85,12 @@ struct PieceLine {
     i: u32,
     text: String,
     page: String,
-    pdf_page: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pdf_page: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     page_end: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pdf_page_end: Option<u32>,
     heading_path: Vec<String>,
     vector: String,
 }
@@ -135,6 +142,7 @@ pub fn pack_bytes(pack: &Pack) -> Result<Vec<u8>> {
             page: p.page.clone(),
             pdf_page: p.pdf_page,
             page_end: p.page_end.clone(),
+            pdf_page_end: p.pdf_page_end,
             heading_path: p.heading_path.clone(),
             vector: encode_vector(&p.vector),
         };
@@ -179,7 +187,16 @@ pub fn read_pack_bytes(bytes: &[u8]) -> Result<Pack> {
         if vector.len() != header.embedding.dims {
             return Err(Error::new(format!("piece {} has {} dimensions, the header says {}", p.i, vector.len(), header.embedding.dims)));
         }
-        pieces.push(PackPiece { index: p.i, text: p.text, page: p.page, pdf_page: p.pdf_page, page_end: p.page_end, heading_path: p.heading_path, vector });
+        pieces.push(PackPiece {
+            index: p.i,
+            text: p.text,
+            page: p.page,
+            pdf_page: p.pdf_page,
+            page_end: p.page_end,
+            pdf_page_end: p.pdf_page_end,
+            heading_path: p.heading_path,
+            vector,
+        });
     }
     if pieces.len() != header.pieces {
         return Err(Error::new(format!("the pack has {} pieces, the header says {}", pieces.len(), header.pieces)));

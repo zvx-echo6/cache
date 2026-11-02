@@ -2,7 +2,8 @@
 //!
 //!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
 //!                                            [--created-at TEXT] [--pieces-out FILE]
-//!   cache-build library <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive]
+//!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive]
+//!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, documents.tsv, SHA256SUMS
 //!   cache-build dump <in.pdf> <page>     (the blocks and lines MuPDF reports for a 1-based page; for debugging)
 
 use cache_builder::build::{build_pack, BuildOptions};
@@ -14,7 +15,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> --fake-embedder [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> --fake-embedder [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -181,9 +182,9 @@ fn cmd_pdf(a: &Args) -> i32 {
 
 fn cmd_library(a: &Args) -> i32 {
     let (Some(out), Some(id), Some(title)) = (a.get("--out"), a.get("--id"), a.get("--title")) else { usage() };
-    let Some(dir) = a.pos.first() else { usage() };
+    let Some(dir) = a.get("--packs").or_else(|| a.pos.first().cloned()) else { usage() };
     let o = LibraryOptions { id, title, version: a.get("--version").unwrap_or_else(|| "1".into()), archive: a.has("--archive") };
-    match build_library(&PathBuf::from(dir), &PathBuf::from(&out), &o) {
+    match build_library(&PathBuf::from(&dir), &PathBuf::from(&out), &o) {
         Ok(r) => {
             println!("library {out}: {} points from {} documents", r.points, r.documents);
             match check_library_dir(&PathBuf::from(&out)) {
