@@ -184,9 +184,14 @@ class WhatsNewSeen {
   }
 }
 
+/// The sheet after an update is on in the app. The tests turn it off (test/flutter_test_config.dart): a test machine has no
+/// app folder to remember it was seen, so it would open over Home in every test that starts the app with a model.
+bool whatsNewAfterUpdate = true;
+
 /// Shows "What's new in [version]" once, after the first start of a new version, when the owner wrote lines for it. A first install
 /// ([firstInstall]) records the version without showing it. Any way it closes (Got it, a swipe down, a tap outside) counts as seen.
 Future<void> maybeShowWhatsNew(BuildContext context, {required WhatsNewSeen seen, required bool firstInstall, String version = kAppVersion, Future<String> Function()? read}) async {
+  if (!whatsNewAfterUpdate) return;
   final last = await seen.lastSeen();
   if (last == version) return;
   if (last == null && firstInstall) {
