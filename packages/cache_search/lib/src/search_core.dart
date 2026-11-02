@@ -418,6 +418,8 @@ void _workerMain(List<dynamic> init) {
                 'whole_library_only': s.wholeLibraryOnly,
                 'source_id': s.sourceId,
                 'index': s.index?.toJson(),
+                'captionsindex': s.captionsIndex?.toJson(),
+                'epubindex': s.epubIndex?.toJson(),
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];

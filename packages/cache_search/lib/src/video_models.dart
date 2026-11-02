@@ -243,6 +243,24 @@ class DownloadedCaption {
 }
 
 /// A video saved on this phone (its manifest).
+/// cs_video_downloads' `captions_index` of a saved video: the source id the index_source job takes and whether it is built.
+class VideoCaptionsIndex {
+  const VideoCaptionsIndex({required this.sourceId, this.files = 0, this.built = false, this.needsBuild = false});
+
+  factory VideoCaptionsIndex.fromJson(Map<String, dynamic> j) => VideoCaptionsIndex(
+    sourceId: (j['source_id'] ?? '') as String,
+    files: (j['files'] as num?)?.toInt() ?? 0,
+    built: j['built'] == true,
+    needsBuild: j['needs_build'] == true,
+  );
+
+  /// "<instance>/<video uuid>".
+  final String sourceId;
+  final int files;
+  final bool built;
+  final bool needsBuild;
+}
+
 class DownloadedVideo {
   const DownloadedVideo({
     required this.instance,
@@ -257,6 +275,7 @@ class DownloadedVideo {
     required this.captions,
     this.thumbnailPath,
     this.downloadedAt,
+    this.captionsIndex,
   });
 
   factory DownloadedVideo.fromJson(Map<String, dynamic> j) => DownloadedVideo(
@@ -272,7 +291,11 @@ class DownloadedVideo {
         thumbnailPath: j['thumbnail_path'] as String?,
         downloadedAt: j['downloaded_at'] as String?,
         captions: [for (final c in _list(j['captions'])) DownloadedCaption.fromJson(c)],
+        captionsIndex: j['captions_index'] is Map ? VideoCaptionsIndex.fromJson((j['captions_index'] as Map).cast<String, dynamic>()) : null,
       );
+
+  /// The index of its caption files (with an indexes_dir in the core's config, when it has captions).
+  final VideoCaptionsIndex? captionsIndex;
 
   final String instance;
   final String uuid;

@@ -144,6 +144,8 @@ class SourceStatus {
     this.wholeLibraryOnly,
     this.sourceId,
     this.index,
+    this.captionsIndex,
+    this.epubIndex,
   });
 
   factory SourceStatus.fromJson(Map<String, dynamic> j) {
@@ -164,6 +166,8 @@ class SourceStatus {
       wholeLibraryOnly: j['whole_library_only'] as bool?,
       sourceId: j['source_id'] as String?,
       index: j['index'] is Map ? SourceIndex.fromJson((j['index'] as Map).cast<String, dynamic>()) : null,
+      captionsIndex: j['captionsindex'] is Map ? ZimSubIndex.fromJson((j['captionsindex'] as Map).cast<String, dynamic>()) : null,
+      epubIndex: j['epubindex'] is Map ? ZimSubIndex.fromJson((j['epubindex'] as Map).cast<String, dynamic>()) : null,
       error: e is Map ? CoreSourceError(e['code'] as String, (e['message'] ?? '') as String) : null,
     );
   }
@@ -198,8 +202,58 @@ class SourceStatus {
   /// Where the source's search index is (a sealed snapshot, the old place, or none); null from a core that does not report it.
   final SourceIndex? index;
 
+  /// A ZIM's caption files' index (`captionsindex`) and its EPUBs' (`epubindex`): absent until the core has looked at the ZIM's
+  /// entries, and without an indexes_dir.
+  final ZimSubIndex? captionsIndex;
+  final ZimSubIndex? epubIndex;
+
   /// True when search can use this source right now.
   bool get searchable => id != null && indexed && !building && !opening && !updating && error == null;
+}
+
+/// cs_status's `captionsindex` or `epubindex` of a ZIM: its caption files' or EPUBs' keyword index.
+class ZimSubIndex {
+  const ZimSubIndex({required this.state, this.kind, this.snapshot, this.sourceId, this.entries, this.items, this.pieces, this.needsBuild});
+
+  factory ZimSubIndex.fromJson(Map<String, dynamic> j) => ZimSubIndex(
+    state: (j['state'] ?? 'none') as String,
+    kind: j['kind'] as String?,
+    snapshot: j['snapshot'] as String?,
+    sourceId: j['source_id'] as String?,
+    entries: (j['entries'] as num?)?.toInt(),
+    items: ((j['files'] ?? j['epubs']) as num?)?.toInt(),
+    pieces: (j['pieces'] as num?)?.toInt(),
+    needsBuild: j['needs_build'] as bool?,
+  );
+
+  /// "opening", "ready" (a snapshot is used) or "none".
+  final String state;
+
+  /// "zim-captions" or "zim-epub".
+  final String? kind;
+  final String? snapshot;
+  final String? sourceId;
+
+  /// How many caption entries or EPUBs the ZIM has (once the core has looked).
+  final int? entries;
+
+  /// Caption files or EPUBs in the snapshot.
+  final int? items;
+  final int? pieces;
+
+  /// It has such entries and no published snapshot (null until the core has looked).
+  final bool? needsBuild;
+
+  Map<String, dynamic> toJson() => {
+    'state': state,
+    'kind': kind,
+    'snapshot': snapshot,
+    'source_id': sourceId,
+    'entries': entries,
+    if (kind == 'zim-epub') 'epubs': items else 'files': items,
+    'pieces': pieces,
+    'needs_build': needsBuild,
+  };
 }
 
 /// cs_status's `index` of a source: where its search index is and what it is.

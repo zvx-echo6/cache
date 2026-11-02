@@ -39,7 +39,7 @@ PdfHold pdfHoldOf(IndexWait why) => switch (why) {
       IndexWait.heat => PdfHold.warm,
       IndexWait.battery => PdfHold.battery,
       IndexWait.storage => PdfHold.storage,
-      IndexWait.none || IndexWait.closed => PdfHold.waiting,
+      IndexWait.none || IndexWait.closed || IndexWait.model => PdfHold.waiting,
     };
 
 /// One ZIM's PDF run as the scheduler sees it: finished when its PDFs are searchable (true) or the run stopped (paused, failed,

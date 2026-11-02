@@ -74,7 +74,10 @@ class DownloadTask {
 /// The video connector as the app uses it: instances, logins (tokens in secure storage), browse calls with the
 /// token and one automatic refresh, downloads with progress, the saved videos, and citation links.
 class VideoState extends ChangeNotifier {
-  VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy}) : tokens = tokens ?? const SecureTokenStore();
+  VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy, this.indexesDir}) : tokens = tokens ?? const SecureTokenStore();
+
+  /// The device's indexes folder (the core's indexes_dir): a saved video's captions are indexed there (captions_index).
+  final Future<Directory?> Function()? indexesDir;
 
   /// Whether a download may start on the current connection (mobile data switches). Null: always.
   final DataPolicy? policy;
@@ -114,7 +117,7 @@ class VideoState extends ChangeNotifier {
     this.dir = dir;
     await dir.create(recursive: true);
     try {
-      _core = await VideoCore.open(dir.path, native: nativeFactory ?? _defaultNative);
+      _core = await VideoCore.open(dir.path, indexesDir: (await indexesDir?.call())?.path, native: nativeFactory ?? _defaultNative);
     } catch (e) {
       unavailable = e is CacheSearchException ? e.message : 'Videos are not available on this device';
       notifyListeners();

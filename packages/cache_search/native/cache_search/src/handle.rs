@@ -6,6 +6,7 @@ use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
 use crate::tools::QueryEmbedder;
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
+use crate::kwslot::KwSlot;
 use crate::pdfindex::{self, PdfIndex};
 use crate::web::{WebSearchTool, WebState};
 use crate::zimsrc::{self, ZimSource};
@@ -236,6 +237,9 @@ pub enum Source {
     Zim(ZimSlot),
     /// The PDF index of a loaded ZIM (never in the `sources` list `set_sources` is given; found beside the ZIM).
     Pdf(PdfSlot),
+    /// The caption index of a saved video, or the caption or EPUB index of a loaded ZIM (never in the `sources` list; found
+    /// under `indexes_dir`, see kwslot.rs).
+    Kw(KwSlot),
     /// A ZIM that could not be opened (missing file, SD card out, bad format). Retried on every
     /// `set_sources`; reported by `cs_status`; skipped by search.
     Failed { kind: &'static str, path: PathBuf, title: String, error: Error },
@@ -538,8 +542,22 @@ impl Handle {
             })
             .collect();
         self.indexes_dir = cfg.indexes_dir.as_ref().filter(|d| !d.is_empty()).map(PathBuf::from);
-        let old_pdfs: Vec<PdfSlot> = old.into_iter().flatten().filter_map(|s| if let Source::Pdf(p) = s { Some(p) } else { None }).collect();
+        let (mut old_pdfs, mut old_kw): (Vec<PdfSlot>, Vec<KwSlot>) = (Vec::new(), Vec::new());
+        for s in old.into_iter().flatten() {
+            match s {
+                Source::Pdf(p) => old_pdfs.push(p),
+                Source::Kw(k) => old_kw.push(k),
+                _ => {}
+            }
+        }
         self.attach_pdf_indexes(old_pdfs);
+        // where jobs find the saved videos and the ZIM files (kwbuild.rs)
+        let zim_places: Vec<(String, PathBuf)> = self
+            .sources
+            .iter()
+            .filter_map(|s| if let Source::Zim(z) = s { Some((z.src.id.clone(), z.src.path.clone())) } else { None })
+            .collect();
+        crate::kwbuild::register_locations(cfg.video.as_ref().map(|v| std::path::Path::new(&v.dir)), &zim_places);
         self.snippet_chars = cfg.snippet_chars;
         self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
@@ -563,6 +581,7 @@ impl Handle {
         }
         self.ext.configure_regions(cfg.regions)?;
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
+        self.attach_kw_indexes(old_kw);
         self.ext.plug_regions();
         self.ext.configure_layers(cfg.layers)?;
         self.ext.configure_notebook(cfg.notebook);
@@ -642,6 +661,9 @@ impl Handle {
                 if listing != p.listing {
                     *p = PdfSlot::start(p.zim_id.clone(), p.zim_title.clone(), p.dir.clone(), listing);
                 }
+                continue;
+            }
+            if let Source::Kw(_) = s {
                 continue;
             }
             let next: Option<Source> = match s {
@@ -725,6 +747,8 @@ impl Handle {
                 *s = n;
             }
         }
+        // caption and EPUB snapshots published (or synced) since the last look are searched without another cs_set_sources
+        self.refresh_kw_indexes();
     }
 
     pub fn zim(&self, id: &str) -> Result<&ZimSource> {
@@ -795,7 +819,7 @@ impl Handle {
                         "docs": docs, "embedding_model": Value::Null, "error": error,
                     })
                 }
-                Source::Pdf(_) => Value::Null,
+                Source::Pdf(_) | Source::Kw(_) => Value::Null,
                 Source::Failed { kind, path, title, error } => json!({
                     "id": Value::Null, "kind": kind, "path": path.to_string_lossy(),
                     "title": title, "language": Value::Null,
@@ -830,7 +854,7 @@ impl Handle {
         let metas: Vec<(Value, Value)> = self
             .sources
             .iter()
-            .filter(|s| !matches!(s, Source::Pdf(_)))
+            .filter(|s| !matches!(s, Source::Pdf(_) | Source::Kw(_)))
             .map(|s| {
                 let at = |d: &Option<PathBuf>| d.as_ref().map(|p| json!(p.to_string_lossy())).unwrap_or(Value::Null);
                 let lib_id = |id: &str, version: Option<&String>| match version {
@@ -850,7 +874,7 @@ impl Handle {
                         json!(lib_id(&o.id, o.settings.as_ref().and_then(|st| st.version.as_ref()))),
                         json!({"kind": "library", "location": at(&o.index_dir), "snapshot": Value::Null, "format": index::LIB_INDEX_FORMAT}),
                     ),
-                    Source::Failed { .. } | Source::Pdf(_) => (Value::Null, Value::Null),
+                    Source::Failed { .. } | Source::Pdf(_) | Source::Kw(_) => (Value::Null, Value::Null),
                 }
             })
             .collect();
@@ -863,6 +887,12 @@ impl Handle {
             if v["kind"] == "zim" {
                 if let Some(p) = v["id"].as_str().and_then(|id| pdf.get(id)) {
                     v["pdfindex"] = p.clone();
+                }
+                // the caption and EPUB indexes of the ZIM, with whether they still need building
+                if let (Some(id), Some(path)) = (v["id"].as_str().map(str::to_string), v["path"].as_str().map(PathBuf::from)) {
+                    for (key, val) in self.kw_status_for_zim(&id, &path) {
+                        v[key] = val;
+                    }
                 }
             }
         }
@@ -925,7 +955,15 @@ impl Handle {
 
     pub fn zim_get(&self, address: &str) -> Result<zimsrc::RawEntry> {
         let a = zimsrc::parse_address(address)?;
-        self.zim(&a.id)?.get(&a.path)
+        let z = self.zim(&a.id)?;
+        match z.get(&a.path) {
+            // an address with `!/` also names a file inside an EPUB (kwslot.rs); the entry itself is tried first
+            Err(e) if e.code == crate::ErrorCode::NotFound && a.path.contains("!/") => match self.zim_get_in_epub(&a.id, &a.path)? {
+                Some(entry) => Ok(entry),
+                None => Err(e),
+            },
+            other => other,
+        }
     }
 
     pub fn zim_main_page(&self, zim_id: &str) -> Result<String> {
