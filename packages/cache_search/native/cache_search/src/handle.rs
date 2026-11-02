@@ -687,14 +687,14 @@ impl Handle {
             match s {
                 Source::Zim(z) => {
                     z.indexes_dir = root.clone();
-                    if let Some(d) = &z.index_dir {
-                        idxsnap::note_legacy(idxsnap::KIND_ZIM, &z.src.id, d);
+                    if let (Some(root), Some(d)) = (&root, &z.index_dir) {
+                        idxsnap::note_legacy(root, idxsnap::KIND_ZIM, &z.src.id, d);
                     }
                 }
                 Source::Library(l) => {
                     l.indexes_dir = root.clone();
-                    if let Some(d) = &l.index_dir {
-                        idxsnap::note_legacy(idxsnap::KIND_LIBRARY, &l.source_id(), d);
+                    if let (Some(root), Some(d)) = (&root, &l.index_dir) {
+                        idxsnap::note_legacy(root, idxsnap::KIND_LIBRARY, &l.source_id(), d);
                     }
                 }
                 _ => {}

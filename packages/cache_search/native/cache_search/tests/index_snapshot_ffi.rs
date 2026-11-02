@@ -497,3 +497,56 @@ fn a_corrupt_snapshot_is_not_used() {
     assert!(search(h, "flood").contains("Flood notes"));
     unsafe { cs_close(h) };
 }
+
+#[test]
+fn two_handles_with_the_same_zim_seal_their_own_folders() {
+    // the old-index lookup is per indexes_dir: another handle's folder is never sealed by mistake (this used to flake when
+    // tests ran side by side, and could bite an app with two profiles)
+    let (e1, e2) = (env("own-1"), env("own-2"));
+    build_legacy(&e1);
+    build_legacy(&e2);
+    let h1 = open_handle(&e1.zim, Some(&e1.legacy), Some(&e1.idx));
+    let h2 = open_handle(&e2.zim, Some(&e2.legacy), Some(&e2.idx));
+    for e in [&e1, &e2, &e1, &e2] {
+        let first = !zim_root(&e.idx, UUID).join("snap").exists();
+        let p = seal(e, json!({}));
+        if first {
+            assert_eq!(p["state"], "done", "{p}");
+            assert_eq!(p["result"]["method"], "link");
+        } else {
+            assert_eq!(p["result"]["adopted"], true, "{p}");
+        }
+    }
+    #[cfg(unix)]
+    for e in [&e1, &e2] {
+        use std::os::unix::fs::MetadataExt;
+        let name = &snapshots(&e.idx, UUID)[0];
+        let snap = std::fs::metadata(zim_root(&e.idx, UUID).join("snap").join(name).join("meta.json")).unwrap();
+        // linked to this environment's own old index (which is still there until the first open from the snapshot)
+        if let Ok(old) = std::fs::metadata(e.legacy.join("meta.json")) {
+            assert_eq!(snap.ino(), old.ino());
+        }
+    }
+    unsafe {
+        cs_close(h1);
+        cs_close(h2);
+    }
+}
+
+#[test]
+fn seal_is_busy_while_a_writer_holds_the_old_index_and_works_after() {
+    let e = env("writer");
+    build_legacy(&e);
+    let w = tantivy::Index::open_in_dir(&e.legacy).unwrap().writer::<tantivy::TantivyDocument>(15_000_000).unwrap();
+    let p = seal(&e, json!({"index_dir": e.legacy}));
+    assert_eq!(p["state"], "failed", "{p}");
+    assert_eq!(p["error"]["code"], "busy", "{p}");
+    assert!(snapshots(&e.idx, UUID).is_empty());
+    assert!(
+        e.legacy.join("meta.json").exists() && e.legacy.join("cache_search_index.json").exists(),
+        "nothing was moved"
+    );
+    drop(w);
+    let p = seal(&e, json!({"index_dir": e.legacy}));
+    assert_eq!(p["state"], "done", "{p}");
+}
