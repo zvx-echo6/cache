@@ -922,3 +922,50 @@ fn serve_exports_a_conversation_and_imports_it_as_a_new_one() {
     let (code, body) = s.req("GET", "/conversations/zzz/export", None);
     assert_eq!((code, j(&body)["code"].as_str().unwrap()), (404, "not_found"));
 }
+
+// ---- index-library / index-zim --indexes-dir: a keyword snapshot ----------------------------------------------------
+
+#[test]
+fn index_library_with_indexes_dir_publishes_a_snapshot() {
+    let tmp = TempDir::new("snapidx");
+    let shard = tmp.path("shard");
+    {
+        cache_search::library::ensure_init();
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(4, Distance::Cosine).build()).build();
+        let sh = EdgeShard::new(Path::new(&shard), cfg).unwrap();
+        let pts: Vec<_> = (1..=20u64)
+            .map(|i| PointStruct::new(i, vec![1.0, i as f32, 0.5, 0.25], json!({"title": format!("T{i}"), "content": format!("sandbag barrier {i}")})).0)
+            .collect();
+        sh.update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts)))).unwrap();
+        sh.flush().unwrap();
+        drop(sh);
+        cache_search::library::write_segments_manifest(Path::new(&shard)).unwrap();
+    }
+    let settings = tmp.path("cache-library.json");
+    std::fs::write(
+        &settings,
+        json!({"format": 1, "library_id": "fx", "version": "7", "title": "Fixture", "fields": {"title": "title", "text": "content"},
+               "embedding": {"vector": "", "model": "m", "sha256": "x", "dims": 4}, "keyword_index": "on"})
+        .to_string(),
+    )
+    .unwrap();
+    let idx = tmp.path("indexes");
+    // --indexes-dir instead of --index-dir
+    let o = cs(&["index-library", "--library", &shard, "--settings", &settings, "--indexes-dir", &idx]);
+    assert!(o.ok, "{}", o.stderr);
+    let fin = j(o.stdout.trim());
+    assert_eq!(fin["state"], "done", "{fin}");
+    let id = fin["result"]["snapshot"].as_str().unwrap().to_string();
+    let dir = Path::new(&idx).join("library").join("fx@7").join("snap").join(&id);
+    assert!(dir.join("manifest.json").is_file() && dir.join("meta.json").is_file(), "{}", dir.display());
+    assert_eq!(fin["result"]["path"], dir.to_string_lossy().as_ref());
+    let m = j(&std::fs::read_to_string(dir.join("manifest.json")).unwrap());
+    assert_eq!((m["kind"].as_str(), m["source_id"].as_str()), (Some("library"), Some("fx@7")));
+    assert!(o.stderr.contains(&format!("snapshot {id} published: {}", dir.display())), "{}", o.stderr);
+    // a second run finds it published and builds nothing
+    let o2 = cs(&["index-library", "--library", &shard, "--settings", &settings, "--indexes-dir", &idx]);
+    assert!(o2.ok && o2.stderr.contains(&format!("snapshot {id} already published")), "{}", o2.stderr);
+    // neither option: a usage error
+    let o3 = cs(&["index-library", "--library", &shard, "--settings", &settings]);
+    assert!(!o3.ok && o3.stderr.contains("index-dir"), "{}", o3.stderr);
+}

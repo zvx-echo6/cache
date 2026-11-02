@@ -981,10 +981,10 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  * Both also take "indexes_dir" (the folder of cs_open's "indexes_dir"; "index_dir" is then not needed and not used). The index
  *   is then built in <indexes_dir>/zim/<zim uuid>/.build/ (index_zim) or <indexes_dir>/library/<library_id[@version]>/.build/
  *   (index_library; the source id is cs_status's "source_id", so a library update with a new version is a new source and a new
- *   snapshot), resumable as before, and published as snapshots/<build-id>/ with manifest.json written last (kind, source_id,
+ *   snapshot), resumable as before, and published as snap/<build-id>/ with manifest.json written last (kind, source_id,
  *   format, tantivy, tokenizer, core, created, files [path,size,sha256]) by one rename; .build is then removed. If a usable
  *   snapshot of that source is already there (or arrives while building, synced from a peer) the job builds nothing more and
- *   ends done. When done, "result":{"adopted":bool,"snapshot":"<build-id>","bytes"?}.
+ *   ends done. When done, "result":{"adopted":bool,"snapshot":"<build-id>","source_id","path" (the snapshot folder),"bytes"?}.
  * kind "index_seal": {"indexes_dir","kind":"zim"|"library","source_id","index_dir"?}
  *   moves an index from its old location (cs_open's "index_dir" of that source; "index_dir" here names it when no handle has
  *   the source) into a snapshot without copying or merging: its files are HARD-LINKED into .build/publish-<id>/, hashed,
@@ -994,7 +994,7 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   done with "result":{"adopted":true,"snapshot"}. An old index that is not finished or is of another format fails
  *   "index_stale" (run index_zim / index_library with "indexes_dir" instead); none at all fails "index_missing". Progress
  *   "phase":"link"|"verify"|"manifest"|"publish"; cs_job_cancel is honoured until "publish". When done "result":
- *   {"adopted":false,"snapshot","files","bytes","method":"link"|"rename"}. A handle with "indexes_dir" uses the snapshot once it
+ *   {"adopted":false,"snapshot","source_id","path","files","bytes","method":"link"|"rename"}. A handle with "indexes_dir" uses the snapshot once it
  *   has verified it (until then the old index, as before), and after its first successful open from a sealed snapshot removes
  *   the old index's files from the old folder.
  * kind "update_library": {"library_path","snapshot_path","snapshot_manifest_path"}
