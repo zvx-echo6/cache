@@ -445,6 +445,8 @@ void _workerMain(List<dynamic> init) {
                   'source_kind': h.sourceKind,
                   'source_title': h.sourceTitle,
                   'page': h.page,
+                  // The worker passes on every field the app reads (a PDF passage's real page).
+                  if (h.pdfPage != null) 'pdf_page': h.pdfPage,
                 }
             ],
             'total_estimate': r.totalEstimate,

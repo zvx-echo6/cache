@@ -2,6 +2,7 @@ import 'package:cache/chat/tool.dart';
 import 'package:cache/pdf/index/pdf_chunk.dart';
 import 'package:cache/pdf/index/pdf_index_core.dart';
 import 'package:cache/pdf/pdf_address.dart';
+import 'package:cache_search/cache_search.dart' show SearchHit;
 import 'package:flutter_test/flutter_test.dart';
 
 String _w(int n, String w) => List.filled(n, w).join(' ');
@@ -48,6 +49,26 @@ void main() {
     // A video moment still opens its link at its time, and a plain PDF entry at its page.
     const pdf = SourceResult(title: 't', snippet: '', address: 'zim:$id/I/a.pdf', pdfPage: 3);
     expect(pdf.openAddress, 'zim:$id/I/a.pdf#page=3');
+  });
+
+  test("a search hit from a ZIM's PDF index carries its real page; the app's chunker gives the page texts too", () {
+    final h = SearchHit.fromJson({
+      'address': 'zimpdf:17e9fb54-9554-d2cd-e15f-17cf750882d1/I/a.pdf@3',
+      'title': 'Are You Ready?, p. iv',
+      'snippet': '',
+      'source_id': '17e9fb54-9554-d2cd-e15f-17cf750882d1',
+      'source_kind': 'zim',
+      'source_title': 'Ready.gov',
+      'page': 'iv',
+      'pdf_page': 6,
+    });
+    expect(h.page, isNull, reason: 'a printed label that is not a number is no page');
+    expect(h.pdfPage, 6);
+    final c = chunkPdfPages([PdfPageText(0, _w(10, 'a')), const PdfPageText(1, ''), PdfPageText(2, _w(5, 'b'), label: 'iii')]);
+    expect(c.pages, [
+      {'pdf_page': 1, 'label': '', 'text': _w(10, 'a')},
+      {'pdf_page': 3, 'label': 'iii', 'text': _w(5, 'b')},
+    ]);
   });
 
   test("the core's open answer: done and skipped (skipped as {path, reason})", () {

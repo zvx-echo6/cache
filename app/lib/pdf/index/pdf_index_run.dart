@@ -45,8 +45,11 @@ class PdfTimingRow {
 
 /// One PDF read, extracted and chunked: its text pieces, or why it is skipped.
 class _OnePdf {
-  _OnePdf.pieces(this.pieces, {this.size, this.sha256, this.title = ''}) : skip = null;
-  _OnePdf.skip(this.skip, {this.size, this.sha256}) : pieces = const [], title = '';
+  _OnePdf.pieces(this.pieces, {this.size, this.sha256, this.title = '', this.pages}) : skip = null;
+  _OnePdf.skip(this.skip, {this.size, this.sha256}) : pieces = const [], title = '', pages = null;
+
+  /// The page texts from cs_pdf_chunk, passed to cs_pdfindex_add as they are.
+  final List<Map<String, dynamic>>? pages;
 
   /// cs_pdfindex_add's "title": the document's own Title, cleaned ([cleanPdfTitle]), or "".
   final String title;
@@ -329,7 +332,7 @@ class PdfIndexRun extends ChangeNotifier {
         } else {
           if (session != null) {
             // The PDF's own Title when it has a real one, else "" (the core names it from its file name).
-            final a = await core.add(session, path: pdf.path, title: one.title, pieces: one.pieces, size: one.size, sha256: one.sha256);
+            final a = await core.add(session, path: pdf.path, title: one.title, pieces: one.pieces, pages: one.pages, size: one.size, sha256: one.sha256);
             pieces = a.pieces;
             committed = a.committed;
           } else {
@@ -469,7 +472,7 @@ class PdfIndexRun extends ChangeNotifier {
       return _OnePdf.skip(PdfSkipReason.noText, size: size, sha256: sha);
     }
     row.pieces = chunks.pieces.length;
-    return _OnePdf.pieces(chunks.pieces, size: size, sha256: sha, title: cleanPdfTitle(pages.title));
+    return _OnePdf.pieces(chunks.pieces, size: size, sha256: sha, title: cleanPdfTitle(pages.title), pages: chunks.pages);
   }
 }
 

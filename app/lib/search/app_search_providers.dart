@@ -55,7 +55,9 @@ class LibrarySearchProvider implements AppSearchProvider {
         // when that is a number).
         open: () {
           final a = pdfEntryOfIndexHit(h.address) ?? h.address;
-          openAddress(h.page != null && isPdfAddress(a) && pdfPageOfAddress(a) == null ? withPdfPage(a, h.page!) : a);
+          // The real PDF page the passage is on when the core says it (a ZIM's PDF index), else the printed page.
+          final page = h.pdfPage ?? h.page;
+          openAddress(page != null && isPdfAddress(a) && pdfPageOfAddress(a) == null ? withPdfPage(a, page) : a);
         },
       ));
     }
