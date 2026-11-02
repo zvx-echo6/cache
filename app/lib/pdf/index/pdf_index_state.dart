@@ -200,6 +200,9 @@ class PdfIndexState extends ChangeNotifier {
   PdfIndexRun? _run;
   String? _runPath;
   bool _picking = false;
+
+  /// The library being measured and started (between leaving the queue and its run beginning): never queued again meanwhile.
+  String? _pickingPath;
   Timer? _watch;
   Set<String>? _known;
 
@@ -564,7 +567,7 @@ class PdfIndexState extends ChangeNotifier {
     if (!_loaded || !available || _disposed) return;
     final hook = autoStart;
     for (final z in zims()) {
-      if (z.uuid == null || z.path == _runPath || _queue.contains(z.path) || _blocked.containsKey(z.path) || _failures.containsKey(z.path)) continue;
+      if (z.uuid == null || z.path == _runPath || z.path == _pickingPath || _queue.contains(z.path) || _blocked.containsKey(z.path) || _failures.containsKey(z.path)) continue;
       final total = _total(z);
       if (total == null || total == 0 || _snapshot(z) != null) continue;
       final pause = _rec(z.fileName)['pause'];
@@ -586,6 +589,7 @@ class PdfIndexState extends ChangeNotifier {
       while (_queue.isNotEmpty && _run == null && !_disposed) {
         final path = forced != null && _queue.contains(forced) ? forced : _queue.first;
         _queue.remove(path);
+        _pickingPath = path;
         final z = _zim(path);
         if (z == null || z.uuid == null) continue;
         final e = _estimates[path] ?? await measure(z);
@@ -606,7 +610,10 @@ class PdfIndexState extends ChangeNotifier {
         return;
       }
     } finally {
-      if (!handedOff) _picking = false;
+      if (!handedOff) {
+        _picking = false;
+        _pickingPath = null;
+      }
       notifyListeners();
     }
   }
@@ -623,6 +630,7 @@ class PdfIndexState extends ChangeNotifier {
     final paths = _paths(z);
     if (list == null || paths == null) {
       _picking = false;
+      _pickingPath = null;
       _failures[z.path] = const PdfRunFailure(PdfRunFailureKind.other, 'The library could not be read.');
       notifyListeners();
       _schedule();
@@ -646,6 +654,7 @@ class PdfIndexState extends ChangeNotifier {
     );
     _runPath = z.path;
     _picking = false;
+    _pickingPath = null;
     var lastSaved = -1;
     void onRun() {
       if (run.committed != lastSaved && !run.starting) {
