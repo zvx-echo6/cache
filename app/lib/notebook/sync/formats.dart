@@ -165,22 +165,32 @@ Object? propValue(List<String> lines) {
 // ---- Obsidian ----
 
 /// An entry as an Obsidian note: properties, then the text as typed.
-String renderObsidian(EntryDoc d) {
+///
+/// [imported]: a note the person made and Cache imported by its tag. Cache then writes only what the note does not already say
+/// its own way: no `notebook` (the id decides), `title` only when it is not the file's name ([titleDefault]), `date` and `time`
+/// only when they are not the time Cache gave it on import ([whenDefault]), and none of the names in [skip] (the note's own
+/// properties that were there before Cache, kept as they are in [EntryDoc.extra]).
+String renderObsidian(EntryDoc d, {bool imported = false, Set<String> skip = const {}, String? titleDefault, String? whenDefault}) {
   final b = StringBuffer('---\n');
-  void p(String k, Object? v) => b.writeln('$k: ${_yaml(v)}');
+  void p(String k, Object? v) {
+    if (!skip.contains(k)) b.writeln('$k: ${_yaml(v)}');
+  }
+
   p('cache_id', d.id);
-  p('notebook', d.notebook);
-  if (d.title != null && d.title!.trim().isNotEmpty) p('title', d.title);
+  if (!imported) p('notebook', d.notebook);
+  if (d.title != null && d.title!.trim().isNotEmpty && !(imported && d.title!.trim() == titleDefault)) p('title', d.title);
   // Obsidian's Date and Date & time types: written as they are, unquoted.
-  b.writeln('date: ${d.when.substring(0, 10)}');
-  b.writeln('time: ${d.when}');
+  if (!imported || d.when != whenDefault) {
+    if (!skip.contains('date')) b.writeln('date: ${d.when.substring(0, 10)}');
+    if (!skip.contains('time')) b.writeln('time: ${d.when}');
+  }
   if (d.place != null) {
     if (d.place!.label != null) p('place', d.place!.label);
     p('lat', d.place!.lat);
     p('lon', d.place!.lon);
   }
   if (d.private) p('private', true);
-  if (d.photos.isNotEmpty) {
+  if (d.photos.isNotEmpty && !skip.contains('photos')) {
     b.writeln('photos:');
     for (final id in d.photos) {
       b.writeln('  - "[[cache-$id.jpg]]"');
@@ -188,7 +198,7 @@ String renderObsidian(EntryDoc d) {
   }
   for (final e in d.fields.entries) {
     final v = e.value;
-    if (v == null) continue;
+    if (v == null || skip.contains(e.key)) continue;
     if (v is Map) {
       if (v['label'] != null) p(e.key, v['label']);
       p('${e.key}_lat', v['lat']);
@@ -219,7 +229,12 @@ String? photoIdOf(Object? link) {
 
 /// An Obsidian note read back; [fieldProps] are the field property names of its notebook (with their type), so the rest are
 /// kept as the user's own. Null when the properties cannot be read.
-EntryDoc? parseObsidian(String text, {required String fallbackId, required String fallbackNotebook, required Map<String, FieldType> fieldProps, String? fallbackWhen}) {
+///
+/// [userKeys]: properties of an imported note that were the person's before Cache imported it; they are kept as they are,
+/// never read as Cache's even when they share a name with Cache's own. [fallbackTitle]: the title when there is no `title`
+/// (an imported note's file name).
+EntryDoc? parseObsidian(String text,
+    {required String fallbackId, required String fallbackNotebook, required Map<String, FieldType> fieldProps, String? fallbackWhen, Set<String> userKeys = const {}, String? fallbackTitle}) {
   final fm = splitFrontMatter(text);
   final List<(String, List<String>)> props;
   final String body;
@@ -231,12 +246,16 @@ EntryDoc? parseObsidian(String text, {required String fallbackId, required Strin
     props = fm.props;
     body = fm.body;
   }
-  final map = {for (final (k, lines) in props) k: lines};
+  final map = {for (final (k, lines) in props) if (!userKeys.contains(k)) k: lines};
   Object? v(String k) => map[k] == null ? null : propValue(map[k]!);
   final extra = <String>[];
   final fields = <String, Object?>{};
   final placeKeys = {for (final e in fieldProps.entries) if (e.value == FieldType.place) e.key};
   for (final (k, lines) in props) {
+    if (userKeys.contains(k)) {
+      extra.addAll(lines);
+      continue;
+    }
     if (kCacheProps.contains(k)) continue;
     final base = k.endsWith('_lat') || k.endsWith('_lon') ? k.substring(0, k.length - 4) : k;
     if (placeKeys.contains(base)) continue;
@@ -265,7 +284,7 @@ EntryDoc? parseObsidian(String text, {required String fallbackId, required Strin
     id: v('cache_id') is String ? v('cache_id') as String : fallbackId,
     notebook: v('notebook') is String ? v('notebook') as String : fallbackNotebook,
     when: when,
-    title: v('title')?.toString(),
+    title: v('title')?.toString() ?? fallbackTitle,
     body: body.replaceAll('\r\n', '\n').trimRight(),
     place: lat is num && lon is num ? NbPlace(lat: lat.toDouble(), lon: lon.toDouble(), label: v('place')?.toString()) : null,
     photos: [for (final x in (photos is List ? photos : const [])) ?photoIdOf(x)],
@@ -469,3 +488,287 @@ String? dayOfJournal(String fileName, {String format = 'yyyy_MM_dd'}) {
     org: edn != null && RegExp(r':preferred-format\s+"?:?[Oo]rg"?').hasMatch(edn),
   );
 }
+
+// ---- import by tag (1.0.30) ----
+//
+// A note the person made in Obsidian or Logseq that carries the import tag (`#cachesync`, settable) and no Cache id is imported
+// once: Cache makes an entry for it and writes its id into the note. From then on the id decides, never the tag. When Cache
+// stops syncing it (the entry deleted, or "Stop syncing this note"), the id goes and `cachesync: off` takes its place, so the
+// note is never imported again unless the person deletes that line. The note's text and inline tags are never touched.
+
+/// The import tag a connection starts with.
+const String kDefaultImportTag = '#cachesync';
+
+/// The property Cache writes into a note it stopped syncing (`cachesync: off`, Logseq `cachesync:: off`).
+const String kSyncOffProp = 'cachesync';
+
+/// Whether [tag] can be the import tag: `#`, then letters, numbers, `-`, `_` and `/`; no spaces.
+bool validImportTag(String tag) => RegExp(r'^#[\p{L}\p{N}_-][\p{L}\p{N}_/-]*$', unicode: true).hasMatch(tag) && !tag.endsWith('/');
+
+String _bareTag(String t) {
+  var s = t.trim();
+  if (s.startsWith('#')) s = s.substring(1);
+  if (s.startsWith('[[') && s.endsWith(']]')) s = s.substring(2, s.length - 2);
+  return s.trim();
+}
+
+/// Whether one of [tags] is the import tag [importTag]: null when none is; else the notebook its `/<notebook>` part names
+/// (null for the plain tag). Case does not matter; the first matching tag wins.
+({String? notebook})? importTagIn(Iterable<String> tags, String importTag) {
+  final base = _bareTag(importTag).toLowerCase();
+  if (base.isEmpty) return null;
+  for (final t in tags) {
+    final s = _bareTag(t);
+    final l = s.toLowerCase();
+    if (l == base) return (notebook: null);
+    if (l.startsWith('$base/') && s.length > base.length + 1) return (notebook: s.substring(base.length + 1));
+  }
+  return null;
+}
+
+/// A notebook name as a tag part compares: lower case, runs of anything but letters and numbers as one `-`.
+String tagSlug(String s) => s.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+
+/// An inline tag: `#word` (letters, numbers, `-`, `_`, `/`) or Logseq's `#[[two words]]`, at the start or after a space.
+final RegExp _inlineTag = RegExp(r'(?<![^\s(\[,;])#(\[\[[^\]\n]+\]\]|[\p{L}\p{N}_/-]+)', unicode: true);
+
+/// [text] without fenced code blocks and inline code (a `#` in code is not a tag).
+String _withoutCode(String text) =>
+    text.replaceAll(RegExp(r'^ *(```|~~~)[^\n]*\n[\s\S]*?^ *\1[^\n]*$', multiLine: true), ' ').replaceAll(RegExp(r'`[^`\n]*`'), ' ');
+
+/// The inline tags of [text].
+List<String> inlineTags(String text) => [for (final m in _inlineTag.allMatches(_withoutCode(text))) _bareTag(m.group(1)!)];
+
+bool _isOff(Object? v) => v == false || (v is String && const {'off', 'no', 'false'}.contains(v.trim().toLowerCase()));
+
+/// The tags of an Obsidian note: its `tags` (or `tag`) property, a list or text, then the #tags of its text (not in code).
+List<String> obsidianTags(String text) {
+  final fm = splitFrontMatter(text);
+  final out = <String>[];
+  for (final (k, lines) in fm?.props ?? const <(String, List<String>)>[]) {
+    final key = k.toLowerCase();
+    if (key != 'tags' && key != 'tag') continue;
+    final v = propValue(lines);
+    for (final x in v is List ? v : [v]) {
+      if (x == null) continue;
+      out.addAll('$x'.split(RegExp(r'[,\s]+')).where((t) => t.isNotEmpty).map(_bareTag));
+    }
+  }
+  out.addAll(inlineTags(fm?.body ?? text));
+  return out;
+}
+
+/// The note says `cachesync: off`: Cache never imports it.
+bool obsidianSyncOff(String text) {
+  for (final (k, lines) in splitFrontMatter(text)?.props ?? const <(String, List<String>)>[]) {
+    if (k.toLowerCase() == kSyncOffProp && _isOff(propValue(lines))) return true;
+  }
+  return false;
+}
+
+/// An Obsidian note with `cache_id: <id>` as its first property (a properties block is made when it has none); the rest byte
+/// for byte. Null when its properties cannot be read (Cache then leaves it alone).
+String? withCacheId(String text, String id) {
+  final t = text.replaceAll('\r\n', '\n');
+  if (splitFrontMatter(t) == null) {
+    if (t.trimLeft().startsWith('---')) return null;
+    return '---\ncache_id: $id\n---\n$t';
+  }
+  return '---\ncache_id: $id\n${t.substring(4)}';
+}
+
+/// An Obsidian note Cache stops syncing: its `cache_id` line replaced by `cachesync: off`; everything else byte for byte. Null
+/// when its properties cannot be read.
+String? releasedObsidian(String text) {
+  final t = text.replaceAll('\r\n', '\n');
+  if (splitFrontMatter(t) == null) return null;
+  final end = t.indexOf('\n---', 3);
+  final lines = t.substring(4, end + 1).split('\n');
+  final hasOff = lines.any((l) => RegExp('^$kSyncOffProp:(\\s|\$)').hasMatch(l));
+  final out = <String>[];
+  for (final l in lines) {
+    if (RegExp(r'^cache_id:(\s|$)').hasMatch(l)) {
+      if (!hasOff) out.add('$kSyncOffProp: off');
+    } else if (RegExp('^$kSyncOffProp:(\\s|\$)').hasMatch(l)) {
+      out.add('$kSyncOffProp: off');
+    } else {
+      out.add(l);
+    }
+  }
+  return '---\n${out.join('\n')}${t.substring(end + 1)}';
+}
+
+// ---- Logseq ----
+
+final RegExp _lsPropLine = RegExp(r'^\s*([A-Za-z0-9_.*+!?$%&=<>-]+)::\s?(.*)$');
+
+/// Logseq properties of [lines] (page properties, or a block's own lines): name (lower case) to its raw value.
+Map<String, String> lsProps(Iterable<String> lines) => {
+      for (final l in lines)
+        if (_lsPropLine.firstMatch(l.replaceAll('\n', '')) case final m?) m.group(1)!.toLowerCase(): m.group(2)!.trim(),
+    };
+
+/// The tags a `tags::` value names: `a, [[b c]], #d`.
+List<String> lsTagValues(String? v) {
+  if (v == null) return const [];
+  final out = [for (final m in RegExp(r'\[\[([^\]]+)\]\]').allMatches(v)) m.group(1)!.trim()];
+  final rest = v.replaceAll(RegExp(r'#?\[\[[^\]]+\]\]'), ',');
+  out.addAll(rest.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).map(_bareTag));
+  return out;
+}
+
+bool _lsTrue(String? v) => v != null && const {'true', 'yes'}.contains(v.trim().toLowerCase());
+
+/// A page's or block's `cachesync:: off`.
+bool lsSyncOff(Map<String, String> props) => _isOff(props[kSyncOffProp]);
+
+/// Whether a page's properties say it is private (`private:: true`).
+bool lsPrivate(Map<String, String> props) => _lsTrue(props['private']);
+
+/// The lines of [text] without their line ends ('' at the end dropped).
+List<String> _lines(String text) {
+  final l = text.split('\n');
+  if (l.isNotEmpty && l.last.isEmpty) l.removeLast();
+  return l;
+}
+
+/// A page's title from its file name (`a___b.md` and `a%2Fb.md` are `a/b`).
+String lsPageTitle(String path) {
+  var n = path.split('/').last;
+  if (n.endsWith('.md')) n = n.substring(0, n.length - 3);
+  n = n.replaceAll('___', '/');
+  try {
+    return Uri.decodeComponent(n);
+  } catch (_) {
+    return n;
+  }
+}
+
+/// A Logseq page Cache imported as one entry: the page's properties are kept as they are (`title::` is its title; the page's
+/// name otherwise), its blocks are the text, as written.
+EntryDoc parseLsPage(String text, {required String pageTitle, required String when, required String notebook}) {
+  final p = splitPage(text);
+  final head = _lines(p.head);
+  final props = lsProps(head);
+  final t = props['title'];
+  return EntryDoc(
+    id: props['cache-id'] ?? '',
+    notebook: notebook,
+    when: when,
+    title: t == null || t.isEmpty ? pageTitle : t,
+    body: p.blocks.map((b) => b.text).join().trimRight(),
+    private: lsPrivate(props),
+    extra: [for (final l in head) if (!RegExp(r'^\s*cache-id::').hasMatch(l)) l],
+  );
+}
+
+/// An imported page written back: `cache-id::` first, the page's own properties (a `title::` follows Cache's title), the text.
+String renderLsPage(EntryDoc d, {required String pageTitle}) {
+  final b = StringBuffer('cache-id:: ${d.id}\n');
+  final t = (d.title ?? '').trim();
+  final hasTitle = d.extra.any((l) => RegExp(r'^title::').hasMatch(l));
+  if (!hasTitle && t.isNotEmpty && t != pageTitle) b.writeln('title:: $t');
+  for (final l in d.extra) {
+    b.writeln(RegExp(r'^title::').hasMatch(l) && t.isNotEmpty ? 'title:: $t' : l);
+  }
+  final body = d.body.replaceAll('\r\n', '\n').trimRight();
+  if (body.isNotEmpty) b.writeln(body);
+  return b.toString();
+}
+
+/// The lines of a block before its child blocks: the first line, the rest of its text and its properties.
+int _ownEnd(LsBlock b) {
+  var i = 1;
+  while (i < b.lines.length && !b.lines[i].startsWith('\t')) {
+    i++;
+  }
+  return i;
+}
+
+/// A block's own properties (not its children's).
+Map<String, String> lsBlockProps(LsBlock b) => lsProps(b.lines.sublist(1, _ownEnd(b)));
+
+/// The tags of a top-level block: its `tags::` and the #tags of its own lines (not of its child blocks).
+List<String> lsBlockTags(LsBlock b) {
+  final own = b.lines.sublist(0, _ownEnd(b));
+  final props = lsProps(own.skip(1));
+  return [...lsTagValues(props['tags']), ...inlineTags(own.where((l) => _lsPropLine.firstMatch(l.replaceAll('\n', '')) == null).join())];
+}
+
+/// [b] with `  cache-id:: <id>` after its own lines.
+String lsBlockWithId(LsBlock b, String id) {
+  final end = _ownEnd(b);
+  final own = [for (final l in b.lines.sublist(0, end)) l.endsWith('\n') ? l : '$l\n'];
+  return [...own, '  cache-id:: $id\n', ...b.lines.sublist(end)].join();
+}
+
+/// A block of the person's own Cache imported: its first line is the title, its other own lines (properties, more text) are
+/// kept as they are, its child blocks are the text, as written (one tab less).
+EntryDoc parseLsBlock(LsBlock b, {required String when, required String notebook}) {
+  final end = _ownEnd(b);
+  final own = [for (final l in b.lines.sublist(1, end)) l.replaceAll('\n', '')];
+  final props = lsProps(own);
+  final title = b.lines.first.replaceAll('\n', '').replaceFirst(RegExp(r'^-\s?'), '');
+  return EntryDoc(
+    id: props['cache-id'] ?? '',
+    notebook: notebook,
+    when: when,
+    title: title.trim().isEmpty ? null : title,
+    body: [for (final l in b.lines.sublist(end)) l.replaceAll('\n', '').replaceFirst('\t', '')].join('\n').trimRight(),
+    private: lsPrivate(props),
+    extra: [for (final l in own) if (!RegExp(r'^\s+cache-id::').hasMatch(l)) l],
+  );
+}
+
+/// An imported block written back (see [parseLsBlock]).
+String renderLsBlock(EntryDoc d) {
+  final b = StringBuffer('- ${d.title ?? ''}\n');
+  for (final l in d.extra) {
+    b.writeln(l);
+  }
+  b.writeln('  cache-id:: ${d.id}');
+  final body = d.body.replaceAll('\r\n', '\n').trimRight();
+  if (body.isNotEmpty) {
+    for (final l in body.split('\n')) {
+      b.writeln('\t$l');
+    }
+  }
+  return b.toString();
+}
+
+/// Logseq property lines Cache stops syncing: the `cache-id::` line becomes `cachesync:: off` (with the same indent).
+List<String> lsReleased(List<String> lines) {
+  final hasOff = lines.any((l) => RegExp('^\\s*$kSyncOffProp::').hasMatch(l));
+  final out = <String>[];
+  for (final l in lines) {
+    final m = RegExp(r'^(\s*)cache-id::').firstMatch(l);
+    if (m != null) {
+      if (!hasOff) out.add('${m.group(1)}$kSyncOffProp:: off${l.endsWith('\n') ? '\n' : ''}');
+    } else if (RegExp('^(\\s*)$kSyncOffProp::').firstMatch(l) case final o?) {
+      out.add('${o.group(1)}$kSyncOffProp:: off${l.endsWith('\n') ? '\n' : ''}');
+    } else {
+      out.add(l);
+    }
+  }
+  return out;
+}
+
+List<String> _keepEnds(String text) => RegExp(r'[^\n]*\n|[^\n]+$').allMatches(text).map((m) => m.group(0)!).toList();
+
+/// An imported Logseq page Cache stops syncing: `cache-id::` becomes `cachesync:: off`; the rest byte for byte.
+String lsPageReleased(String text) {
+  final p = splitPage(text);
+  return lsReleased(_keepEnds(p.head)).join() + p.blocks.map((b) => b.text).join();
+}
+
+/// An imported Logseq block Cache stops syncing (see [lsPageReleased]).
+String lsBlockReleased(LsBlock b) {
+  final end = _ownEnd(b);
+  return [...lsReleased(b.lines.sublist(0, end)), ...b.lines.sublist(end)].join();
+}
+
+/// The lines of [text] as an [LsBlock] holds them (with their line ends).
+LsBlock lsBlockOf(String text) => LsBlock(_keepEnds(text));
+
+/// The `cache-id::` among a page's properties.
+String? lsPageId(String text) => lsProps(_lines(splitPage(text).head))['cache-id'];

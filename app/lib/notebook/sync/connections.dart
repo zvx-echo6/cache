@@ -18,27 +18,34 @@ const String kNotebookShareDir = 'notebook-share';
 /// folder (kind share, id `share`). Private items go to Obsidian and Logseq (decided 2026-10-29); notebook sync leaves private
 /// notebooks out unless each one's "Include in sync and sharing" is on.
 class SyncTargetConfig {
-  const SyncTargetConfig({required this.id, required this.kind, required this.path, this.paused = false, this.display});
+  const SyncTargetConfig({required this.id, required this.kind, required this.path, this.paused = false, this.display, this.importTag});
 
   final String id;
   final SyncKind kind;
   final String path;
   final bool paused;
 
+  /// The tag that imports a note into Cache (Obsidian and Logseq); null is [kDefaultImportTag].
+  final String? importTag;
+  String get tag => importTag ?? kDefaultImportTag;
+
   /// The folder's name as the picker gave it (the path is a URI or a bookmark on phones).
   final String? display;
 
   String get name => display ?? (path.split(RegExp(r'[\\/]')).where((p) => p.isNotEmpty).lastOrNull ?? path);
 
-  SyncTargetConfig copyWith({bool? paused}) => SyncTargetConfig(id: id, kind: kind, path: path, paused: paused ?? this.paused, display: display);
+  SyncTargetConfig copyWith({bool? paused, String? importTag}) =>
+      SyncTargetConfig(id: id, kind: kind, path: path, paused: paused ?? this.paused, display: display, importTag: importTag ?? this.importTag);
 
-  Map<String, dynamic> toJson() => {'id': id, 'kind': kind.name, 'path': path, 'paused': paused, 'display': ?display};
+  Map<String, dynamic> toJson() => {'id': id, 'kind': kind.name, 'path': path, 'paused': paused, 'display': ?display, 'import_tag': ?importTag};
 
   static SyncTargetConfig? fromJson(Object? j) {
     if (j is! Map || j['path'] is! String) return null;
     final kind = SyncKind.values.where((k) => k.name == j['kind']).firstOrNull;
     if (kind == null) return null;
-    return SyncTargetConfig(id: '${j['id']}', kind: kind, path: j['path'] as String, paused: j['paused'] == true, display: j['display'] as String?);
+    final tag = j['import_tag'];
+    return SyncTargetConfig(
+        id: '${j['id']}', kind: kind, path: j['path'] as String, paused: j['paused'] == true, display: j['display'] as String?, importTag: tag is String && validImportTag(tag) ? tag : null);
   }
 }
 
@@ -71,6 +78,12 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
   final Map<String, String> _status = {};
   final Map<String, List<SyncConflict>> _conflicts = {};
   final Map<String, List<String>> _merged = {};
+  final Map<String, int> _notAdded = {};
+  final Map<String, ({Set<String> imported, Set<String> stopped})> _links = {};
+
+  /// Notes imported by their tag in the last sync: the app's name ("Obsidian") and their titles. Read and cleared by
+  /// [takeImported] (the snack bar "2 notes added from Obsidian").
+  final List<({String app, String target, List<String> titles, Set<String> books})> _news = [];
 
   List<SyncTargetConfig> get targets => [for (final t in _targets) if (t.kind != SyncKind.share) t];
   SyncTargetConfig? target(SyncKind kind) => _targets.where((t) => t.kind == kind || (kind == SyncKind.logseq && t.kind == SyncKind.logseqExport)).firstOrNull;
@@ -82,6 +95,73 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
 
   /// Entries changed in both places whose changes were merged in the last run (told, not asked).
   List<String> merged(String id) => _merged[id] ?? const [];
+
+  /// Tagged notes the last sync could not import (Cache could not write its id into them).
+  int notAdded(String id) => _notAdded[id] ?? 0;
+
+  /// The app's name of a connection kind.
+  static String appName(SyncKind kind) => kind == SyncKind.obsidian ? 'Obsidian' : 'Logseq';
+
+  SyncTargetConfig? _linkTarget(String entryId, bool stopped) {
+    for (final t in _targets) {
+      final l = _links[t.id];
+      if (l != null && (stopped ? l.stopped : l.imported).contains(entryId)) return t;
+    }
+    return null;
+  }
+
+  /// The app an entry was imported from by its tag and still syncs with ("Obsidian", "Logseq"), or null.
+  String? importedFrom(String entryId) => switch (_linkTarget(entryId, false)) { final t? => appName(t.kind), null => null };
+
+  /// The app an entry stopped syncing with (kept in Cache, unsynced), or null.
+  String? stoppedWith(String entryId) => switch (_linkTarget(entryId, true)) { final t? => appName(t.kind), null => null };
+
+  /// The notes imported since the last call, by connection.
+  List<({String app, String target, List<String> titles, Set<String> books})> takeImported() {
+    final out = [..._news];
+    _news.clear();
+    return out;
+  }
+
+  /// Sets a connection's import tag (`#cachesync` when [tag] is the default). Notes already in Cache keep syncing; the next
+  /// sync looks for the new tag.
+  Future<void> setImportTag(String id, String tag) async {
+    await init();
+    if (!validImportTag(tag)) return;
+    _targets = [
+      for (final t in _targets)
+        t.id == id ? SyncTargetConfig(id: t.id, kind: t.kind, path: t.path, paused: t.paused, display: t.display, importTag: tag == kDefaultImportTag ? null : tag) : t,
+    ];
+    await _saveTargets();
+    notifyListeners();
+    unawaited(syncAll());
+  }
+
+  /// "Stop syncing this note": Cache's id goes out of the note in Obsidian or Logseq (it says `cachesync: off` instead), the
+  /// entry stays in Cache, unsynced. Null when done, else what is wrong ("Cache cannot reach Obsidian right now. ...").
+  Future<String?> stopSyncing(String entryId) async {
+    await init();
+    final t = _linkTarget(entryId, false);
+    if (t == null) return null;
+    final unreachable = 'Cache cannot reach ${appName(t.kind)} right now. Try again when it is connected.';
+    try {
+      final e = await _engine(t);
+      if (!await e.stopSyncing(entryId)) return unreachable;
+      _links[t.id] = await NotebookSync.links(e.stateFile);
+    } catch (x) {
+      debugPrint('cache notebook sync ${t.id}: stop syncing $x');
+      return unreachable;
+    }
+    notifyListeners();
+    return null;
+  }
+
+  Future<void> _readLinks() async {
+    for (final t in _targets) {
+      if (t.kind == SyncKind.share) continue;
+      _links[t.id] = await NotebookSync.links(File('${(await dir()).path}/${t.id}.json'));
+    }
+  }
 
   Set<String> _privateBooks = {};
 
@@ -114,6 +194,9 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     } catch (e) {
       debugPrint('cache notebook connections: $e');
     }
+    try {
+      await _readLinks();
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -155,6 +238,8 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
     _targets = [for (final x in _targets) if (x.id != id) x];
     _status.remove(id);
     _conflicts.remove(id);
+    _links.remove(id);
+    _notAdded.remove(id);
     await _saveTargets();
     notifyListeners();
   }
@@ -189,6 +274,7 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
       includePrivate: t.kind != SyncKind.share,
       privateBooks: t.kind == SyncKind.share ? {..._privateBooks} : const {},
       logseqConfig: ls,
+      importTag: t.tag,
     );
     final sp = storePhoto;
     if (sp != null) e.storePhotoBytes = sp;
@@ -225,6 +311,11 @@ class NotebookConnections extends ChangeNotifier implements PrivateSharing {
             final r = await e.run();
             _conflicts[t.id] = e.conflicts;
             _merged[t.id] = r.merged;
+            if (t.kind != SyncKind.share) {
+              _notAdded[t.id] = r.notAdded;
+              _links[t.id] = await NotebookSync.links(e.stateFile);
+              if (r.imported.isNotEmpty) _news.add((app: appName(t.kind), target: t.id, titles: [...r.imported], books: {...r.importedBooks}));
+            }
             final n = e.conflicts.length;
             _status[t.id] = n > 0 ? (n == 1 ? '1 change needs a decision' : '$n changes need a decision') : 'Synced ${_clock(DateTime.now())}';
           } on FileSystemException catch (x) {

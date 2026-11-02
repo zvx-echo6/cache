@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../notebook/sync/connections.dart';
 import '../../notebook/sync/folder_access.dart';
+import '../../notebook/sync/formats.dart' show kDefaultImportTag, validImportTag;
 import '../../notebook/sync/sync_engine.dart';
 import '../../theme.dart';
 
@@ -171,11 +172,57 @@ class ConnectionsScreen extends StatelessWidget {
                 key: ValueKey('merged-$key'),
                 style: TextStyle(fontSize: 14, color: k.text),
               ),
+            if (connections.notAdded(target.id) case final n when n > 0)
+              Text(n == 1 ? '1 note not added: Cache cannot change it.' : '$n notes not added: Cache cannot change them.',
+                  key: ValueKey('not-added-$key'), style: TextStyle(fontSize: 14, color: k.emergency)),
             for (final c in connections.conflicts(target.id)) _conflict(context, target.id, c),
+            if (target.kind != SyncKind.logseqExport) _importTagRow(context, key, target),
           ],
         ],
       ),
     );
+  }
+
+  /// "Import tag": notes with it are added to Cache (once; from then on Cache's id in them decides).
+  Widget _importTagRow(BuildContext context, String key, SyncTargetConfig target) {
+    final k = context.t;
+    final logseq = target.kind != SyncKind.obsidian;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        ListTile(
+          key: ValueKey('import-tag-$key'),
+          contentPadding: EdgeInsets.zero,
+          minTileHeight: 56,
+          title: Text('Import tag', style: TextStyle(fontSize: 16, color: k.text)),
+          subtitle: Text('Notes with this tag are added to Cache.', style: TextStyle(fontSize: 14, color: k.secondary)),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [Text(target.tag, style: TextStyle(fontSize: 15, color: k.text)), Icon(Icons.chevron_right, color: k.secondary)],
+          ),
+          onTap: () => _editTag(context, target),
+        ),
+        if (target.importTag != null) Text('Notes already in Cache keep syncing.', style: TextStyle(fontSize: 14, color: k.secondary)),
+        Text(
+          logseq ? "Add private:: true to a page's or block's properties to keep it private in Cache." : "Add private: true to a note's properties to keep it private in Cache.",
+          style: TextStyle(fontSize: 14, color: k.secondary),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editTag(BuildContext context, SyncTargetConfig target) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final tag = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ImportTagSheet(initial: target.tag),
+    );
+    if (tag == null || tag == target.tag) return;
+    await connections.setImportTag(target.id, tag);
+    messenger.showSnackBar(SnackBar(content: Text('Import tag is $tag.')));
   }
 
   Widget _conflict(BuildContext context, String id, SyncConflict c) {
@@ -213,6 +260,70 @@ class ConnectionsScreen extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The import tag's sheet: one field, checked as it is typed (`#`, letters, numbers, `-`, `_`, `/`; no spaces); Save, and Use
+/// #cachesync when it was changed. Pops the new tag.
+class ImportTagSheet extends StatefulWidget {
+  const ImportTagSheet({super.key, required this.initial});
+
+  final String initial;
+
+  @override
+  State<ImportTagSheet> createState() => _ImportTagSheetState();
+}
+
+class _ImportTagSheetState extends State<ImportTagSheet> {
+  late final TextEditingController _c = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = _c.text.trim();
+    final ok = validImportTag(t);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 16 + MediaQuery.viewInsetsOf(context).bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const ValueKey('import-tag-field'),
+            controller: _c,
+            autofocus: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: InputDecoration(
+              labelText: 'Import tag',
+              helperText: '#cachesync/Camping adds the note to the notebook Camping.',
+              helperMaxLines: 2,
+              errorText: ok ? null : 'Use a tag like #cachesync. No spaces.',
+              errorMaxLines: 2,
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) {
+              if (ok) Navigator.pop(context, t);
+            },
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (t != kDefaultImportTag)
+                TextButton(key: const ValueKey('import-tag-default'), onPressed: () => Navigator.pop(context, kDefaultImportTag), child: const Text('Use #cachesync')),
+              const SizedBox(width: 8),
+              FilledButton(key: const ValueKey('import-tag-save'), onPressed: ok ? () => Navigator.pop(context, t) : null, child: const Text('Save')),
+            ],
+          ),
+        ],
       ),
     );
   }

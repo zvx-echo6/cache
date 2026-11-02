@@ -95,7 +95,7 @@ void openNotebookEntry(BuildContext context, NotebookDeps deps, Notebook book, N
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlaceView(deps: deps, book: book, entryId: e.id)));
   } else {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => EntryEditor(notebook: deps.notebook, book: book, places: deps.places, entry: e, now: deps.now),
+      builder: (_) => EntryEditor(notebook: deps.notebook, book: book, places: deps.places, entry: e, now: deps.now, connections: deps.connections),
     ));
   }
 }
@@ -106,7 +106,7 @@ void newNotebookEntryAt(BuildContext context, NotebookDeps deps, Notebook book, 
   Navigator.of(context).push(MaterialPageRoute<void>(
     builder: (_) => book.isPlaces
         ? PlaceForm(deps: deps, book: book, at: at)
-        : EntryEditor(notebook: deps.notebook, book: book, places: deps.places, at: at, now: deps.now),
+        : EntryEditor(notebook: deps.notebook, book: book, places: deps.places, at: at, now: deps.now, connections: deps.connections),
   ));
 }
 
@@ -133,6 +133,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
   void initState() {
     super.initState();
     nb.addListener(_onChange);
+    widget.deps.connections?.addListener(_onLinks);
     _read();
     widget.deps.places.here().then((h) {
       if (mounted && h != null) setState(() => _here = h);
@@ -142,7 +143,12 @@ class _NotebookScreenState extends State<NotebookScreen> {
   @override
   void dispose() {
     nb.removeListener(_onChange);
+    widget.deps.connections?.removeListener(_onLinks);
     super.dispose();
+  }
+
+  void _onLinks() {
+    if (mounted) setState(() {});
   }
 
   void _onChange() {
@@ -166,7 +172,7 @@ class _NotebookScreenState extends State<NotebookScreen> {
       return;
     }
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => EntryEditor(notebook: nb, book: book, places: widget.deps.places, entry: e, now: widget.deps.now),
+      builder: (_) => EntryEditor(notebook: nb, book: book, places: widget.deps.places, entry: e, now: widget.deps.now, connections: widget.deps.connections),
     ));
   }
 
@@ -389,7 +395,12 @@ class _NotebookScreenState extends State<NotebookScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(entryTitle(shown), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                    Row(
+                      children: [
+                        Flexible(child: Text(entryTitle(shown), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text))),
+                        if (widget.deps.connections?.stoppedWith(e.id) case final app?) ...[const SizedBox(width: 6), SyncOffIcon(app: app)],
+                      ],
+                    ),
                     if (preview.isNotEmpty) Text(preview, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, color: k.secondary)),
                     const SizedBox(height: 2),
                     Text(meta.join(' · '), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: k.secondary)),
