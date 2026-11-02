@@ -63,7 +63,7 @@ def surname(author):
     n = normtitle(author.split(',')[0] if ',' in author else author).split()
     return n[-1] if n else ''
 
-HASH_BITS = 64
+HASH_BITS = 48
 
 def h64(ntitle, sur):
     """The title key: the top HASH_BITS bits of the 64-bit BLAKE2b digest of 'normalised title|surname' (big-endian)."""

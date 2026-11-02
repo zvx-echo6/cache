@@ -48,7 +48,7 @@ All integers little-endian. Strings UTF-8. Varints are LEB128 (7 bits per byte, 
 | header_len | u32 | bytes after this field up to the end of the header |
 | catalogue date | u32 | YYYYMMDD of the Open Library dump |
 | build date | u32 | YYYYMMDD |
-| hash bits | u8 + 3 pad | 64 in release 1.0.0 |
+| hash bits | u8 + 3 pad | 48 in release 1.0.0 |
 | attribution | u16 length + bytes | "Book data from Open Library, openlibrary.org" |
 | licence note | u16 length + bytes | |
 | source | u16 length + bytes | |
@@ -90,8 +90,8 @@ author then title, so an author's books sit together and compress well; The firs
 * **Compression is deflate**, decoded by `miniz_oxide` (in `Cargo.lock` as 0.8.9, the backend of the `flate2` that cache_live,
   cache_search and others already use). The builder uses Python's `zlib` at level 9 with raw deflate (`wbits=-15`), so it
   is standard library only. `zstd` would be roughly 10 percent smaller but needs the C `zstd` crate on every target.
-* **Title keys are 64 bits** (the whole digest). The hash bits are in the header, so a build can use fewer (48 bits saves about 26 MB
-  and still has a collision chance of 5e-8 per lookup, which a title comparison on the hit removes anyway).
+* **48-bit title keys**: 64 bits cost two more bytes per key (about 26 MB) for a collision chance of 5e-8 per lookup that a
+  title comparison on the hit removes anyway. The hash bits are in the header, so a build can use up to 64.
 * **A new edition of a book already held** (same title key and LCC class) adds its ISBNs to the first edition's record instead
   of a record of its own. Other editions with the same title key but another class keep their own record. When two records share a
   key, the first one in the Open Library dump wins.
