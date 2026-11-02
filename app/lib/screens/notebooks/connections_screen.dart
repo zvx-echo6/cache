@@ -191,17 +191,21 @@ class ConnectionsScreen extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 4),
-        ListTile(
-          key: ValueKey('import-tag-$key'),
-          contentPadding: EdgeInsets.zero,
-          minTileHeight: 56,
-          title: Text('Import tag', style: TextStyle(fontSize: 16, color: k.text)),
-          subtitle: Text('Notes with this tag are added to Cache.', style: TextStyle(fontSize: 14, color: k.secondary)),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [Text(target.tag, style: TextStyle(fontSize: 15, color: k.text)), Icon(Icons.chevron_right, color: k.secondary)],
+        // Its own Material: the section is a coloured box, which would hide the row's ink.
+        Material(
+          type: MaterialType.transparency,
+          child: ListTile(
+            key: ValueKey('import-tag-$key'),
+            contentPadding: EdgeInsets.zero,
+            minTileHeight: 56,
+            title: Text('Import tag', style: TextStyle(fontSize: 16, color: k.text)),
+            subtitle: Text('Notes with this tag are added to Cache.', style: TextStyle(fontSize: 14, color: k.secondary)),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [Text(target.tag, style: TextStyle(fontSize: 15, color: k.text)), Icon(Icons.chevron_right, color: k.secondary)],
+            ),
+            onTap: () => _editTag(context, target),
           ),
-          onTap: () => _editTag(context, target),
         ),
         if (target.importTag != null) Text('Notes already in Cache keep syncing.', style: TextStyle(fontSize: 14, color: k.secondary)),
         Text(

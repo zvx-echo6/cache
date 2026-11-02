@@ -327,7 +327,7 @@ class NotebookSync {
             final head = lsProps(page.head.split('\n'));
             final tag = lsSyncOff(head) ? null : importTagIn(lsTagValues(head['tags']), importTag);
             if (tag != null) {
-              candidates!.add(_Cand('page', f.path, text, tag.notebook, private: lsPrivate(head)));
+              candidates.add(_Cand('page', f.path, text, tag.notebook, private: lsPrivate(head)));
               continue;
             }
           }
@@ -341,7 +341,7 @@ class NotebookSync {
               final bp = lsBlockProps(b);
               final tag = lsSyncOff(bp) ? null : importTagIn(lsBlockTags(b), importTag);
               if (tag != null) {
-                candidates!.add(_Cand('block', f.path, b.text, tag.notebook, private: lsPrivate(bp)));
+                candidates.add(_Cand('block', f.path, b.text, tag.notebook, private: lsPrivate(bp)));
                 continue;
               }
             }
@@ -401,7 +401,7 @@ class NotebookSync {
         // The person's own note: imported when it has the import tag (and not `cachesync: off`), else never read.
         if (importing && kind == SyncKind.obsidian && !obsidianSyncOff(text)) {
           final tag = importTagIn(obsidianTags(text), importTag);
-          if (tag != null) candidates!.add(_Cand('note', f.path, text, tag.notebook, private: probe.private));
+          if (tag != null) candidates.add(_Cand('note', f.path, text, tag.notebook, private: probe.private));
         }
         continue;
       }
