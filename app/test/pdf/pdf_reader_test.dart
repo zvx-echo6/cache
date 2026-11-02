@@ -60,9 +60,11 @@ void main() {
     expect(find.byTooltip('Next page'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('pdf-page-count')));
     await settleUntil(tester, () => _has(find.text('Go to page')));
+    await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('of 6'), findsOneWidget);
     await tester.enterText(find.byKey(const ValueKey('pdf-goto-field')), '9');
     await tester.pump();
+    expect(find.byKey(const ValueKey('pdf-goto-range')), findsOneWidget);
     expect(find.text('Pages 1 to 6'), findsOneWidget);
     expect(tester.widget<FilledButton>(find.byKey(const ValueKey('pdf-goto-go'))).onPressed, isNull);
     await tester.enterText(find.byKey(const ValueKey('pdf-goto-field')), '5');

@@ -1256,12 +1256,13 @@ class _PdfGoToPageSheetState extends State<PdfGoToPageSheet> {
   Widget build(BuildContext context) {
     final k = context.t;
     final v = _value;
+    final bad = v == null && _field.text.isNotEmpty;
     final slider = (v ?? widget.page).toDouble();
     return Padding(
       padding: EdgeInsets.fromLTRB(24, 0, 24, 24 + MediaQuery.viewInsetsOf(context).bottom),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text('Go to page', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: k.text)),
           const SizedBox(height: 16),
@@ -1279,7 +1280,8 @@ class _PdfGoToPageSheetState extends State<PdfGoToPageSheet> {
                   textInputAction: TextInputAction.go,
                   decoration: InputDecoration(
                     border: const OutlineInputBorder(),
-                    errorText: v == null && _field.text.isNotEmpty ? 'Pages 1 to ${widget.pageCount}' : null,
+                    enabledBorder: bad ? OutlineInputBorder(borderSide: BorderSide(color: k.emergency, width: 2)) : null,
+                    focusedBorder: bad ? OutlineInputBorder(borderSide: BorderSide(color: k.emergency, width: 2)) : null,
                   ),
                   onChanged: (_) => setState(() {}),
                   onSubmitted: (_) {
@@ -1294,6 +1296,11 @@ class _PdfGoToPageSheetState extends State<PdfGoToPageSheet> {
               ),
             ],
           ),
+          if (bad)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('Pages 1 to ${widget.pageCount}', key: const ValueKey('pdf-goto-range'), style: TextStyle(fontSize: 14, color: k.emergency)),
+            ),
           if (widget.pageCount > 1)
             Slider(
               key: const ValueKey('pdf-goto-slider'),

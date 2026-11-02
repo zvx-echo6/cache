@@ -8,6 +8,7 @@ import 'package:cache/pdf/pdf_reader_screen.dart';
 import 'package:cache/pdf/pdf_source.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show SemanticsNode;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test/support/pdf_test_kit.dart';
@@ -46,7 +47,6 @@ Future<void> _open(
   CacheThemeId theme = CacheThemeId.light,
   Size size = kPhone,
   double textScale = 1,
-  bool semantics = false,
 }) async {
   phone(tester, size: size, ratio: size == kPhone ? 3 : 2);
   final nav = GlobalKey<NavigatorState>();
@@ -61,7 +61,7 @@ Future<void> _open(
         viewPadding: size == kPhone ? const EdgeInsets.only(top: 54, bottom: 34) : const EdgeInsets.only(top: 24, bottom: 20),
         textScaler: TextScaler.linear(textScale),
       ),
-      child: DefaultTextStyle.merge(style: const TextStyle(fontFamily: 'Roboto'), child: semantics ? SemanticsDebugger(child: child!) : child!),
+      child: DefaultTextStyle.merge(style: const TextStyle(fontFamily: 'Roboto'), child: child!),
     ),
     home: const Scaffold(),
   );
@@ -284,8 +284,36 @@ void main() {
       await _ready(tester, '12 of 340');
       await _snap(tester, '10a-large-text-200', theme);
       final handle = tester.ensureSemantics();
-      await _open(tester, _reader(_book, page: 12), theme: theme, semantics: true);
+      await _open(tester, _reader(_book, page: 12), theme: theme);
       await _ready(tester, '12 of 340');
+      // What a screen reader reads, in order: the reader's own semantics, listed.
+      final read = <String>[];
+      void visit(SemanticsNode n) {
+        final d = n.getSemanticsData();
+        var line = [d.label, d.value].where((x) => x.trim().isNotEmpty).join(': ').replaceAll('\n', ' ');
+        if (line.length > 110) line = '${line.substring(0, 107)}...';
+        if (line.isNotEmpty) read.add(line);
+        n.visitChildren((c) {
+          visit(c);
+          return true;
+        });
+      }
+
+      visit(tester.getSemantics(find.byType(PdfReaderScreen)));
+      await tester.pumpWidget(shotApp(
+        Scaffold(
+          appBar: AppBar(title: const Text('What a screen reader reads, in order')),
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              for (var i = 0; i < read.length; i++)
+                Padding(padding: const EdgeInsets.only(bottom: 10), child: Text('${i + 1}. ${read[i]}', style: const TextStyle(fontSize: 15))),
+            ],
+          ),
+        ),
+        theme: theme,
+      ));
+      await tester.pump();
       await _snap(tester, '10b-screen-reader-order', theme);
       handle.dispose();
     });
