@@ -2,7 +2,7 @@
 
 use crate::args::Args;
 use cache_embed::{Embedder, EMBED_DEFAULT_THREADS};
-use crate::engine::{job_result, live_preview as core_live_preview, run_job_to_end, ApiError, Conv, Core, Engine};
+use crate::engine::{job_result, live_preview as core_live_preview, run_job_to_end, ApiError, Conv, Core, Engine, JobEnd};
 use crate::server;
 use serde_json::{json, Value};
 use std::io::Write;
@@ -13,9 +13,9 @@ use std::time::Duration;
 pub const USAGE: &str = "\
 cs: command line and HTTP wrapper over the cache_search core
 
-  cs index-zim       --zim <path> --index-dir <dir> [--heap-mb 200]
+  cs index-zim       --zim <path> (--index-dir <dir> | --indexes-dir <dir>) [--heap-mb 200]
   cs unpack-library  --snapshot <file> --dir <dir>
-  cs index-library   --library <dir> --index-dir <dir> [--settings <cache-library.json>] [--heap-mb 200]
+  cs index-library   --library <dir> (--index-dir <dir> | --indexes-dir <dir>) [--settings <cache-library.json>] [--heap-mb 200]
   cs library-manifest --library <dir> [--out <file>]
   cs update-library  --library <dir> --snapshot <file> --manifest <file>
   cs search          --config <sources.json> --query <text> [--k 5] [--offset 0] [--format] [--json] [EMBED] [--open-timeout 600]
@@ -231,23 +231,49 @@ fn run_job(kind: &str, params: Value) -> Result<(), ApiError> {
     end.error.map_or(Ok(()), Err)
 }
 
+/// `--indexes-dir <dir>` builds the index as a syncable snapshot under that folder (the job's "indexes_dir"; `--index-dir` is
+/// then not needed); without it `--index-dir` names the old index folder, as before.
+fn index_dirs(a: &Args, p: &mut Value) -> Result<(), ApiError> {
+    match a.get("indexes-dir") {
+        Some(d) => p["indexes_dir"] = json!(d),
+        None => p["index_dir"] = json!(a.req("index-dir").map_err(usage_err)?),
+    }
+    Ok(())
+}
+
+/// After a snapshot job: say which snapshot is published and where (on stderr; stdout keeps the final progress JSON).
+fn say_snapshot(end: &JobEnd) {
+    let v: Value = serde_json::from_str(&end.progress).unwrap_or(Value::Null);
+    if end.error.is_none() {
+        if let (Some(id), Some(path)) = (v["result"]["snapshot"].as_str(), v["result"]["path"].as_str()) {
+            let how = if v["result"]["adopted"] == true { "already published" } else { "published" };
+            eprintln!("snapshot {id} {how}: {path}");
+        }
+    }
+}
+
+fn run_index_job(kind: &str, params: Value) -> Result<(), ApiError> {
+    let end = run_job_to_end(kind, &params, &mut |l| eprintln!("{l}"))?;
+    print(&end.progress);
+    say_snapshot(&end);
+    end.error.map_or(Ok(()), Err)
+}
+
 pub fn index_zim(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["zim", "index-dir", "heap-mb"], &[], false)?;
-    run_job(
-        "index_zim",
-        json!({"zim_path": a.req("zim").map_err(usage_err)?, "index_dir": a.req("index-dir").map_err(usage_err)?,
-               "heap_mb": a.num("heap-mb", 200usize).map_err(usage_err)?}),
-    )
+    let a = parse(argv, &["zim", "index-dir", "indexes-dir", "heap-mb"], &[], false)?;
+    let mut p = json!({"zim_path": a.req("zim").map_err(usage_err)?, "heap_mb": a.num("heap-mb", 200usize).map_err(usage_err)?});
+    index_dirs(&a, &mut p)?;
+    run_index_job("index_zim", p)
 }
 
 pub fn index_library(argv: &[String]) -> Result<(), ApiError> {
-    let a = parse(argv, &["library", "index-dir", "settings", "heap-mb"], &[], false)?;
-    let mut p = json!({"library_path": a.req("library").map_err(usage_err)?, "index_dir": a.req("index-dir").map_err(usage_err)?,
-                       "heap_mb": a.num("heap-mb", 200usize).map_err(usage_err)?});
+    let a = parse(argv, &["library", "index-dir", "indexes-dir", "settings", "heap-mb"], &[], false)?;
+    let mut p = json!({"library_path": a.req("library").map_err(usage_err)?, "heap_mb": a.num("heap-mb", 200usize).map_err(usage_err)?});
+    index_dirs(&a, &mut p)?;
     if let Some(s) = a.get("settings") {
         p["settings"] = read_settings(s)?;
     }
-    run_job("index_library", p)
+    run_index_job("index_library", p)
 }
 
 /// The core's helper `library::unpack_library` (it has no C ABI function): unpack plus segments manifest.

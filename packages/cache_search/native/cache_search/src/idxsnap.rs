@@ -421,6 +421,11 @@ pub type PhaseFn<'a> = dyn Fn(&str, u64, u64) + 'a;
 /// One build loop: (working folder, progress, cancelled, pace).
 type BuildFn<'a> = dyn Fn(&Path, &dyn Fn(u64, u64), &dyn Fn() -> bool, &dyn Fn()) -> Result<Outcome> + 'a;
 
+/// The folder of a published snapshot, as text (what the jobs report as "path").
+fn snap_path(sd: &Path, build_id: &str) -> String {
+    sd.join(SNAP_DIR).join(build_id).to_string_lossy().into_owned()
+}
+
 /// What a snapshot build reports to its job.
 pub struct Hooks<'a> {
     pub progress: Box<dyn Fn(u64, u64) + 'a>,
@@ -446,7 +451,9 @@ fn run_build(
     let build = snapshot::build_dir(sd);
     if let Some(name) = adopted(sd, kind, source_id) {
         clear_build(&build);
-        (h.set_result)(json!({"adopted": true, "snapshot": name}));
+        (h.set_result)(
+            json!({"adopted": true, "snapshot": name, "source_id": source_id, "path": snap_path(sd, &name)}),
+        );
         return Ok(Outcome::Done);
     }
     let seen = listing_key(sd);
@@ -467,7 +474,9 @@ fn run_build(
         if peer.get() {
             if let Some(name) = adopted(sd, kind, source_id) {
                 clear_build(&build);
-                (h.set_result)(json!({"adopted": true, "snapshot": name}));
+                (h.set_result)(
+                    json!({"adopted": true, "snapshot": name, "source_id": source_id, "path": snap_path(sd, &name)}),
+                );
                 return Ok(Outcome::Done);
             }
         }
@@ -477,7 +486,9 @@ fn run_build(
     let tok = read_meta(&build).map(|m| m.tokenizer).unwrap_or_else(|| default_tokenizer.to_string());
     match publish_build(sd, kind, source_id, &tok, extra, &*h.phase, &*h.cancelled)? {
         Some((id, bytes)) => {
-            (h.set_result)(json!({"adopted": false, "snapshot": id, "bytes": bytes}));
+            (h.set_result)(
+                json!({"adopted": false, "snapshot": id, "source_id": source_id, "path": snap_path(sd, &id), "bytes": bytes}),
+            );
             Ok(Outcome::Done)
         }
         None => Ok(Outcome::Cancelled),
@@ -638,7 +649,7 @@ enum Placed {
 pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
     let (kind, sid, sd, legacy) = (req.kind, req.source_id.as_str(), req.sd.as_path(), req.legacy.as_path());
     if let Some(name) = adopted(sd, kind, sid) {
-        (h.set_result)(json!({"adopted": true, "snapshot": name}));
+        (h.set_result)(json!({"adopted": true, "snapshot": name, "source_id": sid, "path": snap_path(sd, &name)}));
         return Ok(Outcome::Done);
     }
     // the old index must be a finished one of this format and this source
@@ -844,7 +855,7 @@ pub fn seal(req: &SealRequest, h: &Hooks) -> Result<Outcome> {
     }
     (h.phase)("publish", 1, 1);
     (h.set_result)(json!({
-        "adopted": false, "snapshot": build_id, "files": files.len(), "bytes": bytes,
+        "adopted": false, "snapshot": build_id, "source_id": sid, "path": snap_path(sd, &build_id), "files": files.len(), "bytes": bytes,
         "method": if moved { "rename" } else { "link" },
     }));
     Ok(Outcome::Done)
