@@ -18,19 +18,19 @@ sources you want, and Cache uses them offline.
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/home.png" width="200" alt="Home: weather, alerts and your shortcuts"><br><sub>Home: weather, alerts and your shortcuts</sub></td>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/ask-sources.png" width="200" alt="Ask answers from your own sources, with citations"><br><sub>Ask answers from your own sources, with citations</sub></td>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/pdf-cited-passage.png" width="200" alt="A citation opens the page it came from"><br><sub>A citation opens the page it came from</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/home.png" width="200" alt="Home: weather, alerts and your shortcuts"><br><sub>Home: weather, alerts and your shortcuts</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/ask-sources.png" width="200" alt="Ask answers from your own sources, with citations"><br><sub>Ask answers from your own sources, with citations</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/pdf-cited-passage.png" width="200" alt="A citation opens the page it came from"><br><sub>A citation opens the page it came from</sub></td>
   </tr>
   <tr>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/library.png" width="200" alt="The Library: Kiwix ZIMs and your own libraries"><br><sub>The Library: Kiwix ZIMs and your own libraries</sub></td>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/ask-open-navigation.png" width="200" alt="Directions from Ask, then turn by turn in Maps"><br><sub>Directions from Ask, then turn by turn in Maps</sub></td>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/regions-sheet.png" width="200" alt="Map regions to download for offline use"><br><sub>Map regions to download for offline use</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/library.png" width="200" alt="The Library: Kiwix ZIMs and your own libraries"><br><sub>The Library: Kiwix ZIMs and your own libraries</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/ask-open-navigation.png" width="200" alt="Directions from Ask, then turn by turn in Maps"><br><sub>Directions from Ask, then turn by turn in Maps</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/regions-sheet.png" width="200" alt="Map regions to download for offline use"><br><sub>Map regions to download for offline use</sub></td>
   </tr>
   <tr>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/weather.png" width="200" alt="Weather and alerts, kept for when the signal is gone"><br><sub>Weather and alerts, kept for when the signal is gone</sub></td>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/notebook-entry.png" width="200" alt="Notebooks for journals, logs and notes"><br><sub>Notebooks for journals, logs and notes</sub></td>
-    <td align="center" width="33%"><img src="app/assets/guide/shots/videos-list.png" width="200" alt="Videos saved for offline, with captions"><br><sub>Videos saved for offline, with captions</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/weather.png" width="200" alt="Weather and alerts, kept for when the signal is gone"><br><sub>Weather and alerts, kept for when the signal is gone</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/notebook-entry.png" width="200" alt="Notebooks for journals, logs and notes"><br><sub>Notebooks for journals, logs and notes</sub></td>
+    <td align="center" valign="top" width="33%"><img src="app/assets/guide/shots/videos-list.png" width="200" alt="Videos saved for offline, with captions"><br><sub>Videos saved for offline, with captions</sub></td>
   </tr>
 </table>
 
