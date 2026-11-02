@@ -75,6 +75,10 @@ pub struct Extracted {
     /// The title in the PDF's metadata, when there is one.
     pub title: Option<String>,
     pub pages: Vec<RawPage>,
+    /// The year in the PDF's creation date, when it has one.
+    pub year: Option<u32>,
+    /// Typical resolution of the page images, in pixels per inch (the median over the pages that have a sizeable image).
+    pub ppi: Option<u32>,
 }
 
 /// The extractor's name and version, recorded in every pack.
@@ -105,20 +109,31 @@ pub fn extract_pdf(bytes: &[u8]) -> Result<Extracted> {
         .ok()
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
+    let year = doc.metadata(mupdf::document::MetadataName::CreationDate).ok().and_then(|d| year_of(&d));
     let pdf = PdfDocument::try_from(doc).map_err(|e| Error::ctx("reading the PDF", e))?;
     let count = pdf.page_count().map_err(|e| Error::ctx("counting pages", e))? as usize;
     let mut pages = Vec::with_capacity(count);
+    let mut ppis: Vec<f32> = Vec::new();
     for i in 0..count {
         // A page MuPDF cannot read is kept as an empty page: it has no text and no images, so it is skipped later.
-        match extract_page(&pdf, i) {
+        match extract_page(&pdf, i, &mut ppis) {
             Ok(p) => pages.push(p),
             Err(_) => pages.push(RawPage { index: i, label: (i + 1).to_string(), width: 0.0, height: 0.0, blocks: Vec::new(), images: 0 }),
         }
     }
-    Ok(Extracted { title, pages })
+    ppis.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let ppi = ppis.get(ppis.len() / 2).map(|p| p.round() as u32);
+    Ok(Extracted { title, pages, year, ppi })
 }
 
-fn extract_page(pdf: &PdfDocument, i: usize) -> Result<RawPage> {
+/// The year in a PDF date ("D:20190512..." or "2019-05-12...").
+fn year_of(date: &str) -> Option<u32> {
+    let d = date.trim().trim_start_matches("D:");
+    let y: u32 = d.get(..4)?.parse().ok()?;
+    (1800..=2100).contains(&y).then_some(y)
+}
+
+fn extract_page(pdf: &PdfDocument, i: usize, ppis: &mut Vec<f32>) -> Result<RawPage> {
     let page = pdf.load_page(i as i32).map_err(|e| Error::ctx("loading a page", e))?;
     let bounds = page.bounds().map_err(|e| Error::ctx("page size", e))?;
     // Dehyphenate on; PRESERVE_LIGATURES left off so ligatures come out as letters; images kept so no-text pages that
@@ -127,9 +142,20 @@ fn extract_page(pdf: &PdfDocument, i: usize) -> Result<RawPage> {
     let tp = page.to_text_page(flags).map_err(|e| Error::ctx("reading page text", e))?;
     let mut blocks = Vec::new();
     let mut images = 0;
+    let mut best_ppi = 0f32;
     for b in tp.blocks() {
         match b.r#type() {
-            TextBlockType::Image => images += 1,
+            TextBlockType::Image => {
+                images += 1;
+                // pixels across the picture over its width on the page in inches (tiny pictures say nothing about a scan)
+                if let Some(img) = b.image() {
+                    let r = b.bounds();
+                    let width_pt = r.x1 - r.x0;
+                    if width_pt >= 72.0 && img.width() > 0 {
+                        best_ppi = best_ppi.max(img.width() as f32 / (width_pt / 72.0));
+                    }
+                }
+            }
             TextBlockType::Text => {
                 let mut lines = Vec::new();
                 for l in b.lines() {
@@ -175,6 +201,9 @@ fn extract_page(pdf: &PdfDocument, i: usize) -> Result<RawPage> {
             _ => {}
         }
     }
+    if best_ppi > 0.0 {
+        ppis.push(best_ppi.min(1200.0));
+    }
     let label = pdf.page_label(i).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| (i + 1).to_string());
     Ok(RawPage { index: i, label, width: bounds.x1 - bounds.x0, height: bounds.y1 - bounds.y0, blocks, images })
 }
@@ -210,6 +239,9 @@ impl Extracted {
                 put_str(&mut o, t);
             }
             None => o.push(0),
+        }
+        for opt in [self.year, self.ppi] {
+            o.extend_from_slice(&opt.map_or(0u64, |v| 1 << 32 | v as u64).to_le_bytes());
         }
         put_u32(&mut o, self.pages.len());
         for p in &self.pages {
@@ -258,6 +290,10 @@ impl Extracted {
             fn u64(&mut self) -> Result<usize> {
                 Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()) as usize)
             }
+            fn opt_u32(&mut self) -> Result<Option<u32>> {
+                let v = u64::from_le_bytes(self.take(8)?.try_into().unwrap());
+                Ok(if v >> 32 == 1 { Some(v as u32) } else { None })
+            }
             fn f32(&mut self) -> Result<f32> {
                 Ok(f32::from_bits(u32::from_le_bytes(self.take(4)?.try_into().unwrap())))
             }
@@ -279,6 +315,7 @@ impl Extracted {
             return Err(Error::new("not an extraction"));
         }
         let title = if r.u8()? == 1 { Some(r.str()?) } else { None };
+        let (year, ppi) = (r.opt_u32()?, r.opt_u32()?);
         let np = r.count(24)?;
         let mut pages = Vec::with_capacity(np);
         for _ in 0..np {
@@ -305,6 +342,20 @@ impl Extracted {
         if !r.0.is_empty() {
             return Err(Error::new("the extraction has extra bytes"));
         }
-        Ok(Extracted { title, pages })
+        Ok(Extracted { title, pages, year, ppi })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::year_of;
+
+    #[test]
+    fn a_year_comes_from_a_pdf_date() {
+        assert_eq!(year_of("D:20190512103000+00'00'"), Some(2019));
+        assert_eq!(year_of("2007-03-01T10:00:00Z"), Some(2007));
+        assert_eq!(year_of("D:00000101"), None);
+        assert_eq!(year_of("x"), None);
+        assert_eq!(year_of(""), None);
     }
 }

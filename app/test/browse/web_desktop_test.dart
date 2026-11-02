@@ -66,7 +66,8 @@ void main() {
       await show(tester);
       expect(widthClassOf(tester.element(find.byType(BrowseScreen))), WidthClass.desktop);
       expect(find.text('Choose an item'), findsNothing);
-      expect(find.text('Add to Library'), findsNWidgets(2), reason: 'the button in the list and the page beside it');
+      expect(find.text('Add to Library'), findsOneWidget, reason: 'one control: the page beside the list, not also a button in it');
+      expect(find.byKey(const ValueKey('add-to-library')), findsNothing);
       expect(find.text('Build from your PDFs'), findsOneWidget);
       expect(find.text('Make a searchable library from PDF files on this computer.'), findsOneWidget);
       expect(find.text('Drop folder'), findsOneWidget);

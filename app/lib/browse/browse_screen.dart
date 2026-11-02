@@ -287,6 +287,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           final task = libs?.task;
           final items = sources.zims.length + (libs?.libraries.length ?? 0) + (b.device?.build?.libraries.length ?? 0);
           final empty = items == 0 && transfers.isEmpty && task == null && (b.device == null || (b.device!.jobs.isEmpty && b.device!.upload == null));
+          final addBeside = paneShowsDesktopInitial(context) || isPaneSelected(context, _kAddKey);
           return ListView(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
             children: [
@@ -324,16 +325,19 @@ class _BrowseScreenState extends State<BrowseScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                   child: Text("Couldn't check for updates: ${b.updateError}", style: TextStyle(fontSize: 12, color: k.warning)),
                 ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  key: const ValueKey('add-to-library'),
-                  onPressed: _add,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add to Library'),
+              // Not while Add to Library is the page beside the list (a desktop window): never two ways to one place.
+              if (!addBeside) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    key: const ValueKey('add-to-library'),
+                    onPressed: _add,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Add to Library'),
+                  ),
                 ),
-              ),
+              ],
             ],
           );
         },

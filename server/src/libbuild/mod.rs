@@ -32,11 +32,16 @@
 //! counted ("partial: N pages need OCR"); a PDF with no text layer at all is `ocr_needed`, never `failed`.
 
 use crate::embed::EmbedService;
+use classify::{call_letters, Classes, ModelStore, Suggestion};
+use filing::decision_view;
+use removed::RemovedEntry;
+use same::{Match, Quality};
 use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
 use cache_builder::isolate::ChildExtractor;
 use cache_builder::pack::{read_pack, write_pack, Pack};
-use cache_builder::{build_pack_with_extractor, BuildOptions, Embedder, Progress};
+use cache_builder::fingerprint::{decode_minhash, encode_minhash, jaccard, mean_vector};
+use cache_builder::{build_pack_with_extractor, BuildOptions, Embedder, Progress, Report};
 use http_body_util::BodyExt;
 use hyper::body::{Body, Bytes};
 use serde::{Deserialize, Serialize};
@@ -48,7 +53,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+pub mod classify;
 pub mod dropdir;
+pub mod filing;
+pub mod removed;
+pub mod same;
 #[cfg(test)]
 pub(crate) mod testpdf;
 #[cfg(test)]
@@ -160,6 +169,8 @@ pub enum S {
     Done,
     SkippedDuplicate,
     Failed,
+    /// Possibly a new edition of a book already in the library: waits for the person to choose (see [`Decision`]).
+    NeedsDecision,
 }
 
 impl S {
@@ -220,6 +231,20 @@ pub struct Item {
     /// and cleared when the attempt ends). A book found still mid-attempt at startup means the service died while on it.
     #[serde(default)]
     pub attempts: u32,
+    /// What happened, in a sentence the drop folder table shows: "Exact copy of X", "Already have a better copy", "Replaced: ...".
+    #[serde(default)]
+    pub result: Option<String>,
+    /// For a book waiting for a choice: what is known about it and the book it may be an edition of.
+    #[serde(default)]
+    pub decision: Option<Decision>,
+    /// The choice made for a book that was waiting: `keep_both` or `replace_older`.
+    #[serde(default)]
+    pub force: Option<String>,
+    /// For a built book: where it was filed.
+    #[serde(default)]
+    pub division: Option<String>,
+    #[serde(default)]
+    pub call_number: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub started_at: Option<String>,
@@ -252,6 +277,11 @@ impl Item {
             duplicate_of: None,
             moved_to: None,
             attempts: 0,
+            result: None,
+            decision: None,
+            force: None,
+            division: None,
+            call_number: None,
             created_at: now_rfc3339(),
             started_at: None,
             finished_at: None,
@@ -272,6 +302,94 @@ pub struct Book {
     pub size: u64,
     pub file_name: String,
     pub added_at: String,
+    /// Pages with real text on them.
+    #[serde(default)]
+    pub text_pages: u32,
+    /// Words of text.
+    #[serde(default)]
+    pub words: u32,
+    /// Typical page-image resolution (pixels per inch).
+    #[serde(default)]
+    pub ppi: Option<u32>,
+    /// The year in the PDF's creation date.
+    #[serde(default)]
+    pub year: Option<u32>,
+    /// The MinHash fingerprint of the text (base64); empty for a book built before fingerprints.
+    #[serde(default)]
+    pub minhash: String,
+    /// The division number, or none for Unsorted.
+    #[serde(default)]
+    pub division: Option<String>,
+    /// The three letters of the call number.
+    #[serde(default)]
+    pub letters: String,
+    /// A year or `2e` after the letters, for a second edition kept beside the first.
+    #[serde(default)]
+    pub suffix: Option<String>,
+    #[serde(default)]
+    pub suggestions: Vec<Suggestion>,
+    /// Why the book is in Unsorted: `low` (the sorter was not confident), `no_text`, `not_classified` (no classifier model yet).
+    #[serde(default)]
+    pub unsure: Option<String>,
+    /// The version of the classifier that last looked at the book (none while it has not been classified).
+    #[serde(default)]
+    pub classifier_version: Option<u32>,
+    /// The person placed it.
+    #[serde(default)]
+    pub placed: bool,
+    /// The classifier has looked at it.
+    #[serde(default)]
+    pub classified: bool,
+    /// Where it was before the person moved it (a division label).
+    #[serde(default)]
+    pub moved_from: Option<String>,
+    /// The device copy of the PDF, below `sources/<library_id>/`.
+    #[serde(default)]
+    pub source_rel: Option<String>,
+    /// The copy of the file in the drop folder's `complete/`, when it came from there.
+    #[serde(default)]
+    pub drop_copy: Option<String>,
+    #[serde(default)]
+    pub drop_root: Option<String>,
+}
+
+impl Book {
+    /// `530 · KEA`, or `KEA` while the book is in Unsorted.
+    pub fn call_number(&self) -> String {
+        let letters = if self.letters.is_empty() { call_letters(&self.title) } else { self.letters.clone() };
+        classify::call_number(self.division.as_deref(), &letters, self.suffix.as_deref())
+    }
+
+    fn quality(&self) -> Quality {
+        let text_pages = if self.text_pages > 0 { self.text_pages } else { self.pages.saturating_sub(self.ocr_pages) };
+        Quality { text_pages, pages: self.pages, ppi: self.ppi.unwrap_or(0), size: self.size }
+    }
+
+    fn side(&self) -> Side {
+        Side { pages: self.pages, text_pages: self.quality().text_pages, year: self.year, size: self.size, ppi: self.ppi }
+    }
+}
+
+/// What is known about one side of a possible new edition.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Side {
+    pub pages: u32,
+    pub text_pages: u32,
+    pub year: Option<u32>,
+    pub size: u64,
+    pub ppi: Option<u32>,
+}
+
+/// A book that matches one in the library closely but not entirely: the person chooses.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Decision {
+    pub other_doc_id: String,
+    pub other_title: String,
+    pub new_title: String,
+    pub jaccard: f32,
+    pub cosine: f32,
+    pub new: Side,
+    pub old: Side,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -346,6 +464,17 @@ pub struct BuildService {
     stopping: AtomicBool,
     /// How PDFs are read: in a child process, so a PDF that crashes MuPDF fails its own book and never the service.
     extractor: Mutex<ChildExtractor>,
+    pub(crate) removed: Mutex<Vec<RemovedEntry>>,
+    class_cache: Mutex<ClassCache>,
+    /// The classifier model files in `<data>/models/`.
+    models: ModelStore,
+    last_maintenance: Mutex<Instant>,
+    classify_retry: Mutex<Option<Instant>>,
+}
+
+struct ClassCache {
+    mtime: Option<std::time::SystemTime>,
+    classes: Arc<Classes>,
 }
 
 fn write_json(path: &Path, v: &impl Serialize) -> std::io::Result<()> {
@@ -416,6 +545,36 @@ fn friendly_error(raw: &str) -> String {
     }
 }
 
+/// Books built before filing kept their PDF at `sources/<library_id>/<doc_id>.pdf`. At start-up each such file moves into the
+/// filed tree (to Unsorted: the classifier places them when it next has time).
+fn migrate_flat_sources(data: &Path, libs: &mut [LibMeta]) {
+    for m in libs.iter_mut() {
+        let mut changed = false;
+        for b in m.books.iter_mut().filter(|b| b.source_rel.is_none()) {
+            let flat = data.join("app/docs/sources").join(&m.id).join(format!("{}.pdf", b.doc_id));
+            if !flat.is_file() {
+                continue;
+            }
+            if b.letters.is_empty() {
+                b.letters = call_letters(&b.title);
+            }
+            let dir = data.join("app/docs/sources").join(&m.id).join(classify::UNSORTED);
+            match dropdir::move_unique(&flat, &dir, &classify::file_name(&b.call_number(), &b.title)) {
+                Ok(n) => {
+                    b.source_rel = Some(format!("{}/{}", classify::UNSORTED, n));
+                    changed = true;
+                }
+                Err(e) => eprintln!("cache-server: filing the PDF of {}: {e}", b.doc_id),
+            }
+        }
+        if changed {
+            if let Err(e) = write_json(&data.join("build/libs").join(format!("{}.json", m.id)), &*m) {
+                eprintln!("cache-server: saving library {}: {e}", m.id);
+            }
+        }
+    }
+}
+
 fn is_disk_full(e: &std::io::Error) -> bool {
     matches!(e.raw_os_error(), Some(28) | Some(112))
 }
@@ -424,7 +583,7 @@ impl BuildService {
     /// Open the service on `data`: read the queue and the libraries, put interrupted books back in the queue, and finish any
     /// library swap a crash cut short. No thread is started (see [`BuildService::start`]).
     pub fn new(data: PathBuf, lib: Arc<Library>, embed: Arc<dyn Embed>, cfg: BuildConfig) -> Arc<BuildService> {
-        for d in ["build/libs", "build/pending", "build/work", "app/docs/libraries", "app/docs/sources"] {
+        for d in ["build/libs", "build/pending", "build/work", "build/removed/files", "app/docs/libraries", "app/docs/sources"] {
             let _ = std::fs::create_dir_all(data.join(d));
         }
         let q: QueueFile = std::fs::read_to_string(data.join("build/queue.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
@@ -439,6 +598,7 @@ impl BuildService {
             }
         }
         libs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        migrate_flat_sources(&data, &mut libs);
         let mut items = q.items;
         let mut gave_up: Vec<String> = vec![];
         for it in &mut items {
@@ -464,6 +624,8 @@ impl BuildService {
         let drop = dropdir::DropState::load(&data);
         let data_for_tmp = data.join("build/tmp");
         let _ = std::fs::remove_dir_all(&data_for_tmp); // reading folders a crash left
+        let data_for_removed = data.clone();
+        let data_for_models = data.clone();
         // The clock for "publish at most every so often" starts now for every library.
         let last_publish: HashMap<String, Instant> = libs.iter().map(|l| (l.id.clone(), Instant::now())).collect();
         let svc = Arc::new(BuildService {
@@ -487,9 +649,16 @@ impl BuildService {
             drop,
             stopping: AtomicBool::new(false),
             extractor: Mutex::new(default_extractor(data_for_tmp)),
+            removed: Mutex::new(removed::load(&data_for_removed)),
+            class_cache: Mutex::new(ClassCache { mtime: None, classes: Arc::new(Classes::default_classes()) }),
+            models: ModelStore::new(&data_for_models),
+            last_maintenance: Mutex::new(Instant::now()),
+            classify_retry: Mutex::new(None),
         });
         svc.recover();
         svc.save_queue();
+        svc.classes();
+        svc.purge_removed(epoch());
         // a drop-folder file given up on goes to failed/ with its note, as any failed file does
         for id in gave_up {
             svc.settle_drop_item(&id);
@@ -510,9 +679,23 @@ impl BuildService {
         dropdir::start(self);
     }
 
-    /// Ask the threads to end (used by tests and at shutdown).
+    /// Ask the threads to end (used by tests and at shutdown). A book being worked on when the service is stopped on purpose
+    /// (`systemctl stop` or `restart`) has its attempt taken back and saved, so only a real crash counts toward the two-strike rule.
     pub fn shutdown(&self) {
-        self.stopping.store(true, Ordering::Relaxed);
+        if self.stopping.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        {
+            let mut st = lock(&self.st);
+            let mut any = false;
+            for it in st.items.iter_mut().filter(|i| i.state.working()) {
+                it.attempts = it.attempts.saturating_sub(1);
+                any = true;
+            }
+            if any {
+                self.save_queue_locked(&st);
+            }
+        }
         self.poke();
     }
 
@@ -561,7 +744,27 @@ impl BuildService {
     /// Where the original PDF of a book is kept. Everything that reads or writes a source copy goes through this one function,
     /// so filing the PDFs by subject later changes only this.
     pub fn source_path(&self, lib: &str, doc_id: &str) -> PathBuf {
-        self.data.join("app/docs/sources").join(lib).join(format!("{doc_id}.pdf"))
+        match self.book_of(lib, doc_id) {
+            Some(b) => self.source_of(lib, &b),
+            None => self.data.join("app/docs/sources").join(lib).join(format!("{doc_id}.pdf")),
+        }
+    }
+
+    /// The device copy of `b`: in the filed tree, or (a book not yet migrated) at the old flat path. Does not lock the state.
+    pub(crate) fn source_of(&self, lib: &str, b: &Book) -> PathBuf {
+        let root = self.data.join("app/docs/sources").join(lib);
+        match &b.source_rel {
+            Some(rel) => root.join(rel),
+            None => root.join(format!("{}.pdf", b.doc_id)),
+        }
+    }
+
+    pub(crate) fn book_of(&self, lib: &str, doc: &str) -> Option<Book> {
+        lock(&self.st).libs.iter().find(|l| l.id == lib).and_then(|l| l.books.iter().find(|b| b.doc_id == doc).cloned())
+    }
+
+    fn sources_root(&self, lib: &str) -> PathBuf {
+        self.data.join("app/docs/sources").join(lib)
     }
 
     // ---- persistence
@@ -584,14 +787,14 @@ impl BuildService {
 
     /// Keep the most recent finished items only (and throw away the uploads of the ones that go).
     fn prune(&self, st: &mut State) {
-        let finished = st.items.iter().filter(|i| !i.state.live()).count();
+        let finished = st.items.iter().filter(|i| !i.state.live() && i.state != S::NeedsDecision).count();
         if finished <= KEEP_FINISHED {
             return;
         }
         let mut drop_n = finished - KEEP_FINISHED;
         let pending = self.pending_dir();
         st.items.retain(|i| {
-            if drop_n > 0 && !i.state.live() {
+            if drop_n > 0 && !i.state.live() && i.state != S::NeedsDecision {
                 drop_n -= 1;
                 if i.origin == Origin::Upload {
                     let _ = std::fs::remove_file(pending.join(format!("{}.pdf", i.id)));
@@ -654,7 +857,10 @@ impl BuildService {
         while !self.is_stopping() {
             match self.run_one() {
                 Run::Ran => {}
-                Run::Idle | Run::Blocked => self.sleep(Duration::from_secs(2)),
+                Run::Idle | Run::Blocked => {
+                    self.maintenance();
+                    self.sleep(Duration::from_secs(2));
+                }
             }
         }
     }
@@ -663,7 +869,7 @@ impl BuildService {
     pub fn run_one(self: &Arc<Self>) -> Run {
         let picked = {
             let st = lock(&self.st);
-            if st.paused {
+            if st.paused || self.is_stopping() {
                 None
             } else {
                 st.items.iter().position(|i| i.state == S::Queued)
@@ -683,7 +889,7 @@ impl BuildService {
             st.blocked = None;
             // The queue may have changed while the model was checked.
             let Some(idx) = st.items.iter().position(|i| i.state == S::Queued) else { return Run::Idle };
-            if st.paused {
+            if st.paused || self.is_stopping() {
                 return Run::Idle;
             }
             let it = &mut st.items[idx];
@@ -731,6 +937,7 @@ impl BuildService {
             return Outcome::Failed("The book to replace is no longer in this library.".into());
         }
         let mut opts = BuildOptions::new(&item.file_name, &now_rfc3339());
+        opts.smart_title = true;
         opts.title = item.title.clone().or_else(|| replacing.as_ref().map(|b| b.title.clone()));
         if let Some(old) = &replacing {
             opts.doc_id = Some(old.doc_id.clone());
@@ -753,10 +960,39 @@ impl BuildService {
             Progress::Embedded { done, .. } => self.update_item(&id, |it| it.pieces_done = done as u32),
         }, &|pdf| extractor.extract(pdf));
         match result {
-            Ok((pack, _)) => match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref()) {
-                Ok(()) => Outcome::Built(Box::new(pack)),
-                Err(m) => Outcome::Failed(m),
-            },
+            Ok((mut pack, report)) => {
+                let mut replacing = replacing;
+                let mut replaced_because: Option<String> = None;
+                let mut edition = false;
+                if item.replace.is_none() {
+                    match self.compare(item, &pack, &report, bytes.len() as u64) {
+                        Compare::New { edition: e } => edition = e,
+                        Compare::Worse(title) => return Outcome::Worse(title),
+                        Compare::Better { old, reason } => {
+                            // The same book in a better file: rebuilt from this copy as the next version, keeping the title,
+                            // the call number and the place.
+                            pack.header.doc_id = old.doc_id.clone();
+                            pack.header.doc_version = old.doc_version + 1;
+                            pack.header.title = old.title.clone();
+                            replaced_because = Some(reason);
+                            replacing = Some(*old);
+                        }
+                        Compare::Decide(d) => return Outcome::NeedsDecision(d),
+                        Compare::Missing => return Outcome::Failed("The older book is no longer in this library.".into()),
+                    }
+                }
+                let place = match &replacing {
+                    Some(old) => Placement::of(old),
+                    None => self.plan_new(&pack.header.title, &pack.pieces, report.year, edition, &item.library_id),
+                };
+                match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref(), &report, place, replaced_because.as_deref()) {
+                    Ok(()) => match replaced_because {
+                        Some(r) => Outcome::Replaced(Box::new(pack), format!("Replaced: {r}")),
+                        None => Outcome::Built(Box::new(pack)),
+                    },
+                    Err(m) => Outcome::Failed(m),
+                }
+            }
             Err(e) => {
                 if let Some(EmbedErr::Waiting(w)) = lock(&adapter.error).clone() {
                     return Outcome::Waiting(w);
@@ -769,6 +1005,63 @@ impl BuildService {
                     _ => Outcome::Failed(friendly_error(&e.0)),
                 }
             }
+        }
+    }
+
+    fn tuning(&self) -> same::Tuning {
+        std::fs::read_to_string(self.data.join("build/tuning.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    /// Is this book one already in the library, in another file?
+    fn compare(&self, item: &Item, pack: &Pack, rep: &Report, size: u64) -> Compare {
+        let books: Vec<Book> = {
+            let st = lock(&self.st);
+            match st.libs.iter().find(|l| l.id == item.library_id) {
+                Some(m) => m.books.clone(),
+                None => return Compare::New { edition: false },
+            }
+        };
+        match item.force.as_deref() {
+            Some("keep_both") => return Compare::New { edition: true },
+            Some("replace_older") => {
+                let other = item.decision.as_ref().map(|d| d.other_doc_id.clone()).unwrap_or_default();
+                return match books.into_iter().find(|b| b.doc_id == other) {
+                    Some(old) => Compare::Better { old: Box::new(old), reason: "the older edition was replaced at your choice".into() },
+                    None => Compare::Missing,
+                };
+            }
+            _ => {}
+        }
+        let t = self.tuning();
+        // The fingerprints are compared one by one (a library of 20,000 books is 20,000 comparisons of 128 numbers).
+        let mut best: Option<(f32, &Book)> = None;
+        for b in books.iter().filter(|b| !b.minhash.is_empty()) {
+            let j = jaccard(&decode_minhash(&b.minhash), &rep.minhash);
+            if j >= t.edition_jaccard && best.is_none_or(|(bj, _)| j > bj) {
+                best = Some((j, b));
+            }
+        }
+        let Some((j, old)) = best else { return Compare::New { edition: false } };
+        let old_vec = read_pack(&self.packs_dir(&item.library_id).join(cache_builder::pack::pack_file_name(&old.doc_id, old.doc_version))).map(|p| mean_vector(&p.pieces)).unwrap_or_default();
+        let cos = cache_builder::fingerprint::cosine(&old_vec, &rep.mean_vector);
+        match same::judge(&t, j, cos, rep.words, old.words as usize) {
+            Match::Different => Compare::New { edition: false },
+            Match::Same => {
+                let new_q = Quality { text_pages: rep.text_pages as u32, pages: pack.header.page_count as u32, ppi: rep.ppi.unwrap_or(0), size };
+                match same::better(&new_q, &old.quality()) {
+                    Some(reason) => Compare::Better { old: Box::new(old.clone()), reason },
+                    None => Compare::Worse(old.title.clone()),
+                }
+            }
+            Match::Edition => Compare::Decide(Box::new(Decision {
+                other_doc_id: old.doc_id.clone(),
+                other_title: old.title.clone(),
+                new_title: pack.header.title.clone(),
+                jaccard: j,
+                cosine: cos,
+                new: Side { pages: pack.header.page_count as u32, text_pages: rep.text_pages as u32, year: rep.year, size, ppi: rep.ppi },
+                old: old.side(),
+            })),
         }
     }
 
@@ -787,8 +1080,10 @@ impl BuildService {
         }
     }
 
-    /// Write the pack, keep the PDF, put the pieces in the work shard and record the book.
-    fn store_book(&self, item: &Item, pdf: &[u8], pack: &Pack, hash: &str, replacing: Option<&Book>) -> Result<(), String> {
+    /// Write the pack, keep the PDF (filed by subject), put the pieces in the work shard and record the book. For a replacement the
+    /// old device copy (and the old copy in the drop folder's `complete/`) go to Removed.
+    #[allow(clippy::too_many_arguments)]
+    fn store_book(&self, item: &Item, pdf: &[u8], pack: &Pack, hash: &str, replacing: Option<&Book>, rep: &Report, place: Placement, why: Option<&str>) -> Result<(), String> {
         let _g = lock(&self.ops);
         let io = |what: &str, e: std::io::Error| {
             if is_disk_full(&e) {
@@ -799,15 +1094,9 @@ impl BuildService {
         };
         let h = &pack.header;
         write_pack(pack, &self.packs_dir(&item.library_id)).map_err(|e| e.to_string())?;
-        let src = self.source_path(&item.library_id, &h.doc_id);
-        std::fs::create_dir_all(src.parent().unwrap_or(Path::new("."))).map_err(|e| io("keeping the PDF", e))?;
-        write_bytes_atomic(&src, pdf).map_err(|e| io("keeping the PDF", e))?;
-        {
-            let w = self.open_work(&item.library_id)?;
-            w.upsert_pack(pack).map_err(|e| e.to_string())?;
-            w.flush().map_err(|e| e.to_string())?;
-        }
-        let book = Book {
+        let cls = self.classes();
+        let root = self.sources_root(&item.library_id);
+        let mut book = Book {
             doc_id: h.doc_id.clone(),
             doc_version: h.doc_version,
             title: h.title.clone(),
@@ -818,7 +1107,47 @@ impl BuildService {
             size: pdf.len() as u64,
             file_name: item.file_name.clone(),
             added_at: now_rfc3339(),
+            text_pages: rep.text_pages as u32,
+            words: rep.words as u32,
+            ppi: rep.ppi,
+            year: rep.year,
+            minhash: encode_minhash(&rep.minhash),
+            division: place.division,
+            letters: place.letters,
+            suffix: place.suffix,
+            suggestions: place.suggestions,
+            unsure: place.unsure,
+            classifier_version: place.classifier_version,
+            placed: place.placed,
+            classified: place.classified,
+            moved_from: place.moved_from,
+            source_rel: None,
+            drop_copy: None,
+            drop_root: None,
         };
+        if let Some(old) = replacing {
+            let reason = format!("Replaced by a better copy: {}", why.unwrap_or("a newer file of the same book"));
+            let old_src = self.source_of(&item.library_id, old);
+            if old_src.is_file() {
+                let nm = old_src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| old.file_name.clone());
+                let _ = self.to_removed(&old_src, &nm, &reason, "source", &item.library_id);
+            }
+            if let Some(c) = old.drop_copy.as_deref().map(PathBuf::from).filter(|p| p.is_file()) {
+                let nm = c.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| old.file_name.clone());
+                let _ = self.to_removed(&c, &nm, &reason, "drop", &item.library_id);
+            }
+        }
+        let folder = cls.folder_rel(book.division.as_deref());
+        let dir = root.join(&folder);
+        std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
+        let name = dropdir::unique_name(&dir, &classify::file_name(&book.call_number(), &book.title));
+        write_bytes_atomic(&dir.join(&name), pdf).map_err(|e| io("keeping the PDF", e))?;
+        book.source_rel = Some(format!("{}/{}", folder.to_string_lossy().replace('\\', "/"), name));
+        {
+            let w = self.open_work(&item.library_id)?;
+            w.upsert_pack(pack).map_err(|e| e.to_string())?;
+            w.flush().map_err(|e| e.to_string())?;
+        }
         let old_pack = replacing.map(|o| self.packs_dir(&item.library_id).join(cache_builder::pack::pack_file_name(&o.doc_id, o.doc_version)));
         {
             let mut st = lock(&self.st);
@@ -838,6 +1167,57 @@ impl BuildService {
         }
         self.apply_pending_deletes(&item.library_id);
         Ok(())
+    }
+
+    /// Where a new book goes: its three letters, and the division by meaning (or Unsorted when unsure).
+    fn plan_new(&self, title: &str, pieces: &[cache_builder::pack::PackPiece], year: Option<u32>, edition: bool, lib: &str) -> Placement {
+        let letters = call_letters(title);
+        // With no classifier model (or one that cannot score this book) the book waits in Unsorted, unclassified, with no
+        // suggestions; it is looked at when a model appears.
+        let verdict = match self.models.current() {
+            Some(model) => classify::classify(&model, pieces).map_err(|e| eprintln!("cache-server: classifying: {e}")).ok(),
+            None => None,
+        };
+        let (division, suggestions, unsure, classified, classifier_version) = match verdict {
+            Some(v) => (v.division, v.top, v.unsure, true, Some(v.version)),
+            None => (None, vec![], Some("not_classified".to_string()), false, None),
+        };
+        let suffix = edition.then(|| {
+            let st = lock(&self.st);
+            let beside: Vec<&Book> = st
+                .libs
+                .iter()
+                .find(|l| l.id == lib)
+                .map(|l| l.books.iter().filter(|b| b.division == division && (if b.letters.is_empty() { call_letters(&b.title) } else { b.letters.clone() }) == letters).collect())
+                .unwrap_or_default();
+            match year.filter(|y| beside.iter().all(|b| b.year != Some(*y))) {
+                Some(y) => y.to_string(),
+                None => format!("{}e", beside.len() + 1),
+            }
+        });
+        Placement { division, letters, suffix, suggestions, unsure, classifier_version, placed: false, classified, moved_from: None }
+    }
+
+    /// The classes: `build/classes.json` (made from the built-in default when missing, read again when it changes).
+    pub(crate) fn classes(&self) -> Arc<Classes> {
+        let path = self.data.join("build/classes.json");
+        let mut mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let mut c = lock(&self.class_cache);
+        if mtime.is_none() || mtime != c.mtime {
+            if mtime.is_none() {
+                let _ = write_json(&path, &*c.classes);
+                mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            } else {
+                match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<Classes>(&t).map_err(|e| e.to_string())) {
+                    Ok(cl) => {
+                        c.classes = Arc::new(cl);
+                    }
+                    Err(e) => eprintln!("cache-server: build/classes.json is not usable ({e}); the last good classes stay"),
+                }
+            }
+            c.mtime = mtime;
+        }
+        c.classes.clone()
     }
 
     /// Delete the points listed in the library's `pending_deletes` from the work shard. Holds `ops` (the caller does).
@@ -872,16 +1252,40 @@ impl BuildService {
             Remove,
         }
         let mut next = Next::Keep;
+        let cls = self.classes();
         {
             let mut st = lock(&self.st);
             let secs = started.elapsed().as_secs_f64();
             let mut built = 0u64;
+            // where the book was filed
+            let filed: Option<(Option<String>, String)> = match &outcome {
+                Outcome::Built(p) | Outcome::Replaced(p, _) => st
+                    .libs
+                    .iter()
+                    .find(|l| l.id == item.library_id)
+                    .and_then(|l| l.books.iter().find(|b| b.doc_id == p.header.doc_id))
+                    .map(|b| (b.division.clone(), b.call_number())),
+                _ => None,
+            };
             if let Some(it) = st.items.iter_mut().find(|i| i.id == item.id) {
                 it.finished_at = Some(now_rfc3339());
                 it.finished_epoch = Some(epoch());
                 it.attempts = 0; // this attempt came back
+                if let Some((div, call)) = &filed {
+                    it.division = div.clone();
+                    it.call_number = Some(call.clone());
+                    it.force = None;
+                    it.decision = None;
+                }
                 match &outcome {
-                    Outcome::Built(pack) => {
+                    Outcome::Built(pack) | Outcome::Replaced(pack, _) => {
+                        it.result = Some(match &outcome {
+                            Outcome::Replaced(_, r) => r.clone(),
+                            _ => match filed.as_ref().and_then(|(d, _)| d.as_deref()).and_then(|d| cls.find(d)) {
+                                Some((_, d)) => format!("Filed in {} {}", d.number, d.name),
+                                None => format!("Filed in {}", classify::UNSORTED),
+                            },
+                        });
                         it.state = S::Done;
                         it.doc_id = Some(pack.header.doc_id.clone());
                         it.pages = Some(pack.header.page_count as u32);
@@ -896,6 +1300,18 @@ impl BuildService {
                     Outcome::Duplicate(of) => {
                         it.state = S::SkippedDuplicate;
                         it.duplicate_of = Some(of.clone());
+                        it.result = Some(format!("Exact copy of {of}"));
+                    }
+                    Outcome::Worse(of) => {
+                        it.state = S::SkippedDuplicate;
+                        it.duplicate_of = Some(of.clone());
+                        it.result = Some("Already have a better copy".to_string());
+                    }
+                    Outcome::NeedsDecision(d) => {
+                        it.state = S::NeedsDecision;
+                        it.decision = Some((**d).clone());
+                        it.force = None;
+                        it.result = Some(format!("This may be a new edition of \"{}\"", d.other_title));
                     }
                     Outcome::OcrNeeded(m) => {
                         it.state = S::OcrNeeded;
@@ -931,9 +1347,21 @@ impl BuildService {
             self.prune(&mut st);
             self.save_queue_locked(&st);
         }
-        // The upload has been kept as a source copy (or is not wanted): its staging file goes. A failed one stays for a retry.
-        if item.origin == Origin::Upload && matches!(outcome, Outcome::Built(_) | Outcome::Duplicate(_)) {
-            let _ = std::fs::remove_file(&item.path);
+        // The upload has been kept as a source copy: its staging file goes. A copy that is not kept goes to Removed. A failed one stays
+        // for a retry, and one waiting for a choice stays where it is.
+        if item.origin == Origin::Upload {
+            match &outcome {
+                Outcome::Built(_) | Outcome::Replaced(..) => {
+                    let _ = std::fs::remove_file(&item.path);
+                }
+                Outcome::Duplicate(_) | Outcome::Worse(_) => {
+                    let why = lock(&self.st).items.iter().find(|i| i.id == item.id).and_then(|i| i.result.clone()).unwrap_or_else(|| "Not kept".into());
+                    if self.to_removed(Path::new(&item.path), &item.file_name, &why, "upload", &item.library_id).is_err() {
+                        let _ = std::fs::remove_file(&item.path);
+                    }
+                }
+                _ => {}
+            }
         }
         if item.origin == Origin::Drop && !matches!(outcome, Outcome::Waiting(_) | Outcome::Gone) {
             self.settle_drop_item(&item.id);
@@ -1067,7 +1495,8 @@ impl BuildService {
             "progress": {"pages": it.pages, "pieces": it.pieces_done, "pieces_total": it.pieces_total, "ocr_pages": it.ocr_pages},
             "error": it.error, "note": it.note, "replace": it.replace, "doc_id": it.doc_id, "duplicate_of": it.duplicate_of,
             "drop": it.origin == Origin::Drop, "position": position, "created_at": it.created_at, "started_at": it.started_at,
-            "finished_at": it.finished_at,
+            "finished_at": it.finished_at, "result": it.result, "division": it.division, "call_number": it.call_number,
+            "decision": it.decision.as_ref().map(decision_view),
         })
     }
 
@@ -1128,6 +1557,7 @@ impl BuildService {
                 "total": st.items.len(), "waiting": n(&|i| i.state == S::Queued), "working": n(&|i| i.state.working()),
                 "done": n(&|i| i.state == S::Done), "skipped": n(&|i| i.state == S::SkippedDuplicate),
                 "failed": n(&|i| i.state == S::Failed), "ocr_needed": n(&|i| i.state == S::OcrNeeded),
+                "needs_decision": n(&|i| i.state == S::NeedsDecision),
             },
             "eta": {"low_seconds": low, "high_seconds": high},
             "pieces_per_second": rate,
@@ -1224,7 +1654,13 @@ impl BuildService {
             self.save_queue_locked(&st);
             it
         };
-        if it.origin == Origin::Upload {
+        if it.state == S::NeedsDecision {
+            // the person leaves the copy out: it waits in Removed like any copy that was not kept
+            let why = "Not added: you chose to leave it out";
+            if self.to_removed(Path::new(&it.path), &it.file_name, why, if it.origin == Origin::Drop { "drop" } else { "upload" }, &it.library_id).is_err() && it.origin == Origin::Upload {
+                let _ = std::fs::remove_file(&it.path);
+            }
+        } else if it.origin == Origin::Upload {
             let _ = std::fs::remove_file(&it.path);
         }
         Ok(self.queue())
@@ -1332,29 +1768,13 @@ impl BuildService {
             let _ = std::fs::remove_dir_all(&gone);
         }
         let _ = std::fs::remove_dir_all(self.data.join("build/work").join(id));
-        let _ = std::fs::remove_dir_all(self.source_path(id, "x").parent().unwrap_or(Path::new("/nonexistent-cache-path")));
+        let _ = std::fs::remove_dir_all(self.sources_root(id));
         Ok(json!({"removed": true, "id": id}))
     }
 
-    /// `GET /api/build/libraries/{id}/books`.
+    /// `GET /api/build/libraries/{id}/books` (see [`BuildService::books_q`] for the filters).
     pub fn books(&self, id: &str) -> Result<Value, ApiErr> {
-        let st = lock(&self.st);
-        let m = st.libs.iter().find(|l| l.id == id).ok_or_else(|| err(404, "not_found", "no such library"))?;
-        let mut books: Vec<&Book> = m.books.iter().collect();
-        books.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then(a.doc_id.cmp(&b.doc_id)));
-        Ok(Value::Array(
-            books
-                .into_iter()
-                .map(|b| {
-                    let replacing = st.items.iter().any(|i| i.library_id == id && i.state.live() && i.replace.as_deref() == Some(&b.doc_id));
-                    json!({
-                        "id": b.doc_id, "doc_version": b.doc_version, "title": b.title, "pages": b.pages, "passages": b.pieces,
-                        "ocr_pages": b.ocr_pages, "partial": if b.ocr_pages > 0 { Some(format!("partial: {} pages need OCR", b.ocr_pages)) } else { None },
-                        "file_name": b.file_name, "size": b.size, "added_at": b.added_at, "status": if replacing { "replacing" } else { "ready" },
-                    })
-                })
-                .collect(),
-        ))
+        self.books_q(id, "")
     }
 
     /// `PATCH /api/build/libraries/{id}/books/{doc}` {title}: only the title changes. The vectors are not made again; the book's pack
@@ -1385,7 +1805,23 @@ impl BuildService {
             let mut st = lock(&self.st);
             if let Some(m) = st.libs.iter_mut().find(|l| l.id == id) {
                 if let Some(b) = m.books.iter_mut().find(|b| b.doc_id == doc) {
+                    // the call number keeps its letters when the title changes; the filed PDF takes the new title in its name
+                    if b.letters.is_empty() {
+                        b.letters = call_letters(&b.title);
+                    }
                     b.title = title.clone();
+                    if let Some(rel) = b.source_rel.clone() {
+                        let src = self.sources_root(id).join(&rel);
+                        let (parent, current) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+                        let wanted = classify::file_name(&b.call_number(), &b.title);
+                        if src.is_file() && wanted != current {
+                            if let Some(dir) = src.parent() {
+                                if let Ok(n) = dropdir::move_unique(&src, dir, &wanted) {
+                                    b.source_rel = Some(if parent.is_empty() { n } else { format!("{parent}/{n}") });
+                                }
+                            }
+                        }
+                    }
                 }
                 m.dirty = true;
                 let m = m.clone();
@@ -1412,7 +1848,7 @@ impl BuildService {
             let m = m.clone();
             self.save_meta(&m).map_err(|e| err(500, "server_error", format!("could not save the library: {e}")))?;
             let _ = std::fs::remove_file(self.packs_dir(id).join(cache_builder::pack::pack_file_name(&b.doc_id, b.doc_version)));
-            let _ = std::fs::remove_file(self.source_path(id, &b.doc_id));
+            let _ = std::fs::remove_file(self.source_of(id, &b));
             // a replacement waiting for this book has nothing to replace any more
             for it in st.items.iter_mut().filter(|i| i.library_id == id && i.state == S::Queued && i.replace.as_deref() == Some(doc)) {
                 it.replace = None;
@@ -1531,8 +1967,54 @@ impl BuildService {
     }
 }
 
+/// Where a book is filed, as it is worked out.
+struct Placement {
+    division: Option<String>,
+    letters: String,
+    suffix: Option<String>,
+    suggestions: Vec<Suggestion>,
+    unsure: Option<String>,
+    classifier_version: Option<u32>,
+    placed: bool,
+    classified: bool,
+    moved_from: Option<String>,
+}
+
+impl Placement {
+    /// A replacement keeps its book's place.
+    fn of(b: &Book) -> Placement {
+        Placement {
+            division: b.division.clone(),
+            letters: if b.letters.is_empty() { call_letters(&b.title) } else { b.letters.clone() },
+            suffix: b.suffix.clone(),
+            suggestions: b.suggestions.clone(),
+            unsure: b.unsure.clone(),
+            classifier_version: b.classifier_version,
+            placed: b.placed,
+            classified: b.classified,
+            moved_from: b.moved_from.clone(),
+        }
+    }
+}
+
+/// What the comparison with the library's books found.
+enum Compare {
+    New { edition: bool },
+    /// The same book, and this copy is not better.
+    Worse(String),
+    /// The same book, and this copy is better (or the person chose to replace).
+    Better { old: Box<Book>, reason: String },
+    Decide(Box<Decision>),
+    /// The older book to replace has gone.
+    Missing,
+}
+
 enum Outcome {
     Built(Box<Pack>),
+    Replaced(Box<Pack>, String),
+    /// The same book is in the library in a better file.
+    Worse(String),
+    NeedsDecision(Box<Decision>),
     Duplicate(String),
     OcrNeeded(String),
     Failed(String),

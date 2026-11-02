@@ -56,6 +56,10 @@ fn the_wire_format_round_trips_and_refuses_damage() {
     for cut in [0, 3, 10, wire.len() / 2, wire.len() - 1] {
         assert!(cache_builder::extract::Extracted::from_wire(&wire[..cut]).is_err(), "cut at {cut}");
     }
+    let mut dated = direct.clone();
+    dated.year = Some(2019);
+    dated.ppi = Some(300);
+    assert_eq!(cache_builder::extract::Extracted::from_wire(&dated.to_wire()).unwrap(), dated);
     let mut more = wire.clone();
     more.push(0);
     assert!(cache_builder::extract::Extracted::from_wire(&more).is_err());

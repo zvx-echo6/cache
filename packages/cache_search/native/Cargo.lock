@@ -785,6 +785,7 @@ dependencies = [
  "tar",
  "tempfile",
  "uuid",
+ "zim",
 ]
 
 [[package]]
@@ -798,6 +799,10 @@ dependencies = [
 
 [[package]]
 name = "cache_chunk"
+version = "0.1.0"
+
+[[package]]
+name = "cache_classify"
 version = "0.1.0"
 
 [[package]]
@@ -975,6 +980,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "cache_builder",
+ "cache_classify",
  "cache_embed",
  "http-body-util",
  "hyper",

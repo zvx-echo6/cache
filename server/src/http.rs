@@ -231,7 +231,34 @@ async fn build_api(app: &App, method: &str, path: &str, query: &str, body: &[u8]
             let id = id.to_string();
             blocking(move || b.delete_library(&id)).await
         }
-        ("GET", ["libraries", id, "books"]) => library_reply(b.books(id)),
+        ("GET", ["libraries", id, "books"]) => library_reply(b.books_q(id, query)),
+        ("GET", ["libraries", id, "books", doc, "suggestions"]) => {
+            let (id, doc) = (id.to_string(), doc.to_string());
+            library_reply(b.suggestions(&id, &doc))
+        }
+        ("POST", ["libraries", id, "books", doc, "place"]) => {
+            let (id, doc) = (id.to_string(), doc.to_string());
+            blocking(move || b.place_book(&id, &doc, &body_owned)).await
+        }
+        ("GET", ["classes"]) => {
+            let lib = crate::fetch::query_param(query, "library_id");
+            blocking(move || b.classes_view(lib.as_deref())).await
+        }
+        ("POST", ["classes", "reclassify"]) => blocking(move || b.reclassify(&body_owned)).await,
+        ("POST", ["queue", id, "decide"]) => {
+            let id = id.to_string();
+            blocking(move || b.decide(&id, &body_owned)).await
+        }
+        ("GET", ["removed"]) => ok(b.removed_view()),
+        ("POST", ["removed", id, "restore"]) => {
+            let id = id.to_string();
+            blocking(move || b.restore_removed(&id)).await
+        }
+        ("DELETE", ["removed", id]) => {
+            let id = id.to_string();
+            blocking(move || b.delete_removed(&id)).await
+        }
+        ("DELETE", ["removed"]) => blocking(move || b.delete_removed("")).await,
         ("PATCH", ["libraries", id, "books", doc]) => {
             let (id, doc) = (id.to_string(), doc.to_string());
             blocking(move || b.rename_book(&id, &doc, &body_owned)).await
@@ -1305,6 +1332,14 @@ mod tests {
             ("GET", "/api/build/drop"),
             ("PUT", "/api/build/drop"),
             ("POST", "/api/build/drop/check"),
+            ("GET", "/api/build/classes"),
+            ("POST", "/api/build/classes/reclassify"),
+            ("GET", "/api/build/removed"),
+            ("POST", "/api/build/removed/x/restore"),
+            ("DELETE", "/api/build/removed"),
+            ("POST", "/api/build/queue/x/decide"),
+            ("POST", "/api/build/libraries/x/books/y/place"),
+            ("GET", "/api/build/libraries/x/books/y/suggestions"),
         ] {
             let r = route(&a, m, p, None, b"{}").await;
             assert_eq!(r.status, 401, "{m} {p}");
@@ -1389,6 +1424,20 @@ mod tests {
         assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}/books/{doc}"), &c, "").await.0, 200);
         assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}"), &c, "").await.0, 200);
         assert_eq!(json_call(&a, "DELETE", &format!("/api/build/libraries/{lib}"), &c, "").await.0, 404);
+        // filing, choices and Removed
+        let (s, v) = json_call(&a, "GET", "/api/build/classes", &c, "").await;
+        assert_eq!((s, v["result"]["classes"].as_array().map(|x| x.len())), (200, Some(10)));
+        assert_eq!(json_call(&a, "GET", "/api/build/classes?library_id=nope", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "POST", &format!("/api/build/libraries/{lib}/books/nope/place"), &c, r#"{"division":"510"}"#).await.0, 404);
+        assert_eq!(json_call(&a, "POST", "/api/build/queue/nope/decide", &c, r#"{"action":"keep_both"}"#).await.0, 404);
+        // no classifier model file in this data folder
+        assert_eq!(json_call(&a, "POST", "/api/build/classes/reclassify", &c, "{}").await.0, 409);
+        assert_eq!(json_call(&a, "GET", &format!("/api/build/libraries/{lib}/books/nope/suggestions"), &c, "").await.0, 404);
+        let (s, v) = json_call(&a, "GET", "/api/build/removed", &c, "").await;
+        assert!(s == 200 && v["result"]["count"].is_u64() && v["result"]["items"].is_array());
+        assert_eq!(json_call(&a, "POST", "/api/build/removed/nope/restore", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/build/removed/nope", &c, "").await.0, 404);
+        assert_eq!(json_call(&a, "DELETE", "/api/build/removed", &c, "").await.0, 200);
         // unknown build endpoints are 404 like the rest
         assert_eq!(json_call(&a, "GET", "/api/build/nope", &c, "").await.0, 404);
     }

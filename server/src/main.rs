@@ -234,6 +234,8 @@ fn serve(argv: &[String]) -> Result<(), String> {
                 }
             }
         }
+        // stopped on purpose: a book in the middle of being built is not counted as having crashed the service
+        app.build.shutdown();
         helper.shutdown().await;
         Ok::<(), String>(())
     })

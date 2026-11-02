@@ -414,6 +414,13 @@ class PanePrefs {
   }
 }
 
+/// The detail pane beside this list shows [TwoPane.desktopInitial]'s page (a desktop window, nothing chosen): the list leaves out
+/// its own way to that page, so there are never two.
+bool paneShowsDesktopInitial(BuildContext context) {
+  final pane = _PaneScope.of(context);
+  return pane != null && pane.inList && pane.state._builder == null && pane.state.widget.desktopInitial != null && isDesktop(context);
+}
+
 /// Item [key] is the one shown in the detail pane beside this list (its row is marked).
 bool isPaneSelected(BuildContext context, Object key) {
   final pane = _PaneScope.of(context);
