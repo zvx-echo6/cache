@@ -225,6 +225,13 @@ class SearchCore {
   Future<Map<String, dynamic>> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) =>
       _map('pdfIndex', {'op': op, 'session': session, 'args': args});
 
+  /// True when the core has cs_captions_search.
+  Future<bool> hasCaptionsSearch() async => (await _call('hasCaptionsSearch')) as bool;
+
+  /// Saved videos and ZIM videos matched by caption text (cs_captions_search): {"videos":[...]}.
+  Future<Map<String, dynamic>> captionsSearch(String query, {int? k, String? lang}) =>
+      _map('captionsSearch', {'request': {'query': query, 'k': ?k, 'lang': ?lang}});
+
   /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
   Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
 
@@ -521,6 +528,10 @@ void _workerMain(List<dynamic> init) {
           result = eng().zimPdfs(a['zimId'] as String);
         case 'pdfIndex':
           result = eng().pdfIndex(a['op'] as String, session: (a['session'] as int?) ?? 0, args: (a['args'] as Map?)?.cast<String, dynamic>());
+        case 'hasCaptionsSearch':
+          result = eng().hasCaptionsSearch;
+        case 'captionsSearch':
+          result = eng().captionsSearch((a['request'] as Map).cast<String, dynamic>());
         case 'userLayers':
           result = eng().userLayers(a['call'] as String, a['arg'] as String?);
         case 'placesList':

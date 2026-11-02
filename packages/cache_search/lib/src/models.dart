@@ -235,7 +235,7 @@ class CoreSourceError {
 
 /// One number of the conversation's id map.
 class ConversationId {
-  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote});
+  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote, this.timeEnd, this.lang});
 
   factory ConversationId.fromJson(Map<String, dynamic> j) => ConversationId(
         n: j['n'] as int,
@@ -245,6 +245,8 @@ class ConversationId {
         time: (j['time'] as num?)?.toDouble(),
         pdfPage: (j['pdf_page'] as num?)?.toInt(),
         quote: j['quote'] is String ? j['quote'] as String : null,
+        timeEnd: (j['time_end'] as num?)?.toDouble(),
+        lang: j['lang'] is String ? j['lang'] as String : null,
       );
 
   final int n;
@@ -261,7 +263,13 @@ class ConversationId {
   final int? pdfPage;
   final String? quote;
 
-  Map<String, dynamic> toJson() => {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote};
+  /// A caption passage's end (seconds) and language code, when the core gives them (a caption citation opens the player at
+  /// [time] with that language's cue marked). Never part of what the model reads.
+  final double? timeEnd;
+  final String? lang;
+
+  Map<String, dynamic> toJson() =>
+      {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote, 'time_end': ?timeEnd, 'lang': ?lang};
 }
 
 /// What cs_format returns: the exact tool message and the id map so far.

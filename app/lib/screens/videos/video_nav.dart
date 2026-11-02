@@ -32,6 +32,7 @@ Future<void> playVideo(
   String? instance,
   double? offsetS,
   bool cited = false,
+  String? lang,
   List<VideoCaptionInfo> captionUrls = const [],
   String? channel,
 }) async {
@@ -47,6 +48,7 @@ Future<void> playVideo(
         thumbnail: saved?.thumbnailPath,
         prefs: state.prefs,
         cited: cited,
+        citedLang: lang,
         channel: saved?.channelName ?? channel,
         onRedownload: saved == null ? null : () => _redownload(ctx, state, saved),
       ),
@@ -76,7 +78,7 @@ Future<void> _redownload(BuildContext context, VideoState state, DownloadedVideo
 
 /// Plays a ZIM's video entry ([address], `zim:<uuid>/<path>`) at [offsetS] in the same player, with its caption entry when the
 /// ZIM has one beside it.
-Future<void> playZimVideo(BuildContext context, VideoState state, ZimVideoReader zims, {required String address, double offsetS = 0, bool cited = false}) async {
+Future<void> playZimVideo(BuildContext context, VideoState state, ZimVideoReader zims, {required String address, double offsetS = 0, bool cited = false, String? lang}) async {
   final id = address.startsWith('zim:') ? address.substring(4).split('/').first : '';
   final dir = await (zims.cacheDir?.call() ?? getTemporaryDirectory().then((d) => Directory('${d.path}${Platform.pathSeparator}zim-video')));
   final v = await openZimVideo(address: address, read: zims.read, cacheDir: dir, zimTitle: zims.titleOf(id), offsetS: offsetS);
@@ -84,7 +86,7 @@ Future<void> playZimVideo(BuildContext context, VideoState state, ZimVideoReader
   await Navigator.push(
     context,
     MaterialPageRoute<void>(
-      builder: (_) => PlayerScreen(target: v.target, prefs: state.prefs, cited: cited, channel: 'In ${v.zimTitle}', where: 'On this device'),
+      builder: (_) => PlayerScreen(target: v.target, prefs: state.prefs, cited: cited, citedLang: lang, channel: 'In ${v.zimTitle}', where: 'On this device'),
     ),
   );
 }
@@ -99,13 +101,14 @@ Future<void> openVideoCitation(
   required String video,
   double? offsetS,
   String? instance,
+  String? lang,
   ZimVideoReader? zims,
   void Function(String address)? openInReader,
 }) async {
   if (video.startsWith('zim:')) {
     if (zims != null && isZimMediaAddress(video)) {
       try {
-        await playZimVideo(context, state, zims, address: video, offsetS: offsetS ?? 0, cited: true);
+        await playZimVideo(context, state, zims, address: video, offsetS: offsetS ?? 0, cited: true, lang: lang);
         return;
       } catch (_) {
         // not a video this player can take: the reader shows the entry
@@ -115,7 +118,7 @@ Future<void> openVideoCitation(
     return;
   }
   try {
-    await playVideo(context, state, video: video, instance: instance, offsetS: offsetS, cited: offsetS != null);
+    await playVideo(context, state, video: video, instance: instance, offsetS: offsetS, cited: offsetS != null, lang: lang);
   } catch (e) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("This video isn't saved on this device and can't be reached right now.\n${videoErrorText(e)}")));

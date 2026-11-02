@@ -37,7 +37,7 @@ class Conversation {
 
 /// A cited result as the answer showed it: its number, and the address it opens.
 class StoredCitation {
-  const StoredCitation({required this.n, required this.title, required this.snippet, required this.address, this.link, this.time, this.pdfPage, this.quote});
+  const StoredCitation({required this.n, required this.title, required this.snippet, required this.address, this.link, this.time, this.pdfPage, this.quote, this.timeEnd, this.lang});
 
   factory StoredCitation.fromJson(Map<String, dynamic> j) => StoredCitation(
         n: j['n'] as int,
@@ -48,6 +48,8 @@ class StoredCitation {
         time: (j['time'] as num?)?.toDouble(),
         pdfPage: (j['pdf_page'] as num?)?.toInt(),
         quote: j['quote'] is String ? j['quote'] as String : null,
+        timeEnd: (j['time_end'] as num?)?.toDouble(),
+        lang: j['lang'] is String ? j['lang'] as String : null,
       );
 
   final int n;
@@ -63,7 +65,13 @@ class StoredCitation {
   final int? pdfPage;
   final String? quote;
 
-  Map<String, dynamic> toJson() => {'n': n, 'title': title, 'snippet': snippet, 'address': address, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote};
+  /// A caption passage's end (seconds) and language code, when the core gives them (a caption citation opens the player at
+  /// [time] with that language's cue marked). Never part of what the model reads.
+  final double? timeEnd;
+  final String? lang;
+
+  Map<String, dynamic> toJson() =>
+      {'n': n, 'title': title, 'snippet': snippet, 'address': address, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote, 'time_end': ?timeEnd, 'lang': ?lang};
 }
 
 /// Prompt size, answer size and time of one answer.

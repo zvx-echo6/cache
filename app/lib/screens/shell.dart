@@ -357,8 +357,8 @@ class _ShellState extends State<Shell> {
   }
 
   /// A video citation: the player at the cited moment (the saved copy when there is one).
-  void _openVideo(String link, double time) =>
-      openVideoCitation(context, widget.video, video: link, offsetS: time, zims: _zimVideos, openInReader: _openSource);
+  void _openVideo(String link, double time, String? lang) =>
+      openVideoCitation(context, widget.video, video: link, offsetS: time, lang: lang, zims: _zimVideos, openInReader: _openSource);
 
   /// A ZIM's videos for the player: read with the reader's own entry read; named by the ZIM's title.
   late final ZimVideoReader _zimVideos = ZimVideoReader(

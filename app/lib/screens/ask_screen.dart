@@ -69,7 +69,7 @@ class AskScreen extends StatefulWidget {
   final void Function(String address, String quote)? onOpenPassage;
 
   /// Opens the video a citation points at, at its moment (a library point that maps a link and a time).
-  final void Function(String link, double time)? onOpenVideo;
+  final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
@@ -614,7 +614,7 @@ class _AssistantBlock extends StatefulWidget {
   final VoidCallback? onReport;
   final void Function(String address)? onOpenSource;
   final void Function(String address, String quote)? onOpenPassage;
-  final void Function(String link, double time)? onOpenVideo;
+  final void Function(String link, double time, String? lang)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
   @override
@@ -788,7 +788,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
               clipBehavior: Clip.antiAlias,
               child: InkWell(
                 onTap: s.result.isVideoMoment && widget.onOpenVideo != null
-                    ? () => widget.onOpenVideo!(s.result.link!, s.result.time!)
+                    ? () => widget.onOpenVideo!(s.result.link!, s.result.time!, s.result.lang)
                     : widget.onOpenPassage != null && s.result.quote != null && isZimAddress(s.result.address)
                     ? () => widget.onOpenPassage!(s.result.openAddress, s.result.quote!)
                     : widget.onOpenSource != null && isZimAddress(s.result.address)

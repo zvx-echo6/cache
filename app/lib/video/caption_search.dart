@@ -1,8 +1,10 @@
 
+import 'package:cache_search/cache_search.dart' show SearchCore;
+
 /// "Search saved videos" by the words said in them: the search core's captions keyword index (captions interface v1,
-/// 2026-11-02, cs_captions_search). The core builds the index itself (the other builder schedules the builds); the app only
-/// asks it. Until the call is in the core the app runs on [CaptionSearchMissing] (titles and channels are still searched, no
-/// caption lines show); the tests and renders run on [FakeCaptionSearch].
+/// 2026-11-02, cs_captions_search). The core builds the index itself (the scheduler starts the builds); the app only asks it.
+/// The app runs on [CoreCaptionSearch]; [CaptionSearchMissing] is the stand-in where there is no core, and the tests and
+/// renders run on [FakeCaptionSearch]. A saved video whose captions are not indexed yet simply has no matches (no error).
 abstract class CaptionSearch {
   /// False while the core has no captions search.
   bool get available;
@@ -66,7 +68,31 @@ List<CaptionVideo> parseCaptionSearch(Map<String, dynamic> j) => [
       for (final v in (j['videos'] as List? ?? const [])) CaptionVideo.fromJson((v as Map).cast<String, dynamic>()),
     ];
 
-/// The core without the captions index yet: nothing is matched by caption text.
+/// cs_captions_search on the app's search core. A core without the call, a core not open yet, or any failure answers no
+/// caption matches: the list's search still matches titles and channels, and nothing is said about it.
+class CoreCaptionSearch implements CaptionSearch {
+  CoreCaptionSearch(this.core);
+
+  /// The app's search core once it is open (null before, or when it cannot open).
+  final SearchCore? Function() core;
+
+  @override
+  bool get available => core() != null;
+
+  @override
+  Future<List<CaptionVideo>> search(String query, {int? k, String? lang}) async {
+    final c = core();
+    if (c == null || query.trim().isEmpty) return const [];
+    try {
+      if (!await c.hasCaptionsSearch()) return const [];
+      return parseCaptionSearch(await c.captionsSearch(query, k: k, lang: lang));
+    } catch (_) {
+      return const [];
+    }
+  }
+}
+
+/// No search core: nothing is matched by caption text.
 class CaptionSearchMissing implements CaptionSearch {
   const CaptionSearchMissing();
 

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cache/history/conversation_store.dart' show StoredCitation;
 import 'package:cache/screens/videos/player_screen.dart';
 import 'package:cache/screens/videos/video_screen.dart';
 import 'package:cache/screens/videos/videos_screen.dart';
@@ -69,6 +70,17 @@ void main() {
     final one = v.savedGroups(list.where((d) => d.channelName == 'Field Skills').toList());
     expect(one.single.heading, isNull);
     expect(v.savedGroups(const []), isEmpty);
+  });
+
+  test('A caption citation keeps time_end and lang from the core to the stored chat', () {
+    final id = ConversationId.fromJson({
+      'n': 3, 'address': 'cap:tube.example.org/knots/4', 'title': 'Knots, at 0:12', 'link': 'https://tube.example.org/w/knots',
+      'time': 12, 'time_end': 18.5, 'quote': 'It makes a loop', 'lang': 'es',
+    });
+    expect((id.time, id.timeEnd, id.lang), (12.0, 18.5, 'es'));
+    final stored = StoredCitation(n: 3, title: id.title, snippet: '', address: id.address, link: id.link, time: id.time, quote: id.quote, timeEnd: id.timeEnd, lang: id.lang);
+    final back = StoredCitation.fromJson(stored.toJson());
+    expect((back.time, back.timeEnd, back.lang, back.link), (12.0, 18.5, 'es', 'https://tube.example.org/w/knots'));
   });
 
   test('cs_captions_search answers parse as the interface gives them', () {

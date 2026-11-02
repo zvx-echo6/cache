@@ -183,6 +183,15 @@ abstract class CsPdfNative {
   String? pdfIndex(String op, {int session = 0, String json = '{}'});
 }
 
+/// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
+/// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
+abstract class CsCaptionsNative {
+  bool get hasCaptionsSearch;
+
+  /// cs_captions_search: {"videos":[...]}, or null on error (ask [CsNative.lastError]).
+  String? captionsSearch(int handle, String requestJson);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -223,7 +232,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative {
+class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -715,6 +724,16 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
     };
     return _callHS(f, handle, arg ?? '');
   }
+
+  // ---- caption search: looked up on first use ----
+
+  late final _HStrStr? _captionsSearch = _lookupHS('cs_captions_search');
+
+  @override
+  bool get hasCaptionsSearch => _captionsSearch != null;
+
+  @override
+  String? captionsSearch(int handle, String requestJson) => _callHS(_captionsSearch, handle, requestJson);
 
   // ---- PDF indexes of ZIMs: looked up on first use ----
 

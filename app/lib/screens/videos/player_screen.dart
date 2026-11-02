@@ -40,6 +40,7 @@ class PlayerScreen extends StatefulWidget {
     this.channel,
     this.where,
     this.cited = false,
+    this.citedLang,
     this.onPlaySaved,
     this.onRedownload,
     this.mobileOverride,
@@ -66,6 +67,9 @@ class PlayerScreen extends StatefulWidget {
 
   /// Opened from a citation: [VideoTarget.offsetS] is the cited moment, and its cue is marked.
   final bool cited;
+
+  /// The cited passage's caption language (a code), when the citation gives one: that track is shown and its cue marked.
+  final String? citedLang;
 
   /// A stream that cannot play while a saved copy exists: "Saved copy" opens it.
   final VoidCallback? onPlaySaved;
@@ -127,8 +131,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   bool get _hasCaptions => _tracks.isNotEmpty;
 
-  /// The track the transcript shows: the captions choice, else the first.
-  int get _shown => _on ?? 0;
+  /// A cited language's track, shown in the transcript while captions are off.
+  int? _citedTrack;
+
+  /// The track the transcript shows: the captions choice, else the cited language's, else the first.
+  int get _shown => _on ?? _citedTrack ?? 0;
 
   bool get _mobile => widget.mobileOverride ?? (Platform.isAndroid || Platform.isIOS);
 
@@ -198,6 +205,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (kept != null && kept != 'off') {
       final i = _tracks.indexWhere((x) => x.language == kept);
       on = i >= 0 ? i : 0;
+    }
+    final citedTrack = widget.citedLang == null ? -1 : _tracks.indexWhere((x) => x.language == widget.citedLang);
+    if (widget.cited && citedTrack >= 0) {
+      // the cited language: on the picture on a phone, in the transcript on a wide window
+      if (on != null || !_transcriptBeside(context)) on = citedTrack;
+      _citedTrack = citedTrack;
     }
     if (widget.cited && on == null && !_transcriptBeside(context)) on = 0;
     if (on != null) await _cuesOf(on);

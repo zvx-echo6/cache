@@ -228,6 +228,18 @@ class SearchEngine {
     return _object(s ?? (throw CacheSearchException.fromJson(native.lastError(0))));
   }
 
+  // ---- caption search (cs_captions_search) ----
+
+  /// True when the core has cs_captions_search.
+  bool get hasCaptionsSearch => native is CsCaptionsNative && (native as CsCaptionsNative).hasCaptionsSearch;
+
+  /// cs_captions_search: {"query","k"?,"lang"?} -> {"videos":[...]} (cache_search.h).
+  Map<String, dynamic> captionsSearch(Map<String, dynamic> request) {
+    final n = native is CsCaptionsNative ? native as CsCaptionsNative : null;
+    if (n == null || !n.hasCaptionsSearch) throw const CacheSearchException('unsupported', 'This build of the core cannot search captions yet');
+    return _object(_ok(n.captionsSearch(_h, jsonEncode(request))));
+  }
+
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----
 
   /// One of the user-layer calls: `import` ([arg] = import JSON), `list`, `get` (id), `set_visible` (JSON), `delete` (id),

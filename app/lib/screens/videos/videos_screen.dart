@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../../video/caption_search.dart';
 import '../../video/format.dart';
 import '../../video/video_state.dart';
+import '../../video/zim_video.dart' show isZimMediaAddress;
 import 'instance_screen.dart';
 import 'video_dl.dart';
 import 'video_nav.dart';
@@ -109,7 +110,7 @@ class _VideosScreenState extends State<VideosScreen> {
 
   /// A caption match: the player at that moment, the line marked.
   Future<void> _openMoment(CaptionVideo v, CaptionHit h) =>
-      openVideoCitation(context, video, video: v.link, offsetS: h.startS, zims: widget.zims);
+      openVideoCitation(context, video, video: v.link, offsetS: h.startS, lang: h.lang.isEmpty ? null : h.lang, zims: widget.zims);
 
   Future<void> _add() => addVideoInstance(context, video);
 
@@ -337,7 +338,7 @@ class _VideosScreenState extends State<VideosScreen> {
       if (d != null) {
         shown.add('${d.instance}/${d.uuid}');
         rows.add(_savedRow(context, d, hit: v.hits.first, match: v));
-      } else if (v.isZim && widget.zims != null) {
+      } else if (v.isZim && widget.zims != null && isZimMediaAddress(v.link)) {
         rows.add(_zimRow(context, v));
       }
     }

@@ -28,6 +28,7 @@ Future<void> open(
   VideoTarget t, {
   VideoPrefs? prefs,
   bool cited = false,
+  String? citedLang,
   Size size = _phone,
   VoidCallback? onRedownload,
   VoidCallback? onPlaySaved,
@@ -41,6 +42,7 @@ Future<void> open(
         target: t,
         prefs: prefs,
         cited: cited,
+        citedLang: citedLang,
         onRedownload: onRedownload,
         onPlaySaved: onPlaySaved,
         mobileOverride: mobile ?? false,
@@ -411,6 +413,19 @@ void main() {
       c.at(const Duration(seconds: 19));
       await tester.pump();
       expect(find.byKey(const ValueKey('caption-match')), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('Cited in Spanish (the citation\'s lang): the Spanish line is on the picture, marked; on a tablet the transcript is Spanish', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: two(), offset: 12), cited: true, citedLang: 'es');
+      expect(find.byKey(const ValueKey('caption-match')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('caption-band')), matching: find.text('Hace un lazo que no se suelta ni se traba.')), findsOneWidget);
+      await close(tester);
+      final c2 = RecordingController();
+      await open(tester, c2, playerTarget(captions: two(), offset: 12), cited: true, citedLang: 'es', size: _tablet);
+      expect(find.text('TRANSCRIPT · Spanish (automatic)'), findsOneWidget);
+      expect(find.ancestor(of: find.byKey(const ValueKey('transcript-match')), matching: find.byKey(const ValueKey('cue-2'))), findsOneWidget);
       await close(tester);
     });
 
