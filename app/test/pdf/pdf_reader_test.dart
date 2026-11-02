@@ -75,6 +75,46 @@ void main() {
     expect(find.text('5 of 6'), findsOneWidget);
   });
 
+  readerTest('a page opens with its top at the top of the view; Go to page and next page do the same', (tester) async {
+    final key = GlobalKey<PdfReaderScreenState>();
+    await show(tester, PdfReaderScreen(key: key, source: PdfFileSource(six, title: 'x'), initialPage: 3));
+    await settleUntil(tester, () => key.currentState?.debugVisibleRect != null);
+    await settleUntil(tester, () => false, max: 15);
+    void atTop(int page) {
+      final v = key.currentState!.debugVisibleRect!;
+      final r = key.currentState!.debugPageRect(page)!;
+      expect((r.top - v.top).abs(), lessThan(2), reason: 'page $page top ${r.top} view top ${v.top}');
+    }
+
+    atTop(3);
+    await tester.tap(find.byKey(const ValueKey('pdf-next')));
+    await settleUntil(tester, () => false, max: 20);
+    atTop(4);
+    await tester.tap(find.byKey(const ValueKey('pdf-page-count')));
+    await settleUntil(tester, () => _has(find.text('Go to page')));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.enterText(find.byKey(const ValueKey('pdf-goto-field')), '6');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('pdf-goto-go')));
+    await settleUntil(tester, () => false, max: 20);
+    atTop(6);
+  });
+
+  readerTest('a cited passage opens near the top of the view, a small gap above it', (tester) async {
+    final key = GlobalKey<PdfReaderScreenState>();
+    const quote = 'Store treated water in clean, closed containers away from sunlight and mark each one with the date.';
+    await show(tester, PdfReaderScreen(key: key, source: PdfFileSource(six, title: 'x'), initialPage: 4, quote: quote));
+    await settleUntil(tester, () => _has(find.text('Cited passage')) && key.currentState?.debugCitedTop != null);
+    await settleUntil(tester, () => false, max: 15);
+    final st = key.currentState!;
+    final v = st.debugVisibleRect!;
+    final gap = st.debugCitedTop! - v.top;
+    // Below the top edge, and within the top tenth of the view (the page above is out of sight).
+    expect(gap, greaterThan(0));
+    expect(gap, lessThan(v.height * 0.1));
+    expect(st.debugPageRect(4)!.top, lessThan(v.top));
+  });
+
   readerTest('find: the count, next and previous, and closing', (tester) async {
     await show(tester, reader(six));
     await settleUntil(tester, () => _has(find.text('1 of 6')));

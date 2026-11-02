@@ -87,10 +87,11 @@ class PdfReaderScreen extends StatefulWidget {
   final bool debugBrowser;
 
   @override
-  State<PdfReaderScreen> createState() => _PdfReaderScreenState();
+  State<PdfReaderScreen> createState() => PdfReaderScreenState();
 }
 
-class _PdfReaderScreenState extends State<PdfReaderScreen> {
+/// The reader's state; public so tests can read where the view is ([debugVisibleRect], [debugPageRect], [debugCitedTop]).
+class PdfReaderScreenState extends State<PdfReaderScreen> {
   _Phase _phase = _Phase.preparing;
   String? _path;
   PdfTempCopy? _copy;
@@ -392,11 +393,34 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // ---- moving
 
+  /// The gap kept above a page's top, or above a cited passage, when the reader moves to it (logical pixels).
+  static const double _topGap = 24;
+
+  /// Scrolls so that document position [y] sits [gap] below the top of the view, at the zoom the person has; across, the view
+  /// stays where it is unless [x] is given.
+  void _placeAtTop(double y, {double gap = 0, double? x, bool animate = true}) {
+    final z = _controller.currentZoom;
+    final cy = y - gap / z + _controller.viewSize.height / 2 / z;
+    unawaited(_controller.goTo(_controller.calcMatrixFor(Offset(x ?? _controller.centerPosition.dx, cy), zoom: z), duration: animate ? const Duration(milliseconds: 220) : Duration.zero));
+  }
+
+  /// Page [page] with its top at the top of the view (the previous page out of sight).
   void _goToPage(int page, {bool animate = true}) {
     if (!_ready) return;
     final n = page.clamp(1, _pageCount);
-    unawaited(_controller.goToPage(pageNumber: n, anchor: PdfPageAnchor.top, duration: animate ? const Duration(milliseconds: 220) : Duration.zero));
+    _placeAtTop(_controller.layout.pageLayouts[n - 1].top, animate: animate);
   }
+
+  @visibleForTesting
+  Rect? get debugVisibleRect => _ready ? _controller.visibleRect : null;
+
+  @visibleForTesting
+  Rect? debugPageRect(int page) => _ready ? _controller.layout.pageLayouts[page - 1] : null;
+
+  /// The top of the first cited line, in document coordinates.
+  @visibleForTesting
+  double? get debugCitedTop => _citedTop;
+  double? _citedTop;
 
   void _goToSpan(PdfTextSpan s) {
     if (!_ready) {
@@ -412,8 +436,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     final page = _doc!.pages[s.page - 1];
     final r = PdfPageTextRange(pageText: layer, start: s.start, end: s.end).bounds.toRectInDocument(page: page, pageRect: _controller.layout.pageLayouts[s.page - 1]);
     final visible = _controller.visibleRect;
-    final x = r.left >= visible.left && r.right <= visible.right ? _controller.centerPosition.dx : r.center.dx;
-    unawaited(_controller.goTo(_controller.calcMatrixFor(Offset(x, r.center.dy), zoom: _controller.currentZoom), duration: const Duration(milliseconds: 200)));
+    final x = r.left >= visible.left && r.right <= visible.right ? null : r.center.dx;
+    if (_cited.isNotEmpty && identical(s, _cited.first)) {
+      // A cited passage opens near the top of the view, a small gap above it, the strip above that.
+      _citedTop = r.top;
+      _placeAtTop(r.top, gap: _topGap, x: x, animate: false);
+      return;
+    }
+    // A find match to the middle of the view.
+    final z = _controller.currentZoom;
+    unawaited(_controller.goTo(_controller.calcMatrixFor(Offset(x ?? _controller.centerPosition.dx, r.center.dy), zoom: z), duration: const Duration(milliseconds: 200)));
   }
 
   PdfTextSpan? _pendingSpan;
@@ -1112,11 +1144,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           final s = _pendingSpan;
           _pendingSpan = null;
           // After the first zoom and page are set.
-          if (s != null) {
-            Future<void>.delayed(const Duration(milliseconds: 80), () {
-              if (mounted) _goToSpan(s);
-            });
-          }
+          // After the first zoom and page are set: the cited passage near the top, or the page's top at the top.
+          Future<void>.delayed(const Duration(milliseconds: 80), () {
+            if (!mounted) return;
+            if (s != null) {
+              _goToSpan(s);
+            } else if (_cited.isEmpty) {
+              _goToPage(_page, animate: false);
+            }
+          });
         },
         onViewSizeChanged: (size, old, c) {
           if (mounted) _computeZoomRange();
