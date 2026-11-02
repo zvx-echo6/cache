@@ -207,6 +207,13 @@ pub unsafe extern "C" fn cs_zim_pdfs(h: *mut Handle, zim_id: *const c_char) -> *
 }
 
 /// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_captions_search(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.captions_search(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
 /// `params_json` NULL or NUL-terminated.
 #[no_mangle]
 pub unsafe extern "C" fn cs_pdfindex_open(params_json: *const c_char) -> *mut c_char {
@@ -855,7 +862,7 @@ pub unsafe extern "C" fn cs_video_get(h: *mut Handle, request_json: *const c_cha
 /// `h` NULL or live.
 #[no_mangle]
 pub unsafe extern "C" fn cs_video_downloads(h: *mut Handle) -> *mut c_char {
-    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_downloads()?))
+    with_handle(h, ptr::null_mut(), |h| out_string(h.video_downloads_json()?))
 }
 
 /// # Safety
@@ -1181,6 +1188,7 @@ mod tests {
             assert!(cs_video_search(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_get(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_downloads(ptr::null_mut()).is_null());
+            assert!(cs_captions_search(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_delete(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_captions_fetch(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_resolve(ptr::null_mut(), ptr::null()).is_null());

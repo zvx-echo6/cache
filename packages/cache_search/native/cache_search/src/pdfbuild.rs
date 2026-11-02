@@ -659,7 +659,8 @@ pub fn finish(
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     std::fs::write(build.join(PDFS_FILE), pdfindex::rows_to_tsv(&rows))
         .map_err(|e| Error::io(format!("{PDFS_FILE}: {e}")))?;
-    let Some(stage) = snapshot::stage(build, &NOT_IN_SNAPSHOT, &|d, t| progress("manifest", d, t + 1), cancelled)?
+    let Some(stage) =
+        snapshot::stage(build, &NOT_IN_SNAPSHOT, true, &|d, t| progress("manifest", d, t + 1), cancelled)?
     else {
         return Ok((Outcome::Cancelled, None));
     };
