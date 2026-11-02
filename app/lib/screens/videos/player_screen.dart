@@ -520,15 +520,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
       builder: (context, box) => ListView(
         padding: EdgeInsets.zero,
         children: [
-          Container(
+          ColoredBox(
             color: Colors.black,
-            width: double.infinity,
-            // tall (vertical) video must leave room for the controls below
-            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * (beside ? 0.62 : 0.55)),
-            alignment: Alignment.center,
-            child: AspectRatio(
+            // as tall as the video, and a tall (vertical) video leaves room for the controls below
+            child: Center(
+              heightFactor: 1,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * (beside ? 0.62 : 0.55)),
+                child: AspectRatio(
               aspectRatio: ready && !t.isAudio ? c!.value.aspectRatio : 16 / 9,
-              child: !ready ? const Center(child: CircularProgressIndicator()) : _picture(context, c!, overlayCaptions: true),
+                  child: !ready ? const Center(child: CircularProgressIndicator()) : _picture(context, c!, overlayCaptions: true),
+                ),
+              ),
             ),
           ),
           if (_resumedAt != null) _resumedBar(context),

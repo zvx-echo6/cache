@@ -95,6 +95,7 @@ class DownloadTask {
 class VideoState extends ChangeNotifier {
   VideoState({this.dirOverride, this.nativeFactory, TokenStore? tokens, this.policy, VideoPrefs? prefs, this.captionSearch = const CaptionSearchMissing(), this.spaceOf})
       : tokens = tokens ?? const SecureTokenStore(),
+        // ignore: prefer_initializing_formals
         _prefs = prefs;
 
   /// Where each video was left and the captions choice, on this device only (beside the app's other files, never in the shared

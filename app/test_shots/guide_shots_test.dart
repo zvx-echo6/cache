@@ -93,7 +93,7 @@ import '../test/chat_fakes.dart' show ScriptedBackend, say;
 import '../test/nav_fakes.dart' show FakeBackend, FakeNavPosition, FakeSpeaker, fakeProgressJson, fakeRouteJson, fixAt;
 import '../test/navigation_camera_test.dart' show NoSurface;
 import '../test/video_fake.dart' show VideoFakeNative;
-import '../test/video_player_screen_test.dart' show RecordingController;
+import '../test/video_player_fakes.dart' show RecordingController;
 import '../test/support/notebook_fake.dart';
 import '../test/support/owner_state.dart';
 import '../test/support/regions_fake.dart';

@@ -32,3 +32,4 @@ The instance asked us to slow down. Try again in a minute.
 The instance needs you to log in again.
 That instance is not in the list.
 Not found on the instance.
+Can't play this video right now. Check the connection.
