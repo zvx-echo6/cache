@@ -618,11 +618,15 @@ class PdfIndexState extends ChangeNotifier {
     notifyListeners();
     final end = await run.run();
     run.removeListener(onRun);
+    // This device built it: recorded before the run lets go, so the snapshot never shows as one from another device (a kill
+    // right after the publish would otherwise leave it so).
+    if (end == PdfRunEnd.finished) {
+      await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true)?.id, 'built_uuid': z.uuid});
+    }
     _run = null;
     _runPath = null;
     switch (end) {
       case PdfRunEnd.finished:
-        await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true)?.id, 'built_uuid': z.uuid});
         _cleanOldEditions(z, list);
         await onIndexReady?.call();
       case PdfRunEnd.paused:
