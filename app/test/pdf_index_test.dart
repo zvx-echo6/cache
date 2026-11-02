@@ -38,6 +38,11 @@ PdfBytesReader _reader(void Function(int n) onRead) {
   };
 }
 
+/// Stands in for a native crash inside PDFium (which in the app ends the process).
+class _Crash implements Exception {
+  const _Crash();
+}
+
 void main() {
   late Directory dir;
   late String zimPath;
@@ -124,6 +129,39 @@ void main() {
         'skip:A/scan.pdf:no_text',
         'add:A/two.pdf',
       ]);
+    });
+
+    test('a native crash while reading a PDF (the app ended): the next run skips that PDF as damaged and goes on', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      final note = File('${dir.path}/support/pdf-index-attempt-u1.json');
+      // The first run reads one.pdf, then "crashes" inside two.pdf's extraction: the note stays, nothing after it happens.
+      final first = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), attemptFile: note, readPages: _reader((n) {
+        if (n == 5) {
+          expect(note.existsSync(), isTrue, reason: 'written before extraction');
+          throw const _Crash();
+        }
+      }));
+      expect(await first.run(), PdfRunEnd.failed);
+      // A real crash ends the process before anything runs: the note is put back as it would be left.
+      note.writeAsStringSync('{"zim_uuid":"u1","path":"A/two.pdf"}', flush: true);
+      core.calls.clear();
+      final again = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), attemptFile: note, readPages: readFakePdfPages);
+      expect(await again.run(), PdfRunEnd.finished);
+      expect(core.calls.where((c) => c.startsWith('add:') || c.startsWith('skip:')), ['skip:A/two.pdf:damaged']);
+      expect(again.skipped, 4);
+      expect(note.existsSync(), isFalse);
+      expect(paths.current()!.skipped, 4, reason: 'it counts as could not be read');
+    });
+
+    test('a PDF read normally leaves no note behind (a pause after it is no crash)', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      final note = File('${dir.path}/support/pdf-index-attempt-u1.json');
+      late PdfIndexRun run;
+      run = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), attemptFile: note, readPages: _reader((n) {
+        if (n == 2) run.stop(PdfRunStop.person);
+      }));
+      expect(await run.run(), PdfRunEnd.paused);
+      expect(note.existsSync(), isFalse);
     });
 
     test('cancel discards the build', () async {

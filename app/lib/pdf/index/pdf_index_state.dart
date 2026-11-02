@@ -593,6 +593,8 @@ class PdfIndexState extends ChangeNotifier {
       readPages: readPages,
       battery: battery,
       spaceOk: () => (space(File(z.path).parent.path).usable ?? 1) > 0,
+      // This device's note of the PDF being extracted (never synced), beside its record.
+      attemptFile: File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-index-attempt-${z.uuid}.json'),
       clock: clock,
     );
     _runPath = z.path;
