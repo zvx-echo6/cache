@@ -662,6 +662,26 @@ class PdfIndexState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- The entry points for the app-wide index scheduler ----
+  // The scheduler that decides when automatic index work runs sets [autoStart] to null (this state then queues nothing by
+  // itself), asks [needsIndex] which ZIMs have PDFs to make searchable, and calls [start] and [pause]; [partOf] is the state.
+
+  /// True when [z]'s PDFs need making searchable on this device: it has PDFs (listed), no snapshot for its edition, nothing
+  /// running for it, and the person has not paused it. Null while that is not known yet (not listed).
+  bool? needsIndex(PdfZimRef z) {
+    if (!available || !_loaded || z.uuid == null) return null;
+    final total = _total(z);
+    if (total == null) {
+      _ensureList(z);
+      return null;
+    }
+    return total > 0 && _snapshot(z) == null && z.path != _runPath && _rec(z.fileName)['pause'] != 'person';
+  }
+
+  /// Starts (or resumes) [z] now, ahead of anything queued, on any battery; the space is checked first ("Needs ... free" when
+  /// there is not enough). The same as the person's Resume.
+  Future<void> start(PdfZimRef z) => resume(z);
+
   /// Resume (or Free space done, or Try again): starts now, ahead of the queue, on any battery; the space is checked again.
   Future<void> resume(PdfZimRef z) async {
     _failures.remove(z.path);
