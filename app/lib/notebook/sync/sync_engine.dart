@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -51,21 +52,66 @@ class SyncReport {
   /// Entries changed in both places whose changes were merged (the person is told, not asked).
   final List<String> merged = [];
   int conflicts = 0;
+
+  /// Notes imported by their tag in this run (their titles), and the notebooks they went to.
+  final List<String> imported = [];
+  final Set<String> importedBooks = {};
+
+  /// Tagged notes Cache could not import (it could not write its id into them: a read-only folder).
+  int notAdded = 0;
+
+  /// Imported notes whose entry was deleted in Cache: their id was taken out of them.
+  int released = 0;
 }
 
 /// One entry's state at the last sync: where it is, the text it had there, and the entry's rev then.
 class _Item {
-  _Item(this.path, this.base, this.rev, {this.extra = const []});
+  _Item(this.path, this.base, this.rev, {this.extra = const [], this.imp, this.w0, this.uk = const [], this.ht = false});
 
   String path;
   String base;
   int rev;
   List<String> extra;
 
-  Map<String, dynamic> toJson() => {'path': path, 'base': base, 'rev': rev, if (extra.isNotEmpty) 'extra': extra};
+  /// A note the person made that Cache imported by its tag: `note` (Obsidian), `page` or `block` (Logseq); null for Cache's own.
+  final String? imp;
 
-  static _Item fromJson(Map j) => _Item('${j['path']}', '${j['base']}', (j['rev'] as num?)?.toInt() ?? 0, extra: [for (final l in (j['extra'] as List? ?? const [])) '$l']);
+  /// The time Cache gave an imported note (its own date and time, or the import's).
+  final String? w0;
+
+  /// An imported Obsidian note's property names from before the import: kept as they are, never read as Cache's.
+  final List<String> uk;
+
+  /// An imported Obsidian note had a `title` property: it is always written (else only when it is not the file's name).
+  final bool ht;
+
+  Map<String, dynamic> toJson() => {
+        'path': path, 'base': base, 'rev': rev, if (extra.isNotEmpty) 'extra': extra, if (imp != null) 'imp': imp, if (w0 != null) 'w0': w0, if (uk.isNotEmpty) 'uk': uk,
+        if (ht) 'ht': true,
+      };
+
+  static _Item fromJson(Map j) => _Item('${j['path']}', '${j['base']}', (j['rev'] as num?)?.toInt() ?? 0,
+      extra: [for (final l in (j['extra'] as List? ?? const [])) '$l'], imp: j['imp'] as String?, w0: j['w0'] as String?, uk: [for (final k in (j['uk'] as List? ?? const [])) '$k'], ht: j['ht'] == true);
 }
+
+/// A note the person made with the import tag and no Cache id, found by the scan.
+class _Cand {
+  _Cand(this.kind, this.path, this.text, this.notebook, {this.private = false});
+
+  /// `note`, `page` or `block` (see [_Item.imp]).
+  final String kind;
+  final String path;
+
+  /// The file (note, page) or the block, as found.
+  final String text;
+
+  /// The notebook its `#cachesync/<notebook>` names; null for the plain tag.
+  final String? notebook;
+  final bool private;
+}
+
+/// The notebook a note with the plain import tag goes to when there is no Journal (the Journal is Cache's default notebook).
+const String kImportFallbackNotebook = 'Notes';
 
 /// One entry as the folder has it now.
 class _Unit {
@@ -85,6 +131,12 @@ class _Unit {
 /// Cache's id and Cache has a record of it) is two-way; a note made in Obsidian or Logseq is never read, even inside Cache's
 /// folder; and a Cache file deleted there is written back, because Cache is the source of truth (the entry is not deleted).
 /// Notebook sync between the person's devices ([SyncKind.share]) keeps the full two-way rules.
+///
+/// Import by tag (1.0.30, owner-approved): a note the person made with the import tag ([importTag], `#cachesync`) and no Cache
+/// id is imported once, into the notebook `#cachesync/<notebook>` names (made when there is none) or the Journal, and Cache
+/// writes its id into it. From then on the id decides, as for Cache's own files: the tag is never read again. When its entry is
+/// deleted in Cache, or the person chooses "Stop syncing this note" ([stopSyncing]), the id goes out of the note and
+/// `cachesync: off` takes its place, so it is never imported or written again; the note's text stays as it is.
 class NotebookSync {
   NotebookSync({
     required this.notebook,
@@ -94,8 +146,12 @@ class NotebookSync {
     this.includePrivate = true,
     this.privateBooks = const {},
     this.logseqConfig,
+    this.importTag = kDefaultImportTag,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
+
+  /// The tag that imports a note (Obsidian and two-way Logseq).
+  final String importTag;
 
   final NotebookState notebook;
   final SyncKind kind;
@@ -116,6 +172,9 @@ class NotebookSync {
   Map<String, Map<String, String>> _props = {};
   List<SyncConflict> _conflicts = [];
   final Set<String> _ignored = {};
+
+  /// Entries the person stopped syncing with this folder: kept in Cache, never written here again.
+  final Set<String> _stopped = {};
 
   List<SyncConflict> get conflicts => List.unmodifiable(_conflicts);
 
@@ -139,6 +198,9 @@ class NotebookSync {
       _ignored
         ..clear()
         ..addAll([for (final x in (j['ignored'] as List? ?? const [])) '$x']);
+      _stopped
+        ..clear()
+        ..addAll([for (final x in (j['stopped'] as List? ?? const [])) '$x']);
     } catch (e) {
       debugPrint('cache notebook sync: state unreadable ($e)');
     }
@@ -153,6 +215,7 @@ class NotebookSync {
         'props': _props,
         'conflicts': [for (final c in _conflicts) c.toJson()],
         'ignored': [..._ignored],
+        if (_stopped.isNotEmpty) 'stopped': [..._stopped],
       }),
     );
   }
@@ -194,13 +257,59 @@ class NotebookSync {
 
   String _render(EntryDoc d) => _logseq ? renderLogseq(d) : renderObsidian(d);
 
+  static String _baseName(String path) {
+    final n = path.split('/').last;
+    return n.endsWith('.md') ? n.substring(0, n.length - 3) : n;
+  }
+
+  /// Entry [id] as its file or block holds it: an imported note in its own shape, else Cache's.
+  String _renderFor(String id, EntryDoc d) {
+    final it = _items[id];
+    return switch (it?.imp) {
+      'note' => renderObsidian(d, imported: true, skip: it!.uk.toSet(), titleDefault: it.ht ? null : _baseName(it.path), whenDefault: it.w0),
+      'page' => renderLsPage(d, pageTitle: lsPageTitle(it!.path)),
+      'block' => renderLsBlock(d),
+      _ => _render(d),
+    };
+  }
+
+  /// [text] (entry [id]'s file or block) read back; [when] is the entry's time now (an imported note that does not say its time
+  /// keeps it).
+  EntryDoc? _parseAs(String id, String text, Notebook book, {required String when}) {
+    final it = _items[id];
+    switch (it?.imp) {
+      case 'note':
+        return parseObsidian(text, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book), fallbackWhen: when, userKeys: it!.uk.toSet(), fallbackTitle: _baseName(it.path));
+      case 'page':
+        return parseLsPage(text, pageTitle: lsPageTitle(it!.path), when: when, notebook: book.name);
+      case 'block':
+        return parseLsBlock(splitPage(text).blocks.firstOrNull ?? lsBlockOf(text), when: when, notebook: book.name);
+    }
+    return _logseq
+        ? parseLogseq(splitPage(text).blocks.firstOrNull ?? LsBlock([text]), day: when.substring(0, 10), fallbackNotebook: book.name, fieldProps: _propTypes(book))
+        : parseObsidian(text, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book));
+  }
+
+  /// Records entry [id]'s state, keeping what it is (imported or Cache's own).
+  void _rec(String id, String path, String base, int rev, {List<String>? extra}) {
+    final old = _items[id];
+    _items[id] = _Item(path, base, rev, extra: extra ?? old?.extra ?? const [], imp: old?.imp, w0: old?.w0, uk: old?.uk ?? const [], ht: old?.ht ?? false);
+  }
+
+  String get _nowWall => wallTime(_now().toIso8601String());
+
   bool _included(Notebook n, NbEntry e) => !e.draft && (includePrivate || !e.private || privateBooks.contains(n.id));
 
   // ---- the folder ----
 
-  Future<Map<String, _Unit>> _scan(Map<String, Notebook> byName, List<_Unit> newOutside, List<SyncConflict> unreadable) async {
+  Future<Map<String, _Unit>> _scan(Map<String, Notebook> byName, List<_Unit> newOutside, List<SyncConflict> unreadable,
+      {Map<String, (Notebook, NbEntry)> cache = const {}, List<_Cand>? candidates}) async {
     final out = <String, _Unit>{};
     if (kind == SyncKind.logseqExport) return out;
+    // An imported note's notebook and time are its entry's (the note does not say them).
+    String nbOf(String id) => cache[id]?.$1.name ?? '';
+    String whenOf(String id) => cache[id] == null ? _nowWall : wallTime(cache[id]!.$2.occurredAt);
+    final importing = _ownFilesOnly && candidates != null;
     if (_logseq) {
       for (final dir in [_journals, 'pages']) {
         for (final f in await folder.list(dir)) {
@@ -208,8 +317,34 @@ class NotebookSync {
           final text = await folder.readText(f.path);
           if (text == null) continue;
           final day = dayOfJournal(f.path.split('/').last, format: _format);
-          for (final b in splitPage(text).blocks) {
+          final page = splitPage(text);
+          final headId = lsPageId(text);
+          if (headId != null && _items[headId]?.imp == 'page') {
+            out.putIfAbsent(headId, () => _Unit(f.path, text, parseLsPage(text, pageTitle: lsPageTitle(f.path), when: whenOf(headId), notebook: nbOf(headId))));
+            continue;
+          }
+          if (importing && dir == 'pages' && headId == null && !page.head.trimLeft().startsWith('---') && !page.blocks.any((b) => b.cacheId != null)) {
+            final head = lsProps(page.head.split('\n'));
+            final tag = lsSyncOff(head) ? null : importTagIn(lsTagValues(head['tags']), importTag);
+            if (tag != null) {
+              candidates.add(_Cand('page', f.path, text, tag.notebook, private: lsPrivate(head)));
+              continue;
+            }
+          }
+          for (final b in page.blocks) {
             final id = b.cacheId;
+            if (id != null && _items[id]?.imp == 'block') {
+              out.putIfAbsent(id, () => _Unit(f.path, b.text, parseLsBlock(b, when: whenOf(id), notebook: nbOf(id))));
+              continue;
+            }
+            if (id == null && importing) {
+              final bp = lsBlockProps(b);
+              final tag = lsSyncOff(bp) ? null : importTagIn(lsBlockTags(b), importTag);
+              if (tag != null) {
+                candidates.add(_Cand('block', f.path, b.text, tag.notebook, private: lsPrivate(bp)));
+                continue;
+              }
+            }
             final nbName = RegExp(r'^\s+notebook::\s*(.+)$', multiLine: true).firstMatch(b.text)?.group(1)?.trim();
             final book = nbName == null ? null : byName[nbName.replaceAll('"', '')];
             if (id == null && book == null) continue; // the person's own blocks
@@ -225,6 +360,19 @@ class NotebookSync {
       }
       return out;
     }
+    void put(_Unit u) {
+      final prev = out[u.doc.id];
+      if (prev == null) {
+        out[u.doc.id] = u;
+      } else {
+        // A duplicated file: the one Cache knows keeps the id; the other becomes a new entry.
+        final keep = _items[u.doc.id]?.path == prev.path ? prev : u;
+        final other = identical(keep, prev) ? u : prev;
+        out[u.doc.id] = keep;
+        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra)));
+      }
+    }
+
     for (final f in await folder.list('')) {
       if (!f.path.endsWith('.md') || f.path.startsWith('Conflicts/') || f.path.startsWith('.cache/')) continue;
       final text = await folder.readText(f.path);
@@ -241,6 +389,22 @@ class NotebookSync {
         }
         continue;
       }
+      final it = probe.id.isEmpty ? null : _items[probe.id];
+      if (it?.imp == 'note') {
+        final c = cache[probe.id];
+        final doc = parseObsidian(text,
+            fallbackId: '', fallbackNotebook: nbOf(probe.id), fieldProps: c == null ? const {} : _propTypes(c.$1), fallbackWhen: whenOf(probe.id), userKeys: it!.uk.toSet(), fallbackTitle: _baseName(f.path))!;
+        put(_Unit(f.path, text, doc));
+        continue;
+      }
+      if (probe.id.isEmpty && _ownFilesOnly) {
+        // The person's own note: imported when it has the import tag (and not `cachesync: off`), else never read.
+        if (importing && kind == SyncKind.obsidian && !obsidianSyncOff(text)) {
+          final tag = importTagIn(obsidianTags(text), importTag);
+          if (tag != null) candidates.add(_Cand('note', f.path, text, tag.notebook, private: probe.private));
+        }
+        continue;
+      }
       final owner = byName[probe.notebook] ?? book;
       final doc = parseObsidian(text, fallbackId: '', fallbackNotebook: owner?.name ?? '', fieldProps: owner == null ? const {} : _propTypes(owner))!;
       final u = _Unit(f.path, text, doc);
@@ -248,16 +412,7 @@ class NotebookSync {
         if (owner != null) newOutside.add(u);
         continue;
       }
-      final prev = out[doc.id];
-      if (prev == null) {
-        out[doc.id] = u;
-      } else {
-        // A duplicated file: the one Cache knows keeps the id; the other becomes a new entry.
-        final keep = _items[doc.id]?.path == prev.path ? prev : u;
-        final other = identical(keep, prev) ? u : prev;
-        out[doc.id] = keep;
-        newOutside.add(_Unit(other.path, other.text, EntryDoc(id: '', notebook: other.doc.notebook, when: other.doc.when, title: other.doc.title, body: other.doc.body, place: other.doc.place, photos: other.doc.photos, fields: other.doc.fields, private: other.doc.private, extra: other.doc.extra)));
-      }
+      put(u);
     }
     return out;
   }
@@ -287,6 +442,20 @@ class NotebookSync {
 
   /// Writes [text] as entry [id]'s file or block; returns where it is.
   Future<String> _write(String id, EntryDoc d, Notebook n, String text) async {
+    final it = _items[id];
+    if (it?.imp == 'block') {
+      // An imported block stays where the person wrote it.
+      final cur = await folder.readText(it!.path) ?? '';
+      final p = splitPage(cur);
+      final at = p.blocks.indexWhere((b) => b.cacheId == id);
+      final sep = cur.isEmpty || cur.endsWith('\n') ? '' : '\n';
+      await folder.writeText(it.path, at >= 0 ? p.head + [for (var i = 0; i < p.blocks.length; i++) i == at ? text : p.blocks[i].text].join() : '$cur$sep$text');
+      return it.path;
+    }
+    if (it?.imp == 'page') {
+      await folder.writeText(it!.path, text);
+      return it.path;
+    }
     await _copyPhotosOut(d);
     if (!_logseq) {
       final path = _items[id]?.path ?? await _newPath(d, n);
@@ -396,9 +565,7 @@ class NotebookSync {
     var book = await _bookFor(d, byName);
     if (!known && text != null) {
       // The notebook was just made: read the fields again with its field names.
-      final again = _logseq
-          ? parseLogseq(splitPage(text).blocks.firstOrNull ?? LsBlock([text]), day: d.when.substring(0, 10), fallbackNotebook: book.name, fieldProps: _propTypes(book))
-          : parseObsidian(text, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book));
+      final again = _parseAs(id, text, book, when: d.when);
       if (again != null) d = again;
     }
     if (book.savedPlaces == false && kind == SyncKind.share) {
@@ -406,6 +573,8 @@ class NotebookSync {
       if (shared?['saved_places'] == true) book = await notebook.ensureSavedPlaces();
     }
     final existing = await notebook.entry(id);
+    // An imported note keeps in Cache what its file does not hold (a Logseq page or block holds only its title and text).
+    final keep = _items[id]?.imp != null && existing != null;
     final propToFid = {for (final e in _fieldProps(book).entries) e.value: e.key};
     final values = <String, dynamic>{};
     final extra = [...d.extra];
@@ -450,17 +619,19 @@ class NotebookSync {
       occurredAt: existing != null && wallTime(existing.occurredAt) == d.when ? existing.occurredAt : withOffset(d.when, offset),
       title: (d.title ?? '').trim().isEmpty ? null : d.title!.trim(),
       body: d.body.trim().isEmpty ? null : d.body,
-      values: values,
-      place: place,
-      photos: [
-        for (final pid in d.photos)
-          if (had[pid] != null) had[pid]! else if (await (await notebook.photoFile(pid)).exists()) NbPhoto(id: pid),
-      ],
+      values: keep ? {...existing.values, ...values} : values,
+      place: place ?? (keep ? existing.place : null),
+      photos: keep && d.photos.isEmpty
+          ? existing.photos
+          : [
+              for (final pid in d.photos)
+                if (had[pid] != null) had[pid]! else if (await (await notebook.photoFile(pid)).exists()) NbPhoto(id: pid),
+            ],
       files: existing?.files ?? const [],
       private: kind == SyncKind.share ? d.private : (existing?.private ?? d.private),
       props: existing?.props ?? const {},
     );
-    _items[id] = _Item(_items[id]?.path ?? '', '', saved.rev, extra: extra);
+    _rec(id, _items[id]?.path ?? '', '', saved.rev, extra: extra);
     return saved;
   }
 
@@ -486,7 +657,9 @@ class NotebookSync {
     }
     final newOutside = <_Unit>[];
     final unreadable = <SyncConflict>[];
-    final outside = await _scan(byName, newOutside, unreadable);
+    final candidates = <_Cand>[];
+    final outside = await _scan(byName, newOutside, unreadable, cache: cache, candidates: kind == SyncKind.share ? null : candidates);
+    _stopped.removeWhere((id) => !cache.containsKey(id));
     // A Cache file removed outside is written back now (Obsidian and Logseq); a question kept from an older build is dropped.
     if (_ownFilesOnly) _conflicts = [for (final c in _conflicts) if (c.kind != ConflictKind.removedOutside) c];
     final open = {for (final c in _conflicts) c.entryId};
@@ -498,7 +671,10 @@ class NotebookSync {
       for (final e in _items.entries) if (_ignored.contains(e.value.path)) e.key,
     };
     final ids = {...cache.keys, ..._items.keys, ...outside.keys};
+    // Notes whose id the person took out by hand in this run: never imported as new (see below).
+    final held = <String>{};
     for (final id in ids) {
+      if (_stopped.contains(id)) continue;
       if (open.contains(id)) {
         conflicts.addAll(_conflicts.where((c) => c.entryId == id));
         continue;
@@ -507,12 +683,39 @@ class NotebookSync {
       final c = cache[id];
       final s = _items[id];
       final f = outside[id];
+      if (s != null && s.imp != null) {
+        // An imported note moved or renamed outside: it is followed there.
+        if (f != null && f.path != s.path) s.path = f.path;
+        if (c == null) {
+          // Its entry was deleted in Cache: the note stays, without Cache's id, and says `cachesync: off`.
+          if (await notebook.entry(id) != null) continue;
+          await _release(id, s);
+          _items.remove(id);
+          r.released++;
+          continue;
+        }
+        if (f == null && await _takenOver(id, s)) {
+          // The note is there but the person took Cache's id out of it by hand: the same as Stop syncing. The note says
+          // `cachesync: off` (so it is not imported again, tag or not), the entry stays in Cache, unsynced. When the note
+          // cannot be written, nothing changes and the note is not imported either (no duplicate); the next sync tries again.
+          held.add(s.imp == 'block' ? '${s.path}\u0000${lsBlockKey(s.base.split('\n').first)}' : s.path);
+          try {
+            await _markOff(s);
+          } catch (e) {
+            debugPrint('cache notebook sync: could not mark ${s.path} ($e)');
+            continue;
+          }
+          _items.remove(id);
+          _stopped.add(id);
+          continue;
+        }
+      }
       final cacheChanged = c != null && (s == null || c.$2.rev != s.rev);
       final fileChanged = kind != SyncKind.logseqExport && f != null && s != null && f.text != s.base;
       final missing = kind != SyncKind.logseqExport && f == null && s != null;
       if (c != null) {
         final doc = _docOf(c.$1, c.$2);
-        final text = _render(doc);
+        final text = _renderFor(id, doc);
         if (s == null && f == null) {
           _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev);
           r.written++;
@@ -537,29 +740,27 @@ class NotebookSync {
           } else {
             // Notebook sync: changed here since, so written again. Obsidian and Logseq: Cache is the source of truth, so its
             // file or block is written back and the entry stays.
-            _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
+            _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s.extra);
             r.written++;
           }
         } else if (cacheChanged && !fileChanged) {
-          _items[id] = _Item(await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
+          _rec(id, await _write(id, doc, c.$1, text), text, c.$2.rev, extra: s?.extra ?? const []);
           r.written++;
         } else if (!cacheChanged && fileChanged) {
           final saved = await _apply(id, f.doc, byName, text: f.text);
-          _items[id] = _Item(f.path, f.text, saved.rev, extra: _items[id]!.extra);
+          _rec(id, f.path, f.text, saved.rev);
           r.read++;
         } else if (cacheChanged && fileChanged) {
           final m = merge3(s.base, text, f.text);
           if (m.clean) {
-            final mergedDoc = _logseq
-                ? parseLogseq(splitPage(m.text).blocks.firstOrNull ?? LsBlock([m.text]), day: doc.when.substring(0, 10), fallbackNotebook: c.$1.name, fieldProps: _propTypes(c.$1))
-                : parseObsidian(m.text, fallbackId: id, fallbackNotebook: c.$1.name, fieldProps: _propTypes(c.$1));
+            final mergedDoc = _parseAs(id, m.text, c.$1, when: doc.when);
             if (mergedDoc == null) {
               conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
               continue;
             }
             final saved = await _apply(id, mergedDoc, byName);
             final path = await _write(id, mergedDoc, c.$1, m.text);
-            _items[id] = _Item(path, m.text, saved.rev, extra: _items[id]!.extra);
+            _rec(id, path, m.text, saved.rev);
             r.merged.add(doc.title ?? doc.when);
           } else {
             conflicts.add(SyncConflict(entryId: id, kind: ConflictKind.bothChanged, title: doc.title ?? doc.when, path: f.path, cacheText: text, fileText: f.text));
@@ -582,16 +783,21 @@ class NotebookSync {
         } else {
           // Deleted in Cache but changed in the folder: the file wins (an edit outside is newer intent).
           final saved = await _apply(id, f.doc, byName, text: f.text);
-          _items[id] = _Item(f.path, f.text, saved.rev, extra: _items[id]!.extra);
+          _rec(id, f.path, f.text, saved.rev);
           r.read++;
         }
       } else if (f != null && !_ownFilesOnly) {
         // A file or block with an id Cache does not know: read as that entry (notebook sync only; in Obsidian and Logseq a
         // file Cache has no record of is not Cache's).
         final saved = await _apply(id, f.doc, byName, text: f.text);
-        _items[id] = _Item(f.path, f.text, saved.rev, extra: _items[id]!.extra);
+        _rec(id, f.path, f.text, saved.rev);
         r.read++;
       }
+    }
+    // Notes the person made with the import tag and no id: imported once, and Cache's id written into them.
+    for (final u in candidates) {
+      if (held.contains(u.kind == 'block' ? '${u.path}\u0000${lsBlockKey(u.text.split('\n').first)}' : u.path)) continue;
+      await _import(u, byName, r);
     }
     // New notes and blocks written outside (no id yet): read as new entries, and the id written into them (notebook sync only;
     // Obsidian and Logseq notes the person made are left alone).
@@ -661,25 +867,217 @@ class NotebookSync {
       case ConflictKind.bothChanged:
         if (e == null || book == null) break;
         final doc = _docOf(book, e);
-        final text = _render(doc);
+        final text = _renderFor(c.entryId, doc);
         if (keepCache) {
           if (c.fileText != null) await _keepCopy(doc.title ?? doc.when, c.fileText!);
-          _items[c.entryId] = _Item(await _write(c.entryId, doc, book, text), text, e.rev, extra: _items[c.entryId]?.extra ?? const []);
+          _rec(c.entryId, await _write(c.entryId, doc, book, text), text, e.rev, extra: _items[c.entryId]?.extra ?? const []);
         } else {
           await _keepCopy(doc.title ?? doc.when, text);
-          final fileDoc = c.fileText == null
-              ? null
-              : _logseq
-                  ? parseLogseq(splitPage(c.fileText!).blocks.firstOrNull ?? LsBlock([c.fileText!]), day: doc.when.substring(0, 10), fallbackNotebook: book.name, fieldProps: _propTypes(book))
-                  : parseObsidian(c.fileText!, fallbackId: c.entryId, fallbackNotebook: book.name, fieldProps: _propTypes(book));
+          final fileDoc = c.fileText == null ? null : _parseAs(c.entryId, c.fileText!, book, when: doc.when);
           if (fileDoc != null) {
             final saved = await _apply(c.entryId, fileDoc, byName);
-            _items[c.entryId] = _Item(c.path, c.fileText!, saved.rev, extra: _items[c.entryId]!.extra);
+            _rec(c.entryId, c.path, c.fileText!, saved.rev);
           }
         }
     }
     _conflicts = [for (final x in _conflicts) if (!(x.entryId == c.entryId && x.path == c.path && x.kind == c.kind)) x];
     await _save();
+  }
+
+  // ---- import by tag ----
+
+  /// The notebook a tagged note goes to: the one `#cachesync/<name>` names (by name or as a slug, `camping-trip` is "Camping
+  /// trip"), made when there is none; the plain tag's is the Journal (Cache's default notebook), else "Notes".
+  Future<Notebook> _importBook(String? name, Map<String, Notebook> byName) async {
+    if (name == null) {
+      final j = notebook.journal;
+      if (j != null) return j;
+      name = kImportFallbackNotebook;
+    }
+    final want = tagSlug(name);
+    final have = byName.values.where((n) => !n.isPlaces && (n.name.toLowerCase() == name!.toLowerCase() || tagSlug(n.name) == want)).firstOrNull;
+    if (have != null) return have;
+    final shown = name.replaceAll(RegExp(r'[-_]+'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    final made = await notebook.saveNotebook(template: 'notes', def: NotebookDef(name: shown.isEmpty ? name : shown, fields: const [], sort: NotebookSort.recent));
+    byName[made.name] = made;
+    return made;
+  }
+
+  static final Random _rnd = Random.secure();
+
+  String _freshId() {
+    String hex(int n) => [for (var i = 0; i < n; i++) _rnd.nextInt(16).toRadixString(16)].join();
+    return '${hex(8)}-${hex(4)}-4${hex(3)}-a${hex(3)}-${hex(12)}';
+  }
+
+  /// Imports one tagged note: Cache's id goes into the note first (nothing else in it changes), then the entry is made; when
+  /// the id cannot be written (a read-only folder) nothing is made, and when the entry cannot be made the note is put back.
+  Future<void> _import(_Cand u, Map<String, Notebook> byName, SyncReport r) async {
+    final cur = await folder.readText(u.path);
+    if (cur == null) return;
+    final id = _freshId();
+    final now = _nowWall;
+    final String newText;
+    final String unitText;
+    final String w0;
+    var uk = const <String>[];
+    var ht = false;
+    EntryDoc? doc;
+    late final Notebook book;
+    switch (u.kind) {
+      case 'note':
+        if (cur != u.text || obsidianSyncOff(cur)) return; // changed while syncing: the next sync
+        final t = withCacheId(cur, id);
+        final probe = parseObsidian(cur, fallbackId: '', fallbackNotebook: '', fieldProps: const {}, fallbackWhen: now);
+        if (t == null || probe == null) return;
+        book = await _importBook(u.notebook, byName);
+        // The note's own properties stay its own; only a text `title` becomes the entry's title (Cache keeps it up to date).
+        final fm = splitFrontMatter(cur);
+        uk = [
+          for (final (k, lines) in fm?.props ?? const <(String, List<String>)>[])
+            if (k != 'cache_id' && !(k == 'title' && propValue(lines) is String)) k,
+        ];
+        ht = fm?.props.any((p) => p.$1 == 'title') ?? false;
+        // The note's own date and time when it gives them as Obsidian writes them, else now.
+        w0 = RegExp(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$').hasMatch(probe.when) && DateTime.tryParse(probe.when) != null ? probe.when : now;
+        newText = t;
+        unitText = t;
+        doc = parseObsidian(t, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book), fallbackWhen: w0, userKeys: uk.toSet(), fallbackTitle: _baseName(u.path));
+      case 'page':
+        if (cur != u.text || lsSyncOff(lsProps(splitPage(cur).head.split('\n')))) return;
+        book = await _importBook(u.notebook, byName);
+        w0 = now;
+        newText = 'cache-id:: $id\n$cur';
+        unitText = newText;
+        doc = parseLsPage(newText, pageTitle: lsPageTitle(u.path), when: w0, notebook: book.name);
+      default:
+        final at = cur.indexOf(u.text);
+        if (at < 0) return;
+        book = await _importBook(u.notebook, byName);
+        final day = dayOfJournal(u.path.split('/').last, format: _format);
+        w0 = day == null ? now : '$day${now.substring(10)}';
+        unitText = lsBlockWithId(lsBlockOf(u.text), id);
+        newText = cur.replaceRange(at, at + u.text.length, unitText);
+        doc = parseLsBlock(lsBlockOf(unitText), when: w0, notebook: book.name);
+    }
+    if (doc == null) return;
+    doc = EntryDoc(
+        id: id, notebook: book.name, when: doc.when, title: doc.title, body: doc.body, place: doc.place, photos: doc.photos, fields: doc.fields, private: u.private, extra: doc.extra);
+    try {
+      await folder.writeText(u.path, newText);
+    } catch (e) {
+      debugPrint('cache notebook sync: could not import ${u.path} ($e)');
+      r.notAdded++;
+      return;
+    }
+    _items[id] = _Item(u.path, unitText, 0, extra: doc.extra, imp: u.kind, w0: w0, uk: uk, ht: ht);
+    try {
+      final saved = await _apply(id, doc, byName);
+      _items[id] = _Item(u.path, unitText, saved.rev, extra: _items[id]?.extra ?? doc.extra, imp: u.kind, w0: w0, uk: uk, ht: ht);
+    } catch (e) {
+      _items.remove(id);
+      try {
+        if (await folder.readText(u.path) == newText) await folder.writeText(u.path, cur);
+      } catch (_) {}
+      debugPrint('cache notebook sync: could not import ${u.path} ($e)');
+      r.notAdded++;
+      return;
+    }
+    r.imported.add((doc.title ?? '').trim().isEmpty ? _baseName(u.path) : doc.title!.trim());
+    r.importedBooks.add(book.id);
+    await _save();
+  }
+
+  /// The note or block that holds Cache's id [id] now: where it was, else found by its id (moved since).
+  Future<String?> _pathOf(String id, _Item s) async {
+    bool has(String t) => s.imp == 'note' ? parseObsidian(t, fallbackId: '', fallbackNotebook: '', fieldProps: const {})?.id == id : (s.imp == 'page' ? lsPageId(t) == id : splitPage(t).blocks.any((b) => b.cacheId == id));
+    final at = await folder.readText(s.path);
+    if (at != null && has(at)) return s.path;
+    for (final dir in s.imp == 'note' ? [''] : [_journals, 'pages']) {
+      for (final f in await folder.list(dir)) {
+        if (!f.path.endsWith('.md')) continue;
+        final t = await folder.readText(f.path);
+        if (t != null && t.contains(id) && has(t)) return f.path;
+      }
+    }
+    return null;
+  }
+
+  /// Takes Cache's id out of imported note [id] and writes `cachesync: off` in its place; its text and the file stay.
+  Future<void> _release(String id, _Item s) async {
+    final path = await _pathOf(id, s);
+    if (path == null) return;
+    final cur = (await folder.readText(path))!;
+    final String? next;
+    switch (s.imp) {
+      case 'note':
+        next = releasedObsidian(cur);
+      case 'page':
+        next = lsPageReleased(cur);
+      default:
+        final p = splitPage(cur);
+        next = p.head + [for (final b in p.blocks) b.cacheId == id ? lsBlockReleased(b) : b.text].join();
+    }
+    if (next != null && next != cur) await folder.writeText(path, next);
+  }
+
+  /// An imported note that is still there without Cache's id (the person took it out): a file or page at its place, a block
+  /// with the same first line (tags aside) on its page.
+  Future<bool> _takenOver(String id, _Item s) async {
+    final cur = await folder.readText(s.path);
+    if (cur == null) return false;
+    if (s.imp != 'block') return true;
+    final key = lsBlockKey(s.base.split('\n').first);
+    return splitPage(cur).blocks.any((b) => b.cacheId == null && lsBlockKey(b.lines.first) == key);
+  }
+
+  /// Writes `cachesync: off` into a note the person took Cache's id out of (its text and tags stay as they are).
+  Future<void> _markOff(_Item s) async {
+    final cur = await folder.readText(s.path);
+    if (cur == null) return;
+    final String? next;
+    switch (s.imp) {
+      case 'note':
+        next = obsidianWithOff(cur);
+      case 'page':
+        next = lsPageWithOff(cur);
+      default:
+        final key = lsBlockKey(s.base.split('\n').first);
+        final p = splitPage(cur);
+        final at = p.blocks.indexWhere((b) => b.cacheId == null && lsBlockKey(b.lines.first) == key);
+        next = at < 0 ? null : p.head + [for (var i = 0; i < p.blocks.length; i++) i == at ? lsBlockWithOff(p.blocks[i]) : p.blocks[i].text].join();
+    }
+    if (next != null && next != cur) await folder.writeText(s.path, next);
+  }
+
+  /// "Stop syncing this note" (an imported note): Cache's id goes out of the note, `cachesync: off` takes its place, and the
+  /// entry stays in Cache as an entry of its own; neither changes the other again. False when the folder cannot be reached
+  /// (nothing is changed).
+  Future<bool> stopSyncing(String id) async {
+    await _load();
+    final s = _items[id];
+    if (s == null || s.imp == null) return true;
+    if (!await folder.reachable()) return false;
+    await _release(id, s);
+    _items.remove(id);
+    _stopped.add(id);
+    _conflicts = [for (final c in _conflicts) if (c.entryId != id) c];
+    await _save();
+    return true;
+  }
+
+  /// What a connection's record says of the entries: the ones imported by their tag and syncing, and the ones that stopped.
+  static Future<({Set<String> imported, Set<String> stopped})> links(File stateFile) async {
+    try {
+      if (!await stateFile.exists()) return (imported: <String>{}, stopped: <String>{});
+      final j = jsonDecode(await stateFile.readAsString()) as Map;
+      return (
+        imported: {for (final e in (j['items'] as Map? ?? const {}).entries) if ((e.value as Map)['imp'] != null) '${e.key}'},
+        stopped: {for (final x in (j['stopped'] as List? ?? const [])) '$x'},
+      );
+    } catch (_) {
+      return (imported: <String>{}, stopped: <String>{});
+    }
   }
 
   /// Drops the record of what was synced (the folder was disconnected): the next connection starts fresh.

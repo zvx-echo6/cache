@@ -222,7 +222,14 @@ void main() {
     expect(app.modelGeneration, generation + 1);
     expect(find.byKey(const ValueKey('unload-model')), findsNothing);
     expect(find.textContaining('Tap to use'), findsOneWidget);
-    final saved = jsonDecode(File('${dir.path}/settings.json').readAsStringSync()) as Map;
+    // The settings are written in the background: wait for the file (a slow runner took longer than the 50 ms above).
+    final settings = File('${dir.path}/settings.json');
+    await tester.runAsync(() async {
+      for (var i = 0; i < 100 && !settings.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    final saved = jsonDecode(settings.readAsStringSync()) as Map;
     expect(saved['lastModel'], isNull, reason: 'the next start does not load it again');
 
     await show(tester, AskScreen(app: app, chat: ChatController(actCore: const ActCoreStandIn(), tools: const [])));
