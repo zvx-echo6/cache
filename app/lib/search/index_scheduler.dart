@@ -80,7 +80,7 @@ class IndexScheduler extends ChangeNotifier {
   Timer? _timer;
   IndexTask? _current;
   IndexRun? _run;
-  bool _ticking = false;
+  Future<void>? _ticker;
   bool _again = false;
 
   /// Work seen since the last time everything was done, and how much of it is done: the status line's "3 of 12".
@@ -120,22 +120,25 @@ class IndexScheduler extends ChangeNotifier {
     }
   }
 
-  /// Looks for work and runs or pauses it by the rules now.
-  Future<void> kick() async {
-    if (_disposed) return;
-    if (_ticking) {
+  /// Looks for work and runs or pauses it by the rules now. While a look is under way, it is looked again after it, and the
+  /// future ends when that is done too.
+  Future<void> kick() {
+    if (_disposed) return Future.value();
+    final running = _ticker;
+    if (running != null) {
       _again = true;
-      return;
+      return running;
     }
-    _ticking = true;
-    try {
-      do {
-        _again = false;
-        await _tick();
-      } while (_again && !_disposed);
-    } finally {
-      _ticking = false;
-    }
+    return _ticker = () async {
+      try {
+        do {
+          _again = false;
+          await _tick();
+        } while (_again && !_disposed);
+      } finally {
+        _ticker = null;
+      }
+    }();
   }
 
   Future<void> _tick() async {
