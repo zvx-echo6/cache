@@ -11,7 +11,8 @@ import 'pdf_index_state.dart';
 PdfIndexState? pdfIndexShared;
 
 /// A ZIM of the Library as PDF indexing sees it.
-PdfZimRef pdfZimRef(SourcesState sources, ZimFile z) => PdfZimRef(path: z.path, uuid: sources.idOf(z), title: sources.titleOf(z));
+PdfZimRef pdfZimRef(SourcesState sources, ZimFile z) =>
+    PdfZimRef(path: z.path, uuid: sources.idOf(z), title: sources.titleOf(z), language: sources.originOf(z)?.language);
 
 /// The app's PDF indexing over the Library's ZIMs (keyword only), on the search core's PDF calls ([CorePdfIndex]); a core
 /// without them shows nothing about it.

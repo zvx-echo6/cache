@@ -218,7 +218,8 @@ class SearchCore {
   /// The ZIM's PDF entries (cs_zim_pdfs).
   Future<Map<String, dynamic>> zimPdfs(String zimId) => _map('zimPdfs', {'zimId': zimId});
 
-  /// One call of the PDF index build session: `open`, `add`, `skip`, `close`, `discard` (see cache_search.h).
+  /// One handle-less PDF call: the build session (`open`, `add`, `reuse`, `skip`, `close`, `discard`) or `chunk` (cs_pdf_chunk);
+  /// see cache_search.h.
   Future<Map<String, dynamic>> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) =>
       _map('pdfIndex', {'op': op, 'session': session, 'args': args});
 

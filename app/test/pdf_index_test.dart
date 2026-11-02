@@ -408,6 +408,9 @@ void main() {
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.person)), 'Paused · 340 of 5,768');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189)), 'Needs 1.2 GB free');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.waiting, total: 5768)), 'Waiting to make PDFs searchable');
+      // A new edition reusing its older one: the PDFs it does not hold.
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5790, handled: 5768, newCount: 22)), 'Making PDFs searchable: 5,768 of 5,790 · 22 new PDFs');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.waiting, total: 5790, newCount: 1)), 'Waiting to make PDFs searchable · 1 new PDF');
       expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.running, total: 5768)), 'Making PDFs searchable');
       expect(pdfRowNote(const PdfPart(phase: PdfPartPhase.done, total: 5768)), isNull);
       expect(pdfRowNote(null), isNull);

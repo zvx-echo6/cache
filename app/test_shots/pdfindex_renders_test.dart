@@ -114,6 +114,7 @@ void main() {
         ('Waiting (another library first)', _waiting),
         ('Starting', _starting),
         ('Making searchable', _running),
+        ('New edition, reusing the old one', const PdfPart(phase: PdfPartPhase.running, total: 5790, handled: 5768, newCount: 22)),
         ('Paused (person)', _pausedPerson),
         ('Paused (low battery, or a long job on battery under 50%)', _pausedBattery),
         ('Not enough room', _needsSpace),
@@ -137,7 +138,7 @@ void main() {
           ),
         ),
         theme,
-        size: const Size(430, 1250),
+        size: const Size(430, 1350),
       );
       await _snap(tester, '2a-states', theme);
       for (final (name, p) in [

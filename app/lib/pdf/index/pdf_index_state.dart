@@ -12,9 +12,12 @@ import 'pdf_pages.dart';
 
 /// A ZIM as PDF indexing sees it.
 class PdfZimRef {
-  const PdfZimRef({required this.path, required this.uuid, required this.title});
+  const PdfZimRef({required this.path, required this.uuid, required this.title, this.language});
 
   final String path;
+
+  /// The ZIM's Language metadata ("eng"); null or empty when not known (the core then takes English).
+  final String? language;
 
   /// Null until the core has opened the ZIM.
   final String? uuid;
@@ -42,6 +45,7 @@ class PdfPart {
     this.fromOtherDevice = false,
     this.finishFraction,
     this.needBytes = 0,
+    this.newCount = 0,
   });
 
   final PdfPartPhase phase;
@@ -61,6 +65,9 @@ class PdfPart {
 
   /// The room the run needs when there is not enough ([PdfPartPhase.needsSpace]).
   final int needBytes;
+
+  /// A new edition of a ZIM whose older edition's PDFs are reused: the PDFs not in it (new or changed), "22 new PDFs".
+  final int newCount;
 
   double? get fraction => total > 0 ? (handled / total).clamp(0.0, 1.0) : null;
 
@@ -325,6 +332,36 @@ class PdfIndexState extends ChangeNotifier {
     return uuid;
   }
 
+  final Map<String, (String, int)> _newCounts = {};
+
+  /// For a new edition: the PDFs of [z] that its older edition's snapshot does not hold at the same path and size (its pdfs.tsv);
+  /// 0 when there is no older edition here.
+  int _newCount(PdfZimRef z) {
+    final list = _lists[z.path];
+    final root = _indexes;
+    if (list == null || list.zimUuid != z.uuid || root == null) return 0;
+    final prev = _previous(z, list);
+    if (prev == null) return 0;
+    final have = _newCounts[z.path];
+    if (have != null && have.$1 == prev) return have.$2;
+    final paths = PdfIndexPaths(root, prev);
+    final snap = paths.current();
+    var n = 0;
+    if (snap != null) {
+      final known = <String>{};
+      try {
+        final f = File('${paths.snaps.path}${Platform.pathSeparator}${snap.id}${Platform.pathSeparator}pdfs.tsv');
+        for (final line in f.readAsLinesSync()) {
+          final c = line.split('\t');
+          if (c.length >= 2) known.add('${c[0]}\t${c[1]}');
+        }
+      } catch (_) {}
+      n = list.pdfs.where((p) => !known.contains('${p.path}\t${p.size}')).length;
+    }
+    _newCounts[z.path] = (prev, n);
+    return n;
+  }
+
   /// Every [watchEvery]: a snapshot that arrived from another device is noticed (a run of the same edition gives way), and what
   /// was held back (battery, space) is tried again.
   void _rewatch() {
@@ -379,8 +416,8 @@ class PdfIndexState extends ChangeNotifier {
     if (run != null) {
       if (run.finishing) return PdfPart(phase: PdfPartPhase.finishing, total: total, handled: run.handled, unreadable: run.skipped, finishFraction: run.finishFraction);
       if (run.stopped != PdfRunStop.none) return PdfPart(phase: PdfPartPhase.pausing, total: total, handled: run.handled);
-      if (run.starting) return PdfPart(phase: PdfPartPhase.starting, total: total, handled: run.handled);
-      return PdfPart(phase: PdfPartPhase.running, total: total, handled: run.handled, unreadable: run.skipped);
+      if (run.starting) return PdfPart(phase: PdfPartPhase.starting, total: total, handled: run.handled, newCount: _newCount(z));
+      return PdfPart(phase: PdfPartPhase.running, total: total, handled: run.handled, unreadable: run.skipped, newCount: _newCount(z));
     }
     final m = _snapshot(z);
     if (m != null) {
@@ -403,7 +440,7 @@ class PdfIndexState extends ChangeNotifier {
       case 'battery':
         return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.battery);
     }
-    if (_queue.contains(z.path) || _picking) return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: handled);
+    if (_queue.contains(z.path) || _picking) return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: handled, newCount: _newCount(z));
     // Nothing queued it (start-by-itself off): a build left by an earlier run is a pause.
     if (handled > 0 || _paths(z)!.build.existsSync()) return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.closed);
     return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: handled);
@@ -551,6 +588,7 @@ class PdfIndexState extends ChangeNotifier {
       paths: paths,
       zimName: _zimName(z, list),
       previousZimUuid: _previous(z, list),
+      language: (z.language ?? '').trim().isEmpty ? null : z.language,
       list: list,
       readPages: readPages,
       battery: battery,

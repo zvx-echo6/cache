@@ -177,8 +177,9 @@ abstract class CsPdfNative {
   /// cs_zim_pdfs: {"zim_uuid","zim_name","pdfs":[{"path","title","size"}]}, or null on error (ask [CsNative.lastError]).
   String? zimPdfs(int handle, String zimId);
 
-  /// The handle-less build session: [op] is `open`, `add`, `skip`, `close` or `discard`; [session] is open's session for add,
-  /// skip and close; [json] the call's JSON (none for close). The answer, or null on error (ask [CsNative.lastError] with 0).
+  /// The handle-less calls: [op] is `open`, `add`, `reuse`, `skip`, `close`, `discard` (the build session; [session] is open's
+  /// session for add, reuse, skip and close) or `chunk` (cs_pdf_chunk, pure); [json] the call's JSON (none for close). The
+  /// answer, or null on error or when the core lacks that call (ask [CsNative.lastError] with 0).
   String? pdfIndex(String op, {int session = 0, String json = '{}'});
 }
 
@@ -720,6 +721,8 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
   late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfAdd = _lookupSessionStr('cs_pdfindex_add');
   late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfSkip = _lookupSessionStr('cs_pdfindex_skip');
   late final Pointer<Utf8> Function(int)? _pdfClose = _lookupSession('cs_pdfindex_close');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfReuse = _lookupSessionStr('cs_pdfindex_reuse');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfChunk = _lookupStr1('cs_pdf_chunk');
 
   Pointer<Utf8> Function(Pointer<Utf8>)? _lookupStr1(String name) {
     try {
@@ -754,8 +757,10 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
   @override
   String? pdfIndex(String op, {int session = 0, String json = '{}'}) => using((a) {
     final j = json.toNativeUtf8(allocator: a);
-    final open = _pdfOpen, discard = _pdfDiscard, add = _pdfAdd, skip = _pdfSkip, close = _pdfClose;
+    final open = _pdfOpen, discard = _pdfDiscard, add = _pdfAdd, skip = _pdfSkip, close = _pdfClose, reuse = _pdfReuse, chunk = _pdfChunk;
     return switch (op) {
+      'reuse' when reuse != null => _take(reuse(session, j)),
+      'chunk' when chunk != null => _take(chunk(j)),
       'open' when open != null => _take(open(j)),
       'discard' when discard != null => _take(discard(j)),
       'add' when add != null => _take(add(session, j)),

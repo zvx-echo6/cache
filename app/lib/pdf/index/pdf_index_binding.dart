@@ -6,9 +6,9 @@ import '../../sources/sources_state.dart';
 import 'pdf_chunk.dart';
 import 'pdf_index_core.dart';
 
-/// The search core's PDF index calls (branch core-pdf): cs_zim_pdfs, the handle-less cs_pdfindex_* session keyed by
-/// {indexes_dir, zim_uuid}, and the pdfindex_finish job, through the app's search core. Not in the core yet, so done here:
-/// chunking (cs_pdf_chunk; [chunkPdfPages], the same rule) and reuse across editions (v2.1: nothing is reused).
+/// The search core's PDF index calls (core-pdf): cs_zim_pdfs, cs_pdf_chunk (the shared cache_chunk), the handle-less
+/// cs_pdfindex_* session keyed by {indexes_dir, zim_uuid} with reuse across editions, and the pdfindex_finish job, through the
+/// app's search core. A core without cs_pdf_chunk chunks here with the same rule ([chunkPdfPages]).
 class CorePdfIndex implements PdfIndexCore {
   CorePdfIndex(this.sources);
 
@@ -38,23 +38,39 @@ class CorePdfIndex implements PdfIndexCore {
   Future<Uint8List> readEntry(String address) async => (await sources.zimGet(address)).bytes;
 
   @override
-  Future<PdfChunks> chunk(List<PdfPageText> pages) async => chunkPdfPages(pages);
+  Future<PdfChunks> chunk(List<PdfPageText> pages) async {
+    try {
+      return PdfChunks.fromJson(await _core.pdfIndex('chunk', args: {
+        'pages': [for (final p in pages) {'index': p.index, 'label': p.label ?? '', 'text': p.text}],
+      }));
+    } on CacheSearchException catch (e) {
+      // A core without cs_pdf_chunk answers nothing for it: the same rule here.
+      if (e.code == 'internal' || e.code == 'unsupported') return chunkPdfPages(pages);
+      rethrow;
+    }
+  }
 
   @override
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid}) async =>
-      PdfStaging.fromJson(await _core.pdfIndex('open', args: {'indexes_dir': indexesDir, 'zim_uuid': zimUuid, 'zim_name': zimName}));
-
-  /// cs_pdfindex_reuse is not in the core yet: nothing is reused, every PDF is read.
-  @override
-  Future<PdfReused> reuse(int session, {required String path, required String sha256}) async => const PdfReused(reused: false);
-
-  @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async =>
-      PdfAdded.fromJson(await _core.pdfIndex('add', session: session, args: {'path': path, 'title': title, 'pieces': pieces}));
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid, String? language}) async =>
+      PdfStaging.fromJson(await _core.pdfIndex('open', args: {
+        'indexes_dir': indexesDir,
+        'zim_uuid': zimUuid,
+        'zim_name': zimName,
+        'language': ?language,
+        if (previousZimUuid != null) 'previous': {'zim_uuid': previousZimUuid},
+      }));
 
   @override
-  Future<void> skip(int session, {required String path, required PdfSkipReason reason}) =>
-      _core.pdfIndex('skip', session: session, args: {'path': path, 'reason': reason.code});
+  Future<PdfReused> reuse(int session, {required String path, required String sha256}) async =>
+      PdfReused.fromJson(await _core.pdfIndex('reuse', session: session, args: {'path': path, 'sha256': sha256}));
+
+  @override
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async =>
+      PdfAdded.fromJson(await _core.pdfIndex('add', session: session, args: {'path': path, 'title': title, 'pieces': pieces, 'size': ?size, 'sha256': ?sha256}));
+
+  @override
+  Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256}) =>
+      _core.pdfIndex('skip', session: session, args: {'path': path, 'reason': reason.code, 'size': ?size, 'sha256': ?sha256});
 
   @override
   Future<void> close(int session) => _core.pdfIndex('close', session: session);

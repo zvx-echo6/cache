@@ -108,7 +108,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid}) async {
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid, String? language}) async {
     calls.add('open');
     final paths = PdfIndexPaths(indexesDir, zimUuid);
     final dir = paths.build;
@@ -168,7 +168,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async {
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async {
     calls.add('add:$path');
     final err = failAddWith;
     if (err != null) throw err;
@@ -218,7 +218,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<void> skip(int session, {required String path, required PdfSkipReason reason}) async {
+  Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256}) async {
     calls.add('skip:$path:${reason.code}');
     _session(session).pendingSkips.add('$path\t${reason.code}');
   }
@@ -296,7 +296,7 @@ class _FakeFinish implements PdfFinishJob {
       for (final l in skipped) {
         final c = l.split('\t');
         final f = core._fileOf(paths.zimUuid, c[0]);
-        rows.writeln([c[0], f?.$1 ?? 0, f?.$2 ?? '', 0, c.last].join('\t'));
+        rows.writeln([c[0], f?.$1 ?? 0, f?.$2 ?? '', 0, 'skipped:${c.last}'].join('\t'));
       }
       File('${tmp.path}/pdfs.tsv').writeAsStringSync(rows.toString());
       final seg = File('${tmp.path}/segment.bin')..writeAsStringSync(done.join('\n'));

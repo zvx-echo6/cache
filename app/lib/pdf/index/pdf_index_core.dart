@@ -31,18 +31,19 @@ abstract class PdfIndexCore {
   /// Opens or creates the ZIM's build, `zim-pdf/<zim uuid>/.build/` (cs_pdfindex_open). A build for another format or chunker is
   /// discarded by the core and started again. [previousZimUuid] is an older edition of the same ZIM (the same zim_name) whose
   /// snapshot's PDFs may be reused: the answer lists them ([PdfStaging.reusable]).
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid});
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid, String? language});
 
   /// Takes a PDF's pieces from the previous edition's snapshot when its bytes are the same (cs_pdfindex_reuse, with the sha256 of
   /// the bytes read): reused, or not (then it is extracted as usual).
   Future<PdfReused> reuse(int session, {required String path, required String sha256});
 
-  /// Adds one PDF's text pieces, replacing any it had (cs_pdfindex_add). Durable in batches: the core commits about every 20
+  /// Adds one PDF's text pieces, replacing any it had (cs_pdfindex_add), with the size and sha256 of its bytes (recorded in the
+  /// snapshot's pdfs.tsv, for the next edition's reuse). Durable in batches: the core commits about every 20
   /// PDFs or 30 seconds and lists a path as done only after the commit that holds it.
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces});
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256});
 
   /// Marks a PDF that has nothing to index (cs_pdfindex_skip).
-  Future<void> skip(int session, {required String path, required PdfSkipReason reason});
+  Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256});
 
   /// Commits and closes the session; the build stays for a resume (cs_pdfindex_close).
   Future<void> close(int session);
@@ -233,13 +234,13 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   @override
   Future<PdfChunks> chunk(List<PdfPageText> pages) async => _no();
   @override
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid}) async => _no();
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid, String? language}) async => _no();
   @override
   Future<PdfReused> reuse(int session, {required String path, required String sha256}) async => _no();
   @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async => _no();
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async => _no();
   @override
-  Future<void> skip(int session, {required String path, required PdfSkipReason reason}) async => _no();
+  Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256}) async => _no();
   @override
   Future<void> close(int session) async {}
   @override

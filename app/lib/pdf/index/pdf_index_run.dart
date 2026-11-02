@@ -44,11 +44,15 @@ class PdfTimingRow {
 
 /// One PDF read, extracted and chunked: its text pieces, or why it is skipped.
 class _OnePdf {
-  _OnePdf.pieces(this.pieces) : skip = null;
-  _OnePdf.skip(this.skip) : pieces = const [];
+  _OnePdf.pieces(this.pieces, {this.size, this.sha256}) : skip = null;
+  _OnePdf.skip(this.skip, {this.size, this.sha256}) : pieces = const [];
 
   final List<Map<String, dynamic>> pieces;
   final PdfSkipReason? skip;
+
+  /// The size and sha256 of the bytes read (none when they could not be read), for the snapshot's pdfs.tsv.
+  final int? size;
+  final String? sha256;
 }
 
 class _Stopped implements Exception {
@@ -71,6 +75,7 @@ class PdfIndexRun extends ChangeNotifier {
     required this.paths,
     required this.zimName,
     this.previousZimUuid,
+    this.language,
     this.spaceOk,
     required this.list,
     this.readPages = readPdfPagesFromBytes,
@@ -92,6 +97,9 @@ class PdfIndexRun extends ChangeNotifier {
 
   /// An older edition of this ZIM with a snapshot: its unchanged PDFs are reused, not read again.
   final String? previousZimUuid;
+
+  /// The ZIM's Language metadata (it picks the stemmer; the core takes English when there is none).
+  final String? language;
 
   /// False when the device is low on storage (under the reserve): the run stops with "this device is full" (checked with the
   /// battery).
@@ -203,7 +211,7 @@ class PdfIndexRun extends ChangeNotifier {
     try {
       var doneSet = <String>{};
       if (stage) {
-        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid);
+        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid, language: language);
         for (final r in s.reusable) {
           reusable[r.path] = r.size;
         }
@@ -264,11 +272,11 @@ class PdfIndexRun extends ChangeNotifier {
         _checkStop();
         final sw = Stopwatch()..start();
         if (one.skip != null) {
-          if (session != null) await core.skip(session, path: pdf.path, reason: one.skip!);
+          if (session != null) await core.skip(session, path: pdf.path, reason: one.skip!, size: one.size, sha256: one.sha256);
           skipped++;
         } else {
           if (session != null) {
-            final a = await core.add(session, path: pdf.path, title: pdf.name, pieces: one.pieces);
+            final a = await core.add(session, path: pdf.path, title: pdf.name, pieces: one.pieces, size: one.size, sha256: one.sha256);
             pieces = a.pieces;
             committed = a.committed;
           } else {
@@ -373,6 +381,8 @@ class PdfIndexRun extends ChangeNotifier {
       return _OnePdf.skip(PdfSkipReason.damaged);
     }
     row.readMs = sw.elapsedMilliseconds;
+    final size = data.length;
+    final sha = stage ? crypto.sha256.convert(data).toString() : null;
     _checkStop();
     sw.reset();
     final pages = await readPages(data, pdf.path);
@@ -382,7 +392,7 @@ class PdfIndexRun extends ChangeNotifier {
     final reason = pages.locked ? PdfSkipReason.locked : (pages.damaged ? PdfSkipReason.damaged : (pages.noText ? PdfSkipReason.noText : null));
     if (reason != null) {
       row.skipped = reason;
-      return _OnePdf.skip(reason);
+      return _OnePdf.skip(reason, size: size, sha256: sha);
     }
     _checkStop();
     sw.reset();
@@ -390,10 +400,10 @@ class PdfIndexRun extends ChangeNotifier {
     row.chunkMs = sw.elapsedMilliseconds;
     if (chunks.pieces.isEmpty) {
       row.skipped = PdfSkipReason.noText;
-      return _OnePdf.skip(PdfSkipReason.noText);
+      return _OnePdf.skip(PdfSkipReason.noText, size: size, sha256: sha);
     }
     row.pieces = chunks.pieces.length;
-    return _OnePdf.pieces(chunks.pieces);
+    return _OnePdf.pieces(chunks.pieces, size: size, sha256: sha);
   }
 }
 

@@ -226,7 +226,7 @@ class SearchEngine {
   /// cs_zim_pdfs of the ZIM [zimId].
   Map<String, dynamic> zimPdfs(String zimId) => _object(_ok(_pdf().zimPdfs(_h, zimId)));
 
-  /// One call of the handle-less build session ([CsPdfNative.pdfIndex]).
+  /// One handle-less PDF call ([CsPdfNative.pdfIndex]): the build session, or `chunk` (cs_pdf_chunk).
   Map<String, dynamic> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) {
     final s = _pdf().pdfIndex(op, session: session, json: jsonEncode(args ?? const {}));
     return _object(s ?? (throw CacheSearchException.fromJson(native.lastError(0))));

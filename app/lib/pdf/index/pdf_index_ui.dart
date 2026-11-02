@@ -12,12 +12,15 @@ import 'pdf_index_state.dart';
 /// "340 of 5,768".
 String _of(PdfPart p) => '${formatCount(p.handled)} of ${formatCount(p.total)}';
 
+/// " · 22 new PDFs" for a new edition reusing its older one; nothing otherwise.
+String _new(PdfPart p) => p.newCount > 0 ? ' · ${formatCount(p.newCount)} new PDF${p.newCount == 1 ? '' : 's'}' : '';
+
 /// The status line of a library's PDFs (always on: a status, not an action).
 String pdfPartLine(PdfPart p) => switch (p.phase) {
   PdfPartPhase.done => 'PDFs: searching ready',
-  PdfPartPhase.waiting => 'Waiting to make PDFs searchable',
-  PdfPartPhase.starting => 'Making PDFs searchable…',
-  PdfPartPhase.running => 'Making PDFs searchable: ${_of(p)}',
+  PdfPartPhase.waiting => 'Waiting to make PDFs searchable${_new(p)}',
+  PdfPartPhase.starting => 'Making PDFs searchable…${_new(p)}',
+  PdfPartPhase.running => 'Making PDFs searchable: ${_of(p)}${_new(p)}',
   PdfPartPhase.pausing => 'Pausing…',
   PdfPartPhase.finishing => 'Making PDFs searchable: finishing',
   PdfPartPhase.paused => switch (p.pause) {
