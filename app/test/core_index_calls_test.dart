@@ -193,6 +193,7 @@ void main() {
     now = now.add(const Duration(seconds: 31));
     expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'the wait doubled to a minute');
     now = now.add(const Duration(seconds: 30));
+    job = _Job();
     final run = await (await CoreIndexWork(calls).pending()).single.start();
     job.now = const JobProgress(state: JobState.done, done: 1, total: 1);
     expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
