@@ -363,8 +363,8 @@ fn dir_bytes(dir: &Path) -> u64 {
         .sum()
 }
 
-/// The shard sizes (f32, f16) of the same packs written both ways, and the top-1 of each query in both.
-fn f16_vs_f32(tmp: &Path) -> (u64, u64) {
+/// The same packs written both ways: the shard configs say so, and every query has the same top-1 in both.
+fn f16_vs_f32(tmp: &Path) {
     use cache_builder::embed::fake_vector;
     use cache_builder::library::VectorDatatype;
     let packs = tmp.join("packs");
@@ -381,12 +381,15 @@ fn f16_vs_f32(tmp: &Path) -> (u64, u64) {
         out
     };
     let (a, b) = (mk("f32", VectorDatatype::F32), mk("f16", VectorDatatype::F16));
-    // the f16 shard says so in its own config; cache-library.json is the same apart from nothing (no field for it)
-    let cfg = std::fs::read_to_string(b.join("shard/edge_config.json")).unwrap_or_default();
-    if !cfg.is_empty() {
-        assert!(cfg.to_lowercase().contains("float16"), "{cfg}");
-        assert!(!std::fs::read_to_string(a.join("shard/edge_config.json")).unwrap().to_lowercase().contains("float16"));
-    }
+    // the f16 shard says so in its own config and its segment; cache-library.json has no field for it and is the same
+    let datatype = |d: &Path| -> (String, String) {
+        let cfg: Value = serde_json::from_slice(&std::fs::read(d.join("shard/edge_config.json")).unwrap()).unwrap();
+        let seg = std::fs::read_dir(d.join("shard/segments")).unwrap().next().unwrap().unwrap().path().join("segment.json");
+        let seg: Value = serde_json::from_slice(&std::fs::read(seg).unwrap()).unwrap();
+        (cfg["vectors"][""]["datatype"].as_str().unwrap().to_string(), seg["config"]["vector_data"][""]["datatype"].as_str().unwrap().to_string())
+    };
+    assert_eq!(datatype(&a), ("float32".to_string(), "float32".to_string()));
+    assert_eq!(datatype(&b), ("float16".to_string(), "float16".to_string()));
     assert_eq!(std::fs::read(a.join(SETTINGS_FILE)).unwrap(), std::fs::read(b.join(SETTINGS_FILE)).unwrap());
     let open = |d: &Path| {
         let s: Value = serde_json::from_slice(&std::fs::read(d.join(SETTINGS_FILE)).unwrap()).unwrap();
@@ -406,14 +409,12 @@ fn f16_vs_f32(tmp: &Path) -> (u64, u64) {
             assert_eq!(ha[0].snippet, hb[0].snippet, "top-1 differs for {t:.40}");
         }
     }
-    (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")))
 }
 
 #[test]
 fn an_f16_library_opens_and_answers_like_the_f32_one_in_less_space() {
     let tmp = tempfile::tempdir().unwrap();
-    let (f32_bytes, f16_bytes) = f16_vs_f32(tmp.path());
-    assert!(f16_bytes < f32_bytes, "f16 {f16_bytes} bytes, f32 {f32_bytes} bytes");
+    f16_vs_f32(tmp.path());
 
     // the command line takes the option, and refuses anything else
     let packs = tmp.path().join("packs");
@@ -421,4 +422,64 @@ fn an_f16_library_opens_and_answers_like_the_f32_one_in_less_space() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let out = cli().arg("library").arg("--packs").arg(packs.as_path()).arg("--out").arg(tmp.path().join("cli8")).args(["--id", "r3", "--title", "T", "--vector-datatype", "f8"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
+}
+
+/// Edge keeps vectors in 32 MiB chunks it creates whole, so a small library is the same size either way; f16 holds twice the
+/// vectors per chunk (16384 against 8192 of 1024 dimensions). 9000 pieces need two chunks as f32 and one as f16.
+#[test]
+fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_same_top_1() {
+    use cache_builder::embed::fake_vector;
+    use cache_builder::library::{write_library, LibDoc, VectorDatatype};
+    use cache_builder::pack::PackPiece;
+    let pieces: Vec<PackPiece> = (0..9000u32)
+        .map(|i| {
+            let text = format!("passage number {i} about subject {} and detail {}", i % 97, i % 13);
+            PackPiece {
+                index: i,
+                vector: fake_vector(&text),
+                text,
+                page: "1".into(),
+                pdf_page: Some(1),
+                page_end: None,
+                pdf_page_end: None,
+                heading_path: vec![],
+            }
+        })
+        .collect();
+    let doc = || LibDoc {
+        title: "Big".into(),
+        doc_id: "big".into(),
+        doc_version: 1,
+        source_blake3: "ab".repeat(32),
+        link: String::new(),
+        author: None,
+        zim: None,
+        pages: Some(1),
+        pieces: pieces.clone(),
+        entry: None,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let mk = |name: &str, dt: VectorDatatype| {
+        let out = tmp.path().join(name);
+        let o = LibraryOptions { vector_datatype: dt, archive: false, ..library_opts() };
+        write_library(&out, &o, [doc()]).unwrap();
+        out
+    };
+    let (a, b) = (mk("f32", VectorDatatype::F32), mk("f16", VectorDatatype::F16));
+    let (sa, sb) = (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")));
+    assert!(sb + 30 * 1024 * 1024 < sa, "f16 {sb} bytes, f32 {sa} bytes");
+    let open = |d: &Path| {
+        let s: Value = serde_json::from_slice(&std::fs::read(d.join(SETTINGS_FILE)).unwrap()).unwrap();
+        cache_search::library::open_library(&d.join("shard"), None, Some(&s)).unwrap()
+    };
+    let (la, lb) = (open(&a), open(&b));
+    assert_eq!((la.docs, lb.docs), (9000, 9000));
+    for i in [0usize, 777, 4500, 8999] {
+        let mut q = pieces[i].vector.clone();
+        q.iter_mut().step_by(5).for_each(|x| *x *= 1.03);
+        let ha = la.dense_search(&q, 1, 1, 200).unwrap();
+        let hb = lb.dense_search(&q, 1, 1, 200).unwrap();
+        assert_eq!(ha[0].address, hb[0].address, "top-1 differs for piece {i}");
+        assert_eq!(ha[0].snippet, pieces[i].text);
+    }
 }
