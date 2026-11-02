@@ -60,7 +60,7 @@ import 'package:cache/screens/ask_off.dart';
 import 'package:cache/screens/ask_screen.dart';
 import 'package:cache/screens/model_search_screen.dart';
 import 'package:cache/screens/models_screen.dart';
-import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, MapPlace, MapProgress, MapRoute, MapSearchResponse, VideoTarget;
+import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, MapPlace, MapProgress, MapRoute, MapSearchResponse, SearchResponse, VideoTarget;
 import 'package:cache/layout/edit_home_screen.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/layout/modules.dart';
@@ -77,6 +77,7 @@ import 'package:cache/screens/download_confirm.dart' show confirmDownload, openS
 import 'package:cache/screens/home_screen.dart';
 import 'package:cache/screens/setup_card.dart';
 import 'package:cache/search/app_search.dart';
+import 'package:cache/search/app_search_providers.dart' show LibrarySearchProvider;
 import 'package:cache/search/index_scheduler.dart';
 import 'package:cache/settings/hub.dart';
 import 'package:cache/pdf/index/pdf_index_app.dart' show pdfIndexShared;
@@ -1241,15 +1242,24 @@ void main() {
   testWidgets('search-pdf-hits', (tester) async {
     final h = _HomeRig();
     await homeRig(tester, h);
-    // What the Library's search gives for a passage in a ZIM's PDF (the core's title "<PDF>, p. <page>"; then the ZIM's title
-    // and the page) beside a page of a ZIM. Caption and EPUB hits are not in Home's search (it keeps zim: pages and PDF
-    // passages only), so none is shown.
-    final search = AppSearch([
-      _Found('Library', Icons.menu_book_outlined, [
-        ('Water and Shelter Handbook, p. 47', 'Survival Library, p. 47', 0.9),
-        ('Water purification', 'Wikipedia Medicine', 0.8),
-        ('Field Water Supply, p. 12', 'Survival Library, p. 12', 0.7),
+    // The app's own Library search (its rows and second lines as Home shows them) over what the core finds for "boil water":
+    // a passage in a ZIM's PDF, a ZIM page, and words said in a ZIM's video (a caption hit).
+    final dir = Directory.systemTemp.createTempSync('guide-search');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    const zim = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    final libraryHits = LibrarySearchProvider(
+      sources: _HitSources(dir, [
+        {'address': 'zimpdf:$zim/Manuals/water.pdf@3', 'title': 'Water and Shelter Handbook, p. 47', 'snippet': 'Bring it to a rolling boil.', 'source_id': zim, 'source_kind': 'zim', 'source_title': 'Survival Library', 'page': 47, 'pdf_page': 49},
+        {'address': 'zimcap:$zim/Videos/water_en.srt@6', 'title': 'Purifying water in the field, at 02:15', 'snippet': 'Boil the water for one full minute.', 'source_id': zim, 'source_kind': 'zim', 'source_title': 'Survival Library', 'page': null, 'link': 'zim:$zim/Videos/water.mp4', 'time': 135, 'lang': 'en', 'quote': 'Boil the water'},
+        {'address': 'zim:$zim/A/Water_purification', 'title': 'Water purification', 'snippet': 'Boiling kills germs.', 'source_id': zim, 'source_kind': 'zim', 'source_title': 'Wikipedia Medicine', 'page': null},
       ]),
+      openZim: (_) {},
+      openAddress: (_) {},
+      openVideo: (_, _, _) {},
+      openPassage: (_, _) {},
+    );
+    final search = AppSearch([
+      libraryHits,
       _Found('Notebooks', Icons.book_outlined, [('Water cache restocked', 'Journal · Oct 27', 0.5)]),
     ]);
     await show(tester, HomeScreen(layout: h.layout, weather: h.weather, search: search, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}, onOpenWeather: () {}));
@@ -1651,6 +1661,20 @@ class _ShotPdfIndex extends PdfIndexState {
 
   @override
   PdfPart? partOf(PdfZimRef z) => parts[z.path.split(Platform.pathSeparator).last];
+}
+
+/// Sources whose search core answers every search with [hits] (the core's own JSON for each hit).
+class _HitSources extends FakeSources {
+  _HitSources(super.dir, this.hits);
+
+  final List<Map<String, dynamic>> hits;
+
+  @override
+  bool get coreReady => true;
+
+  @override
+  Future<SearchResponse> searchIn(String query, {List<String>? zimIds, int k = 20, int offset = 0}) async =>
+      SearchResponse.fromJson({'results': hits, 'total_estimate': hits.length});
 }
 
 /// One module's part of Home's search, with the results it is given.
