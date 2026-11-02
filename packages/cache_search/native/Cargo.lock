@@ -784,6 +784,7 @@ dependencies = [
  "tar",
  "tempfile",
  "uuid",
+ "zim",
 ]
 
 [[package]]

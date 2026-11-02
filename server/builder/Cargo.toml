@@ -39,6 +39,8 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["v5"] }
 # Appends cache-library.json to the packed snapshot (the same tar crate cache_search uses).
 tar = { version = "0.4", default-features = false }
+# ZIM reader (pure Rust), the same crate and version the core uses.
+zim = "0.5.0"
 
 [dev-dependencies]
 tempfile = "3"

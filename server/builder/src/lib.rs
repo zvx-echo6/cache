@@ -13,6 +13,7 @@ pub mod layout;
 pub mod library;
 pub mod pack;
 pub mod text;
+pub mod zim;
 
 pub use build::{build_pack, build_pack_with, BuildOptions, Progress, Report};
 pub use embed::{Embedder, FakeEmbedder};
