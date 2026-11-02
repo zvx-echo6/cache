@@ -73,6 +73,8 @@ import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
+import 'settings/space.dart' show Space;
+import 'search/index_scheduler.dart';
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
@@ -294,6 +296,14 @@ class _CacheAppState extends State<CacheApp> {
     ],
   );
 
+  /// The one scheduler of automatic index work (search/index_scheduler.dart): the core's builds and seals (behind
+  /// IndexCoreCalls.none until the core has index_source and index_seal) and, once it registers, the PDF loop. It runs while
+  /// the app is open, with the battery and storage rules, against the storage of the indexes folder.
+  late final IndexScheduler indexing = IndexScheduler(
+    sources: [CoreIndexWork(IndexCoreCalls.none)],
+    space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
+  );
+
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
   void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
@@ -327,6 +337,7 @@ class _CacheAppState extends State<CacheApp> {
     weather: weather,
     sharing: sharing,
     regions: regions,
+    indexing: indexing,
     storage: StorageUsage(
       kinds: [for (final k in dataKinds) if (k.inStorage) k],
       freeIn: () => app.modelsDir ?? sources.zimsDir,
@@ -510,10 +521,16 @@ class _CacheAppState extends State<CacheApp> {
     pdfIndexShared = pdfIndex;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
-    _lifecycle = AppLifecycleListener(onResume: () {
-      unawaited(weather.updateIfDue(kBackgroundEvery));
-      unawaited(connections.syncAll());
-    });
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        unawaited(weather.updateIfDue(kBackgroundEvery));
+        unawaited(connections.syncAll());
+        indexing.setOpen(true);
+      },
+      // Automatic index work runs only while the app is open.
+      onHide: () => indexing.setOpen(false),
+    );
+    indexing.setOpen(true);
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -573,7 +590,10 @@ class _CacheAppState extends State<CacheApp> {
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
       // A snapshot that came by sync is attached when the core is given its sources again.
-      if (ids.contains(kIndexesShareId)) unawaited(sources.refresh());
+      if (ids.contains(kIndexesShareId)) {
+        unawaited(sources.refresh());
+        unawaited(indexing.kick());
+      }
     };
     sources.addListener(_syncIndexesOnly);
     settingsRead.then((_) => sharing.init());
