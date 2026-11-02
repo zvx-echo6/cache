@@ -480,7 +480,7 @@ void main() {
       coreSays = ('ready', fresh);
       await renew();
       final p = (await until(z, (p) => p.phase == PdfPartPhase.done))!;
-      expect(p.fromOtherDevice, isFalse);
+      expect(p.fromOtherDevice, isFalse, reason: 'record ${rec.readAsStringSync()}, snapshots ${paths.snapshots().map((s) => s.id).toList()}, fresh $fresh, old $old');
     });
 
     test('a ZIM that goes takes its index with it, on this device', () async {
