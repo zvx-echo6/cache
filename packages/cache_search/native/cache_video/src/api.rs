@@ -51,10 +51,21 @@ struct RemoveReq {
 struct LoginReq {
     instance: String,
     username: String,
-    password: String,
+    /// The password (the site's own accounts and id-and-pass plugins); absent with [external_auth_token].
+    #[serde(default)]
+    password: Option<String>,
     /// The two-factor code, when the account has one.
     #[serde(default)]
     otp: Option<String>,
+    /// The one-time `externalAuthToken` an external auth plugin hands back (with `username`) on the site's `/login` page.
+    #[serde(default)]
+    external_auth_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthMethodsReq {
+    instance: String,
 }
 
 #[derive(Deserialize)]
@@ -211,16 +222,65 @@ impl Video {
     pub fn login(&self, req: &str) -> Result<String> {
         let r: LoginReq = parse(req)?;
         let inst = self.instance(&r.instance)?;
+        if let Some(ext) = r.external_auth_token.as_deref().filter(|t| !t.is_empty()) {
+            return self.login_external(&inst, &r.username, ext);
+        }
+        let password = r.password.as_deref().ok_or_else(|| Error::bad_json("login needs \"password\" or \"external_auth_token\""))?;
         let (cid, secret) = self.oauth_client(&inst)?;
         let otp = r.otp.as_deref().filter(|o| !o.is_empty());
         let headers: Vec<(&str, &str)> = otp.map(|o| ("x-peertube-otp", o)).into_iter().collect();
         let t = http::post_form(
             &format!("{}/api/v1/users/token", inst.url),
-            &[("client_id", &cid), ("client_secret", &secret), ("grant_type", "password"), ("username", &r.username), ("password", &r.password)],
+            &[("client_id", &cid), ("client_secret", &secret), ("grant_type", "password"), ("username", &r.username), ("password", password)],
             &headers,
             "login",
         )?;
         Self::token_answer(&inst, &t)
+    }
+
+    /// The second half of a sign-in with an external auth plugin (PeerTube's documented flow: the plugin's auth page ends on
+    /// the site's `/login?externalAuthToken=...&username=...`; the one-time token, valid 5 minutes, is traded at
+    /// `POST /api/v1/users/token` with `grant_type=password`, the username and `externalAuthToken`). A token that was used,
+    /// expired or is unknown is "auth_failed" (invalid_grant): the person starts the sign-in again.
+    fn login_external(&self, inst: &Instance, username: &str, token: &str) -> Result<String> {
+        let (cid, secret) = self.oauth_client(inst)?;
+        let t = http::post_form(
+            &format!("{}/api/v1/users/token", inst.url),
+            &[("client_id", &cid), ("client_secret", &secret), ("grant_type", "password"), ("username", username), ("externalAuthToken", token)],
+            &[],
+            "signing in",
+        )?;
+        Self::token_answer(inst, &t)
+    }
+
+    /// How the site lets people sign in, from its public `/api/v1/config`: `{"instance","password":bool,"external":[{"name",
+    /// "version","auth_name","display_name","url"}],"return_prefix"}`. "external" is `plugin.registeredExternalAuths` with
+    /// each method's auth page (`/plugins/<name>/<version>/auth/<authName>`, as the site's own web client builds it);
+    /// "password" is false only when the site sends its users straight to its one external method
+    /// (`client.menu.login.redirectOnSingleExternalAuth` with exactly one), as its own login page does; "return_prefix" is
+    /// the site's `/login` page, where a finished external sign-in comes back with `externalAuthToken` and `username`.
+    pub fn auth_methods(&self, req: &str) -> Result<String> {
+        let r: AuthMethodsReq = parse(req)?;
+        let inst = self.instance(&r.instance)?;
+        let cfg = http::get_json(&format!("{}/api/v1/config", inst.url), None, "reading the sign-in methods")?;
+        let external: Vec<Value> = cfg["plugin"]["registeredExternalAuths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| {
+                let (name, version, auth) = (a["name"].as_str()?, a["version"].as_str()?, a["authName"].as_str()?);
+                Some(json!({
+                    "name": name,
+                    "version": version,
+                    "auth_name": auth,
+                    "display_name": a["authDisplayName"].as_str().filter(|d| !d.is_empty()).unwrap_or(auth),
+                    "url": format!("{}/plugins/{}/{}/auth/{}", inst.url, enc(name), enc(version), enc(auth)),
+                }))
+            })
+            .collect();
+        let redirect_single = cfg["client"]["menu"]["login"]["redirectOnSingleExternalAuth"].as_bool() == Some(true);
+        let password = !(redirect_single && external.len() == 1);
+        Ok(json!({"instance": inst.id, "password": password, "external": external, "return_prefix": format!("{}/login", inst.url)}).to_string())
     }
 
     /// Trade a refresh token for new tokens (the refresh token changes too: store both).

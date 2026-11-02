@@ -99,6 +99,13 @@ class VideoCore {
   Future<VideoTokens> login(String instance, String username, String password, {String? otp}) async =>
       VideoTokens.fromJson(await _video('login', _req({'instance': instance, 'username': username, 'password': password, 'otp': otp})));
 
+  /// The second half of a sign-in with the site's external auth plugin: the one-time token and username its /login page got.
+  Future<VideoTokens> loginExternal(String instance, String username, String externalAuthToken) async =>
+      VideoTokens.fromJson(await _video('login', {'instance': instance, 'username': username, 'external_auth_token': externalAuthToken}));
+
+  /// How the site lets people sign in (cs_video_auth_methods).
+  Future<VideoAuthMethods> authMethods(String instance) async => VideoAuthMethods.fromJson(await _video('auth_methods', {'instance': instance}));
+
   Future<VideoTokens> refresh(String instance, String refreshToken) async =>
       VideoTokens.fromJson(await _video('refresh', {'instance': instance, 'refresh_token': refreshToken}));
 

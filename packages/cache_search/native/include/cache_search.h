@@ -798,8 +798,21 @@ char *cs_video_instance_remove(cs_handle *h, const char *request_json);
  * request_json: {"instance","username","password","otp"?}. Returns {"instance","token_type","access_token",
  * "refresh_token","expires_in","refresh_token_expires_in"}; the caller stores them. The password is used for this
  * call only and is never in an error message. Wrong credentials: "auth_failed"; "otp_required" when the account
- * has two-factor login and "otp" was not given. */
+ * has two-factor login and "otp" was not given.
+ * External sign-in (an auth plugin such as OpenID Connect): {"instance","username","external_auth_token"} in place of the
+ * password, with the one-time externalAuthToken and username the site's /login page receives when the plugin's auth page
+ * (cs_video_auth_methods) finishes; traded with grant_type=password and externalAuthToken (PeerTube's documented flow).
+ * The token lives 5 minutes and is used once: an expired or used one is "auth_failed". */
 char *cs_video_login(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance"}. How the site lets people sign in, from its public GET /api/v1/config:
+ * {"instance","password":bool,"external":[{"name","version","auth_name","display_name","url"}],"return_prefix"}.
+ * "external" is plugin.registeredExternalAuths, each with its auth page /plugins/<name>/<version>/auth/<authName> (as the
+ * site's web client builds it) and the site's own authDisplayName; "password" is false only when the site sends its users
+ * straight to its single external method (client.menu.login.redirectOnSingleExternalAuth with exactly one), as its own
+ * login page does; "return_prefix" is the site's /login page, where a finished external sign-in comes back with
+ * ?externalAuthToken=...&username=... (or ?externalAuthError=true). */
+char *cs_video_auth_methods(cs_handle *h, const char *request_json);
 
 /* request_json: {"instance","refresh_token"}. Same answer as cs_video_login (the refresh token changes too). */
 char *cs_video_refresh(cs_handle *h, const char *request_json);

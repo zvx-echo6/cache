@@ -8,12 +8,13 @@ CsNative fakeVideoNative() => VideoFakeNative();
 
 /// A factory of [VideoFakeNative]s with [saved] already on the device (the manifests as cs_video_downloads lists them; the
 /// closure is copied to the worker isolate). [captionFetchFails]: captions_fetch fetches nothing.
-CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false, bool private = false}) =>
+CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false, bool private = false, String auth = 'local'}) =>
     () => VideoFakeNative()
       .._saved.addAll([for (final m in saved) {...m}])
       ..captionFetchFails = captionFetchFails
       ..noCaptions = noCaptions
-      ..private = private;
+      ..private = private
+      ..auth = auth;
 
 /// A saved video's manifest for [seededVideos].
 Map<String, dynamic> savedManifest({
@@ -82,7 +83,26 @@ class VideoFakeNative implements CsNative {
       case 'instance_remove':
         _instances.removeWhere((i) => i['id'] == r['instance']);
         return jsonEncode({'removed': r['instance'], 'downloads_deleted': false});
+      case 'auth_methods':
+        final ext = [
+          {'name': 'auth-openid-connect', 'version': '1.2.0', 'auth_name': 'openid-connect', 'display_name': 'GitLab', 'url': 'https://tube.example.org/plugins/auth-openid-connect/1.2.0/auth/openid-connect'},
+          if (auth == 'both') {'name': 'auth-saml2', 'version': '0.4.1', 'auth_name': 'saml2', 'display_name': 'University login', 'url': 'https://tube.example.org/plugins/auth-saml2/0.4.1/auth/saml2'},
+        ];
+        return jsonEncode({
+          'instance': r['instance'],
+          'password': auth != 'external',
+          'external': auth == 'local' ? [] : ext,
+          'return_prefix': 'https://tube.example.org/login',
+        });
       case 'login':
+        if (r['external_auth_token'] != null) {
+          if (r['external_auth_token'] != 'EXT1' || r['username'] != 'bob') {
+            _error = jsonEncode({'code': 'auth_failed', 'message': 'Cannot authenticate user with an expired external auth token'});
+            return null;
+          }
+          _accessValid = true;
+          return jsonEncode({'instance': r['instance'], 'token_type': 'Bearer', 'access_token': 'A1', 'refresh_token': 'R1', 'expires_in': 100});
+        }
         if (r['password'] != 'right') {
           _error = jsonEncode({'code': 'auth_failed', 'message': 'wrong'});
           return null;
@@ -233,6 +253,9 @@ class VideoFakeNative implements CsNative {
 
   /// The site's video is private: it needs a login, and its qualities come only with one (with the file token).
   bool private = false;
+
+  /// How the site lets people sign in: "local" (its own accounts), "external" (only an auth plugin) or "both".
+  String auth = 'local';
 
   /// Makes the next token-carrying list call fail once, as an expired token does.
   void expireToken() => _accessValid = false;

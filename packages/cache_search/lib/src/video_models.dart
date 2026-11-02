@@ -23,6 +23,39 @@ class VideoInstance {
   String get host => url.replaceFirst(RegExp(r'^https?://'), '');
 }
 
+/// One sign-in method of a site's external auth plugin (cs_video_auth_methods "external").
+class VideoExternalAuth {
+  const VideoExternalAuth({required this.authName, required this.displayName, required this.url});
+
+  factory VideoExternalAuth.fromJson(Map<String, dynamic> j) =>
+      VideoExternalAuth(authName: (j['auth_name'] ?? '') as String, displayName: (j['display_name'] ?? j['auth_name'] ?? '') as String, url: (j['url'] ?? '') as String);
+
+  final String authName;
+
+  /// The site's own name for it ("GitLab").
+  final String displayName;
+
+  /// Its auth page on the site.
+  final String url;
+}
+
+/// How a site lets people sign in: its own user name and password form, and its external methods.
+class VideoAuthMethods {
+  const VideoAuthMethods({required this.password, required this.external, required this.returnPrefix});
+
+  factory VideoAuthMethods.fromJson(Map<String, dynamic> j) => VideoAuthMethods(
+        password: j['password'] != false,
+        external: [for (final e in _list(j['external'])) VideoExternalAuth.fromJson(e)],
+        returnPrefix: (j['return_prefix'] ?? '') as String,
+      );
+
+  final bool password;
+  final List<VideoExternalAuth> external;
+
+  /// The site's /login page: a finished external sign-in comes back there with externalAuthToken and username.
+  final String returnPrefix;
+}
+
 /// The tokens a login returns. The core keeps nothing: the app stores them in its secure storage.
 class VideoTokens {
   const VideoTokens({required this.accessToken, this.refreshToken, this.expiresIn});

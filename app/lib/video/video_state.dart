@@ -229,6 +229,25 @@ class VideoState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// How the site lets people sign in (its public config); the user name and password form alone when it cannot be read.
+  Future<VideoAuthMethods> authMethods(String instance) async {
+    try {
+      return await core.authMethods(instance);
+    } catch (_) {
+      return const VideoAuthMethods(password: true, external: [], returnPrefix: '');
+    }
+  }
+
+  /// Finishes a sign-in with the site's external auth plugin: trades the one-time token its /login page got for the usual
+  /// tokens, kept in secure storage like a password login (the refresh token works the same).
+  Future<void> loginExternal(String instance, String username, String externalAuthToken) async {
+    final t = await core.loginExternal(instance, username, externalAuthToken);
+    await _store(instance, t);
+    await tokens.write(_k(instance, 'user'), username);
+    _users[instance] = username;
+    notifyListeners();
+  }
+
   Future<void> logout(String instance) async {
     await _forget(instance);
     _users.remove(instance);

@@ -6,6 +6,7 @@
 import 'dart:io';
 
 import 'package:cache/screens/download_confirm.dart' show openStorageForSpace;
+import 'package:cache/screens/videos/instance_sheet.dart';
 import 'package:cache/screens/videos/player_screen.dart';
 import 'package:cache/screens/videos/video_screen.dart';
 import 'package:cache/screens/videos/videos_screen.dart';
@@ -85,12 +86,12 @@ List<Map<String, dynamic>> _library({int extra = 0, bool missing = false}) => [
         savedManifest(uuid: 'w$i', title: 'Water filter, part ${i + 1}', channel: 'Water', at: '2026-09-1${i}T10:00:00Z', size: (60 + 10 * i) * 1024 * 1024, durationS: 200 + 30 * i, thumb: _thumbs['water']),
     ];
 
-Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, Space? space, bool noCaptions = false, bool site = true, bool private = false}) async {
+Future<VideoState> _state(WidgetTester tester, List<Map<String, dynamic>> saved, {CaptionSearch? search, Space? space, bool noCaptions = false, bool site = true, bool private = false, String auth = 'local'}) async {
   final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('video-shot')))!;
   addTearDown(() => dir.deleteSync(recursive: true));
   final v = VideoState(
     dirOverride: dir,
-    nativeFactory: seededVideoNative(saved, noCaptions: noCaptions, private: private),
+    nativeFactory: seededVideoNative(saved, noCaptions: noCaptions, private: private, auth: auth),
     tokens: MemoryTokenStore(),
     prefs: VideoPrefs(),
     captionSearch: search ?? const CaptionSearchMissing(),
@@ -358,6 +359,27 @@ void main() {
       await tester.pump();
       await _snap(tester, '8-zim-video-player', theme);
       await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('10: the sign-in sheet as the site offers it ($n)', (tester) async {
+      for (final (name, auth) in [('10a-sign-in-local-only', 'local'), ('10b-sign-in-external-only', 'external'), ('10c-sign-in-both', 'both')]) {
+        final v = await _state(tester, const [], auth: auth);
+        await _show(
+          tester,
+          Builder(
+            builder: (context) => Scaffold(
+              appBar: AppBar(title: const Text('Example PeerTube')),
+              body: Center(child: TextButton(onPressed: () => showInstanceSheet(context, video: v, instance: v.instances.single), child: const Text('open'))),
+            ),
+          ),
+          theme,
+        );
+        await tester.tap(find.text('open'));
+        await _settle(tester);
+        await tester.pumpAndSettle();
+        await _snap(tester, name, theme);
+        await tester.pumpWidget(const SizedBox());
+      }
     });
 
     testWidgets('9: tablet and desktop ($n)', (tester) async {

@@ -422,3 +422,47 @@ fn a_private_video_signed_in_has_its_qualities_with_the_file_token() {
     assert_eq!(d["stream"]["qualities_expire"], "2026-01-01T00:00:00.000Z");
     assert!(m.hits_for("/token").iter().any(|h| h.method == "POST" && h.header("Authorization") == Some("Bearer A1")));
 }
+
+#[test]
+fn sign_in_methods_from_the_site_config_and_an_external_sign_in() {
+    let (_t, m, v, id) = setup("auth");
+    let methods = |cfg: Option<Value>| {
+        m.knobs.lock().unwrap().auth_config = cfg;
+        j(v.auth_methods(&json!({"instance": id}).to_string()))
+    };
+    let gitlab = json!({"npmName": "peertube-plugin-auth-openid-connect", "name": "auth-openid-connect", "version": "1.2.0", "authName": "openid-connect", "authDisplayName": "GitLab"});
+    let saml = json!({"npmName": "peertube-plugin-auth-saml2", "name": "auth-saml2", "version": "0.4.1", "authName": "saml2", "authDisplayName": "University login"});
+
+    // only the site's own accounts (a recorded config from before these fields, and an empty list)
+    let a = methods(None);
+    assert_eq!((a["password"].as_bool().unwrap(), a["external"].as_array().unwrap().len()), (true, 0));
+    let a = methods(Some(json!({"plugin": {"registered": [], "registeredExternalAuths": [], "registeredIdAndPassAuths": []}})));
+    assert_eq!((a["password"].as_bool().unwrap(), a["external"].as_array().unwrap().len()), (true, 0));
+
+    // both: external methods and the password form
+    let a = methods(Some(json!({"plugin": {"registeredExternalAuths": [gitlab, saml], "registeredIdAndPassAuths": []},
+                                "client": {"menu": {"login": {"redirectOnSingleExternalAuth": false}}}})));
+    assert!(a["password"].as_bool().unwrap());
+    assert_eq!(a["external"][0]["display_name"], "GitLab");
+    assert_eq!(a["external"][0]["url"], format!("{}/plugins/auth-openid-connect/1.2.0/auth/openid-connect", m.url()));
+    assert_eq!(a["external"][1]["display_name"], "University login");
+    assert_eq!(a["return_prefix"], format!("{}/login", m.url()));
+
+    // only external: one method and the site sends its users straight to it
+    let a = methods(Some(json!({"plugin": {"registeredExternalAuths": [gitlab]}, "client": {"menu": {"login": {"redirectOnSingleExternalAuth": true}}}})));
+    assert!(!a["password"].as_bool().unwrap());
+    assert_eq!(a["external"].as_array().unwrap().len(), 1);
+
+    // the one-time token from the redirect is traded for the usual tokens, which refresh as usual
+    let t = j(v.login(&json!({"instance": id, "username": "bob", "external_auth_token": "EXT1"}).to_string()));
+    assert_eq!((t["access_token"].as_str().unwrap(), t["refresh_token"].as_str().unwrap()), ("A1", "R1"));
+    let form = m.hits_for("/api/v1/users/token").last().unwrap().body.clone();
+    assert!(form.contains("grant_type=password") && form.contains("externalAuthToken=EXT1") && form.contains("username=bob") && !form.contains("password="));
+    let r = j(v.refresh(&json!({"instance": id, "refresh_token": "R1"}).to_string()));
+    assert_eq!(r["access_token"], "A2");
+    // a used or expired token: auth_failed, the person signs in again
+    let e = v.login(&json!({"instance": id, "username": "bob", "external_auth_token": "OLD"}).to_string()).unwrap_err();
+    assert_eq!(e.code, "auth_failed");
+    // neither a password nor a token
+    assert_eq!(v.login(&json!({"instance": id, "username": "bob"}).to_string()).unwrap_err().code, "bad_json");
+}
