@@ -668,7 +668,8 @@ char *cs_map_progress(cs_handle *h, const char *request_json);
  *   <manifest> = {"version":1,"instance","instance_url","id","uuid","short_uuid","title","description","channel":<channel>,
  *                "duration_s","published_at","kind":"video"|"audio","resolution":"480"|"audio","resolution_label",
  *                "source":"web"|"hls"|"hls+audio","size","sha256","checksum_verified":null|"playlist","file",
- *                "thumbnail":null|name,"captions":[{"language","label","automatic","file"}],"warnings":[...],
+ *                "thumbnail":null|name,"captions":[{"language","label","automatic","file"}],
+ *                "missing_captions":[{"language","label","automatic"}] (captions the instance has that did not save),"warnings":[...],
  *                "downloaded_at", and, added when listed: "dir","path","thumbnail_path","captions"[i]."path"} */
 
 /* {"instances":[{"id","url","name","version","added_at"}]} */
@@ -730,6 +731,12 @@ char *cs_video_downloads(cs_handle *h);
 /* request_json: {"instance","video"}. Deletes the downloaded video's files (and a half-finished download of it).
  * {"deleted":"<uuid>","instance","freed_bytes"}, or "not_found". */
 char *cs_video_delete(cs_handle *h, const char *request_json);
+
+/* request_json: {"instance","video","token"?}. Fetches again only the caption files a downloaded video is missing (a caption
+ * that failed to save is a "caption <lang> not saved: ..." warning in its manifest); the video file is not fetched. The
+ * manifest is rewritten with the captions it now has, the warnings of the ones that saved dropped and a new warning for one
+ * that failed again. Answers the <manifest> as cs_video_downloads lists it, or "not_found" when it is not downloaded. */
+char *cs_video_captions_fetch(cs_handle *h, const char *request_json);
 
 /* Citations: where to open a video at a time. request_json: {"video":"<link|uuid|short uuid>","instance"?:"<id|address>",
  * "offset_s"?:12.5,"token"?}. "video" may be a PeerTube link (/w/<id>, /videos/watch/<id>, /videos/embed/<id>; a start= or t=

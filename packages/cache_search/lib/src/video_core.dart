@@ -123,6 +123,10 @@ class VideoCore {
 
   Future<void> delete(String instance, String video) => _video('delete', {'instance': instance, 'video': video});
 
+  /// Fetches again only the captions a saved video is missing (cs_video_captions_fetch); the video file stays as it is.
+  Future<DownloadedVideo> fetchMissingCaptions(String instance, String video, {String? token}) async =>
+      DownloadedVideo.fromJson(await _video('captions_fetch', _req({'instance': instance, 'video': video, 'token': token})));
+
   /// Where to open [video] (a link, uuid or short uuid) at [offsetS]: the saved file, else a stream.
   Future<VideoTarget> resolve(String video, {String? instance, double? offsetS, String? token}) async =>
       VideoTarget.fromJson(await _video('resolve', _req({'video': video, 'instance': instance, 'offset_s': offsetS, 'token': token})));

@@ -252,6 +252,7 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
         _videoGet = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_get'),
         _videoDownloads = lib.lookupFunction<_HStrC, _HStr>('cs_video_downloads'),
         _videoDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_delete'),
+        _videoCaptionsFetch = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_captions_fetch'),
         _videoResolve = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_resolve'),
         _layersList = lib.lookupFunction<_HStrC, _HStr>('cs_layers_list'),
         _layersRefresh = lib.lookupFunction<_HStrC, _HStr>('cs_layers_refresh'),
@@ -324,6 +325,7 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
   final _HStrStr _videoGet;
   final _HStr _videoDownloads;
   final _HStrStr _videoDelete;
+  final _HStrStr _videoCaptionsFetch;
   final _HStrStr _videoResolve;
   final _HStr _layersList;
   final _HStr _layersRefresh;
@@ -475,6 +477,7 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
       'get' => _take(_videoGet(_p(handle), req)),
       'downloads' => _take(_videoDownloads(_p(handle))),
       'delete' => _take(_videoDelete(_p(handle), req)),
+      'captions_fetch' => _take(_videoCaptionsFetch(_p(handle), req)),
       'resolve' => _take(_videoResolve(_p(handle), req)),
       _ => throw ArgumentError('Unknown video call $op'),
         };

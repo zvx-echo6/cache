@@ -463,15 +463,23 @@ impl Prepared {
             warnings.clear();
         }
         let mut caps: Vec<Value> = vec![];
+        let mut missing: Vec<Value> = vec![];
         for c in self.video.fetch_captions(&self.inst, &uuid, tok) {
             let lang: String = c["language"].as_str().unwrap_or("und").chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_').collect();
             let name = format!("captions-{lang}.vtt");
-            match http::get_bytes(c["url"].as_str().unwrap_or(""), 5 * 1024 * 1024, "caption") {
+            let failed = match http::get_bytes(c["url"].as_str().unwrap_or(""), 5 * 1024 * 1024, "caption") {
                 Ok(b) => match std::fs::write(dest.join(&name), b) {
-                    Ok(_) => caps.push(json!({"language": c["language"], "label": c["label"], "automatic": c["automatic"], "file": name})),
-                    Err(e) => warnings.push(format!("caption {lang} not saved: {e}")),
+                    Ok(_) => {
+                        caps.push(json!({"language": c["language"], "label": c["label"], "automatic": c["automatic"], "file": name}));
+                        None
+                    }
+                    Err(e) => Some(format!("caption {lang} not saved: {e}")),
                 },
-                Err(e) => warnings.push(format!("caption {lang} not saved: {}", e.message)),
+                Err(e) => Some(format!("caption {lang} not saved: {}", e.message)),
+            };
+            if let Some(w) = failed {
+                warnings.push(w);
+                missing.push(json!({"language": c["language"], "label": c["label"], "automatic": c["automatic"]}));
             }
         }
         let manifest = json!({
@@ -496,6 +504,7 @@ impl Prepared {
             "file": final_name,
             "thumbnail": thumb,
             "captions": caps,
+            "missing_captions": missing,
             "warnings": warnings,
             "downloaded_at": now_iso(),
         });
@@ -549,6 +558,59 @@ impl Video {
         list.sort_by(|a, b| b["downloaded_at"].as_str().cmp(&a["downloaded_at"].as_str()).then(a["uuid"].as_str().cmp(&b["uuid"].as_str())));
         let bytes: u64 = list.iter().map(|m| store::dir_size(Path::new(m["dir"].as_str().unwrap_or("")))).sum();
         Ok(json!({"downloads": list, "total_bytes": bytes}).to_string())
+    }
+
+    /// Fetch again the captions a finished download is missing (a caption that failed to save leaves a "caption <lang> not saved"
+    /// warning in the manifest): only the missing caption files are fetched, the video is not. The manifest is rewritten with
+    /// the captions it now has, and the warnings of the ones that saved are dropped. Answers the manifest as `downloads` lists it.
+    pub fn captions_fetch(&self, req: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct R {
+            instance: String,
+            video: String,
+            #[serde(default)]
+            token: Option<String>,
+        }
+        let r: R = serde_json::from_str(req).map_err(|e| Error::bad_json(format!("request_json: {e}")))?;
+        let uuid = crate::resolve::uuid_of(&r.video);
+        let iid = store::normalize(&r.instance).map(|n| n.0).unwrap_or(r.instance.clone());
+        let dir = self.video_dir(&iid, &uuid)?;
+        let mut m = self.manifest(&iid, &uuid)?.ok_or_else(|| Error::not_found(format!("no downloaded video {} on {iid}", r.video)))?;
+        let inst = self.instance(&iid)?;
+        let mut caps: Vec<Value> = m["captions"].as_array().cloned().unwrap_or_default();
+        let have = |caps: &[Value], lang: &str| caps.iter().any(|c| c["language"].as_str() == Some(lang) && c["file"].as_str().is_some_and(|f| dir.join(f).is_file()));
+        let mut warnings: Vec<String> = m["warnings"].as_array().map(|a| a.iter().filter_map(|w| w.as_str().map(String::from)).collect()).unwrap_or_default();
+        let mut missing: Vec<Value> = vec![];
+        for c in self.fetch_captions(&inst, &uuid, r.token.as_deref().filter(|t| !t.is_empty())) {
+            let raw = c["language"].as_str().unwrap_or("und").to_string();
+            if have(&caps, &raw) {
+                continue;
+            }
+            let lang: String = raw.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_').collect();
+            let name = format!("captions-{lang}.vtt");
+            let saved = match http::get_bytes(c["url"].as_str().unwrap_or(""), 5 * 1024 * 1024, "caption") {
+                Ok(b) => store::write_atomic(&dir.join(&name), &b).map_err(|e| e.message),
+                Err(e) => Err(e.message),
+            };
+            let prefix = format!("caption {lang} not saved");
+            warnings.retain(|w| !w.starts_with(&prefix));
+            match saved {
+                Ok(()) => {
+                    caps.retain(|x| x["language"].as_str() != Some(raw.as_str()));
+                    caps.push(json!({"language": c["language"], "label": c["label"], "automatic": c["automatic"], "file": name}));
+                }
+                Err(e) => {
+                    warnings.push(format!("{prefix}: {e}"));
+                    missing.push(json!({"language": c["language"], "label": c["label"], "automatic": c["automatic"]}));
+                }
+            }
+        }
+        m["captions"] = json!(caps);
+        m["missing_captions"] = json!(missing);
+        m["warnings"] = json!(warnings);
+        store::write_atomic(&dir.join("manifest.json"), m.to_string().as_bytes())?;
+        Ok(abs_manifest(&dir, &m).to_string())
     }
 
     /// Delete a downloaded video (all its files, and a half-finished download of it).

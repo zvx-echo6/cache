@@ -179,6 +179,7 @@ fn download_list_resolve_delete() {
     assert_eq!(man["size"], WEB_SIZE);
     assert_eq!(man["sha256"], sha_hex(&blob(WEB_SIZE, 7)));
     assert_eq!(man["captions"][0]["language"], "en");
+    assert_eq!(man["missing_captions"], json!([]));
     assert_eq!(man["duration_s"], 11);
     assert_eq!(man["channel"]["name"], "big-clive");
     assert!(man["path"].as_str().unwrap().ends_with("video.mp4") && std::path::Path::new(man["path"].as_str().unwrap()).is_file());
@@ -365,4 +366,36 @@ fn at_most_two_downloads_per_instance() {
     drop(a);
     let c = dl::acquire("limit.test", &|| true).unwrap();
     drop((b, c, other));
+}
+
+#[test]
+fn a_caption_that_did_not_save_is_fetched_again_alone() {
+    let (t, m, v, id) = setup("capfetch");
+    assert_eq!(job(&v, &t, &id, WEB_UUID, "lowest", json!({})).unwrap(), Outcome::Done);
+    let dir = t.0.join("downloads").join(&id).join(WEB_UUID);
+    // as a download whose English caption failed to save leaves it
+    std::fs::remove_file(dir.join("captions-en.vtt")).unwrap();
+    let mut man: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    man["captions"] = json!([]);
+    man["warnings"] = json!(["caption en not saved: the instance did not answer"]);
+    man["missing_captions"] = json!([{"language": "en", "label": "English", "automatic": true}]);
+    std::fs::write(dir.join("manifest.json"), man.to_string()).unwrap();
+    let video_before = std::fs::metadata(dir.join("video.mp4")).unwrap().modified().unwrap();
+    let hits_before = m.hits.lock().unwrap().len();
+
+    let r = j(v.captions_fetch(&json!({"instance": id, "video": WEB_UUID}).to_string()));
+    assert_eq!(r["captions"][0]["language"], "en");
+    assert!(r["captions"][0]["path"].as_str().unwrap().ends_with("captions-en.vtt"));
+    assert_eq!(r["warnings"], json!([]));
+    assert_eq!(r["missing_captions"], json!([]));
+    assert!(dir.join("captions-en.vtt").is_file());
+    assert_eq!(std::fs::metadata(dir.join("video.mp4")).unwrap().modified().unwrap(), video_before, "the video is not fetched again");
+    let hits: Vec<String> = m.hits.lock().unwrap()[hits_before..].iter().map(|h| h.path.clone()).collect();
+    assert!(hits.iter().all(|p| p.contains("caption")), "only the captions list and file: {hits:?}");
+    assert_eq!(j(v.downloads_json())["downloads"][0]["captions"][0]["language"], "en");
+
+    // nothing missing: nothing fetched but the list
+    let r = j(v.captions_fetch(&json!({"instance": id, "video": WEB_UUID}).to_string()));
+    assert_eq!(r["captions"].as_array().unwrap().len(), 1);
+    assert_eq!(v.captions_fetch(&json!({"instance": id, "video": HLS_UUID}).to_string()).unwrap_err().code, "not_found");
 }

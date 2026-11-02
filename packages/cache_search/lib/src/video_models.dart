@@ -232,14 +232,21 @@ class VideoDetails {
 }
 
 class DownloadedCaption {
-  const DownloadedCaption({required this.language, required this.label, required this.path});
+  const DownloadedCaption({required this.language, required this.label, required this.path, this.automatic = false});
 
-  factory DownloadedCaption.fromJson(Map<String, dynamic> j) =>
-      DownloadedCaption(language: (j['language'] ?? '') as String, label: (j['label'] ?? j['language'] ?? '') as String, path: j['path'] as String);
+  factory DownloadedCaption.fromJson(Map<String, dynamic> j) => DownloadedCaption(
+        language: (j['language'] ?? '') as String,
+        label: (j['label'] ?? j['language'] ?? '') as String,
+        path: j['path'] as String,
+        automatic: (j['automatic'] ?? false) == true,
+      );
 
   final String language;
   final String label;
   final String path;
+
+  /// Made by the instance's speech recognition, not by a person.
+  final bool automatic;
 }
 
 /// A video saved on this phone (its manifest).
@@ -257,6 +264,10 @@ class DownloadedVideo {
     required this.captions,
     this.thumbnailPath,
     this.downloadedAt,
+    this.description,
+    this.publishedAt,
+    this.warnings = const [],
+    this.missingCaptions = const [],
   });
 
   factory DownloadedVideo.fromJson(Map<String, dynamic> j) => DownloadedVideo(
@@ -272,6 +283,13 @@ class DownloadedVideo {
         thumbnailPath: j['thumbnail_path'] as String?,
         downloadedAt: j['downloaded_at'] as String?,
         captions: [for (final c in _list(j['captions'])) DownloadedCaption.fromJson(c)],
+        description: j['description'] as String?,
+        publishedAt: j['published_at'] as String?,
+        warnings: [for (final w in (j['warnings'] as List? ?? const [])) if (w is String) w],
+        missingCaptions: [
+          for (final c in _list(j['missing_captions']))
+            VideoCaptionInfo(language: (c['language'] ?? '') as String, label: (c['label'] ?? c['language'] ?? '') as String, url: '', automatic: c['automatic'] == true),
+        ],
       );
 
   final String instance;
@@ -286,6 +304,14 @@ class DownloadedVideo {
   final String? thumbnailPath;
   final String? downloadedAt;
   final List<DownloadedCaption> captions;
+  final String? description;
+  final String? publishedAt;
+
+  /// What did not save with the video ("caption es not saved: ...", "thumbnail not saved: ..."): the video plays without it.
+  final List<String> warnings;
+
+  /// The captions the instance has that did not save with the video (fetched again with VideoCore.fetchMissingCaptions).
+  final List<VideoCaptionInfo> missingCaptions;
 }
 
 /// Where to open a video for a citation: the file on this phone, or a stream.

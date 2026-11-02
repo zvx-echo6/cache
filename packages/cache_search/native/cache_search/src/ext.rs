@@ -432,6 +432,7 @@ video_calls!(
     video_search => search,
     video_get => get,
     video_delete => delete_download,
+    video_captions_fetch => captions_fetch,
     video_resolve => resolve,
 );
 
