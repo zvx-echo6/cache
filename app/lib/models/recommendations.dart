@@ -103,7 +103,11 @@ class ModelRecommendation {
     this.section = RecommendationSection.recommended,
     this.licence,
     this.settings = ModelSettings.none,
+    this.uncensored = false,
   });
+
+  /// An uncensored model: its row carries the "Uncensored" tag (an Experimental entry is not uncensored by being there).
+  final bool uncensored;
 
   /// The model's own settings (none: the app's usual ones).
   final ModelSettings settings;
@@ -163,6 +167,7 @@ class ModelRecommendation {
       section: section,
       licence: j['licence'] is String ? j['licence'] as String : null,
       settings: ModelSettings.fromJson(j['settings']),
+      uncensored: j['uncensored'] == true,
     );
   }
 }
@@ -172,7 +177,7 @@ class ModelRecommendation {
 /// ```json
 /// {"format": 2, "models": [{"name": "...", "repo": "owner/name", "revision": "commit", "file": "x.gguf", "size": 123,
 ///   "sha256": "... or null", "kind": "tuned_for_cache" | "works_not_tuned", "section": "recommended" | "experimental",
-///   "licence": "optional line", "note": "one line", "settings": {"temp": 1.0, "top_k": 64, "top_p": 0.95, "min_p": 0.05,
+///   "licence": "optional line", "note": "one line", "uncensored": true (optional), "settings": {"temp": 1.0, "top_k": 64, "top_p": 0.95, "min_p": 0.05,
 ///   "repeat_penalty": 1.0, "n_ctx": 8192, "max_tokens": 2048, "stop": [], "fetch_first": false} (every setting optional)},
 ///   {"name": "...", "url": "https://...", "file": "x.gguf", "size": 123, "sha256": "required", ...}]}
 /// ```
