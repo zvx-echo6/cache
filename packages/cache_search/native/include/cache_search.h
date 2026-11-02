@@ -167,7 +167,9 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * "epubindex", each {"state":"opening"|"ready"|"none","kind":"zim-captions"|"zim-epub","snapshot","format","files"|"epubs":N,
  * "pieces":N,"created", "source_id":"<zim uuid>","entries":N (how many such entries the ZIM has),"needs_build":bool (entries
  * and no published snapshot)} (the state-only forms for "opening" and "none"). The core looks at the ZIM's entries once, on a
- * background thread, the first time cs_status is asked; until it is done these keys are absent (a ZIM that has an index but not
+ * low-priority background thread, the first time cs_status is asked, and only for a ZIM whose header MIME list has text/vtt, a
+ * SubRip type or application/epub+zip (any other ZIM has none: no walk, no keys; application/octet-stream and text/plain never
+ * start a walk, though in a walk a .srt/.vtt path with them counts); until it is done these keys are absent (a ZIM that has an index but not
  * been looked at yet shows the index without "entries" and "needs_build"). Without an indexes_dir there are none of these keys.
  * "error" codes of a library source include "damaged" (see above) as well as "not_found" and "io".
  * "updating" is true for a library an update_library job owns (see cs_job_start): its shard is closed, search skips

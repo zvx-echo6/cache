@@ -16,6 +16,12 @@ use std::io::Read;
 
 /// The most one member may unpack to (a damaged or hostile file cannot fill the memory).
 pub const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
+/// The most one `Zip` unpacks in all, over every `read`.
+pub const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+/// The most members a zip may list.
+pub const MAX_MEMBERS: u64 = 20_000;
+/// Deflate cannot shrink data by more than about 1032 times; a member that claims more is not believed.
+const MAX_RATIO: u64 = 1100;
 
 #[derive(Debug, Clone)]
 struct Member {
@@ -30,25 +36,42 @@ struct Member {
 pub struct Zip<'a> {
     data: &'a [u8],
     members: Vec<Member>,
+    /// Bytes unpacked so far (for [`MAX_TOTAL_BYTES`]).
+    unpacked: std::cell::Cell<u64>,
+}
+
+fn slice_at(b: &[u8], i: usize, n: usize) -> Option<&[u8]> {
+    b.get(i..i.checked_add(n)?)
 }
 
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
+    Some(u16::from_le_bytes(slice_at(b, i, 2)?.try_into().ok()?))
 }
 
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
+    Some(u32::from_le_bytes(slice_at(b, i, 4)?.try_into().ok()?))
 }
 
 fn u64_at(b: &[u8], i: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(b.get(i..i + 8)?.try_into().ok()?))
+    Some(u64::from_le_bytes(slice_at(b, i, 8)?.try_into().ok()?))
 }
 
 fn bad(msg: &str) -> Error {
     Error::unsupported(format!("not a readable epub: {msg}"))
 }
 
+/// A member name that stays inside the archive: not absolute, no drive, no `..` segment, no NUL.
+fn safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(['/', '\\'])
+        && !name.contains('\0')
+        && !name.as_bytes().get(1).is_some_and(|c| *c == b':')
+        && !name.split(['/', '\\']).any(|seg| seg == "..")
+}
+
 impl<'a> Zip<'a> {
+    /// Read the directory. `unsupported` for anything that is not a sound zip: no directory, a truncated or damaged one, more
+    /// than [`MAX_MEMBERS`] members, a name outside the archive (`..`, absolute), sizes that cannot be true.
     pub fn open(data: &'a [u8]) -> Result<Zip<'a>> {
         // end of central directory: the last 0x06054b50 within the final 64 KiB + 22 bytes
         let lo = data.len().saturating_sub(22 + 65_535);
@@ -62,34 +85,39 @@ impl<'a> Zip<'a> {
         if count == 0xFFFF || dir_off == 0xFFFF_FFFF {
             let loc = eocd.checked_sub(20).filter(|&l| u32_at(data, l) == Some(0x0706_4b50));
             if let Some(l) = loc {
-                let z64 = u64_at(data, l + 8).ok_or_else(|| bad("short zip64 locator"))? as usize;
+                let z64 = usize::try_from(u64_at(data, l + 8).ok_or_else(|| bad("short zip64 locator"))?)
+                    .map_err(|_| bad("bad zip64 locator"))?;
                 if u32_at(data, z64) == Some(0x0606_4b50) {
-                    count = u64_at(data, z64 + 32).ok_or_else(|| bad("short zip64 record"))?;
-                    dir_off = u64_at(data, z64 + 48).ok_or_else(|| bad("short zip64 record"))?;
+                    count = u64_at(data, z64.saturating_add(32)).ok_or_else(|| bad("short zip64 record"))?;
+                    dir_off = u64_at(data, z64.saturating_add(48)).ok_or_else(|| bad("short zip64 record"))?;
                 }
             }
         }
+        if count > MAX_MEMBERS {
+            return Err(bad("too many members"));
+        }
         let mut members = Vec::new();
-        let mut p = dir_off as usize;
+        let mut p = usize::try_from(dir_off).map_err(|_| bad("bad directory offset"))?;
+        if p > data.len() {
+            return Err(bad("the directory is past the end of the file (truncated)"));
+        }
         for _ in 0..count {
+            let damaged = || bad("damaged directory");
             if u32_at(data, p) != Some(0x0201_4b50) {
-                return Err(bad("damaged directory"));
+                return Err(damaged());
             }
-            let method = u16_at(data, p + 10).ok_or_else(|| bad("damaged directory"))?;
-            let mut comp_size = u32_at(data, p + 20).ok_or_else(|| bad("damaged directory"))? as u64;
-            let mut size = u32_at(data, p + 24).ok_or_else(|| bad("damaged directory"))? as u64;
+            let method = u16_at(data, p + 10).ok_or_else(damaged)?;
+            let mut comp_size = u32_at(data, p + 20).ok_or_else(damaged)? as u64;
+            let mut size = u32_at(data, p + 24).ok_or_else(damaged)? as u64;
             let (n, m, k) = (
-                u16_at(data, p + 28).ok_or_else(|| bad("damaged directory"))? as usize,
-                u16_at(data, p + 30).ok_or_else(|| bad("damaged directory"))? as usize,
-                u16_at(data, p + 32).ok_or_else(|| bad("damaged directory"))? as usize,
+                u16_at(data, p + 28).ok_or_else(damaged)? as usize,
+                u16_at(data, p + 30).ok_or_else(damaged)? as usize,
+                u16_at(data, p + 32).ok_or_else(damaged)? as usize,
             );
-            let mut offset = u32_at(data, p + 42).ok_or_else(|| bad("damaged directory"))? as u64;
-            let name = String::from_utf8_lossy(data.get(p + 46..p + 46 + n).ok_or_else(|| bad("damaged directory"))?)
-                .into_owned();
+            let mut offset = u32_at(data, p + 42).ok_or_else(damaged)? as u64;
+            let name = String::from_utf8_lossy(slice_at(data, p + 46, n).ok_or_else(damaged)?).into_owned();
             // zip64 extra field (id 1): the sizes and offset that did not fit, in this order
-            let extra = data
-                .get(p + 46 + n..p + 46 + n + m)
-                .ok_or_else(|| bad("damaged directory"))?;
+            let extra = slice_at(data, p + 46 + n, m).ok_or_else(damaged)?;
             let mut e = 0;
             while e + 4 <= extra.len() {
                 let (id, len) = (
@@ -109,6 +137,22 @@ impl<'a> Zip<'a> {
                 }
                 e += 4 + len;
             }
+            if !safe_name(&name) {
+                return Err(bad("a member name leads outside the archive"));
+            }
+            // the sizes must be possible: the data is in the file, a stored member is as long as it says, and deflate
+            // does not shrink further than it can
+            let in_file = offset
+                .checked_add(comp_size)
+                .is_some_and(|end| end <= data.len() as u64);
+            let possible = match method {
+                0 => size == comp_size,
+                8 => size <= comp_size.saturating_mul(MAX_RATIO).saturating_add(1024),
+                _ => true,
+            };
+            if !in_file || !possible {
+                return Err(bad("a member's sizes are not possible (truncated or damaged)"));
+            }
             members.push(Member {
                 name,
                 method,
@@ -116,9 +160,13 @@ impl<'a> Zip<'a> {
                 size,
                 offset,
             });
-            p += 46 + n + m + k;
+            p = p.checked_add(46 + n + m + k).ok_or_else(damaged)?;
         }
-        Ok(Zip { data, members })
+        Ok(Zip {
+            data,
+            members,
+            unpacked: std::cell::Cell::new(0),
+        })
     }
 
     /// The names of the members, in directory order (folders end in `/`).
@@ -131,7 +179,8 @@ impl<'a> Zip<'a> {
     }
 
     /// The unpacked bytes of a member. `not_found` for an unknown name, `unsupported` for a method other than stored or
-    /// deflate or a member over [`MAX_MEMBER_BYTES`], `io` for damaged data.
+    /// deflate, a member over [`MAX_MEMBER_BYTES`] or a zip past [`MAX_TOTAL_BYTES`] in all, `io` for damaged data or data
+    /// whose real size is not the size the directory states.
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
         let m = self
             .members
@@ -144,7 +193,10 @@ impl<'a> Zip<'a> {
                 m.size
             )));
         }
-        let h = m.offset as usize;
+        if self.unpacked.get().saturating_add(m.size) > MAX_TOTAL_BYTES {
+            return Err(Error::unsupported("the epub unpacks past its total limit"));
+        }
+        let h = usize::try_from(m.offset).map_err(|_| Error::io(format!("{name:?} in the epub: bad offset")))?;
         if u32_at(self.data, h) != Some(0x0403_4b50) {
             return Err(Error::io(format!("{name:?} in the epub: damaged local header")));
         }
@@ -152,30 +204,33 @@ impl<'a> Zip<'a> {
             u16_at(self.data, h + 26).unwrap_or(0) as usize,
             u16_at(self.data, h + 28).unwrap_or(0) as usize,
         );
-        let start = h + 30 + n + e;
-        let raw = self
-            .data
-            .get(start..start.saturating_add(m.comp_size as usize))
+        let raw = slice_at(self.data, h + 30 + n + e, m.comp_size as usize)
             .ok_or_else(|| Error::io(format!("{name:?} in the epub: data runs past the end of the file")))?;
-        match m.method {
-            0 => Ok(raw.to_vec()),
+        let out = match m.method {
+            0 => raw.to_vec(),
             8 => {
-                let mut out = Vec::with_capacity(m.size as usize);
+                // read one byte past the stated size: more than stated is a lie, found without unpacking the rest
+                let mut out = Vec::with_capacity(m.size.min(MAX_MEMBER_BYTES) as usize);
                 flate2::read::DeflateDecoder::new(raw)
-                    .take(MAX_MEMBER_BYTES + 1)
+                    .take(m.size + 1)
                     .read_to_end(&mut out)
                     .map_err(|e| Error::io(format!("{name:?} in the epub: {e}")))?;
-                if out.len() as u64 > MAX_MEMBER_BYTES {
-                    return Err(Error::unsupported(format!(
-                        "{name:?} in the epub unpacks past the limit"
-                    )));
-                }
-                Ok(out)
+                out
             }
-            other => Err(Error::unsupported(format!(
-                "{name:?} in the epub uses compression method {other}"
-            ))),
+            other => {
+                return Err(Error::unsupported(format!(
+                    "{name:?} in the epub uses compression method {other}"
+                )))
+            }
+        };
+        if out.len() as u64 != m.size {
+            return Err(Error::io(format!(
+                "{name:?} in the epub unpacks to a different size than the {} bytes it states",
+                m.size
+            )));
         }
+        self.unpacked.set(self.unpacked.get() + out.len() as u64);
+        Ok(out)
     }
 }
 
@@ -681,6 +736,54 @@ pub(crate) mod testutil {
         out
     }
 
+    /// A zip whose members are given as they are stored: (name, stored bytes, method, the size the directory states).
+    pub fn raw_zip(members: &[(&str, Vec<u8>, u16, u32)]) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        let mut dir: Vec<u8> = Vec::new();
+        for (name, body, method, size) in members {
+            let off = out.len() as u32;
+            out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+            out.extend_from_slice(&[20, 0, 0, 0]);
+            out.extend_from_slice(&method.to_le_bytes());
+            out.extend_from_slice(&[0, 0, 0, 0]);
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(body);
+            dir.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+            dir.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+            dir.extend_from_slice(&method.to_le_bytes());
+            dir.extend_from_slice(&[0, 0, 0, 0]);
+            dir.extend_from_slice(&0u32.to_le_bytes());
+            dir.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            dir.extend_from_slice(&size.to_le_bytes());
+            dir.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            dir.extend_from_slice(&[0u8; 12]);
+            dir.extend_from_slice(&off.to_le_bytes());
+            dir.extend_from_slice(name.as_bytes());
+        }
+        let dir_off = out.len() as u32;
+        let dir_len = dir.len() as u32;
+        out.extend_from_slice(&dir);
+        out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[0, 0, 0, 0]);
+        out.extend_from_slice(&(members.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(members.len() as u16).to_le_bytes());
+        out.extend_from_slice(&dir_len.to_le_bytes());
+        out.extend_from_slice(&dir_off.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    pub fn deflate(data: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
     pub const CONTAINER: &str = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
 
     pub fn opf(title: &str, items: &[(&str, &str)], spine: &[&str]) -> String {
@@ -718,6 +821,109 @@ mod tests {
         assert_eq!(zip.read("nope").unwrap_err().code, crate::ErrorCode::NotFound);
         assert!(Zip::open(b"PK not a zip").is_err());
         assert!(Zip::open(&z[..z.len() - 30]).is_err());
+    }
+
+    #[test]
+    fn a_zip_bomb_is_refused_before_it_fills_the_memory() {
+        // 80 MB of zeros deflate to about 80 KB: over the per-member limit, stated honestly
+        let zeros = vec![0u8; 80 * 1024 * 1024];
+        let body = deflate(&zeros);
+        assert!(body.len() < 200_000);
+        let z = raw_zip(&[("big.xhtml", body.clone(), 8, zeros.len() as u32)]);
+        let zip = Zip::open(&z).unwrap();
+        assert_eq!(zip.read("big.xhtml").unwrap_err().code, crate::ErrorCode::Unsupported);
+        // a small stated size over data that unpacks to far more: found at once, not after unpacking it all
+        let z = raw_zip(&[("liar.xhtml", body.clone(), 8, 1000)]);
+        let t0 = std::time::Instant::now();
+        assert_eq!(
+            Zip::open(&z).unwrap().read("liar.xhtml").unwrap_err().code,
+            crate::ErrorCode::Io
+        );
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5));
+        // a stated size no deflate stream can reach from so few bytes is not believed
+        let z = raw_zip(&[("absurd.xhtml", deflate(b"hello"), 8, 60 * 1024 * 1024)]);
+        assert_eq!(Zip::open(&z).err().unwrap().code, crate::ErrorCode::Unsupported);
+        // a stored member that states another size than it has
+        let z = raw_zip(&[("a.txt", b"hello".to_vec(), 0, 99)]);
+        assert!(Zip::open(&z).is_err());
+        // several honest members that together pass the total limit
+        let chunk = vec![0u8; 60 * 1024 * 1024];
+        let body = deflate(&chunk);
+        let names: Vec<String> = (0..5).map(|i| format!("m{i}.xhtml")).collect();
+        let members: Vec<(&str, Vec<u8>, u16, u32)> = names
+            .iter()
+            .map(|n| (n.as_str(), body.clone(), 8u16, chunk.len() as u32))
+            .collect();
+        let z = raw_zip(&members);
+        let zip = Zip::open(&z).unwrap();
+        let mut ok = 0;
+        for n in &names {
+            if zip.read(n).is_ok() {
+                ok += 1;
+            }
+        }
+        assert_eq!(ok, 4, "the fifth 60 MB member passes 256 MB in all");
+    }
+
+    #[test]
+    fn a_truncated_zip_is_an_error_at_every_length_and_never_a_panic() {
+        let big = "line of text\n".repeat(400);
+        let z = make_zip(&[
+            ("a.txt", b"hello", false),
+            ("dir/b.txt", big.as_bytes(), true),
+            ("c.xhtml", b"<p>x</p>", true),
+        ]);
+        for len in 0..z.len() {
+            if let Ok(zip) = Zip::open(&z[..len]) {
+                let names: Vec<String> = zip.names().map(str::to_string).collect();
+                for n in names {
+                    let _ = zip.read(&n);
+                }
+            }
+        }
+        // a directory offset past the end, a count far beyond the limit, and garbage
+        let mut g = z.clone();
+        let n = g.len();
+        g[n - 6..n - 2].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Zip::open(&g).is_err());
+        let mut g = z.clone();
+        g[n - 12..n - 10].copy_from_slice(&u16::MAX.to_le_bytes());
+        let _ = Zip::open(&g);
+        let junk: Vec<u8> = (0..4000u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+        assert!(Zip::open(&junk).is_err());
+    }
+
+    #[test]
+    fn member_names_that_leave_the_archive_are_refused() {
+        for name in [
+            "../evil.xhtml",
+            "a/../../evil",
+            "/etc/passwd",
+            "\\share\\x",
+            "C:/x.xhtml",
+            "a\\..\\b",
+        ] {
+            let z = raw_zip(&[(name, b"x".to_vec(), 0, 1)]);
+            assert!(Zip::open(&z).is_err(), "{name}");
+        }
+        // dots inside a name are fine
+        let z = raw_zip(&[
+            ("OEBPS/a..b/c.xhtml", b"x".to_vec(), 0, 1),
+            ("..hidden", b"y".to_vec(), 0, 1),
+        ]);
+        assert_eq!(Zip::open(&z).unwrap().names().count(), 2);
+    }
+
+    #[test]
+    fn too_many_members_are_refused() {
+        let names: Vec<String> = (0..(MAX_MEMBERS as usize + 1).min(60_000))
+            .map(|i| format!("f{i}"))
+            .collect();
+        // the 16-bit count in the end record cannot hold more than 65535; build with exactly the limit plus one
+        let members: Vec<(&str, Vec<u8>, u16, u32)> =
+            names.iter().map(|n| (n.as_str(), Vec::new(), 0u16, 0u32)).collect();
+        let z = raw_zip(&members);
+        assert!(Zip::open(&z).is_err());
     }
 
     #[test]

@@ -40,16 +40,21 @@ const MIMES: [&str; 8] = [
     "application/octet-stream",
 ];
 
-fn mime_index(m: &str) -> u16 {
-    MIMES.iter().position(|x| *x == m).unwrap() as u16
+fn mime_index(mimes: &[&str], m: &str) -> u16 {
+    mimes.iter().position(|x| *x == m).unwrap() as u16
 }
 
 /// A minimal valid ZIM (major 6, minor 1) holding `entries` (namespace `C`: path, title, mime, bytes) and the metadata
 /// `Language`, `Title` and `Name`, in one uncompressed cluster.
 fn write_zim(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, Vec<u8>)]) {
+    write_zim_mimes(path, uuid, name, entries, &MIMES);
+}
+
+/// `write_zim` with the header's MIME list given (`text/plain` must be second: the metadata uses it).
+fn write_zim_mimes(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, Vec<u8>)], mimes: &[&str]) {
     let mut all: Vec<(u8, String, String, u16, Vec<u8>)> = entries
         .iter()
-        .map(|(p, t, m, b)| (b'C', p.to_string(), t.to_string(), mime_index(m), b.clone()))
+        .map(|(p, t, m, b)| (b'C', p.to_string(), t.to_string(), mime_index(mimes, m), b.clone()))
         .collect();
     for (k, v) in [("Language", "eng"), ("Title", "Media test"), ("Name", name)] {
         all.push((b'M', k.into(), k.into(), 1, v.as_bytes().to_vec()));
@@ -57,7 +62,7 @@ fn write_zim(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, 
     all.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let n = all.len();
     let mut mime = Vec::new();
-    for m in MIMES {
+    for m in mimes {
         mime.extend_from_slice(m.as_bytes());
         mime.push(0);
     }
@@ -1093,4 +1098,77 @@ fn damaged_and_empty_epubs_are_skipped_not_fatal() {
         tsv.contains("Books/broken.epub") && tsv.contains("skipped:damaged") && tsv.contains("skipped:no_text"),
         "{tsv}"
     );
+}
+
+#[test]
+fn a_zim_without_candidate_mime_types_is_never_walked() {
+    const U1: &str = "0badc0de-0000-4000-8000-000000000d01";
+    const U2: &str = "0badc0de-0000-4000-8000-000000000d02";
+    let t = TempDir::new("nowalk");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    // the MIME list has only text/html, text/plain and application/octet-stream; the .srt entry (octet-stream, as in ready.gov's
+    // ZIMs) would be found by a walk, so the empty answer shows there was none
+    let plain = t.0.join("plain.zim");
+    write_zim_mimes(
+        &plain,
+        U1,
+        "plain",
+        &[
+            (
+                "Alpha",
+                "Alpha",
+                "text/html",
+                b"<html><body><p>Alpha.</p></body></html>".to_vec(),
+            ),
+            (
+                "Media/talk_en.srt",
+                "",
+                "application/octet-stream",
+                srt_of("octet words", 8),
+            ),
+        ],
+        &["text/html", "text/plain", "application/octet-stream"],
+    );
+    // a ZIM that lists text/vtt is walked, and then the octet-stream .srt is counted too
+    let withvtt = t.0.join("withvtt.zim");
+    write_zim_mimes(
+        &withvtt,
+        U2,
+        "withvtt",
+        &[
+            ("Media/a.vtt", "", "text/vtt", vtt_of("vtt words", 8)),
+            (
+                "Media/talk_en.srt",
+                "",
+                "application/octet-stream",
+                srt_of("octet words", 8),
+            ),
+        ],
+        &["text/html", "text/plain", "application/octet-stream", "text/vtt"],
+    );
+    let mut h = open(&[&plain, &withvtt], &idx, &vdir);
+    let t0 = Instant::now();
+    while !(cache_search::kwslot::scan_finished(U1) && cache_search::kwslot::scan_finished(U2)) {
+        let _ = h.status_json();
+        assert!(t0.elapsed() < Duration::from_secs(30), "the scans never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let st: Value = serde_json::from_str(&h.status_json()).unwrap();
+    let by_id = |id: &str| {
+        st["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert!(
+        !cache_search::kwbuild::was_walked(U1),
+        "no candidate type in the MIME list: no walk"
+    );
+    assert!(by_id(U1).get("captionsindex").is_none() && by_id(U1).get("epubindex").is_none());
+    assert!(cache_search::kwbuild::was_walked(U2));
+    assert_eq!(by_id(U2)["captionsindex"]["entries"], 2, "{st}");
+    assert!(by_id(U2).get("epubindex").is_none());
 }

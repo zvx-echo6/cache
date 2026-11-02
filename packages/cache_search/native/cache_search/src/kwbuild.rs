@@ -327,14 +327,67 @@ fn ext_of(path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Whether a ZIM's MIME list (in its header, so cheap to read) names a type that caption or EPUB entries have: `text/vtt`,
+/// a SubRip type (`application/x-subrip`, `text/srt`...) or `application/epub+zip`. Only then is the ZIM's entry list walked.
+/// `application/octet-stream` and `text/plain` are in nearly every ZIM, so they never start a walk; but a caption file that
+/// has one of them (a `.srt` or `.vtt` path) is counted when a walk happens anyway.
+pub fn walk_candidates(mime_table: &[String]) -> bool {
+    mime_table.iter().any(|m| {
+        let m = m.to_ascii_lowercase();
+        m.starts_with("text/vtt")
+            || m.starts_with("application/epub")
+            || m.contains("subrip")
+            || m.ends_with("/srt")
+            || m.ends_with("-srt")
+    })
+}
+
+/// ZIMs whose entry list has been walked in this process (for the test that a ZIM without candidate types is never walked).
+static WALKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether `scan_zim` has walked the entries of the ZIM with this uuid in this process.
+pub fn was_walked(uuid: &str) -> bool {
+    WALKED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|u| u == uuid)
+}
+
+/// Lower the priority of the calling thread so a walk of a big ZIM does not compete with the app (Linux and Android:
+/// nice 10 for this thread; elsewhere the walk only paces itself).
+fn lower_thread_priority() {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // SAFETY: gettid and setpriority take and return plain integers; a failure only leaves the priority as it was.
+    unsafe {
+        let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+        libc::setpriority(libc::PRIO_PROCESS as _, tid, 10);
+    }
+}
+
+/// Entries between two short sleeps of a gentle walk, and the sleep.
+const GENTLE_EVERY: u32 = 4096;
+const GENTLE_PAUSE: Duration = Duration::from_millis(2);
+
 /// List the caption entries, the EPUB entries and the video entries of a ZIM. HLS segment captions (a `.vtt` in a folder that
-/// also holds `.ts` segments) are left out.
-pub fn scan_zim(src: &ZimSource) -> Result<ZimMedia> {
+/// also holds `.ts` segments) are left out. A ZIM whose MIME list has no candidate type (`walk_candidates`) is not walked: it
+/// has none. `gentle` lowers the thread's priority and pauses now and then (the status scan; a build does not).
+pub fn scan_zim(src: &ZimSource, gentle: bool) -> Result<ZimMedia> {
     let czim = src.zim()?;
+    if !walk_candidates(&czim.mime_table) {
+        return Ok(ZimMedia::default());
+    }
+    WALKED.lock().unwrap_or_else(|e| e.into_inner()).push(src.id.clone());
+    if gentle {
+        lower_thread_priority();
+    }
     let mut caps: Vec<(String, String, String)> = Vec::new();
     let mut media = ZimMedia::default();
     let mut ts_folders: HashSet<String> = HashSet::new();
     for idx in 0..src.entry_count() as u32 {
+        if gentle && idx % GENTLE_EVERY == GENTLE_EVERY - 1 {
+            std::thread::sleep(GENTLE_PAUSE);
+        }
         let Ok(e) = czim.get_by_url_index(idx) else { continue };
         if !matches!(e.namespace, zim::Namespace::UserContent | zim::Namespace::Articles) {
             continue;
@@ -1010,7 +1063,7 @@ pub fn run(
     let mut prev_name = String::new();
     if let Some(Deferred::Zim(zim)) = req.deferred.take() {
         prev_name = zim_name_of(&zim);
-        let media = scan_zim(&zim)?;
+        let media = scan_zim(&zim, false)?;
         req.src = if req.kind == ZIM_CAPTIONS {
             Box::new(ZimCaptionsSource { src: zim, media })
         } else {
@@ -1267,6 +1320,29 @@ mod tests {
         );
         assert_eq!(pair_base("talk.es.vtt"), (String::new(), "talk".into()));
         assert_eq!(pair_base("a/no_lang_here.vtt").1, "no_lang_here");
+    }
+
+    #[test]
+    fn only_caption_and_epub_types_start_a_walk() {
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(!walk_candidates(&l(&[
+            "text/html",
+            "text/plain",
+            "application/octet-stream",
+            "application/pdf",
+            "image/png"
+        ])));
+        assert!(!walk_candidates(&[]));
+        for m in [
+            "text/vtt",
+            "text/vtt; charset=utf-8",
+            "application/x-subrip",
+            "text/srt",
+            "application/epub+zip",
+            "Application/EPUB+zip",
+        ] {
+            assert!(walk_candidates(&l(&["text/html", m])), "{m}");
+        }
     }
 
     #[test]
