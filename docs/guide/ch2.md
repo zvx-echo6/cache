@@ -543,6 +543,8 @@ A cited EPUB opens at its chapter, with the first words of the passage marked.
 
 "Videos" lists the videos on this device and the video sites where you find more. Open it from "Modules". Saved videos are in this list now. There is no separate "Saved" tile.
 
+![The Videos list](shot:videos-list)
+
 From the top it shows:
 - "Downloading": videos on their way, each with "Pause" or "Resume";
 - "On this device": how many videos and how much space, for example `3 videos · 410 MB`. A row has a picture with its length, the title, and a line such as `480p · 230 MB · Captions`. With videos from two or more channels, they are grouped by channel;

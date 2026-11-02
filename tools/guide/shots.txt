@@ -73,6 +73,6 @@ source-page | A data source's page: "Use this source", "Replace", "Remove the ke
 storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note
 video-download | A video page with "Download" and the size choices
 video-player | The video player with the speed button showing 1x and the Full screen button
-videos-list | Videos: one added instance, "Add an instance", and "Saved on this phone" at the top
 weather-choose-place | The Choose a place sheet: "Find a town or place" with a few matching towns
 zim-reader | The reader open on a Library page with "Search this ZIM" and "Find in page", and the bottom bar Back, Forward, Main page
+videos-list | Videos: one video downloading, four saved videos grouped by channel, and "Video sites" with one site
