@@ -366,6 +366,10 @@ void main() {
       expect((await until(zims.single, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
       expect(core.calls.where((c) => c.startsWith('reuse:')), isNotEmpty);
       expect(next.current(), isNotNull);
+      // The old edition goes once the new one's publish is recorded, a moment after it shows as ready (bounded wait).
+      for (var i = 0; i < 80 && paths.root.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
       expect(paths.root.existsSync(), isFalse, reason: 'the old edition, which no ZIM here uses, is removed');
     });
 
