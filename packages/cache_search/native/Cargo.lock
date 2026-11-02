@@ -714,13 +714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cache_catalog"
-version = "0.1.0"
-dependencies = [
- "miniz_oxide 0.8.9",
-]
-
-[[package]]
 name = "cache_chunk"
 version = "0.1.0"
 
