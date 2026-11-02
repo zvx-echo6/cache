@@ -790,7 +790,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final show = _overlay || _dragging;
     final big = full || MediaQuery.sizeOf(context).width >= kTranscriptMinWidth;
     final pad = MediaQuery.paddingOf(context);
-    final bottomBar = big ? 76.0 : 64.0;
+    final bottomBar = big ? 80.0 : 72.0;
     return LayoutBuilder(
       builder: (context, box) => Stack(
         key: ValueKey(full ? 'player-full' : 'player-inline'),
