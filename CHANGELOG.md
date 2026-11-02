@@ -6,7 +6,41 @@ release notes).
 
 ## Unreleased
 
+## 1.0.30 (unreleased, test)
+
 ### New
+- Library: search reaches inside the PDFs, EPUBs and video captions in your ZIMs, and an answer cites the exact PDF page, EPUB chapter or moment in the video
+- Library: Cache makes them searchable by itself in the background, easing off when the battery is low, the phone is warm or you are using Cache; Settings shows the progress, and Storage > Advanced has the speed
+- Sharing and sync: search and map indexes built on one linked device are used on your others, so each is built only once
+- PDF reader: read PDFs inside Cache, with find, go to page, fit and zoom, and dark pages; a citation opens the PDF at its page
+- Library reader: EPUB entries in ZIMs open in the reader, and an EPUB citation opens its chapter at the cited passage
+- Videos: one Videos list and a new player with captions, quality choice, resume where you stopped, and a transcript beside the video on larger screens
+- Videos: saved videos are searchable by what is said in them
+- Videos: sign in to a video site the way the site offers it, and play private videos at any quality
+- No model needed: with no model on the device Cache is search only (Library, Notebooks, Places, Maps and the guide still work, and saved chats stay readable); Ask comes back when a model is added
+- Obsidian and Logseq: tag a note `#cachesync` to import it into Cache
+- Layout: a layout for wide windows (computers and a large iPad held sideways)
+
+### Fixed
+- Search: a match snippet on text with multibyte characters no longer crashes the search
+- Library: no second Add to Library button on wide screens
+- Library: source icons from the Kiwix catalogue show again (they were asked for at a size the catalogue does not serve)
+- Sharing and sync: a library's search index is no longer copied to your linked devices; each device builds its own, and a copy an earlier version sent is kept or rebuilt
+- Sharing and sync: Regions no longer copies what each device fetches or caches for itself (tile indexes, the cache of map tiles viewed online, database working files); every downloaded part still syncs
+
+## 1.0.29 - 2026-11-01
+
+The changes of 1.0.1 to 1.0.28 are listed here too; they had no sections of their own.
+
+### New
+- Emergency alerts: official FEMA IPAWS alerts for your area, along with the weather alerts
+- Downloads: region maps download many times faster; every download shows what it is doing, with speed and time left
+- Models: Gemma 4 E2B tuned for Cache is recommended; uncensored models are listed apart, under Experimental
+- Places: places and addresses are ready in seconds after a download; places with a Wikipedia article show a short summary and open the article
+- Repeaters: tap one on the map for its details; each repeater list is a notebook
+- Weather and alerts settings: choose which places weather watches (your location, regions and saved places)
+- iPad and tablets: two panes side by side, and every list can be hidden for more room
+- Update notices: Cache says when a new version is ready
 - Library: open the Cache guide and read it like a book, with chapters, links between sections, links that open the part of Cache a section is about, and search; a guide citation in Ask and the guide buttons on Set up Cache open the exact section
 - Notebooks: keep several notebooks, starting with a Journal; make more from Journal, Log, Notes or Places, or from 16 starter logs
 - Notebooks: an entry can have a title, text, a date, a place, photos, attached documents and the notebook's own fields
@@ -77,9 +111,6 @@ release notes).
 - Videos: playback speed, and true full screen (landscape for a wide video, the phone's bars hidden) with the controls on a tap
 
 ### Fixed
-- Library: source icons from the Kiwix catalogue show again (they were asked for at a size the catalogue does not serve)
-- Sharing and sync: a library's search index is no longer copied to your linked devices; each device builds its own, and a copy an earlier version sent is kept or rebuilt
-- Sharing and sync: Regions no longer copies what each device fetches or caches for itself (tile indexes, the cache of map tiles viewed online, database working files); every downloaded part still syncs
 - Regions: places not published for an area yet say "not available yet" instead of failing; the region counts as done
 - Regions: a part left waiting with nothing downloading offers Carry on; places published after a region was downloaded are added at the next start
 - Weather: Home no longer says "Not set up yet" for weather that is on while Cache is still starting after an update; an update never resets your settings
