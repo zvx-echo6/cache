@@ -140,6 +140,15 @@ class TwoPaneState extends State<TwoPane> {
     if (id != null) _prefs.setHidden(id, hidden);
   }
 
+  /// Closes the detail page (back to the list's starting page) and shows the list again.
+  void closeDetail() {
+    setState(() {
+      _key = null;
+      _builder = null;
+    });
+    setListHidden(false);
+  }
+
   // The width the pages have (the window less the rail when it shows): two panes when it fits, else the list alone.
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) => _panes(context, c.maxWidth));
@@ -364,6 +373,12 @@ Widget? paneShowButton(BuildContext context) {
     icon: const Icon(Icons.keyboard_double_arrow_right),
     onPressed: () => pane.state.setListHidden(false),
   );
+}
+
+/// Closes the page in the detail pane and shows its list again; null outside a detail pane.
+VoidCallback? paneClose(BuildContext context) {
+  final pane = _PaneScope.of(context);
+  return pane == null || pane.inList ? null : pane.state.closeDetail;
 }
 
 /// Which two-pane pages have their list hidden, kept on this device (a small file next to the settings).
