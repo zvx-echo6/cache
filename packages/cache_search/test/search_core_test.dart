@@ -10,7 +10,7 @@ CsNative _fake() => FakeNative()
   ..replies['ids'] = '{"ids":[{"n":1,"address":"zim:u/A","title":"A"}]}'
   ..replies['jobProgress'] = '{"state":"done","done":5,"total":5,"error":null}'
   ..replies['status'] =
-      '{"sources":[{"id":"u","kind":"zim","path":"/z/a.zim","title":"U","indexed":true,"building":false,"stale":false,"opening":false,"updating":false,"docs":7,"keyword_source":"own","embedding_model":"bge-m3-Q8_0.gguf","error":null}]}';
+      '{"sources":[{"id":"u","kind":"zim","path":"/z/a.zim","title":"U","indexed":true,"building":false,"stale":false,"opening":false,"updating":false,"docs":7,"keyword_source":"own","embedding_model":"bge-m3-Q8_0.gguf","source_id":"u","index":{"kind":"zim","location":"/i/a.idx","snapshot":null,"format":3},"error":null}]}';
 
 CsNative _failing() => FakeNative()
   ..openResult = 0
@@ -33,6 +33,9 @@ void main() {
     expect(status.docs, 7);
     expect(status.keywordSource, 'own', reason: 'the worker passes where keyword search comes from on to the app');
     expect(status.embeddingModel, 'bge-m3-Q8_0.gguf', reason: 'and the embedding model a library names');
+    expect(status.sourceId, 'u', reason: 'and the id sync filters the indexes by');
+    expect(status.index?.kind, 'zim');
+    expect(status.index?.format, 3);
     await core.close();
     await expectLater(core.status(), throwsA(isA<CacheSearchException>()));
   });

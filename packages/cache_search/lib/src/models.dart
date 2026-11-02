@@ -212,6 +212,8 @@ class SourceIndex {
     kind: j['kind'] as String?,
   );
 
+  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind};
+
   /// "snapshot" (a sealed snapshot in the indexes folder), "legacy" (built where indexes were kept before) or "none".
   final String location;
 

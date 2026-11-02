@@ -405,6 +405,8 @@ void _workerMain(List<dynamic> init) {
                 'keyword_source': s.keywordSource,
                 'embedding_model': s.embeddingModel,
                 'whole_library_only': s.wholeLibraryOnly,
+                'source_id': s.sourceId,
+                'index': s.index?.toJson(),
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];
