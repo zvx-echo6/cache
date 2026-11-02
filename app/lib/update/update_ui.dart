@@ -9,8 +9,8 @@ import '../theme.dart';
 import '../version.dart';
 import 'app_update.dart';
 
-/// The installed build: the version is `1.0.<build>` on both phones.
-int get installedBuild => int.tryParse(kAppVersion.split('.').last) ?? 0;
+/// The installed build number ([kAppBuild], pubspec.yaml's `+<build>`), the same on both phones.
+int get installedBuild => kAppBuild;
 
 /// The app's update check (the iPhone's; null on Android, where nothing is built yet): what Home's banner and Settings > Credits
 /// and licences read.
