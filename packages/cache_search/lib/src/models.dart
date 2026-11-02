@@ -1,0 +1,450 @@
+/// A source the core searches: a ZIM, or a library (a Qdrant collection's shard, docs/LIBRARY-FORMAT.md).
+class SourceConfig {
+  const SourceConfig.zim({required this.path, required this.indexDir})
+      : kind = 'zim',
+        settings = null;
+
+  /// A library: [path] is its unpacked shard folder, [indexDir] the folder of its keyword index, and [settings] the
+  /// library settings file's JSON (cache-library.json) or null to let the core guess.
+  const SourceConfig.library({required this.path, required this.indexDir, this.settings}) : kind = 'library';
+
+  final String kind;
+  final String path;
+  final String indexDir;
+  final Map<String, dynamic>? settings;
+
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        'path': path,
+        'index_dir': indexDir,
+        'settings': ?settings,
+      };
+}
+
+/// The cs_open / cs_set_sources config JSON for [sources]. [extra] adds the other sections of the config (user, live, places,
+/// routing, video, layers, snippet_chars, ...): `places` (`{"packs": [".../places.sqlite"]}`, the map's search), `routing`
+/// (`{"valhalla": {"tiles", "shim"}, "offroad": {"pack", "elevation"}}`) and `user` (`{"db_path"}`, saved places). A later
+/// cs_set_sources without them keeps the earlier ones.
+Map<String, dynamic> openConfigJson(List<SourceConfig> sources, {Map<String, dynamic>? extra}) => {
+      'sources': [for (final s in sources) s.toJson()],
+      ...?extra,
+    };
+
+/// One hit of cs_search.
+class SearchHit {
+  const SearchHit({
+    required this.address,
+    required this.title,
+    required this.snippet,
+    required this.sourceId,
+    required this.sourceKind,
+    required this.sourceTitle,
+    this.page,
+    this.pdfPage,
+  });
+
+  factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
+        address: j['address'] as String,
+        title: (j['title'] ?? '') as String,
+        snippet: (j['snippet'] ?? '') as String,
+        sourceId: (j['source_id'] ?? '') as String,
+        sourceKind: (j['source_kind'] ?? '') as String,
+        sourceTitle: (j['source_title'] ?? '') as String,
+        // A PDF page's printed label may be text ("iv"): only a number is a page here.
+        page: j['page'] is int ? j['page'] as int : null,
+        pdfPage: (j['pdf_page'] as num?)?.toInt(),
+      );
+
+  final String address;
+  final String title;
+  final String snippet;
+  final String sourceId;
+  final String sourceKind;
+  final String sourceTitle;
+  final int? page;
+
+  /// For a passage of a ZIM's PDF ("zimpdf:" address): the real 1-based PDF page it is on ([page] is the printed label).
+  final int? pdfPage;
+
+  /// The shape cs_format takes.
+  Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};
+}
+
+class SearchResponse {
+  const SearchResponse({required this.results, required this.totalEstimate, this.vectorSources = const [], this.keywordOnlySources = const []});
+
+  factory SearchResponse.fromJson(Map<String, dynamic> j) => SearchResponse(
+        results: [for (final r in (j['results'] as List? ?? const [])) SearchHit.fromJson((r as Map).cast<String, dynamic>())],
+        totalEstimate: (j['total_estimate'] ?? 0) as int,
+        vectorSources: ((j['vector_sources'] as List?) ?? const []).cast<String>(),
+        keywordOnlySources: ((j['keyword_only_sources'] as List?) ?? const []).cast<String>(),
+      );
+
+  final List<SearchHit> results;
+  final int totalEstimate;
+  final List<String> vectorSources;
+  final List<String> keywordOnlySources;
+}
+
+/// A query embedding made by the caller; the core uses it only for libraries embedded with [model].
+class QueryVector {
+  const QueryVector(this.model, this.vector);
+
+  final String model;
+  final List<double> vector;
+
+  Map<String, dynamic> toJson() => {'model': model, 'vector': vector};
+}
+
+/// What cs_read returns. [author], [page] and [sourceType] are only set for libraries.
+class ReadResult {
+  const ReadResult({required this.address, required this.title, required this.text, required this.truncated, this.author, this.page, this.sourceType});
+
+  factory ReadResult.fromJson(Map<String, dynamic> j) => ReadResult(
+        address: j['address'] as String,
+        title: (j['title'] ?? '') as String,
+        text: (j['text'] ?? '') as String,
+        truncated: (j['truncated'] ?? false) as bool,
+        author: j['author'] as String?,
+        page: j['page'] as int?,
+        sourceType: j['source_type'] as String?,
+      );
+
+  final String address;
+  final String title;
+  final String text;
+  final bool truncated;
+  final String? author;
+  final int? page;
+  final String? sourceType;
+}
+
+class Suggestion {
+  const Suggestion({required this.title, required this.address, required this.sourceId});
+
+  factory Suggestion.fromJson(Map<String, dynamic> j) =>
+      Suggestion(title: (j['title'] ?? '') as String, address: j['address'] as String, sourceId: (j['source_id'] ?? '') as String);
+
+  final String title;
+  final String address;
+  final String sourceId;
+}
+
+/// One entry of cs_status. [id] is null for a source that could not be opened (see [error]).
+class SourceStatus {
+  const SourceStatus({
+    required this.id,
+    required this.kind,
+    required this.path,
+    required this.title,
+    required this.indexed,
+    required this.building,
+    required this.stale,
+    required this.opening,
+    required this.updating,
+    required this.docs,
+    this.error,
+    this.keywordSource,
+    this.embeddingModel,
+    this.wholeLibraryOnly,
+    this.sourceId,
+    this.index,
+    this.captionsIndex,
+    this.epubIndex,
+    this.pdfIndex,
+  });
+
+  factory SourceStatus.fromJson(Map<String, dynamic> j) {
+    final e = j['error'];
+    return SourceStatus(
+      id: j['id'] as String?,
+      kind: (j['kind'] ?? '') as String,
+      path: (j['path'] ?? '') as String,
+      title: (j['title'] ?? '') as String,
+      indexed: (j['indexed'] ?? false) as bool,
+      building: (j['building'] ?? false) as bool,
+      stale: (j['stale'] ?? false) as bool,
+      opening: (j['opening'] ?? false) as bool,
+      updating: (j['updating'] ?? false) as bool,
+      docs: (j['docs'] ?? 0) as int,
+      keywordSource: j['keyword_source'] as String?,
+      embeddingModel: j['embedding_model'] as String?,
+      wholeLibraryOnly: j['whole_library_only'] as bool?,
+      sourceId: j['source_id'] as String?,
+      index: j['index'] is Map ? SourceIndex.fromJson((j['index'] as Map).cast<String, dynamic>()) : null,
+      captionsIndex: j['captionsindex'] is Map ? ZimSubIndex.fromJson((j['captionsindex'] as Map).cast<String, dynamic>()) : null,
+      epubIndex: j['epubindex'] is Map ? ZimSubIndex.fromJson((j['epubindex'] as Map).cast<String, dynamic>()) : null,
+      pdfIndex: j['pdfindex'] is Map ? ZimSubIndex.fromJson((j['pdfindex'] as Map).cast<String, dynamic>()) : null,
+      error: e is Map ? CoreSourceError(e['code'] as String, (e['message'] ?? '') as String) : null,
+    );
+  }
+
+  final String? id;
+  final String kind;
+  final String path;
+  final String title;
+  final bool indexed;
+  final bool building;
+  final bool stale;
+  final bool opening;
+  final bool updating;
+
+  /// Where keyword search for this source comes from: "own" (the ZIM's built-in Xapian index, read through libzim), "device"
+  /// (the index built on this device), "none", or null when the core does not say (other ZIMs).
+  final String? keywordSource;
+
+  /// The embedding model a library's settings name (its query vectors must come from it); null for a ZIM or a library
+  /// that names none.
+  final String? embeddingModel;
+  /// For a library: true when its entries lack `doc_id` and `doc_version`, so it can only be updated as a whole; null for
+  /// a ZIM or a library that is still opening.
+  final bool? wholeLibraryOnly;
+  final int docs;
+  final CoreSourceError? error;
+
+  /// The source's id under the indexes folder (`<kind>/<source id>/`, percent-encoded by the core); null from a core that does
+  /// not report it.
+  final String? sourceId;
+
+  /// Where the source's search index is (a sealed snapshot, the old place, or none); null from a core that does not report it.
+  final SourceIndex? index;
+
+  /// A ZIM's caption files' index (`captionsindex`) and its EPUBs' (`epubindex`): absent until the core has looked at the ZIM's
+  /// entries, and without an indexes_dir.
+  final ZimSubIndex? captionsIndex;
+  final ZimSubIndex? epubIndex;
+
+  /// A ZIM's PDF index as the core uses it (cs_status "pdfindex": "opening", "ready" with its snapshot, or "none" when no
+  /// usable snapshot is attached, an incompatible one among them); null when the core reports none for this source.
+  final ZimSubIndex? pdfIndex;
+
+  /// True when search can use this source right now.
+  bool get searchable => id != null && indexed && !building && !opening && !updating && error == null;
+}
+
+/// One of cs_status's "rejected_snapshots": a snapshot the core found unusable and removed on this device (kept in
+/// `<indexes_dir>/.local/rejected.json`), which sync then never fetches again.
+class RejectedSnapshot {
+  const RejectedSnapshot({required this.kind, required this.sourceId, required this.buildId, this.reason, this.path});
+
+  factory RejectedSnapshot.fromJson(Map<String, dynamic> j) => RejectedSnapshot(
+    kind: (j['kind'] ?? '') as String,
+    sourceId: (j['source_id'] ?? '') as String,
+    buildId: (j['build_id'] ?? '') as String,
+    reason: j['reason'] as String?,
+    path: j['path'] as String?,
+  );
+
+  final String kind;
+  final String sourceId;
+  final String buildId;
+  final String? reason;
+
+  /// The snapshot's folder relative to the indexes folder, as the core writes it: "<kind>/<source id, as a folder name>/snap/
+  /// <build id>".
+  final String? path;
+
+  Map<String, dynamic> toJson() => {'kind': kind, 'source_id': sourceId, 'build_id': buildId, 'reason': reason, 'path': path};
+}
+
+/// cs_status's `captionsindex` or `epubindex` of a ZIM: its caption files' or EPUBs' keyword index.
+class ZimSubIndex {
+  const ZimSubIndex({required this.state, this.kind, this.snapshot, this.sourceId, this.entries, this.items, this.pieces, this.needsBuild});
+
+  factory ZimSubIndex.fromJson(Map<String, dynamic> j) => ZimSubIndex(
+    state: (j['state'] ?? 'none') as String,
+    kind: j['kind'] as String?,
+    snapshot: j['snapshot'] as String?,
+    sourceId: j['source_id'] as String?,
+    entries: (j['entries'] as num?)?.toInt(),
+    items: ((j['files'] ?? j['epubs']) as num?)?.toInt(),
+    pieces: (j['pieces'] as num?)?.toInt(),
+    needsBuild: j['needs_build'] as bool?,
+  );
+
+  /// "opening", "ready" (a snapshot is used) or "none".
+  final String state;
+
+  /// "zim-captions" or "zim-epub".
+  final String? kind;
+  final String? snapshot;
+  final String? sourceId;
+
+  /// How many caption entries or EPUBs the ZIM has (once the core has looked).
+  final int? entries;
+
+  /// Caption files or EPUBs in the snapshot.
+  final int? items;
+  final int? pieces;
+
+  /// It has such entries and no published snapshot (null until the core has looked).
+  final bool? needsBuild;
+
+  Map<String, dynamic> toJson() => {
+    'state': state,
+    'kind': kind,
+    'snapshot': snapshot,
+    'source_id': sourceId,
+    'entries': entries,
+    if (kind == 'zim-epub') 'epubs': items else 'files': items,
+    'pieces': pieces,
+    'needs_build': needsBuild,
+  };
+}
+
+/// cs_status's `index` of a source: where its search index is and what it is.
+class SourceIndex {
+  const SourceIndex({required this.location, this.snapshot, this.format, this.kind, this.dir, this.needsSeal = false});
+
+  factory SourceIndex.fromJson(Map<String, dynamic> j) => SourceIndex(
+    location: (j['location'] ?? 'none') as String,
+    snapshot: j['snapshot'] as String?,
+    format: (j['format'] as num?)?.toInt(),
+    kind: j['kind'] as String?,
+    dir: j['dir'] as String?,
+    needsSeal: j['needs_seal'] == true,
+  );
+
+  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind, 'dir': dir, if (needsSeal) 'needs_seal': true};
+
+  /// The folder of the index in use (a snapshot's, or the old index_dir), when there is one.
+  final String? dir;
+
+  /// Only an index in the old place exists and the indexes folder is set: an index_seal job moves it into a snapshot.
+  final bool needsSeal;
+
+  /// "snapshot" (a sealed snapshot in the indexes folder), "legacy" (built where indexes were kept before) or "none".
+  final String location;
+
+  /// The snapshot in use (its build id), when [location] is "snapshot".
+  final String? snapshot;
+  final int? format;
+
+  /// The folder kind in the indexes folder: zim, zim-pdf, library, region-index or places-index.
+  final String? kind;
+}
+
+class CoreSourceError {
+  const CoreSourceError(this.code, this.message);
+
+  final String code;
+  final String message;
+}
+
+/// One number of the conversation's id map.
+class ConversationId {
+  const ConversationId({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote, this.timeEnd, this.lang});
+
+  factory ConversationId.fromJson(Map<String, dynamic> j) => ConversationId(
+        n: j['n'] as int,
+        address: j['address'] as String,
+        title: (j['title'] ?? '') as String,
+        link: j['link'] as String?,
+        time: (j['time'] as num?)?.toDouble(),
+        pdfPage: (j['pdf_page'] as num?)?.toInt(),
+        quote: j['quote'] is String ? j['quote'] as String : null,
+        timeEnd: (j['time_end'] as num?)?.toDouble(),
+        lang: j['lang'] is String ? j['lang'] as String : null,
+      );
+
+  final int n;
+  final String address;
+  final String title;
+
+  /// Where the citation opens, when its library maps it: a link (a video's address), and the moment in it in seconds.
+  /// Kept beside the numbering; never part of what the model reads.
+  final String? link;
+  final double? time;
+
+  /// A passage of a PDF, when the core gives one: its page (from 1) and its text, for the PDF reader to open at and highlight.
+  /// Absent from older cores. Kept beside the numbering; never part of what the model reads.
+  final int? pdfPage;
+  final String? quote;
+
+  /// A caption passage's end (seconds) and language code, when the core gives them (a caption citation opens the player at
+  /// [time] with that language's cue marked). Never part of what the model reads.
+  final double? timeEnd;
+  final String? lang;
+
+  Map<String, dynamic> toJson() =>
+      {'n': n, 'address': address, 'title': title, 'link': ?link, 'time': ?time, 'pdf_page': ?pdfPage, 'quote': ?quote, 'time_end': ?timeEnd, 'lang': ?lang};
+}
+
+/// What cs_format returns: the exact tool message and the id map so far.
+class FormattedResults {
+  const FormattedResults({required this.toolMessage, required this.ids});
+
+  factory FormattedResults.fromJson(Map<String, dynamic> j) => FormattedResults(
+        toolMessage: (j['tool_message'] ?? '') as String,
+        ids: [for (final i in (j['ids'] as List? ?? const [])) ConversationId.fromJson((i as Map).cast<String, dynamic>())],
+      );
+
+  final String toolMessage;
+  final List<ConversationId> ids;
+}
+
+/// What cs_tool returns: [content] is exactly the tool message the model sees; [ids] are the numbers this call gave.
+class ToolOutput {
+  const ToolOutput({required this.content, required this.ids});
+
+  factory ToolOutput.fromJson(Map<String, dynamic> j) => ToolOutput(
+        content: (j['content'] ?? '') as String,
+        ids: [for (final i in (j['ids'] as List? ?? const [])) ConversationId.fromJson((i as Map).cast<String, dynamic>())],
+      );
+
+  final String content;
+  final List<ConversationId> ids;
+}
+
+enum JobState { running, done, cancelled, failed }
+
+class JobProgress {
+  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes, this.detail, this.phase, this.result, this.paused, this.effective});
+
+  factory JobProgress.fromJson(Map<String, dynamic> j) {
+    final e = j['error'];
+    return JobProgress(
+      state: JobState.values.firstWhere((s) => s.name == j['state'], orElse: () => JobState.failed),
+      done: (j['done'] ?? 0) as int,
+      total: (j['total'] ?? 0) as int,
+      errorCode: e is Map ? e['code'] as String? : null,
+      errorMessage: e is Map ? e['message'] as String? : null,
+      bytes: j['detail'] is Map ? ((j['detail'] as Map)['bytes'] as num?)?.toInt() : null,
+      detail: j['detail'] is Map ? (j['detail'] as Map).cast<String, dynamic>() : null,
+      phase: j['phase'] as String?,
+      result: j['result'] is Map ? (j['result'] as Map).cast<String, dynamic>() : null,
+      paused: j['paused'] as bool?,
+      effective: j['effective'] is Map ? (j['effective'] as Map).cast<String, dynamic>() : null,
+    );
+  }
+
+  /// The step a job kind names, when it does (pdfindex_finish: "merge", "manifest", "publish").
+  final String? phase;
+
+  /// What a finished job made, when its kind says (pdfindex_finish: {"pdfs","pieces","skipped","bytes","snapshot"}).
+  final Map<String, dynamic>? result;
+
+  /// Held by cs_job_set's "paused" (null from a core without job pacing).
+  final bool? paused;
+
+  /// The pace in effect: the app's duty plus the job's own back-off ({"work_ms","idle_ms","threads"}).
+  final Map<String, dynamic>? effective;
+
+  final JobState state;
+  final int done;
+  final int total;
+  final String? errorCode;
+  final String? errorMessage;
+
+  /// Bytes written so far (layer downloads).
+  final int? bytes;
+
+  /// What a kind reports besides the counts (layer downloads: bytes; unpack_library and check_library: the library's
+  /// point count and settings), or null.
+  final Map<String, dynamic>? detail;
+
+  bool get isFinished => state != JobState.running;
+
+  /// 0..1, or null while the total is not known yet.
+  double? get fraction => total <= 0 ? null : (done / total).clamp(0.0, 1.0);
+}

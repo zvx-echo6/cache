@@ -1,0 +1,173 @@
+{
+  "format": 1,
+  "id": "nws-alerts-point",
+  "title": "Weather alerts (NWS, by point)",
+  "provider": "NWS",
+  "description": "active emergency alerts and weather warnings for the place (National Weather Service, US)",
+  "attribution": "Alerts from the US National Weather Service (weather.gov)",
+  "request": {
+    "url": "https://api.weather.gov/alerts/active?point={lat:4},{lon:4}",
+    "headers": {
+      "Accept": "application/geo+json",
+      "User-Agent": "Cache (https://github.com/zvx-echo6/cache-packs)"
+    }
+  },
+  "refresh_minutes": 15,
+  "quota": {
+    "per_minute": 10,
+    "per_day": 1000,
+    "per_month": 20000
+  },
+  "validity": {
+    "fixed_hours": 6
+  },
+  "require": [
+    "features"
+  ],
+  "items": [
+    {
+      "each": "features",
+      "key": {
+        "first_of": [
+          {
+            "path": "properties.id"
+          },
+          {
+            "path": "id"
+          }
+        ]
+      },
+      "label": {
+        "path": "properties.event"
+      },
+      "time": {
+        "first_of": [
+          {
+            "path": "properties.sent",
+            "time": {
+              "in": "rfc3339",
+              "zone": "place",
+              "out": "datetime_s"
+            }
+          },
+          {
+            "path": "properties.effective",
+            "time": {
+              "in": "rfc3339",
+              "zone": "place",
+              "out": "datetime_s"
+            }
+          }
+        ]
+      },
+      "ends": {
+        "first_of": [
+          {
+            "path": "properties.ends",
+            "time": {
+              "in": "rfc3339"
+            }
+          },
+          {
+            "path": "properties.expires",
+            "time": {
+              "in": "rfc3339"
+            }
+          }
+        ]
+      },
+      "sort": [
+        {
+          "by": {
+            "path": "properties.severity"
+          },
+          "rank": [
+            "Extreme",
+            "Severe",
+            "Moderate",
+            "Minor",
+            "Unknown"
+          ]
+        },
+        {
+          "by": {
+            "first_of": [
+              {
+                "path": "properties.onset"
+              },
+              {
+                "path": "properties.effective"
+              },
+              {
+                "path": "properties.sent"
+              }
+            ]
+          },
+          "time": true
+        }
+      ],
+      "fields": [
+        {
+          "label": "Severity",
+          "path": "properties.severity",
+          "case": "lower",
+          "omit_if": [
+            "unknown"
+          ]
+        },
+        {
+          "label": "Urgency",
+          "path": "properties.urgency",
+          "case": "lower",
+          "omit_if": [
+            "unknown"
+          ]
+        },
+        {
+          "label": "Area",
+          "path": "properties.areaDesc",
+          "max_chars": 160
+        },
+        {
+          "label": "Distance",
+          "distance": {
+            "geometry": "geometry",
+            "unit": "mi"
+          }
+        },
+        {
+          "label": "Expires",
+          "first_of": [
+            {
+              "path": "properties.ends",
+              "time": {
+                "in": "rfc3339",
+                "zone": "place",
+                "out": "%Y-%m-%d %H:%M"
+              }
+            },
+            {
+              "path": "properties.expires",
+              "time": {
+                "in": "rfc3339",
+                "zone": "place",
+                "out": "%Y-%m-%d %H:%M"
+              }
+            }
+          ]
+        },
+        {
+          "label": "Headline",
+          "path": "properties.headline",
+          "max_chars": 240
+        },
+        {
+          "label": "Instructions",
+          "path": "properties.instruction",
+          "max_chars": 400
+        }
+      ],
+      "area": "geometry"
+    }
+  ]
+}

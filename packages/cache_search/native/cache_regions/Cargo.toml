@@ -1,0 +1,30 @@
+[package]
+name = "cache_regions"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's regions: the Valhalla tiles and the places of downloaded regions, and of routes and searches online, one build at a time"
+
+[dependencies]
+# Same HTTP stack as cache_layers and cache_live: blocking ureq with rustls and bundled roots (nothing from the platform).
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# regions.sqlite (regions, their tile lists, the stream cache); bundled like the other crates'.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The published tiles and index are gzip files; each tile's SHA-256 is in the index.
+flate2 = "1"
+sha2 = "0.10"
+# Free space before a region starts (the same version as cache_sync's).
+fs4 = "=1.1.0"
+serde.workspace = true
+serde_json.workspace = true
+# The places part: the merged places database is written through cache_places::merged (cache_places does not depend on
+# this crate, so there is no cycle).
+cache_places = { path = "../cache_places" }
+# The fetched tile indexes are syncable snapshots (kinds region-index and places-index).
+cache_snapshot = { path = "../cache_snapshot" }
+
+[dev-dependencies]
+# The tests' routing server.
+tiny_http = "0.12"
+# Two devices: a tile index snapshot travels from one to the other (tests/peer_index.rs).
+cache_sync = { path = "../cache_sync" }

@@ -1,0 +1,91 @@
+[
+ {
+  "id": "af",
+  "name": "Afghanistan",
+  "kind": "country",
+  "alt": [
+   "Afgana",
+   "Afxanistan",
+   "I-Afugani"
+  ],
+  "in": "",
+  "pop": 32738376,
+  "shard": "af"
+ },
+ {
+  "id": "us-id",
+  "name": "Idaho",
+  "kind": "region",
+  "alt": [
+   "Aidaho",
+   "Aydaho",
+   "Aighdeachobh"
+  ],
+  "in": "United States",
+  "pop": 2001619,
+  "shard": "us"
+ },
+ {
+  "id": "us-id-boise",
+  "name": "Boise",
+  "kind": "locality",
+  "alt": [
+   "Boise City"
+  ],
+  "in": "Ada County, Idaho",
+  "pop": 235684,
+  "shard": "us"
+ },
+ {
+  "id": "ca",
+  "name": "Canada",
+  "kind": "country",
+  "alt": [
+   "Kanada",
+   "IKhanada",
+   "Tanata"
+  ],
+  "in": "",
+  "pop": 36991981,
+  "shard": "ca"
+ },
+ {
+  "id": "us-ut",
+  "name": "Utah",
+  "kind": "region",
+  "alt": [
+   "UT",
+   "Uta",
+   "Utaho"
+  ],
+  "in": "United States",
+  "pop": 3503613,
+  "shard": "us"
+ },
+ {
+  "id": "us",
+  "name": "United States",
+  "kind": "country",
+  "alt": [
+   "IMelika",
+   "Fereende Stoaten fon Amerikoa",
+   "Vereinigte Schtaate vo Amerika"
+  ],
+  "in": "",
+  "pop": 331449281,
+  "shard": "us"
+ },
+ {
+  "id": "us-pacific-northwest",
+  "name": "Pacific Northwest",
+  "kind": "multi_state",
+  "alt": [
+   "PNW",
+   "Pacific NW",
+   "Cascadia"
+  ],
+  "in": "",
+  "pop": 14232170,
+  "shard": "us"
+ }
+]

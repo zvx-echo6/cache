@@ -1,0 +1,63 @@
+{
+  "format": 2,
+  "updated": "2026-11-02",
+  "models": [
+    {
+      "name": "Gemma 4 E2B · tuned for Cache",
+      "url": "https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q4_K_M.gguf",
+      "file": "e2b-stock-cache-1.0-Q4_K_M.gguf",
+      "size": 3427879936,
+      "sha256": "bd342122ed2381d4b3d2aa87b0e4273cbfdf79058a72b126975baa0509c2ab2f",
+      "kind": "tuned_for_cache",
+      "section": "recommended",
+      "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
+      "note": "Small and quick, and tuned to answer from your sources."
+    },
+    {
+      "name": "Gemma 4 E4B · Q4_K_M",
+      "repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "revision": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+      "file": "gemma-4-E4B-it-Q4_K_M.gguf",
+      "size": 4977171584,
+      "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+      "kind": "works_not_tuned",
+      "section": "recommended",
+      "note": "Larger than E2B and slower. Needs more memory."
+    },
+    {
+      "name": "Gemma 4 E2B uncensored · tuned for Cache",
+      "url": "https://data.cached.info/models/cache-1.0/e2b-trevorjs-cache-1.0-Q4_K_M.gguf",
+      "file": "e2b-trevorjs-cache-1.0-Q4_K_M.gguf",
+      "size": 3427873312,
+      "sha256": "cf255f6f71b6415c66fae529fb52f659c14d82741e98e07e38dabb685bccd0b8",
+      "kind": "tuned_for_cache",
+      "section": "experimental",
+      "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
+      "note": "An uncensored E2B, tuned for Cache.",
+      "uncensored": true
+    },
+    {
+      "name": "Gemma 4 E4B uncensored · Q4_K_M",
+      "repo": "TrevorJS/gemma-4-E4B-it-uncensored-GGUF",
+      "revision": "771f130d4c49735ace331f68a80f7ae31387e51c",
+      "file": "gemma-4-E4B-it-uncensored-Q4_K_M.gguf",
+      "size": 5335285280,
+      "sha256": "b2a89ec2df7f13440c723fb3fda2c531696cbe8e20ed2f1122f97a43aaafcb50",
+      "kind": "works_not_tuned",
+      "section": "experimental",
+      "note": "An uncensored E4B. Larger and slower.",
+      "uncensored": true
+    },
+    {
+      "name": "Gemma 4 E2B Q6 · tuned for Cache",
+      "url": "https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q6_K.gguf",
+      "file": "e2b-stock-cache-1.0-Q6_K.gguf",
+      "size": 3845346304,
+      "sha256": "09694d33cbca622556148e5e56fe97f1ecfeadbbdfbd24c4df6ede0708a6e330",
+      "kind": "tuned_for_cache",
+      "section": "experimental",
+      "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
+      "note": "Larger and a little slower; in our tests it answered from your sources more reliably than the standard version."
+    }
+  ]
+}

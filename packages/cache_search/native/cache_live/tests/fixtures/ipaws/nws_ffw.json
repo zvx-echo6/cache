@@ -1,0 +1,191 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "@context": [
+    "https://geojson.org/geojson-ld/geojson-context.jsonld",
+    {
+     "@version": "1.1",
+     "wx": "https://api.weather.gov/ontology#",
+     "@vocab": "https://api.weather.gov/ontology#"
+    }
+   ],
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.e6e8f35546b1bcf3ea5ca9fb6c6d9c0ebfe11d2a.001.1",
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -105.71,
+       33.42
+      ],
+      [
+       -105.66,
+       33.42
+      ],
+      [
+       -105.65,
+       33.43
+      ],
+      [
+       -105.63,
+       33.44
+      ],
+      [
+       -105.61,
+       33.4
+      ],
+      [
+       -105.62,
+       33.38
+      ],
+      [
+       -105.64,
+       33.39
+      ],
+      [
+       -105.64,
+       33.34
+      ],
+      [
+       -105.63,
+       33.33
+      ],
+      [
+       -105.56,
+       33.36
+      ],
+      [
+       -105.53,
+       33.38
+      ],
+      [
+       -105.43,
+       33.43
+      ],
+      [
+       -105.43,
+       33.41
+      ],
+      [
+       -105.55,
+       33.33
+      ],
+      [
+       -105.59,
+       33.31
+      ],
+      [
+       -105.73,
+       33.31
+      ],
+      [
+       -105.73,
+       33.39
+      ],
+      [
+       -105.78,
+       33.39
+      ],
+      [
+       -105.78,
+       33.41
+      ],
+      [
+       -105.71,
+       33.42
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.e6e8f35546b1bcf3ea5ca9fb6c6d9c0ebfe11d2a.001.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.e6e8f35546b1bcf3ea5ca9fb6c6d9c0ebfe11d2a.001.1",
+    "areaDesc": "Lincoln, NM",
+    "geocode": {
+     "SAME": [
+      "035027"
+     ],
+     "UGC": [
+      "NMC027"
+     ]
+    },
+    "affectedZones": [
+     "https://api.weather.gov/zones/county/NMC027"
+    ],
+    "references": [],
+    "sent": "2026-10-29T13:36:00-06:00",
+    "effective": "2026-10-29T13:36:00-06:00",
+    "onset": "2026-10-29T13:36:00-06:00",
+    "expires": "2026-10-29T16:30:00-06:00",
+    "ends": "2026-10-29T16:30:00-06:00",
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Likely",
+    "urgency": "Immediate",
+    "event": "Flash Flood Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Albuquerque NM",
+    "headline": "Flash Flood Warning issued October 29 at 1:36PM MDT until October 29 at 4:30PM MDT by NWS Albuquerque NM",
+    "description": "FFWABQ\n\nThe National Weather Service in Albuquerque has issued a\n\n* Flash Flood Warning for...\nThe South Fork burn scar in...\nSouth Central Lincoln County in central New Mexico...\n\n* Until 430 PM MDT.\n\n* At 136 PM MDT, Doppler radar indicated thunderstorms producing\nheavy rain over the South Fork Burn Scar. Up to 1 inch of rain has\nfallen. The expected rainfall rate is 1 to 2 inches in 1 hour.\nAdditional rainfall amounts up to 2 inches are possible in the\nwarned area. Flash flooding is ongoing or expected to begin\nshortly.\n\nExcessive rainfall over the burn scar will impact Upper Canyon, Brady\nCanyon, and Perk Canyon as well as the Cedar Creek, Eagle Creek and\nRio Ruidoso drainages. Impacts will include but are not limited to\nall nearby reservoirs, bridges, culverts and roadways. Impacts to\nareas along the Rio Ruidoso may extend downstream of Ruidoso Downs.\nThe debris flow can consist of rock, mud, vegetation and other loose\nmaterials.\n\nHAZARD...Life threatening flash flooding. Thunderstorms producing\nflash flooding in and around the South Fork Burn Scar.\n\nSOURCE...Radar indicated.\n\nIMPACT...Life threatening flash flooding of areas in and around the\nSouth Fork Burn Scar.\n\n* Some locations that will experience flash flooding include...\nRuidoso, Ruidoso Downs, Alto, Glencoe and Hollywood.",
+    "instruction": "This is a life threatening situation. Heavy rainfall will cause\nextensive and severe flash flooding of creeks, streams and ditches in\nthe South Fork Burn Scar. Severe debris flows can also be anticipated\nacross roads. Roads and driveways may be washed away in places. If\nyou encounter flood waters, climb to safety.",
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+     "AWIPSidentifier": [
+      "FFWABQ"
+     ],
+     "WMOidentifier": [
+      "WGUS55 KABQ 291936"
+     ],
+     "flashFloodDetection": [
+      "RADAR INDICATED"
+     ],
+     "flashFloodDamageThreat": [
+      "CONSIDERABLE"
+     ],
+     "BLOCKCHANNEL": [
+      "EAS",
+      "NWEM"
+     ],
+     "EAS-ORG": [
+      "WXR"
+     ],
+     "VTEC": [
+      "/O.NEW.KABQ.FF.W.0239.261029T1936Z-261029T2230Z/"
+     ],
+     "eventEndingTime": [
+      "2026-10-29T16:30:00-06:00"
+     ],
+     "WEAHandling": [
+      "Imminent Threat"
+     ],
+     "CMAMtext": [
+      "NWS: FLASH FLOOD WARNING this area til 4:30 PM MDT. Avoid flooded areas."
+     ],
+     "CMAMlongtext": [
+      "National Weather Service: A FLASH FLOOD WARNING is in effect for this area until 4:30 PM MDT. This is a dangerous and life-threatening situation. Do not attempt to travel unless you are fleeing an area subject to flooding or under an evacuation order."
+     ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+     "SAME": [
+      "FFW"
+     ],
+     "NationalWeatherService": [
+      "FFW"
+     ]
+    },
+    "replacedBy": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.aeeac1d612ea3767d3853538fafb81f536fa48f2.001.1",
+    "replacedAt": "2026-10-29T15:42:00-06:00"
+   }
+  }
+ ]
+}

@@ -1,0 +1,83 @@
+import java.util.Properties
+
+plugins {
+    id("com.android.application")
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id("dev.flutter.flutter-gradle-plugin")
+}
+
+android {
+    namespace = "com.happylittlellc.cache"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        // flutter_local_notifications needs core library desugaring.
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        // A side-by-side test build (android-test-apk.yml sets the Gradle property cacheTestApk=true): its own package
+        // (com.happylittlellc.cache.test, so its own data) and the label "Cache test". Plugin providers use ${applicationId}.
+        val testApk = (project.findProperty("cacheTestApk") as String?) == "true"
+        applicationId = if (testApk) "com.happylittlellc.cache.test" else "com.happylittlellc.cache"
+        manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        minSdk = 28 // llama.cpp needs API 28
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    packaging {
+        jniLibs {
+            // The native layer finds its CPU variant libraries (libggml-cpu-*.so) by scanning the app's
+            // library folder, so they must be installed there as real files.
+            useLegacyPackaging = true
+            // Not shipped: on the Pixel 8 (Tensor G3) the SVE2 variants read prompts at about half the
+            // speed of armv8.6_1, and ggml would prefer them. Keep every armv8.x variant.
+            excludes += "**/libggml-cpu-android_armv9*.so"
+        }
+    }
+
+    // Release signing: the Play upload key, read from android/key.properties (never committed; see .gitignore).
+    // Without that file (any machine but the release builder) release builds are signed with the debug key.
+    val keyProps = Properties().apply {
+        val f = rootProject.file("key.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    signingConfigs {
+        if (keyProps.getProperty("storeFile") != null) {
+            create("upload") {
+                storeFile = file(keyProps.getProperty("storeFile"))
+                storePassword = keyProps.getProperty("storePassword")
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}

@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "id": "landcover",
+  "title": "Land cover",
+  "description": "What covers the ground (trees, grass, crops, water, built-up and more) at 10 m, from ESA WorldCover 2021.",
+  "kind": "raster",
+  "transform": "raster_window",
+  "source": {
+    "type": "cog",
+    "url": "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_{lat}{lon}_Map.tif",
+    "minzoom": 0,
+    "maxzoom": 13,
+    "tile_format": "png",
+    "tile_size": 256,
+    "grid_deg": 3
+  },
+  "attribution": "© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium",
+  "license": "CC BY 4.0",
+  "coverage": { "bbox": [-180, -60, 180, 82.75] },
+  "offline": { "allowed": true, "max_parallel": 4 },
+  "update": { "version": "2021-v200", "interval_days": 365 },
+  "style_hints": {
+    "classes": { "10": "Tree cover", "20": "Shrubland", "30": "Grassland", "40": "Cropland", "50": "Built-up", "60": "Bare / sparse vegetation", "70": "Snow and ice", "80": "Permanent water bodies", "90": "Herbaceous wetland", "95": "Mangroves", "100": "Moss and lichen" },
+    "tile_encoding": "indexed PNG: the pixel value is the class, 0 is no data"
+  },
+  "recipe": "https://registry.opendata.aws/esa-worldcover-vito/"
+}

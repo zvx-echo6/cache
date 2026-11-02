@@ -1,0 +1,33 @@
+[workspace]
+members = ["cache_snapshot", "cache_search", "cache_tool", "cache_user", "cache_live", "cache_layers", "cache_video", "cache_navigate", "cache_places", "places_pack", "cache_embed", "../cli", "cache_offroad", "offroad_pack", "cache_sync", "cache_regions", "cache_calc", "cache_act", "cache_notebook", "../../cache_chunk", "../../cache_classify"]
+resolver = "2"
+# Third-party crates patched for a target they do not build for (see [patch.crates-io]); not members of this workspace.
+exclude = ["vendor"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: object fields keep insertion order, so every JSON output has a deliberate field order
+# (the order cache_search.h documents and TOOLS.md shows) instead of alphabetical.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
+
+# Dependencies keep only line tables in dev and test builds (backtraces still have file and line). With full debug info the
+# dependency rlibs reach about 6 GB (segment alone 2 GB), and rustc maps every rlib a test binary links copy-on-write, which
+# Windows charges to the commit limit. Several test targets linking at once ran out of commit; rustc then skips the rlib it
+# could not map and fails with "crate `X` required to be available in rlib format". Release builds (the app) are unaffected.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
+# netdev (iroh's netwatch needs ^0.46.1) uses libc::in6_ifreq on every Apple target, but libc declares it for macOS only,
+# so the iOS build failed. vendor/netdev-0.46.3 is the crates.io release (MIT) with that one function made macOS-only
+# (src/os/darwin/ipv6_addr_flags.rs); drop this when a netdev release builds for iOS.
+[patch.crates-io]
+netdev = { path = "vendor/netdev-0.46.3" }
+
+# libc is held at 0.2.189 in Cargo.lock: 0.2.190 made the net/route.h constants (RTM_*, RTAX_*, RTF_*) macOS-only, and iroh's
+# netwatch uses them on iOS. Do not `cargo update` libc past 0.2.189 until netwatch or libc builds for iOS again.

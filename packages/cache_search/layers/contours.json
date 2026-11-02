@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "contours",
+  "title": "Contour lines",
+  "description": "Contour lines in feet, made on the device from the elevation layer (minor and index lines).",
+  "kind": "vector",
+  "transform": "contours",
+  "derived_from": "elevation",
+  "attribution": "© Mapterhorn",
+  "license": "Derived from the elevation layer",
+  "style_hints": { "source_layer": "contours", "unit": "ft", "properties": { "ele": "elevation in feet", "level": "0 minor, 1 index" } }
+}

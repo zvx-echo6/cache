@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:dc="http://purl.org/dc/terms/"
+      xmlns:opds="https://specs.opds.io/opds-1.2"
+      xmlns:thr="http://purl.org/syndication/thread/1.0">
+  <id>a244719d-9eba-383f-2c0a-a311db799d36</id>
+  <link rel="self"
+        href="/catalog/v2/languages"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <title>List of languages</title>
+  <updated>2026-10-26T02:16:42Z</updated>
+
+  <entry>
+    <title>Afrikaans</title>
+    <dc:language>afr</dc:language>
+    <thr:count>11</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=afr"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>937fb7b6-e900-52f7-30ee-6ba2c9f1990e</id>
+  </entry>
+<entry>
+    <title>Deutsch</title>
+    <dc:language>deu</dc:language>
+    <thr:count>311</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=deu"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>1dc1194a-88d8-13d4-05a5-104a14a9c1c8</id>
+  </entry>
+<entry>
+    <title>English</title>
+    <dc:language>eng</dc:language>
+    <thr:count>1311</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=eng"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>ba4f4e2b-6402-51b7-850c-f9278083af99</id>
+  </entry>
+<entry>
+    <title>français</title>
+    <dc:language>fra</dc:language>
+    <thr:count>518</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=fra"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>e089d952-5434-43b6-caac-3549db342426</id>
+  </entry>
+<entry>
+    <title>español</title>
+    <dc:language>spa</dc:language>
+    <thr:count>430</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=spa"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-10-26T02:16:42Z</updated>
+    <id>7a45058e-fa1f-cf9a-6e84-8e0e20efd5e5</id>
+  </entry>
+</feed>

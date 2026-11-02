@@ -1,0 +1,188 @@
+{
+ "about": "Search-quality queries for search_eval.py: the two from the 2026-10-26 check plus 13 from heldout-v1 (questions that were never used for training). Expectations were written by reading what the recon library and the ZIMs contain (each source searched alone), not from any ranking output.",
+ "queries": [
+  {
+   "id": "iphone-battery",
+   "query": "replace iphone battery",
+   "expect": [
+    {
+     "source": "iFixit",
+     "title": "iphone.*battery|battery.*iphone"
+    }
+   ],
+   "note": "from the 2026-10-26 check with the full source set; iFixit has iPhone battery guides"
+  },
+  {
+   "id": "flood",
+   "query": "flood",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "flood"
+    },
+    {
+     "source": "Ready.gov",
+     "title": "flood"
+    },
+    {
+     "source": "Wikipedia",
+     "title": "flood"
+    },
+    {
+     "source": "Appropedia",
+     "title": "flood"
+    },
+    {
+     "source": "Wikivoyage",
+     "title": "flood"
+    }
+   ],
+   "note": "from the 2026-10-26 check; a generic word, so any article about floods counts (the Hundred Rabbits tidal \"flood\" page does not)"
+  },
+  {
+   "id": "snakebite",
+   "query": "how to treat a snakebite",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "snake ?bite"
+    },
+    {
+     "source": "Wikipedia",
+     "title": "^snakebite$"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  },
+  {
+   "id": "dry-heat",
+   "query": "dry heat sterilization temp and how long",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "dry heat|sterili"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  },
+  {
+   "id": "termites",
+   "query": "is a 3 inch gap between soil and wood siding enough against termites",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "termite"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  },
+  {
+   "id": "threshing",
+   "query": "how do you thresh bean pods at smal scale",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "thresh"
+    }
+   ],
+   "note": "from heldout-v1 (practical) (typo kept)"
+  },
+  {
+   "id": "currants",
+   "query": "Are currants and gooseberries edible raw?",
+   "expect": [
+    {
+     "title": "currant|gooseberr"
+    }
+   ],
+   "note": "from heldout-v1 (practical); Recon, Appropedia and Wikipedia all have it"
+  },
+  {
+   "id": "salvaged-concrete",
+   "query": "If using salvaged concrete for rainwater tank paving, what thickness should the pieces be?",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "concrete|paver"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  },
+  {
+   "id": "compass",
+   "query": "compass accuracy metal interference tilting parallax error",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "compass|bearing"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  },
+  {
+   "id": "sere-boil",
+   "query": "sere water purification boil how long and aerate",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "boil"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  },
+  {
+   "id": "avicenna",
+   "query": "When did Avicenna live?",
+   "expect": [
+    {
+     "source": "Wikipedia",
+     "title": "^Avicenna$"
+    }
+   ],
+   "note": "from heldout-v1 (general_trivia)"
+  },
+  {
+   "id": "mickey",
+   "query": "who did the original voice for mickey mouse",
+   "expect": [
+    {
+     "source": "Wikipedia",
+     "title": "^Mickey Mouse$|^Walt Disney$"
+    }
+   ],
+   "note": "from heldout-v1 (general_trivia)"
+  },
+  {
+   "id": "charles-diana",
+   "query": "what year did charles and diana divorce",
+   "expect": [
+    {
+     "source": "Wikipedia",
+     "title": "Diana, Princess of Wales|Charles III|divorce"
+    }
+   ],
+   "note": "from heldout-v1 (general_trivia)"
+  },
+  {
+   "id": "dehydrated",
+   "query": "how do I know if I'm getting dehydrated?",
+   "expect": [
+    {
+     "title": "dehydrat"
+    }
+   ],
+   "note": "from heldout-v1 (practical); Recon has 'Dehydration Symptoms', Wikipedia has 'Dehydration'"
+  },
+  {
+   "id": "jerky",
+   "query": "jerky how long to dehydrate and marinate and how long it keeps",
+   "expect": [
+    {
+     "source": "Recon",
+     "title": "jerky"
+    }
+   ],
+   "note": "from heldout-v1 (practical)"
+  }
+ ]
+}

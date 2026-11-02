@@ -1,0 +1,24 @@
+{
+ "serverVersion": "8.2.4",
+ "serverCommit": "",
+ "instance": {
+  "name": "Example PeerTube",
+  "shortDescription": "A PeerTube instance",
+  "defaultLanguage": "en",
+  "isNSFW": false
+ },
+ "signup": {
+  "allowed": false
+ },
+ "user": {
+  "videoQuota": -1
+ },
+ "video": {
+  "image": {
+   "extensions": [
+    ".png",
+    ".jpg"
+   ]
+  }
+ }
+}

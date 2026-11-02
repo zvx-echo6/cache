@@ -1,0 +1,89 @@
+[package]
+name = "cache_search"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[features]
+# Keyword search over a ZIM's own built-in Xapian index, through the C++ shim ../zimx over the official prebuilt libzim
+# (GPL-2.0-or-later; see ../zimx/LIBZIM.md and DESIGN.md "Licences"). Takes effect on Windows and Android only; any
+# build with --no-default-features is the Tantivy-only core.
+default = ["xapian"]
+xapian = []
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+zim = "0.5.0"
+# The passage chunker, shared with the library builder (cs_pdf_chunk).
+cache_chunk = { path = "../../../cache_chunk" }
+cache_tool = { path = "../cache_tool" }
+# Saved places and live data live in their own crates; this crate wires them into the handle and exports their C ABI.
+cache_user = { path = "../cache_user" }
+cache_layers = { path = "../cache_layers" }
+cache_live = { path = "../cache_live" }
+# Places packs, the geocoder and the nearby and locate tools.
+cache_places = { path = "../cache_places" }
+# The calculate tool (exact arithmetic and unit conversion), registered by Handle::open.
+cache_calc = { path = "../cache_calc" }
+# The act tool (actions modules publish, confirm cards), registered by Handle::open; it is offered once the host installs actions.
+cache_act = { path = "../cache_act" }
+# The navigate tool (Valhalla road routing and off-road legs), registered from the "routing" section of the config.
+cache_navigate = { path = "../cache_navigate" }
+# Video sources (PeerTube): instances, browse, offline downloads, citation links; wired in ext.rs and job.rs.
+cache_video = { path = "../cache_video" }
+# Sharing and sync between devices (iroh): cs_sync_open, cs_sync_call, cs_sync_close.
+cache_sync = { path = "../cache_sync" }
+# Road tiles by region (downloads, the stream cache for routes planned online, updates): cs_regions_*, and the navigate
+# tool's tile folder and stream from the "regions" section of the config.
+cache_regions = { path = "../cache_regions" }
+# Syncable index snapshots (layout, manifest, verify, pick, gc, stage, publish): re-exported as crate::snapshot.
+cache_snapshot = { path = "../cache_snapshot" }
+# The Notebook (Journal and Logbook) in notebook.sqlite, from the "notebook" section of the config: cs_notebook.
+cache_notebook = { path = "../cache_notebook" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "1"
+tantivy = "0.27"
+html-escape = "0.3"
+# Same xz2 the zim crate uses; enabling "static" (feature unification) builds liblzma into the library instead of linking liblzma.so.5.
+xz2 = { version = "0.1.7", features = ["static"] }
+# HTTP client for web_search and web reads: blocking ureq with rustls and the compiled-in root certificates (webpki-roots),
+# the same client as cache_live, cache_layers and cache_video. NOT reqwest: its rustls feature verifies with the platform
+# verifier, which on Android needs the JVM handed to it and so fails in a Dart FFI library.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
+common = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1" }
+shard = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }
+# Writes the blank library template (a tar holding a shard snapshot, itself a tar); the same tar crate Qdrant unpacks
+# snapshots with (already in the lockfile through edge).
+tar = { version = "0.4", default-features = false }
+# A .cache-library may be gzip-compressed (the preallocated Qdrant files are mostly zeros); the template is written
+# compressed. The same pure-Rust flate2 cache_live uses (already in the lockfile).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# Free-space check of update_library: statvfs on unix, GetDiskFreeSpaceExW on Windows (both already in the lockfile).
+# sha256 of the PDF index snapshot files (manifest.json); already in the lockfile.
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+# Test-only: builds a real partial snapshot locally with Qdrant's own segment snapshot code (same rev, already in
+# the lockfile through edge).
+segment = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", default-features = false }
+uuid = "1"
+# Test-only: unpacks the published places tiles in the ignored Utah test (the same flate2 cache_regions uses).
+flate2 = "1"
+
+# Test-only, Windows: hard-link count and file index of a file (GetFileInformationByHandle).
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

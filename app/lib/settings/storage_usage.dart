@@ -1,0 +1,180 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+import '../browse/zim_download.dart' show FreeSpace, freeBytesOnDisk;
+import 'damaged_files.dart';
+import 'data_kinds.dart';
+import 'space.dart';
+
+/// The bytes of every file under [dir] (0 when it does not exist or cannot be read). Links are not followed.
+Future<int> directorySize(Directory dir) async {
+  var total = 0;
+  try {
+    if (!await dir.exists()) return 0;
+    await for (final e in dir.list(recursive: true, followLinks: false)) {
+      if (e is File) {
+        try {
+          total += await e.length();
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return total;
+}
+
+/// What the app keeps on the phone, by kind ([DataKind], the same list Sharing shares), measured from the files themselves; the free
+/// space and what Cache leaves for the phone; and Clean up: unfinished downloads, damaged files and temporary files, never anything
+/// the person saved.
+class StorageUsage extends ChangeNotifier {
+  StorageUsage({
+    required this.kinds,
+    required this.freeIn,
+    this.leftovers = _noDirs,
+    this.manifests = _noManifests,
+    this.busy = _idle,
+    FreeSpace? freeSpace,
+    TotalSpace? totalSpace,
+    DamagedFiles? damaged,
+  }) : _freeSpace = freeSpace ?? freeBytesOnDisk,
+       _totalSpace = totalSpace ?? totalBytesOnDisk,
+       _damaged = damaged ?? DamagedFiles();
+
+  /// The kinds Storage lists, in order.
+  final List<DataKind> kinds;
+
+  /// A folder on the file system the app writes to, for the free space.
+  final Directory? Function() freeIn;
+
+  /// Where unfinished downloads and temporary files collect (partial-download folders, the temporary folder). Clean up empties them.
+  final List<Directory?> Function() leftovers;
+
+  /// The downloaded files that have a published manifest (size and SHA-256): one that does not match it is damaged, and Clean up
+  /// removes it so it can be downloaded again. Files with no manifest are never checked.
+  final List<FileManifest> Function() manifests;
+
+  /// True while a download runs (its unfinished file is in use, so Clean up waits).
+  final bool Function() busy;
+  final FreeSpace _freeSpace;
+  final TotalSpace _totalSpace;
+  final DamagedFiles _damaged;
+
+  /// The damaged files found by the last measure.
+  List<FileManifest> damagedFiles = const [];
+
+  static List<Directory?> _noDirs() => const [];
+  static List<FileManifest> _noManifests() => const [];
+  static bool _idle() => false;
+
+  final Map<String, int> _bytes = {};
+
+  /// Free bytes on the phone, or null when the system cannot say.
+  int? freeBytes;
+
+  /// The size of the phone's storage, or null when the system cannot say.
+  int? totalBytes;
+
+  /// What Clean up would free.
+  int cleanupBytes = 0;
+  bool measured = false;
+  bool _busy = false;
+
+  /// The bytes of the kind [id] (0 before it is measured).
+  int bytesOf(String id) => _bytes[id] ?? 0;
+
+  int get usedBytes => _bytes.values.fold(0, (a, b) => a + b);
+
+  /// What Cache always leaves for the phone (10% of the storage, 5 to 20 GB).
+  int get reserveBytes => reserveFor(totalBytes);
+
+  /// Free space alone, which is cheap (the home page shows it).
+  void readFree() {
+    final d = freeIn();
+    final f = d == null ? null : _freeSpace(d.path);
+    final t = d == null ? null : _totalSpace(d.path);
+    if (f != freeBytes || t != totalBytes) {
+      freeBytes = f;
+      totalBytes = t;
+      notifyListeners();
+    }
+  }
+
+  Future<int> _sum(List<Directory?> dirs) async {
+    var t = 0;
+    for (final d in dirs) {
+      if (d != null) t += await directorySize(d);
+    }
+    return t;
+  }
+
+  /// Measures every folder.
+  Future<void> measure() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      readFree();
+      for (final k in kinds) {
+        _bytes[k.id] = await _sum(k.folders);
+      }
+      // Sizes at once; the checksums (worked out once per file) follow.
+      damagedFiles = await _damaged.find(manifests(), hash: false);
+      cleanupBytes = await _sum(leftovers()) + _bytesOf(damagedFiles);
+      measured = true;
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+    unawaited(_checkSums());
+  }
+
+  int _bytesOf(List<FileManifest> files) {
+    var t = 0;
+    for (final m in files) {
+      try {
+        t += File(m.path).lengthSync();
+      } catch (_) {}
+    }
+    return t;
+  }
+
+  Future<void>? _summing;
+
+  Future<void> _checkSums() => _summing ??= () async {
+        try {
+          final found = await _damaged.find(manifests());
+          final before = _bytesOf(damagedFiles);
+          damagedFiles = found;
+          cleanupBytes = cleanupBytes - before + _bytesOf(found);
+          notifyListeners();
+        } catch (_) {
+        } finally {
+          _summing = null;
+        }
+      }();
+
+  /// Deletes what is in the leftover folders (not the folders themselves) and the damaged downloads, and measures again. Returns the
+  /// bytes freed.
+  Future<int> cleanUp() async {
+    if (busy()) return 0;
+    final before = cleanupBytes;
+    for (final m in await _damaged.find(manifests())) {
+      try {
+        await File(m.path).delete();
+      } catch (_) {}
+    }
+    for (final d in leftovers()) {
+      if (d == null) continue;
+      try {
+        if (!await d.exists()) continue;
+        await for (final e in d.list(followLinks: false)) {
+          try {
+            await e.delete(recursive: true);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    await measure();
+    return (before - cleanupBytes).clamp(0, before);
+  }
+}

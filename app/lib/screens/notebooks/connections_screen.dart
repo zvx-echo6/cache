@@ -1,0 +1,346 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/material.dart';
+
+import '../../notebook/sync/connections.dart';
+import '../../notebook/sync/folder_access.dart';
+import '../../notebook/sync/formats.dart' show kDefaultImportTag, validImportTag;
+import '../../notebook/sync/sync_engine.dart';
+import '../../theme.dart';
+
+/// Chooses a folder: its stored form and name, or null when none was chosen (tests give their own).
+typedef PickFolder = Future<({String path, String display})?> Function();
+
+/// Notebooks > Connections: Obsidian and Logseq folders, and notebook sync between your devices. Each says once what it does,
+/// its status line, and the changes that need a decision.
+class ConnectionsScreen extends StatelessWidget {
+  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true, this.phone});
+
+  /// On a phone (Android, iOS): the Obsidian section says that Obsidian syncs only while it is open. Null: this device.
+  final bool? phone;
+
+  bool get _phone => phone ?? (Platform.isAndroid || Platform.isIOS);
+
+  final NotebookConnections connections;
+  final PickFolder pickFolder;
+
+  /// Sharing and sync is set up on this phone (notebook sync is ticked there, as Notebooks).
+  final bool shareAvailable;
+
+  /// Obsidian and Logseq folders can be connected (Cache keeps access to a folder the person chooses: SAF on Android, a
+  /// security-scoped bookmark on iOS).
+  final bool folders;
+
+  Future<void> _connect(BuildContext context, SyncKind kind) async {
+    final messenger = ScaffoldMessenger.of(context);
+    var k = kind;
+    if (kind == SyncKind.logseq) {
+      final pick = await showModalBottomSheet<SyncKind>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                key: const ValueKey('logseq-files'),
+                minTileHeight: 56,
+                title: const Text('Logseq with a folder of Markdown files'),
+                subtitle: const Text('Logseq 0.10 and earlier. Changes in either place update the other.'),
+                onTap: () => Navigator.pop(ctx, SyncKind.logseq),
+              ),
+              ListTile(
+                key: const ValueKey('logseq-export'),
+                minTileHeight: 56,
+                title: const Text('Logseq 2'),
+                subtitle: const Text('Cache writes your entries as Markdown for Logseq to import. Changes made in Logseq stay there.'),
+                onTap: () => Navigator.pop(ctx, SyncKind.logseqExport),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (pick == null) return;
+      k = pick;
+    }
+    final picked = await pickFolder();
+    if (picked == null) return;
+    final err = await connections.connect(k, picked.path, display: picked.display);
+    if (err != null) messenger.showSnackBar(SnackBar(content: Text(err)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Connections')),
+      body: ListenableBuilder(
+        listenable: connections,
+        builder: (context, _) => ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            if (folders) ...[
+            _section(
+              context,
+              key: 'obsidian',
+              title: 'Obsidian',
+              what: 'Cache keeps your entries as Markdown files in a folder you choose. Open that folder as a vault in Obsidian. '
+                  'Changes in either place update the other.',
+              target: connections.target(SyncKind.obsidian),
+              onConnect: () => _connect(context, SyncKind.obsidian),
+            ),
+            const SizedBox(height: 12),
+            _section(
+              context,
+              key: 'logseq',
+              title: 'Logseq',
+              what: 'Cache keeps your entries as blocks on the journal pages of a Logseq graph. Open that folder as a graph in Logseq.',
+              target: connections.target(SyncKind.logseq),
+              onConnect: () => _connect(context, SyncKind.logseq),
+            ),
+            const SizedBox(height: 12),
+            ],
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Your other devices', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                  const SizedBox(height: 4),
+                  Text(
+                    shareAvailable
+                        ? 'Notebooks, with their photos, stay the same on the devices you linked in Sharing and sync when Notebooks is ticked there. '
+                            'Private notebooks stay on this device unless their "Include in sync and sharing" is on.'
+                        : 'Link your devices in Settings > Sharing and sync and tick Notebooks to keep your notebooks the same on all of them.',
+                    style: TextStyle(fontSize: 14, color: k.secondary),
+                  ),
+                  if (connections.status('share') case final s?) Padding(padding: const EdgeInsets.only(top: 6), child: Text(s, style: TextStyle(fontSize: 14, color: k.text))),
+                  for (final c in connections.conflicts('share')) _conflict(context, 'share', c),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _section(BuildContext context, {required String key, required String title, required String what, required SyncTargetConfig? target, required VoidCallback onConnect}) {
+    final k = context.t;
+    final merged = target == null ? const <String>[] : connections.merged(target.id);
+    return Container(
+      key: ValueKey('connection-$key'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: k.surface, borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text))),
+              if (target == null)
+                FilledButton(key: ValueKey('connect-$key'), onPressed: onConnect, child: const Text('Connect'))
+              else
+                PopupMenuButton<String>(
+                  key: ValueKey('menu-$key'),
+                  onSelected: (c) {
+                    switch (c) {
+                      case 'sync':
+                        connections.syncAll();
+                      case 'pause':
+                        connections.setPaused(target.id, !target.paused);
+                      case 'disconnect':
+                        connections.disconnect(target.id);
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'sync', child: Text('Sync now')),
+                    PopupMenuItem(value: 'pause', child: Text(target.paused ? 'Resume' : 'Pause')),
+                    const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(what, style: TextStyle(fontSize: 14, color: k.secondary)),
+          if (target != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              [target.name, if (target.kind == SyncKind.logseqExport) 'export only'].join(' · '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 14, color: k.text),
+            ),
+            // Owner, 2026-11-02: Obsidian on a phone sends and receives only while it is open (Obsidian Sync does not run in
+            // the background), so changes made in Cache reach other devices after Obsidian has been opened.
+            if (_phone && target.kind == SyncKind.obsidian)
+              Text('On phones, Obsidian sends and receives changes only while the Obsidian app is open. Open it to sync.',
+                  key: const ValueKey('obsidian-phone-note'), style: TextStyle(fontSize: 14, color: k.secondary)),
+            if (connections.status(target.id) case final s?) Text(s, key: ValueKey('status-$key'), style: TextStyle(fontSize: 14, color: s.startsWith("Can't") ? k.warning : k.text)),
+            if (merged.isNotEmpty)
+              Text(
+                'Changed in both places and merged: ${merged.take(3).join(', ')}${merged.length > 3 ? ' and ${merged.length - 3} more' : ''}',
+                key: ValueKey('merged-$key'),
+                style: TextStyle(fontSize: 14, color: k.text),
+              ),
+            if (connections.notAdded(target.id) case final n when n > 0)
+              Text(n == 1 ? '1 note not added: Cache cannot change it.' : '$n notes not added: Cache cannot change them.',
+                  key: ValueKey('not-added-$key'), style: TextStyle(fontSize: 14, color: k.emergency)),
+            for (final c in connections.conflicts(target.id)) _conflict(context, target.id, c),
+            if (target.kind != SyncKind.logseqExport) _importTagRow(context, key, target),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// "Import tag": notes with it are added to Cache (once; from then on Cache's id in them decides).
+  Widget _importTagRow(BuildContext context, String key, SyncTargetConfig target) {
+    final k = context.t;
+    final logseq = target.kind != SyncKind.obsidian;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        // Its own Material: the section is a coloured box, which would hide the row's ink.
+        Material(
+          type: MaterialType.transparency,
+          child: ListTile(
+            key: ValueKey('import-tag-$key'),
+            contentPadding: EdgeInsets.zero,
+            minTileHeight: 56,
+            title: Text('Import tag', style: TextStyle(fontSize: 16, color: k.text)),
+            subtitle: Text('Notes with this tag are added to Cache.', style: TextStyle(fontSize: 14, color: k.secondary)),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [Text(target.tag, style: TextStyle(fontSize: 15, color: k.text)), Icon(Icons.chevron_right, color: k.secondary)],
+            ),
+            onTap: () => _editTag(context, target),
+          ),
+        ),
+        if (target.importTag != null) Text('Notes already in Cache keep syncing.', style: TextStyle(fontSize: 14, color: k.secondary)),
+        Text(
+          logseq ? "Add private:: true to a page's or block's properties to keep it private in Cache." : "Add private: true to a note's properties to keep it private in Cache.",
+          style: TextStyle(fontSize: 14, color: k.secondary),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editTag(BuildContext context, SyncTargetConfig target) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final tag = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ImportTagSheet(initial: target.tag),
+    );
+    if (tag == null || tag == target.tag) return;
+    await connections.setImportTag(target.id, tag);
+    messenger.showSnackBar(SnackBar(content: Text('Import tag is $tag.')));
+  }
+
+  Widget _conflict(BuildContext context, String id, SyncConflict c) {
+    final k = context.t;
+    final (title, keepLabel, otherLabel, note) = switch (c.kind) {
+      ConflictKind.bothChanged => ('Changed in two places: ${c.title}', "Keep Cache's version", "Keep the file's version", 'The other version is kept as a copy.'),
+      ConflictKind.removedOutside => ('Removed in the folder: ${c.title}', 'Keep in Cache', 'Delete here too', null),
+      ConflictKind.unreadable => ("Couldn't read ${c.title}. Cache left it alone.", 'Ignore', null, null),
+    };
+    return Card(
+      key: ValueKey('conflict-${c.entryId}-${c.kind.name}'),
+      margin: const EdgeInsets.only(top: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: k.text)),
+            if (c.kind == ConflictKind.bothChanged) ...[
+              const SizedBox(height: 6),
+              Text('In Cache', style: TextStyle(fontSize: 12, color: k.secondary)),
+              Text(c.cacheText ?? '', maxLines: 6, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+              const SizedBox(height: 4),
+              Text('In the folder', style: TextStyle(fontSize: 12, color: k.secondary)),
+              Text(c.fileText ?? '', maxLines: 6, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            ],
+            if (note != null) Text(note, style: TextStyle(fontSize: 13, color: k.secondary)),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton(key: const ValueKey('conflict-keep-cache'), onPressed: () => connections.resolve(id, c, keepCache: true), child: Text(keepLabel)),
+                if (otherLabel != null)
+                  TextButton(key: const ValueKey('conflict-keep-file'), onPressed: () => connections.resolve(id, c, keepCache: false), child: Text(otherLabel)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The import tag's sheet: one field, checked as it is typed (`#`, letters, numbers, `-`, `_`, `/`; no spaces); Save, and Use
+/// #cachesync when it was changed. Pops the new tag.
+class ImportTagSheet extends StatefulWidget {
+  const ImportTagSheet({super.key, required this.initial});
+
+  final String initial;
+
+  @override
+  State<ImportTagSheet> createState() => _ImportTagSheetState();
+}
+
+class _ImportTagSheetState extends State<ImportTagSheet> {
+  late final TextEditingController _c = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = _c.text.trim();
+    final ok = validImportTag(t);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 16 + MediaQuery.viewInsetsOf(context).bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const ValueKey('import-tag-field'),
+            controller: _c,
+            autofocus: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: InputDecoration(
+              labelText: 'Import tag',
+              helperText: '#cachesync/Camping adds the note to the notebook Camping.',
+              helperMaxLines: 2,
+              errorText: ok ? null : 'Use a tag like #cachesync. No spaces.',
+              errorMaxLines: 2,
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) {
+              if (ok) Navigator.pop(context, t);
+            },
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (t != kDefaultImportTag)
+                TextButton(key: const ValueKey('import-tag-default'), onPressed: () => Navigator.pop(context, kDefaultImportTag), child: const Text('Use #cachesync')),
+              const SizedBox(width: 8),
+              FilledButton(key: const ValueKey('import-tag-save'), onPressed: ok ? () => Navigator.pop(context, t) : null, child: const Text('Save')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

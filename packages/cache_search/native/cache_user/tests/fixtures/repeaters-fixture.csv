@@ -1,0 +1,6 @@
+Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Comment
+1,"Burley ",927.162500,-,25,Tone,151.4,151.4,023,NN,FM,5,Burley
+2,"Rupert Mt",449.200000,-,5,DTCS,88.5,88.5,432,NN,DMR,5,"Rupert, Mt"
+3,"Burley Hill",147.360000,+,0.6,TSQL,100.0,100.0,023,NN,FM,5,"Burley, Hill"
+4,"Heyburn ",146.450000,split,147.45,,88.5,88.5,023,NN,Auto,5,Heyburn
+5,"Albion ",146.900000,-,0.6,Tone,88.5,88.5,023,NN,FM,5,Albion

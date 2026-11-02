@@ -1,0 +1,19 @@
+Map style and fonts
+
+omt_template.json is derived from OpenFreeMap's "Liberty" style
+(https://github.com/hyperknot/openfreemap-styles, MIT), a fork of OSM Liberty
+(https://github.com/maputnik/osm-liberty), itself a fork of OSM Bright, derived from Mapbox Open Styles.
+  - Style code: BSD 3-Clause License (OpenMapTiles / OSM Bright GL Style).
+  - Style design: CC BY 4.0 (OpenMapTiles).
+  - Map data: (c) OpenStreetMap contributors, ODbL 1.0.
+The layer structure is kept; every colour is replaced by a palette role (tool/make_omt_template.py), and
+layers that need a sprite sheet are left out.
+
+fonts/ holds glyph ranges of Noto Sans (Regular, Bold, Italic) as served by OpenFreeMap,
+released under the SIL Open Font License, Version 1.1 (https://openfontlicense.org/).
+
+protomaps_v4_template.json is the layer structure of the official @protomaps/basemaps package (version 5.7.2,
+https://github.com/protomaps/basemaps), for Protomaps basemap tiles v4, with every colour replaced by a palette
+field (tool/make_protomaps_template.cjs). Layers that need the sprite sheet are left out.
+  - Package code: BSD 3-Clause License, Copyright (c) Protomaps LLC.
+  - Map data: (c) OpenStreetMap contributors, ODbL 1.0.

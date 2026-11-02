@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand Charcoal: the native launch background (day and night). -->
+    <color name="brand_charcoal">#1A1D1F</color>
+</resources>

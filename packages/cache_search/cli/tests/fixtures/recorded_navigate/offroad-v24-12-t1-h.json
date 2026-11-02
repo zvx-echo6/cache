@@ -1,0 +1,219 @@
+{
+ "request": {
+  "from": "Kuna",
+  "mode": "drive",
+  "near": "Kuna, Idaho",
+  "to": "Swan Falls Dam"
+ },
+ "result": {
+  "distance_km": 3.21,
+  "distance_mi": 1.99,
+  "duration_minutes": 6.0,
+  "from_matched": {
+   "county": "Ada",
+   "distance_km": 1.4,
+   "kind": "poi",
+   "locality": "Kuna",
+   "near": {
+    "county": "Ada",
+    "distance_m": 0,
+    "housenumber": "637",
+    "locality": "Kuna",
+    "name": "Kuna High School",
+    "state": "ID",
+    "street": "East Deer Flat Road"
+   },
+   "place_name": "Kuna High School",
+   "snap_distance_m": 10,
+   "state": "ID",
+   "street": "East Deer Flat Road"
+  },
+  "location_bias": "near:Kuna, Ada, Idaho, United States",
+  "major_roads": [
+   {
+    "distance_km": 1.38,
+    "name": "North Linder Road"
+   },
+   {
+    "distance_km": 0.54,
+    "name": "East Deer Flat Road"
+   },
+   {
+    "distance_km": 0.39,
+    "name": "South Swan Falls Road"
+   }
+  ],
+  "mode": "drive",
+  "offroad_mi": 0.11,
+  "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
+  "ok": true,
+  "other_destination_candidates": [
+   {
+    "county": "Ada",
+    "distance_km": 1.2,
+    "kind": "poi",
+    "locality": "Kuna",
+    "place_name": "Swan Falls Assisted Living",
+    "state": "ID",
+    "street": "West White Way"
+   },
+   {
+    "county": "Ada",
+    "distance_km": 1.5,
+    "kind": "poi",
+    "locality": "Kuna",
+    "place_name": "Swan Falls Family Dentistry",
+    "state": "ID",
+    "street": "North Linder Road"
+   }
+  ],
+  "pins": "12 map pins prepared, one per step; the radio bridge sends them to the asker",
+  "route_id": "a7650ad16e34abd2",
+  "step_count": 12,
+  "steps": [
+   {
+    "cardinal": "N",
+    "distance_mi": 0.11,
+    "elev_gain_m": 0,
+    "elev_loss_m": 1,
+    "grade_class": "flat",
+    "index": 0,
+    "instruction": "By dirt bike or mountain bike: Off-road N 0.11 mi, flat, built up (-1 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "built up",
+    "travel": "2w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.12,
+    "index": 1,
+    "instruction": "Drive east.",
+    "kind": "road",
+    "street_names": [],
+    "type": "start_right"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.04,
+    "index": 2,
+    "instruction": "Turn right.",
+    "kind": "road",
+    "street_names": [],
+    "type": "right"
+   },
+   {
+    "cardinal": "W",
+    "distance_mi": 0.34,
+    "index": 3,
+    "instruction": "Turn left onto East Deer Flat Road.",
+    "kind": "road",
+    "street_names": [
+     "East Deer Flat Road"
+    ],
+    "type": "left"
+   },
+   {
+    "cardinal": "S",
+    "distance_mi": 0.86,
+    "index": 4,
+    "instruction": "Turn left onto North Linder Road.",
+    "kind": "road",
+    "street_names": [
+     "North Linder Road"
+    ],
+    "type": "left"
+   },
+   {
+    "cardinal": "SW",
+    "distance_mi": 0.02,
+    "index": 5,
+    "instruction": "Enter the roundabout and take the 2nd exit onto North Linder Avenue.",
+    "kind": "road",
+    "street_names": [],
+    "type": "roundabout_enter"
+   },
+   {
+    "cardinal": "S",
+    "distance_mi": 0.02,
+    "index": 6,
+    "instruction": "Exit the roundabout onto North Linder Avenue.",
+    "kind": "road",
+    "street_names": [
+     "North Linder Avenue"
+    ],
+    "type": "roundabout_exit"
+   },
+   {
+    "cardinal": "S",
+    "distance_mi": 0.1,
+    "index": 7,
+    "instruction": "Turn right to stay on North Linder Avenue.",
+    "kind": "road",
+    "street_names": [
+     "North Linder Avenue"
+    ],
+    "type": "right"
+   },
+   {
+    "cardinal": "SW",
+    "distance_mi": 0.24,
+    "index": 8,
+    "instruction": "Turn right onto South Swan Falls Road.",
+    "kind": "road",
+    "street_names": [
+     "South Swan Falls Road"
+    ],
+    "type": "right"
+   },
+   {
+    "cardinal": "W",
+    "distance_mi": 0.03,
+    "index": 9,
+    "instruction": "Turn right.",
+    "kind": "road",
+    "street_names": [],
+    "type": "right"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.11,
+    "index": 10,
+    "instruction": "Turn right.",
+    "kind": "road",
+    "street_names": [],
+    "type": "right"
+   },
+   {
+    "cardinal": "NW",
+    "distance_mi": 0.0,
+    "index": 11,
+    "instruction": "Your destination is on the left.",
+    "kind": "road",
+    "street_names": [],
+    "type": "destination_left"
+   }
+  ],
+  "steps_truncated": false,
+  "to_matched": {
+   "county": "Ada",
+   "distance_km": 0.7,
+   "kind": "poi",
+   "locality": "Kuna",
+   "near": {
+    "county": "Ada",
+    "distance_m": 0,
+    "housenumber": "387",
+    "locality": "Kuna",
+    "name": "Swan Falls Storage",
+    "state": "ID",
+    "street": "South Swan Falls Road"
+   },
+   "place_name": "Swan Falls Storage",
+   "snap_distance_m": 21,
+   "state": "ID",
+   "street": "South Swan Falls Road"
+  }
+ }
+}

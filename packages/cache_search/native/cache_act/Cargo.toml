@@ -1,0 +1,10 @@
+[package]
+name = "cache_act"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's act tool: modules publish their actions as data, the model calls them, and a change waits for the user's tap"
+
+[dependencies]
+serde_json.workspace = true
+cache_tool = { path = "../cache_tool" }

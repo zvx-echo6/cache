@@ -1,0 +1,14 @@
+[package]
+name = "cache_navigate"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's navigate tool: docs/TOOLS.md's navigate over Valhalla road routing and the off-road router"
+
+[dependencies]
+cache_tool = { path = "../cache_tool" }
+cache_offroad = { path = "../cache_offroad", features = ["shim"] }
+serde.workspace = true
+serde_json.workspace = true
+# The clock is always passed in (ctx.now); no "clock" feature.
+chrono = { version = "0.4", default-features = false, features = ["std"] }

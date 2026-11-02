@@ -1,0 +1,284 @@
+import 'package:flutter/material.dart';
+
+import '../downloads/download_row.dart';
+import '../models/hf_hub.dart';
+import '../models/model_downloads.dart';
+import '../models/search_model.dart';
+import '../theme.dart';
+import 'download_confirm.dart';
+
+String _size(int bytes) {
+  if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
+  return '${(bytes / (1 << 20)).toStringAsFixed(0)} MB';
+}
+
+String _count(int n) {
+  if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+  if (n >= 1000) return '${(n / 1000).toStringAsFixed(0)}k';
+  return '$n';
+}
+
+/// What a model row's controls do: Download asks first (the pop-up), Pause and Resume act at once, Remove asks the row's way, and a
+/// full device opens Storage.
+DlActions modelActions(BuildContext context, ModelDownloads d, HfFile f) => DlActions(
+      download: () => downloadModel(context, d, f),
+      pause: () => d.pause(f),
+      resume: () => d.resume(f),
+      remove: () => d.remove(f),
+      downloadNow: () => d.resume(f, anyway: true),
+      freeSpace: openStorageForSpace == null ? null : () => openStorageForSpace!(context),
+    );
+
+/// Find a model on Hugging Face: search, pick a repository, pick a file. Shows each file's size and whether it fits
+/// this phone; downloads resume where they stopped and are checked against Hugging Face's checksum.
+class ModelSearchScreen extends StatefulWidget {
+  const ModelSearchScreen({super.key, required this.downloads, this.initialQuery = 'gemma 4'});
+
+  final ModelDownloads downloads;
+  final String initialQuery;
+
+  @override
+  State<ModelSearchScreen> createState() => _ModelSearchScreenState();
+}
+
+class _ModelSearchScreenState extends State<ModelSearchScreen> {
+  late final _query = TextEditingController(text: widget.initialQuery);
+  List<HfModel>? _results;
+  String? _error;
+  bool _searching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _search();
+  }
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() async {
+    if (_query.text.trim().isEmpty) return;
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
+    try {
+      final r = await widget.downloads.hub.search(_query.text);
+      if (mounted) setState(() => _results = r);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not search Hugging Face. Check the connection and try again.');
+    } finally {
+      if (mounted) setState(() => _searching = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final results = _results;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Find a model')),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: TextField(
+                key: const ValueKey('model-search'),
+                controller: _query,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _search(),
+                decoration: InputDecoration(
+                  hintText: 'Search Hugging Face (for example gemma 4, qwen3)',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searching
+                      ? const Padding(padding: EdgeInsets.all(14), child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+                      : null,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Text(
+                'Models from Hugging Face in GGUF format. Cache only uses models that can use tools; that is checked when the model is first loaded.',
+                style: TextStyle(fontSize: 13, color: k.secondary),
+              ),
+            ),
+            Expanded(
+              child: _error != null
+                  ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: k.secondary))))
+                  : results == null
+                  ? const SizedBox.shrink()
+                  : results.isEmpty
+                  ? Center(child: Text('No GGUF models match.', style: TextStyle(fontSize: 16, color: k.secondary)))
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                      itemCount: results.length,
+                      itemBuilder: (context, i) {
+                        final m = results[i];
+                        return Card(
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          child: ListTile(
+                            minTileHeight: 64,
+                            title: Text(m.name, style: const TextStyle(fontSize: 17)),
+                            subtitle: Text(
+                              [m.owner, '${_count(m.downloads)} downloads', if (m.gated) 'needs a Hugging Face account'].join(' · '),
+                              style: TextStyle(fontSize: 14, color: k.secondary),
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(builder: (_) => ModelFilesScreen(downloads: widget.downloads, model: m)),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Downloads [f] from a model screen after the download pop-up. The first chat model brings the search model along (it gives meaning
+/// search), as one more line in the same pop-up. Offers "Use it" when the model is ready.
+Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f) async {
+  final dir = d.app.modelsDir;
+  if (dir == null) return;
+  final sm = d.searchModel;
+  final withSearch = sm != null && !d.isSearchModel(f) && d.app.searchModel == null && !d.searchModelQueued;
+  final choice = await askToDownload(
+    context,
+    title: 'Download ${d.labelOf(f)}?',
+    lines: [
+      DownloadLine(d.labelOf(f), f.size),
+      if (withSearch) DownloadLine('Search model (once, for searching by meaning)', sm.size),
+    ],
+    dir: dir.path,
+    policy: d.policy,
+  );
+  if (choice == DownloadChoice.cancel || !context.mounted) return;
+  await d.start(f, anyway: choice == DownloadChoice.now);
+  if (!context.mounted) return;
+  // The first chat model on this device: the app says "Ask is on." itself (Shell), so this one says nothing over it.
+  if (d.finished != null && d.app.models.length > 1) {
+    final finished = d.finished!;
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      content: Text('${finished.fileName} is ready.'),
+      action: SnackBarAction(label: 'Use it', onPressed: () => d.app.activate(finished)),
+    ));
+  }
+}
+
+/// The files of one repository, with size, fit and a download button each.
+class ModelFilesScreen extends StatefulWidget {
+  const ModelFilesScreen({super.key, required this.downloads, required this.model, this.memory});
+
+  final ModelDownloads downloads;
+  final HfModel model;
+
+  /// The phone's memory for the fit check; read from the phone when null.
+  final int? memory;
+
+  @override
+  State<ModelFilesScreen> createState() => _ModelFilesScreenState();
+}
+
+class _ModelFilesScreenState extends State<ModelFilesScreen> {
+  List<HfFile>? _files;
+  String? _error;
+  int? _memory;
+
+  @override
+  void initState() {
+    super.initState();
+    _memory = widget.memory;
+    if (_memory == null) totalMemoryBytes().then((m) => mounted ? setState(() => _memory = m) : null);
+    widget.downloads.hub.ggufFiles(widget.model.id).then(
+      (f) => mounted ? setState(() => _files = f) : null,
+      onError: (_) => mounted ? setState(() => _error = 'Could not list the files. Check the connection and try again.') : null,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    final files = _files;
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.model.name)),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Expanded(
+              child: ListenableBuilder(
+                listenable: Listenable.merge([widget.downloads, widget.downloads.app]),
+                builder: (context, _) {
+                  if (_error != null) return Center(child: Text(_error!, style: TextStyle(fontSize: 16, color: k.secondary)));
+                  if (files == null) return const Center(child: CircularProgressIndicator());
+                  if (files.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text('This repository has no single-file GGUF models.', textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: k.secondary)),
+                      ),
+                    );
+                  }
+                  final d = widget.downloads;
+                  final withSearch = d.searchModel != null && d.app.searchModel == null && !d.searchModelQueued;
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                    children: [
+                      if (withSearch)
+                        Padding(
+                          key: const ValueKey('also-downloads-search-model'),
+                          padding: const EdgeInsets.all(8),
+                          child: Text('Also downloads: Search model, ${kSearchModel.sizeLabel}', style: TextStyle(fontSize: 14, color: k.secondary)),
+                        ),
+                      if (widget.model.gated)
+                        Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            'This repository asks people to sign in to Hugging Face and accept its terms first. If the download is refused, get the file in a browser and use "Choose a file".',
+                            style: TextStyle(fontSize: 14, color: k.warning),
+                          ),
+                        ),
+                      for (final f in files)
+                        Builder(builder: (context) {
+                          final fit = ModelFit.of(f.size, _memory);
+                          final colour = switch (fit) {
+                            ModelFit.fits => k.ok,
+                            ModelFit.tight => k.warning,
+                            ModelFit.tooBig => k.emergency,
+                            ModelFit.unknown => k.secondary,
+                          };
+                          return DownloadRow(
+                            key: ValueKey('file-${f.fileName}'),
+                            keyBase: 'download-${f.fileName}',
+                            title: f.fileName,
+                            state: d.stateOf(f),
+                            actions: modelActions(context, d, f),
+                            idleSpan: TextSpan(children: [
+                              TextSpan(text: _size(f.size), style: TextStyle(color: k.secondary)),
+                              if (fit != ModelFit.unknown) TextSpan(text: ' · ${fit.label}', style: TextStyle(color: colour)),
+                            ]),
+                          );
+                        }),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

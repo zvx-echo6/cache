@@ -1,0 +1,142 @@
+#!/bin/bash
+# Device-only static routing build. All downloads/build products stay in $1.
+set -euo pipefail
+[[ $# == 2 ]] || { echo "usage: $0 <work-dir> <output-dir>" >&2; exit 2; }
+[[ $(uname -s) == Darwin ]] || { echo "requires macOS/Xcode" >&2; exit 1; }
+# Apple clang interprets this ambient variable even for macOS host tools.
+# iOS stays pinned via the target triplet and explicit CMake/compiler flags below.
+unset IPHONEOS_DEPLOYMENT_TARGET
+here=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$1" "$2"
+work=$(cd "$1" && pwd)
+out=$(cd "$2" && pwd)
+valhalla_rev=72f459fc5661fb906ad424be5378c4e32d9a5b3b
+vcpkg_rev=0e39c10736341cc8135b560438229bbda3d3219a
+checkout() {
+  local url=$1 dir=$2 rev=$3
+  if [[ ! -d "$dir/.git" ]]; then git clone --no-checkout "$url" "$dir"; fi
+  git -C "$dir" fetch origin "$rev"
+  git -C "$dir" checkout --detach "$rev"
+  [[ $(git -C "$dir" rev-parse HEAD) == "$rev" ]]
+}
+checkout https://github.com/valhalla/valhalla.git "$work/src" "$valhalla_rev"
+git -C "$work/src" submodule update --init --recursive
+checkout https://github.com/microsoft/vcpkg.git "$work/vcpkg" "$vcpkg_rev"
+export VCPKG_ROOT="$work/vcpkg"
+export VCPKG_DOWNLOADS="$work/downloads"
+mkdir -p "$VCPKG_DOWNLOADS"
+"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+cp "$here/tz/leapseconds" "$work/src/third_party/tz/leapseconds"
+touch "$work/src/third_party/tz/leapseconds"
+case $(uname -m) in
+  arm64) host=arm64-osx ;;
+  x86_64) host=x64-osx ;;
+  *) echo "unsupported host" >&2; exit 1 ;;
+esac
+cmake -S "$here" -B "$work/build" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DVALHALLA_SRC="$work/src" \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_TARGET_TRIPLET=arm64-ios-rel -DVCPKG_HOST_TRIPLET="$host" \
+  -DVCPKG_OVERLAY_TRIPLETS="$here/triplets" \
+  -DVCPKG_INSTALLED_DIR="$work/installed" \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.3 \
+  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+  -DCACHE_VALHALLA_STATIC=ON -DCACHE_VALHALLA_BUILD_TEST=ON \
+  -DENABLE_STATIC_LIBRARY_MODULES=OFF
+# Verify generated commands, not only CMake property visibility, before compiling.
+python3 - "$work/build/compile_commands.json" "$work/src/src/baldr/tz_alt.cpp" <<'PY'
+import json
+from pathlib import Path
+import shlex
+import sys
+
+def fail(message):
+    raise SystemExit("routing compile preflight: " + message)
+
+try:
+    entries = json.loads(Path(sys.argv[1]).read_text())
+    expected = Path(sys.argv[2]).resolve()
+    if not isinstance(entries, list) or not entries:
+        fail("compile_commands.json is empty or not an array")
+    tz_count = 0
+    for entry in entries:
+        source = Path(entry["file"])
+        if not source.is_absolute():
+            source = Path(entry["directory"]) / source
+        source = source.resolve()
+        args = entry.get("arguments")
+        if args is None:
+            args = shlex.split(entry["command"])
+        if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            fail(f"{source}: malformed compiler arguments")
+        definitions = {}
+        undefines = set()
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg in ("-D", "-U"):
+                index += 1
+                if index == len(args):
+                    fail(f"{source}: trailing {arg}")
+                value = args[index]
+                kind = arg
+            elif arg.startswith(("-D", "-U")):
+                kind, value = arg[:2], arg[2:]
+            else:
+                index += 1
+                continue
+            name, separator, value = value.partition("=")
+            if kind == "-D":
+                definitions.setdefault(name, []).append(value if separator else "1")
+            else:
+                undefines.add(name)
+            index += 1
+        if any(value != "0" for value in definitions.get("USE_OS_TZDB", [])):
+            fail(f"{source}: USE_OS_TZDB must be absent or explicitly 0")
+        if source == expected:
+            tz_count += 1
+            if definitions.get("INSTALL") != ["."] or "INSTALL" in undefines:
+                fail(f"{source}: expected exactly one -DINSTALL=. with no -UINSTALL")
+        elif "INSTALL" in definitions or "INSTALL" in undefines:
+            fail(f"{source}: INSTALL must be scoped only to tz_alt.cpp")
+        # Both date implementation files inherit the offline Valhalla flags.
+        if source == expected or source.name == "ios.mm":
+            for name in ("HAS_REMOTE_API", "AUTO_DOWNLOAD"):
+                values = definitions.get(name, [])
+                if not values or any(value != "0" for value in values) or name in undefines:
+                    fail(f"{source}: require {name}=0 without conflicting definitions/undefines")
+    if tz_count != 1:
+        fail(f"expected one tz_alt.cpp compile command; found {tz_count}")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    fail(f"cannot inspect compile commands: {error}")
+print("routing compile preflight: PASS (scoped INSTALL=.; embedded TZDB; date networking disabled)")
+PY
+# Linking the C harness resolves the shim's complete dependency closure.
+cmake --build "$work/build" --target valhalla_shim_test --parallel 3
+archives=("$work/build/libvalhalla_shim.a" "$work/build/valhalla/src/libvalhalla.a")
+while IFS= read -r archive; do
+  # Full protobuf and protoc are build tools; routing uses protobuf-lite only.
+  case $(basename "$archive") in libprotobuf.a|libprotoc.a) continue ;; esac
+  archives+=("$archive")
+done < <(find "$work/installed/arm64-ios-rel/lib" -maxdepth 1 -name '*.a' -type f | LC_ALL=C sort)
+xcrun libtool -static -o "$out/libcache_valhalla.a" "${archives[@]}"
+[[ $(xcrun lipo -archs "$out/libcache_valhalla.a") == arm64 ]]
+xcrun nm -gU "$out/libcache_valhalla.a" > "$out/valhalla-symbols.txt"
+for symbol in version init route matrix locate trace_attributes string_free destroy last_error last_error_code; do
+  grep -Eq " [T] _valhalla_shim_${symbol}$" "$out/valhalla-symbols.txt" || {
+    echo "missing shim definition: $symbol" >&2; exit 1;
+  }
+done
+# Relink against the actual merged archive, not just CMake's individual libraries.
+xcrun --sdk iphoneos clang -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  -miphoneos-version-min=16.3 -I"$here/shim" "$here/test/shim_test.c" \
+  "$out/libcache_valhalla.a" -lc++ -lz -framework CoreFoundation -o "$work/bundle-link-check"
+{
+  echo "Valhalla=$valhalla_rev"
+  echo "vcpkg=$vcpkg_rev"
+  echo "target=arm64-apple-ios deployment=16.3"
+  xcodebuild -version
+  xcrun --sdk iphoneos --show-sdk-version
+  shasum -a 256 "$out/libcache_valhalla.a"
+} > "$out/valhalla-build.txt"

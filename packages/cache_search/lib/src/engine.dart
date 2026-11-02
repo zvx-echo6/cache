@@ -1,0 +1,378 @@
+import 'dart:convert';
+
+import 'errors.dart';
+import 'map_models.dart';
+import 'models.dart';
+import 'native.dart';
+
+Map<String, dynamic> _object(String json) => (jsonDecode(json) as Map).cast<String, dynamic>();
+
+/// Synchronous, typed use of the core: JSON in and out, every error raised from cs_last_error. Calls can
+/// block, so the app uses it through [SearchCore], which runs it in a background isolate; a handle is used
+/// from one thread at a time.
+class SearchEngine {
+  SearchEngine(this.native, this._handle);
+
+  /// Opens the core with [sources] (cs_open). Returns at once; libraries open in the background.
+  factory SearchEngine.open(CsNative native, List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    final h = native.open(jsonEncode(openConfigJson(sources, extra: extra)));
+    if (h == 0) throw CacheSearchException.fromJson(native.lastError(0));
+    return SearchEngine(native, h);
+  }
+
+  final CsNative native;
+  int _handle;
+
+  bool get isOpen => _handle != 0;
+
+  int get _h {
+    if (_handle == 0) throw const CacheSearchException('internal', 'The search core is closed');
+    return _handle;
+  }
+
+  /// The result string of a call, or the core's error as an exception.
+  String _ok(String? s) => s ?? (throw CacheSearchException.fromJson(native.lastError(_h)));
+
+  /// {"version":..,"index_format":..}
+  Map<String, dynamic> version() => _object(native.version() ?? '{}');
+
+  /// Replaces the source list (a ZIM was added or removed). [extra] are the config's other fields cs_set_sources takes again
+  /// each time (`indexes_dir`).
+  void setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: extra))) < 0) {
+      throw CacheSearchException.fromJson(native.lastError(_h));
+    }
+  }
+
+  List<SourceStatus> status() => [
+        for (final s in (_object(_ok(native.status(_h)))['sources'] as List? ?? const []))
+          SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
+      ];
+
+  /// cs_status's "rejected_snapshots": snapshots the core found unusable and removed on this device (none from an older core).
+  List<RejectedSnapshot> rejectedSnapshots() => [
+        for (final r in (_object(_ok(native.status(_h)))['rejected_snapshots'] as List? ?? const []))
+          if (r is Map) RejectedSnapshot.fromJson(r.cast<String, dynamic>()),
+      ];
+
+  SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
+    final options = {
+      'k': k,
+      'offset': offset,
+      'sources': sources,
+      'query_vector': queryVector?.toJson(),
+    };
+    return SearchResponse.fromJson(_object(_ok(native.search(_h, query, jsonEncode(options)))));
+  }
+
+  /// The text for an address, cut at a paragraph end to [maxChars] (about 6,000 is 1,500 tokens).
+  ReadResult read(String address, {int maxChars = 6000}) =>
+      ReadResult.fromJson(_object(_ok(native.read(_h, address, maxChars))));
+
+  /// Raw bytes of a ZIM entry (HTML, CSS, images), following redirects.
+  ZimBytes zimGet(String address) =>
+      native.zimGet(_h, address) ?? (throw CacheSearchException.fromJson(native.lastError(_h)));
+
+  /// The address of a ZIM's main page.
+  String zimMainPage(String zimId) => _object(_ok(native.zimMainPage(_h, zimId)))['address'] as String;
+
+  List<Suggestion> suggest(String prefix, {int k = 10, List<String>? sources}) => [
+        for (final s in (_object(_ok(native.suggest(_h, prefix, jsonEncode({'k': k, 'sources': sources}))))['suggestions'] as List? ?? const []))
+          Suggestion.fromJson((s as Map).cast<String, dynamic>()),
+      ];
+
+  /// The phone's GPS fix, for the tools that default to "where I am" (cs_set_location). [fixedAt] is ISO 8601 with an offset.
+  void setLocation(double lat, double lon, {double accuracyM = -1, required String fixedAt}) {
+    if (native.setLocation(_h, lat, lon, accuracyM, fixedAt) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  void clearLocation() {
+    if (native.clearLocation(_h) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// Web search settings (cs_set_web); [provider] null turns it off. [online] is the app's own view of the connection.
+  void setWeb({String? provider, String? key, required bool online}) {
+    if (native.setWeb(_h, provider, key, online) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// The function schemas of the tools available now (cs_tool_schemas), each {"type":"function","function":{...}}.
+  List<Map<String, dynamic>> toolSchemas() =>
+      [for (final t in jsonDecode(_ok(native.toolSchemas(_h))) as List) (t as Map).cast<String, dynamic>()];
+
+  /// Runs one tool call (cs_tool). A failure of the tool is not an exception: its content is the error JSON.
+  ToolOutput tool(ConversationNumbers conv, String name, Map<String, dynamic> args, {required String now}) =>
+      ToolOutput.fromJson(_object(_ok(native.tool(_h, conv.handle, name, jsonEncode(args), now))));
+
+  Map<String, dynamic> placesList() => _object(_ok(native.placesList(_h)));
+  Map<String, dynamic> placeSave(Map<String, dynamic> place) => _object(_ok(native.placeSave(_h, jsonEncode(place))));
+  Map<String, dynamic> placeDelete(String key) => _object(_ok(native.placeDelete(_h, key)));
+
+  Map<String, dynamic> liveSources() => _object(_ok(native.live(_h, 'sources', '')));
+  Map<String, dynamic> liveFetch(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'fetch', jsonEncode(request))));
+  Map<String, dynamic> liveGet(Map<String, dynamic> request) => _object(_ok(native.live(_h, 'get', jsonEncode(request))));
+
+  CsLiveNative get _liveNative {
+    final n = native is CsLiveNative ? native as CsLiveNative : null;
+    if (n != null && n.hasLivePolicy) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core cannot take a fetch policy or keys yet');
+  }
+
+  /// cs_live_set_fetch_policy: `{"online","allow_metered","metered","enabled_sources":[ids]}`; null clears it (every fetch is denied).
+  /// The same state gives live_data's `not_refreshed` (switched off, no connection, mobile data updates off).
+  void liveSetFetchPolicy(Map<String, dynamic>? policy) {
+    if (_liveNative.liveSetFetchPolicy(_h, policy == null ? null : jsonEncode(policy)) < 0) {
+      throw CacheSearchException.fromJson(native.lastError(_h));
+    }
+  }
+
+  /// cs_live_set_key: one source's key, kept in the core's memory only; null forgets it.
+  void liveSetKey(String sourceId, String? key) {
+    if (_liveNative.liveSetKey(_h, sourceId, key) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// cs_live_preview (needs no handle): checks a connector definition (`check_only`), or downloads once with it.
+  Map<String, dynamic> livePreview(Map<String, dynamic> request) {
+    final r = _liveNative.livePreview(jsonEncode(request));
+    return _object(r ?? (throw CacheSearchException.fromJson(native.lastError(0))));
+  }
+
+  /// The map layer engine (cs_layers_*): [op] is list, refresh, save, remove, server, plan, delete or clear_cache.
+  Map<String, dynamic> layers(String op, [String? arg]) => _object(_ok(native.layers(_h, op, arg)));
+
+  // ---- the map: search, route, guidance (cs_map_*), and saved places ----
+
+  CsMapNative get _map {
+    final n = native is CsMapNative ? native as CsMapNative : null;
+    if (n != null && n.hasMap) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core has no map search or routing yet');
+  }
+
+  CsMapNative get _saved {
+    final n = native is CsMapNative ? native as CsMapNative : null;
+    if (n != null && n.hasSavedPlaces) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core cannot save places yet');
+  }
+
+  /// cs_map_search: `{"query", "near"?: {"lat","lon"}, "limit"?, "meaning"?, "query_vector"?}` as the raw JSON object.
+  Map<String, dynamic> mapSearchRaw(Map<String, dynamic> request) => _object(_ok(_map.mapSearch(_h, jsonEncode(request))));
+
+  /// cs_map_route: `{"from"?, "to", "via"?, "mode"?, "land_access"?, "alternatives"?}` as the raw JSON object.
+  Map<String, dynamic> mapRouteRaw(Map<String, dynamic> request) => _object(_ok(_map.mapRoute(_h, jsonEncode(request))));
+
+  /// cs_map_progress: `{"route_id"|"route", "lat", "lon", ...}` as the raw JSON object.
+  Map<String, dynamic> mapProgressRaw(Map<String, dynamic> request) => _object(_ok(_map.mapProgress(_h, jsonEncode(request))));
+
+  MapSearchResponse mapSearch(Map<String, dynamic> request) => MapSearchResponse.fromJson(mapSearchRaw(request));
+  MapRoute mapRoute(Map<String, dynamic> request) => MapRoute.fromJson(mapRouteRaw(request));
+  MapProgress mapProgress(Map<String, dynamic> request) => MapProgress.fromJson(mapProgressRaw(request));
+
+  /// cs_places_refresh: the next search reads the places again (the merged database and every pack file); [packs], when
+  /// given, replaces the list of single-region packs. `{"ok", "packs", "merged"}`.
+  Map<String, dynamic> placesRefresh({List<String>? packs}) {
+    final n = native is CsPlacesNative ? native as CsPlacesNative : null;
+    if (n == null || !n.hasPlacesRefresh) {
+      throw const CacheSearchException('unsupported', 'This build of the core cannot refresh places yet');
+    }
+    return _object(_ok(n.placesRefresh(_h, jsonEncode({'packs': ?packs}))));
+  }
+
+  // ---- the act tool (docs/ACTIONS.md) ----
+
+  CsActNative get _act {
+    final n = native is CsActNative ? native as CsActNative : null;
+    if (n != null && n.hasAct) return n;
+    throw const CacheSearchException('unsupported', 'This build of the core has no act tool yet');
+  }
+
+  /// cs_act_set_definitions: installs [definitions] (module order, then each module's own), replacing the earlier set.
+  /// `{"accepted":N,"rejected":[...],"not_listed":[...]}`.
+  Map<String, dynamic> actSetDefinitions(List<Map<String, dynamic>> definitions) => _object(_ok(_act.actSetDefinitions(_h, jsonEncode(definitions))));
+
+  /// cs_act_set_modules_off: the modules switched off (their actions are left out and answer not_set_up).
+  void actSetModulesOff(List<String> modules) {
+    if (_act.actSetModulesOff(_h, jsonEncode(modules)) < 0) throw CacheSearchException.fromJson(native.lastError(_h));
+  }
+
+  /// cs_act_resolve: `{"ok":true,"action","fields"}` with places as `{"lat","lon","name"?,"label"?}`, or the act call's error JSON.
+  Map<String, dynamic> actResolve(String action, Map<String, dynamic> fields) => _object(_ok(_act.actResolve(_h, action, jsonEncode(fields))));
+
+  /// cs_act_finish: the host's [reply] (`{"ok":true,"result"}` or `{"ok":false,"error"}`) to the host_run [runId] in [conv]; the
+  /// exact tool message for the model.
+  String actFinish(ConversationNumbers conv, String runId, Map<String, dynamic> reply) =>
+      _act.actFinish(conv.handle, runId, jsonEncode(reply)) ?? (throw CacheSearchException.fromJson(native.lastError(0)));
+
+  /// cs_act_outcome: what a tap on a confirm card came to; the exact content of the system message for the model.
+  String actOutcome(ConversationNumbers conv, Map<String, dynamic> outcome) =>
+      _act.actOutcome(conv.handle, jsonEncode(outcome)) ?? (throw CacheSearchException.fromJson(native.lastError(0)));
+
+  // ---- the Notebook (cs_notebook) ----
+
+  /// cs_notebook: one op of the Notebook with its [args]; the answer as JSON (an object).
+  Map<String, dynamic> notebook(String op, Map<String, dynamic> args) {
+    final n = native is CsNotebookNative ? native as CsNotebookNative : null;
+    if (n == null || !n.hasNotebook) throw const CacheSearchException('unsupported', 'This build of the core has no Notebook yet');
+    return _object(_ok(n.notebook(_h, op, jsonEncode(args))));
+  }
+
+  // ---- PDF indexes of ZIMs (cs_zim_pdfs, cs_pdfindex_*) ----
+
+  CsPdfNative _pdf() {
+    final n = native is CsPdfNative ? native as CsPdfNative : null;
+    if (n == null || !n.hasPdfIndex) throw const CacheSearchException('unsupported', 'This build of the core cannot index PDFs yet');
+    return n;
+  }
+
+  /// True when the loaded core has the PDF index calls.
+  bool get hasPdfIndex => native is CsPdfNative && (native as CsPdfNative).hasPdfIndex;
+
+  /// cs_zim_pdfs of the ZIM [zimId].
+  Map<String, dynamic> zimPdfs(String zimId) => _object(_ok(_pdf().zimPdfs(_h, zimId)));
+
+  /// One handle-less PDF call ([CsPdfNative.pdfIndex]): the build session, or `chunk` (cs_pdf_chunk).
+  Map<String, dynamic> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) {
+    final s = _pdf().pdfIndex(op, session: session, json: jsonEncode(args ?? const {}));
+    return _object(s ?? (throw CacheSearchException.fromJson(native.lastError(0))));
+  }
+
+  // ---- caption search (cs_captions_search) ----
+
+  /// True when the core has cs_captions_search.
+  bool get hasCaptionsSearch => native is CsCaptionsNative && (native as CsCaptionsNative).hasCaptionsSearch;
+
+  /// cs_captions_search: {"query","k"?,"lang"?} -> {"videos":[...]} (cache_search.h).
+  Map<String, dynamic> captionsSearch(Map<String, dynamic> request) {
+    final n = native is CsCaptionsNative ? native as CsCaptionsNative : null;
+    if (n == null || !n.hasCaptionsSearch) throw const CacheSearchException('unsupported', 'This build of the core cannot search captions yet');
+    return _object(_ok(n.captionsSearch(_h, jsonEncode(request))));
+  }
+
+  // ---- the user's map layers and repeater lists (cs_userlayer*) ----
+
+  /// One of the user-layer calls: `import` ([arg] = import JSON), `list`, `get` (id), `set_visible` (JSON), `delete` (id),
+  /// `export` (JSON); the answer as JSON (an object).
+  Map<String, dynamic> userLayers(String call, [String? arg]) {
+    final n = native is CsUserLayersNative ? native as CsUserLayersNative : null;
+    if (n == null || !n.hasUserLayers) throw const CacheSearchException('unsupported', 'This build of the core has no map layers of your own yet');
+    if (!const {'import', 'list', 'get', 'set_visible', 'delete', 'export'}.contains(call)) {
+      throw CacheSearchException('bad_json', 'unknown user-layer call $call');
+    }
+    return _object(_ok(n.userLayers(_h, call, arg)));
+  }
+
+  List<SavedPlaceRecord> savedPlaces() => [
+        for (final p in (_object(_ok(_saved.placesList(_h)))['places'] as List? ?? const []))
+          SavedPlaceRecord.fromJson((p as Map).cast<String, dynamic>()),
+      ];
+
+  /// cs_place_save: `{"key"?, "name", "lat", "lon", "label"?}`; returns the saved place.
+  SavedPlaceRecord savePlace(Map<String, dynamic> place) {
+    final r = _object(_ok(_saved.placeSave(_h, jsonEncode(place))));
+    return SavedPlaceRecord.fromJson(r['place'] is Map ? (r['place'] as Map).cast<String, dynamic>() : r);
+  }
+
+  void deleteSavedPlace(String key) => _ok(_saved.placeDelete(_h, key));
+
+  void close() {
+    if (_handle != 0) native.close(_handle);
+    _handle = 0;
+  }
+}
+
+/// One chat's [n] numbering (cs_conv).
+class ConversationNumbers {
+  ConversationNumbers(this.native, this._conv);
+
+  factory ConversationNumbers.create(CsNative native) {
+    final c = native.conversationNew();
+    if (c == 0) throw CacheSearchException.fromJson(native.lastError(0));
+    return ConversationNumbers(native, c);
+  }
+
+  /// A conversation from [json], the output of [export] (cs_conversation_import).
+  factory ConversationNumbers.import(CsNative native, String json) {
+    final c = native.conversationImport(json);
+    if (c == 0) throw CacheSearchException.fromJson(native.lastError(0));
+    return ConversationNumbers(native, c);
+  }
+
+  final CsNative native;
+  int _conv;
+
+  /// The native conversation, for cs_tool.
+  int get handle => _c;
+
+  /// The conversation's whole state as JSON, to save a chat and continue it later (cs_conversation_export).
+  String export() => native.conversationExport(_c) ?? (throw CacheSearchException.fromJson(native.lastError(0)));
+
+  int get _c {
+    if (_conv == 0) throw const CacheSearchException('internal', 'The conversation is closed');
+    return _conv;
+  }
+
+  /// Numbers [results] (search hits, or any list of {address,title,snippet}) and returns the exact tool
+  /// message plus the id map so far.
+  FormattedResults format(List<Map<String, dynamic>> results) {
+    final s = native.format(_c, jsonEncode(results));
+    if (s == null) throw CacheSearchException.fromJson(native.lastError(0));
+    return FormattedResults.fromJson(_object(s));
+  }
+
+  /// The id map so far, for the citation check.
+  List<ConversationId> ids() {
+    final s = native.conversationIds(_c);
+    if (s == null) throw CacheSearchException.fromJson(native.lastError(0));
+    return FormattedResults.fromJson({'ids': _object(s)['ids']}).ids;
+  }
+
+  void free() {
+    if (_conv != 0) native.conversationFree(_conv);
+    _conv = 0;
+  }
+}
+
+/// A long job (index_zim, index_library, update_library, library_manifest).
+class CoreJob {
+  CoreJob(this.native, this._job);
+
+  /// [kind] is the job kind and [params] its parameters, for example kind "index_zim" with
+  /// {"zim_path","index_dir","heap_mb":200}.
+  factory CoreJob.start(CsNative native, String kind, Map<String, dynamic> params) {
+    final j = native.jobStart(kind, jsonEncode(params));
+    if (j == 0) throw CacheSearchException.fromJson(native.lastError(0));
+    return CoreJob(native, j);
+  }
+
+  final CsNative native;
+  int _job;
+
+  int get _j {
+    if (_job == 0) throw const CacheSearchException('internal', 'The job is freed');
+    return _job;
+  }
+
+  JobProgress progress() {
+    final s = native.jobProgress(_j);
+    if (s == null) throw CacheSearchException.fromJson(native.lastError(0));
+    return JobProgress.fromJson(_object(s));
+  }
+
+  /// Asks the job to stop at its next checkpoint; poll [progress] until it says cancelled.
+  void cancel() {
+    if (native.jobCancel(_j) < 0) throw CacheSearchException.fromJson(native.lastError(0));
+  }
+
+  /// Changes the job's pace now (cs_job_set): {"work_ms","idle_ms","threads"?,"paused"?,"auto"?}, what is left out stays. Answers
+  /// {"duty","effective","auto","paused"}, or null when this core has no cs_job_set.
+  Map<String, dynamic>? set(Map<String, Object?> pace) {
+    final n = native;
+    if (n is! CsJobNative) return null;
+    final s = (n as CsJobNative).jobSet(_j, jsonEncode(pace));
+    return s == null ? null : _object(s);
+  }
+
+  /// Frees a job that is done, cancelled or failed.
+  void free() {
+    if (_job != 0) native.jobFree(_job);
+    _job = 0;
+  }
+}

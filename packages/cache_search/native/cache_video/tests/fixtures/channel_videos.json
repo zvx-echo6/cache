@@ -1,0 +1,284 @@
+{
+ "total": 59,
+ "data": [
+  {
+   "id": 52751,
+   "uuid": "aa97b1a9-ae8b-4b6b-989d-8d409abe9d9b",
+   "shortUUID": "n4Nk3o6U8ot1NziGkxa9Ag",
+   "url": "https://example.org/videos/watch/aa97b1a9-ae8b-4b6b-989d-8d409abe9d9b",
+   "name": "N9SAB 80M Linked EFHW Ham Radio Antenna | 40M NVIS Field Test",
+   "category": {
+    "id": null,
+    "label": "Unknown"
+   },
+   "licence": {
+    "id": 7,
+    "label": "Public Domain Dedication"
+   },
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "privacy": {
+    "id": 1,
+    "label": "Public"
+   },
+   "nsfw": false,
+   "nsfwFlags": 0,
+   "nsfwSummary": null,
+   "truncatedDescription": "N9SAB 80 m linked EFHW ham radio antenna field test for portable QRP, 40 m NVIS, Winlink, and multiband HF operation on 80, 40, 20, 15, and 10 meters.\n\nIn this video, I deploy the lightweight N9SAB linked end fed half wave antenna low and nearly h...",
+   "description": "N9SAB 80 m linked EFHW ham radio antenna field test for portable QRP, 40 m NVIS, Winlink, and multiband HF operation on 80, 40, 20, 15, and 10 meters.\n\nIn this video, I deploy the lightweight N9SAB linked end fed half wave antenna low and nearly h...",
+   "isLocal": true,
+   "duration": 803,
+   "aspectRatio": 1.7778,
+   "views": 0,
+   "viewers": 0,
+   "downloads": 0,
+   "likes": 0,
+   "dislikes": 0,
+   "thumbnailPath": "/lazy-static/thumbnails/6a499e1c-3556-4616-93df-b0800c651707.jpg",
+   "previewPath": "/lazy-static/thumbnails/480edd45-e8de-4cea-b9f2-48724a4a0b46.jpg",
+   "thumbnails": [
+    {
+     "height": 157,
+     "width": 280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/6a499e1c-3556-4616-93df-b0800c651707.jpg"
+    },
+    {
+     "height": 480,
+     "width": 850,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/7691378c-8659-49eb-9869-0c8f87a5e437.jpg"
+    },
+    {
+     "height": 720,
+     "width": 1280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/c07eebfb-80d7-434b-915e-a7d33426d780.jpg"
+    },
+    {
+     "height": 1400,
+     "width": 1400,
+     "aspectRatio": "1:1",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/eed19dae-2805-45f8-8b62-49e654cfdc9e.jpg"
+    },
+    {
+     "height": 1080,
+     "width": 1920,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/480edd45-e8de-4cea-b9f2-48724a4a0b46.jpg"
+    }
+   ],
+   "embedPath": "/videos/embed/n4Nk3o6U8ot1NziGkxa9Ag",
+   "createdAt": "2026-08-16T20:42:57.594Z",
+   "updatedAt": "2026-08-16T20:43:32.145Z",
+   "publishedAt": "2026-08-16T20:42:56.775Z",
+   "originallyPublishedAt": "2026-08-16T00:00:00.000Z",
+   "isLive": false,
+   "account": {
+    "id": 2,
+    "displayName": "root",
+    "name": "root",
+    "url": "https://example.org/accounts/root",
+    "host": "example.org",
+    "avatars": []
+   },
+   "channel": {
+    "id": 36,
+    "name": "oh8stn",
+    "displayName": "(YT)OH8STN",
+    "url": "https://example.org/video-channels/oh8stn",
+    "host": "example.org",
+    "avatars": []
+   },
+   "comments": 0
+  },
+  {
+   "id": 52384,
+   "uuid": "a2af05fc-b7e7-4d9c-93df-a35d51841ee4",
+   "shortUUID": "m69Yzwmbuo1q3vaMg7DnzN",
+   "url": "https://example.org/videos/watch/a2af05fc-b7e7-4d9c-93df-a35d51841ee4",
+   "name": "LiNK500MP MK2 Wireless GPS for Ham Radio: When Is It Coming?",
+   "category": {
+    "id": null,
+    "label": "Unknown"
+   },
+   "licence": {
+    "id": 7,
+    "label": "Public Domain Dedication"
+   },
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "privacy": {
+    "id": 1,
+    "label": "Public"
+   },
+   "nsfw": false,
+   "nsfwFlags": 0,
+   "nsfwSummary": null,
+   "truncatedDescription": "TITLE\n\nLiNK500MP MK2 Wireless GPS for Ham Radio: When Is It Coming?\n\nDESCRIPTION\n\nThe DL4KA LiNK500MP MK2 adds powerful wireless capabilities to the Lab599 TX-500MP, but one important promised feature is still missing: wireless access to its built...",
+   "description": "TITLE\n\nLiNK500MP MK2 Wireless GPS for Ham Radio: When Is It Coming?\n\nDESCRIPTION\n\nThe DL4KA LiNK500MP MK2 adds powerful wireless capabilities to the Lab599 TX-500MP, but one important promised feature is still missing: wireless access to its built...",
+   "isLocal": true,
+   "duration": 503,
+   "aspectRatio": 1.7778,
+   "views": 0,
+   "viewers": 0,
+   "downloads": 0,
+   "likes": 0,
+   "dislikes": 0,
+   "thumbnailPath": "/lazy-static/thumbnails/1f837509-e205-4016-b496-85e7d6529b87.jpg",
+   "previewPath": "/lazy-static/thumbnails/ae42bf46-a502-406c-b0a4-2ba5abcee119.jpg",
+   "thumbnails": [
+    {
+     "height": 157,
+     "width": 280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/1f837509-e205-4016-b496-85e7d6529b87.jpg"
+    },
+    {
+     "height": 480,
+     "width": 850,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/10ad60a3-9224-4218-93aa-3ec417603287.jpg"
+    },
+    {
+     "height": 720,
+     "width": 1280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/60f9d7b0-58f0-46ef-ab61-e80942bbcb5b.jpg"
+    },
+    {
+     "height": 1400,
+     "width": 1400,
+     "aspectRatio": "1:1",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/bd83eb24-3947-4c60-a360-826d34e4e042.jpg"
+    },
+    {
+     "height": 1080,
+     "width": 1920,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/ae42bf46-a502-406c-b0a4-2ba5abcee119.jpg"
+    }
+   ],
+   "embedPath": "/videos/embed/m69Yzwmbuo1q3vaMg7DnzN",
+   "createdAt": "2026-08-10T21:05:40.694Z",
+   "updatedAt": "2026-08-10T21:06:04.283Z",
+   "publishedAt": "2026-08-10T21:05:39.893Z",
+   "originallyPublishedAt": "2026-08-10T00:00:00.000Z",
+   "isLive": false,
+   "account": {
+    "id": 2,
+    "displayName": "root",
+    "name": "root",
+    "url": "https://example.org/accounts/root",
+    "host": "example.org",
+    "avatars": []
+   },
+   "channel": {
+    "id": 36,
+    "name": "oh8stn",
+    "displayName": "(YT)OH8STN",
+    "url": "https://example.org/video-channels/oh8stn",
+    "host": "example.org",
+    "avatars": []
+   },
+   "comments": 0
+  },
+  {
+   "id": 50065,
+   "uuid": "22711950-3bd2-48ef-acd8-e576d01f6520",
+   "shortUUID": "5fFa7GRfE7zBh1e2HDkGKs",
+   "url": "https://example.org/videos/watch/22711950-3bd2-48ef-acd8-e576d01f6520",
+   "name": "QRP Portable JS8Call on Android",
+   "category": {
+    "id": null,
+    "label": "Unknown"
+   },
+   "licence": {
+    "id": 7,
+    "label": "Public Domain Dedication"
+   },
+   "language": {
+    "id": "en",
+    "label": "English"
+   },
+   "privacy": {
+    "id": 1,
+    "label": "Public"
+   },
+   "nsfw": false,
+   "nsfwFlags": 0,
+   "nsfwSummary": null,
+   "truncatedDescription": "Hello Operators \n\nThis isn't a particularly good clip, but it does show you some of the things I'm working on.\n\nQRP Portable testing JS8Call for Android. While the EMCOMM community keeps developing desktop apps for Windows, Linux, MacBook, some cl...",
+   "description": "Hello Operators \n\nThis isn't a particularly good clip, but it does show you some of the things I'm working on.\n\nQRP Portable testing JS8Call for Android. While the EMCOMM community keeps developing desktop apps for Windows, Linux, MacBook, some cl...",
+   "isLocal": true,
+   "duration": 109,
+   "aspectRatio": 0.5625,
+   "views": 0,
+   "viewers": 0,
+   "downloads": 0,
+   "likes": 0,
+   "dislikes": 0,
+   "thumbnailPath": "/lazy-static/thumbnails/43c9a1cc-35ea-4258-80f3-a2f610d2957c.jpg",
+   "previewPath": "/lazy-static/thumbnails/9b945027-ea1f-4ac4-b9f8-b10e479d4ec1.jpg",
+   "thumbnails": [
+    {
+     "height": 157,
+     "width": 280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/43c9a1cc-35ea-4258-80f3-a2f610d2957c.jpg"
+    },
+    {
+     "height": 480,
+     "width": 850,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/db91f377-5d94-499e-b556-5dc00b119d99.jpg"
+    },
+    {
+     "height": 720,
+     "width": 1280,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/d6b8a8dd-1bed-45d4-860c-c7d45aa912c5.jpg"
+    },
+    {
+     "height": 1400,
+     "width": 1400,
+     "aspectRatio": "1:1",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/f2fedf30-41f4-413c-8cfc-7fdd1e555ba0.jpg"
+    },
+    {
+     "height": 1080,
+     "width": 1920,
+     "aspectRatio": "16:9",
+     "fileUrl": "https://example.org/lazy-static/thumbnails/9b945027-ea1f-4ac4-b9f8-b10e479d4ec1.jpg"
+    }
+   ],
+   "embedPath": "/videos/embed/5fFa7GRfE7zBh1e2HDkGKs",
+   "createdAt": "2026-07-15T08:03:52.868Z",
+   "updatedAt": "2026-07-23T00:50:23.365Z",
+   "publishedAt": "2026-07-15T08:03:51.655Z",
+   "originallyPublishedAt": "2026-07-07T00:00:00.000Z",
+   "isLive": false,
+   "account": {
+    "id": 2,
+    "displayName": "root",
+    "name": "root",
+    "url": "https://example.org/accounts/root",
+    "host": "example.org",
+    "avatars": []
+   },
+   "channel": {
+    "id": 36,
+    "name": "oh8stn",
+    "displayName": "(YT)OH8STN",
+    "url": "https://example.org/video-channels/oh8stn",
+    "host": "example.org",
+    "avatars": []
+   },
+   "comments": 0
+  }
+ ]
+}

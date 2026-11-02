@@ -1,0 +1,1260 @@
+{
+ "format": 1,
+ "shard": "us",
+ "release": "2026-10-21.0",
+ "count": 14,
+ "regions": [
+  {
+   "id": "us",
+   "name": "United States",
+   "kind": "country",
+   "country": "US",
+   "parents": [],
+   "bbox": [
+    172.44525,
+    18.91069,
+    -66.94974,
+    71.38683
+   ],
+   "area_km2": 9460570,
+   "population": 331449281,
+   "population_source": "overture",
+   "admin_level": 0,
+   "wikidata": "Q30",
+   "gers_id": "f39eb4af-5206-481b-b19e-bd784ded3f05",
+   "polygon": "polygons/us.geojson",
+   "alt": [
+    "IMelika",
+    "Fereende Stoaten fon Amerikoa",
+    "Vereinigte Schtaate vo Amerika"
+   ],
+   "sizes": {
+    "routing": 7438030381,
+    "map": {
+     "public-lands": [
+      456763396,
+      12
+     ],
+     "elevation": [
+      464387062,
+      8
+     ],
+     "hillshade": [
+      464387062,
+      8
+     ],
+     "contours": [
+      464387062,
+      8
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "arizona": 1101692928,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "colorado": 817577984,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nebraska": 417923072,
+      "nevada": 1320779776,
+      "new-mexico": 937656320,
+      "north-dakota": 323534848,
+      "oregon": 762380288,
+      "south-dakota": 303071232,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 17366405658
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:15:04Z"
+   }
+  },
+  {
+   "id": "us-id",
+   "name": "Idaho",
+   "kind": "region",
+   "country": "US",
+   "region_code": "US-ID",
+   "parents": [
+    "us",
+    "us-pacific-northwest",
+    "us-intermountain-west"
+   ],
+   "bbox": [
+    -117.24303,
+    41.98883,
+    -111.04356,
+    49.00084
+   ],
+   "area_km2": 215996,
+   "population": 2001619,
+   "population_source": "overture",
+   "admin_level": 1,
+   "wikidata": "Q1221",
+   "gers_id": "67f7717c-86ee-4a2e-8d73-b6c920bfca57",
+   "polygon": "polygons/us-id.geojson",
+   "informal_parents": [
+    "us-pacific-northwest",
+    "us-intermountain-west"
+   ],
+   "alt": [
+    "Aidaho",
+    "Aydaho",
+    "Aighdeachobh"
+   ],
+   "sizes": {
+    "routing": 112629848,
+    "map": {
+     "basemap": [
+      440704217,
+      15
+     ],
+     "blm-routes": [
+      14868080,
+      14
+     ],
+     "mvum": [
+      65460731,
+      14
+     ],
+     "public-lands": [
+      21151427,
+      12
+     ],
+     "usfs-trails-roads": [
+      98337059,
+      14
+     ],
+     "elevation": [
+      302510642,
+      11
+     ],
+     "hillshade": [
+      302510642,
+      11
+     ],
+     "contours": [
+      302510642,
+      11
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 791792096
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:14Z"
+   }
+  },
+  {
+   "id": "us-id-ada-county",
+   "name": "Ada County",
+   "kind": "county",
+   "country": "US",
+   "region_code": "US-ID",
+   "parents": [
+    "us-id",
+    "us-id-treasure-valley"
+   ],
+   "bbox": [
+    -116.5137,
+    43.11227,
+    -115.97486,
+    43.80742
+   ],
+   "area_km2": 2742,
+   "population": 434211,
+   "population_source": "overture",
+   "admin_level": 2,
+   "wikidata": "Q109820",
+   "gers_id": "b7c9abc8-c3ab-487f-92b5-8734c38f1fe8",
+   "polygon": "polygons/us-id-ada-county.geojson",
+   "informal_parents": [
+    "us-id-treasure-valley"
+   ],
+   "alt": [
+    "Ada"
+   ],
+   "sizes": {
+    "routing": 25571551,
+    "map": {
+     "basemap": [
+      25918020,
+      15
+     ],
+     "blm-routes": [
+      518455,
+      14
+     ],
+     "mvum": [
+      361047,
+      14
+     ],
+     "public-lands": [
+      1398276,
+      12
+     ],
+     "usfs-trails-roads": [
+      841150,
+      14
+     ],
+     "elevation": [
+      11023990,
+      12
+     ],
+     "hillshade": [
+      11023990,
+      12
+     ],
+     "contours": [
+      11023990,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "oregon": 762380288
+     },
+     "terrain": 6015974
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:12Z"
+   }
+  },
+  {
+   "id": "us-id-boise",
+   "name": "Boise",
+   "kind": "locality",
+   "class": "city",
+   "country": "US",
+   "region_code": "US-ID",
+   "parents": [
+    "us-id-ada-county",
+    "us-metro-boise-city-id"
+   ],
+   "bbox": [
+    -116.36568,
+    43.50218,
+    -116.09419,
+    43.69206
+   ],
+   "area_km2": 224.9,
+   "population": 235684,
+   "population_source": "overture",
+   "wikidata": "Q35775",
+   "gers_id": "7643a242-1a17-4633-a0d1-b8b7d9f60f42",
+   "polygon": "polygons/us-id-boise.geojson",
+   "alt": [
+    "Boise City"
+   ],
+   "sizes": {
+    "routing": 17512681,
+    "map": {
+     "basemap": [
+      13361107,
+      15
+     ],
+     "blm-routes": [
+      309244,
+      14
+     ],
+     "mvum": [
+      125171,
+      14
+     ],
+     "public-lands": [
+      1221243,
+      12
+     ],
+     "usfs-trails-roads": [
+      533629,
+      14
+     ],
+     "elevation": [
+      3679834,
+      12
+     ],
+     "hillshade": [
+      3679834,
+      12
+     ],
+     "contours": [
+      3679834,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "oregon": 762380288
+     },
+     "terrain": 1200644
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:12Z"
+   }
+  },
+  {
+   "id": "us-id-jerome-county",
+   "name": "Jerome County",
+   "kind": "county",
+   "country": "US",
+   "region_code": "US-ID",
+   "parents": [
+    "us-id",
+    "us-id-magic-valley"
+   ],
+   "bbox": [
+    -114.6174,
+    42.49491,
+    -113.93169,
+    42.85112
+   ],
+   "area_km2": 1558,
+   "population": 22814,
+   "population_source": "overture",
+   "admin_level": 2,
+   "wikidata": "Q494536",
+   "gers_id": "c49d39ce-d472-4e62-a52b-c8be6792554f",
+   "polygon": "polygons/us-id-jerome-county.geojson",
+   "informal_parents": [
+    "us-id-magic-valley"
+   ],
+   "alt": [
+    "Jerome"
+   ],
+   "sizes": {
+    "routing": 5032257,
+    "map": {
+     "basemap": [
+      4007175,
+      15
+     ],
+     "blm-routes": [
+      169128,
+      14
+     ],
+     "mvum": [
+      74154,
+      14
+     ],
+     "public-lands": [
+      1155174,
+      12
+     ],
+     "usfs-trails-roads": [
+      272745,
+      14
+     ],
+     "elevation": [
+      7317134,
+      12
+     ],
+     "hillshade": [
+      7317134,
+      12
+     ],
+     "contours": [
+      7317134,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 3526420
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:15Z"
+   }
+  },
+  {
+   "id": "us-id-magic-valley",
+   "name": "Magic Valley",
+   "kind": "valley",
+   "country": "US",
+   "countries": [
+    "US"
+   ],
+   "parents": [
+    "us-id",
+    "us-id-southern-idaho"
+   ],
+   "bbox": [
+    -115.0869,
+    41.98883,
+    -112.99997,
+    43.993
+   ],
+   "area_km2": 29859,
+   "members": [
+    "us-id-blaine-county",
+    "us-id-camas-county",
+    "us-id-cassia-county",
+    "us-id-gooding-county",
+    "us-id-jerome-county",
+    "us-id-lincoln-county"
+   ],
+   "polygon": "polygons/us-id-magic-valley.geojson",
+   "population": 192835,
+   "population_source": "sum of members",
+   "description": "The south central Snake River Plain around Twin Falls.",
+   "source": "Idaho Public Health District 5 (South Central), whose eight counties match the usual 'Magic Valley' usage.",
+   "informal_parents": [
+    "us-id-southern-idaho"
+   ],
+   "alt": [
+    "South Central Idaho"
+   ],
+   "sizes": {
+    "routing": 12751587,
+    "map": {
+     "basemap": [
+      30189512,
+      15
+     ],
+     "blm-routes": [
+      1518674,
+      14
+     ],
+     "mvum": [
+      4990033,
+      14
+     ],
+     "public-lands": [
+      2859132,
+      12
+     ],
+     "usfs-trails-roads": [
+      4633248,
+      14
+     ],
+     "elevation": [
+      96245080,
+      12
+     ],
+     "hillshade": [
+      96245080,
+      12
+     ],
+     "contours": [
+      96245080,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 67108756
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:16Z"
+   }
+  },
+  {
+   "id": "us-id-southern-idaho",
+   "name": "Southern Idaho",
+   "kind": "sub_state",
+   "country": "US",
+   "countries": [
+    "US"
+   ],
+   "parents": [
+    "us-id"
+   ],
+   "bbox": [
+    -117.24303,
+    41.98883,
+    -111.04356,
+    45.26809
+   ],
+   "area_km2": 110909,
+   "members": [
+    "us-id-adams-county",
+    "us-id-canyon-county",
+    "us-id-gem-county",
+    "us-id-owyhee-county",
+    "us-id-payette-county",
+    "us-id-washington-county"
+   ],
+   "polygon": "polygons/us-id-southern-idaho.geojson",
+   "population": 1122538,
+   "population_source": "sum of members",
+   "description": "Southwest, Central, South Central and Southeastern health districts (Boise to Pocatello).",
+   "source": "Idaho Department of Health and Welfare Public Health Districts 3, 4, 5 and 6. District boundaries are official; the grouping as 'Southern Idaho' is a convention.",
+   "informal_parents": [],
+   "alt": [
+    "South Idaho",
+    "Snake River Plain"
+   ],
+   "sizes": {
+    "routing": 73305595,
+    "map": {
+     "basemap": [
+      192252725,
+      15
+     ],
+     "blm-routes": [
+      13105974,
+      14
+     ],
+     "mvum": [
+      28724793,
+      14
+     ],
+     "public-lands": [
+      11618738,
+      12
+     ],
+     "usfs-trails-roads": [
+      34382078,
+      14
+     ],
+     "elevation": [
+      483785984,
+      12
+     ],
+     "hillshade": [
+      483785984,
+      12
+     ],
+     "contours": [
+      483785984,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 344375660
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:18Z"
+   }
+  },
+  {
+   "id": "us-id-twin-falls",
+   "name": "Twin Falls",
+   "kind": "locality",
+   "class": "city",
+   "country": "US",
+   "region_code": "US-ID",
+   "parents": [
+    "us-id-twin-falls-county",
+    "us-metro-twin-falls-id"
+   ],
+   "bbox": [
+    -114.51593,
+    42.51255,
+    -114.37903,
+    42.60642
+   ],
+   "area_km2": 50.4,
+   "population": 49764,
+   "population_source": "overture",
+   "wikidata": "Q548384",
+   "gers_id": "3ac9ac5b-02e1-454e-802b-5f86c9b8ee7f",
+   "polygon": "polygons/us-id-twin-falls.geojson",
+   "alt": [],
+   "sizes": {
+    "routing": 2799591,
+    "map": {
+     "basemap": [
+      1438627,
+      15
+     ],
+     "blm-routes": [
+      169128,
+      14
+     ],
+     "mvum": [
+      70799,
+      14
+     ],
+     "public-lands": [
+      1061571,
+      12
+     ],
+     "usfs-trails-roads": [
+      270382,
+      14
+     ],
+     "elevation": [
+      2423464,
+      12
+     ],
+     "hillshade": [
+      2423464,
+      12
+     ],
+     "contours": [
+      2423464,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 245360
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:18Z"
+   }
+  },
+  {
+   "id": "us-id-twin-falls-county",
+   "name": "Twin Falls County",
+   "kind": "county",
+   "country": "US",
+   "region_code": "US-ID",
+   "parents": [
+    "us-id",
+    "us-id-magic-valley"
+   ],
+   "bbox": [
+    -115.03924,
+    41.99415,
+    -114.00032,
+    42.91843
+   ],
+   "area_km2": 4988,
+   "population": 82375,
+   "population_source": "overture",
+   "admin_level": 2,
+   "wikidata": "Q491339",
+   "gers_id": "63efca98-edd9-40bf-8aa9-d87ea32a51c2",
+   "polygon": "polygons/us-id-twin-falls-county.geojson",
+   "informal_parents": [
+    "us-id-magic-valley"
+   ],
+   "alt": [
+    "Twin Falls"
+   ],
+   "sizes": {
+    "routing": 5615211,
+    "map": {
+     "basemap": [
+      9029178,
+      15
+     ],
+     "blm-routes": [
+      169525,
+      14
+     ],
+     "mvum": [
+      1195002,
+      14
+     ],
+     "public-lands": [
+      1362900,
+      12
+     ],
+     "usfs-trails-roads": [
+      1144958,
+      14
+     ],
+     "elevation": [
+      21465344,
+      12
+     ],
+     "hillshade": [
+      21465344,
+      12
+     ],
+     "contours": [
+      21465344,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 13358700
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:18Z"
+   }
+  },
+  {
+   "id": "us-intermountain-west",
+   "name": "Intermountain West",
+   "kind": "multi_state",
+   "country": "US",
+   "countries": [
+    "US"
+   ],
+   "parents": [
+    "us",
+    "us-mountain-west"
+   ],
+   "bbox": [
+    -120.00652,
+    35.00189,
+    -102.04158,
+    49.00111
+   ],
+   "area_km2": 1623851,
+   "members": [
+    "us-id",
+    "us-ut",
+    "us-nv",
+    "us-wy",
+    "us-mt",
+    "us-co"
+   ],
+   "polygon": "polygons/us-intermountain-west.geojson",
+   "population": 16455043,
+   "population_source": "sum of members",
+   "description": "Idaho, Utah, Nevada, Wyoming, Montana and Colorado.",
+   "source": "Six-state list as specified by the project owner; definitions of the Intermountain West vary (some add Arizona and New Mexico or leave out Montana).",
+   "informal_parents": [
+    "us-mountain-west"
+   ],
+   "alt": [
+    "Intermountain",
+    "Inter-mountain West"
+   ],
+   "sizes": {
+    "routing": 606917084,
+    "map": {
+     "basemap": [
+      572441390,
+      13
+     ],
+     "blm-routes": [
+      75165949,
+      14
+     ],
+     "mvum": [
+      192473354,
+      14
+     ],
+     "public-lands": [
+      80314712,
+      12
+     ],
+     "usfs-trails-roads": [
+      253406922,
+      14
+     ],
+     "elevation": [
+      482868590,
+      10
+     ],
+     "hillshade": [
+      482868590,
+      10
+     ],
+     "contours": [
+      482868590,
+      10
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "arizona": 1101692928,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "colorado": 817577984,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nebraska": 417923072,
+      "nevada": 1320779776,
+      "new-mexico": 937656320,
+      "north-dakota": 323534848,
+      "oregon": 762380288,
+      "south-dakota": 303071232,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 7793309310
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:17:56Z"
+   }
+  },
+  {
+   "id": "us-metro-twin-falls-id",
+   "name": "Twin Falls, ID",
+   "kind": "metro",
+   "class": "metropolitan",
+   "country": "US",
+   "parents": [
+    "us-id"
+   ],
+   "bbox": [
+    -115.03817,
+    41.99421,
+    -113.93169,
+    42.91835
+   ],
+   "area_km2": 6544,
+   "counties": [
+    "us-id-jerome-county",
+    "us-id-twin-falls-county"
+   ],
+   "census_geoid": "46300",
+   "polygon": "polygons/us-metro-twin-falls-id.geojson",
+   "population": 122565,
+   "population_source": "census-2024",
+   "alt": [
+    "Twin Falls"
+   ],
+   "sizes": {
+    "routing": 7553570,
+    "map": {
+     "basemap": [
+      9467991,
+      15
+     ],
+     "blm-routes": [
+      169525,
+      14
+     ],
+     "mvum": [
+      1218528,
+      14
+     ],
+     "public-lands": [
+      1372637,
+      12
+     ],
+     "usfs-trails-roads": [
+      1157470,
+      14
+     ],
+     "elevation": [
+      22513142,
+      12
+     ],
+     "hillshade": [
+      22513142,
+      12
+     ],
+     "contours": [
+      22513142,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "idaho": 1022754816
+     },
+     "terrain": 14406498
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:19:16Z"
+   }
+  },
+  {
+   "id": "us-mountain-west",
+   "name": "Mountain West",
+   "kind": "multi_state",
+   "country": "US",
+   "countries": [
+    "US"
+   ],
+   "parents": [
+    "us"
+   ],
+   "bbox": [
+    -120.00652,
+    31.3322,
+    -102.04158,
+    49.00111
+   ],
+   "area_km2": 2234163,
+   "members": [
+    "us-az",
+    "us-co",
+    "us-id",
+    "us-mt",
+    "us-nv",
+    "us-nm"
+   ],
+   "polygon": "polygons/us-mountain-west.geojson",
+   "population": 26167683,
+   "population_source": "sum of members",
+   "description": "The eight states of the Mountain division.",
+   "source": "US Census Bureau, Census Regions and Divisions of the United States (Mountain Division): https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf",
+   "informal_parents": [],
+   "alt": [
+    "Mountain States",
+    "Rocky Mountain States"
+   ],
+   "sizes": {
+    "routing": 867963216,
+    "map": {
+     "basemap": [
+      736922297,
+      13
+     ],
+     "blm-routes": [
+      91491392,
+      14
+     ],
+     "mvum": [
+      213852242,
+      14
+     ],
+     "public-lands": [
+      94689405,
+      12
+     ],
+     "usfs-trails-roads": [
+      287114242,
+      14
+     ],
+     "elevation": [
+      567052284,
+      10
+     ],
+     "hillshade": [
+      567052284,
+      10
+     ],
+     "contours": [
+      567052284,
+      10
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "arizona": 1101692928,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "colorado": 817577984,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nebraska": 417923072,
+      "nevada": 1320779776,
+      "new-mexico": 937656320,
+      "north-dakota": 323534848,
+      "oregon": 762380288,
+      "south-dakota": 303071232,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 8725589316
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:20:38Z"
+   }
+  },
+  {
+   "id": "us-pacific-northwest",
+   "name": "Pacific Northwest",
+   "kind": "multi_state",
+   "country": "US",
+   "countries": [
+    "US"
+   ],
+   "parents": [
+    "us"
+   ],
+   "bbox": [
+    -124.75439,
+    41.98883,
+    -111.04356,
+    49.00244
+   ],
+   "area_km2": 641176,
+   "members": [
+    "us-wa",
+    "us-or",
+    "us-id"
+   ],
+   "polygon": "polygons/us-pacific-northwest.geojson",
+   "population": 14232170,
+   "population_source": "sum of members",
+   "description": "Washington, Oregon and Idaho.",
+   "source": "Common usage (no federal definition). The three-state definition is the narrowest in common use; editable.",
+   "informal_parents": [],
+   "alt": [
+    "PNW",
+    "Pacific NW",
+    "Cascadia"
+   ],
+   "sizes": {
+    "routing": 476726158,
+    "map": {
+     "basemap": [
+      642454212,
+      14
+     ],
+     "blm-routes": [
+      17199866,
+      14
+     ],
+     "mvum": [
+      128468400,
+      14
+     ],
+     "public-lands": [
+      41133179,
+      12
+     ],
+     "usfs-trails-roads": [
+      193169093,
+      14
+     ],
+     "elevation": [
+      609903618,
+      11
+     ],
+     "hillshade": [
+      609903618,
+      11
+     ],
+     "contours": [
+      609903618,
+      11
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "alberta": 1823850496,
+      "british-columbia": 2892185600,
+      "california": 2295480320,
+      "idaho": 1022754816,
+      "montana": 945340416,
+      "nevada": 1320779776,
+      "oregon": 762380288,
+      "utah": 978681856,
+      "washington": 752287744,
+      "wyoming": 679133184
+     },
+     "terrain": 3393953826
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:23:22Z"
+   }
+  },
+  {
+   "id": "us-ut",
+   "name": "Utah",
+   "kind": "region",
+   "country": "US",
+   "region_code": "US-UT",
+   "parents": [
+    "us",
+    "us-intermountain-west"
+   ],
+   "bbox": [
+    -114.05285,
+    36.99781,
+    -109.04158,
+    42.00195
+   ],
+   "area_km2": 219689,
+   "population": 3503613,
+   "population_source": "overture",
+   "admin_level": 1,
+   "wikidata": "Q829",
+   "gers_id": "506017c0-8932-44b5-b82c-92f9dcffdcf1",
+   "polygon": "polygons/us-ut.geojson",
+   "informal_parents": [
+    "us-intermountain-west"
+   ],
+   "alt": [
+    "UT",
+    "Uta",
+    "Utaho"
+   ],
+   "sizes": {
+    "routing": 118261230,
+    "map": {
+     "basemap": [
+      299853659,
+      15
+     ],
+     "blm-routes": [
+      26138599,
+      14
+     ],
+     "mvum": [
+      22683858,
+      14
+     ],
+     "public-lands": [
+      12350886,
+      12
+     ],
+     "usfs-trails-roads": [
+      22124391,
+      14
+     ],
+     "elevation": [
+      576924656,
+      12
+     ],
+     "hillshade": [
+      576924656,
+      12
+     ],
+     "contours": [
+      576924656,
+      12
+     ]
+    },
+    "offroad": {
+     "packs": {
+      "utah": 978681856
+     },
+     "terrain": 423737044
+    },
+    "routing_build": "na-2026-10-29-speeds2",
+    "built": "2026-10-30T19:24:27Z"
+   }
+  }
+ ],
+ "tree": [
+  {
+   "id": "us",
+   "name": "United States",
+   "kind": "country",
+   "children": [
+    {
+     "id": "us-mountain-west",
+     "name": "Mountain West",
+     "kind": "multi_state",
+     "children": [
+      {
+       "id": "us-intermountain-west",
+       "name": "Intermountain West",
+       "kind": "multi_state",
+       "children": [
+        {
+         "id": "us-id",
+         "name": "Idaho",
+         "kind": "region",
+         "children": [
+          {
+           "id": "us-id-southern-idaho",
+           "name": "Southern Idaho",
+           "kind": "sub_state",
+           "children": [
+            {
+             "id": "us-id-magic-valley",
+             "name": "Magic Valley",
+             "kind": "valley",
+             "children": [
+              {
+               "id": "us-id-jerome-county",
+               "name": "Jerome County",
+               "kind": "county"
+              },
+              {
+               "id": "us-id-twin-falls-county",
+               "name": "Twin Falls County",
+               "kind": "county",
+               "children": [
+                {
+                 "id": "us-id-twin-falls",
+                 "name": "Twin Falls",
+                 "kind": "locality"
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "us-metro-twin-falls-id",
+           "name": "Twin Falls, ID",
+           "kind": "metro",
+           "children": [
+            {
+             "id": "us-id-twin-falls",
+             "name": "Twin Falls",
+             "kind": "locality"
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "us-ut",
+         "name": "Utah",
+         "kind": "region"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "us-pacific-northwest",
+     "name": "Pacific Northwest",
+     "kind": "multi_state",
+     "children": [
+      {
+       "id": "us-id",
+       "name": "Idaho",
+       "kind": "region",
+       "children": [
+        {
+         "id": "us-id-southern-idaho",
+         "name": "Southern Idaho",
+         "kind": "sub_state",
+         "children": [
+          {
+           "id": "us-id-magic-valley",
+           "name": "Magic Valley",
+           "kind": "valley",
+           "children": [
+            {
+             "id": "us-id-jerome-county",
+             "name": "Jerome County",
+             "kind": "county"
+            },
+            {
+             "id": "us-id-twin-falls-county",
+             "name": "Twin Falls County",
+             "kind": "county",
+             "children": [
+              {
+               "id": "us-id-twin-falls",
+               "name": "Twin Falls",
+               "kind": "locality"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "us-metro-twin-falls-id",
+         "name": "Twin Falls, ID",
+         "kind": "metro",
+         "children": [
+          {
+           "id": "us-id-twin-falls",
+           "name": "Twin Falls",
+           "kind": "locality"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

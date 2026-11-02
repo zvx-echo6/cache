@@ -1,0 +1,22 @@
+# Build output
+build/
+target/
+
+# App packages
+*.apk
+*.aab
+*.ipa
+
+# Signing keys and profiles (never commit them)
+*.keystore
+*.jks
+key.properties
+*.p12
+*.mobileprovision
+
+# Local environment files
+.env
+.env.*
+
+# macOS
+.DS_Store

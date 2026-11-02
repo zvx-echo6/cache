@@ -1,0 +1,86 @@
+[
+ {
+  "file": "system-loc-text.txt",
+  "bytes": 1109,
+  "sha256": "887d6b4e8356597c2544094e50f9ff32f0a3164336383939f650694818c6d677",
+  "what": "system-v4 prompt, now=2026-10-29T14:30:00-06:00, location_known=True, voice=False"
+ },
+ {
+  "file": "system-loc-voice.txt",
+  "bytes": 1328,
+  "sha256": "ec3552c037b8449e4569e1489e020059060f58f1489dd943f164b38a12f626bf",
+  "what": "system-v4 prompt, now=2026-10-29T14:30:00-06:00, location_known=True, voice=True"
+ },
+ {
+  "file": "system-noloc-text.txt",
+  "bytes": 1026,
+  "sha256": "4ff8b48ef78a001b9335313de05180316ce843c674202095a84c1d24ebd67d89",
+  "what": "system-v4 prompt, now=2026-10-29T14:30:00-06:00, location_known=False, voice=False"
+ },
+ {
+  "file": "system-noloc-voice.txt",
+  "bytes": 1245,
+  "sha256": "d069146893c11b8468e64cd560c76a8d22922527fc265414adb0798b3f35ecd0",
+  "what": "system-v4 prompt, now=2026-10-29T14:30:00-06:00, location_known=False, voice=True"
+ },
+ {
+  "file": "act-definitions-gen-places-038.json",
+  "bytes": 2431,
+  "sha256": "b35a387f757f781f4d53528e531aa95723f84a6184ccf11969fbf623721e08cf",
+  "what": "act definitions as published for row gen-places-038 (app); sha256 equals the recording's"
+ },
+ {
+  "file": "act-definitions-nb-067.json",
+  "bytes": 3705,
+  "sha256": "a6dc9e598cfed6962c3aa3809370c126c83f92d30b92b54f0c92057d3e7b2d62",
+  "what": "act definitions as published for row nb-067 (notebook); sha256 equals the recording's"
+ },
+ {
+  "file": "notebook-logs-nb-067.json",
+  "bytes": 1150,
+  "sha256": "adb39baa76ba2ee541878e8538287c190e55378cf33ec1c2ca5a65efec834848",
+  "what": "Notebook generator input for nb-067 (notebook_actions.py <this> reproduces the notebook part of act-definitions-nb-067.json)"
+ },
+ {
+  "file": "app-setup-status-definition.json",
+  "bytes": 359,
+  "sha256": "a6647473799d0d6e881a411ecad67d69fc75b490b7b5cd5e8e56e9d723f94292",
+  "what": "app.setup_status definition"
+ },
+ {
+  "file": "setup-status-act-048.json",
+  "bytes": 11016,
+  "sha256": "d57ae02be7d4e9a52f2bf77a0ad1ac6f4b3b3d2482f3d64a2251f6b6cd07b813",
+  "what": "app.setup_status for act-048: each act call, the exact host reply (host_reply; null in records made before 2026-10-30) and the tool message the model saw"
+ },
+ {
+  "file": "setup-status-act-116.json",
+  "bytes": 3357,
+  "sha256": "ae9c0ba7c5ca0104fc6fa453876588cd58c59cf6ebcf27975bbdc34de9f7fedc",
+  "what": "app.setup_status for act-116: each act call, the exact host reply (host_reply; null in records made before 2026-10-30) and the tool message the model saw"
+ },
+ {
+  "file": "ask-about-this-seed.json",
+  "bytes": 1311,
+  "sha256": "bf2922e6ee06959fd41d88ef735316bf3fa7ea25c127a4e25e7da8b78e71ce51",
+  "what": "Ask about this: the seeded live_data call (arguments = json.dumps(args, ensure_ascii=False), default separators) and its result"
+ },
+ {
+  "file": "MANIFEST.json",
+  "bytes": 2800,
+  "sha256": "0038a5f2a008eb9ad3e0921f146bf9418e6402bc819c92f3327745d5da6700b2",
+  "what": "this list"
+ },
+ {
+  "file": "userdata-golden.json",
+  "bytes": 19309,
+  "sha256": "31efe101eaf473c1c696080fd87fa5507e6799b3b3e89395b1c1d4c3d6894687",
+  "what": "S12/S13 + saved places: recorded tool calls and tool messages (layer nearby, repeater nearby, navigate/locate to a layer point, places.list, places.save) and the nearby/navigate/locate declarations as recorded"
+ },
+ {
+  "file": "setup-status-v1030.json",
+  "bytes": 7494,
+  "sha256": "5c1a9b626d89eb2ce9833ff70df594e75135037fdcf4d412882d3e0863dd26b7",
+  "what": "S11 after the UI simplification: host replies (all sections, and filtered to connection / location) from the harness's default_setup_reply with the 2026-10-30 guide titles and labels"
+ }
+]

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?><alert xmlns="urn:oasis:names:tc:emergency:cap:1.2"><identifier>urn:oid:2.49.0.1.840.0.e6e8f35546b1bcf3ea5ca9fb6c6d9c0ebfe11d2a.001.1.IPAWS</identifier><sender>w-nws.webmaster@noaa.gov</sender><sent>2026-10-29T13:36:00-06:00</sent><status>Actual</status><msgType>Alert</msgType><source>211803 v2.3.0</source><scope>Public</scope><code>IPAWSv1.0</code><info><language>en-US</language><category>Met</category><event>Flash Flood Warning</event><responseType>Avoid</responseType><urgency>Immediate</urgency><severity>Severe</severity><certainty>Likely</certainty><eventCode><valueName>SAME</valueName><value>FFW</value></eventCode><eventCode><valueName>NationalWeatherService</valueName><value>FFW</value></eventCode><effective>2026-10-29T13:36:00-06:00</effective><onset>2026-10-29T13:36:00-06:00</onset><expires>2026-10-29T16:30:00-06:00</expires><senderName>NWS Albuquerque NM</senderName><headline>Flash Flood Warning issued October 29 at 1:36PM MDT until October 29 at 4:30PM MDT by NWS Albuquerque NM</headline><description>FFWABQ
+
+The National Weather Service in Albuquerque has issued a
+
+* Flash Flood Warning for...
+The South Fork burn scar in...
+South Central Lincoln County in central New Mexico...
+
+* Until 430 PM MDT.
+
+* At 136 PM MDT, Doppler radar indicated thunderstorms producing
+heavy rain over the South Fork Burn Scar. Up to 1 inch of rain has
+fallen. The expected rainfall rate is 1 to 2 inches in 1 hour.
+Additional rainfall amounts up to 2 inches are possible in the
+warned area. Flash flooding is ongoing or expected to begin
+shortly.
+
+Excessive rainfall over the burn scar will impact Upper Canyon, Brady
+Canyon, and Perk Canyon as well as the Cedar Creek, Eagle Creek and
+Rio Ruidoso drainages. Impacts will include but are not limited to
+all nearby reservoirs, bridges, culverts and roadways. Impacts to
+areas along the Rio Ruidoso may extend downstream of Ruidoso Downs.
+The debris flow can consist of rock, mud, vegetation and other loose
+materials.
+
+HAZARD...Life threatening flash flooding. Thunderstorms producing
+flash flooding in and around the South Fork Burn Scar.
+
+SOURCE...Radar indicated.
+
+IMPACT...Life threatening flash flooding of areas in and around the
+South Fork Burn Scar.
+
+* Some locations that will experience flash flooding include...
+Ruidoso, Ruidoso Downs, Alto, Glencoe and Hollywood.
+</description><instruction>This is a life threatening situation. Heavy rainfall will cause
+extensive and severe flash flooding of creeks, streams and ditches in
+the South Fork Burn Scar. Severe debris flows can also be anticipated
+across roads. Roads and driveways may be washed away in places. If
+you encounter flood waters, climb to safety.</instruction><web>http://www.weather.gov</web><parameter><valueName>AWIPSidentifier</valueName><value>FFWABQ</value></parameter><parameter><valueName>WMOidentifier</valueName><value>WGUS55 KABQ 291936</value></parameter><parameter><valueName>flashFloodDetection</valueName><value>RADAR INDICATED</value></parameter><parameter><valueName>flashFloodDamageThreat</valueName><value>CONSIDERABLE</value></parameter><parameter><valueName>BLOCKCHANNEL</valueName><value>EAS</value></parameter><parameter><valueName>BLOCKCHANNEL</valueName><value>NWEM</value></parameter><parameter><valueName>EAS-ORG</valueName><value>WXR</value></parameter><parameter><valueName>VTEC</valueName><value>/O.NEW.KABQ.FF.W.0239.261029T1936Z-261029T2230Z/</value></parameter><parameter><valueName>eventEndingTime</valueName><value>2026-10-29T16:30:00-06:00</value></parameter><parameter><valueName>WEAHandling</valueName><value>Imminent Threat</value></parameter><parameter><valueName>CMAMtext</valueName><value>NWS: FLASH FLOOD WARNING this area til 4:30 PM MDT. Avoid flooded areas.</value></parameter><parameter><valueName>CMAMlongtext</valueName><value>National Weather Service: A FLASH FLOOD WARNING is in effect for this area until 4:30 PM MDT. This is a dangerous and life-threatening situation. Do not attempt to travel unless you are fleeing an area subject to flooding or under an evacuation order.</value></parameter><area><areaDesc>Lincoln, NM</areaDesc><polygon>33.42,-105.71 33.42,-105.66 33.43,-105.65 33.44,-105.63 33.4,-105.61 33.38,-105.62 33.39,-105.64 33.34,-105.64 33.33,-105.63 33.36,-105.56 33.38,-105.53 33.43,-105.43 33.41,-105.43 33.33,-105.55 33.31,-105.59 33.31,-105.73 33.39,-105.73 33.39,-105.78 33.41,-105.78 33.42,-105.71</polygon><geocode><valueName>SAME</valueName><value>035027</value></geocode><geocode><valueName>UGC</valueName><value>NMC027</value></geocode></area></info><info><language>es-US</language><category>Met</category><event>Flash Flood Warning</event><responseType>Avoid</responseType><urgency>Immediate</urgency><severity>Severe</severity><certainty>Likely</certainty><eventCode><valueName>SAME</valueName><value>FFW</value></eventCode><eventCode><valueName>NationalWeatherService</valueName><value>FFW</value></eventCode><effective>2026-10-29T13:36:00-06:00</effective><onset>2026-10-29T13:36:00-06:00</onset><expires>2026-10-29T16:30:00-06:00</expires><senderName>NWS Albuquerque NM</senderName><headline>Flash Flood Warning issued October 29 at 1:36PM MDT until October 29 at 4:30PM MDT by NWS Albuquerque NM</headline><description>FFWABQ
+
+The National Weather Service in Albuquerque has issued a
+
+* Flash Flood Warning for...
+The South Fork burn scar in...
+South Central Lincoln County in central New Mexico...
+
+* Until 430 PM MDT.
+
+* At 136 PM MDT, Doppler radar indicated thunderstorms producing
+heavy rain over the South Fork Burn Scar. Up to 1 inch of rain has
+fallen. The expected rainfall rate is 1 to 2 inches in 1 hour.
+Additional rainfall amounts up to 2 inches are possible in the
+warned area. Flash flooding is ongoing or expected to begin
+shortly.
+
+Excessive rainfall over the burn scar will impact Upper Canyon, Brady
+Canyon, and Perk Canyon as well as the Cedar Creek, Eagle Creek and
+Rio Ruidoso drainages. Impacts will include but are not limited to
+all nearby reservoirs, bridges, culverts and roadways. Impacts to
+areas along the Rio Ruidoso may extend downstream of Ruidoso Downs.
+The debris flow can consist of rock, mud, vegetation and other loose
+materials.
+
+HAZARD...Life threatening flash flooding. Thunderstorms producing
+flash flooding in and around the South Fork Burn Scar.
+
+SOURCE...Radar indicated.
+
+IMPACT...Life threatening flash flooding of areas in and around the
+South Fork Burn Scar.
+
+* Some locations that will experience flash flooding include...
+Ruidoso, Ruidoso Downs, Alto, Glencoe and Hollywood.
+</description><instruction>This is a life threatening situation. Heavy rainfall will cause
+extensive and severe flash flooding of creeks, streams and ditches in
+the South Fork Burn Scar. Severe debris flows can also be anticipated
+across roads. Roads and driveways may be washed away in places. If
+you encounter flood waters, climb to safety.</instruction><web>http://www.weather.gov</web><parameter><valueName>AWIPSidentifier</valueName><value>FFWABQ</value></parameter><parameter><valueName>WMOidentifier</valueName><value>WGUS55 KABQ 291936</value></parameter><parameter><valueName>flashFloodDetection</valueName><value>RADAR INDICATED</value></parameter><parameter><valueName>flashFloodDamageThreat</valueName><value>CONSIDERABLE</value></parameter><parameter><valueName>BLOCKCHANNEL</valueName><value>EAS</value></parameter><parameter><valueName>BLOCKCHANNEL</valueName><value>NWEM</value></parameter><parameter><valueName>EAS-ORG</valueName><value>WXR</value></parameter><parameter><valueName>VTEC</valueName><value>/O.NEW.KABQ.FF.W.0239.261029T1936Z-261029T2230Z/</value></parameter><parameter><valueName>eventEndingTime</valueName><value>2026-10-29T16:30:00-06:00</value></parameter><parameter><valueName>WEAHandling</valueName><value>Imminent Threat</value></parameter><parameter><valueName>CMAMtext</valueName><value>SNM: AVISO DE INUNDACIONES REPENTINAS hasta 4:30 PM MDT. Evite areas inundadas.</value></parameter><parameter><valueName>CMAMlongtext</valueName><value>Servicio Nacional de Meteorologia: AVISO DE INUNDACIONES REPENTINAS en efecto para esta area hasta las 4:30 PM MDT. Esta es una situacion peligrosa y amenaza la vida. No intente viajar a menos que sea para abandonar un area propensa a inundaciones o bajo una orden de desalojo.</value></parameter><area><areaDesc>Lincoln, NM</areaDesc><polygon>33.42,-105.71 33.42,-105.66 33.43,-105.65 33.44,-105.63 33.4,-105.61 33.38,-105.62 33.39,-105.64 33.34,-105.64 33.33,-105.63 33.36,-105.56 33.38,-105.53 33.43,-105.43 33.41,-105.43 33.33,-105.55 33.31,-105.59 33.31,-105.73 33.39,-105.73 33.39,-105.78 33.41,-105.78 33.42,-105.71</polygon><geocode><valueName>SAME</valueName><value>035027</value></geocode><geocode><valueName>UGC</valueName><value>NMC027</value></geocode></area></info><Signature xmlns="http://www.w3.org/2000/09/xmldsig#" xmlns:ns5="http://gov.fema.ipaws.services/IPAWS_CAPService/" xmlns:ns2="urn:oasis:names:tc:emergency:cap:1.2" xmlns:ns4="http://gov.fema.ipaws.services/capresponse" xmlns:ns3="http://gov.fema.ipaws.services/caprequest"><SignedInfo><CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/><SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/><Reference URI=""><Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms><DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><DigestValue>FHppFfTTXe2DGU5qejibwnNpc3yF/BKeZES2mM7k8lE=</DigestValue></Reference></SignedInfo><SignatureValue>EL9k+vXT2yuL/D8Mka3lsLRH4+rSARR781WVqApAAkNsM7zWGwi37GBsyrBez19zw6G+DXU0ZHE4&#13;
+mXqJGyTmvjXCbU6/Fx5j7pqVHkNJw8+IpKgPkX9SD72hflldK7sLH1t0rjT115Tc6/rAFVr2IrIh&#13;
+vRToOz3EEAIYf2mMwDmGDP3SMN+rTjoV0xZ70u2unWpj0T1EJhj+53xMnAi8uoWvkkAQ2jVYNSMl&#13;
+2Vx+bPR058nCuuvQqfhPl4RNko5wXUOPEMLjG4Zds+LfA4AR5oMF6z9UUzM/OpuKpN6l2OsQ/MDQ&#13;
+3bXwYzKkaCF73PzfwWc0y9Vuq05BcjDIiq7uwA==</SignatureValue><KeyInfo><X509Data><X509SubjectName>CN=IPAWSOPEN200032,OU=A01410D0000019A5E4549540014DF2C,OU=Devices IPAWS,OU=National Continuity Programs,O=FEMA IPAWS,C=US</X509SubjectName><X509Certificate>MIIHPzCCBSegAwIBAgIQQAGaXkVJb3yj70Q8FAqMbzANBgkqhkiG9w0BAQsFADBdMQswCQYDVQQG&#13;
+EwJVUzESMBAGA1UEChMJSWRlblRydXN0MSAwHgYDVQQLExdJZGVuVHJ1c3QgR2xvYmFsIENvbW1v&#13;
+bjEYMBYGA1UEAxMPSUdDIERldmljZSBDQSAyMB4XDTI1MTEwNzEyMjMxMFoXDTI4MTEwNjEyMjIx&#13;
+MFowgaUxCzAJBgNVBAYTAlVTMRMwEQYDVQQKEwpGRU1BIElQQVdTMSUwIwYDVQQLExxOYXRpb25h&#13;
+bCBDb250aW51aXR5IFByb2dyYW1zMRYwFAYDVQQLEw1EZXZpY2VzIElQQVdTMSgwJgYDVQQLEx9B&#13;
+MDE0MTBEMDAwMDAxOUE1RTQ1NDk1NDAwMTRERjJDMRgwFgYDVQQDEw9JUEFXU09QRU4yMDAwMzIw&#13;
+ggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCOdhA5DPitMFp6DUbiQZi/anJ6L9qtPrRz&#13;
+gZksP2aOSve50875b4yi2eMv2caKpF+lxtbmzxdZjRuV55TnCkn7HaaLpi+7nFP4aDB9DDw/Gnop&#13;
+65nNzLvZ7MXpCC3ikJk09iSgwVaw6RGte9X2WyUoPaEmygjv1lsVx+JGohgvPxTtiZhQJyxkxbM5&#13;
+rR2MAC5VjsrZNu3idfvd1B0EEGM1cVU9jpVuyiWK53k+vPuSOH/UWMXezzrBEwjtw1SMVv2/dxKz&#13;
+79gaITMmF6z5QqDFV0cstzmyEZWhyoavCpXW4W+vU+FLO0IgXINzY34IsnFQ/cqGEJ6MtC63uM8f&#13;
+2L7dAgMBAAGjggKwMIICrDAOBgNVHQ8BAf8EBAMCBaAwfQYIKwYBBQUHAQEEcTBvMCkGCCsGAQUF&#13;
+BzABhh1odHRwOi8vaWdjLm9jc3AuaWRlbnRydXN0LmNvbTBCBggrBgEFBQcwAoY2aHR0cDovL3Zh&#13;
+bGlkYXRpb24uaWRlbnRydXN0LmNvbS9jZXJ0cy9pZ2NkZXZpY2VjYTIucDdjMB8GA1UdIwQYMBaA&#13;
+FD+LR65hHetlI5XEOi3tu0jVIykiMIIBQwYDVR0gBIIBOjCCATYwDQYLYIZIAYb5LwBkJQEwggEj&#13;
+BgtghkgBhvkvAGQmATCCARIwSwYIKwYBBQUHAgEWP2h0dHBzOi8vc2VjdXJlLmlkZW50cnVzdC5j&#13;
+b20vY2VydGlmaWNhdGVzL3BvbGljeS9JR0MvaW5kZXguaHRtbDCBwgYIKwYBBQUHAgIwgbUMgbJD&#13;
+ZXJ0aWZpY2F0ZSB1c2UgcmVzdHJpY3RlZCB0byBSZWx5aW5nIFBhcnR5KHMpIGluIGFjY29yZGFu&#13;
+Y2Ugd2l0aCBJR0MtQ1AgKHNlZSBodHRwczovL3NlY3VyZS5pZGVudHJ1c3QuY29tL2NlcnRpZmlj&#13;
+YXRlcy9wb2xpY3kvaWdjL2luZGV4Lmh0bWwpLiBJR0MtQ1BTIGluY29ycG9yYXRlZCBieSByZWZl&#13;
+cmVuY2UuMEUGA1UdHwQ+MDwwOqA4oDaGNGh0dHA6Ly92YWxpZGF0aW9uLmlkZW50cnVzdC5jb20v&#13;
+Y3JsL2lnY2RldmljZWNhMi5jcmwwGgYDVR0RBBMwEYIPSVBBV1NPUEVOMjAwMDMyMB0GA1UdDgQW&#13;
+BBQ8QhNU0KQ6GUEOz5peBrNTppU+fDAxBgNVHSUEKjAoBggrBgEFBQcDAgYIKwYBBQUHAwUGCCsG&#13;
+AQUFBwMGBggrBgEFBQcDBzANBgkqhkiG9w0BAQsFAAOCAgEAXiYe+0catdoGF4nXiIoyywVkVTaG&#13;
+BacaUIjTceAJv35LhC5gwAM+O3OudKQQbMeIzOcjJluFc4vFjmzL/DxLLKk6IVVZQ+MXO8O5UZ6e&#13;
+0hSwQv3mO+9JkCYL7M/GIJwiq6XuEiLS7wESwnHq2tIppZNfpcZcMSlQC+4hoUPJuVNU7QVFtvXe&#13;
+6FaB/zDMTU3pzOuCxn/SNIhBKHVesE8n5soIp5q8U/R/I9vYM52NISzZcYPGUp6Snyd9mVqmxAo+&#13;
+t3pAgsojLOrSBPLQoPoip/KeKCMahrumQuaHi6t3ML6IlCIuOeNnHEaxnUIWGD7kAswOKsqGGjMN&#13;
+JwXw6TeqrddvCg8Nd0SH7mWI/vjOq/ykZs2q6lB3b/5ur7YjGOdT3310R0VhZ8pxuyUTrR6EFlFR&#13;
+PkWhg46BaEiP1GtzmEW7wT0YStf4wvwDR3HkjpzNoBO92+iwhVHPKyl7T4METnDyTAD+aDn/Xtp/&#13;
+pZePlh9uOkCqS7NOm6B4Hjra/iL3BQG2gwcE6XOzbETH6/ibKwMroFDAgqe8AA6xdmcajHBf7/wA&#13;
+maMrAQmgbINPpZWjMo3wf2IccUTVHxLaZj+yQZcWMuX9R2H84eTo/CfqmG1RyxcqO0Nd1BS8i8Ii&#13;
+YnCXXUlXkpl0xFj1R1xiGv8bd4l5AGjorijY2Wnub1m4Y4k=</X509Certificate></X509Data></KeyInfo></Signature></alert>

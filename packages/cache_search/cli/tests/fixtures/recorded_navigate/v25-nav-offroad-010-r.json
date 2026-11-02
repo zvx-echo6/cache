@@ -1,0 +1,277 @@
+{
+ "request": {
+  "from": "Salmon",
+  "mode": "drive",
+  "near": "Salmon",
+  "to": "Goldbug Hot Springs"
+ },
+ "result": {
+  "distance_km": 40.75,
+  "distance_mi": 25.32,
+  "duration_minutes": 67.5,
+  "from_matched": {
+   "county": "Lemhi",
+   "distance_km": 0.0,
+   "kind": "locality",
+   "locality": "Salmon",
+   "near": {
+    "county": "Lemhi",
+    "distance_m": 0,
+    "housenumber": null,
+    "locality": null,
+    "name": "Salmon",
+    "state": "Idaho",
+    "street": null
+   },
+   "place_name": "Salmon",
+   "snap_distance_m": 0,
+   "state": "Idaho",
+   "street": null
+  },
+  "location_bias": "near:Salmon, Lemhi, Idaho, United States",
+  "major_roads": [
+   {
+    "distance_km": 36.65,
+    "name": "US 93"
+   },
+   {
+    "distance_km": 0.73,
+    "name": "Main Street"
+   },
+   {
+    "distance_km": 0.54,
+    "name": "Warm Springs Road"
+   }
+  ],
+  "mode": "drive",
+  "offroad_mi": 1.65,
+  "offroad_note": "Off-road legs are straight lines between turn points over a ~30 m elevation grid with no path on the ground; follow legs run along the mapped road, track or trail they name.",
+  "offroad_steps_omitted": 3,
+  "ok": true,
+  "other_destination_candidates": [
+   {
+    "county": "Lemhi",
+    "distance_km": 31.3,
+    "kind": "street",
+    "locality": null,
+    "place_name": "Goldbug Hot Springs Trailhead",
+    "state": "Idaho",
+    "street": "Goldbug Hot Springs Trail"
+   }
+  ],
+  "pins": "20 map pins prepared, one per step; the radio bridge sends them to the asker",
+  "road_steps_omitted": 5,
+  "route_id": "54e6602b5ffe83f2",
+  "step_count": 20,
+  "steps": [
+   {
+    "cardinal": "E",
+    "distance_mi": 0.25,
+    "elev_gain_m": 25,
+    "elev_loss_m": 3,
+    "follow": {
+     "name": "Goldbug Hot Springs Trail",
+     "trail_kind": "trail"
+    },
+    "grade_class": "uphill",
+    "index": 8,
+    "instruction": "By dirt bike or mountain bike: Follow Goldbug Hot Springs Trail E 0.25 mi, uphill, grassland (+25 m -3 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "grassland",
+    "travel": "2w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "SE",
+    "distance_mi": 0.02,
+    "elev_gain_m": 2,
+    "elev_loss_m": 0,
+    "grade_class": "uphill",
+    "index": 9,
+    "instruction": "By dirt bike or mountain bike: Off-road SE 0.02 mi, uphill, grassland (+2 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "grassland",
+    "travel": "2w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "E",
+    "distance_mi": 0.17,
+    "elev_gain_m": 6,
+    "elev_loss_m": 2,
+    "follow": {
+     "name": "Goldbug Hot Springs Trail",
+     "trail_kind": "trail"
+    },
+    "grade_class": "flat",
+    "index": 10,
+    "instruction": "By dirt bike or mountain bike: Follow Goldbug Hot Springs Trail E 0.17 mi, flat, grassland (+6 m -2 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "grassland",
+    "travel": "2w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "E",
+    "distance_mi": 0.09,
+    "elev_gain_m": 18,
+    "elev_loss_m": 1,
+    "grade_class": "uphill",
+    "index": 11,
+    "instruction": "By dirt bike or mountain bike: Off-road E 0.09 mi, uphill, grassland (+18 m -1 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "grassland",
+    "travel": "2w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.13,
+    "elev_gain_m": 8,
+    "elev_loss_m": 2,
+    "follow": {
+     "name": "Goldbug Hot Springs Trail",
+     "trail_kind": "trail"
+    },
+    "grade_class": "flat",
+    "index": 12,
+    "instruction": "By dirt bike or mountain bike: Follow Goldbug Hot Springs Trail NE 0.13 mi, flat, tree cover (+8 m -2 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "2w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.16,
+    "elev_gain_m": 32,
+    "elev_loss_m": 0,
+    "grade_class": "uphill",
+    "index": 13,
+    "instruction": "By dirt bike or mountain bike: Off-road NE 0.16 mi, uphill, tree cover (+32 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "2w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.16,
+    "elev_gain_m": 25,
+    "elev_loss_m": 0,
+    "follow": {
+     "name": "Goldbug Hot Springs Trail",
+     "trail_kind": "trail"
+    },
+    "grade_class": "uphill",
+    "index": 14,
+    "instruction": "By dirt bike or mountain bike: Follow Goldbug Hot Springs Trail NE 0.16 mi, uphill, tree cover (+25 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "2w",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.09,
+    "elev_gain_m": 13,
+    "elev_loss_m": 1,
+    "grade_class": "uphill",
+    "index": 15,
+    "instruction": "By dirt bike or mountain bike: Off-road NE 0.09 mi, uphill, tree cover (+13 m -1 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "2w",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "E",
+    "distance_mi": 0.06,
+    "elev_gain_m": 11,
+    "elev_loss_m": 1,
+    "grade_class": "uphill",
+    "index": 16,
+    "instruction": "On foot: Off-road E 0.06 mi, uphill, tree cover (+11 m -1 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "foot",
+    "type": "mode_change"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.15,
+    "elev_gain_m": 67,
+    "elev_loss_m": 0,
+    "grade_class": "steep_uphill",
+    "index": 17,
+    "instruction": "On foot: Off-road NE 0.15 mi, steep uphill, tree cover (+67 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "foot",
+    "type": "offroad_leg"
+   },
+   {
+    "cardinal": "NE",
+    "distance_mi": 0.1,
+    "elev_gain_m": 49,
+    "elev_loss_m": 0,
+    "follow": {
+     "name": "Goldbug Hot Springs Trail",
+     "trail_kind": "trail"
+    },
+    "grade_class": "steep_uphill",
+    "index": 18,
+    "instruction": "On foot: Follow Goldbug Hot Springs Trail NE 0.1 mi, steep uphill, tree cover (+49 m)",
+    "kind": "offroad_follow",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "foot",
+    "type": "offroad_follow"
+   },
+   {
+    "cardinal": "N",
+    "distance_mi": 0.01,
+    "elev_gain_m": 5,
+    "elev_loss_m": 0,
+    "grade_class": "steep_uphill",
+    "index": 19,
+    "instruction": "On foot: Off-road N 0.01 mi, steep uphill, tree cover (+5 m)",
+    "kind": "offroad",
+    "street_names": [],
+    "terrain": "tree cover",
+    "travel": "foot",
+    "type": "offroad_leg"
+   }
+  ],
+  "steps_truncated": true,
+  "to_matched": {
+   "county": "Lemhi",
+   "distance_km": 30.2,
+   "kind": "poi",
+   "locality": null,
+   "near": {
+    "county": "Lemhi",
+    "distance_m": 0,
+    "housenumber": null,
+    "locality": null,
+    "name": "Goldbug Hot Springs",
+    "state": "Idaho",
+    "street": null
+   },
+   "place_name": "Goldbug Hot Springs",
+   "snap_distance_m": 5,
+   "state": "Idaho",
+   "street": null
+  }
+ }
+}

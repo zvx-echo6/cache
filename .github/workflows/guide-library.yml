@@ -1,0 +1,110 @@
+# Builds the Cache guide library (cache-guide-<version>.cache-library) from docs/guide on a GitHub runner, as
+# tools/guide/BUILD.md describes: split, embed every section with bge-m3 (CPU), assemble, write the shard and snapshot, package,
+# then unpack, index and verify it with the Linux `cs`. Uploads the package, the manifest and the verify log as an artifact.
+# Run by hand, or by pushing a branch named guide-library-<version> (GitHub dispatches a workflow by hand only once it is on the
+# default branch). It publishes nothing and changes no file in the repository. No secrets are used.
+name: Guide library
+
+on:
+  push:
+    branches: ['guide-library-*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The library version, the build date: YYYY-MM-DD, with a letter for a second build that day (2026-11-02b)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guide-library-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: 1.99.1
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  # The embedding model the library is made with (the one the app downloads; tools/guide/package.py writes the same).
+  MODEL_URL: https://huggingface.co/lm-kit/bge-m3-gguf/resolve/9379ce497e8814b200f2dc0d18eb4045426dcb8c/bge-m3-Q8_0.gguf
+  MODEL_SHA256: c98c7c907bb3ab8c3be4c8ad827cc934c7c1a7e014d1c999e0c45c8027c158bb
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # llama.cpp, for cache_llama
+      - name: Version
+        env:
+          VERSION: ${{ github.event.inputs.version || '' }}
+          REF: ${{ github.ref_name }}
+        run: |
+          [ -n "$VERSION" ] || VERSION="${REF#guide-library-}"
+          [[ "$VERSION" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[a-z]?$ ]] || { echo "version must be YYYY-MM-DD with an optional letter: $VERSION"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "W=$RUNNER_TEMP/guide" >> "$GITHUB_ENV"
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/cache_search/native -> target
+          key: guide-library
+      - name: Guide checks
+        run: |
+          python3 -I tools/guide/ci_check.py
+          python3 -I tools/guide/guide_titles.py > /dev/null
+      - name: The embedding model
+        run: |
+          mkdir -p "$W"
+          curl -fsSL --retry 3 -o "$W/bge-m3-Q8_0.gguf" "$MODEL_URL"
+          echo "$MODEL_SHA256  $W/bge-m3-Q8_0.gguf" | sha256sum -c -
+      - name: cache_llama (Linux, CPU)
+        run: |
+          cmake -S packages/cache_llama/src -B "$RUNNER_TEMP/llama" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/llama" --target cache_llama -j "$(nproc)"
+          lib=$(find "$RUNNER_TEMP/llama" -name 'libcache_llama.so' | head -n 1)
+          [ -n "$lib" ] || { echo 'libcache_llama.so was not built'; exit 1; }
+          echo "LLAMA_LIB=$lib" >> "$GITHUB_ENV"
+      - name: cs and the snapshot writer
+        working-directory: packages/cache_search/native
+        run: |
+          cargo build --release --locked -p cache_search_cli --bin cs
+          cargo build --release --locked -p cache_search --no-default-features --example build_guide
+      - name: 1. Split
+        run: python3 -I tools/guide/split.py --out "$W/manifest.json"
+      - name: 2. Embed
+        run: python3 -I tools/guide/embed_guide.py --lib "$LLAMA_LIB" --model "$W/bge-m3-Q8_0.gguf" "$W/manifest.json" "$W/vectors.json"
+      - name: 3. Assemble
+        run: python3 -I tools/guide/assemble.py "$W/manifest.json" "$W/vectors.json" title_text_vec "$W/points.json"
+      - name: 4. Shard and snapshot
+        run: packages/cache_search/native/target/release/examples/build_guide "$W/points.json" "$W/shard" "$W/guide.snapshot"
+      - name: 5. Package
+        run: |
+          mkdir -p "$W/pkg"
+          python3 -I tools/guide/package.py --snapshot "$W/guide.snapshot" --version "$VERSION" --out-dir "$W/pkg" | tee "$W/pkg/sha256.txt"
+      - name: 6. Unpack, index and verify
+        run: |
+          cs=packages/cache_search/native/target/release/cs
+          lib="$W/check/library/cache-guide-$VERSION"
+          "$cs" unpack-library --snapshot "$W/pkg/cache-guide-$VERSION.cache-library.tar" --dir "$lib"
+          "$cs" index-library --library "$lib" --index-dir "$W/check/index" --settings "$lib/cache-library.json"
+          echo '{"sources": []}' > "$W/check/base-config.json"
+          python3 -I tools/guide/gen_config.py --base-config "$W/check/base-config.json" --library-dir "$lib" \
+            --index-dir "$W/check/index" --out "$W/check/config.json"
+          python3 -I tools/guide/verify.py --cs "$cs" --config "$W/check/config.json" --manifest "$W/manifest.json" \
+            --embed-lib "$LLAMA_LIB" --embed-model "$W/bge-m3-Q8_0.gguf" --embed-sha256 "$MODEL_SHA256" | tee "$W/pkg/verify.txt"
+      - name: Upload
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-guide-${{ env.VERSION }}
+          path: |
+            ${{ runner.temp }}/guide/pkg/
+            ${{ runner.temp }}/guide/manifest.json
+          if-no-files-found: error
+          retention-days: 30

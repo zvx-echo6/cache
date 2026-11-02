@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "id": "openfreemap",
+  "title": "Base map (OpenFreeMap)",
+  "description": "An alternative base map: streets, places, water and land from OpenStreetMap, streamed from OpenFreeMap (OpenMapTiles layout).",
+  "kind": "vector",
+  "transform": "as_is",
+  "source": { "type": "tilejson", "url": "https://tiles.openfreemap.org/planet", "minzoom": 0, "maxzoom": 14, "tile_format": "mvt" },
+  "attribution": "OpenFreeMap © OpenMapTiles Data from OpenStreetMap",
+  "license": "OpenStreetMap data: ODbL 1.0. OpenMapTiles schema: CC BY 4.0. OpenFreeMap terms of service apply.",
+  "coverage": { "bbox": [-180, -85.0511287, 180, 85.0511287] },
+  "offline": { "allowed": true, "max_tiles_per_download": 3000, "max_bytes_per_download": 52428800, "max_parallel": 4 },
+  "update": { "version": "", "interval_days": 30 },
+  "layout": "openmaptiles",
+  "enabled_by_default": false,
+  "recipe": "https://openfreemap.org/quick_start/"
+}

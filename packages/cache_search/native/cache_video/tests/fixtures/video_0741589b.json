@@ -1,0 +1,153 @@
+{
+ "id": 21165,
+ "uuid": "0741589b-349b-4883-9f25-962d8a26917c",
+ "shortUUID": "1TXQQs6hkDT9SpzqT1ZRCG",
+ "url": "https://example.org/videos/watch/0741589b-349b-4883-9f25-962d8a26917c",
+ "name": "DSCN2618",
+ "category": {
+  "id": null,
+  "label": "Unknown"
+ },
+ "licence": {
+  "id": null,
+  "label": "Unknown"
+ },
+ "language": {
+  "id": "en",
+  "label": "English"
+ },
+ "privacy": {
+  "id": 1,
+  "label": "Public"
+ },
+ "nsfw": false,
+ "nsfwFlags": 0,
+ "nsfwSummary": null,
+ "truncatedDescription": null,
+ "description": null,
+ "isLocal": true,
+ "duration": 5,
+ "aspectRatio": 1.3333,
+ "views": 0,
+ "viewers": 0,
+ "downloads": 0,
+ "likes": 0,
+ "dislikes": 0,
+ "thumbnailPath": "/lazy-static/thumbnails/fa8153a7-2d66-4179-9577-a12e0300abaf.jpg",
+ "previewPath": "/lazy-static/thumbnails/35ab3583-5b5a-4db5-a288-cbec00d2c265.jpg",
+ "thumbnails": [
+  {
+   "height": 480,
+   "width": 850,
+   "aspectRatio": "16:9",
+   "fileUrl": "https://example.org/lazy-static/thumbnails/35ab3583-5b5a-4db5-a288-cbec00d2c265.jpg"
+  },
+  {
+   "height": 157,
+   "width": 280,
+   "aspectRatio": "16:9",
+   "fileUrl": "https://example.org/lazy-static/thumbnails/fa8153a7-2d66-4179-9577-a12e0300abaf.jpg"
+  }
+ ],
+ "embedPath": "/videos/embed/1TXQQs6hkDT9SpzqT1ZRCG",
+ "createdAt": "2026-04-15T18:54:15.070Z",
+ "updatedAt": "2026-04-15T23:56:50.884Z",
+ "publishedAt": "2026-04-15T18:54:14.636Z",
+ "originallyPublishedAt": null,
+ "isLive": false,
+ "account": {
+  "url": "https://example.org/accounts/root",
+  "name": "root",
+  "host": "example.org",
+  "avatars": [],
+  "id": 2,
+  "hostRedundancyAllowed": false,
+  "followingCount": 0,
+  "followersCount": 0,
+  "createdAt": "2026-02-13T00:34:33.275Z",
+  "displayName": "root",
+  "description": null,
+  "updatedAt": "2026-02-13T00:34:33.274Z",
+  "userId": 1
+ },
+ "channel": {
+  "url": "https://example.org/video-channels/scl-skills",
+  "name": "scl-skills",
+  "host": "example.org",
+  "avatars": [],
+  "id": 168,
+  "hostRedundancyAllowed": false,
+  "followingCount": 0,
+  "followersCount": 0,
+  "createdAt": "2026-04-15T16:17:51.703Z",
+  "banners": [],
+  "displayName": "SCL-Skills",
+  "description": "Survival Companion Library — SCL-Skills",
+  "support": null,
+  "isLocal": true,
+  "updatedAt": "2026-04-15T18:54:15.086Z",
+  "ownerAccount": {
+   "url": "https://example.org/accounts/root",
+   "name": "root",
+   "host": "example.org",
+   "avatars": [],
+   "id": 2,
+   "hostRedundancyAllowed": false,
+   "followingCount": 0,
+   "followersCount": 0,
+   "createdAt": "2026-02-13T00:34:33.275Z",
+   "displayName": "root",
+   "description": null,
+   "updatedAt": "2026-02-13T00:34:33.274Z",
+   "userId": 1
+  }
+ },
+ "comments": 0,
+ "blacklisted": false,
+ "blacklistedReason": null,
+ "streamingPlaylists": [],
+ "files": [
+  {
+   "id": 21165,
+   "resolution": {
+    "id": 240,
+    "label": "240p"
+   },
+   "width": 320,
+   "height": 240,
+   "magnetUri": "magnet:?xs=https%3A%2F%2Fexample.org%2Flazy-static%2Ftorrents%2F3fd61c58-4dde-42ce-8445-9773ea1ff1d0-240.torrent&xt=urn:btih:54b988b952a33ac40c5e4b1e19175a0f891682f1&dn=DSCN2618&tr=https%3A%2F%2Fexample.org%2Ftracker%2Fannounce&tr=wss%3A%2F%2Fexample.org%3A443%2Ftracker%2Fsocket&ws=https%3A%2F%2Fexample.org%2Fstatic%2Fweb-videos%2Fe2f9c724-72a4-4b2b-94a7-7c56d63feb82-240.mp4",
+   "size": 721911,
+   "fps": 15,
+   "torrentUrl": "https://example.org/lazy-static/torrents/3fd61c58-4dde-42ce-8445-9773ea1ff1d0-240.torrent",
+   "torrentDownloadUrl": "https://example.org/download/torrents/3fd61c58-4dde-42ce-8445-9773ea1ff1d0-240.torrent",
+   "fileUrl": "https://example.org/static/web-videos/e2f9c724-72a4-4b2b-94a7-7c56d63feb82-240.mp4",
+   "fileDownloadUrl": "https://example.org/download/web-videos/0741589b-349b-4883-9f25-962d8a26917c-240.mp4",
+   "metadataUrl": "https://example.org/api/v1/videos/0741589b-349b-4883-9f25-962d8a26917c/metadata/21165",
+   "hasAudio": true,
+   "hasVideo": true,
+   "storage": 0
+  }
+ ],
+ "liveSchedules": [],
+ "support": null,
+ "tags": [],
+ "commentsPolicy": {
+  "id": 1,
+  "label": "Enabled"
+ },
+ "downloadEnabled": true,
+ "waitTranscoding": false,
+ "inputFileUpdatedAt": null,
+ "state": {
+  "id": 1,
+  "label": "Published"
+ },
+ "trackerUrls": [
+  "https://example.org/tracker/announce",
+  "wss://example.org:443/tracker/socket"
+ ],
+ "embedPrivacyPolicy": {
+  "id": 1,
+  "label": "All allowed"
+ }
+}

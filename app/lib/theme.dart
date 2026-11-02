@@ -1,0 +1,382 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+/// The colour tokens of one theme. Screens read colours from here (via `context.t`) and never
+/// hard-code them.
+@immutable
+class CacheTokens extends ThemeExtension<CacheTokens> {
+  const CacheTokens({
+    required this.background,
+    required this.surface,
+    required this.text,
+    required this.secondary,
+    required this.accent,
+    required this.primary,
+    required this.onPrimary,
+    required this.emergency,
+    required this.warning,
+    required this.ok,
+    this.monoDark,
+    this.monoLight,
+  });
+
+  final Color background;
+  final Color surface;
+  final Color text;
+  final Color secondary;
+  /// Highlights, links and selected labels; always readable as text on [background] and [surface].
+  final Color accent;
+
+  /// Filled primary actions, and the colour of the text or icons on them.
+  final Color primary;
+  final Color onPrimary;
+  final Color emergency;
+  final Color warning;
+  final Color ok;
+
+  /// Single-hue themes only: the painted brand art (tiles, wordmark, launch scene) is drawn in this theme's own hue, with
+  /// its darkest tone mapped to [monoDark] and its lightest to [monoLight]. Null keeps the art in full colour.
+  final Color? monoDark;
+  final Color? monoLight;
+
+  @override
+  CacheTokens copyWith({
+    Color? background,
+    Color? surface,
+    Color? text,
+    Color? secondary,
+    Color? accent,
+    Color? primary,
+    Color? onPrimary,
+    Color? emergency,
+    Color? warning,
+    Color? ok,
+    Color? monoDark,
+    Color? monoLight,
+  }) =>
+      CacheTokens(
+        background: background ?? this.background,
+        surface: surface ?? this.surface,
+        text: text ?? this.text,
+        secondary: secondary ?? this.secondary,
+        accent: accent ?? this.accent,
+        primary: primary ?? this.primary,
+        onPrimary: onPrimary ?? this.onPrimary,
+        emergency: emergency ?? this.emergency,
+        warning: warning ?? this.warning,
+        ok: ok ?? this.ok,
+        monoDark: monoDark ?? this.monoDark,
+        monoLight: monoLight ?? this.monoLight,
+      );
+
+  @override
+  CacheTokens lerp(ThemeExtension<CacheTokens>? other, double t) {
+    if (other is! CacheTokens) return this;
+    return CacheTokens(
+      background: Color.lerp(background, other.background, t)!,
+      surface: Color.lerp(surface, other.surface, t)!,
+      text: Color.lerp(text, other.text, t)!,
+      secondary: Color.lerp(secondary, other.secondary, t)!,
+      accent: Color.lerp(accent, other.accent, t)!,
+      primary: Color.lerp(primary, other.primary, t)!,
+      onPrimary: Color.lerp(onPrimary, other.onPrimary, t)!,
+      emergency: Color.lerp(emergency, other.emergency, t)!,
+      warning: Color.lerp(warning, other.warning, t)!,
+      ok: Color.lerp(ok, other.ok, t)!,
+      monoDark: Color.lerp(monoDark, other.monoDark, t),
+      monoLight: Color.lerp(monoLight, other.monoLight, t),
+    );
+  }
+
+  /// A colour filter that turns the brand art into this theme's hue (luminance mapped from [monoDark] to [monoLight], with
+  /// extra contrast so glyph and tile stay apart), or null for the full-colour themes.
+  ColorFilter? get brandFilter {
+    final d = monoDark, l = monoLight;
+    if (d == null || l == null) return null;
+    const gain = 1.35;
+    List<double> row(double dark, double light) {
+      final diff = (light - dark) * gain;
+      return [diff * 0.2126, diff * 0.7152, diff * 0.0722, 0, 255 * dark + (light - dark) * 255 * (0.5 - 0.5 * gain)];
+    }
+
+    return ColorFilter.matrix([
+      ...row(d.r, l.r),
+      ...row(d.g, l.g),
+      ...row(d.b, l.b),
+      0, 0, 0, 1, 0,
+    ]);
+  }
+}
+
+extension CacheTokensContext on BuildContext {
+  CacheTokens get t => Theme.of(this).extension<CacheTokens>()!;
+}
+
+enum CacheThemeId { dark, light, parchment, tactical }
+
+extension CacheThemeIdInfo on CacheThemeId {
+  String get label => switch (this) {
+        CacheThemeId.dark => 'Dark',
+        CacheThemeId.light => 'Light',
+        CacheThemeId.parchment => 'Parchment',
+        CacheThemeId.tactical => 'Tactical',
+      };
+
+  String get hint => switch (this) {
+        CacheThemeId.dark => 'Default',
+        CacheThemeId.light => 'Bright, for indoors',
+        CacheThemeId.parchment => 'Warm paper, easy reading in daylight',
+        CacheThemeId.tactical => 'Red on black, protects night vision',
+      };
+
+  bool get isLight => this == CacheThemeId.light || this == CacheThemeId.parchment;
+}
+
+/// The brand palette. Dark, Light and Parchment are built from it; Tactical is deliberately not (red only, to
+/// protect night vision).
+abstract final class Brand {
+  static const forest = Color(0xFF3B4D3A);
+  static const olive = Color(0xFF6B7F4E);
+  static const parchment = Color(0xFFDCC9A3);
+  static const charcoal = Color(0xFF1A1D1F);
+  static const slate = Color(0xFF2A3036);
+  static const clay = Color(0xFFCB7A3C);
+}
+
+const Map<CacheThemeId, CacheTokens> cacheTokens = {
+  // Charcoal ground, Slate cards, Parchment text, Clay actions.
+  CacheThemeId.dark: CacheTokens(
+    background: Brand.charcoal,
+    surface: Brand.slate,
+    text: Brand.parchment,
+    secondary: Color(0xFFB0A58A),
+    accent: Color(0xFFDB8A4B), // Clay, lifted a little so it reads as text on Slate
+    primary: Brand.clay,
+    onPrimary: Brand.charcoal,
+    emergency: Color(0xFFFF7A6E),
+    warning: Color(0xFFE0B45A),
+    ok: Color(0xFF8FB36A),
+  ),
+  // Parchment-tinted ground, near-white cards, Charcoal text, Forest actions, Clay (darkened to read as text) accent.
+  CacheThemeId.light: CacheTokens(
+    background: Color(0xFFF3EBD9),
+    surface: Color(0xFFFFFDF8),
+    text: Brand.charcoal,
+    secondary: Color(0xFF55594F),
+    accent: Color(0xFF9C5320),
+    primary: Brand.forest,
+    onPrimary: Color(0xFFF3EBD9),
+    emergency: Color(0xFFB3281E),
+    warning: Color(0xFF7A5200),
+    ok: Color(0xFF3F6B2E),
+  ),
+  // Parchment itself as the paper, a lighter sheet for cards.
+  CacheThemeId.parchment: CacheTokens(
+    background: Brand.parchment,
+    surface: Color(0xFFE8DBBC),
+    text: Brand.charcoal,
+    secondary: Color(0xFF4A4638),
+    accent: Color(0xFF7E4416),
+    primary: Brand.forest,
+    onPrimary: Color(0xFFF3EBD9),
+    emergency: Color(0xFF9A1F16),
+    warning: Color(0xFF6E4A00),
+    ok: Color(0xFF2F5A22),
+  ),
+  CacheThemeId.tactical: CacheTokens(
+    background: Color(0xFF000000),
+    surface: Color(0xFF120404),
+    text: Color(0xFFE0473C),
+    secondary: Color(0xFF8E2B24),
+    accent: Color(0xFFFF5A4A),
+    primary: Color(0xFFFF5A4A),
+    onPrimary: Color(0xFF000000),
+    emergency: Color(0xFFFF2D1F),
+    warning: Color(0xFFC24A1E),
+    ok: Color(0xFFB23A2E),
+    monoDark: Color(0xFF260806),
+    monoLight: Color(0xFFFF6A58),
+  ),
+};
+
+ThemeData buildTheme(CacheThemeId id) {
+  final k = cacheTokens[id]!;
+  final brightness = id.isLight ? Brightness.light : Brightness.dark;
+  final tactical = id == CacheThemeId.tactical;
+  final scheme = ColorScheme(
+    brightness: brightness,
+    primary: k.primary,
+    onPrimary: k.onPrimary,
+    primaryContainer: k.surface,
+    onPrimaryContainer: k.text,
+    secondary: tactical ? k.accent : Brand.olive,
+    onSecondary: tactical ? k.background : Brand.charcoal,
+    secondaryContainer: id == CacheThemeId.dark ? Brand.forest : k.surface,
+    onSecondaryContainer: k.text,
+    tertiary: k.accent,
+    onTertiary: k.background,
+    error: k.emergency,
+    onError: k.background,
+    surface: k.background,
+    onSurface: k.text,
+    onSurfaceVariant: k.secondary,
+    surfaceTint: Colors.transparent,
+    surfaceContainerLowest: k.background,
+    surfaceContainerLow: k.surface,
+    surfaceContainer: k.surface,
+    surfaceContainerHigh: k.surface,
+    surfaceContainerHighest: k.surface,
+    outline: k.secondary,
+    outlineVariant: k.surface,
+    shadow: Colors.black,
+    scrim: Colors.black,
+    inverseSurface: k.text,
+    onInverseSurface: k.background,
+    inversePrimary: k.primary,
+  );
+
+  final base = ThemeData(brightness: brightness, useMaterial3: true);
+  final textTheme = base.textTheme.apply(bodyColor: k.text, displayColor: k.text).copyWith(
+        bodyLarge: TextStyle(fontSize: 18, height: 1.4, color: k.text),
+        bodyMedium: TextStyle(fontSize: 17, height: 1.4, color: k.text),
+        bodySmall: TextStyle(fontSize: 14, color: k.secondary),
+        titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: k.text),
+        titleMedium: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text),
+        labelLarge: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text),
+      );
+
+  return base.copyWith(
+    colorScheme: scheme,
+    scaffoldBackgroundColor: k.background,
+    canvasColor: k.background,
+    textTheme: textTheme,
+    primaryTextTheme: textTheme,
+    iconTheme: IconThemeData(color: k.text),
+    dividerColor: k.surface,
+    splashFactory: InkRipple.splashFactory,
+    extensions: [k],
+    appBarTheme: AppBarTheme(
+      backgroundColor: k.background,
+      foregroundColor: k.text,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      centerTitle: false,
+      titleTextStyle: textTheme.titleLarge,
+      iconTheme: IconThemeData(color: k.text),
+      systemOverlayStyle: overlayFor(id),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: k.surface,
+      surfaceTintColor: Colors.transparent,
+      indicatorColor: k.primary.withValues(alpha: 0.28),
+      height: 72,
+      iconTheme: WidgetStateProperty.resolveWith((s) =>
+          IconThemeData(size: 26, color: s.contains(WidgetState.selected) ? k.accent : k.secondary)),
+      labelTextStyle: WidgetStateProperty.resolveWith((s) => TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: s.contains(WidgetState.selected) ? k.accent : k.secondary,
+          )),
+    ),
+    // A tablet's rail: the bar's look, in a column.
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: k.surface,
+      indicatorColor: k.primary.withValues(alpha: 0.28),
+      selectedIconTheme: IconThemeData(size: 26, color: k.accent),
+      unselectedIconTheme: IconThemeData(size: 26, color: k.secondary),
+      selectedLabelTextStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.accent),
+      unselectedLabelTextStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.secondary),
+    ),
+    // On a tablet a sheet is a centred sheet 560 wide at most, and a pop-up 400 wide at most (a phone is narrower than both).
+    bottomSheetTheme: const BottomSheetThemeData(constraints: BoxConstraints(maxWidth: 560)),
+    dialogTheme: DialogThemeData(
+      constraints: const BoxConstraints(maxWidth: 400),
+      backgroundColor: k.surface,
+      surfaceTintColor: Colors.transparent,
+      titleTextStyle: textTheme.titleMedium,
+      contentTextStyle: textTheme.bodyMedium,
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: k.surface,
+      surfaceTintColor: Colors.transparent,
+      textStyle: textTheme.bodyMedium,
+    ),
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: k.surface,
+      contentTextStyle: TextStyle(fontSize: 16, color: k.text),
+      actionTextColor: k.accent,
+      behavior: SnackBarBehavior.floating,
+    ),
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: k.primary,
+      linearTrackColor: k.surface,
+      circularTrackColor: k.surface,
+    ),
+    textSelectionTheme: TextSelectionThemeData(
+      cursorColor: k.primary,
+      selectionColor: k.primary.withValues(alpha: 0.35),
+      selectionHandleColor: k.primary,
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: k.surface,
+      hintStyle: TextStyle(fontSize: 17, color: k.secondary),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+      focusedBorder:
+          OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide(color: k.primary, width: 1.5)),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: k.primary,
+        foregroundColor: k.onPrimary,
+        minimumSize: const Size(48, 52),
+        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: k.accent,
+        side: BorderSide(color: k.secondary),
+        minimumSize: const Size(48, 52),
+        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(foregroundColor: k.accent, minimumSize: const Size(48, 48)),
+    ),
+    radioTheme: RadioThemeData(fillColor: WidgetStatePropertyAll(k.primary)),
+    listTileTheme: ListTileThemeData(
+      iconColor: k.secondary,
+      textColor: k.text,
+      subtitleTextStyle: TextStyle(fontSize: 15, color: k.secondary),
+    ),
+  );
+}
+
+/// Status bar / navigation bar styling. Android can only draw white or dark icons, so the
+/// Tactical theme hides the bars entirely (see [applySystemUi]) and this style is a fallback.
+SystemUiOverlayStyle overlayFor(CacheThemeId id) {
+  final k = cacheTokens[id]!;
+  return SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: id.isLight ? Brightness.dark : Brightness.light,
+    statusBarBrightness: id.isLight ? Brightness.light : Brightness.dark,
+    systemNavigationBarColor: k.surface,
+    systemNavigationBarIconBrightness: id.isLight ? Brightness.dark : Brightness.light,
+    systemNavigationBarDividerColor: k.surface,
+  );
+}
+
+/// Tactical hides the system bars (their white icons would break night vision); swipe from the
+/// edge to bring them back for a moment. Other themes show them normally.
+void applySystemUi(CacheThemeId id) {
+  if (id == CacheThemeId.tactical) {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  } else {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+  SystemChrome.setSystemUIOverlayStyle(overlayFor(id));
+}

@@ -1,0 +1,143 @@
+{
+ "format": 1,
+ "generated": "2026-10-25T23:31:44Z",
+ "overture_release": "2026-10-21.0",
+ "polygon_base": "https://cache.echo6.co/regions/polygons/",
+ "polygon_note": "Fetch a region's polygon on demand from polygon_base + <id>.geojson",
+ "ids": "Country ids are the lowercase ISO 3166-1 alpha-2 code, regions the lowercase ISO 3166-2 code, others <region-code>-<slug>; gers_id is Overture's stable identifier for the underlying division.",
+ "countries": [
+  {
+   "id": "af",
+   "name": "Afghanistan",
+   "kind": "country",
+   "shard": "af",
+   "bbox": [
+    60.5176,
+    29.37729,
+    74.88986,
+    38.49107
+   ],
+   "area_km2": 641959,
+   "population": 32738376,
+   "parents": [],
+   "count": 444,
+   "kinds": {
+    "country": 1,
+    "region": 34,
+    "county": 397,
+    "locality": 12
+   }
+  },
+  {
+   "id": "ca",
+   "name": "Canada",
+   "kind": "country",
+   "shard": "ca",
+   "bbox": [
+    -141.00266,
+    41.67656,
+    -52.61937,
+    83.13709
+   ],
+   "area_km2": 9915550,
+   "population": 36991981,
+   "parents": [],
+   "count": 2528,
+   "kinds": {
+    "country": 1,
+    "region": 13,
+    "county": 1537,
+    "locality": 976,
+    "sub_state": 1
+   }
+  },
+  {
+   "id": "us",
+   "name": "United States",
+   "kind": "country",
+   "shard": "us",
+   "bbox": [
+    172.44525,
+    18.91069,
+    -66.94974,
+    71.38683
+   ],
+   "area_km2": 9460570,
+   "population": 331449281,
+   "parents": [],
+   "count": 12550,
+   "kinds": {
+    "country": 1,
+    "region": 51,
+    "county": 3134,
+    "locality": 8407,
+    "metro_alias": 1,
+    "valley": 5,
+    "sub_state": 12,
+    "multi_state": 4,
+    "metro": 935
+   }
+  }
+ ],
+ "shards": {
+  "af": {
+   "path": "af.json",
+   "search": "af.search.json",
+   "count": 444,
+   "bytes": 306280,
+   "search_bytes": 93771,
+   "kinds": {
+    "country": 1,
+    "region": 34,
+    "county": 397,
+    "locality": 12
+   }
+  },
+  "ca": {
+   "path": "ca.json",
+   "search": "ca.search.json",
+   "count": 2528,
+   "bytes": 1126397,
+   "search_bytes": 325239,
+   "kinds": {
+    "country": 1,
+    "region": 13,
+    "county": 1537,
+    "locality": 976,
+    "sub_state": 1
+   }
+  },
+  "us": {
+   "path": "us.json",
+   "search": "us.search.json",
+   "count": 12550,
+   "bytes": 6671166,
+   "search_bytes": 1534340,
+   "kinds": {
+    "country": 1,
+    "region": 51,
+    "county": 3134,
+    "locality": 8407,
+    "metro_alias": 1,
+    "valley": 5,
+    "sub_state": 12,
+    "multi_state": 4,
+    "metro": 935
+   }
+  }
+ },
+ "counts_by_kind": {
+  "locality": 71491,
+  "county": 38935,
+  "region": 3929,
+  "country": 219,
+  "dependency": 53,
+  "multi_state": 4,
+  "sub_state": 15,
+  "valley": 5,
+  "metro_alias": 1,
+  "multi_country": 1,
+  "metro": 935
+ },
+ "total": 115588
+}

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+
+<Style id="IDLE">
+		<IconStyle>
+			<scale>.6</scale>
+		</IconStyle>
+	</Style>
+
+<Placemark>
+<name>TEST1</name>
+<styleUrl>#IDLE</styleUrl>
+<description><![CDATA[
+Burley<br>
+927.162500- 151.4<br>
+On-air: Yes<br>
+<a href='https://www.repeaterbook.com/repeaters/details.php?state_id=16&ID=90001'>Click for Details</a>
+]]></description>
+<Point>
+<coordinates>-113.80000000,42.54000000,0</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<name>TEST2</name>
+<styleUrl>#IDLE</styleUrl>
+<description><![CDATA[
+Rupert<br>
+449.200000- D432<br>
+On-air: Yes<br>
+<a href='https://www.repeaterbook.com/repeaters/details.php?state_id=16&ID=90002'>Click for Details</a>
+]]></description>
+<Point>
+<coordinates>-113.68000000,42.62000000,0</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<name>TEST3</name>
+<styleUrl>#IDLE</styleUrl>
+<description><![CDATA[
+Burley<br>
+147.360000+ 100.0<br>
+On-air: No<br>
+
+]]></description>
+<Point>
+<coordinates>-113.77000000,42.52000000,0</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<name>TEST4</name>
+<styleUrl>#IDLE</styleUrl>
+<description><![CDATA[
+Heyburn<br>
+146.450000s<br>
+On-air: Yes<br>
+<a href='https://www.repeaterbook.com/repeaters/details.php?state_id=16&ID=90004'>Click for Details</a>
+]]></description>
+<Point>
+<coordinates>-113.76000000,42.56000000,0</coordinates>
+</Point>
+</Placemark>
+<Placemark>
+<name>TEST5</name>
+<styleUrl>#IDLE</styleUrl>
+<description><![CDATA[
+Twin Falls<br>
+145.230000- 88.5<br>
+On-air: Yes<br>
+
+]]></description>
+<Point>
+<coordinates>-114.46000000,42.56000000,0</coordinates>
+</Point>
+</Placemark>
+</Document>
+</kml>

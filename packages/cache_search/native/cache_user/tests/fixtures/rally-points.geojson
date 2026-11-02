@@ -1,0 +1,6 @@
+{"type": "FeatureCollection", "name": "Rally Points", "private": true, "features": [
+ {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-113.79, 42.55]}, "properties": {"name": "North gate", "notes": "Meet here at dawn.\n   Bring   water and the radio."}},
+ {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-113.81, 42.53]}, "properties": {"name": "Canal bridge"}},
+ {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[-113.79, 42.55], [-113.81, 42.53]]}, "properties": {"name": "Walk between"}},
+ {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[-113.80, 42.54], [-113.79, 42.54], [-113.79, 42.545], [-113.80, 42.54]]]}, "properties": {"name": "Assembly area"}}
+]}

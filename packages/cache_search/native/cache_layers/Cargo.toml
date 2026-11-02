@@ -1,0 +1,28 @@
+[package]
+name = "cache_layers"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's map layer engine: layer definitions, the local tile server, area downloads, contours and land-cover windows"
+
+[dependencies]
+# Same HTTP stack as cache_live: blocking ureq with rustls and bundled roots (nothing from the platform).
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+# Viewed-tile cache (LRU) in a SQLite file; bundled like cache_live's.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The local tile server.
+tiny_http = "0.12"
+# gzip/deflate: PMTiles directories, vector tiles, the TIFF blocks of cloud-optimised GeoTIFFs.
+flate2 = "1"
+# PNG decode (Terrarium tiles) and encode (land-cover tiles); pure-Rust WebP decode (Mapterhorn tiles).
+png = "0.17"
+image-webp = "0.2"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

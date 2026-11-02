@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "hillshade",
+  "title": "Hillshade",
+  "description": "Shaded relief drawn on the device from the elevation layer.",
+  "kind": "elevation",
+  "transform": "hillshade",
+  "derived_from": "elevation",
+  "attribution": "© Mapterhorn",
+  "license": "Derived from the elevation layer",
+  "style_hints": { "illumination_direction": 335, "exaggeration": 0.5 }
+}
