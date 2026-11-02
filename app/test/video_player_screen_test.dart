@@ -474,6 +474,83 @@ void main() {
       await close(tester);
     });
 
+    testWidgets('A signed-in private video on a file: the file token is renewed 2 minutes before it expires, in place', (tester) async {
+      final made = <(String, RecordingController)>[];
+      var loads = 0;
+      final prefs = VideoPrefs()..quality = '360';
+      _size(tester, _phone);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(
+          target: playerTarget(local: false, needsAuth: true),
+          qualities: const [VideoQuality(key: '360', label: '360p', url: 'https://video.example.test/v-360.mp4?videoFileToken=OLD')],
+          qualitiesExpire: DateTime.now().add(const Duration(minutes: 3)),
+          loadQualities: () async {
+            loads++;
+            return (const [VideoQuality(key: '360', label: '360p', url: 'https://video.example.test/v-360.mp4?videoFileToken=NEW')], DateTime.now().add(const Duration(hours: 1)));
+          },
+          prefs: prefs,
+          mobileOverride: false,
+          controllerFactory: (t) {
+            final c = RecordingController();
+            made.add((t.location, c));
+            return c;
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      expect(made.single.$1, endsWith('OLD'));
+      made.single.$2.at(const Duration(seconds: 40));
+      await tester.pump(const Duration(seconds: 50));
+      expect(loads, 0, reason: 'not yet');
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+      await tester.pump();
+      expect(loads, 1);
+      expect(made.last.$1, endsWith('NEW'));
+      expect(made.last.$2.calls, ['initialize', 'seek:40000', 'play'], reason: 'the same moment, still playing');
+      expect(find.text("This video can't be played."), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('A private video refused mid-playback (403 on the file): resolved again once and resumed in place', (tester) async {
+      final made = <(String, RecordingController)>[];
+      var resolves = 0;
+      _size(tester, _phone);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(
+          target: playerTarget(local: false, needsAuth: true),
+          loadQualities: () async => (const <VideoQuality>[], null),
+          reloadTarget: () async {
+            resolves++;
+            return VideoTarget(isLocal: false, uuid: 'test-video', title: 'Saved video', offsetS: 0, durationS: 60, location: 'https://video.example.test/video.mp4?videoFileToken=NEW', needsAuth: true, instance: 'example.org');
+          },
+          mobileOverride: false,
+          controllerFactory: (t) {
+            final c = RecordingController();
+            made.add((t.location, c));
+            return c;
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      final first = made.single.$2;
+      first.at(const Duration(seconds: 25));
+      await tester.pump();
+      first.value = first.value.copyWith(errorDescription: 'Source error: HTTP 403 Forbidden');
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(resolves, 1);
+      expect(made.last.$1, endsWith('NEW'));
+      expect(made.last.$2.calls, ['initialize', 'seek:25000', 'play']);
+      expect(find.text("This video can't be played."), findsNothing);
+      await close(tester);
+    });
+
     testWidgets('A saved copy: the gear says which quality it is, not a choice', (tester) async {
       _size(tester, _phone);
       final c = RecordingController();

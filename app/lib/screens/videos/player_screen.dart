@@ -54,6 +54,7 @@ class PlayerScreen extends StatefulWidget {
     this.qualities = const [],
     this.qualitiesExpire,
     this.loadQualities,
+    this.reloadTarget,
     this.savedQuality,
   });
 
@@ -101,6 +102,9 @@ class PlayerScreen extends StatefulWidget {
   /// For a stream: reads the video page again for its qualities (when none were given, in the background while it plays;
   /// and for fresh addresses when a private video's file token has expired).
   final Future<(List<VideoQuality>, DateTime?)?> Function()? loadQualities;
+
+  /// For a stream: resolves the video again (a fresh Auto address, with a new file token for a private video).
+  final Future<VideoTarget> Function()? reloadTarget;
 
   /// For a saved copy: its quality ("480p"), shown in the settings as which copy this is.
   final String? savedQuality;
@@ -190,6 +194,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
     _start();
+    _scheduleRefresh();
     // Opened with no qualities (a citation): Auto plays now, the list fills in when the video page arrives.
     if (!t.isLocal && _qualities.isEmpty && widget.loadQualities != null) unawaited(_reloadQualities());
   }
@@ -202,9 +207,54 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _qualities = got.$1;
         _qExpire = got.$2;
       });
+      _scheduleRefresh();
     } catch (_) {
       // no list: Auto stays the only choice
     }
+  }
+
+  /// A private video's file token runs out: this long before it does, the address is renewed in place.
+  static const Duration _refreshAhead = Duration(minutes: 2);
+  Timer? _expiryTimer;
+
+  /// One renewal after a playback failure that looks like the file token (401 or 403 on the file).
+  bool _authRetried = false;
+
+  /// A signed-in private video playing a plain file: renew its file token before it expires.
+  void _scheduleRefresh() {
+    _expiryTimer?.cancel();
+    final exp = _qExpire;
+    if (exp == null || t.isLocal || !t.needsAuth || widget.loadQualities == null) return;
+    final wait = exp.difference(DateTime.now()) - _refreshAhead;
+    _expiryTimer = Timer(wait.isNegative ? Duration.zero : wait, () => unawaited(_refreshSource()));
+  }
+
+  /// Fresh addresses (a new file token) for what plays now, swapped in at the same moment, playing as it was. A playlist
+  /// passes its token on to each segment by itself (reinjectVideoFileToken), so only a plain file is swapped.
+  Future<void> _refreshSource() async {
+    if (!mounted || _c == null || widget.loadQualities == null) return;
+    await _reloadQualities();
+    if (!mounted || _c == null || _src.isHls) return;
+    VideoTarget? src;
+    final key = _quality;
+    if (key != null) {
+      for (final q in _qualities) {
+        if (q.key == key) src = _sourceOf(q);
+      }
+    } else if (widget.reloadTarget != null) {
+      try {
+        src = await widget.reloadTarget!();
+      } catch (_) {
+        src = null;
+      }
+    }
+    if (src != null && mounted) await _switchTo(src, quality: key);
+  }
+
+  /// A file refused for its token (HTTP 401 or 403), as the platform player words it.
+  static bool _authFailure(String? error) {
+    final e = (error ?? '').toLowerCase();
+    return e.contains('401') || e.contains('403') || e.contains('forbidden') || e.contains('unauthorized');
   }
 
   VideoPlayerController _make() {
@@ -296,6 +346,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _tick() {
     if (!mounted) return;
     final c = _c!;
+    // a private video's file refused mid-playback (its token ran out): renew once and carry on
+    if (c.value.hasError && !_authRetried && !t.isLocal && t.needsAuth && _authFailure(c.value.errorDescription)) {
+      _authRetried = true;
+      unawaited(_refreshSource());
+      return;
+    }
     final cues = _cues[_shown];
     if (cues != null) {
       final i = cueAt(cues, c.value.position);
@@ -331,6 +387,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _remember();
     _hide?.cancel();
     _flashTimer?.cancel();
+    _expiryTimer?.cancel();
     _keep?.cancel();
     _resumedTimer?.cancel();
     _focus.dispose();
@@ -710,7 +767,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget build(BuildContext context) {
     final c = _c;
     final ready = c != null && c.value.isInitialized;
-    final error = _error ?? (c != null && c.value.hasError ? (t.isLocal ? "This file can't be played." : "This video can't be played.") : null);
+    final retrying = c != null && c.value.hasError && _authRetried && !t.isLocal && t.needsAuth && _authFailure(c.value.errorDescription);
+    final error = _error ?? (c != null && c.value.hasError && !retrying ? (t.isLocal ? "This file can't be played." : "This video can't be played.") : null);
     // Turning a phone sideways on a wide video goes full screen (the system's rotation; a tablet's wide window has its panes).
     if (!_full && ready && error == null && _mobile && !t.isAudio && c.value.aspectRatio >= 1 && !_wide(context) &&
         MediaQuery.orientationOf(context) == Orientation.landscape) {

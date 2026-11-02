@@ -249,6 +249,8 @@ void main() {
     await _show(tester, VideoScreen(video: v, instanceId: 'tube.example.org', uuid: VideoFakeNative.uuid, title: 'Merry Christmas'));
     expect(find.text('Log in to Example PeerTube to play this video'), findsOneWidget);
     expect(find.byIcon(Icons.play_arrow), findsNothing, reason: 'the picture does not play yet');
+    expect(find.byKey(const ValueKey('video-locked')), findsOneWidget);
+    expect(find.byIcon(Icons.play_circle_outline), findsNothing, reason: 'never a play sign while it needs a login');
     await tester.tap(find.byKey(const ValueKey('video-login')));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'User name'), 'alice');
@@ -260,6 +262,7 @@ void main() {
     await settle(tester);
     await tester.pumpAndSettle();
     expect(find.text('Log in to Example PeerTube to play this video'), findsNothing);
+    expect(find.byKey(const ValueKey('video-locked')), findsNothing);
     expect(find.byIcon(Icons.play_arrow), findsOneWidget);
     final d = await tester.runAsync(() => v.details('tube.example.org', VideoFakeNative.uuid));
     expect(d!.qualities.first.url, 'https://example.org/v-720.mp4?videoFileToken=FT1');

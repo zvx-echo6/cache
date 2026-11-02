@@ -168,6 +168,7 @@ class _VideoScreenState extends State<VideoScreen> {
   Widget _page(BuildContext context, double width, VideoDetails? d, DownloadedVideo? saved, DownloadTask? task) {
     final k = context.t;
     final why = _cannotPlay(d, saved);
+    final locked = saved == null && _needsLogin(d);
     final title = d?.title ?? saved?.title ?? widget.title;
     final channel = d?.channel.displayName ?? saved?.channelName ?? '';
     final duration = d?.durationS ?? saved?.durationS ?? 0;
@@ -188,7 +189,25 @@ class _VideoScreenState extends State<VideoScreen> {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                VideoThumb(url: d?.preview ?? d?.thumbnail, fallbackUrl: d?.thumbnail, path: saved?.thumbnailPath, durationS: duration, width: width - 32, audio: saved?.isAudio ?? false),
+                Opacity(
+                  opacity: locked ? 0.35 : 1,
+                  child: VideoThumb(
+                    url: d?.preview ?? d?.thumbnail,
+                    fallbackUrl: d?.thumbnail,
+                    path: saved?.thumbnailPath,
+                    durationS: duration,
+                    width: width - 32,
+                    audio: saved?.isAudio ?? false,
+                    blankIcon: locked ? null : Icons.play_circle_outline,
+                  ),
+                ),
+                // needs a login: a lock, never a play sign
+                if (locked)
+                  DecoratedBox(
+                    key: const ValueKey('video-locked'),
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), shape: BoxShape.circle),
+                    child: const Padding(padding: EdgeInsets.all(12), child: Icon(Icons.lock_outline, size: 40, color: Colors.white)),
+                  ),
                 if (why == null)
                   DecoratedBox(
                     decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.5), shape: BoxShape.circle),

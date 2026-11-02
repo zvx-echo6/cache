@@ -32,7 +32,7 @@ class VideoTile extends StatelessWidget {
 
 /// A video thumbnail from a URL or a file, with the duration on it.
 class VideoThumb extends StatelessWidget {
-  const VideoThumb({super.key, this.url, this.fallbackUrl, this.path, this.durationS, this.width = 120, this.audio = false});
+  const VideoThumb({super.key, this.url, this.fallbackUrl, this.path, this.durationS, this.width = 120, this.audio = false, this.blankIcon = Icons.play_circle_outline});
 
   final String? url;
 
@@ -42,6 +42,9 @@ class VideoThumb extends StatelessWidget {
   final int? durationS;
   final double width;
   final bool audio;
+
+  /// The sign on a video with no picture; null: none.
+  final IconData? blankIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +89,7 @@ class VideoThumb extends StatelessWidget {
     );
   }
 
-  Widget _blank(CacheTokens k) => ColoredBox(color: k.background, child: Icon(Icons.play_circle_outline, color: k.secondary));
+  Widget _blank(CacheTokens k) => ColoredBox(color: k.background, child: blankIcon == null ? null : Icon(blankIcon, color: k.secondary));
 }
 
 /// A message in the middle of an empty or failed screen.

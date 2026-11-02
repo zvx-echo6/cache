@@ -53,6 +53,7 @@ Future<void> playVideo(
         citedLang: lang,
         qualities: target.isLocal ? const [] : qualities,
         qualitiesExpire: qualitiesExpire,
+        reloadTarget: target.isLocal ? null : () => state.resolve(video, instance: instance),
         loadQualities: target.isLocal || target.instance == null
             ? null
             : () async {

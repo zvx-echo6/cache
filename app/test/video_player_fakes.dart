@@ -81,6 +81,7 @@ VideoTarget playerTarget({
   String title = 'Saved video',
   String? instance = 'example.org',
   String uuid = 'test-video',
+  bool needsAuth = false,
 }) =>
     VideoTarget(
       isLocal: local,
@@ -91,6 +92,7 @@ VideoTarget playerTarget({
       location: local ? 'offline.mp4' : 'https://video.example.test/video.mp4',
       captions: captions,
       instance: instance,
+      needsAuth: needsAuth,
     );
 
 /// Writes WebVTT [cues] (start s, end s, text) to a file in [dir] and gives it as a saved caption track.
