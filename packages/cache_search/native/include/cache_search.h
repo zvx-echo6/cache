@@ -115,6 +115,10 @@ char *cs_version(void);
  *                                  cs_set_sources in the process sets it). What it holds is about 8 times larger once
  *                                  decompressed, and that is taken off the top of zim_budget_mb
  *   "zim_dirent_cache": 512        optional, default 512 (libzim's own default): dirents each open archive's dirent cache holds
+ *   "indexes_dir": "<path>"        optional: the folder of the app's syncable indexes. A ZIM whose PDF index has a published
+ *                                  snapshot at <indexes_dir>/zim-pdf/<its uuid>/snap/<build-id>/ is searched together with
+ *                                  that snapshot (see "PDF indexes" below); without indexes_dir no PDF index is attached.
+ *                                  Each cs_set_sources replaces it. A snapshot of a ZIM that is not loaded is never attached.
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
  * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it
@@ -150,6 +154,12 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * is still opening. A ZIM that carries its own Xapian index (builds with the "xapian" feature: Windows, Android) is
  * searched through it with no index_dir: it is "indexed":true, "building":false, "stale":false, "docs" its entry
  * count, and has "keyword_source":"own" (placed after "embedding_model"); other ZIMs have no "keyword_source" field. A library that finished opening is reported as before.
+ * Every source entry also has "source_id" (the id sync filters by: the ZIM's lowercase UUID; a library's library_id, with
+ * "@<version>" when its settings give a version; null for a source that failed to open) and "index":{"kind":"zim"|"library",
+ * "location":<its index_dir, or null>,"snapshot":null,"format":N} (snapshot is null until that kind publishes snapshots).
+ * A ZIM with a published PDF index snapshot has "pdfindex":{"state":"opening"|"ready"|"none","kind":"zim-pdf","snapshot":
+ * "<build-id>","format":N,"pdfs":N,"pieces":N,"created":"..."} (the state-only forms for "opening" and "none"); other
+ * sources have no "pdfindex" key.
  * "error" codes of a library source include "damaged" (see above) as well as "not_found" and "io".
  * "updating" is true for a library an update_library job owns (see cs_job_start): its shard is closed, search skips
  * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
@@ -202,6 +212,47 @@ uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t 
 
 /* {"address":"zim:<uuid>/<main page path>"} */
 char *cs_zim_main_page(cs_handle *h, const char *zim_id);
+
+/* --- PDF indexes of ZIMs ---
+ *
+ * A ZIM's PDFs are searched by keyword like the rest of the ZIM: one Tantivy index per ZIM, no vectors, one document per piece
+ * (about 200 words) with its text, title, printed page label and 1-based PDF page. It is kept as an immutable, syncable snapshot:
+ *   <indexes_dir>/zim-pdf/<zim uuid>/.build/           the working index while it is being built (never synced)
+ *   <indexes_dir>/zim-pdf/<zim uuid>/snap/<build-id>/  published: Tantivy files and manifest.json, written last
+ * A snapshot is used only when manifest.json is there, every listed file has the listed size and sha256, its kind and source id
+ * match, and its format, Tantivy version, tokenizer and chunker are ones this core reads. Of several usable snapshots every device
+ * uses the earliest "created", then the lowest build id; the core removes, on this device only, the others except one newer
+ * one kept as a rollback. A published snapshot is never written to (not even by opening it). Attach happens in cs_open and
+ * cs_set_sources (snapshots are checked and opened on a background thread; cs_status shows "pdfindex"); call cs_set_sources
+ * again after a snapshot is published or arrives by sync.
+ * Search results from it have the address "zimpdf:<zim uuid>/<pdf path>@<piece>", title "<title>, p. <printed page label>"
+ * (the model sees exactly that and the snippet, nothing else), source_id the ZIM's id, and honour a "sources" filter on the ZIM.
+ * cs_tool's "ids" entries for such a result also carry "link":"zim:<uuid>/<pdf path>#page=<pdf page>", "pdf_page":N and
+ * "quote":"<the piece's text verbatim, at most 300 words>"; ids of other results have none of these three keys. cs_read of
+ * such an address (cs_tool "read") returns the text of its whole PDF page (every piece that starts on it, in order).
+ *
+ * cs_zim_pdfs: {"zim_uuid","zim_name" (the ZIM's metadata Name),"pdfs":[{"path","title","size"}]} for the entries whose mime type
+ * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id. */
+char *cs_zim_pdfs(cs_handle *h, const char *zim_id);
+
+/* The build session (handle-less; resumable across kills). Every call takes {"indexes_dir","zim_uuid"} (or a session from open).
+ * cs_pdfindex_open({"indexes_dir","zim_uuid","zim_name","language"?}) -> {"session":N,"done":[paths added],"skipped":[{"path",
+ *   "reason"}],"pieces":N}. Opens or creates .build/ (language is the ZIM's Language, which picks the stemmer; English when
+ *   absent). A .build made for another uuid, format, chunker or tokenizer is discarded and restarted. "busy" while another
+ *   session or the finish job has it.
+ * cs_pdfindex_add(session, {"path","title","pieces":[{"i","text","page","pdf_page","pdf_page_end"?,"heading_path"}]}) ->
+ *   {"pieces":total,"committed":n}. Replaces any pieces of that path, then adds. All or nothing per PDF. Durable in batches:
+ *   the core commits about every 20 PDFs or 30 s and records a path as done only after the commit that holds it, so a kill
+ *   redoes at most the PDFs after the last commit. "committed" counts the PDFs durably recorded, added and skipped.
+ * cs_pdfindex_skip(session, {"path","reason":"no_text"|"locked"|"damaged"}) -> {"skipped":N}
+ * cs_pdfindex_close(session) -> {"pieces","committed"}: commits and keeps .build for resume.
+ * cs_pdfindex_discard({"indexes_dir","zim_uuid"}) -> {"discarded":bool}: deletes .build ("busy" while it is in use).
+ * Publishing is the job kind "pdfindex_finish" (cs_job_start) below. All of these return NULL with cs_last_error(NULL) on failure. */
+char *cs_pdfindex_open(const char *params_json);
+char *cs_pdfindex_add(uint64_t session, const char *params_json);
+char *cs_pdfindex_skip(uint64_t session, const char *params_json);
+char *cs_pdfindex_close(uint64_t session);
+char *cs_pdfindex_discard(const char *params_json);
 
 /* Title suggestions for the address bar.
  * options_json: {"k":10,"sources":[ids]|null}. Returns {"suggestions":[{"title","address","source_id"}]}
@@ -883,6 +934,14 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "pdfindex_finish": {"indexes_dir","zim_uuid"}
+ *   publishes the PDF index build of a ZIM: merges .build/ to one segment, copies its files with their sha256 into
+ *   .build/publish-<build-id>/, writes manifest.json there last (kind "zim-pdf", source_id, format, tantivy, tokenizer, chunker,
+ *   core, created, zim_uuid, zim_name, pdfs, pieces, skipped, files [path,size,sha256]), renames the folder to
+ *   snap/<build-id>/ in one step and removes .build. cs_job_start fails with "not_found" (no build) or "busy" (a session or
+ *   another finish has it). The progress JSON adds "phase":"merge"|"manifest"|"publish" (done/total count within the phase);
+ *   cs_job_cancel is honoured until "publish" (the build is kept and resumes); when done it adds
+ *   "result":{"pdfs","pieces","skipped","bytes","snapshot":"<build-id>"}.
  * kind "video_download": {"dir","instance","video","choice"?:"lowest","token"?}
  *   downloads one video for offline use. "dir" is the "video" folder of the cs_open config; "choice" is "audio",
  *   "lowest", "highest" or a resolution from cs_video_get's options (a resolution the video lacks gives the nearest one

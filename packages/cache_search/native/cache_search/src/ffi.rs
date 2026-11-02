@@ -197,6 +197,60 @@ pub unsafe extern "C" fn cs_zim_main_page(h: *mut Handle, zim_id: *const c_char)
 }
 
 /// # Safety
+/// `h` NULL or live; `zim_id` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_zim_pdfs(h: *mut Handle, zim_id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let id = arg_str(zim_id, "zim_id")?;
+        out_string(h.zim_pdfs(id)?)
+    })
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_open(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::open_session(arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_add(session: u64, params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::add(session, arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_skip(session: u64, params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::skip(session, arg_str(params_json, "params_json")?))
+}
+
+#[no_mangle]
+pub extern "C" fn cs_pdfindex_close(session: u64) -> *mut c_char {
+    string_call(|| crate::pdfbuild::close(session))
+}
+
+/// # Safety
+/// `zim_path` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_discard(zim_path: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::discard(arg_str(zim_path, "zim_path")?))
+}
+
+/// Run a handle-less call that returns JSON; NULL with `cs_last_error(NULL)` on failure.
+fn string_call(f: impl FnOnce() -> Result<String>) -> *mut c_char {
+    match guarded(|| out_string(f()?)) {
+        Ok(p) => p,
+        Err(e) => {
+            set_thread_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// # Safety
 /// `h` NULL or live; `query` NULL or NUL-terminated; `options_json` NULL (defaults) or NUL-terminated.
 #[no_mangle]
 pub unsafe extern "C" fn cs_search(h: *mut Handle, query: *const c_char, options_json: *const c_char) -> *mut c_char {

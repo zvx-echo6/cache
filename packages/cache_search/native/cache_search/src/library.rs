@@ -857,7 +857,7 @@ impl LibSlot {
             _ => None,
         });
         let time = time.filter(|n| n.as_f64().is_some_and(|t| t.is_finite() && t >= 0.0));
-        Cite { link: self.text_field(p, &f.link), time }
+        Cite { link: self.text_field(p, &f.link), time, ..Default::default() }
     }
 
     fn address(&self, id: &PointId) -> String {
