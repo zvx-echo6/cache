@@ -193,7 +193,7 @@ class PdfSearchNote extends StatelessWidget {
   );
 }
 
-/// "Still making <collection>'s PDFs searchable (340 of 5,768)".
+/// The line itself: "Still making Where There Is No Doctor's PDFs searchable (340 of 5,768)".
 String pdfStillLine(PdfZimRef z, PdfPart p) => "Still making ${z.title}'s PDFs searchable (${_of(p)})";
 
 class PdfSearchNoteView extends StatelessWidget {
