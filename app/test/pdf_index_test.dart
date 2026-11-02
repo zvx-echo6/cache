@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -31,11 +32,16 @@ FakeZim _zim({String uuid = 'u1'}) => FakeZim(
 /// Reads pages as the fake does, and calls [onRead] with the count of PDFs read so far (to pause or cancel mid-run).
 PdfBytesReader _reader(void Function(int n) onRead) {
   var n = 0;
-  return (Uint8List bytes, String name) async {
+  return (Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
     n++;
     onRead(n);
-    return readFakePdfPages(bytes, name);
+    return readFakePdfPages(bytes, name, betweenPages: betweenPages);
   };
+}
+
+/// Stands in for a native crash inside PDFium (which in the app ends the process).
+class _Crash implements Exception {
+  const _Crash();
 }
 
 void main() {
@@ -124,6 +130,62 @@ void main() {
         'skip:A/scan.pdf:no_text',
         'add:A/two.pdf',
       ]);
+    });
+
+    test('a native crash while reading a PDF (the app ended): the next run skips that PDF as damaged and goes on', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      final note = File('${dir.path}/support/pdf-index-attempt-u1.json');
+      // The first run reads one.pdf, then "crashes" inside two.pdf's extraction: the note stays, nothing after it happens.
+      final first = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), attemptFile: note, readPages: _reader((n) {
+        if (n == 5) {
+          expect(note.existsSync(), isTrue, reason: 'written before extraction');
+          throw const _Crash();
+        }
+      }));
+      expect(await first.run(), PdfRunEnd.failed);
+      // A real crash ends the process before anything runs: the note is put back as it would be left.
+      note.writeAsStringSync('{"zim_uuid":"u1","path":"A/two.pdf"}', flush: true);
+      core.calls.clear();
+      final again = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), attemptFile: note, readPages: readFakePdfPages);
+      expect(await again.run(), PdfRunEnd.finished);
+      expect(core.calls.where((c) => c.startsWith('add:') || c.startsWith('skip:')), ['skip:A/two.pdf:damaged']);
+      expect(again.skipped, 4);
+      expect(note.existsSync(), isFalse);
+      expect(paths.current()!.skipped, 4, reason: 'it counts as could not be read');
+    });
+
+    test('a PDF read normally leaves no note behind (a pause after it is no crash)', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      final note = File('${dir.path}/support/pdf-index-attempt-u1.json');
+      late PdfIndexRun run;
+      run = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), attemptFile: note, readPages: _reader((n) {
+        if (n == 2) run.stop(PdfRunStop.person);
+      }));
+      expect(await run.run(), PdfRunEnd.paused);
+      expect(note.existsSync(), isFalse);
+    });
+
+    test('the throttle is asked before each PDF and between the pages of one, and a pause during a wait stops at once', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      var asks = 0;
+      final run = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), readPages: readFakePdfPages, permit: () async => asks++);
+      expect(await run.run(), PdfRunEnd.finished);
+      // Five PDFs, and one more between the two pages of each two-page PDF read (one.pdf, scan.pdf).
+      expect(asks, 7);
+      final waiting = Completer<void>();
+      late PdfIndexRun held;
+      var calls = 0;
+      held = PdfIndexRun(core: FakePdfIndexCore(zims: {'u1': _zim()}), paths: PdfIndexPaths(indexes, 'u9'), zimName: 'guide', list: await list(core), readPages: readFakePdfPages, permit: () {
+        calls++;
+        // Held between one.pdf's pages: the person pauses during the wait.
+        if (calls == 2) {
+          held.stop(PdfRunStop.person);
+          waiting.complete();
+        }
+        return Future<void>.value();
+      });
+      expect(await held.run(), PdfRunEnd.paused);
+      expect(waiting.isCompleted, isTrue);
     });
 
     test('cancel discards the build', () async {

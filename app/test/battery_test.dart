@@ -20,6 +20,14 @@ void main() {
     expect(r?.low, isFalse);
     answer = {'percent': 15, 'charging': false};
     expect((await readBattery(mobile: true))?.low, isTrue);
+    // How warm it is comes along: moderate and above is hot.
+    answer = {'percent': 60, 'charging': false, 'thermal': 'moderate'};
+    expect((await readBattery(mobile: true))?.thermal, Thermal.moderate);
+    expect((await readBattery(mobile: true))?.thermal.hot, isTrue);
+    answer = {'percent': 60, 'charging': false, 'thermal': 'light'};
+    expect((await readBattery(mobile: true))?.thermal.hot, isFalse);
+    answer = {'percent': 60, 'charging': false};
+    expect((await readBattery(mobile: true))?.thermal, Thermal.unknown, reason: 'an older native side says nothing');
     // The phone cannot say: no reading.
     answer = {'percent': -1, 'charging': false};
     expect(await readBattery(mobile: true), isNull);

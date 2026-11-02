@@ -293,6 +293,9 @@ struct Inner {
     only: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::last`].
     last: BTreeMap<String, Vec<String>>,
+    /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
+    /// round, so a round already running cannot write them back (set_only does not wait for the round).
+    refetch: Mutex<HashMap<String, Vec<String>>>,
 }
 
 pub struct SyncEngine {
@@ -745,6 +748,16 @@ impl Inner {
     async fn rescan(&self, share: &Share) -> Result<bool> {
         let mut idx = self.load_index(&share.id);
         let mut seen = self.load_seen(&share.id);
+        // Deletes made fetchable again since the last round ([`Inner::refetch`]): forgotten, so the merge below fetches them.
+        let again = self.refetch.lock().unwrap().remove(&share.id).unwrap_or_default();
+        let mut refetched = false;
+        for p in again {
+            if idx.files.get(&p).map(|e| e.deleted).unwrap_or(false) {
+                idx.files.remove(&p);
+                seen.remove(&p);
+                refetched = true;
+            }
+        }
         if !share.path.is_dir() {
             bail!("{} is missing", share.path.display());
         }
@@ -756,7 +769,20 @@ impl Inner {
             v
         })
         .await?;
-        let mut changed = false;
+        #[cfg(feature = "test-hooks")]
+        {
+            // A rescan caught between reading the index and storing it: held while `<dir>/hold-rescan` exists (it says so with
+            // `<dir>/hold-rescan.held`), so a test can call in meanwhile.
+            let hold = self.dir.join("hold-rescan");
+            if hold.exists() {
+                let _ = std::fs::write(self.dir.join("hold-rescan.held"), b"");
+                while hold.exists() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                let _ = std::fs::remove_file(self.dir.join("hold-rescan.held"));
+            }
+        }
+        let mut changed = refetched;
         // What an earlier version listed under a path that never syncs now is forgotten, not marked deleted: a delete would go to
         // the other devices and remove their own copies.
         let forget: Vec<String> = idx.files.keys().filter(|p| excluded(self.skip(&share.id), p)).cloned().collect();
@@ -1396,6 +1422,7 @@ impl SyncEngine {
             local_deletes: cfg.local_deletes.clone(),
             only: Mutex::new(cfg.only.clone()),
             last: cfg.last.clone(),
+            refetch: Mutex::new(HashMap::new()),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
@@ -1534,7 +1561,9 @@ impl SyncEngine {
                 let was = inner.only.lock().unwrap().get(&id).cloned();
                 let now_wanted = |p: &str| new.as_ref().map(|n| excluded(n, p)).unwrap_or(true);
                 let was_wanted = |p: &str| was.as_ref().map(|n| excluded(n, p)).unwrap_or(true);
-                let mut idx = inner.load_index(&id);
+                // The index is only read here: the next round forgets these deletes inside its own rescan, so a round that is
+                // running now cannot store its copy of the index over the change (it did, now and then, and they never came back).
+                let idx = inner.load_index(&id);
                 let back: Vec<String> = idx
                     .files
                     .iter()
@@ -1542,11 +1571,7 @@ impl SyncEngine {
                     .map(|(p, _)| p.clone())
                     .collect();
                 if !back.is_empty() {
-                    let seen = inner.load_seen(&id);
-                    for p in &back {
-                        idx.files.remove(p);
-                    }
-                    inner.store_index(&id, &idx, &seen)?;
+                    inner.refetch.lock().unwrap().entry(id.clone()).or_default().extend(back.iter().cloned());
                 }
                 {
                     let mut only = inner.only.lock().unwrap();

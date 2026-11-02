@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -76,6 +77,8 @@ class PdfIndexRun extends ChangeNotifier {
     required this.zimName,
     this.previousZimUuid,
     this.language,
+    this.attemptFile,
+    this.permit,
     this.spaceOk,
     required this.list,
     this.readPages = readPdfPagesFromBytes,
@@ -100,6 +103,42 @@ class PdfIndexRun extends ChangeNotifier {
 
   /// The ZIM's Language metadata (it picks the stemmer; the core takes English when there is none).
   final String? language;
+
+  /// Where the PDF being extracted is written down first (flushed), and removed once its extraction returned. A malformed PDF
+  /// can crash PDFium natively, which ends the whole app; the next run finds the note and skips that PDF as damaged instead of
+  /// crashing on it again. Null keeps no note (the timing run, the estimate's sample).
+  final File? attemptFile;
+
+  /// The index scheduler's throttle, awaited before each PDF and between the pages of one (bursts with rests, a warm phone, the
+  /// person using the app, the model answering). Null never waits.
+  final PdfPermit? permit;
+
+  /// Notes [path] as being extracted, durably.
+  void _noteAttempt(String path) {
+    final f = attemptFile;
+    if (f == null) return;
+    f.parent.createSync(recursive: true);
+    f.writeAsStringSync(jsonEncode({'zim_uuid': list.zimUuid, 'path': path}), flush: true);
+  }
+
+  void _clearAttempt() {
+    final f = attemptFile;
+    try {
+      if (f != null && f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+
+  /// The PDF an earlier run was extracting when the app ended (a native crash), for this ZIM; null when none.
+  String? _crashedOn() {
+    final f = attemptFile;
+    try {
+      if (f == null || !f.existsSync()) return null;
+      final j = jsonDecode(f.readAsStringSync());
+      return j is Map && j['zim_uuid'] == list.zimUuid && j['path'] is String ? j['path'] as String : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// False when the device is low on storage (under the reserve): the run stops with "this device is full" (checked with the
   /// battery).
@@ -219,6 +258,15 @@ class PdfIndexRun extends ChangeNotifier {
         doneSet = {...s.done, ...s.skipped};
         pieces = s.pieces;
         committed = s.done.length + s.skipped.length;
+        // The app ended while PDFium read this PDF (a native crash): it is skipped as damaged, never tried again.
+        final crashed = _crashedOn();
+        if (crashed != null && !doneSet.contains(crashed) && list.pdfs.any((p) => p.path == crashed)) {
+          await core.skip(session, path: crashed, reason: PdfSkipReason.damaged);
+          doneSet.add(crashed);
+          skipped++;
+          bytesDone += list.pdfs.firstWhere((p) => p.path == crashed).size;
+        }
+        _clearAttempt();
         for (final p in list.pdfs) {
           if (s.done.contains(p.path)) {
             done++;
@@ -236,6 +284,7 @@ class PdfIndexRun extends ChangeNotifier {
         if (doneSet.contains(pdf.path)) continue;
         if (limit != null && count >= limit!) break;
         count++;
+        await permit?.call();
         await _checkBattery();
         _checkStop();
         _checkSpace();
@@ -385,7 +434,17 @@ class PdfIndexRun extends ChangeNotifier {
     final sha = stage ? crypto.sha256.convert(data).toString() : null;
     _checkStop();
     sw.reset();
-    final pages = await readPages(data, pdf.path);
+    _noteAttempt(pdf.path);
+    final PdfPagesOutcome pages;
+    try {
+      pages = await readPages(data, pdf.path, betweenPages: permit == null ? null : () async {
+        await permit!();
+        _checkStop();
+      });
+    } finally {
+      // Extraction returned (or threw): no native crash on this PDF, whatever comes next.
+      _clearAttempt();
+    }
     row.extractMs = sw.elapsedMilliseconds;
     row.pages = pages.pages.length;
     row.textPages = pages.pages.where((p) => p.trim().isNotEmpty).length;

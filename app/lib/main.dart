@@ -74,6 +74,9 @@ import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
 import 'settings/space.dart' show Space;
+import 'search/pdf_index_work.dart';
+import 'platform/battery.dart' show kBatteryChannel;
+import 'search/index_throttle.dart';
 import 'search/index_scheduler.dart';
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
@@ -297,12 +300,30 @@ class _CacheAppState extends State<CacheApp> {
   );
 
   /// The one scheduler of automatic index work (search/index_scheduler.dart): the core's builds and seals (behind
-  /// IndexCoreCalls.none until the core has index_source and index_seal) and, once it registers, the PDF loop. It runs while
-  /// the app is open, with the battery and storage rules, against the storage of the indexes folder.
+  /// IndexCoreCalls.none until the core has index_source and index_seal) and the ZIMs' PDFs (the PDF state queues nothing by
+  /// itself: its autoStart is null). It runs while the app is open, with the battery and storage rules, against the storage of
+  /// the indexes folder.
+  /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person
+  /// using Cache and the model generating, applied to core jobs (cs_job_set) and to the PDF loop (indexPermit).
+  late final IndexThrottle indexThrottle = IndexThrottle(
+    mobile: Platform.isAndroid || Platform.isIOS,
+    speed: settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle,
+  );
+
   late final IndexScheduler indexing = IndexScheduler(
-    sources: [CoreIndexWork(IndexCoreCalls.none)],
+    throttle: indexThrottle,
+    sources: [
+      CoreIndexWork(IndexCoreCalls.none),
+      PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
+    ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
   );
+
+  void _kickIndexing() => unawaited(indexing.kick());
+
+  void _onChatForIndexing() => indexThrottle.setGenerating(chat.busy);
+
+  void _onSettingsForIndexing() => indexThrottle.setSpeed(settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle);
 
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
   void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
@@ -531,6 +552,15 @@ class _CacheAppState extends State<CacheApp> {
       onHide: () => indexing.setOpen(false),
     );
     indexing.setOpen(true);
+    indexThrottleShared = indexThrottle;
+    // The model generating an answer pauses background index work; the speed setting applies at once.
+    chat.addListener(_onChatForIndexing);
+    settings.addListener(_onSettingsForIndexing);
+    // iOS says when the thermal state changes: read it at once.
+    kBatteryChannel.setMethodCallHandler((call) async {
+      if (call.method == 'changed') await indexThrottle.read(fresh: true);
+      return null;
+    });
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
     sources.whenCoreReady().then((_) {
@@ -596,6 +626,8 @@ class _CacheAppState extends State<CacheApp> {
       }
     };
     sources.addListener(_syncIndexesOnly);
+    // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
+    sources.addListener(_kickIndexing);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
@@ -691,6 +723,11 @@ class _CacheAppState extends State<CacheApp> {
     browse.dispose();
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
+    sources.removeListener(_kickIndexing);
+    chat.removeListener(_onChatForIndexing);
+    settings.removeListener(_onSettingsForIndexing);
+    indexing.dispose();
+    indexThrottle.dispose();
     pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
@@ -723,7 +760,14 @@ class _CacheAppState extends State<CacheApp> {
         builder: (context, child) => Stack(
           fit: StackFit.expand,
           children: [
-            child!,
+            // Any touch, scroll or wheel: the person is using Cache, background index work slows down meanwhile.
+            Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => indexThrottle.noteActivity(),
+              onPointerMove: (_) => indexThrottle.noteActivity(),
+              onPointerSignal: (_) => indexThrottle.noteActivity(),
+              child: child!,
+            ),
             IgnorePointer(
               ignoring: app.started && _coreDone,
               child: AnimatedOpacity(
