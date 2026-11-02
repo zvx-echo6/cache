@@ -56,7 +56,8 @@ class PdfTimingResult {
 /// progress, it is left alone and add is not timed. The developer pulls the file from the device.
 Future<PdfTimingResult> runPdfTiming({
   required PdfIndexCore core,
-  required String zimPath,
+  required PdfIndexPaths paths,
+  required String zimName,
   required ZimPdfList list,
   required Directory logDir,
   PdfBytesReader readPages = readPdfPagesFromBytes,
@@ -66,18 +67,19 @@ Future<PdfTimingResult> runPdfTiming({
   await logDir.create(recursive: true);
   final started = clock();
   final stamp = started.toUtc().toIso8601String().replaceAll(':', '').split('.').first;
-  final paths = PdfIndexPaths(zimPath);
-  final log = File('${logDir.path}${Platform.pathSeparator}pdf-timing-${paths.name}-$stamp.tsv');
+  final safe = zimName.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
+  final log = File('${logDir.path}${Platform.pathSeparator}pdf-timing-$safe-$stamp.tsv');
   final stage = !paths.build.existsSync();
   final out = StringBuffer()
     ..writeln('# Cache PDF index timing, ${started.toUtc().toIso8601String()}')
-    ..writeln('# zim\t${paths.name}\tuuid\t${list.zimUuid}\tpdfs\t${list.pdfs.length}\tbytes\t${list.bytes}')
+    ..writeln('# zim\t$zimName\tuuid\t${list.zimUuid}\tpdfs\t${list.pdfs.length}\tbytes\t${list.bytes}')
     ..writeln('path\tbytes\tpages\ttext_pages\tpieces\tread_ms\textract_ms\tchunk_ms\tadd_ms\tskipped');
   final rows = <PdfTimingRow>[];
   final sw = Stopwatch()..start();
   final run = PdfIndexRun(
     core: core,
-    zimPath: zimPath,
+    paths: paths,
+    zimName: zimName,
     list: list,
     readPages: readPages,
     stage: stage,
@@ -90,7 +92,7 @@ Future<PdfTimingResult> runPdfTiming({
   sw.stop();
   if (stage) {
     try {
-      await core.discard(zimPath);
+      await core.discard(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid);
     } catch (_) {}
   }
   for (final r in rows) {

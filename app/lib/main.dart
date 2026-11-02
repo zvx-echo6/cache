@@ -53,7 +53,7 @@ import 'models/model_downloads.dart';
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'pdf/index/pdf_index_app.dart';
-import 'pdf/index/pdf_index_core.dart' show kZimPdfIndexLocalDeletes, kZimPdfIndexNotShared;
+import 'pdf/index/pdf_index_core.dart' show kIndexesDirName, kIndexesLocalDeletes, kIndexesNotShared, kIndexesShareId, zimPdfFetchOnly;
 import 'pdf/index/pdf_index_state.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
@@ -217,12 +217,10 @@ class _CacheAppState extends State<CacheApp> {
       label: 'Library',
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
-      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
-      local: () => [sources.indexesDir],
-      // A ZIM's PDF index snapshots (<zim>.pdfindex/snap/) sync, so its PDFs are indexed once on any device; the build never
-      // does, and each device deletes old snapshots for itself.
-      notShared: const {'libraries': kLibraryNotShared, 'library': kZimPdfIndexNotShared},
-      localDeletes: const {'library': kZimPdfIndexLocalDeletes},
+      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library. The
+      // indexes folder (ZIM PDF indexes) syncs on its own, as the always-on indexes share.
+      local: () => [sources.indexesDir, _support(kIndexesDirName)],
+      notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
     ),
@@ -283,6 +281,19 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: getApplicationSupportDirectory,
     deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
     kinds: dataKinds,
+    // The indexes folder syncs whenever sharing is set up, whatever kinds are ticked: each linked device takes only the PDF
+    // indexes of the ZIMs it has (refreshed as ZIMs come and go).
+    autoShares: [
+      AutoShare(
+        id: kIndexesShareId,
+        name: 'Indexes',
+        dir: () => _support(kIndexesDirName),
+        notShared: kIndexesNotShared,
+        localDeletes: kIndexesLocalDeletes,
+        fetchOnly: () => zimPdfFetchOnly([for (final z in sources.zims) ?sources.idOf(z)]),
+        changes: sources,
+      ),
+    ],
   );
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.

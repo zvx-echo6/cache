@@ -12,7 +12,6 @@ class DataKind {
     this.shared = _none,
     this.local = _noDirs,
     this.notShared = const {},
-    this.localDeletes = const {},
     this.count,
     this.list,
     this.inStorage = true,
@@ -32,10 +31,6 @@ class DataKind {
   /// What each device builds for itself inside a shared folder, by share id, so it never syncs: path patterns in the sync engine's
   /// form (segments, `*` for any one segment, each covering everything under it), as `*/index` for every library's search index.
   final Map<String, List<String>> notShared;
-
-  /// Where a delete stays on the device that made it, by share id, in the same patterns: index snapshots each device cleans up
-  /// for itself (what is there still syncs; a delete is never sent or applied).
-  final Map<String, List<String>> localDeletes;
 
   /// How many items there are ("4" in "4 · 113.6 GB"); null when the kind has no items to count.
   final int Function()? count;

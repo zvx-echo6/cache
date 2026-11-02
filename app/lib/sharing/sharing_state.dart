@@ -12,8 +12,11 @@ import '../settings/data_policy.dart';
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
 class SharingState extends ChangeNotifier {
-  SharingState({required this.policy, required this.supportDir, required this.kinds, this.deviceName = 'Cache device', SyncOpener? opener})
+  SharingState({required this.policy, required this.supportDir, required this.kinds, this.autoShares = const [], this.deviceName = 'Cache device', SyncOpener? opener})
     : _opener = opener ?? _openReal;
+
+  /// Folders shared whenever sharing is set up, whatever kinds are ticked (the indexes folder), each with its own patterns.
+  final List<AutoShare> autoShares;
 
   final DataPolicy policy;
   final Future<Directory> Function() supportDir;
@@ -71,10 +74,18 @@ class SharingState extends ChangeNotifier {
       _core = await _opener({
         'dir': dir.path,
         'name': deviceName,
-        'exclude': {for (final k in kinds) ...k.notShared},
-        'local_deletes': {for (final k in kinds) ...k.localDeletes},
+        'exclude': {
+          for (final k in kinds) ...k.notShared,
+          for (final a in autoShares) a.id: a.notShared,
+        },
+        'local_deletes': {for (final a in autoShares) a.id: a.localDeletes},
+        'fetch_only': {
+          for (final a in autoShares)
+            if (a.fetchOnly != null) a.id: a.fetchOnly!(),
+        },
       });
       await _applyPolicy();
+      await _startAutoShares();
       _net = policy.probe.changes.listen((_) async {
         try {
           await _core?.call('network_changed');
@@ -90,6 +101,40 @@ class SharingState extends ChangeNotifier {
     } finally {
       _starting = false;
       notifyListeners();
+    }
+  }
+
+  /// Adds each always-on folder that is not shared yet, and keeps its receive filter in step with what it depends on.
+  Future<void> _startAutoShares() async {
+    if (autoShares.isEmpty) return;
+    await refresh();
+    for (final a in autoShares) {
+      final dir = a.dir();
+      if (dir != null && shareOf(a.id) == null) {
+        await dir.create(recursive: true);
+        await _core?.call('share_add', {'id': a.id, 'name': a.name, 'path': dir.path});
+      }
+      final changes = a.changes;
+      if (a.fetchOnly != null && changes != null) {
+        void update() => unawaited(_setFetchOnly(a));
+        changes.addListener(update);
+        _autoListeners.add(() => changes.removeListener(update));
+      }
+    }
+  }
+
+  final List<VoidCallback> _autoListeners = [];
+  final Map<String, List<String>> _fetchOnlySent = {};
+
+  /// Tells the engine [a]'s receive filter when it changed.
+  Future<void> _setFetchOnly(AutoShare a) async {
+    final now = a.fetchOnly!();
+    if (listEquals(_fetchOnlySent[a.id], now)) return;
+    _fetchOnlySent[a.id] = now;
+    try {
+      await _core?.call('set_fetch_only', {'share': a.id, 'patterns': now});
+    } catch (_) {
+      _fetchOnlySent.remove(a.id);
     }
   }
 
@@ -195,12 +240,30 @@ class SharingState extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final off in _autoListeners) {
+      off();
+    }
     _poll?.cancel();
     _net?.cancel();
     if (_core != null) policy.settings.removeListener(_onSettings);
     _core?.close();
     super.dispose();
   }
+}
+
+/// A folder shared whenever sharing is set up (not one of the kinds the person ticks): its fixed share id and folder, what in it
+/// never syncs, where its deletes stay local, and the receive filter (what it takes from peers; null takes everything),
+/// refreshed whenever [changes] tells.
+class AutoShare {
+  const AutoShare({required this.id, required this.name, required this.dir, this.notShared = const [], this.localDeletes = const [], this.fetchOnly, this.changes});
+
+  final String id;
+  final String name;
+  final Directory? Function() dir;
+  final List<String> notShared;
+  final List<String> localDeletes;
+  final List<String> Function()? fetchOnly;
+  final Listenable? changes;
 }
 
 /// What the state needs from the engine (the real one is [SyncCore]; tests give a fake).

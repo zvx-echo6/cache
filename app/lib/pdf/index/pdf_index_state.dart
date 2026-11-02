@@ -110,6 +110,7 @@ class PdfIndexState extends ChangeNotifier {
   PdfIndexState({
     required this.core,
     required this.zims,
+    required this.indexesDir,
     required this.recordFile,
     this.changes,
     this.readPages = readPdfPagesFromBytes,
@@ -128,12 +129,16 @@ class PdfIndexState extends ChangeNotifier {
   final List<PdfZimRef> Function() zims;
   final Listenable? changes;
 
+  /// The device's indexes folder (the core's indexes_dir): each ZIM's PDF index is zim-pdf/<uuid>/ in it.
+  final Future<Directory> Function() indexesDir;
+  String? _indexes;
+
   final Future<File> Function() recordFile;
   final PdfBytesReader readPages;
   final BatteryReader? battery;
   final Space Function(String dir) space;
 
-  /// The core should look at a new or replaced `<zim>.pdfindex/` (built here or arrived).
+  /// The core should look at a new snapshot (built here or arrived): the app gives it the sources again.
   final Future<void> Function()? onIndexReady;
 
   /// The single setting hook for starting by itself; null is off.
@@ -167,6 +172,7 @@ class PdfIndexState extends ChangeNotifier {
   Future<void> init() async {
     if (_loaded) return;
     try {
+      _indexes = (await indexesDir()).path;
       final f = await recordFile();
       if (f.existsSync()) _record = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
     } catch (_) {
@@ -228,6 +234,10 @@ class PdfIndexState extends ChangeNotifier {
     _queue.removeWhere((p) => !paths.contains(p));
     final known = _known;
     _known = paths;
+    // A ZIM that went (deleted here or by sync, or replaced by an update): its index goes from this device.
+    for (final gone in known?.difference(paths) ?? const <String>{}) {
+      unawaited(forget(gone));
+    }
     for (final z in now) {
       if (z.uuid == null) continue;
       _ensureList(z);
@@ -269,16 +279,31 @@ class PdfIndexState extends ChangeNotifier {
     }
   }
 
-  /// The snapshot every device uses for [z]'s ZIM version (null when none is complete here), and whether there are snapshots
-  /// for other versions (a new ZIM version: the old index is not this ZIM's). Read again after 10 seconds.
+  /// [z]'s folders in the indexes folder; null until its uuid is known.
+  PdfIndexPaths? pathsOf(PdfZimRef z) => _paths(z);
+
+  /// The name cs_pdfindex_open is given for [z].
+  String zimNameOf(PdfZimRef z, ZimPdfList? list) => _zimName(z, list);
+
+  PdfIndexPaths? _paths(PdfZimRef z) => z.uuid == null || _indexes == null ? null : PdfIndexPaths(_indexes!, z.uuid!);
+
+  /// The ZIM's name for cs_pdfindex_open: its own, else the file name without ".zim".
+  String _zimName(PdfZimRef z, ZimPdfList? list) {
+    final n = list?.zimName ?? '';
+    return n.isNotEmpty ? n : z.fileName.replaceFirst(RegExp(r'\.zim$', caseSensitive: false), '');
+  }
+
+  /// The snapshot every device uses for [z]'s ZIM version (null when none is complete here), and whether the version this file
+  /// had before has one (a new ZIM version: that index is not this ZIM's). Read again after 10 seconds.
   (PdfSnapshot?, bool) _snapshot(PdfZimRef z, {bool fresh = false}) {
     final m = _manifests[z.path];
     final now = clock();
     if (!fresh && m != null && now.difference(m.$1) < const Duration(seconds: 10)) return (m.$2, m.$3);
-    final paths = PdfIndexPaths(z.path);
-    final all = paths.snapshots();
-    final mine = z.uuid == null ? null : paths.snapshotFor(z.uuid!);
-    final other = all.any((s) => s.zimUuid != z.uuid);
+    final paths = _paths(z);
+    final mine = paths?.current();
+    final before = _rec(z.fileName)['index_uuid'];
+    if (mine != null && before != z.uuid) unawaited(_put(z.fileName, {'index_uuid': z.uuid}));
+    final other = mine == null && before is String && before != z.uuid && _indexes != null && PdfIndexPaths(_indexes!, before).current() != null;
     _manifests[z.path] = (now, mine, other);
     return (mine, other);
   }
@@ -303,7 +328,7 @@ class PdfIndexState extends ChangeNotifier {
 
   /// The PDFs part of [z]; null when there is nothing to show (no PDFs, not listed yet, the core cannot index).
   PdfPart? partOf(PdfZimRef z) {
-    if (!available || !_loaded || z.uuid == null) return null;
+    if (!available || !_loaded || z.uuid == null || _indexes == null) return null;
     final rec = _rec(z.fileName);
     final list = _lists[z.path];
     final total = list?.zimUuid == z.uuid ? list!.pdfs.length : (rec['count_uuid'] == z.uuid ? (rec['count'] as num?)?.toInt() : null);
@@ -326,7 +351,7 @@ class PdfIndexState extends ChangeNotifier {
     if (_queue.contains(z.path)) return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: (rec['handled'] as num?)?.toInt() ?? 0);
     if (_measuring.contains(z.path)) return PdfPart(phase: PdfPartPhase.measuring, total: total);
     final (m, otherVersion) = _snapshot(z);
-    final paths = PdfIndexPaths(z.path);
+    final paths = _paths(z)!;
     final handled = (rec['handled'] as num?)?.toInt() ?? 0;
     final failure = _failures[z.path];
     if (failure != null && paths.build.existsSync()) {
@@ -376,7 +401,7 @@ class PdfIndexState extends ChangeNotifier {
     try {
       final list = await listOf(z);
       if (list == null) return null;
-      final build = PdfIndexPaths(z.path).build;
+      final build = _paths(z)!.build;
       final doneHere = build.existsSync() ? ((_rec(z.fileName)['handled'] as num?)?.toInt() ?? 0) : 0;
       final todo = list.pdfs.length - doneHere;
       final bytes = list.bytes;
@@ -392,7 +417,8 @@ class PdfIndexState extends ChangeNotifier {
       for (final p in picks) {
         final run = PdfIndexRun(
           core: core,
-          zimPath: z.path,
+          paths: _paths(z)!,
+          zimName: _zimName(z, list),
           list: ZimPdfList(zimUuid: list.zimUuid, zimName: list.zimName, pdfs: [p]),
           readPages: readPages,
           stage: false,
@@ -438,7 +464,7 @@ class PdfIndexState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final run = _run = PdfIndexRun(core: core, zimPath: z.path, list: list, readPages: readPages, battery: battery, clock: clock);
+    final run = _run = PdfIndexRun(core: core, paths: _paths(z)!, zimName: _zimName(z, list), list: list, readPages: readPages, battery: battery, clock: clock);
     _runPath = z.path;
     var lastSaved = -1;
     void onRun() {
@@ -504,8 +530,9 @@ class PdfIndexState extends ChangeNotifier {
       _run?.stop(PdfRunStop.cancel);
       return;
     }
+    final paths = _paths(z);
     try {
-      await core.discard(z.path);
+      if (paths != null) await core.discard(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid);
     } catch (_) {}
     await _put(z.fileName, {'pause': null, 'handled': null});
     notifyListeners();
@@ -521,14 +548,24 @@ class PdfIndexState extends ChangeNotifier {
     say?.call('Making ${e.pdfs} PDFs searchable.');
   }
 
-  /// The ZIM is being deleted: its index, staging and record go with it.
+  /// The ZIM at [zimPath] is gone: its index (every snapshot and the build) and record go from this device. The delete of a
+  /// snapshot never syncs, so other devices keep theirs.
   Future<void> forget(String zimPath) async {
     if (_runPath == zimPath) _run?.stop(PdfRunStop.cancel);
     _queue.remove(zimPath);
     final name = zimPath.split(RegExp(r'[\\/]')).last;
+    final rec = _rec(name);
+    final uuids = {rec['count_uuid'], rec['index_uuid'], rec['built_uuid'], rec['uuid']}.whereType<String>();
     _record.remove(name);
     await _save();
-    PdfIndexPaths(zimPath).deleteAll();
+    // Only an index no ZIM still here uses (two files may be the same ZIM).
+    final kept = {for (final z in zims()) ?z.uuid};
+    final root = _indexes;
+    if (root != null) {
+      for (final u in uuids) {
+        if (!kept.contains(u)) PdfIndexPaths(root, u).deleteAll();
+      }
+    }
     _lists.remove(zimPath);
     _manifests.remove(zimPath);
     notifyListeners();

@@ -67,7 +67,8 @@ class _Failed implements Exception {
 class PdfIndexRun extends ChangeNotifier {
   PdfIndexRun({
     required this.core,
-    required this.zimPath,
+    required this.paths,
+    required this.zimName,
     required this.list,
     this.readPages = readPdfPagesFromBytes,
     this.battery,
@@ -80,7 +81,11 @@ class PdfIndexRun extends ChangeNotifier {
   }) : clock = clock ?? DateTime.now;
 
   final PdfIndexCore core;
-  final String zimPath;
+  /// Where the ZIM's index is built and published (its uuid's folder in the device's indexes folder).
+  final PdfIndexPaths paths;
+
+  /// The ZIM's name, given to cs_pdfindex_open.
+  final String zimName;
   final ZimPdfList list;
   final PdfBytesReader readPages;
   final BatteryReader? battery;
@@ -178,7 +183,7 @@ class PdfIndexRun extends ChangeNotifier {
     try {
       var doneSet = <String>{};
       if (stage) {
-        final s = await core.open(zimPath: zimPath, zimUuid: list.zimUuid, zimName: PdfIndexPaths(zimPath).name);
+        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName);
         session = s.session;
         doneSet = {...s.done, ...s.skipped};
         pieces = s.pieces;
@@ -270,7 +275,7 @@ class PdfIndexRun extends ChangeNotifier {
       case PdfRunStop.superseded:
         if (stage) {
           try {
-            await core.discard(zimPath);
+            await core.discard(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid);
           } catch (_) {}
         }
         return _stop == PdfRunStop.cancel ? PdfRunEnd.cancelled : PdfRunEnd.superseded;
@@ -282,7 +287,7 @@ class PdfIndexRun extends ChangeNotifier {
   Future<PdfRunEnd> _finish() async {
     finishing = true;
     notifyListeners();
-    final job = _job = await core.finish(zimPath);
+    final job = _job = await core.finish(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid);
     try {
       while (true) {
         final p = await job.progress();

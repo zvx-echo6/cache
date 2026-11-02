@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../pdf/index/pdf_index_core.dart' show kIndexesDirName;
+
 /// Where Cache's published data lives (road routing, places, the region catalogue). `https://cache.echo6.co` serves the same
 /// bucket with the same paths: build with `--dart-define=CACHE_DATA_BASE=https://cache.echo6.co` to use it. No trailing slash.
 const String kDataBaseUrl = String.fromEnvironment('CACHE_DATA_BASE', defaultValue: 'https://data.cached.info');
@@ -48,6 +50,8 @@ Map<String, dynamic> buildCoreExtras({
     'notebook': notebookConfig(supportDir),
     // The region engine (cs_open's regions section): where it keeps its tiles and where it fetches road routing and places from.
     'regions': regionsConfig(supportDir, routingBaseUrl: regionsBaseUrl, placesBaseUrl: placesBaseUrl),
+    // The device's indexes folder (ZIM PDF indexes: zim-pdf/<uuid>/), which syncs on its own (the always-on indexes share).
+    'indexes_dir': '${supportDir.path}/$kIndexesDirName',
   };
 }
 

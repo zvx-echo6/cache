@@ -36,7 +36,8 @@ Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name) async {
   return PdfPagesOutcome.read(s.substring(8).split('\f'));
 }
 
-/// A stand-in for the core's PDF calls that behaves as interface v2 says, on real folders: the build is `.pdfindex/.build/`
+/// A stand-in for the core's PDF calls that behaves as interface v2 says, on real folders: the build is
+/// `<indexes_dir>/zim-pdf/<uuid>/.build/`
 /// (meta.json, done.tsv and skipped.tsv), adds are committed in batches of [batch] PDFs (and at close), a path is done only
 /// after its commit, and the publish writes a dot-named temporary folder with manifest.json last and renames it to
 /// `snap/<build-id>/`. Used by the tests and the renders until the core has the calls; never by a release build.
@@ -101,9 +102,10 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName}) async {
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName}) async {
     calls.add('open');
-    final dir = PdfIndexPaths(zimPath).build;
+    final paths = PdfIndexPaths(indexesDir, zimUuid);
+    final dir = paths.build;
     final meta = File('${dir.path}/meta.json');
     if (dir.existsSync()) {
       try {
@@ -116,7 +118,7 @@ class FakePdfIndexCore implements PdfIndexCore {
     dir.createSync(recursive: true);
     if (!meta.existsSync()) meta.writeAsStringSync(jsonEncode({'zim_uuid': zimUuid, 'zim_name': zimName}));
     final id = _next++;
-    _sessions[id] = _Session(zimPath);
+    _sessions[id] = _Session(paths);
     final done = _lines(File('${dir.path}/done.tsv'));
     final skipped = _lines(File('${dir.path}/skipped.tsv'));
     return PdfStaging(session: id, done: {for (final l in done) l.split('\t').first}, skipped: {for (final l in skipped) l.split('\t').first}, pieces: _pieces(dir));
@@ -131,7 +133,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   void _commit(_Session s) {
     if (s.pending.isEmpty && s.pendingSkips.isEmpty) return;
     calls.add('commit');
-    final dir = PdfIndexPaths(s.zimPath).build;
+    final dir = s.paths.build;
     File('${dir.path}/done.tsv').writeAsStringSync(s.pending.map((l) => '$l\n').join(), mode: FileMode.append, flush: true);
     File('${dir.path}/skipped.tsv').writeAsStringSync(s.pendingSkips.map((l) => '$l\n').join(), mode: FileMode.append, flush: true);
     s.pending.clear();
@@ -153,7 +155,7 @@ class FakePdfIndexCore implements PdfIndexCore {
       s.since = 0;
       _commit(s);
     }
-    final dir = PdfIndexPaths(s.zimPath).build;
+    final dir = s.paths.build;
     final pending = s.pending.fold(0, (n, l) => n + (int.tryParse(l.split('\t').last) ?? 0));
     return PdfAdded(pieces: _pieces(dir) + pending, committed: _lines(File('${dir.path}/done.tsv')).length);
   }
@@ -175,23 +177,23 @@ class FakePdfIndexCore implements PdfIndexCore {
   void kill(int session) => _sessions.remove(session);
 
   @override
-  Future<void> discard(String zimPath) async {
+  Future<void> discard({required String indexesDir, required String zimUuid}) async {
     calls.add('discard');
-    final d = PdfIndexPaths(zimPath).build;
+    final d = PdfIndexPaths(indexesDir, zimUuid).build;
     if (d.existsSync()) d.deleteSync(recursive: true);
   }
 
   @override
-  Future<PdfFinishJob> finish(String zimPath) async {
+  Future<PdfFinishJob> finish({required String indexesDir, required String zimUuid}) async {
     calls.add('finish');
-    return _FakeFinish(this, PdfIndexPaths(zimPath), 'b${DateTime.now().microsecondsSinceEpoch}-${_builds++}');
+    return _FakeFinish(this, PdfIndexPaths(indexesDir, zimUuid), 'b${DateTime.now().microsecondsSinceEpoch}-${_builds++}');
   }
 }
 
 class _Session {
-  _Session(this.zimPath);
+  _Session(this.paths);
 
-  final String zimPath;
+  final PdfIndexPaths paths;
   final List<String> pending = [];
   final List<String> pendingSkips = [];
   int since = 0;

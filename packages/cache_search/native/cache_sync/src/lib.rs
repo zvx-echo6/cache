@@ -121,6 +121,12 @@ pub struct Config {
     /// is left out of what peers are told.
     #[serde(default)]
     pub local_deletes: BTreeMap<String, Vec<String>>,
+    /// What this device takes from peers, by share id, in the same patterns: a share listed here fetches (and applies deletes
+    /// for) only the paths its patterns cover, and an empty list takes nothing; a share not listed takes everything. The
+    /// receiver's filter: the indexes share takes `zim-pdf/<uuid>` only for the ZIMs this device has. What this device has
+    /// itself is still listed and sent. Changed while running with the `set_fetch_only` call.
+    #[serde(default)]
+    pub fetch_only: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -282,6 +288,8 @@ struct Inner {
     exclude: BTreeMap<String, Vec<String>>,
     /// Where deletes stay local, by share id ([`Config::local_deletes`]).
     local_deletes: BTreeMap<String, Vec<String>>,
+    /// What is taken from peers, by share id ([`Config::fetch_only`]); changed by `set_fetch_only`.
+    fetch_only: Mutex<BTreeMap<String, Vec<String>>>,
 }
 
 pub struct SyncEngine {
@@ -459,6 +467,16 @@ impl Inner {
     /// The patterns that never sync in `share`.
     fn skip(&self, share: &str) -> &[String] {
         self.exclude.get(share).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// A peer's index of `share` as this device takes it: [`Self::without_excluded`], then only what [`Config::fetch_only`]
+    /// lets in.
+    fn from_peer(&self, share: &str, idx: &Index) -> Index {
+        let mut out = self.without_excluded(share, idx);
+        if let Some(only) = self.fetch_only.lock().unwrap().get(share) {
+            out.files.retain(|p, _| excluded(only, p));
+        }
+        out
     }
 
     /// `idx` without the paths that never sync in `share` (what a peer lists for them is not looked at), and without the deletes
@@ -932,7 +950,7 @@ impl Inner {
     }
 
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
-        let remote = &self.without_excluded(&sh.id, remote);
+        let remote = &self.from_peer(&sh.id, remote);
         let actions = index::merge(&self.load_index(&sh.id), remote);
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
@@ -1351,6 +1369,7 @@ impl SyncEngine {
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
             local_deletes: cfg.local_deletes.clone(),
+            fetch_only: Mutex::new(cfg.fetch_only.clone()),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
@@ -1503,6 +1522,20 @@ impl SyncEngine {
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
+            "set_fetch_only" => {
+                // {"share": id, "patterns": [..]} limits what that share takes from peers; "patterns": null takes everything.
+                let share = args.get("share").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("share missing"))?.to_string();
+                let patterns: Option<Vec<String>> = serde_json::from_value(args.get("patterns").cloned().unwrap_or(Value::Null))?;
+                {
+                    let mut only = inner.fetch_only.lock().unwrap();
+                    match patterns {
+                        Some(p) => only.insert(share, p),
+                        None => only.remove(&share),
+                    };
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
+            }
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
@@ -1538,7 +1571,7 @@ impl SyncEngine {
                 if let Some(idx) = &st.index {
                     for sh in &idx.shares {
                         if !joined.contains(sh.id.as_str()) {
-                            let offered = inner.without_excluded(&sh.id, &sh.index);
+                            let offered = inner.from_peer(&sh.id, &sh.index);
                             let live = offered.files.values().filter(|e| !e.deleted);
                             let (n, b) = live.fold((0u64, 0u64), |(n, b), e| (n + 1, b + e.size));
                             offers.push(json!({"peer": p.id, "peer_name": p.name, "id": sh.id, "name": sh.name, "files": n, "bytes": b}));
@@ -1559,7 +1592,7 @@ impl SyncEngine {
                 let mut pending_bytes = 0u64;
                 for st in run.peers.values() {
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
-                        for a in index::merge(&idx, &inner.without_excluded(&sh.id, &rs.index)) {
+                        for a in index::merge(&idx, &inner.from_peer(&sh.id, &rs.index)) {
                             if let Action::Fetch { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;

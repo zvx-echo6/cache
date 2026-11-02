@@ -45,7 +45,8 @@ Future<void> runPdfTimingFromSettings(BuildContext context, PdfIndexState state)
     if (list == null) throw StateError('The library could not be read.');
     final r = await runPdfTiming(
       core: state.core,
-      zimPath: zim.path,
+      paths: state.pathsOf(zim) ?? (throw StateError('The library is not ready yet.')),
+      zimName: state.zimNameOf(zim, list),
       list: list,
       readPages: state.readPages,
       logDir: await pdfTimingDir(),

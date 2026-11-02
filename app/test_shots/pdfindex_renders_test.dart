@@ -45,7 +45,7 @@ const _finishing = PdfPart(phase: PdfPartPhase.finishing, total: 5768, handled: 
 const _done = PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768);
 const _doneSome = PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768, unreadable: 12);
 const _fromOther = PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768, fromOtherDevice: true);
-const _newVersion = PdfPart(phase: PdfPartPhase.newVersion, total: 5790, newCount: 22);
+const _newVersion = PdfPart(phase: PdfPartPhase.newVersion, total: 5790);
 
 Widget _part(PdfPart p) => PdfPartView(part: p, onStart: () {}, onPause: () {}, onResume: () {}, onRemove: () async {}, onFreeSpace: () {});
 

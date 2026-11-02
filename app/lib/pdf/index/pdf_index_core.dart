@@ -5,8 +5,10 @@ import 'dart:typed_data';
 
 /// The search core's calls for making a ZIM's PDFs searchable on this device (interface v2, 2026-11-02): a keyword index, like
 /// all other ZIM content (no vectors, no search model). The app drives the loop (it has pdfrx); the core lists the PDFs, chunks
-/// the pages (the one cache_chunk the server and the builder share), owns the resumable build in `<zim name>.pdfindex/.build/`
-/// and publishes each finished index as an immutable snapshot, `<zim name>.pdfindex/snap/<build-id>/`, which syncs.
+/// the pages (the one cache_chunk the server and the builder share), owns the resumable build in
+/// `<indexes_dir>/zim-pdf/<zim uuid>/.build/` and publishes each finished index as an immutable snapshot,
+/// `<indexes_dir>/zim-pdf/<zim uuid>/snap/<build-id>/`. The indexes folder is one per device and syncs on its own (the always-on
+/// "indexes" share), to every linked device that has the same ZIM.
 ///
 /// The core-pdf binding implements this once the calls are in the core; until then the app runs on [PdfIndexCoreMissing] (the
 /// feature is not offered) and the tests and renders on FakePdfIndexCore.
@@ -23,9 +25,9 @@ abstract class PdfIndexCore {
   /// The pieces of one PDF's pages (cs_pdf_chunk): about 200 words, never across a heading.
   Future<PdfChunks> chunk(List<PdfPageText> pages);
 
-  /// Opens or creates the ZIM's build, `.pdfindex/.build/` (cs_pdfindex_open). A build for another ZIM version, format or
-  /// chunker is discarded by the core and started again.
-  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName});
+  /// Opens or creates the ZIM's build, `zim-pdf/<zim uuid>/.build/` (cs_pdfindex_open). A build for another format or chunker is
+  /// discarded by the core and started again.
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName});
 
   /// Adds one PDF's text pieces, replacing any it had (cs_pdfindex_add). Durable in batches: the core commits about every 20
   /// PDFs or 30 seconds and lists a path as done only after the commit that holds it.
@@ -38,10 +40,11 @@ abstract class PdfIndexCore {
   Future<void> close(int session);
 
   /// Deletes the build (cs_pdfindex_discard).
-  Future<void> discard(String zimPath);
+  Future<void> discard({required String indexesDir, required String zimUuid});
 
-  /// Starts the publish job (cs_job_start "pdfindex_finish"): merge, manifest, then one rename to `snap/<build-id>/`.
-  Future<PdfFinishJob> finish(String zimPath);
+  /// Starts the publish job (cs_job_start "pdfindex_finish" with indexes_dir and zim_uuid): merge, manifest, then one rename to
+  /// `snap/<build-id>/`.
+  Future<PdfFinishJob> finish({required String indexesDir, required String zimUuid});
 }
 
 /// What cs_pdfindex_add answers: pieces in the build so far, and PDFs committed (a kill redoes the ones after that).
@@ -192,7 +195,7 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   @override
   Future<PdfChunks> chunk(List<PdfPageText> pages) async => _no();
   @override
-  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName}) async => _no();
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName}) async => _no();
   @override
   Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async => _no();
   @override
@@ -200,28 +203,26 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   @override
   Future<void> close(int session) async {}
   @override
-  Future<void> discard(String zimPath) async => _no();
+  Future<void> discard({required String indexesDir, required String zimUuid}) async => _no();
   @override
-  Future<PdfFinishJob> finish(String zimPath) async => _no();
+  Future<PdfFinishJob> finish({required String indexesDir, required String zimUuid}) async => _no();
 }
 
-/// The folders of one ZIM's PDF index, beside the ZIM: `<name>.pdfindex/` holding `.build/` (this device's resumable build,
-/// never synced) and `snap/<build-id>/` (published snapshots, which sync). The name is the ZIM's file name without ".zim".
+/// The folders of one ZIM's PDF index in the device's indexes folder: `zim-pdf/<zim uuid>/` holding `.build/` (this device's
+/// resumable build, never synced) and `snap/<build-id>/` (published snapshots, which sync).
 class PdfIndexPaths {
-  PdfIndexPaths(this.zimPath);
+  PdfIndexPaths(this.indexesDir, this.zimUuid);
 
-  final String zimPath;
+  final String indexesDir;
+  final String zimUuid;
 
-  String get _stem => zimPath.replaceFirst(RegExp(r'\.zim$', caseSensitive: false), '');
+  static String get _sep => Platform.pathSeparator;
 
-  /// The file name without ".zim": the `zim_name` the app gives cs_pdfindex_open.
-  String get name => _stem.split(RegExp(r'[\\/]')).last;
+  Directory get root => Directory('$indexesDir${_sep}zim-pdf$_sep$zimUuid');
+  Directory get build => Directory('${root.path}$_sep.build');
+  Directory get snaps => Directory('${root.path}${_sep}snap');
 
-  Directory get root => Directory('$_stem.pdfindex');
-  Directory get build => Directory('${root.path}${Platform.pathSeparator}.build');
-  Directory get snaps => Directory('${root.path}${Platform.pathSeparator}snap');
-
-  /// Removes it all (the ZIM is gone).
+  /// Removes it all on this device (the ZIM is gone; a snapshot delete never syncs).
   void deleteAll() {
     try {
       if (root.existsSync()) root.deleteSync(recursive: true);
@@ -236,15 +237,15 @@ class PdfIndexPaths {
       if (!snaps.existsSync()) return out;
       for (final d in snaps.listSync().whereType<Directory>()) {
         final s = PdfSnapshot.read(d);
-        if (s != null) out.add(s);
+        if (s != null && (s.zimUuid == null || s.zimUuid == zimUuid)) out.add(s);
       }
     } catch (_) {}
     return out;
   }
 
-  /// The snapshot every device uses for ZIM version [zimUuid]: the earliest created, then the lowest build id.
-  PdfSnapshot? snapshotFor(String zimUuid) {
-    final all = snapshots().where((s) => s.zimUuid == zimUuid).toList()
+  /// The snapshot every device uses: the earliest created, then the lowest build id.
+  PdfSnapshot? current() {
+    final all = snapshots()
       ..sort((a, b) {
         final c = a.created.compareTo(b.created);
         return c != 0 ? c : a.id.compareTo(b.id);
@@ -289,11 +290,19 @@ class PdfSnapshot {
   }
 }
 
-/// What a ZIM folder (the `library` shared folder) holds that never syncs, as sync patterns (see DataKind.notShared): the
-/// working folders inside a PDF index (`.build/`, and the publish's temporary folder, which the core names with a leading dot).
-/// The published snapshots (`snap/<build-id>/`) sync, following the ZIM's own sync choice (the same shared folder).
-const List<String> kZimPdfIndexNotShared = ['*.pdfindex/.*'];
+/// The always-on share of the device's indexes folder: on whenever sharing is set up, whatever kinds the person ticked, so an
+/// index reaches every linked device that has the same source even when the source itself does not sync.
+const String kIndexesShareId = 'indexes';
 
-/// Where deletes stay on each device (see DataKind.localDeletes): a snapshot each device cleans up for itself is never deleted
-/// on another device by sync.
-const List<String> kZimPdfIndexLocalDeletes = ['*.pdfindex/snap'];
+/// The device's indexes folder, under the app's support folder (the core's `indexes_dir`).
+const String kIndexesDirName = 'shared-indexes';
+
+/// What never syncs in the indexes share: the working folders inside each index (`.build/`, and the publish's temporary folder,
+/// which the core names with a leading dot).
+const List<String> kIndexesNotShared = ['zim-pdf/*/.*'];
+
+/// Where a delete stays on the device that made it: snapshots each device cleans up for itself.
+const List<String> kIndexesLocalDeletes = ['zim-pdf/*/snap'];
+
+/// The receiver's filter on the indexes share: only the PDF indexes of the ZIMs this device has.
+List<String> zimPdfFetchOnly(Iterable<String> zimUuids) => [for (final u in zimUuids) 'zim-pdf/$u'];
