@@ -559,7 +559,7 @@ fn a_snapshot_holds_no_absolute_paths_and_is_not_written_by_reading() {
 }
 
 #[test]
-fn of_several_snapshots_the_earliest_is_used_and_the_rest_cleaned_up_locally() {
+fn of_several_snapshots_the_earliest_is_used_and_the_others_cleaned_up_locally() {
     let e = env("pick");
     let mut names = Vec::new();
     for _ in 0..3 {
@@ -577,17 +577,9 @@ fn of_several_snapshots_the_earliest_is_used_and_the_rest_cleaned_up_locally() {
     let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
     let st = settle(h);
     assert_eq!(st["sources"][0]["pdfindex"]["snapshot"], sorted[0], "the earliest created is used");
-    // kept: the one in use and the newest other one; the middle one is removed on this device
+    // kept: the one in use (the earliest), and the newest usable one older than it (there is none); the others go, on this device only
     let left = snapshots(&e.idx, UUID);
-    assert_eq!(
-        left,
-        {
-            let mut v = vec![sorted[0].clone(), sorted[2].clone()];
-            v.sort();
-            v
-        },
-        "{left:?}"
-    );
+    assert_eq!(left, vec![sorted[0].clone()], "{left:?}");
     unsafe { cs_close(h) };
 }
 
@@ -643,4 +635,81 @@ fn zim_pdfs_lists_the_pdfs_of_a_zim() {
     assert_eq!(r["pdfs"], json!([]));
     assert!(unsafe { cs_zim_pdfs(h, cstr(OTHER).as_ptr()) }.is_null());
     unsafe { cs_close(h) };
+}
+
+const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+fn add_with(session: u64, pdf: &Pdf, size: u64, sha: &str) -> Value {
+    let p = json!({"path": pdf.0, "title": pdf.1, "pieces": pieces_json(&pdf.2), "size": size, "sha256": sha});
+    call(unsafe { cs_pdfindex_add(session, cstr(&p.to_string()).as_ptr()) })
+}
+
+fn reuse(session: u64, path: &str, sha: &str) -> Value {
+    call(unsafe { cs_pdfindex_reuse(session, cstr(&json!({"path": path, "sha256": sha}).to_string()).as_ptr()) })
+}
+
+#[test]
+fn the_snapshot_lists_its_pdfs_and_a_new_edition_reuses_unchanged_ones() {
+    let e = env("reuse");
+    let p = pdfs();
+    // edition 1: A added, B skipped (no text), both with the size and sha256 of their bytes
+    let s = open_session(&e.idx, UUID, None);
+    let id = s["session"].as_u64().unwrap();
+    add_with(id, &p[0], 100, SHA_A);
+    call(unsafe {
+        cs_pdfindex_skip(
+            id,
+            cstr(&json!({"path": "Manuals/c.pdf", "reason": "no_text", "size": 7, "sha256": SHA_B}).to_string())
+                .as_ptr(),
+        )
+    });
+    add_with(id, &p[1], 50, SHA_B);
+    close(id);
+    let built = finish(&e.idx, UUID)["result"].clone();
+    assert_eq!((built["pdfs"].as_u64(), built["skipped"].as_u64()), (Some(2), Some(1)), "{built}");
+    let dir = snap_dir(&e.idx, UUID).join(built["snapshot"].as_str().unwrap());
+    let tsv = std::fs::read_to_string(dir.join("pdfs.tsv")).unwrap();
+    let rows: Vec<&str> = tsv.lines().collect();
+    assert_eq!(
+        rows,
+        vec![
+            format!("Manuals/a.pdf\t100\t{SHA_A}\t4\tadded"),
+            format!("Manuals/b.pdf\t50\t{SHA_B}\t1\tadded"),
+            format!("Manuals/c.pdf\t7\t{SHA_B}\t0\tskipped:no_text"),
+        ]
+    );
+    let manifest: Value = serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+    assert!(manifest["files"].as_array().unwrap().iter().any(|f| f["path"] == "pdfs.tsv"));
+    assert_eq!(manifest["source_id"], UUID);
+
+    // edition 2 (a new uuid, the same ZIM name): A is unchanged and is copied; B changed (other hash) and is extracted again
+    let mut open = json!({"indexes_dir": e.idx, "zim_uuid": OTHER, "zim_name": "tiny", "previous": {"zim_uuid": UUID}});
+    let s2 = call(unsafe { cs_pdfindex_open(cstr(&open.to_string()).as_ptr()) });
+    assert_eq!(
+        s2["reusable"],
+        json!([{"path": "Manuals/a.pdf", "size": 100, "sha256": SHA_A}, {"path": "Manuals/b.pdf", "size": 50, "sha256": SHA_B}])
+    );
+    let id2 = s2["session"].as_u64().unwrap();
+    assert_eq!(reuse(id2, "Manuals/a.pdf", SHA_A), json!({"reused": true, "pieces": 4}));
+    assert_eq!(reuse(id2, "Manuals/b.pdf", SHA_A), json!({"reused": false}), "another hash is not reused");
+    assert_eq!(reuse(id2, "Manuals/nope.pdf", SHA_A), json!({"reused": false}));
+    add_with(id2, &p[1], 51, SHA_A);
+    close(id2);
+    let built2 = finish(&e.idx, OTHER)["result"].clone();
+    assert_eq!(built2["pieces"], 5, "{built2}");
+    let tsv2 =
+        std::fs::read_to_string(snap_dir(&e.idx, OTHER).join(built2["snapshot"].as_str().unwrap()).join("pdfs.tsv"))
+            .unwrap();
+    assert!(tsv2.contains(&format!("Manuals/a.pdf\t100\t{SHA_A}\t4\tadded")), "{tsv2}");
+
+    // the reused pieces are the same text, and a previous edition of another ZIM name is not offered
+    let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
+    settle(h);
+    unsafe { cs_close(h) };
+    open["zim_name"] = json!("other-name");
+    open["zim_uuid"] = json!("0badc0de-0000-4000-8000-0000000000aa");
+    let s3 = call(unsafe { cs_pdfindex_open(cstr(&open.to_string()).as_ptr()) });
+    assert_eq!(s3["reusable"], json!([]));
+    close(s3["session"].as_u64().unwrap());
 }
