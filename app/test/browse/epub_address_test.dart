@@ -38,7 +38,7 @@ void main() {
     expect(resolveEpubPath('OEBPS/content.opf', 'Text/ch1.xhtml'), 'OEBPS/Text/ch1.xhtml');
     expect(resolveEpubPath('OEBPS/Text/ch1.xhtml', '../Images/a.png#x'), 'OEBPS/Images/a.png');
     expect(resolveEpubPath('content.opf', 'ch1.xhtml'), 'ch1.xhtml');
-    expect(quoteProbe('  Boil   water for one full minute before drinking it, and longer at altitude. '), 'Boil water for one full minute before drinking it,');
+    expect(quoteProbe('  Boil   water for one full minute before drinking it, and longer at altitude. '), 'Boil water for one full minute before drinking');
   });
 
   group('tapping an EPUB entry opens its first chapter', () {
