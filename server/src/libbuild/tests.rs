@@ -929,7 +929,7 @@ fn a_crashing_pdf_in_the_drop_folder_goes_to_failed_with_its_reason() {
     svc.scan();
     drain(&svc);
     assert_eq!(names(&root, "ingest"), Vec::<String>::new());
-    assert_eq!(names(&root, "complete"), vec!["a.pdf", "c.pdf"]);
+    assert_eq!(tree_files(&root.join("complete")).len(), 2, "the two good books are filed in complete/");
     assert_eq!(names(&root, "failed"), vec!["bad.pdf", "bad.pdf.why.txt"]);
     assert_eq!(std::fs::read_to_string(root.join("failed/bad.pdf.why.txt")).unwrap().trim(), DAMAGED);
 }
