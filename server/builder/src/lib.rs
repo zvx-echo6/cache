@@ -4,6 +4,7 @@
 pub mod build;
 pub mod chunk;
 pub mod embed;
+pub mod embed_http;
 pub mod error;
 pub mod extract;
 pub mod incremental;
