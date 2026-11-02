@@ -407,7 +407,12 @@ pub(crate) fn match_snippet(searcher: &Searcher, query: &dyn Query, field: Field
     }
     let out = html::snippet_from_text(&text[from..], max);
     // the cut must not lose the last match; the fragment itself then (it fits by construction)
-    let tail = text[first_start.max(last_end.saturating_sub(40))..last_end].split_whitespace().collect::<Vec<_>>().join(" ");
+    // (the 40-byte look-back is moved up to a character boundary: the text has curly quotes, dashes and ligatures)
+    let mut t0 = first_start.max(last_end.saturating_sub(40));
+    while !text.is_char_boundary(t0) {
+        t0 += 1;
+    }
+    let tail = text[t0..last_end].split_whitespace().collect::<Vec<_>>().join(" ");
     if out.contains(&tail) {
         out
     } else {
@@ -1420,6 +1425,43 @@ mod tests {
         // no match: the start of the text
         let q = qp.parse_query("zebra").unwrap();
         assert_eq!(match_snippet(&searcher, &*q, f, &text, 200), html::snippet_from_text(&text, 200));
+    }
+
+
+    #[test]
+    fn the_match_snippet_never_cuts_inside_a_multibyte_character() {
+        use tantivy::schema::{Schema, TEXT};
+        use tantivy::{doc, Index};
+        let mut sb = Schema::builder();
+        let f = sb.add_text_field("text", TEXT);
+        let index = Index::create_in_ram(sb.build());
+        index.tokenizers().register("default", index::make_analyzer("en_stem"));
+        let qp = QueryParser::for_index(&index, vec![f]);
+        let q = qp.parse_query("water storage person emergency supplies").unwrap();
+        // curly quotes, dashes, ligatures and accents (2 to 3 bytes each) all around the matches, at every alignment
+        for pad in 0..8 {
+            let text = format!(
+                "{}\u{2019}Store one gallon of water per person per day\u{2014}a \u{201c}three-day\u{201d} supply \u{fb01}rst. {}\u{2022} Emergency supplies: store water\u{2019}s \u{e9}quivalent in the pantry\u{2026} {}",
+                "\u{e9}".repeat(pad),
+                "Keep the \u{2018}kit\u{2019} near the door \u{2013} and check it twice a year. ".repeat(12),
+                "Rotate stored water every six months \u{2014} then store more water per person. ".repeat(6)
+            );
+            let mut w = index.writer(15_000_000).unwrap();
+            w.add_document(doc!(f => text.as_str())).unwrap();
+            w.commit().unwrap();
+            drop(w);
+            let searcher = index.reader().unwrap().searcher();
+            // matches that follow a run of 3-byte characters closely (the 40 bytes before the last match end inside the run)
+            let text2 = format!("Water {}{}person {}", "\u{2019}".repeat(18 + pad / 3), " ".repeat(1 + pad % 3), "Filler words go on and on here. ".repeat(40));
+            for max in [60, 100, 200] {
+                let s = match_snippet(&searcher, &*q, f, &text2, max);
+                assert!(s.chars().count() <= max, "{s}");
+            }
+            for max in [60, 200, 400, 800] {
+                let s = match_snippet(&searcher, &*q, f, &text, max);
+                assert!(!s.is_empty() && s.chars().count() <= max, "pad {pad} max {max}: {s}");
+            }
+        }
     }
 
     #[test]

@@ -1032,10 +1032,7 @@ fn the_first_two_pdf_results_get_a_longer_snippet_and_the_third_stays_short() {
     };
     let texts: Vec<String> = ["Alpha", "Bravo", "Charlie"].iter().map(|w| body(w)).collect();
     for (k, t) in texts.iter().enumerate() {
-        assert!(
-            t.find("$250,000").unwrap() > 400 && t.chars().count() < 800,
-            "the answer is past the normal length"
-        );
+        assert!(t.find("$250,000").unwrap() > 400 && t.chars().count() < 800, "the answer is past the normal length");
         add_raw(
             id,
             json!({"path": format!("Guides/flood_{k}.pdf"), "title": format!("Flood Guide {}", ["One", "Two", "Three"][k]),
@@ -1071,6 +1068,58 @@ fn the_first_two_pdf_results_get_a_longer_snippet_and_the_third_stays_short() {
     let r = &s2["results"][0];
     if r["address"].as_str().unwrap().starts_with("zimpdf:") {
         assert!(r["snippet"].as_str().unwrap().chars().count() > 0);
+    }
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn text_with_curly_quotes_dashes_and_ligatures_around_the_matches_still_searches() {
+    // PDF text is full of 2- and 3-byte characters; the snippet code used to cut inside one and the tool answered "search failed"
+    let e = env("multibyte");
+    let s = open_session(&e.idx, UUID, None);
+    let id = s["session"].as_u64().unwrap();
+    let mut specs = Vec::new();
+    for k in 0..6usize {
+        let pad = "\u{2019}".repeat(12 + k);
+        let text = format!(
+            "{pad}Store water \u{2014} one gallon per person per day{}\u{2014}\u{201c}three days\u{201d}\u{2019}s supply of emergency supplies. {} Keep \u{fb01}rst\u{2011}aid items and the \u{2018}kit\u{2019} near the door. {}",
+            " ".repeat(k % 3),
+            "Check the pantry twice a year \u{2013} rotate cans and bottles. ".repeat(10),
+            "Water storage is easiest in sealed containers \u{2022} away from heat. ".repeat(10)
+        );
+        specs.push((format!("Guides/water_{k}.pdf"), text));
+    }
+    // and every alignment of a run of 3-byte characters between two matches (the shape that cut inside a character)
+    for k in 0..24usize {
+        let text = format!(
+            "Water {}{}person number{k} {}",
+            "\u{2019}".repeat(18 + k / 3),
+            " ".repeat(1 + k % 3),
+            format!("Filler words go on and on here, copy {k}. ").repeat(40)
+        );
+        specs.push((format!("Guides/run_{k}.pdf"), text));
+    }
+    for (path, text) in &specs {
+        add_raw(
+            id,
+            json!({"path": path, "title": path.rsplit('/').next().unwrap(), "pieces": [piece(0, text, 1, None)]}),
+        );
+    }
+    close(id);
+    finish(&e.idx, UUID);
+    let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
+    settle(h);
+    let r = call(unsafe { cs_search(h, cstr("water person").as_ptr(), cstr(r#"{"k":40}"#).as_ptr()) });
+    assert!(r["results"].as_array().unwrap().len() >= 10, "{r}");
+    for q in [
+        "water storage per person for emergency supplies",
+        "storing food for emergency kit",
+        "store water person supply pantry kit",
+    ] {
+        let c = cs_conversation_new();
+        let r = tool(h, c, "search", json!({"query": q}));
+        assert!(r.get("error").is_none() && r["content"].is_string(), "{q}: {r}");
+        unsafe { cs_conversation_free(c) };
     }
     unsafe { cs_close(h) };
 }
