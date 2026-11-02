@@ -480,6 +480,6 @@ fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_sam
         let ha = la.dense_search(&q, 1, 1, 200).unwrap();
         let hb = lb.dense_search(&q, 1, 1, 200).unwrap();
         assert_eq!(ha[0].address, hb[0].address, "top-1 differs for piece {i}");
-        assert_eq!(ha[0].snippet, pieces[i].text);
+        assert_eq!(ha[0].address, format!("lib:r3/{}", cache_builder::library::point_uuid("big", 1, i as u32)), "piece {i} is its own nearest");
     }
 }
