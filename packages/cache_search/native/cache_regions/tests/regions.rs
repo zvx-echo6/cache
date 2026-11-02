@@ -331,6 +331,28 @@ fn no_request_at_all_while_the_network_is_off() {
 }
 
 #[test]
+fn a_hold_pauses_the_region_downloads_but_not_a_stream() {
+    let srv = Server::start();
+    srv.publish("b1");
+    let t = Tmp::new("hold");
+    let e = engine(&t.0, &srv, json!({}));
+    call(&e, "plan", json!({"id": "a", "geometry": region_a()}));
+    assert_eq!(call(&e, "set_policy", json!({"hold": true})), json!({"ok": true}));
+    call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+    wait_state(&e, "a", "paused");
+    assert_eq!(call(&e, "status", json!({}))["paused"], "Paused");
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(region(&e, "a")["done_tiles"], 0, "nothing is fetched while held");
+    // A stream near a route still fetches (routing must work while the downloads are paused).
+    let s = call(&e, "stream", json!({"points": [[42.6, -113.9]], "timeout_ms": 5000}));
+    assert_eq!(s["ok"], true, "{s}");
+
+    call(&e, "set_policy", json!({"hold": false}));
+    wait_state(&e, "a", "ready");
+    assert_eq!(call(&e, "status", json!({}))["paused"], Value::Null);
+}
+
+#[test]
 fn a_fresh_device_offline_cannot_plan() {
     let srv = Server::start();
     srv.publish("b1");

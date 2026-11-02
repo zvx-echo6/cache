@@ -9,6 +9,8 @@ import '../screens/settings/widgets.dart' show GroupLabel;
 import '../theme.dart';
 import '../web/desktop_layout.dart';
 import 'browse_state.dart';
+import 'zim_dl.dart';
+import '../downloads/download_row.dart';
 import 'library_actions.dart';
 import 'opds.dart';
 import 'web/device_flows.dart';
@@ -405,74 +407,30 @@ class EntryTile extends StatelessWidget {
     final installed = browse.installedFor(entry);
     final installedRelease = installed == null ? null : browse.sources.originOf(installed)?.release;
     final newer = installed != null && installedRelease != null && installedRelease.compareTo(entry.release) < 0;
-    final detail = transfer == null
-        ? [if (entry.summary.isNotEmpty) entry.summary, formatBytes(entry.size)].join(' · ')
-        : switch (transfer.phase) {
-            TransferPhase.blockedByMobileData => 'Waiting for Wi-Fi',
-            TransferPhase.paused => 'Paused',
-            TransferPhase.failed => transfer.error ?? 'The download stopped',
-            TransferPhase.downloading => 'Downloading ${formatBytes(transfer.done)} of ${formatBytes(transfer.total)}',
-            _ => 'Downloading…',
-          };
-    final Widget action;
-    if (transfer != null) {
-      action = SizedBox(
-        width: 44,
-        height: 44,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: CircularProgressIndicator(strokeWidth: 2.5, value: transfer.phase == TransferPhase.downloading ? transfer.fraction : null),
-        ),
-      );
-    } else if (installed != null && !newer) {
-      action = RowBadge('On this device', color: k.ok);
-    } else {
-      action = IconButton(
-        key: ValueKey('download-${entry.id}'),
-        tooltip: newer ? 'Update ${entry.title}' : 'Download ${entry.title}',
-        onPressed: () => downloadZim(context, browse, entry, replaces: newer ? installed : null),
-        icon: Container(
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: k.accent, width: 1.5)),
-          child: Icon(newer ? Icons.system_update_alt : Icons.download, size: 17, color: k.accent),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Material(
-        color: k.surface,
-        borderRadius: BorderRadius.circular(14),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 52),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
-            child: Row(
-              children: [
-                _icon(k),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(entry.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: k.text)),
-                      Text(
-                        detail,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 12, color: transfer?.phase == TransferPhase.failed ? k.warning : k.secondary),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 4),
-                action,
-              ],
+    final s = zimDl(transfer, size: entry.size);
+    // An entry on its way is in the download pattern; one on this device, or not yet downloaded, keeps its own badge and button.
+    final Widget idleAction = installed != null && !newer
+        ? RowBadge('On this device', color: k.ok)
+        : IconButton(
+            key: ValueKey('download-${entry.id}'),
+            tooltip: newer ? 'Update ${entry.title}' : 'Download ${entry.title}',
+            onPressed: () => downloadZim(context, browse, entry, replaces: newer ? installed : null),
+            icon: Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: k.accent, width: 1.5)),
+              child: Icon(newer ? Icons.system_update_alt : Icons.download, size: 17, color: k.accent),
             ),
-          ),
-        ),
-      ),
+          );
+    return DownloadRow(
+      key: ValueKey('entry-${entry.id}'),
+      keyBase: 'entry-${entry.id}',
+      leading: _icon(k),
+      title: entry.title,
+      state: s,
+      actions: zimActions(context, browse, entry, download: installed != null && !newer ? null : () => downloadZim(context, browse, entry, replaces: newer ? installed : null)),
+      idleLine: [if (entry.summary.isNotEmpty) entry.summary, formatBytes(entry.size)].join(' · '),
+      idleAction: idleAction,
     );
   }
 

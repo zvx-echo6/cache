@@ -22,7 +22,9 @@ String partsSentence({bool map = false, bool routing = false, bool places = fals
 String sizeWords(int? bytes) => bytes == null ? 'Size unknown' : formatBytes(bytes);
 
 /// Says [text] at the bottom of the screen, with [action] when given: a button's result is always shown at once.
+/// A screen that has closed meanwhile (the answer came after it went) is told nothing.
 void tell(ScaffoldMessengerState m, String text, {SnackBarAction? action}) {
+  if (!m.mounted) return;
   m.hideCurrentSnackBar();
   m.showSnackBar(SnackBar(content: Text(text), action: action));
 }
