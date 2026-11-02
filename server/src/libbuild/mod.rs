@@ -388,6 +388,18 @@ fn make_library_id(title: &str) -> String {
 }
 
 
+/// The reader child: this program as `extract-pdf`. In the unit tests this program is the test binary, which has no such command, so
+/// there it is the binary run on `tests::extract_child_entry`, which acts as the child (every test goes through a real child process).
+fn default_extractor(tmp: PathBuf) -> ChildExtractor {
+    let mut e = ChildExtractor::current_exe(tmp);
+    #[cfg(test)]
+    {
+        e.args = ["--exact", "libbuild::tests::extract_child_entry", "--nocapture", "--test-threads=1"].iter().map(Into::into).collect();
+        e.env = vec![("CACHE_TEST_EXTRACT_CHILD".into(), "1".into())];
+    }
+    e
+}
+
 /// A book that was mid-attempt when the service died this many times is not tried again.
 const MAX_ATTEMPTS: u32 = 2;
 const CRASH_LOOP_MSG: &str = "Cache stopped unexpectedly twice while building this book, so it was set aside. The PDF may be damaged.";
@@ -472,7 +484,7 @@ impl BuildService {
             rt: Mutex::new(tokio::runtime::Handle::try_current().ok()),
             drop,
             stopping: AtomicBool::new(false),
-            extractor: Mutex::new(ChildExtractor::current_exe(data_for_tmp)),
+            extractor: Mutex::new(default_extractor(data_for_tmp)),
         });
         svc.recover();
         svc.save_queue();

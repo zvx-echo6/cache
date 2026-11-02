@@ -855,10 +855,9 @@ fn extract_child_entry() {
     std::process::exit(cache_builder::isolate::child_main());
 }
 
+/// Set the reader's fault and time limit (the reader itself is the default one, see `default_extractor`).
 fn child_reader(svc: &BuildService, fault: Option<&str>, timeout: Option<Duration>) {
-    let mut e = ChildExtractor::current_exe(svc.data.join("build/tmp"));
-    e.args = ["--exact", "libbuild::tests::extract_child_entry", "--nocapture", "--test-threads=1"].iter().map(Into::into).collect();
-    e.env = vec![("CACHE_TEST_EXTRACT_CHILD".into(), "1".into())];
+    let mut e = lock(&svc.extractor).clone();
     e.fault = fault.map(String::from);
     e.timeout = timeout;
     svc.set_extractor(e);
