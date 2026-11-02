@@ -696,10 +696,51 @@ List<String> lsBlockTags(LsBlock b) {
 }
 
 /// [b] with `  cache-id:: <id>` after its own lines.
-String lsBlockWithId(LsBlock b, String id) {
+String lsBlockWithId(LsBlock b, String id) => _blockWith(b, '  cache-id:: $id\n');
+
+String _blockWith(LsBlock b, String line) {
   final end = _ownEnd(b);
   final own = [for (final l in b.lines.sublist(0, end)) l.endsWith('\n') ? l : '$l\n'];
-  return [...own, '  cache-id:: $id\n', ...b.lines.sublist(end)].join();
+  return [...own, line, ...b.lines.sublist(end)].join();
+}
+
+/// A block's first line as the person sees it, without tags and spacing: how Cache knows a block again once its id was
+/// taken out by hand (with or without its tag).
+String lsBlockKey(String firstLine) => firstLine
+    .replaceAll('\n', '')
+    .replaceFirst(RegExp(r'^-\s?'), '')
+    .replaceAll(_inlineTag, ' ')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
+
+/// [b] saying `cachesync:: off` (a block the person took Cache's id out of by hand); the rest byte for byte.
+String lsBlockWithOff(LsBlock b) {
+  if (lsSyncOff(lsBlockProps(b))) return b.text;
+  final props = lsBlockProps(b);
+  if (props.containsKey(kSyncOffProp)) return lsBlockReleased(b);
+  return _blockWith(b, '  $kSyncOffProp:: off\n');
+}
+
+/// A Logseq page saying `cachesync:: off` as its first property; the rest byte for byte.
+String lsPageWithOff(String text) {
+  final p = splitPage(text);
+  final props = lsProps(_lines(p.head));
+  if (lsSyncOff(props)) return text;
+  if (props.containsKey(kSyncOffProp)) return lsPageReleased(text);
+  return '$kSyncOffProp:: off\n$text';
+}
+
+/// An Obsidian note saying `cachesync: off` as its first property (a properties block made when it has none); the rest byte
+/// for byte. Null when its properties cannot be read.
+String? obsidianWithOff(String text) {
+  final t = text.replaceAll('\r\n', '\n');
+  if (obsidianSyncOff(t)) return t;
+  if (splitFrontMatter(t) == null) {
+    if (t.trimLeft().startsWith('---')) return null;
+    return '---\n$kSyncOffProp: off\n---\n$t';
+  }
+  if (splitFrontMatter(t)!.props.any((p) => p.$1 == kSyncOffProp)) return releasedObsidian(t);
+  return '---\n$kSyncOffProp: off\n${t.substring(4)}';
 }
 
 /// A block of the person's own Cache imported: its first line is the title, its other own lines (properties, more text) are

@@ -671,6 +671,8 @@ class NotebookSync {
       for (final e in _items.entries) if (_ignored.contains(e.value.path)) e.key,
     };
     final ids = {...cache.keys, ..._items.keys, ...outside.keys};
+    // Notes whose id the person took out by hand in this run: never imported as new (see below).
+    final held = <String>{};
     for (final id in ids) {
       if (_stopped.contains(id)) continue;
       if (open.contains(id)) {
@@ -693,7 +695,16 @@ class NotebookSync {
           continue;
         }
         if (f == null && await _takenOver(id, s)) {
-          // The note is there but the person took Cache's id out of it: it is theirs again; the entry stays in Cache.
+          // The note is there but the person took Cache's id out of it by hand: the same as Stop syncing. The note says
+          // `cachesync: off` (so it is not imported again, tag or not), the entry stays in Cache, unsynced. When the note
+          // cannot be written, nothing changes and the note is not imported either (no duplicate); the next sync tries again.
+          held.add(s.imp == 'block' ? '${s.path}\u0000${lsBlockKey(s.base.split('\n').first)}' : s.path);
+          try {
+            await _markOff(s);
+          } catch (e) {
+            debugPrint('cache notebook sync: could not mark ${s.path} ($e)');
+            continue;
+          }
           _items.remove(id);
           _stopped.add(id);
           continue;
@@ -785,6 +796,7 @@ class NotebookSync {
     }
     // Notes the person made with the import tag and no id: imported once, and Cache's id written into them.
     for (final u in candidates) {
+      if (held.contains(u.kind == 'block' ? '${u.path}\u0000${lsBlockKey(u.text.split('\n').first)}' : u.path)) continue;
       await _import(u, byName, r);
     }
     // New notes and blocks written outside (no id yet): read as new entries, and the id written into them (notebook sync only;
@@ -914,7 +926,7 @@ class NotebookSync {
     late final Notebook book;
     switch (u.kind) {
       case 'note':
-        if (cur != u.text) return; // changed while syncing: the next sync
+        if (cur != u.text || obsidianSyncOff(cur)) return; // changed while syncing: the next sync
         final t = withCacheId(cur, id);
         final probe = parseObsidian(cur, fallbackId: '', fallbackNotebook: '', fieldProps: const {}, fallbackWhen: now);
         if (t == null || probe == null) return;
@@ -932,7 +944,7 @@ class NotebookSync {
         unitText = t;
         doc = parseObsidian(t, fallbackId: id, fallbackNotebook: book.name, fieldProps: _propTypes(book), fallbackWhen: w0, userKeys: uk.toSet(), fallbackTitle: _baseName(u.path));
       case 'page':
-        if (cur != u.text) return;
+        if (cur != u.text || lsSyncOff(lsProps(splitPage(cur).head.split('\n')))) return;
         book = await _importBook(u.notebook, byName);
         w0 = now;
         newText = 'cache-id:: $id\n$cur';
@@ -1010,13 +1022,32 @@ class NotebookSync {
   }
 
   /// An imported note that is still there without Cache's id (the person took it out): a file or page at its place, a block
-  /// with its first line on its page.
+  /// with the same first line (tags aside) on its page.
   Future<bool> _takenOver(String id, _Item s) async {
     final cur = await folder.readText(s.path);
     if (cur == null) return false;
     if (s.imp != 'block') return true;
-    final first = s.base.split('\n').first;
-    return splitPage(cur).blocks.any((b) => b.lines.first.replaceAll('\n', '') == first);
+    final key = lsBlockKey(s.base.split('\n').first);
+    return splitPage(cur).blocks.any((b) => b.cacheId == null && lsBlockKey(b.lines.first) == key);
+  }
+
+  /// Writes `cachesync: off` into a note the person took Cache's id out of (its text and tags stay as they are).
+  Future<void> _markOff(_Item s) async {
+    final cur = await folder.readText(s.path);
+    if (cur == null) return;
+    final String? next;
+    switch (s.imp) {
+      case 'note':
+        next = obsidianWithOff(cur);
+      case 'page':
+        next = lsPageWithOff(cur);
+      default:
+        final key = lsBlockKey(s.base.split('\n').first);
+        final p = splitPage(cur);
+        final at = p.blocks.indexWhere((b) => b.cacheId == null && lsBlockKey(b.lines.first) == key);
+        next = at < 0 ? null : p.head + [for (var i = 0; i < p.blocks.length; i++) i == at ? lsBlockWithOff(p.blocks[i]) : p.blocks[i].text].join();
+    }
+    if (next != null && next != cur) await folder.writeText(s.path, next);
   }
 
   /// "Stop syncing this note" (an imported note): Cache's id goes out of the note, `cachesync: off` takes its place, and the

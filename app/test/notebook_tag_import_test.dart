@@ -362,7 +362,38 @@ void main() {
       expect(r.folder.text['Moved/B.md'], contains('cache_id: $id'));
     });
 
-    test('the person takes the id out by hand: the note is theirs again, never overwritten; the entry stays', () async {
+    test('Obsidian: the id taken out by hand, the tag kept: no duplicate; cachesync: off; the entry stops; deleting that line imports it anew', () async {
+      final r = _Rig(SyncKind.obsidian);
+      await r.journal();
+      r.folder.text['A.md'] = '---\ntags: [cachesync]\n---\nOne #cachesync\n';
+      await r.engine.run();
+      final id = _idIn(r.folder.text['A.md']!);
+      final before = r.entryCount;
+      // (a) only the id line removed: the tags stay
+      r.folder.text['A.md'] = '---\ntags: [cachesync]\n---\nOne, edited #cachesync\n';
+      var rep = await r.engine.run();
+      expect((rep.imported.length, rep.written, rep.read), (0, 0, 0));
+      expect(r.entryCount, before, reason: 'no duplicate');
+      expect(r.folder.text['A.md'], '---\ncachesync: off\ntags: [cachesync]\n---\nOne, edited #cachesync\n');
+      expect((await NotebookSync.links(r.state)).stopped, {id});
+      expect((await r.nb.entry(id))!.body, 'One #cachesync', reason: 'the entry stays as it was');
+      // stopped: a change in Cache stays in Cache; the next syncs change nothing
+      await r.edit(id, body: 'Changed in Cache');
+      rep = await r.engine.run();
+      expect((rep.imported.length, rep.written), (0, 0));
+      expect(r.folder.text['A.md'], '---\ncachesync: off\ntags: [cachesync]\n---\nOne, edited #cachesync\n');
+      // (c) the person deletes cachesync: off with the tag there: imported once, as a new entry
+      r.folder.text['A.md'] = '---\ntags: [cachesync]\n---\nOne, edited #cachesync\n';
+      rep = await r.engine.run();
+      expect(rep.imported, ['A']);
+      expect(r.entryCount, before + 1);
+      final again = _idIn(r.folder.text['A.md']!);
+      expect(again, isNot(id));
+      expect((await r.engine.run()).imported.length, 0);
+      expect(r.entryCount, before + 1);
+    });
+
+    test('Obsidian: the id and the tag both taken out by hand (no properties left): cachesync: off all the same; the text stays', () async {
       final r = _Rig(SyncKind.obsidian);
       await r.journal();
       r.folder.text['A.md'] = 'One #cachesync\n';
@@ -370,10 +401,14 @@ void main() {
       final id = _idIn(r.folder.text['A.md']!);
       r.folder.text['A.md'] = 'One, my own now\n';
       await r.engine.run();
+      expect(r.folder.text['A.md'], '---\ncachesync: off\n---\nOne, my own now\n');
+      expect((await NotebookSync.links(r.state)).stopped, {id});
       await r.edit(id, body: 'Changed in Cache');
       await r.engine.run();
-      expect(r.folder.text['A.md'], 'One, my own now\n');
-      expect((await NotebookSync.links(r.state)).stopped, {id});
+      expect(r.folder.text['A.md'], '---\ncachesync: off\n---\nOne, my own now\n');
+      // the tag added back with the line still there: never imported
+      r.folder.text['A.md'] = '---\ncachesync: off\n---\nOne, my own now #cachesync\n';
+      expect((await r.engine.run()).imported.length, 0);
     });
 
     test('a read-only note is not added (nothing is made in Cache) and is left as it is', () async {
@@ -482,6 +517,58 @@ void main() {
       await r.engine.run();
       expect(r.folder.text['pages/Trip.md'], '- Tent #[[cachesync/Camping trip]]\n  private:: true\n  cachesync:: off\n\t- stakes\n');
       expect((await r.engine.run()).imported, isEmpty);
+    });
+
+    test('Logseq: a block\'s id taken out by hand, tag kept or not: no duplicate; cachesync:: off; deleting it imports anew', () async {
+      final r = _Rig(SyncKind.logseq);
+      await r.journal();
+      const page = 'journals/2026_10_29.md';
+      const mine = '- My own note\n';
+      r.folder.text[page] = '$mine- Pack list #cachesync\n\t- water\n- Tent #cachesync\n\t- stakes\n';
+      await r.engine.run();
+      final ids = RegExp(r'cache-id:: (\S+)').allMatches(r.folder.text[page]!).map((m) => m.group(1)!).toList();
+      expect(ids.length, 2);
+      final before = r.entryCount;
+      // (a) the first block's id line removed, its tag kept; (b) the second's id line and tag removed
+      r.folder.text[page] = '$mine- Pack list #cachesync\n\t- water\n- Tent\n\t- stakes\n';
+      var rep = await r.engine.run();
+      expect((rep.imported.length, rep.written), (0, 0));
+      expect(r.entryCount, before);
+      expect(r.folder.text[page], '$mine- Pack list #cachesync\n  cachesync:: off\n\t- water\n- Tent\n  cachesync:: off\n\t- stakes\n');
+      final links = await NotebookSync.links(r.state);
+      expect(links.stopped, {...ids});
+      expect((await r.engine.run()).imported.length, 0);
+      // (c) cachesync:: off deleted with the tag there: imported once, as new
+      r.folder.text[page] = '$mine- Pack list #cachesync\n\t- water\n- Tent\n  cachesync:: off\n\t- stakes\n';
+      rep = await r.engine.run();
+      expect(rep.imported, ['Pack list #cachesync']);
+      expect(r.entryCount, before + 1);
+      expect((await r.engine.run()).imported.length, 0);
+    });
+
+    test('Logseq: a page\'s id taken out by hand, tag kept: no duplicate; cachesync:: off; deleting it imports anew', () async {
+      final r = _Rig(SyncKind.logseq);
+      await r.journal();
+      const path = 'pages/Gear list.md';
+      r.folder.text[path] = 'tags:: cachesync\n\n- Stove\n';
+      await r.engine.run();
+      final id = _idIn(r.folder.text[path]!);
+      final before = r.entryCount;
+      r.folder.text[path] = 'tags:: cachesync\n\n- Stove\n';
+      var rep = await r.engine.run();
+      expect((rep.imported.length, rep.written), (0, 0));
+      expect(r.entryCount, before);
+      expect(r.folder.text[path], 'cachesync:: off\ntags:: cachesync\n\n- Stove\n');
+      expect((await NotebookSync.links(r.state)).stopped, {id});
+      // (b) tag gone as well: the line stays, nothing else is written
+      r.folder.text[path] = 'cachesync:: off\n\n- Stove\n';
+      expect((await r.engine.run()).written, 0);
+      expect(r.folder.text[path], 'cachesync:: off\n\n- Stove\n');
+      // (c)
+      r.folder.text[path] = 'tags:: cachesync\n\n- Stove\n';
+      rep = await r.engine.run();
+      expect(rep.imported, ['Gear list']);
+      expect(r.entryCount, before + 1);
     });
 
     test('Logseq 2 (export only) never imports', () async {
