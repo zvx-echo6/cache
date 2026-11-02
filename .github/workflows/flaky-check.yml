@@ -1,0 +1,44 @@
+# Temporary (removed before merge): repeats the test files that failed intermittently, idle and under CPU load.
+name: Flaky check
+
+on:
+  push:
+    branches: [rel-30-regions]
+
+permissions:
+  contents: read
+
+jobs:
+  repeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      - name: Disk and the pop-up's storage
+        working-directory: app
+        run: |
+          df -h / /tmp
+          flutter test --no-pub test/zz_probe/space_probe_test.dart 2>&1 | grep PROBE
+      - name: Repeat 10 times, idle, then 10 times under CPU load
+        working-directory: app
+        run: |
+          FILES="test/regions_test.dart test/models_screen_test.dart test/search_model_ui_test.dart"
+          fails=0
+          for mode in idle load; do
+            if [ "$mode" = load ]; then for i in 1 2 3 4 5 6; do (timeout 3000 sh -c 'while :; do :; done' &) ; done; fi
+            for i in $(seq 1 10); do
+              if flutter test --no-pub $FILES > run.log 2>&1; then echo "$mode $i: pass"; else
+                fails=$((fails+1)); echo "$mode $i: FAIL"; grep -E "❌|Expected:|Actual:|\[E\]|FAILED" run.log | head -20; fi
+            done
+          done
+          pkill -f 'while :; do :; done' || true
+          echo "failures: $fails of 20"
+          [ "$fails" = 0 ]
