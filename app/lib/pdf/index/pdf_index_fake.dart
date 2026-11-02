@@ -226,6 +226,7 @@ class _FakeFinish implements PdfFinishJob {
       final pieces = done.fold(0, (s, l) => s + (int.tryParse(l.split('\t').last) ?? 0));
       final tmp = Directory('${paths.root.path}/.publish-$buildId')..createSync(recursive: true);
       final seg = File('${tmp.path}/segment.bin')..writeAsStringSync(done.join('\n'));
+      final segBytes = seg.lengthSync();
       File('${tmp.path}/manifest.json').writeAsStringSync(jsonEncode({
         'kind': 'zim-pdf',
         'zim_uuid': meta['zim_uuid'],
@@ -237,7 +238,7 @@ class _FakeFinish implements PdfFinishJob {
         'pieces': pieces,
         'skipped': skipped.length,
         'files': [
-          {'path': 'segment.bin', 'size': seg.lengthSync(), 'sha256': 'fake'},
+          {'path': 'segment.bin', 'size': segBytes, 'sha256': 'fake'},
         ],
       }));
       paths.snaps.createSync(recursive: true);
@@ -248,7 +249,7 @@ class _FakeFinish implements PdfFinishJob {
         phase: 'publish',
         done: core.finishSteps,
         total: core.finishSteps,
-        result: {'pdfs': done.length, 'pieces': pieces, 'skipped': skipped.length, 'bytes': seg.lengthSync(), 'snapshot': buildId},
+        result: {'pdfs': done.length, 'pieces': pieces, 'skipped': skipped.length, 'bytes': segBytes, 'snapshot': buildId},
       );
     } catch (e) {
       _p = PdfFinishProgress(state: PdfFinishState.failed, error: '$e');
