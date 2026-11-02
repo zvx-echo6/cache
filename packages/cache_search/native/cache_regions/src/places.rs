@@ -643,7 +643,7 @@ impl Inner {
         std::thread::scope(|sc| {
             for _ in 0..POOL {
                 sc.spawn(|| loop {
-                    if !self.may_use_network() || lock(&later).is_some() {
+                    if !self.downloads_go() || lock(&later).is_some() {
                         break;
                     }
                     let Some(t) = lock(&queue).next() else { break };

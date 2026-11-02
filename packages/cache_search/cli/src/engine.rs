@@ -238,6 +238,12 @@ impl Core {
         }));
     }
 
+    /// The guide gate score of a query vector (see `Handle::guide_gate_score`).
+    pub fn guide_gate_score(&mut self, model: &str, vector: &[f32]) -> Option<f32> {
+        // SAFETY: `self.h` is the live handle `cs_open` returned and `&mut self` is the only user of it.
+        unsafe { &mut *self.h }.guide_gate_score(model, vector)
+    }
+
     pub fn layers_list(&mut self) -> Result<String, ApiError> {
         let p = unsafe { cs_layers_list(self.h) };
         self.result(p)
@@ -636,6 +642,18 @@ impl Engine {
             None => Ok(end.progress),
             Some(e) => Err(e),
         }
+    }
+
+    /// The guide gate score of `query`, embedded with the engine's embedder. None when there is no guide library.
+    pub fn guide_gate(&mut self, query: &str) -> Result<Option<f32>, ApiError> {
+        let Some(emb) = &self.embedder else {
+            return Err(ApiError::new("not_configured", "guide-gate needs the embedder (--embed-lib and --embed-model)"));
+        };
+        let (model, v) = {
+            let emb = emb.lock().map_err(|_| ApiError::new("internal", "the embedder lock is poisoned"))?;
+            (emb.model_id.clone(), emb.embed(query)?)
+        };
+        Ok(self.core.guide_gate_score(&model, &v))
     }
 
     /// `cs_search`. When an embedder is configured and `options` has no `query_vector`, the query is embedded and

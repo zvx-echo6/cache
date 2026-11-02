@@ -75,9 +75,9 @@ On the Models screen (tap the model name in "Ask", then "Manage models"):
 
 The search model (605 MB) lets Cache search by meaning.
 
-- "Next: Search model, 605 MB": it downloads after the current model.
+- "Waiting for [name] to finish": the search model starts when that download is done.
 - "Also downloads: Search model, 605 MB": it comes with the model you're downloading.
-- "Search model: download stopped ([reason])": in the download bar on the Models screen, tap "Try again". If the reason is mobile data, connect to Wi-Fi first.
+- The search model's row on the Models screen says Stopped, with the reason: tap "Resume". If it says "Waiting for Wi-Fi", connect to Wi-Fi or tap "Download now".
 - "Meaning search needs the model [name].": shown under search results in the reader when a library wants a different model. It has no button. Cache can't download that model and searches by keywords.
 - "Matching words only: the meaning search is not available": places search by words only.
 
@@ -122,7 +122,27 @@ Seen while a Library item downloads. After most, tap "Try again". It continues w
 - "That file is no longer on the download server.": search the catalogue again.
 - "The download server answered [code].", "The download server did not say how big the file is.", "The download server redirected too many times.", "The download server sent a redirect with no address." or "The download server continued from the wrong place. Try again.": try later.
 - "Could not write the file: [reason]": check free space.
-- "Could not finish the download: [reason]" or "The download failed.": tap "Try again".
+- "Could not finish the download: [reason]": tap "Try again".
+
+## Download status messages
+
+Models, regions, Library items and videos show their progress the same way.
+
+- "Starting…": you tapped it and it has not begun yet.
+- "1.7 of 4.6 GB · 6.2 MB/s · about 8 min left": the size so far, the speed and the time left. The speed and time appear after about 5 seconds. The time reads "less than a minute", "about 8 min" or "about 2 hr". If the size is not known, the line reads "1.7 GB so far".
+- "Pausing…": it is stopping because you asked.
+- "Paused", then how much is downloaded and the full size: tap "Resume" to carry on.
+- "Stopped: [reason] · [done] of [total]": the reason is "no connection", "this device is full", "server did not answer" or "download was cut off". A model that needs an account says "this model needs a Hugging Face account". On a region the line ends with its places instead of the size. Fix the cause, then tap "Resume".
+- "Waiting for [name] to finish": it starts when that download is done.
+- "Waiting for Wi-Fi": it starts on Wi-Fi. Tap "Download now" to use mobile data.
+- "Checking the file…" and "Unpacking…": it has arrived. Cache is checking it and putting it in place.
+- "On this device · 4.6 GB": it is here and its size.
+
+A region shows its name and how much is done, for example Idaho and 41%, above its parts. A part that is done reads "Ready · 107 MB".
+
+Controls on a row: "Pause" while it downloads, "Resume" when it is paused or stopped, and "Remove" on a row that is paused, stopped or waiting. Press and hold a row for "Pause", "Resume" or "Remove download".
+
+"Remove" asks "Remove the 1.7 GB already downloaded?" Tap "Keep" to leave it, or "Remove" to delete it. "Removed." appears with "Undo".
 
 ## Reader messages
 
@@ -212,10 +232,9 @@ The message has a "Try again" button where it can.
 ## Region download messages
 
 On the "Local" tab, a region shows its parts. A part that is ready already works.
-- "Carry on": the download stopped. Tap it. A pop-up asks "Carry on with [region]?"
-- "Try again": a part couldn't finish. Tap it.
-- `Map stopped at 80%`: the map download stopped. Tap "Carry on".
-- "Couldn't finish": open the region and tap "Try again".
+- "Resume": the download stopped, or a part couldn't finish. Tap it.
+- `Map stopped at 80%`: the map download stopped. Tap "Resume".
+- "Couldn't finish": open the region and tap "Resume".
 - "Not on this device" with "Add": off-road isn't here. Tap "Add".
 - "Download anyway": goes ahead on mobile data.
 
@@ -379,7 +398,7 @@ In "Videos":
 
 - "Not enough free space on this device.": free space.
 - "The file did not arrive intact. Try again."
-- "Download stopped." or "The download failed.": tap "Continue download" (on the video) or "Continue" (in "Saved videos").
+- "Download stopped.": tap "Resume" (on the video or in "Saved videos").
 - "Wait for Wi-Fi": you're on mobile data and "Mobile data downloads" is off.
 - "This video has no file to download yet.": try later.
 - "This file can't be played.": try another size, or play it online.
@@ -487,11 +506,11 @@ Most downloads continue where they stopped. Fix the cause first: the connection 
 
 ![A region that stopped](shot:region-row)
 
-- Models: download the same file again on the Models screen.
+- Models: tap "Resume" on its row on the Models screen.
 - Regions: they continue by themselves, or tap the region's update button on the "Local" tab.
 - Library items: tap "Try again" in "Add to Library", or "Resume" on its row.
 - Libraries from a link: add the same link again.
-- Videos: tap "Continue download" or "Continue".
+- Videos: tap "Resume".
 
 ## An index still building
 

@@ -577,6 +577,7 @@ class CoreLayerEngine extends LayerEngine {
       ..phase = AreaPhase.running
       ..error = null
       ..interrupted = false
+      ..paused = false
       ..doneTiles = update ? 0 : a.doneTiles;
     _areaLayer[a.id] = (_entries[a.layerId]?['download_layer'] as String?) ?? a.layerId;
     _running[a.id] = _Run(a, job, update);
@@ -635,6 +636,16 @@ class CoreLayerEngine extends LayerEngine {
         await r.job.free();
       } catch (_) {}
       if (_disposed) return;
+      final pausedNow = _pausing.remove(a.id) && p.state == JobState.cancelled && !r.update;
+      if (pausedNow) {
+        // Paused: what it fetched stays, and so does the shape it was asked for, so Resume carries it on.
+        a
+          ..phase = AreaPhase.failed
+          ..error = null
+          ..paused = true;
+        reload = true;
+        continue;
+      }
       if (p.state == JobState.done || (p.state == JobState.cancelled && !r.update)) {
         // Finished, or a first download cancelled: nothing is left to carry on.
         if (_saved.remove(a.id) != null) await _storeSaved();
@@ -691,6 +702,17 @@ class CoreLayerEngine extends LayerEngine {
   Future<void> cancel(String areaId) async {
     final r = _running[areaId];
     if (r == null) return;
+    await r.job.cancel();
+    await r.done.future;
+  }
+
+  final Set<String> _pausing = {};
+
+  @override
+  Future<void> pause(String areaId) async {
+    final r = _running[areaId];
+    if (r == null || r.update) return cancel(areaId);
+    _pausing.add(areaId);
     await r.job.cancel();
     await r.done.future;
   }

@@ -407,8 +407,6 @@ class _LocalTabState extends State<LocalTab> {
       builder: (context, _) {
         final local = regions.local;
         return _list([
-          if (regions.paused != null && local.any((l) => l.phase == RegionPhase.downloading || l.phase == RegionPhase.paused))
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: statusText(context, [Part(regions.paused!, Tone.warn)], maxLines: 3)),
           SettingsGroup(
             rows: [
               if (local.isEmpty) const SettingsRow(title: 'Nothing downloaded yet', status: [Part('Pick a region under Downloads')]),

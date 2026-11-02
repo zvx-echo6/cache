@@ -59,7 +59,7 @@ This page lists your regions and your map layers.
 ![Settings, Maps](shot:settings-maps)
 
 1. Go to ["Settings" > "Maps"](cache://settings/maps).
-2. Under "Regions", each region on the device has one row. A downloading region shows its parts, for example `Map stopped at 80% · Places 40% · Off-road waiting`, with "Carry on".
+2. Under "Regions", each region on the device has one row. A downloading region shows its parts, for example `Map stopped at 80% · Places 40% · Off-road waiting`, with "Resume".
 3. Tap a region to open its page. Press and hold it for "Carry on", "Check for update" and "Delete".
 4. Tap "Download another region" to get more ("Directions, map, places and off-road for an area").
 5. Under "Layers", tap "Layers" for the full list. It shows how many layers exist, how many are on, and the space they use.

@@ -318,6 +318,9 @@ class DownloadedArea {
   /// fail.
   bool interrupted = false;
 
+  /// Paused by the person: stopped part way with what it fetched kept; Resume carries it on.
+  bool paused = false;
+
   /// When the tiles were fetched (updates restart it).
   DateTime? fetchedAt;
 

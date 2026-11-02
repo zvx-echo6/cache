@@ -72,6 +72,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_INDEX: u64 = 512 * 1024 * 1024;
 
 const NO_NETWORK: &str = "Paused: no network it may use";
+/// What `paused` says while the person has paused the downloads (`set_policy` `hold`).
+const HELD: &str = "Paused";
 
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -277,6 +279,9 @@ struct Inner {
     st: Mutex<State>,
     indexes: Mutex<HashMap<String, Arc<Index>>>,
     network: AtomicBool,
+    /// The person paused the downloads (`set_policy` `hold`): no region tiles are fetched; a stream (routing near a route, the
+    /// places around a search) still is.
+    held: AtomicBool,
     stop: AtomicBool,
     wake: (Mutex<bool>, Condvar),
     /// Last stream-cache use stamp handed out (milliseconds, made unique).
@@ -485,6 +490,11 @@ impl Inner {
     /// Every request checks this first: with the policy off, nothing goes out at all.
     fn may_use_network(&self) -> bool {
         self.network.load(Ordering::Relaxed) && !self.stopped()
+    }
+
+    /// Whether the region downloads may run now: the network may be used and the person has not paused them.
+    pub(crate) fn downloads_go(&self) -> bool {
+        self.may_use_network() && !self.held.load(Ordering::Relaxed)
     }
 
     fn poke(&self) {
@@ -826,6 +836,10 @@ impl Inner {
             st.paused = Some(NO_NETWORK.into());
             return Next::Wait(IDLE);
         }
+        if self.held.load(Ordering::Relaxed) {
+            st.paused = Some(HELD.into());
+            return Next::Wait(IDLE);
+        }
         let (need, name) = match &next {
             Next::Batch(b) | Next::Places(b) => (b.tiles.iter().map(|t| t.bytes).sum::<u64>(), b.name.clone()),
             _ => (0, String::new()),
@@ -847,7 +861,7 @@ impl Inner {
         std::thread::scope(|sc| {
             for _ in 0..POOL {
                 sc.spawn(|| loop {
-                    if !self.may_use_network() || later.lock().map(|l| l.is_some()).unwrap_or(true) {
+                    if !self.downloads_go() || later.lock().map(|l| l.is_some()).unwrap_or(true) {
                         break;
                     }
                     let Some(t) = queue.lock().ok().and_then(|mut q| q.next()) else { break };
@@ -1578,6 +1592,7 @@ impl Regions {
             st: Mutex::new(st),
             indexes: Mutex::new(HashMap::new()),
             network: AtomicBool::new(true),
+            held: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             wake: (Mutex::new(false), Condvar::new()),
             tick: AtomicU64::new(tick.unwrap_or(0).max(0) as u64),
@@ -1626,6 +1641,13 @@ impl Regions {
             "set_policy" => {
                 if let Some(n) = args.get("network").and_then(|v| v.as_bool()) {
                     inner.network.store(n, Ordering::Relaxed);
+                }
+                if let Some(h) = args.get("hold").and_then(|v| v.as_bool()) {
+                    inner.held.store(h, Ordering::Relaxed);
+                    let mut st = inner.st();
+                    if !h && st.paused.as_deref() == Some(HELD) {
+                        st.paused = None;
+                    }
                 }
                 if let Some(r) = args.get("reserve_bytes").and_then(|v| v.as_u64()) {
                     inner.reserve.store(r, Ordering::Relaxed);

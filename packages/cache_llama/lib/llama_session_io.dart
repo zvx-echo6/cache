@@ -105,7 +105,9 @@ class LlamaSession {
       if (_gens.containsKey(id)) stop();
     });
     _gens[id] = c;
-    _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request)});
+    // "max_tokens" caps what one request generates; the worker counts the tokens (the native request ignores the key).
+    final max = request['max_tokens'];
+    _toWorker!.send({'type': 'generate', 'id': id, 'request': jsonEncode(request), 'maxTokens': max is int && max > 0 ? max : null});
     return c.stream;
   }
 
@@ -197,11 +199,16 @@ void _workerMain(SendPort toMain) {
           toMain.send({'type': 'error', 'id': id, 'error': err.toDartString()});
           break;
         }
+        final maxTokens = msg['maxTokens'] as int?;
         var n = 0;
         while ((n = b.clNext(handle, tok, _kTokenBuf)) >= 0) {
-          if (n == 0) continue;
-          final pn = b.clPartial(handle, json, _kJsonBuf);
-          if (pn >= 0) toMain.send({'type': 'partial', 'id': id, 'json': json.toDartString()});
+          // The cap: the answer is what was generated up to it (cl_finish parses it as after a stop).
+          final capped = maxTokens != null && b.clGeneratedTokens(handle) >= maxTokens;
+          if (n > 0) {
+            final pn = b.clPartial(handle, json, _kJsonBuf);
+            if (pn >= 0) toMain.send({'type': 'partial', 'id': id, 'json': json.toDartString()});
+          }
+          if (capped) break;
         }
         if (n == -2) {
           toMain.send({'type': 'error', 'id': id, 'error': 'The model stopped with an error while answering'});
