@@ -185,6 +185,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('video-delete-yes')));
     await settle(tester);
+    await settle(tester);
+    await tester.pumpAndSettle();
     expect(v.saved, hasLength(2));
     expect(find.byType(VideoScreen), findsNothing, reason: 'its site is not on the list: nothing is left to show, back to the list');
     expect(find.text('Knots every camper should know'), findsNothing);
