@@ -159,6 +159,14 @@ void main() {
       );
     });
 
+    test('setSources passes the fields it takes again each time (indexes_dir)', () {
+      final n = FakeNative();
+      final e = SearchEngine.open(n, [_zim]);
+      e.setSources([_zim], extra: {'indexes_dir': '/d/shared-indexes'});
+      final last = n.calls.lastWhere((c) => c.startsWith('setSources:'));
+      expect(jsonDecode(last.substring('setSources:'.length))['indexes_dir'], '/d/shared-indexes');
+    });
+
     test('setSources raises on a negative result', () {
       final n = FakeNative();
       final e = SearchEngine.open(n, [_zim]);

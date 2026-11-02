@@ -36,9 +36,10 @@ class SearchEngine {
   /// {"version":..,"index_format":..}
   Map<String, dynamic> version() => _object(native.version() ?? '{}');
 
-  /// Replaces the source list (a ZIM was added or removed).
-  void setSources(List<SourceConfig> sources) {
-    if (native.setSources(_h, jsonEncode(openConfigJson(sources))) < 0) {
+  /// Replaces the source list (a ZIM was added or removed). [extra] are the config's other fields cs_set_sources takes again
+  /// each time (`indexes_dir`).
+  void setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: extra))) < 0) {
       throw CacheSearchException.fromJson(native.lastError(_h));
     }
   }
@@ -205,6 +206,26 @@ class SearchEngine {
     final n = native is CsNotebookNative ? native as CsNotebookNative : null;
     if (n == null || !n.hasNotebook) throw const CacheSearchException('unsupported', 'This build of the core has no Notebook yet');
     return _object(_ok(n.notebook(_h, op, jsonEncode(args))));
+  }
+
+  // ---- PDF indexes of ZIMs (cs_zim_pdfs, cs_pdfindex_*) ----
+
+  CsPdfNative _pdf() {
+    final n = native is CsPdfNative ? native as CsPdfNative : null;
+    if (n == null || !n.hasPdfIndex) throw const CacheSearchException('unsupported', 'This build of the core cannot index PDFs yet');
+    return n;
+  }
+
+  /// True when the loaded core has the PDF index calls.
+  bool get hasPdfIndex => native is CsPdfNative && (native as CsPdfNative).hasPdfIndex;
+
+  /// cs_zim_pdfs of the ZIM [zimId].
+  Map<String, dynamic> zimPdfs(String zimId) => _object(_ok(_pdf().zimPdfs(_h, zimId)));
+
+  /// One handle-less PDF call ([CsPdfNative.pdfIndex]): the build session, or `chunk` (cs_pdf_chunk).
+  Map<String, dynamic> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) {
+    final s = _pdf().pdfIndex(op, session: session, json: jsonEncode(args ?? const {}));
+    return _object(s ?? (throw CacheSearchException.fromJson(native.lastError(0))));
   }
 
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----

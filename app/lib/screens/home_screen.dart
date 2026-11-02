@@ -28,6 +28,7 @@ class HomeScreen extends StatefulWidget {
     required this.onOpenSettings,
     required this.onOpenShortcut,
     this.search,
+    this.searchFootnote,
     this.weather,
     this.onOpenWeather,
     this.turnOn,
@@ -62,6 +63,10 @@ class HomeScreen extends StatefulWidget {
 
   /// Searches every module as the person types; null searches nothing (the Ask row stays).
   final AppSearch? search;
+
+  /// One quiet line at the very bottom of the results, under the list, never above it (libraries whose PDFs are not searchable
+  /// yet); null shows none.
+  final Widget? searchFootnote;
 
   final LayoutState layout;
 
@@ -249,7 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-    return ClipRRect(
+    final list = ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -291,6 +296,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+    final note = widget.searchFootnote;
+    if (note == null || results == null) return list;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [list, note]);
   }
 
   /// Search only, and nothing found: says so, and under it, small, the way to answers in words.

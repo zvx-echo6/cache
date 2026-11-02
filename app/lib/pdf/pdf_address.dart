@@ -67,3 +67,13 @@ String pdfTitleOf(String pathOrName) {
   s = s.replaceAll('_', ' ').trim();
   return s.isEmpty ? 'PDF' : s;
 }
+
+/// A search hit in a ZIM's PDF index, `zimpdf:<uuid>/<pdf path>@<piece>` (the core's address), as the PDF entry it is in,
+/// `zim:<uuid>/<pdf path>`; null for any other address.
+String? pdfEntryOfIndexHit(String address) {
+  if (!address.startsWith('zimpdf:')) return null;
+  final rest = address.substring('zimpdf:'.length);
+  final at = rest.lastIndexOf('@');
+  if (at <= 0) return null;
+  return 'zim:${rest.substring(0, at)}';
+}

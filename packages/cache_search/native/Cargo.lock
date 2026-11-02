@@ -838,6 +838,7 @@ version = "0.1.0"
 dependencies = [
  "cache_act",
  "cache_calc",
+ "cache_chunk",
  "cache_layers",
  "cache_live",
  "cache_navigate",
@@ -857,6 +858,7 @@ dependencies = [
  "segment",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "shard",
  "tantivy",
  "tar",

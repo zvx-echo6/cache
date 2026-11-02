@@ -271,6 +271,13 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
     ...?librarySources?.call(),
   ];
 
+  /// The fields of the core's config that cs_set_sources takes again each time: the indexes folder (a snapshot there is attached
+  /// to its source when the sources are set).
+  Map<String, dynamic> get _setSourcesExtra => {if (_extra['indexes_dir'] != null) 'indexes_dir': _extra['indexes_dir']};
+
+  /// What the core last said about every source.
+  Iterable<SourceStatus> get statuses => _status.values;
+
   /// What the core last said about the source at [path] (a ZIM file, or a library's shard folder), or null.
   SourceStatus? statusAt(String path) => _status[path];
 
@@ -408,7 +415,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       _scan();
       final core = _core;
       if (core == null) return;
-      await core.setSources(_configs());
+      await core.setSources(_configs(), extra: _setSourcesExtra);
       await _refreshPlaces(core);
       await _readStatus(core);
       _dropOrphanIndexes();
@@ -511,7 +518,7 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       final core = _core;
       if (finished && core != null) {
         // A source whose index was being built is picked up again when the list is set again.
-        await core.setSources(_configs());
+        await core.setSources(_configs(), extra: _setSourcesExtra);
         await _readStatus(core);
       }
     } catch (e) {

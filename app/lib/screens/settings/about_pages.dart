@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
+import '../../pdf/index/pdf_index_app.dart';
+import '../../pdf/index/pdf_timing.dart' show kPdfTimingSwitch, kPdfTimingCount;
+import '../../pdf/index/pdf_timing_ui.dart';
 import '../../settings/hub.dart';
 import '../../theme.dart';
 import '../../update/update_ui.dart';
@@ -107,6 +110,20 @@ class AboutPage extends StatelessWidget {
             ),
           ],
         ),
+        // Debug and developer builds only: never in a build people install.
+        if (kPdfTimingSwitch && (pdfIndexShared?.available ?? false))
+          SettingsGroup(
+            label: 'Developer',
+            rows: [
+              SettingsRow(
+                key: const ValueKey('pdf-timing'),
+                icon: Icons.timer_outlined,
+                title: 'Time PDF indexing',
+                status: const [Part('Indexes the first $kPdfTimingCount PDFs of a library and logs the speed')],
+                onTap: () => runPdfTimingFromSettings(context, pdfIndexShared!),
+              ),
+            ],
+          ),
       ],
     );
   }

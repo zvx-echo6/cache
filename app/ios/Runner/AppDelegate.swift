@@ -76,8 +76,21 @@ import workmanager_apple
       let level = device.batteryLevel
       let charging = device.batteryState == .charging || device.batteryState == .full
       let percent: Int = level < 0 ? -1 : Int((level * 100).rounded())
-      let answer: [String: Any] = ["percent": percent, "charging": charging]
+      // How warm the iPhone is: background index work eases off as it warms and pauses when severe (serious is "severe").
+      let thermal: String
+      switch ProcessInfo.processInfo.thermalState {
+      case .nominal: thermal = "nominal"
+      case .fair: thermal = "light"
+      case .serious: thermal = "severe"
+      case .critical: thermal = "critical"
+      @unknown default: thermal = "unknown"
+      }
+      let answer: [String: Any] = ["percent": percent, "charging": charging, "thermal": thermal]
       result(answer)
+    }
+    // The thermal state changed: the app reads it again at once (background index work eases off or pauses).
+    NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { _ in
+      battery.invokeMethod("changed", arguments: nil)
     }
   }
 }

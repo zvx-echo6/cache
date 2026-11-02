@@ -43,12 +43,23 @@ struct Shared {
     state: Mutex<(State, Option<Error>)>,
     /// Extra progress a kind reports (layer_download: bytes written); shown as "detail" when set.
     detail: Mutex<Option<Value>>,
+    /// The step a multi-step job is in (`pdfindex_finish`: merge, manifest, publish); shown as "phase" when set.
+    phase: Mutex<Option<String>>,
+    /// What a finished job returns (`pdfindex_finish`); shown as "result" when set.
+    result: Mutex<Option<Value>>,
 }
 
 impl Shared {
     fn set_progress(&self, d: u64, t: u64) {
         self.done.store(d, Ordering::SeqCst);
         self.total.store(t, Ordering::SeqCst);
+    }
+
+    fn set_phase(&self, phase: &str, d: u64, t: u64) {
+        if let Ok(mut g) = self.phase.lock() {
+            *g = Some(phase.to_string());
+        }
+        self.set_progress(d, t);
     }
 }
 
@@ -184,6 +195,7 @@ impl Job {
             "library_template" => Self::start_library_template(params_json),
             "video_download" => Self::start_video_download(params_json),
             "layer_download" => Self::start_layer_download(params_json),
+            "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -206,6 +218,22 @@ impl Job {
                 &|d, t| sh.set_progress(d, t),
                 &|| sh.cancel.load(Ordering::SeqCst),
             )
+        })
+    }
+
+    /// Start a `pdfindex_finish` job: `{"zim_path"}`. Merges the ZIM's PDF index build to one segment, writes the snapshot with
+    /// its manifest (last) into a temporary folder and publishes it by one rename to `snap/<build-id>/` (see pdfbuild.rs).
+    /// `not_found` without a build, `busy` while a build session is open. Progress phases "merge", "manifest", "publish";
+    /// cancel is honoured until "publish"; the result is in the progress JSON as "result" when done.
+    fn start_pdfindex_finish(params_json: &str) -> Result<Job> {
+        let mut req = crate::pdfbuild::prepare_finish(params_json)?;
+        let lock = req.take_lock();
+        Self::spawn("cs-pdfindex-finish", lock, 1, move |sh| {
+            let (outcome, result) = crate::pdfbuild::finish(&req, &|ph, d, t| sh.set_phase(ph, d, t), &|| sh.cancel.load(Ordering::SeqCst))?;
+            if let (Some(r), Ok(mut g)) = (result, sh.result.lock()) {
+                *g = Some(r);
+            }
+            Ok(outcome)
         })
     }
 
@@ -417,6 +445,8 @@ impl Job {
             total: AtomicU64::new(total),
             state: Mutex::new((State::Running, None)),
             detail: Mutex::new(None),
+            phase: Mutex::new(None),
+            result: Mutex::new(None),
         });
         let sh = shared.clone();
         let th = std::thread::Builder::new()
@@ -462,6 +492,12 @@ impl Job {
         });
         if let Some(d) = self.shared.detail.lock().ok().and_then(|g| g.clone()) {
             v["detail"] = d;
+        }
+        if let Some(p) = self.shared.phase.lock().ok().and_then(|g| g.clone()) {
+            v["phase"] = json!(p);
+        }
+        if let Some(r) = self.shared.result.lock().ok().and_then(|g| g.clone()) {
+            v["result"] = r;
         }
         v.to_string()
     }

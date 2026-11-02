@@ -20,6 +20,8 @@ import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
+import '../pdf/index/pdf_index_app.dart';
+import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
@@ -166,6 +168,8 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    // PDF indexing's messages ("Another device finished this. Using its index.").
+    pdfIndexShared?.say = _sayIfMounted;
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
     widget.app.addListener(_onApp);
     _navEvents = widget.nav.events.listen((e) {
@@ -238,6 +242,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
@@ -503,6 +508,10 @@ class _ShellState extends State<Shell> {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WeatherPage(deps: _settingsDeps)));
   }
 
+  void _sayIfMounted(String text) {
+    if (mounted) _say(text);
+  }
+
   void _say(String text) {
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
@@ -662,6 +671,12 @@ class _ShellState extends State<Shell> {
     turnOn: _weatherTurnOn,
     setup: _setup,
     search: _search,
+    searchFootnote: pdfIndexShared == null
+        ? null
+        : PdfSearchNote(
+            state: pdfIndexShared!,
+            open: (z) => unawaited(showPdfPartSheet(context, pdfIndexShared!, z)),
+          ),
     onAsk: _askFromHome,
     askOn: _askOn,
     onChooseModel: () => openModels(context, widget.app),

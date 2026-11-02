@@ -52,6 +52,8 @@ import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
+import 'pdf/index/pdf_index_app.dart';
+import 'pdf/index/pdf_index_state.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
@@ -71,6 +73,12 @@ import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
+import 'settings/space.dart' show Space;
+import 'search/pdf_index_work.dart';
+import 'platform/battery.dart' show kBatteryChannel;
+import 'search/index_throttle.dart';
+import 'search/index_scheduler.dart';
+import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
@@ -143,6 +151,7 @@ class _CacheAppState extends State<CacheApp> {
     downloads: modelDownloads,
     modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
   );
+  late final PdfIndexState pdfIndex = appPdfIndex(sources: sources);
   late final MapsState maps = MapsState(
     engine: CoreLayerEngine(
       openCore: sources.whenCoreReady,
@@ -214,7 +223,7 @@ class _CacheAppState extends State<CacheApp> {
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
-      local: () => [sources.indexesDir],
+      local: () => [sources.indexesDir, _support(kIndexesDirName)],
       notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
@@ -276,7 +285,48 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: getApplicationSupportDirectory,
     deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
     kinds: dataKinds,
+    // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
+    // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
+    always: [
+      AlwaysShared(
+        id: kIndexesShareId,
+        name: 'Search indexes',
+        dir: () => _support(kIndexesDirName),
+        exclude: kIndexesNotShared,
+        localDeletes: kIndexesLocalDeletes,
+        last: kIndexesLast,
+      ),
+    ],
   );
+
+  /// The one scheduler of automatic index work (search/index_scheduler.dart): the core's builds and seals (behind
+  /// IndexCoreCalls.none until the core has index_source and index_seal) and the ZIMs' PDFs (the PDF state queues nothing by
+  /// itself: its autoStart is null). It runs while the app is open, with the battery and storage rules, against the storage of
+  /// the indexes folder.
+  /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person
+  /// using Cache and the model generating, applied to core jobs (cs_job_set) and to the PDF loop (indexPermit).
+  late final IndexThrottle indexThrottle = IndexThrottle(
+    mobile: Platform.isAndroid || Platform.isIOS,
+    speed: settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle,
+  );
+
+  late final IndexScheduler indexing = IndexScheduler(
+    throttle: indexThrottle,
+    sources: [
+      CoreIndexWork(IndexCoreCalls.none),
+      PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
+    ],
+    space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
+  );
+
+  void _kickIndexing() => unawaited(indexing.kick());
+
+  void _onChatForIndexing() => indexThrottle.setGenerating(chat.busy);
+
+  void _onSettingsForIndexing() => indexThrottle.setSpeed(settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle);
+
+  /// Tells sharing which indexes this device fetches: those of the sources the core has open.
+  void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
@@ -308,6 +358,7 @@ class _CacheAppState extends State<CacheApp> {
     weather: weather,
     sharing: sharing,
     regions: regions,
+    indexing: indexing,
     storage: StorageUsage(
       kinds: [for (final k in dataKinds) if (k.inStorage) k],
       freeIn: () => app.modelsDir ?? sources.zimsDir,
@@ -487,11 +538,28 @@ class _CacheAppState extends State<CacheApp> {
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
+    // Making a ZIM's PDFs searchable on this device.
+    pdfIndexShared = pdfIndex;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
-    _lifecycle = AppLifecycleListener(onResume: () {
-      unawaited(weather.updateIfDue(kBackgroundEvery));
-      unawaited(connections.syncAll());
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        unawaited(weather.updateIfDue(kBackgroundEvery));
+        unawaited(connections.syncAll());
+        indexing.setOpen(true);
+      },
+      // Automatic index work runs only while the app is open.
+      onHide: () => indexing.setOpen(false),
+    );
+    indexing.setOpen(true);
+    indexThrottleShared = indexThrottle;
+    // The model generating an answer pauses background index work; the speed setting applies at once.
+    chat.addListener(_onChatForIndexing);
+    settings.addListener(_onSettingsForIndexing);
+    // iOS says when the thermal state changes: read it at once.
+    kBatteryChannel.setMethodCallHandler((call) async {
+      if (call.method == 'changed') await indexThrottle.read(fresh: true);
+      return null;
     });
     if (kAppLockEnabled) appPin.init();
     applySystemUi(_applied);
@@ -551,11 +619,20 @@ class _CacheAppState extends State<CacheApp> {
     // What a device-to-device sync brings into the Library's folders shows in the Library list at once.
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
+      // A snapshot that came by sync is attached when the core is given its sources again.
+      if (ids.contains(kIndexesShareId)) {
+        unawaited(sources.refresh());
+        unawaited(indexing.kick());
+      }
     };
+    sources.addListener(_syncIndexesOnly);
+    // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
+    sources.addListener(_kickIndexing);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
     sources.init();
+    unawaited(pdfIndex.init());
     libraries.init();
     browse.init();
     video.init();
@@ -645,6 +722,13 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     browse.dispose();
     nav.dispose();
+    sources.removeListener(_syncIndexesOnly);
+    sources.removeListener(_kickIndexing);
+    chat.removeListener(_onChatForIndexing);
+    settings.removeListener(_onSettingsForIndexing);
+    indexing.dispose();
+    indexThrottle.dispose();
+    pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
     sources.dispose();
@@ -676,7 +760,14 @@ class _CacheAppState extends State<CacheApp> {
         builder: (context, child) => Stack(
           fit: StackFit.expand,
           children: [
-            child!,
+            // Any touch, scroll or wheel: the person is using Cache, background index work slows down meanwhile.
+            Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => indexThrottle.noteActivity(),
+              onPointerMove: (_) => indexThrottle.noteActivity(),
+              onPointerSignal: (_) => indexThrottle.noteActivity(),
+              child: child!,
+            ),
             IgnorePointer(
               ignoring: app.started && _coreDone,
               child: AnimatedOpacity(
