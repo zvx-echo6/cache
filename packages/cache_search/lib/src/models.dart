@@ -40,6 +40,7 @@ class SearchHit {
     required this.sourceKind,
     required this.sourceTitle,
     this.page,
+    this.pdfPage,
   });
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
@@ -51,6 +52,7 @@ class SearchHit {
         sourceTitle: (j['source_title'] ?? '') as String,
         // A PDF page's printed label may be text ("iv"): only a number is a page here.
         page: j['page'] is int ? j['page'] as int : null,
+        pdfPage: (j['pdf_page'] as num?)?.toInt(),
       );
 
   final String address;
@@ -60,6 +62,9 @@ class SearchHit {
   final String sourceKind;
   final String sourceTitle;
   final int? page;
+
+  /// For a passage of a ZIM's PDF ("zimpdf:" address): the real 1-based PDF page it is on ([page] is the printed label).
+  final int? pdfPage;
 
   /// The shape cs_format takes.
   Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};

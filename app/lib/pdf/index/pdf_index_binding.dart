@@ -65,8 +65,8 @@ class CorePdfIndex implements PdfIndexCore {
       PdfReused.fromJson(await _core.pdfIndex('reuse', session: session, args: {'path': path, 'sha256': sha256}));
 
   @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async =>
-      PdfAdded.fromJson(await _core.pdfIndex('add', session: session, args: {'path': path, 'title': title, 'pieces': pieces, 'size': ?size, 'sha256': ?sha256}));
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, List<Map<String, dynamic>>? pages, int? size, String? sha256}) async =>
+      PdfAdded.fromJson(await _core.pdfIndex('add', session: session, args: {'path': path, 'title': title, 'pieces': pieces, 'pages': ?pages, 'size': ?size, 'sha256': ?sha256}));
 
   @override
   Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256}) =>

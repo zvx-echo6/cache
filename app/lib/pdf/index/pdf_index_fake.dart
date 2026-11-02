@@ -76,6 +76,9 @@ class FakePdfIndexCore implements PdfIndexCore {
   /// The title each add was given, by path.
   final Map<String, String> titles = {};
 
+  /// The pages each add was given, by path.
+  final Map<String, List<Map<String, dynamic>>?> pagesAdded = {};
+
   final Map<int, _Session> _sessions = {};
   int _next = 1;
   int _builds = 0;
@@ -117,7 +120,10 @@ class FakePdfIndexCore implements PdfIndexCore {
         if (end == words.length) break;
       }
     }
-    return PdfChunks(pieces: pieces, emptyPages: empty, chunker: 1);
+    return PdfChunks(pieces: pieces, emptyPages: empty, chunker: 1, pages: [
+      for (final p in pages)
+        if (p.text.trim().isNotEmpty) {'pdf_page': p.index + 1, 'label': p.label ?? '', 'text': p.text},
+    ]);
   }
 
   @override
@@ -181,9 +187,10 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async {
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, List<Map<String, dynamic>>? pages, int? size, String? sha256}) async {
     calls.add('add:$path');
     titles[path] = title;
+    pagesAdded[path] = pages;
     final err = failAddWith;
     if (err != null) throw err;
     for (final p in pieces) {

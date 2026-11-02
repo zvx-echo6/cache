@@ -42,5 +42,8 @@ PdfChunks chunkPdfPages(List<PdfPageText> pages) {
     });
     if (end == words.length) break;
   }
-  return PdfChunks(pieces: pieces, emptyPages: empty);
+  return PdfChunks(pieces: pieces, emptyPages: empty, pages: [
+    for (final p in pages)
+      if (p.text.trim().isNotEmpty) {'pdf_page': p.index + 1, 'label': p.label ?? '', 'text': p.text},
+  ]);
 }

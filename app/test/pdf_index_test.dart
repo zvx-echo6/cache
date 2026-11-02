@@ -205,6 +205,15 @@ void main() {
       expect(cleanPdfTitle('12345'), '');
     });
 
+    test("each PDF's page texts go to the index with its pieces (a citation lands on its page; read gives the whole page)", () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      expect(await PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), readPages: readFakePdfPages).run(), PdfRunEnd.finished);
+      final pages = core.pagesAdded['A/one.pdf']!;
+      expect([for (final p in pages) p['pdf_page']], [1, 2]);
+      expect(pages[1]['text'], _words(30, 'fire'));
+      expect(core.pagesAdded['A/two.pdf']!.single['pdf_page'], 1);
+    });
+
     test('cancel discards the build', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
       late PdfIndexRun run;
