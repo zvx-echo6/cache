@@ -3,14 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
-
-/// The search core's calls for making a ZIM's PDFs searchable on this device (interface v1, 2026-11-02): the app drives the
-/// loop (it has pdfrx and the loaded search model), the core lists the PDFs, chunks the pages (the one implementation the
-/// server and the builder share) and owns the durable staging and the final atomic publish of `<zim name>.pdfindex/`.
+/// The search core's calls for making a ZIM's PDFs searchable on this device (interface v2, 2026-11-02): a keyword index, like
+/// all other ZIM content (no vectors, no search model). The app drives the loop (it has pdfrx); the core lists the PDFs, chunks
+/// the pages (the one cache_chunk the server and the builder share), owns the resumable build in `<zim name>.pdfindex/.build/`
+/// and publishes each finished index as an immutable snapshot, `<zim name>.pdfindex/snap/<build-id>/`, which syncs.
 ///
-/// [CorePdfIndex] binds these to the core's C calls once they are in it (branch core-pdf); until then the app runs on
-/// [PdfIndexCoreMissing] (the feature is not offered) and the tests and renders on [FakePdfIndexCore].
+/// The core-pdf binding implements this once the calls are in the core; until then the app runs on [PdfIndexCoreMissing] (the
+/// feature is not offered) and the tests and renders on FakePdfIndexCore.
 abstract class PdfIndexCore {
   /// False while the core has none of these calls: nothing about PDF indexing is shown.
   bool get available;
@@ -24,25 +23,36 @@ abstract class PdfIndexCore {
   /// The pieces of one PDF's pages (cs_pdf_chunk): about 200 words, never across a heading.
   Future<PdfChunks> chunk(List<PdfPageText> pages);
 
-  /// Opens or creates the ZIM's staging, `<zim dir>/<zim name>.pdfindex.partial/` (cs_pdfindex_open). A partial for another ZIM
-  /// version or another model is discarded by the core and started again.
-  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName, required String model});
+  /// Opens or creates the ZIM's build, `.pdfindex/.build/` (cs_pdfindex_open). A build for another ZIM version, format or
+  /// chunker is discarded by the core and started again.
+  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName});
 
-  /// Writes one PDF's pieces, each with its vector, then marks the PDF done (cs_pdfindex_add): all or nothing. The total of
-  /// pieces staged so far.
-  Future<int> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces});
+  /// Adds one PDF's text pieces, replacing any it had (cs_pdfindex_add). Durable in batches: the core commits about every 20
+  /// PDFs or 30 seconds and lists a path as done only after the commit that holds it.
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces});
 
   /// Marks a PDF that has nothing to index (cs_pdfindex_skip).
   Future<void> skip(int session, {required String path, required PdfSkipReason reason});
 
-  /// Closes the session; the partial stays for a resume (cs_pdfindex_close).
+  /// Commits and closes the session; the build stays for a resume (cs_pdfindex_close).
   Future<void> close(int session);
 
-  /// Deletes the partial (cs_pdfindex_discard).
+  /// Deletes the build (cs_pdfindex_discard).
   Future<void> discard(String zimPath);
 
-  /// Starts the publish job (cs_job_start "pdfindex_finish"): the partial becomes `<zim name>.pdfindex/` in one step.
+  /// Starts the publish job (cs_job_start "pdfindex_finish"): merge, manifest, then one rename to `snap/<build-id>/`.
   Future<PdfFinishJob> finish(String zimPath);
+}
+
+/// What cs_pdfindex_add answers: pieces in the build so far, and PDFs committed (a kill redoes the ones after that).
+class PdfAdded {
+  const PdfAdded({required this.pieces, required this.committed});
+
+  factory PdfAdded.fromJson(Map<String, dynamic> j) =>
+      PdfAdded(pieces: (j['pieces'] as num?)?.toInt() ?? 0, committed: (j['committed'] as num?)?.toInt() ?? 0);
+
+  final int pieces;
+  final int committed;
 }
 
 /// One PDF entry of a ZIM.
@@ -96,18 +106,21 @@ class PdfPageText {
   Map<String, dynamic> toJson() => {'index': index, 'text': text, 'label': ?label};
 }
 
-/// What cs_pdf_chunk answers. Each piece is kept as the core wrote it, so what goes back in cs_pdfindex_add is the core's own
-/// shape with only "vector" added.
+/// What cs_pdf_chunk answers. Each piece is kept as the core wrote it and goes back in cs_pdfindex_add unchanged.
 class PdfChunks {
-  const PdfChunks({required this.pieces, this.emptyPages = const []});
+  const PdfChunks({required this.pieces, this.emptyPages = const [], this.chunker});
 
   factory PdfChunks.fromJson(Map<String, dynamic> j) => PdfChunks(
     pieces: [for (final p in (j['pieces'] as List? ?? const [])) (p as Map).cast<String, dynamic>()],
     emptyPages: [for (final i in (j['empty_pages'] as List? ?? const [])) (i as num).toInt()],
+    chunker: j['chunker'],
   );
 
   final List<Map<String, dynamic>> pieces;
   final List<int> emptyPages;
+
+  /// The chunker's version (the build is started again when it changes).
+  final Object? chunker;
 }
 
 /// What cs_pdfindex_open answers: the session and what an earlier run already finished.
@@ -143,13 +156,13 @@ class PdfFinishProgress {
 
   final PdfFinishState state;
 
-  /// "optimize", "write" or "publish": cancellable until "publish".
+  /// "merge", "manifest" or "publish": cancellable until "publish".
   final String? phase;
   final int done;
   final int total;
   final String? error;
 
-  /// When done: {"pdfs","pieces","skipped","bytes"}.
+  /// When done: {"pdfs","pieces","skipped","bytes","snapshot"}.
   final Map<String, dynamic>? result;
 
   bool get cancellable => state == PdfFinishState.running && phase != 'publish';
@@ -179,9 +192,9 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   @override
   Future<PdfChunks> chunk(List<PdfPageText> pages) async => _no();
   @override
-  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName, required String model}) async => _no();
+  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName}) async => _no();
   @override
-  Future<int> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async => _no();
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async => _no();
   @override
   Future<void> skip(int session, {required String path, required PdfSkipReason reason}) async => _no();
   @override
@@ -192,9 +205,8 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   Future<PdfFinishJob> finish(String zimPath) async => _no();
 }
 
-/// The folders of one ZIM's PDF index, beside the ZIM: `<name>.pdfindex/` (the published index, which syncs),
-/// `<name>.pdfindex.partial/` (this device's staging) and `<name>.pdfindex.tmp/` (the publish in progress). The name is the ZIM's
-/// file name without ".zim".
+/// The folders of one ZIM's PDF index, beside the ZIM: `<name>.pdfindex/` holding `.build/` (this device's resumable build,
+/// never synced) and `snap/<build-id>/` (published snapshots, which sync). The name is the ZIM's file name without ".zim".
 class PdfIndexPaths {
   PdfIndexPaths(this.zimPath);
 
@@ -205,69 +217,83 @@ class PdfIndexPaths {
   /// The file name without ".zim": the `zim_name` the app gives cs_pdfindex_open.
   String get name => _stem.split(RegExp(r'[\\/]')).last;
 
-  Directory get index => Directory('$_stem.pdfindex');
-  Directory get partial => Directory('$_stem.pdfindex.partial');
-  Directory get tmp => Directory('$_stem.pdfindex.tmp');
+  Directory get root => Directory('$_stem.pdfindex');
+  Directory get build => Directory('${root.path}${Platform.pathSeparator}.build');
+  Directory get snaps => Directory('${root.path}${Platform.pathSeparator}snap');
 
-  /// Removes all three (the ZIM is gone).
+  /// Removes it all (the ZIM is gone).
   void deleteAll() {
-    for (final d in [index, partial, tmp]) {
-      try {
-        if (d.existsSync()) d.deleteSync(recursive: true);
-      } catch (_) {}
-    }
+    try {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    } catch (_) {}
+  }
+
+  /// The complete snapshots here: a manifest, and every file it lists present at its size (a snapshot still arriving by sync
+  /// is not one yet; the core checks the sha256 of each file before it uses one).
+  List<PdfSnapshot> snapshots() {
+    final out = <PdfSnapshot>[];
+    try {
+      if (!snaps.existsSync()) return out;
+      for (final d in snaps.listSync().whereType<Directory>()) {
+        final s = PdfSnapshot.read(d);
+        if (s != null) out.add(s);
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  /// The snapshot every device uses for ZIM version [zimUuid]: the earliest created, then the lowest build id.
+  PdfSnapshot? snapshotFor(String zimUuid) {
+    final all = snapshots().where((s) => s.zimUuid == zimUuid).toList()
+      ..sort((a, b) {
+        final c = a.created.compareTo(b.created);
+        return c != 0 ? c : a.id.compareTo(b.id);
+      });
+    return all.firstOrNull;
   }
 }
 
-/// The published index as this device finds it: which ZIM version it is for, how many PDFs it holds and skipped, and a
-/// fingerprint of its files (SHA256SUMS), by which the app tells an index it built from one that came from another device.
-class PdfIndexManifest {
-  const PdfIndexManifest({required this.zimUuid, required this.pdfs, required this.skipped, required this.fingerprint, this.paths = const {}});
+/// One published snapshot as this device finds it (its manifest.json).
+class PdfSnapshot {
+  const PdfSnapshot({required this.id, required this.zimUuid, required this.created, required this.pdfs, required this.skipped, this.pieces = 0});
 
+  /// The build id (the folder's name).
+  final String id;
   final String? zimUuid;
+  final String created;
   final int pdfs;
   final int skipped;
-  final String fingerprint;
+  final int pieces;
 
-  /// The PDFs it holds or skipped (documents.tsv and skipped.tsv), for "22 new".
-  final Set<String> paths;
-
-  /// Reads [dir]; null when there is no finished index there (no cache-library.json or no SHA256SUMS: a half-synced copy).
-  static PdfIndexManifest? read(Directory dir) {
+  static PdfSnapshot? read(Directory dir) {
     try {
-      final lib = File('${dir.path}/cache-library.json');
-      final sums = File('${dir.path}/SHA256SUMS');
-      if (!lib.existsSync() || !sums.existsSync()) return null;
-      final j = (jsonDecode(lib.readAsStringSync()) as Map).cast<String, dynamic>();
-      final docs = _firstColumn(File('${dir.path}/documents.tsv'));
-      final skipped = _firstColumn(File('${dir.path}/skipped.tsv'));
-      final s = sums.readAsStringSync();
-      return PdfIndexManifest(
-        zimUuid: (j['zim_uuid'] ?? (j['zim'] is Map ? (j['zim'] as Map)['uuid'] : null)) as String?,
-        pdfs: (j['pdfs'] as num?)?.toInt() ?? docs.length,
-        skipped: (j['skipped'] as num?)?.toInt() ?? skipped.length,
-        fingerprint: sha256.convert(utf8.encode(s)).toString(),
-        paths: {...docs, ...skipped},
+      final f = File('${dir.path}${Platform.pathSeparator}manifest.json');
+      if (!f.existsSync()) return null;
+      final j = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
+      for (final e in (j['files'] as List? ?? const [])) {
+        final m = (e as Map).cast<String, dynamic>();
+        final file = File('${dir.path}${Platform.pathSeparator}${(m['path'] as String).replaceAll('/', Platform.pathSeparator)}');
+        if (!file.existsSync() || file.lengthSync() != (m['size'] as num).toInt()) return null;
+      }
+      return PdfSnapshot(
+        id: dir.path.split(RegExp(r'[\\/]')).last,
+        zimUuid: j['zim_uuid'] as String?,
+        created: (j['created'] as String?) ?? '',
+        pdfs: (j['pdfs'] as num?)?.toInt() ?? 0,
+        skipped: (j['skipped'] as num?)?.toInt() ?? 0,
+        pieces: (j['pieces'] as num?)?.toInt() ?? 0,
       );
     } catch (_) {
       return null;
     }
   }
-
-  static Set<String> _firstColumn(File f) {
-    if (!f.existsSync()) return const {};
-    return {
-      for (final line in const LineSplitter().convert(f.readAsStringSync()))
-        if (line.trim().isNotEmpty && !line.startsWith('#')) line.split('\t').first,
-    };
-  }
 }
 
-/// What a ZIM folder (the `library` shared folder) holds that never syncs, as sync patterns (see DataKind.notShared). The
-/// published `<name>.pdfindex/` syncs: it holds the vectors, the expensive part, so a ZIM's PDFs are indexed once, on any device.
-/// Left out:
-/// - `*.pdfindex.partial`: this device's staging (a resume point only this device can use).
-/// - `*.pdfindex.tmp`: a publish in progress, renamed to `.pdfindex/` in one step when it is whole.
-/// - `*.pdfindex/index`: a keyword index the core may build inside the published index for itself, built on each device as a
-///   library's `index/` is.
-const List<String> kZimPdfIndexNotShared = ['*.pdfindex.partial', '*.pdfindex.tmp', '*.pdfindex/index'];
+/// What a ZIM folder (the `library` shared folder) holds that never syncs, as sync patterns (see DataKind.notShared): the
+/// working folders inside a PDF index (`.build/`, and the publish's temporary folder, which the core names with a leading dot).
+/// The published snapshots (`snap/<build-id>/`) sync, following the ZIM's own sync choice (the same shared folder).
+const List<String> kZimPdfIndexNotShared = ['*.pdfindex/.*'];
+
+/// Where deletes stay on each device (see DataKind.localDeletes): a snapshot each device cleans up for itself is never deleted
+/// on another device by sync.
+const List<String> kZimPdfIndexLocalDeletes = ['*.pdfindex/snap'];

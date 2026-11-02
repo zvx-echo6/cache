@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../downloads/download_row.dart';
 import '../../maps/ui/format.dart' show formatBytes, formatCount;
-import '../../models/search_model.dart' show kNeedsSearchModel;
 import '../../screens/download_confirm.dart' show openStorageForSpace;
 import '../../theme.dart';
 import 'pdf_index_run.dart';
@@ -31,7 +30,6 @@ String _of(PdfPart p, {bool unit = true}) => '${formatCount(p.handled)} of ${for
 /// Why a run stopped, in the plain words after "Stopped: ".
 String pdfStopWords(PdfRunFailure f) => switch (f.kind) {
   PdfRunFailureKind.full => 'this device is full',
-  PdfRunFailureKind.needsModel => 'needs the search model',
   PdfRunFailureKind.other => 'the library could not be read',
 };
 
@@ -85,7 +83,7 @@ DlState pdfDlState(PdfPart p) => switch (p.phase) {
 };
 
 /// What the start pop-up's button does.
-enum PdfConfirmChoice { start, freeSpace, getModel }
+enum PdfConfirmChoice { start, freeSpace }
 
 /// "Make 5,768 PDFs searchable?": what it does, the range measured on this device and the space, the advice to plug in, and
 /// that it is a guess. Not enough room: Start becomes "Free space" with what it needs and what is free.
@@ -108,9 +106,7 @@ class PdfIndexConfirm extends StatelessWidget {
     final n = formatCount(e.pdfs);
     final long = e.high > const Duration(hours: 2);
     final Widget button;
-    if (e.needsModel) {
-      button = FilledButton(key: const ValueKey('pdfindex-get-model'), onPressed: () => Navigator.pop(context, PdfConfirmChoice.getModel), child: const Text('Get search model'));
-    } else if (!e.fits) {
+    if (!e.fits) {
       button = FilledButton(key: const ValueKey('pdfindex-free-space'), onPressed: () => Navigator.pop(context, PdfConfirmChoice.freeSpace), child: const Text('Free space'));
     } else {
       button = FilledButton(key: const ValueKey('pdfindex-start'), onPressed: () => Navigator.pop(context, PdfConfirmChoice.start), child: const Text('Start'));
@@ -123,28 +119,23 @@ class PdfIndexConfirm extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text('Cache reads every PDF on this device.', style: body),
-          if (e.needsModel) ...[
+          const SizedBox(height: 6),
+          Text('${_cap(pdfRange(e.low, e.high))}. Uses about ${formatBytes(e.indexBytes)}.', key: const ValueKey('pdfindex-estimate'), style: body),
+          if (!e.fits) ...[
             const SizedBox(height: 6),
-            Text(kNeedsSearchModel, key: const ValueKey('pdfindex-needs-model'), style: TextStyle(fontSize: 15, height: 1.4, color: k.warning)),
-          ] else ...[
-            const SizedBox(height: 6),
-            Text('${_cap(pdfRange(e.low, e.high))}. Uses about ${formatBytes(e.indexBytes)}.', key: const ValueKey('pdfindex-estimate'), style: body),
-            if (!e.fits) ...[
-              const SizedBox(height: 6),
-              Text(
-                'Needs ${formatBytes(e.needBytes)}. ${formatBytes(e.usable ?? 0)} free.',
-                key: const ValueKey('pdfindex-short'),
-                style: TextStyle(fontSize: 15, height: 1.4, color: k.emergency),
-              ),
-            ],
-            const SizedBox(height: 6),
-            Text('Best while charging. You can pause any time.', style: body),
-            if (long) ...[const SizedBox(height: 6), Text('Plug in to go faster and save battery.', style: body)],
-            const SizedBox(height: 6),
-            Text('Keeps going while Cache is open.', style: body),
-            const SizedBox(height: 10),
-            Text('This is a guess until it has run a few minutes.', style: small),
+            Text(
+              'Needs ${formatBytes(e.needBytes)}. ${formatBytes(e.usable ?? 0)} free.',
+              key: const ValueKey('pdfindex-short'),
+              style: TextStyle(fontSize: 15, height: 1.4, color: k.emergency),
+            ),
           ],
+          const SizedBox(height: 6),
+          Text('Best while charging. You can pause any time.', style: body),
+          if (long) ...[const SizedBox(height: 6), Text('Plug in to go faster and save battery.', style: body)],
+          const SizedBox(height: 6),
+          Text('Keeps going while Cache is open.', style: body),
+          const SizedBox(height: 10),
+          Text('This is a guess until it has run a few minutes.', style: small),
         ],
       ),
       actions: [
@@ -182,8 +173,8 @@ void showPdfAutoStartSnack(ScaffoldMessengerState messenger, int pdfs, VoidCallb
   ..hideCurrentSnackBar()
   ..showSnackBar(SnackBar(content: Text('Making ${formatCount(pdfs)} PDFs searchable.'), action: SnackBarAction(label: 'Stop', onPressed: stop)));
 
-/// Makes [z]'s PDFs searchable: times a sample, asks with the start pop-up, then starts. [getModel] fetches the search model.
-Future<void> startPdfIndex(BuildContext context, PdfIndexState state, PdfZimRef z, {Future<void> Function()? getModel}) async {
+/// Makes [z]'s PDFs searchable: times a sample, asks with the start pop-up, then starts.
+Future<void> startPdfIndex(BuildContext context, PdfIndexState state, PdfZimRef z) async {
   final e = await state.measure(z);
   if (e == null || !context.mounted) return;
   final choice = await confirmPdfIndex(context, e);
@@ -193,8 +184,6 @@ Future<void> startPdfIndex(BuildContext context, PdfIndexState state, PdfZimRef 
       await state.start(z);
     case PdfConfirmChoice.freeSpace:
       openStorageForSpace?.call(context);
-    case PdfConfirmChoice.getModel:
-      await getModel?.call();
     case null:
       break;
   }
@@ -204,11 +193,10 @@ Future<void> startPdfIndex(BuildContext context, PdfIndexState state, PdfZimRef 
 /// line, and one control (Make searchable, Pause, Resume, Free space, Update search; none when done). Nothing when the library
 /// has no PDFs or this device cannot index them.
 class PdfIndexPartRow extends StatelessWidget {
-  const PdfIndexPartRow({super.key, required this.state, required this.zim, this.getModel});
+  const PdfIndexPartRow({super.key, required this.state, required this.zim});
 
   final PdfIndexState state;
   final PdfZimRef zim;
-  final Future<void> Function()? getModel;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -218,7 +206,7 @@ class PdfIndexPartRow extends StatelessWidget {
       if (p == null) return const SizedBox.shrink();
       return PdfPartView(
         part: p,
-        onStart: () => startPdfIndex(context, state, zim, getModel: getModel),
+        onStart: () => startPdfIndex(context, state, zim),
         onPause: () => state.pause(zim),
         onResume: () => state.start(zim),
         onRemove: () => state.remove(zim),
@@ -329,7 +317,7 @@ class _Bar extends StatelessWidget {
 }
 
 /// The PDFs part on a sheet of its own (where the line under search results leads).
-Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimRef zim, {Future<void> Function()? getModel}) =>
+Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimRef zim) =>
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -342,7 +330,7 @@ Future<void> showPdfPartSheet(BuildContext context, PdfIndexState state, PdfZimR
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
               child: Text(zim.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: ctx.t.text)),
             ),
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: PdfIndexPartRow(state: state, zim: zim, getModel: getModel)),
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: PdfIndexPartRow(state: state, zim: zim)),
             const SizedBox(height: 8),
           ],
         ),

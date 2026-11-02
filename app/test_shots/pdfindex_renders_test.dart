@@ -34,8 +34,8 @@ Future<void> _show(WidgetTester tester, Widget page, CacheThemeId theme, {Size s
 }
 
 const _idle = PdfPart(phase: PdfPartPhase.idle, total: 5768);
-const _running = PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 1204, range: (Duration(hours: 5), Duration(hours: 8)));
-const _live = PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 1251, timeLeft: Duration(hours: 5, minutes: 40));
+const _running = PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 1204, range: (Duration(hours: 2), Duration(hours: 3)));
+const _live = PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 1251, timeLeft: Duration(hours: 2, minutes: 20));
 const _starting = PdfPart(phase: PdfPartPhase.starting, total: 5768);
 const _pausedPerson = PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 1204, pause: PdfPause.person);
 const _pausedBattery = PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 1204, pause: PdfPause.battery);
@@ -160,10 +160,9 @@ void main() {
     });
 
     testWidgets('3: the start pop-up: range; not enough space (${_t(theme)})', (tester) async {
-      const ok = PdfEstimate(pdfs: 5768, low: Duration(hours: 5), high: Duration(hours: 8), indexBytes: 1288490189, needBytes: 2576980378, usable: 40 << 30);
-      const short = PdfEstimate(pdfs: 5768, low: Duration(hours: 5), high: Duration(hours: 8), indexBytes: 1288490189, needBytes: 2576980378, usable: 429496730);
-      const model = PdfEstimate(pdfs: 5768, low: Duration.zero, high: Duration.zero, indexBytes: 0, needBytes: 0, usable: 40 << 30, needsModel: true);
-      for (final (name, e) in [('3a-confirm-range', ok), ('3b-confirm-free-space', short), ('3c-confirm-needs-model', model)]) {
+      const ok = PdfEstimate(pdfs: 5768, low: Duration(hours: 2), high: Duration(hours: 4), indexBytes: 450 << 20, needBytes: 900 << 20, usable: 40 << 30);
+      const short = PdfEstimate(pdfs: 5768, low: Duration(hours: 2), high: Duration(hours: 4), indexBytes: 450 << 20, needBytes: 900 << 20, usable: 300 << 20);
+      for (final (name, e) in [('3a-confirm-range', ok), ('3b-confirm-free-space', short)]) {
         await _sheet(tester, _idle, theme);
         Navigator.of(tester.element(find.byType(ListView).first)).pop();
         await tester.pump(const Duration(milliseconds: 400));
@@ -193,7 +192,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       unawaited(confirmPdfIndex(
         tester.element(find.byType(ListView).first),
-        const PdfEstimate(pdfs: 5790, low: Duration(hours: 5), high: Duration(hours: 8), indexBytes: 1300000000, needBytes: 2600000000, usable: 40 << 30),
+        const PdfEstimate(pdfs: 5790, low: Duration(hours: 2), high: Duration(hours: 4), indexBytes: 452 << 20, needBytes: 904 << 20, usable: 40 << 30),
       ));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));

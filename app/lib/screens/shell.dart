@@ -20,7 +20,6 @@ import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
-import '../models/search_model.dart' show SearchModel;
 import '../pdf/index/pdf_index_app.dart';
 import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
@@ -598,7 +597,7 @@ class _ShellState extends State<Shell> {
               if (z == null) {
                 _goModule(ModuleId.library);
               } else {
-                unawaited(showPdfPartSheet(context, pdfIndexShared!, z, getModel: () async => SearchModel.shared?.ensure()));
+                unawaited(showPdfPartSheet(context, pdfIndexShared!, z));
               }
             },
           ),

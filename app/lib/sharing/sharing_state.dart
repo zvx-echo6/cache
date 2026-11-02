@@ -72,6 +72,7 @@ class SharingState extends ChangeNotifier {
         'dir': dir.path,
         'name': deviceName,
         'exclude': {for (final k in kinds) ...k.notShared},
+        'local_deletes': {for (final k in kinds) ...k.localDeletes},
       });
       await _applyPolicy();
       _net = policy.probe.changes.listen((_) async {

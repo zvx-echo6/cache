@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cache/pdf/index/battery.dart';
 import 'package:cache/pdf/index/pdf_index_core.dart';
@@ -6,13 +7,12 @@ import 'package:cache/pdf/index/pdf_index_fake.dart';
 import 'package:cache/pdf/index/pdf_index_run.dart';
 import 'package:cache/pdf/index/pdf_index_state.dart';
 import 'package:cache/pdf/index/pdf_index_ui.dart';
+import 'package:cache/pdf/index/pdf_pages.dart';
 import 'package:cache/pdf/index/pdf_timing.dart';
 import 'package:cache/settings/space.dart';
 import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-const _model = 'bge-m3-Q8_0.gguf';
 
 String _words(int n, [String w = 'water']) => List.filled(n, w).join(' ');
 
@@ -28,15 +28,14 @@ FakeZim _zim({String uuid = 'u1'}) => FakeZim(
   ],
 );
 
-/// The search model's stand-in: a 1024-float vector per piece, counting calls.
-class _Embed {
-  int calls = 0;
-  void Function(int calls)? onCall;
-  Future<(String, List<double>)?> call(String text) async {
-    calls++;
-    onCall?.call(calls);
-    return (_model, List<double>.filled(1024, 0.5));
-  }
+/// Reads pages as the fake does, and calls [onRead] with the count of PDFs read so far (to pause or cancel mid-run).
+PdfBytesReader _reader(void Function(int n) onRead) {
+  var n = 0;
+  return (Uint8List bytes, String name) async {
+    n++;
+    onRead(n);
+    return readFakePdfPages(bytes, name);
+  };
 }
 
 void main() {
@@ -53,10 +52,9 @@ void main() {
   Future<ZimPdfList> list(FakePdfIndexCore core) => core.zimPdfs('u1');
 
   group('the driver', () {
-    test('indexes every PDF with text, skips locked, damaged and textless ones, and publishes', () async {
+    test('indexes every PDF with text (text pieces, no vectors), skips locked, damaged and textless ones, and publishes a snapshot', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
-      final embed = _Embed();
-      final run = PdfIndexRun(core: core, embed: embed.call, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
+      final run = PdfIndexRun(core: core, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
       expect(await run.run(), PdfRunEnd.finished);
       expect(core.calls, [
         'open',
@@ -65,66 +63,82 @@ void main() {
         'skip:A/broken.pdf:damaged',
         'skip:A/scan.pdf:no_text',
         'add:A/two.pdf',
+        'commit',
         'close',
         'finish',
       ]);
       expect(run.done, 2);
       expect(run.skipped, 3);
-      // One piece of 200 words and one of the rest (40 words of overlap) on page 1, one on page 2, one for the second PDF.
-      expect(embed.calls, 4);
+      // Two pieces on page 1 (200 words, then the rest with 40 words of overlap), one on page 2, one for the second PDF.
+      expect(run.pieces, 4);
       final paths = PdfIndexPaths(zimPath);
-      expect(paths.partial.existsSync(), isFalse);
-      expect(paths.tmp.existsSync(), isFalse);
-      final m = PdfIndexManifest.read(paths.index)!;
-      expect(m.zimUuid, 'u1');
-      expect(m.pdfs, 2);
-      expect(m.skipped, 3);
-      expect(run.result?['pieces'], 4);
+      expect(paths.build.existsSync(), isFalse);
+      final snap = paths.snapshotFor('u1')!;
+      expect(snap.id, run.result?['snapshot']);
+      expect(snap.pdfs, 2);
+      expect(snap.skipped, 3);
+      expect(snap.pieces, 4);
+      // Only the snapshot is left in the index folder: no build, no temporary folder.
+      expect(paths.root.listSync().map((e) => e.path.split(Platform.pathSeparator).last), ['snap']);
     });
 
-    test('a pause keeps the partial; the next run starts from its done list and redoes only the PDF in hand', () async {
+    test('a pause keeps the build; the next run starts from the committed done list', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
-      final embed = _Embed();
       late PdfIndexRun run;
-      // Pause while the second PDF with text is being embedded: the first is done, that one is dropped.
-      embed.onCall = (n) {
-        if (n == 4) run.stop(PdfRunStop.person);
-      };
-      run = PdfIndexRun(core: core, embed: embed.call, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
+      // Pause while the last PDF is read: the four before it are added or skipped, and close commits them.
+      run = PdfIndexRun(core: core, zimPath: zimPath, list: await list(core), readPages: _reader((n) {
+        if (n == 5) run.stop(PdfRunStop.person);
+      }));
       expect(await run.run(), PdfRunEnd.paused);
-      expect(PdfIndexPaths(zimPath).partial.existsSync(), isTrue);
+      expect(PdfIndexPaths(zimPath).build.existsSync(), isTrue);
       expect(core.calls.where((c) => c.startsWith('add:')), ['add:A/one.pdf']);
-      expect(core.calls.last, 'close');
+      expect(core.calls.sublist(core.calls.length - 2), ['commit', 'close']);
 
       core.calls.clear();
-      embed.onCall = null;
-      final again = PdfIndexRun(core: core, embed: embed.call, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
+      final again = PdfIndexRun(core: core, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
       expect(await again.run(), PdfRunEnd.finished);
-      expect(core.calls, ['open', 'add:A/two.pdf', 'close', 'finish']);
+      expect(core.calls, ['open', 'add:A/two.pdf', 'commit', 'close', 'finish']);
       expect(again.done, 2);
       expect(again.skipped, 3);
     });
 
-    test('cancel discards the partial', () async {
+    test('a kill loses only the uncommitted batch: the next run redoes those PDFs', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()}, batch: 1);
+      final s = await core.open(zimPath: zimPath, zimUuid: 'u1', zimName: 'guide');
+      final added = await core.add(s.session, path: 'A/one.pdf', title: 'One', pieces: [
+        {'i': 0, 'text': 'water', 'page': '1', 'pdf_page': 1, 'heading_path': <String>[]},
+      ]);
+      expect(added.committed, 1);
+      await core.skip(s.session, path: 'A/locked.pdf', reason: PdfSkipReason.locked);
+      core.kill(s.session);
+      core.calls.clear();
+      final run = PdfIndexRun(core: core, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
+      expect(await run.run(), PdfRunEnd.finished);
+      // one.pdf was committed; the skip of locked.pdf was not, so it is read again.
+      expect(core.calls.where((c) => c.startsWith('add:') || c.startsWith('skip:')), [
+        'skip:A/locked.pdf:locked',
+        'skip:A/broken.pdf:damaged',
+        'skip:A/scan.pdf:no_text',
+        'add:A/two.pdf',
+      ]);
+    });
+
+    test('cancel discards the build', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
-      final embed = _Embed();
       late PdfIndexRun run;
-      embed.onCall = (n) {
+      run = PdfIndexRun(core: core, zimPath: zimPath, list: await list(core), readPages: _reader((n) {
         if (n == 2) run.stop(PdfRunStop.cancel);
-      };
-      run = PdfIndexRun(core: core, embed: embed.call, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
+      }));
       expect(await run.run(), PdfRunEnd.cancelled);
       expect(core.calls.last, 'discard');
-      expect(PdfIndexPaths(zimPath).partial.existsSync(), isFalse);
-      expect(PdfIndexPaths(zimPath).index.existsSync(), isFalse);
+      expect(PdfIndexPaths(zimPath).build.existsSync(), isFalse);
+      expect(PdfIndexPaths(zimPath).snapshots(), isEmpty);
     });
 
     test('a low battery on battery pauses; plugged in it does not', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
       final low = PdfIndexRun(
         core: core,
-        embed: _Embed().call,
-        model: _model,
         zimPath: zimPath,
         list: await list(core),
         readPages: readFakePdfPages,
@@ -134,8 +148,6 @@ void main() {
       expect(low.stopped, PdfRunStop.battery);
       final plugged = PdfIndexRun(
         core: core,
-        embed: _Embed().call,
-        model: _model,
         zimPath: zimPath,
         list: await list(core),
         readPages: readFakePdfPages,
@@ -144,28 +156,43 @@ void main() {
       expect(await plugged.run(), PdfRunEnd.finished);
     });
 
-    test('a full device stops with "this device is full"; the partial stays for a resume', () async {
+    test('a full device stops with "this device is full"; the build stays for a resume', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()}, failAddWith: const FileSystemException('write', 'x', OSError('No space left on device', 28)));
-      final run = PdfIndexRun(core: core, embed: _Embed().call, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
+      final run = PdfIndexRun(core: core, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
       expect(await run.run(), PdfRunEnd.failed);
       expect(run.failure?.kind, PdfRunFailureKind.full);
       expect(pdfStopWords(run.failure!), 'this device is full');
-      expect(PdfIndexPaths(zimPath).partial.existsSync(), isTrue);
+      expect(PdfIndexPaths(zimPath).build.existsSync(), isTrue);
+    });
+  });
+
+  group('snapshots', () {
+    void snapshot(String id, {required String uuid, required String created, bool whole = true}) {
+      final d = Directory('${PdfIndexPaths(zimPath).snaps.path}/$id')..createSync(recursive: true);
+      File('${d.path}/seg').writeAsStringSync(whole ? 'abcd' : 'ab');
+      File('${d.path}/manifest.json').writeAsStringSync(
+        '{"zim_uuid":"$uuid","created":"$created","pdfs":3,"pieces":9,"skipped":1,"files":[{"path":"seg","size":4,"sha256":"x"}]}',
+      );
+    }
+
+    test('every device picks the same one: the earliest created, then the lowest build id; a half-arrived one does not count', () {
+      snapshot('b2', uuid: 'u1', created: '2026-11-02T01:00:00Z');
+      snapshot('b1', uuid: 'u1', created: '2026-11-02T01:00:00Z');
+      snapshot('a0', uuid: 'u1', created: '2026-11-02T02:00:00Z');
+      snapshot('a1', uuid: 'u1', created: '2026-11-01T00:00:00Z', whole: false);
+      snapshot('c0', uuid: 'old', created: '2026-10-01T00:00:00Z');
+      final p = PdfIndexPaths(zimPath);
+      expect(p.snapshotFor('u1')?.id, 'b1');
+      expect(p.snapshotFor('old')?.id, 'c0');
+      expect(p.snapshotFor('none'), isNull);
+      expect(p.snapshots().map((s) => s.id).toSet(), {'b2', 'b1', 'a0', 'c0'});
     });
 
-    test('no search model: it stops and says so', () async {
-      final core = FakePdfIndexCore(zims: {'u1': _zim()});
-      final run = PdfIndexRun(core: core, embed: (_) async => null, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
-      expect(await run.run(), PdfRunEnd.failed);
-      expect(run.failure?.kind, PdfRunFailureKind.needsModel);
-    });
-
-    test('with no embed stage it builds a keyword-only index (no model, no vectors)', () async {
-      final core = FakePdfIndexCore(zims: {'u1': _zim()}, vectors: false);
-      final run = PdfIndexRun(core: core, embed: null, model: _model, zimPath: zimPath, list: await list(core), readPages: readFakePdfPages);
-      expect(await run.run(), PdfRunEnd.finished);
-      expect(run.done, 2);
-      expect(run.pieces, 4);
+    test('the folders sit beside the ZIM, named after its file', () {
+      final p = PdfIndexPaths('${dir.path}/wikimed_en_2026-10.zim');
+      String rel(Directory d) => d.path.substring(dir.path.length + 1).replaceAll(Platform.pathSeparator, '/');
+      expect([rel(p.root), rel(p.build), rel(p.snaps)], ['wikimed_en_2026-10.pdfindex', 'wikimed_en_2026-10.pdfindex/.build', 'wikimed_en_2026-10.pdfindex/snap']);
+      expect(p.name, 'wikimed_en_2026-10');
     });
   });
 
@@ -177,9 +204,6 @@ void main() {
     PdfIndexState make({PdfIndexCore? withCore}) => PdfIndexState(
       core: withCore ?? core,
       zims: () => zims,
-      embed: _Embed().call,
-      model: _model,
-      hasModel: () => true,
       recordFile: () async => File('${dir.path}/support/pdf-index.json'),
       readPages: readFakePdfPages,
       battery: null,
@@ -200,6 +224,13 @@ void main() {
       for (var i = 0; i < 400 && state.partOf(z)?.phase != phase; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 25));
       }
+    }
+
+    Future<void> renew() async {
+      final fresh = make();
+      await fresh.init();
+      state.dispose();
+      state = fresh;
     }
 
     setUp(() async {
@@ -234,61 +265,49 @@ void main() {
       expect(done.unreadable, 3);
       expect(state.pending(), isEmpty);
       // A new start of the app reads the same from its record.
-      final later = make();
-      await later.init();
-      state.dispose();
-      state = later;
+      await renew();
       expect((await settled(z))?.fromOtherDevice, isFalse);
     });
 
-    test('an index that arrived from another device is used at once', () async {
+    test('a snapshot that arrived from another device is used at once', () async {
       final z = zims.single;
       await settled(z);
-      // Another device built it (the same fake publish, then the folder arrives here by sync).
+      // Another device built it (the same fake publish), then its snap/<id>/ arrives here by sync.
       final elsewhere = Directory('${dir.path}/elsewhere')..createSync();
       final otherZim = '${elsewhere.path}/guide.zim';
       final other = FakePdfIndexCore(zims: {'u1': _zim()});
-      final run = PdfIndexRun(core: other, embed: _Embed().call, model: _model, zimPath: otherZim, list: await other.zimPdfs('u1'), readPages: readFakePdfPages);
+      final run = PdfIndexRun(core: other, zimPath: otherZim, list: await other.zimPdfs('u1'), readPages: readFakePdfPages);
       expect(await run.run(), PdfRunEnd.finished);
-      PdfIndexPaths(otherZim).index.renameSync(PdfIndexPaths(zimPath).index.path);
-      final fresh = make();
-      await fresh.init();
-      state.dispose();
-      state = fresh;
+      PdfIndexPaths(otherZim).root.renameSync(PdfIndexPaths(zimPath).root.path);
+      await renew();
       final p = (await settled(z))!;
       expect(p.phase, PdfPartPhase.done);
       expect(p.fromOtherDevice, isTrue);
       expect(pdfPartLine(p), 'Searchable · came from another device');
     });
 
-    test('a partial with no pause recorded was cut off: "Paused: Cache was closed"; Remove deletes it', () async {
+    test('a build with no pause recorded was cut off: "Paused: Cache was closed"; Remove deletes it', () async {
       final z = zims.single;
       await settled(z);
-      PdfIndexPaths(zimPath).partial.createSync();
+      PdfIndexPaths(zimPath).build.createSync(recursive: true);
       final p = state.partOf(z)!;
       expect(p.phase, PdfPartPhase.paused);
       expect(p.pause, PdfPause.closed);
       expect(pdfPartLine(p), startsWith('Paused: Cache was closed'));
       await state.remove(z);
-      expect(PdfIndexPaths(zimPath).partial.existsSync(), isFalse);
+      expect(PdfIndexPaths(zimPath).build.existsSync(), isFalse);
       expect(state.partOf(z)!.phase, PdfPartPhase.idle);
     });
 
-    test('an index for another ZIM version shows the new version and its new PDFs', () async {
+    test('a snapshot for another ZIM version only: the new version shows', () async {
       final z = zims.single;
       await settled(z);
-      final idx = PdfIndexPaths(zimPath).index..createSync();
-      File('${idx.path}/cache-library.json').writeAsStringSync('{"zim_uuid":"old","pdfs":2,"skipped":0}');
-      File('${idx.path}/documents.tsv').writeAsStringSync('A/one.pdf\t3\nA/two.pdf\t1\n');
-      File('${idx.path}/SHA256SUMS').writeAsStringSync('x\n');
-      final fresh = make();
-      await fresh.init();
-      state.dispose();
-      state = fresh;
+      final d = Directory('${PdfIndexPaths(zimPath).snaps.path}/old1')..createSync(recursive: true);
+      File('${d.path}/manifest.json').writeAsStringSync('{"zim_uuid":"old","created":"2026-10-01T00:00:00Z","pdfs":2,"skipped":0,"files":[]}');
+      await renew();
       final p = (await settled(z))!;
       expect(p.phase, PdfPartPhase.newVersion);
-      expect(p.newCount, 3);
-      expect(pdfPartLine(p), '5 PDFs · 3 new, not searchable yet');
+      expect(pdfPartLine(p), '5 PDFs · new version, not searchable yet');
     });
 
     test('the estimate is timed on this device and checked against the space and the reserve', () async {
@@ -296,11 +315,12 @@ void main() {
       await settled(z);
       final e = (await state.measure(z))!;
       expect(e.pdfs, 5);
-      expect(e.needsModel, isFalse);
       expect(e.high >= e.low, isTrue);
       expect(e.needBytes, e.indexBytes * 2);
       expect(e.fits, isTrue);
-      final tight = PdfEstimate(pdfs: 5, low: Duration.zero, high: Duration.zero, indexBytes: 600 << 20, needBytes: 1200 << 20, usable: 400 << 20);
+      // Timing stages nothing.
+      expect(core.calls.where((c) => c == 'open' || c.startsWith('add:')), isEmpty);
+      const tight = PdfEstimate(pdfs: 5, low: Duration.zero, high: Duration.zero, indexBytes: 600 << 20, needBytes: 1200 << 20, usable: 400 << 20);
       expect(tight.fits, isFalse);
     });
 
@@ -342,26 +362,26 @@ void main() {
     });
   });
 
-  test('the timing run logs pages/s, pieces/s and embed ms per piece, and stages nothing', () async {
+  test('the timing run logs pages/s and ms a PDF for extract, chunk and add, in a build it then discards', () async {
     final core = FakePdfIndexCore(zims: {'u1': _zim()});
-    final r = await runPdfTiming(
-      core: core,
-      embed: _Embed().call,
-      model: _model,
-      zimPath: zimPath,
-      list: await core.zimPdfs('u1'),
-      logDir: Directory('${dir.path}/logs'),
-      readPages: readFakePdfPages,
-      count: 3,
-    );
+    final r = await runPdfTiming(core: core, zimPath: zimPath, list: await core.zimPdfs('u1'), logDir: Directory('${dir.path}/logs'), readPages: readFakePdfPages, count: 3);
     expect(r.rows, hasLength(3));
-    expect(core.calls.where((c) => c == 'open' || c.startsWith('add:') || c == 'finish'), isEmpty);
+    expect(r.staged, isTrue);
+    expect(core.calls, ['open', 'add:A/one.pdf', 'skip:A/locked.pdf:locked', 'skip:A/broken.pdf:damaged', 'commit', 'close', 'discard']);
     final text = r.log.readAsStringSync();
     expect(text, contains('# pages_per_s'));
-    expect(text, contains('# pieces_per_s'));
-    expect(text, contains('# embed_ms_per_piece'));
+    expect(text, contains('# ms_per_pdf\tread\t'));
+    expect(text, contains('\tadd\t'));
     expect(text, contains('# whole_zim_extrapolated_hours'));
-    expect(PdfIndexPaths(zimPath).partial.existsSync(), isFalse);
+    expect(PdfIndexPaths(zimPath).build.existsSync(), isFalse);
+    expect(PdfIndexPaths(zimPath).snapshots(), isEmpty);
+    // A build in progress is left alone: nothing staged, add not timed.
+    PdfIndexPaths(zimPath).build.createSync(recursive: true);
+    core.calls.clear();
+    final r2 = await runPdfTiming(core: core, zimPath: zimPath, list: await core.zimPdfs('u1'), logDir: Directory('${dir.path}/logs'), readPages: readFakePdfPages, count: 2);
+    expect(r2.staged, isFalse);
+    expect(core.calls, isEmpty);
+    expect(PdfIndexPaths(zimPath).build.existsSync(), isTrue);
   });
 
   group('the part and the pop-up', () {

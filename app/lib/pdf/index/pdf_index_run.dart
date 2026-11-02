@@ -8,17 +8,13 @@ import 'battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_pages.dart';
 
-/// Embeds one piece with the app's loaded search model: its model id and vector, or null when the model is not on the device.
-/// The app passes SearchEmbedder.embed (the same bge-m3 copy the searches use; no second load).
-typedef PdfEmbed = Future<(String, List<double>)?> Function(String text);
-
 /// Why a run stopped before the end.
 enum PdfRunStop { none, person, battery, cancel, superseded }
 
 /// How a run ended.
 enum PdfRunEnd { finished, paused, cancelled, failed, superseded }
 
-enum PdfRunFailureKind { full, needsModel, other }
+enum PdfRunFailureKind { full, other }
 
 class PdfRunFailure {
   const PdfRunFailure(this.kind, [this.message]);
@@ -40,13 +36,12 @@ class PdfTimingRow {
   int extractMs = 0;
   int chunkMs = 0;
   int addMs = 0;
-  final List<int> embedMs = [];
   PdfSkipReason? skipped;
 
-  int get totalMs => readMs + extractMs + chunkMs + addMs + embedMs.fold(0, (s, v) => s + v);
+  int get totalMs => readMs + extractMs + chunkMs + addMs;
 }
 
-/// One PDF read, extracted, chunked and embedded: its pieces with their vectors, or why it is skipped.
+/// One PDF read, extracted and chunked: its text pieces, or why it is skipped.
 class _OnePdf {
   _OnePdf.pieces(this.pieces) : skip = null;
   _OnePdf.skip(this.skip) : pieces = const [];
@@ -64,15 +59,14 @@ class _Failed implements Exception {
   final PdfRunFailure failure;
 }
 
-/// The app side of indexing one ZIM's PDFs (interface v1): cs_pdfindex_open, then for each PDF not done yet read its bytes
-/// (the zim entry read), extract the pages (pdfrx), cs_pdf_chunk, embed each piece, cs_pdfindex_add (or cs_pdfindex_skip for no
-/// text, locked or damaged), then cs_pdfindex_close and the pdfindex_finish job. A kill loses at most the PDF in hand: the next
-/// run starts from cs_pdfindex_open's done list. [stop] pauses (the partial stays) or cancels (the partial is discarded).
+/// The app side of indexing one ZIM's PDFs (interface v2, keyword only): cs_pdfindex_open, then for each PDF not done yet read
+/// its bytes (the zim entry read), extract the pages (pdfrx), cs_pdf_chunk, cs_pdfindex_add with the text pieces (or
+/// cs_pdfindex_skip for no text, locked or damaged), then cs_pdfindex_close and the pdfindex_finish job. The core commits in
+/// batches, so a kill redoes at most the uncommitted batch: the next run starts from cs_pdfindex_open's done list. [stop] pauses
+/// (the build stays) or cancels (the build is discarded).
 class PdfIndexRun extends ChangeNotifier {
   PdfIndexRun({
     required this.core,
-    required this.embed,
-    required this.model,
     required this.zimPath,
     required this.list,
     this.readPages = readPdfPagesFromBytes,
@@ -80,17 +74,12 @@ class PdfIndexRun extends ChangeNotifier {
     this.batteryEvery = const Duration(minutes: 1),
     this.limit,
     this.stage = true,
+    this.publish = true,
     this.onTiming,
     DateTime Function()? clock,
   }) : clock = clock ?? DateTime.now;
 
   final PdfIndexCore core;
-
-  /// The embed stage, the one seam for vectors: null indexes the pieces as text only (a keyword-only index), with no model.
-  final PdfEmbed? embed;
-
-  /// The search model's id (its file name), given to cs_pdfindex_open: a partial made with another model starts again.
-  final String model;
   final String zimPath;
   final ZimPdfList list;
   final PdfBytesReader readPages;
@@ -100,14 +89,20 @@ class PdfIndexRun extends ChangeNotifier {
   /// Index at most this many PDFs (the debug timing run).
   final int? limit;
 
-  /// False for a timing run that stages nothing: every step but cs_pdfindex_add and the publish.
+  /// False for a timing run that stages nothing: every step but open, add and the publish.
   final bool stage;
+
+  /// False for the timing run that stages its PDFs (to time cs_pdfindex_add) but publishes nothing.
+  final bool publish;
   final void Function(PdfTimingRow row)? onTiming;
   final DateTime Function() clock;
 
   int done = 0;
   int skipped = 0;
   int pieces = 0;
+
+  /// PDFs the core has committed (cs_pdfindex_add's "committed"): what a kill keeps.
+  int committed = 0;
   int bytesDone = 0;
 
   /// What this run did itself (a resume counts from where it starts), for the speed.
@@ -183,10 +178,11 @@ class PdfIndexRun extends ChangeNotifier {
     try {
       var doneSet = <String>{};
       if (stage) {
-        final s = await core.open(zimPath: zimPath, zimUuid: list.zimUuid, zimName: PdfIndexPaths(zimPath).name, model: model);
+        final s = await core.open(zimPath: zimPath, zimUuid: list.zimUuid, zimName: PdfIndexPaths(zimPath).name);
         session = s.session;
         doneSet = {...s.done, ...s.skipped};
         pieces = s.pieces;
+        committed = s.done.length;
         for (final p in list.pdfs) {
           if (s.done.contains(p.path)) {
             done++;
@@ -222,7 +218,9 @@ class PdfIndexRun extends ChangeNotifier {
           skipped++;
         } else {
           if (session != null) {
-            pieces = await core.add(session, path: pdf.path, title: pdf.name, pieces: one.pieces);
+            final a = await core.add(session, path: pdf.path, title: pdf.name, pieces: one.pieces);
+            pieces = a.pieces;
+            committed = a.committed;
           } else {
             pieces += one.pieces.length;
           }
@@ -240,7 +238,7 @@ class PdfIndexRun extends ChangeNotifier {
         await core.close(session);
         session = null;
       }
-      if (!stage) return PdfRunEnd.finished;
+      if (!stage || !publish) return PdfRunEnd.finished;
       _checkStop();
       return await _finish();
     } on _Stopped {
@@ -344,23 +342,8 @@ class PdfIndexRun extends ChangeNotifier {
       row.skipped = PdfSkipReason.noText;
       return _OnePdf.skip(PdfSkipReason.noText);
     }
-    final embedder = embed;
-    if (embedder == null) {
-      row.pieces = chunks.pieces.length;
-      return _OnePdf.pieces(chunks.pieces);
-    }
-    final out = <Map<String, dynamic>>[];
-    for (final piece in chunks.pieces) {
-      _checkStop();
-      sw.reset();
-      final v = await embedder((piece['text'] as String?) ?? '');
-      row.embedMs.add(sw.elapsedMilliseconds);
-      if (v == null) throw const _Failed(PdfRunFailure(PdfRunFailureKind.needsModel));
-      if (v.$1 != model) throw _Failed(PdfRunFailure(PdfRunFailureKind.other, 'The search model changed (${v.$1}).'));
-      out.add({...piece, 'vector': v.$2});
-    }
-    row.pieces = out.length;
-    return _OnePdf.pieces(out);
+    row.pieces = chunks.pieces.length;
+    return _OnePdf.pieces(chunks.pieces);
   }
 }
 

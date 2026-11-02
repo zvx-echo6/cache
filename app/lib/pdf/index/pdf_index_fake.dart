@@ -16,7 +16,7 @@ class FakePdf {
   final bool locked;
   final bool damaged;
 
-  /// The bytes [readEntry] gives and [readFakePdfPages] reads back.
+  /// The bytes [FakePdfIndexCore.readEntry] gives and [readFakePdfPages] reads back.
   Uint8List get bytes => Uint8List.fromList(utf8.encode(locked ? 'LOCKED' : (damaged ? 'DAMAGED' : 'FAKEPDF\n${pages.join('\f')}')));
 }
 
@@ -28,7 +28,7 @@ class FakeZim {
   final List<FakePdf> pdfs;
 }
 
-/// Reads the pages of a [FakePdf]'s bytes, as [readPdfPages] reads a real PDF.
+/// Reads the pages of a [FakePdf]'s bytes, as readPdfPagesFromBytes reads a real PDF.
 Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name) async {
   final s = utf8.decode(bytes, allowMalformed: true);
   if (s == 'LOCKED') return const PdfPagesOutcome.locked();
@@ -36,15 +36,12 @@ Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name) async {
   return PdfPagesOutcome.read(s.substring(8).split('\f'));
 }
 
-/// A stand-in for the core's PDF calls that behaves as interface v1 says, on real folders: the staging is
-/// `<name>.pdfindex.partial/` with done.tsv and skipped.tsv, and the publish writes `<name>.pdfindex.tmp/` and renames it to
-/// `<name>.pdfindex/` (cache-library.json, documents.tsv, skipped.tsv, SHA256SUMS). Used by the tests and the renders until the
-/// core has the calls, and by nothing in a release build.
+/// A stand-in for the core's PDF calls that behaves as interface v2 says, on real folders: the build is `.pdfindex/.build/`
+/// (meta.json, done.tsv and skipped.tsv), adds are committed in batches of [batch] PDFs (and at close), a path is done only
+/// after its commit, and the publish writes a dot-named temporary folder with manifest.json last and renames it to
+/// `snap/<build-id>/`. Used by the tests and the renders until the core has the calls; never by a release build.
 class FakePdfIndexCore implements PdfIndexCore {
-  FakePdfIndexCore({this.zims = const {}, this.finishSteps = 3, this.stepDelay = Duration.zero, this.failAddWith, this.vectors = true});
-
-  /// Every piece must carry a vector (v1); false for a keyword-only index.
-  final bool vectors;
+  FakePdfIndexCore({this.zims = const {}, this.finishSteps = 3, this.stepDelay = Duration.zero, this.failAddWith, this.batch = 20});
 
   /// By ZIM id.
   final Map<String, FakeZim> zims;
@@ -56,11 +53,15 @@ class FakePdfIndexCore implements PdfIndexCore {
   /// When set, cs_pdfindex_add fails with it (a full device: FileSystemException with ENOSPC).
   Object? failAddWith;
 
-  /// Calls, for tests: `open`, `add:PATH`, `skip:PATH:REASON`, `close`, `discard`, `finish`.
+  /// PDFs a commit holds.
+  final int batch;
+
+  /// Calls, for tests: `open`, `add:PATH`, `skip:PATH:REASON`, `commit`, `close`, `discard`, `finish`.
   final List<String> calls = [];
 
-  final Map<int, ({String zimPath, String uuid, String model})> _sessions = {};
+  final Map<int, _Session> _sessions = {};
   int _next = 1;
+  int _builds = 0;
 
   @override
   bool get available => true;
@@ -79,7 +80,7 @@ class FakePdfIndexCore implements PdfIndexCore {
     return z.pdfs.firstWhere((p) => p.path == rest.substring(slash + 1)).bytes;
   }
 
-  /// The v1 rule, simply: about 200 words a piece, at most 300, 40 words of overlap, within a page.
+  /// The rule, simply: about 200 words a piece, 40 words of overlap, within a page.
   @override
   Future<PdfChunks> chunk(List<PdfPageText> pages) async {
     final pieces = <Map<String, dynamic>>[];
@@ -96,26 +97,26 @@ class FakePdfIndexCore implements PdfIndexCore {
         if (end == words.length) break;
       }
     }
-    return PdfChunks(pieces: pieces, emptyPages: empty);
+    return PdfChunks(pieces: pieces, emptyPages: empty, chunker: 1);
   }
 
   @override
-  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName, required String model}) async {
+  Future<PdfStaging> open({required String zimPath, required String zimUuid, required String zimName}) async {
     calls.add('open');
-    final dir = PdfIndexPaths(zimPath).partial;
+    final dir = PdfIndexPaths(zimPath).build;
     final meta = File('${dir.path}/meta.json');
     if (dir.existsSync()) {
       try {
         final m = jsonDecode(meta.readAsStringSync()) as Map;
-        if (m['zim_uuid'] != zimUuid || m['model'] != model) dir.deleteSync(recursive: true);
+        if (m['zim_uuid'] != zimUuid) dir.deleteSync(recursive: true);
       } catch (_) {
         dir.deleteSync(recursive: true);
       }
     }
     dir.createSync(recursive: true);
-    if (!meta.existsSync()) meta.writeAsStringSync(jsonEncode({'zim_uuid': zimUuid, 'model': model}));
+    if (!meta.existsSync()) meta.writeAsStringSync(jsonEncode({'zim_uuid': zimUuid, 'zim_name': zimName}));
     final id = _next++;
-    _sessions[id] = (zimPath: zimPath, uuid: zimUuid, model: model);
+    _sessions[id] = _Session(zimPath);
     final done = _lines(File('${dir.path}/done.tsv'));
     final skipped = _lines(File('${dir.path}/skipped.tsv'));
     return PdfStaging(session: id, done: {for (final l in done) l.split('\t').first}, skipped: {for (final l in skipped) l.split('\t').first}, pieces: _pieces(dir));
@@ -125,56 +126,86 @@ class FakePdfIndexCore implements PdfIndexCore {
 
   static int _pieces(Directory dir) => _lines(File('${dir.path}/done.tsv')).fold(0, (s, l) => s + (int.tryParse(l.split('\t').last) ?? 0));
 
-  Directory _dir(int session) => PdfIndexPaths((_sessions[session] ?? (throw StateError('Session closed'))).zimPath).partial;
+  _Session _session(int id) => _sessions[id] ?? (throw StateError('Session closed'));
+
+  void _commit(_Session s) {
+    if (s.pending.isEmpty && s.pendingSkips.isEmpty) return;
+    calls.add('commit');
+    final dir = PdfIndexPaths(s.zimPath).build;
+    File('${dir.path}/done.tsv').writeAsStringSync(s.pending.map((l) => '$l\n').join(), mode: FileMode.append, flush: true);
+    File('${dir.path}/skipped.tsv').writeAsStringSync(s.pendingSkips.map((l) => '$l\n').join(), mode: FileMode.append, flush: true);
+    s.pending.clear();
+    s.pendingSkips.clear();
+  }
 
   @override
-  Future<int> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async {
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async {
     calls.add('add:$path');
     final err = failAddWith;
     if (err != null) throw err;
     for (final p in pieces) {
-      final v = p['vector'];
-      if (vectors && (v is! List || v.isEmpty)) throw ArgumentError('A piece has no vector');
+      if (p['text'] is! String || p.containsKey('vector')) throw ArgumentError('A piece is text only');
     }
-    final dir = _dir(session);
-    File('${dir.path}/done.tsv').writeAsStringSync('$path\t${pieces.length}\n', mode: FileMode.append, flush: true);
-    return _pieces(dir);
+    final s = _session(session);
+    s.pending.add('$path\t${pieces.length}');
+    s.since++;
+    if (s.since >= batch) {
+      s.since = 0;
+      _commit(s);
+    }
+    final dir = PdfIndexPaths(s.zimPath).build;
+    final pending = s.pending.fold(0, (n, l) => n + (int.tryParse(l.split('\t').last) ?? 0));
+    return PdfAdded(pieces: _pieces(dir) + pending, committed: _lines(File('${dir.path}/done.tsv')).length);
   }
 
   @override
   Future<void> skip(int session, {required String path, required PdfSkipReason reason}) async {
     calls.add('skip:$path:${reason.code}');
-    File('${_dir(session).path}/skipped.tsv').writeAsStringSync('$path\t${reason.code}\n', mode: FileMode.append, flush: true);
+    _session(session).pendingSkips.add('$path\t${reason.code}');
   }
 
   @override
   Future<void> close(int session) async {
+    final s = _sessions.remove(session);
+    if (s != null) _commit(s);
     calls.add('close');
-    _sessions.remove(session);
   }
+
+  /// A kill: the session goes without its last commit.
+  void kill(int session) => _sessions.remove(session);
 
   @override
   Future<void> discard(String zimPath) async {
     calls.add('discard');
-    final d = PdfIndexPaths(zimPath).partial;
+    final d = PdfIndexPaths(zimPath).build;
     if (d.existsSync()) d.deleteSync(recursive: true);
   }
 
   @override
   Future<PdfFinishJob> finish(String zimPath) async {
     calls.add('finish');
-    return _FakeFinish(this, PdfIndexPaths(zimPath));
+    return _FakeFinish(this, PdfIndexPaths(zimPath), 'b${DateTime.now().microsecondsSinceEpoch}-${_builds++}');
   }
 }
 
+class _Session {
+  _Session(this.zimPath);
+
+  final String zimPath;
+  final List<String> pending = [];
+  final List<String> pendingSkips = [];
+  int since = 0;
+}
+
 class _FakeFinish implements PdfFinishJob {
-  _FakeFinish(this.core, this.paths) {
+  _FakeFinish(this.core, this.paths, this.buildId) {
     unawaited(_run());
   }
 
   final FakePdfIndexCore core;
   final PdfIndexPaths paths;
-  PdfFinishProgress _p = const PdfFinishProgress(state: PdfFinishState.running, phase: 'optimize');
+  final String buildId;
+  PdfFinishProgress _p = const PdfFinishProgress(state: PdfFinishState.running, phase: 'merge');
   bool _cancel = false;
 
   Future<void> _run() async {
@@ -184,30 +215,40 @@ class _FakeFinish implements PdfFinishJob {
           _p = const PdfFinishProgress(state: PdfFinishState.cancelled);
           return;
         }
-        _p = PdfFinishProgress(state: PdfFinishState.running, phase: i == core.finishSteps - 1 ? 'publish' : 'optimize', done: i, total: core.finishSteps);
+        final phase = i == core.finishSteps - 1 ? 'publish' : (i == 0 ? 'merge' : 'manifest');
+        _p = PdfFinishProgress(state: PdfFinishState.running, phase: phase, done: i, total: core.finishSteps);
         await Future<void>.delayed(core.stepDelay);
       }
-      final part = paths.partial;
-      final meta = (jsonDecode(File('${part.path}/meta.json').readAsStringSync()) as Map).cast<String, dynamic>();
-      final done = FakePdfIndexCore._lines(File('${part.path}/done.tsv'));
-      final skipped = FakePdfIndexCore._lines(File('${part.path}/skipped.tsv'));
-      final tmp = paths.tmp;
-      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
-      tmp.createSync(recursive: true);
-      File('${tmp.path}/cache-library.json').writeAsStringSync(jsonEncode({'zim_uuid': meta['zim_uuid'], 'model': meta['model'], 'pdfs': done.length, 'skipped': skipped.length}));
-      File('${tmp.path}/documents.tsv').writeAsStringSync(done.map((l) => '$l\n').join());
-      File('${tmp.path}/skipped.tsv').writeAsStringSync(skipped.map((l) => '$l\n').join());
-      File('${tmp.path}/SHA256SUMS').writeAsStringSync('fake ${DateTime.now().microsecondsSinceEpoch}\n');
-      if (paths.index.existsSync()) paths.index.deleteSync(recursive: true);
-      tmp.renameSync(paths.index.path);
-      part.deleteSync(recursive: true);
+      final build = paths.build;
+      final meta = (jsonDecode(File('${build.path}/meta.json').readAsStringSync()) as Map).cast<String, dynamic>();
+      final done = FakePdfIndexCore._lines(File('${build.path}/done.tsv'));
+      final skipped = FakePdfIndexCore._lines(File('${build.path}/skipped.tsv'));
       final pieces = done.fold(0, (s, l) => s + (int.tryParse(l.split('\t').last) ?? 0));
+      final tmp = Directory('${paths.root.path}/.publish-$buildId')..createSync(recursive: true);
+      final seg = File('${tmp.path}/segment.bin')..writeAsStringSync(done.join('\n'));
+      File('${tmp.path}/manifest.json').writeAsStringSync(jsonEncode({
+        'kind': 'zim-pdf',
+        'zim_uuid': meta['zim_uuid'],
+        'zim_name': meta['zim_name'],
+        'format': 1,
+        'chunker': 1,
+        'created': DateTime.now().toUtc().toIso8601String(),
+        'pdfs': done.length,
+        'pieces': pieces,
+        'skipped': skipped.length,
+        'files': [
+          {'path': 'segment.bin', 'size': seg.lengthSync(), 'sha256': 'fake'},
+        ],
+      }));
+      paths.snaps.createSync(recursive: true);
+      tmp.renameSync('${paths.snaps.path}/$buildId');
+      build.deleteSync(recursive: true);
       _p = PdfFinishProgress(
         state: PdfFinishState.done,
         phase: 'publish',
         done: core.finishSteps,
         total: core.finishSteps,
-        result: {'pdfs': done.length, 'pieces': pieces, 'skipped': skipped.length, 'bytes': 0},
+        result: {'pdfs': done.length, 'pieces': pieces, 'skipped': skipped.length, 'bytes': seg.lengthSync(), 'snapshot': buildId},
       );
     } catch (e) {
       _p = PdfFinishProgress(state: PdfFinishState.failed, error: '$e');

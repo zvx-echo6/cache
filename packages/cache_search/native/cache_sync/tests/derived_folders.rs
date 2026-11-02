@@ -10,7 +10,7 @@ use std::{path::Path, time::Duration};
 /// kRegionsNotShared and kMapLayersNotShared, app/lib/pdf/index/pdf_index_core.dart kZimPdfIndexNotShared); keep them equal.
 fn app_patterns() -> Value {
     json!({
-        "library": ["*.pdfindex.partial", "*.pdfindex.tmp", "*.pdfindex/index"],
+        "library": ["*.pdfindex/.*"],
         "libraries": ["*/index"],
         "regions": ["index", "places/index", "**/*-shm", "**/*-journal"],
         "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal"],
@@ -19,9 +19,11 @@ fn app_patterns() -> Value {
 
 fn engine(dir: &Path, name: &str, port: u16, exclude: bool) -> SyncEngine {
     let ex = if exclude { app_patterns() } else { json!({}) };
+    // app/lib/pdf/index/pdf_index_core.dart kZimPdfIndexLocalDeletes.
+    let local = if exclude { json!({"library": ["*.pdfindex/snap"]}) } else { json!({}) };
     let cfg: Config = serde_json::from_value(json!({
         "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false,
-        "interval_secs": 5, "reserve_bytes": 0, "port": port, "exclude": ex,
+        "interval_secs": 5, "reserve_bytes": 0, "port": port, "exclude": ex, "local_deletes": local,
     }))
     .unwrap();
     SyncEngine::open(cfg).unwrap()
@@ -94,19 +96,16 @@ fn globs_within_a_segment_and_at_any_depth() {
     assert!(excluded(&mid, "abc") && excluded(&mid, "aXbYc") && !excluded(&mid, "acb") && !excluded(&mid, "ab"));
 }
 
-/// A ZIM's PDF index: the published `<zim>.pdfindex/` is matched by nothing (it travels, vectors and all); this device's staging,
-/// a publish in progress and a keyword index built inside the published index are.
+/// A ZIM's PDF index (interface v2): the snapshots under `snap/` are matched by nothing (they travel); the build (`.build/`) and
+/// the publish's temporary folder (dot-named) are.
 #[test]
 fn zim_pdf_index_patterns() {
-    let p: Vec<String> = ["*.pdfindex.partial", "*.pdfindex.tmp", "*.pdfindex/index"].iter().map(|s| s.to_string()).collect();
+    let p = vec!["*.pdfindex/.*".to_string()];
     for yes in [
-        "wikimed_en_2026-10.pdfindex.partial",
-        "wikimed_en_2026-10.pdfindex.partial/done.tsv",
-        "wikimed_en_2026-10.pdfindex.partial/shard/segment.bin",
-        "wikimed_en_2026-10.pdfindex.tmp",
-        "wikimed_en_2026-10.pdfindex.tmp/SHA256SUMS",
-        "wikimed_en_2026-10.pdfindex/index",
-        "wikimed_en_2026-10.pdfindex/index/meta.json",
+        "wikimed_en_2026-10.pdfindex/.build",
+        "wikimed_en_2026-10.pdfindex/.build/meta.json",
+        "wikimed_en_2026-10.pdfindex/.build/segment.idx",
+        "wikimed_en_2026-10.pdfindex/.publish-b7/manifest.json",
     ] {
         assert!(excluded(&p, yes), "{yes} is excluded");
     }
@@ -114,35 +113,26 @@ fn zim_pdf_index_patterns() {
         "wikimed_en_2026-10.zim",
         "wikimed_en_2026-10.zim.origin.json",
         "wikimed_en_2026-10.pdfindex",
-        "wikimed_en_2026-10.pdfindex/cache-library.json",
-        "wikimed_en_2026-10.pdfindex/shard/segment.bin",
-        "wikimed_en_2026-10.pdfindex/documents.tsv",
-        "wikimed_en_2026-10.pdfindex/skipped.tsv",
-        "wikimed_en_2026-10.pdfindex/SHA256SUMS",
-        "wikimed_en_2026-10.pdfindex/indexes/x",
-        "wikimed_en_2026-10.pdfindex/shard/index/x",
+        "wikimed_en_2026-10.pdfindex/snap",
+        "wikimed_en_2026-10.pdfindex/snap/b7/manifest.json",
+        "wikimed_en_2026-10.pdfindex/snap/b7/.managed.json",
+        "wikimed_en_2026-10.pdfindex/snap/b7/seg.store",
+        ".hidden.zim",
     ] {
         assert!(!excluded(&p, no), "{no} syncs");
     }
 }
 
-/// The ZIM folder end to end: the ZIM and its finished PDF index reach the other device; the staging and a publish in progress
-/// stay where they were made.
+/// The ZIM folder end to end: the ZIM and its snapshots reach the other device, the build and a publish in progress stay where
+/// they were made, and a snapshot one device deletes (its own clean-up) stays on the other, which does not send it back.
 #[test]
-fn a_zim_pdf_index_travels_and_its_staging_never_does() {
+fn zim_pdf_snapshots_travel_and_their_deletes_stay_local() {
     let tmp = tempfile::tempdir().unwrap();
     let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
     let (za, zb) = (tmp.path().join("zims-a"), tmp.path().join("zims-b"));
-    let parts = [
-        "guide.zim",
-        "guide.pdfindex/cache-library.json",
-        "guide.pdfindex/shard/segment.bin",
-        "guide.pdfindex/documents.tsv",
-        "guide.pdfindex/skipped.tsv",
-        "guide.pdfindex/SHA256SUMS",
-    ];
-    let staging = ["other.pdfindex.partial/done.tsv", "other.pdfindex.partial/shard/segment.bin", "other.pdfindex.tmp/SHA256SUMS", "guide.pdfindex/index/meta.json"];
-    for f in parts.iter().chain(&staging) {
+    let parts = ["guide.zim", "guide.pdfindex/snap/b1/seg.store", "guide.pdfindex/snap/b1/manifest.json"];
+    let working = ["guide.pdfindex/.build/meta.json", "guide.pdfindex/.build/seg.idx", "guide.pdfindex/.publish-b2/manifest.json"];
+    for f in parts.iter().chain(&working) {
         write(&za.join(f), &format!("A {f}"));
     }
     std::fs::create_dir_all(&zb).unwrap();
@@ -155,17 +145,31 @@ fn a_zim_pdf_index_travels_and_its_staging_never_does() {
         call(e, "share_add", json!({"id": "library", "name": "Library (library)", "path": z}));
     }
     std::thread::sleep(Duration::from_secs(6));
-    until("the ZIM and its PDF index on B", 90, &a, &b, || parts.iter().all(|f| zb.join(f).exists()));
+    until("the ZIM and its snapshot on B", 90, &a, &b, || parts.iter().all(|f| zb.join(f).exists()));
     rounds(&a, &b);
     for f in &parts {
         assert_eq!(std::fs::read_to_string(zb.join(f)).unwrap(), format!("A {f}"), "{f} travels whole");
     }
-    for f in &staging {
+    for f in &working {
         assert!(!zb.join(f).exists(), "{f} must not travel");
         assert!(za.join(f).exists(), "A keeps its {f}");
     }
-    let st = call(&b, "status", json!({}));
-    assert_eq!(st["shares"][0]["files"], parts.len(), "{st}");
+
+    // A newer snapshot from B reaches A; then A cleans up the old one for itself.
+    write(&zb.join("guide.pdfindex/snap/b3/seg.store"), "B seg");
+    write(&zb.join("guide.pdfindex/snap/b3/manifest.json"), "B manifest");
+    std::thread::sleep(Duration::from_secs(6));
+    until("B's snapshot on A", 90, &a, &b, || za.join("guide.pdfindex/snap/b3/manifest.json").exists());
+    std::fs::remove_dir_all(za.join("guide.pdfindex/snap/b1")).unwrap();
+    std::thread::sleep(Duration::from_secs(6));
+    rounds(&a, &b);
+    rounds(&a, &b);
+    assert!(zb.join("guide.pdfindex/snap/b1/manifest.json").exists(), "a delete under snap/ must not reach B");
+    assert!(zb.join("guide.pdfindex/snap/b1/seg.store").exists(), "a delete under snap/ must not reach B");
+    assert!(!za.join("guide.pdfindex/snap/b1").exists(), "A must not fetch back what it deleted");
+    // Other deletes still travel: the ZIM removed on A goes from B.
+    std::fs::remove_file(za.join("guide.zim")).unwrap();
+    until("the ZIM gone from B", 90, &a, &b, || !zb.join("guide.zim").exists());
     a.close();
     b.close();
 }

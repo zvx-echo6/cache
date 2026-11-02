@@ -114,6 +114,13 @@ pub struct Config {
     /// device loses its own copy.
     #[serde(default)]
     pub exclude: BTreeMap<String, Vec<String>>,
+    /// Where a delete stays on this device, by share id, in the same patterns as [`Config::exclude`]: published index snapshots
+    /// (`*.pdfindex/snap`), which each device cleans up for itself (keeping the previous one while an older core may need it).
+    /// What is there syncs as usual (a new snapshot reaches every device), but a delete here is never sent, and a delete a peer
+    /// lists is never applied: the deleted entry stays in this device's own index (so the peer's copy is not fetched back) and
+    /// is left out of what peers are told.
+    #[serde(default)]
+    pub local_deletes: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -273,6 +280,8 @@ struct Inner {
     recovered: AtomicBool,
     /// What never syncs, by share id ([`Config::exclude`]).
     exclude: BTreeMap<String, Vec<String>>,
+    /// Where deletes stay local, by share id ([`Config::local_deletes`]).
+    local_deletes: BTreeMap<String, Vec<String>>,
 }
 
 pub struct SyncEngine {
@@ -452,13 +461,22 @@ impl Inner {
         self.exclude.get(share).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
-    /// `idx` without the paths that never sync in `share` (what a peer lists for them is not looked at).
+    /// `idx` without the paths that never sync in `share` (what a peer lists for them is not looked at), and without the deletes
+    /// that stay local there ([`Config::local_deletes`]): ours are not sent and a peer's are not applied.
     fn without_excluded(&self, share: &str, idx: &Index) -> Index {
         let skip = self.skip(share);
-        if skip.is_empty() {
+        let local = self.local_deletes.get(share).map(|v| v.as_slice()).unwrap_or(&[]);
+        if skip.is_empty() && local.is_empty() {
             return idx.clone();
         }
-        Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect() }
+        Index {
+            files: idx
+                .files
+                .iter()
+                .filter(|(p, e)| !excluded(skip, p) && !(e.deleted && excluded(local, p)))
+                .map(|(p, e)| (p.clone(), e.clone()))
+                .collect(),
+        }
     }
 
     fn load_index(&self, share: &str) -> Index {
@@ -1332,6 +1350,7 @@ impl SyncEngine {
             settle_again: Arc::default(),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
+            local_deletes: cfg.local_deletes.clone(),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);

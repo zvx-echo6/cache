@@ -74,7 +74,7 @@ class PdfPart {
 
 /// What the start pop-up says (measured on this device before any work).
 class PdfEstimate {
-  const PdfEstimate({required this.pdfs, required this.low, required this.high, required this.indexBytes, required this.needBytes, required this.usable, this.needsModel = false});
+  const PdfEstimate({required this.pdfs, required this.low, required this.high, required this.indexBytes, required this.needBytes, required this.usable});
 
   /// PDFs still to read.
   final int pdfs;
@@ -90,9 +90,6 @@ class PdfEstimate {
   /// Free space less the device reserve; null when the device cannot say.
   final int? usable;
 
-  /// The search model is not on this device: nothing can be embedded.
-  final bool needsModel;
-
   bool get fits => usable == null || needBytes <= usable!;
 }
 
@@ -100,8 +97,8 @@ class PdfEstimate {
 /// (UX-pdf-index-30 section 4 proposes "only under about 10 minutes and 100 MB").
 typedef PdfAutoStart = bool Function(PdfEstimate estimate);
 
-/// Bytes the finished index takes for one piece: the 1024-float vector, its text and payload, and the graph.
-const int kPdfIndexBytesPerPiece = 6 * 1024;
+/// Bytes the finished index takes for one piece: its stored text (about 200 words), title and page, and the keyword postings.
+const int kPdfIndexBytesPerPiece = 2 * 1024;
 
 /// The time a run must have had before its own speed replaces the start pop-up's range.
 const Duration kPdfLiveEstimateAfter = Duration(minutes: 2);
@@ -113,9 +110,6 @@ class PdfIndexState extends ChangeNotifier {
   PdfIndexState({
     required this.core,
     required this.zims,
-    required this.embed,
-    required this.model,
-    required this.hasModel,
     required this.recordFile,
     this.changes,
     this.readPages = readPdfPagesFromBytes,
@@ -134,10 +128,6 @@ class PdfIndexState extends ChangeNotifier {
   final List<PdfZimRef> Function() zims;
   final Listenable? changes;
 
-  /// The embed stage (the app's search model); null builds a keyword-only index and needs no model.
-  final PdfEmbed? embed;
-  final String model;
-  final bool Function() hasModel;
   final Future<File> Function() recordFile;
   final PdfBytesReader readPages;
   final BatteryReader? battery;
@@ -161,7 +151,7 @@ class PdfIndexState extends ChangeNotifier {
   final Map<String, ZimPdfList> _lists = {};
   final Set<String> _listing = {};
   final Map<String, String> _listFailed = {};
-  final Map<String, (DateTime, PdfIndexManifest?)> _manifests = {};
+  final Map<String, (DateTime, PdfSnapshot?, bool)> _manifests = {};
   final Set<String> _measuring = {};
   final Map<String, (Duration, Duration)> _ranges = {};
   final Map<String, PdfRunFailure> _failures = {};
@@ -279,13 +269,18 @@ class PdfIndexState extends ChangeNotifier {
     }
   }
 
-  PdfIndexManifest? _manifest(String path, {bool fresh = false}) {
-    final m = _manifests[path];
+  /// The snapshot every device uses for [z]'s ZIM version (null when none is complete here), and whether there are snapshots
+  /// for other versions (a new ZIM version: the old index is not this ZIM's). Read again after 10 seconds.
+  (PdfSnapshot?, bool) _snapshot(PdfZimRef z, {bool fresh = false}) {
+    final m = _manifests[z.path];
     final now = clock();
-    if (!fresh && m != null && now.difference(m.$1) < const Duration(seconds: 10)) return m.$2;
-    final read = PdfIndexManifest.read(PdfIndexPaths(path).index);
-    _manifests[path] = (now, read);
-    return read;
+    if (!fresh && m != null && now.difference(m.$1) < const Duration(seconds: 10)) return (m.$2, m.$3);
+    final paths = PdfIndexPaths(z.path);
+    final all = paths.snapshots();
+    final mine = z.uuid == null ? null : paths.snapshotFor(z.uuid!);
+    final other = all.any((s) => s.zimUuid != z.uuid);
+    _manifests[z.path] = (now, mine, other);
+    return (mine, other);
   }
 
   /// Every [watchEvery]: an index that arrived from another device (sync) is noticed, and a run of the same version gives way.
@@ -293,10 +288,10 @@ class PdfIndexState extends ChangeNotifier {
     if (!available) return;
     var changed = false;
     for (final z in zims()) {
-      final before = _manifests[z.path]?.$2?.fingerprint;
-      final m = _manifest(z.path, fresh: true);
-      if (m?.fingerprint != before) changed = true;
-      if (m != null && z.path == _runPath && m.zimUuid == z.uuid && m.fingerprint != _rec(z.fileName)['built'] && !(_run?.finishing ?? false)) {
+      final before = _manifests[z.path]?.$2?.id;
+      final m = _snapshot(z, fresh: true).$1;
+      if (m?.id != before) changed = true;
+      if (m != null && z.path == _runPath && m.id != _rec(z.fileName)['built'] && !(_run?.finishing ?? false)) {
         _run?.stop(PdfRunStop.superseded);
       }
     }
@@ -330,23 +325,23 @@ class PdfIndexState extends ChangeNotifier {
     }
     if (_queue.contains(z.path)) return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: (rec['handled'] as num?)?.toInt() ?? 0);
     if (_measuring.contains(z.path)) return PdfPart(phase: PdfPartPhase.measuring, total: total);
-    final m = _manifest(z.path);
+    final (m, otherVersion) = _snapshot(z);
     final paths = PdfIndexPaths(z.path);
     final handled = (rec['handled'] as num?)?.toInt() ?? 0;
     final failure = _failures[z.path];
-    if (failure != null && paths.partial.existsSync()) {
+    if (failure != null && paths.build.existsSync()) {
       return PdfPart(phase: PdfPartPhase.failed, total: total, handled: handled, failure: failure);
     }
-    if (m != null && m.zimUuid == z.uuid) {
+    if (m != null) {
       return PdfPart(
         phase: PdfPartPhase.done,
         total: total,
         handled: m.pdfs + m.skipped,
         unreadable: m.skipped,
-        fromOtherDevice: rec['built'] != m.fingerprint,
+        fromOtherDevice: rec['built'] != m.id,
       );
     }
-    if (paths.partial.existsSync()) {
+    if (paths.build.existsSync()) {
       final pause = switch (rec['pause']) {
         'person' => PdfPause.person,
         'battery' => PdfPause.battery,
@@ -354,10 +349,8 @@ class PdfIndexState extends ChangeNotifier {
       };
       return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: pause);
     }
-    if (m != null) {
-      final now = list?.zimUuid == z.uuid ? list!.pdfs.where((p) => !m.paths.contains(p.path)).length : 0;
-      return PdfPart(phase: PdfPartPhase.newVersion, total: total, newCount: now);
-    }
+    // Snapshots for another version only: a new ZIM version (v2 snapshots do not list their PDFs, so no "new" count).
+    if (otherVersion) return PdfPart(phase: PdfPartPhase.newVersion, total: total);
     return PdfPart(phase: PdfPartPhase.idle, total: total);
   }
 
@@ -383,16 +376,11 @@ class PdfIndexState extends ChangeNotifier {
     try {
       final list = await listOf(z);
       if (list == null) return null;
-      final partial = PdfIndexPaths(z.path).partial;
-      final doneHere = partial.existsSync() ? ((_rec(z.fileName)['handled'] as num?)?.toInt() ?? 0) : 0;
+      final build = PdfIndexPaths(z.path).build;
+      final doneHere = build.existsSync() ? ((_rec(z.fileName)['handled'] as num?)?.toInt() ?? 0) : 0;
       final todo = list.pdfs.length - doneHere;
       final bytes = list.bytes;
       final sp = space(File(z.path).parent.path);
-      if (embed != null && !hasModel()) {
-        return PdfEstimate(pdfs: todo, low: Duration.zero, high: Duration.zero, indexBytes: 0, needBytes: 0, usable: sp.usable, needsModel: true);
-      }
-      // The model loads before the clock starts: the first piece would otherwise carry the load.
-      await embed?.call('warm up');
       final sorted = [...list.pdfs]..sort((a, b) => a.size.compareTo(b.size));
       final picks = <ZimPdf>{
         if (sorted.isNotEmpty) sorted[sorted.length ~/ 2],
@@ -404,18 +392,13 @@ class PdfIndexState extends ChangeNotifier {
       for (final p in picks) {
         final run = PdfIndexRun(
           core: core,
-          embed: embed,
-          model: model,
           zimPath: z.path,
           list: ZimPdfList(zimUuid: list.zimUuid, zimName: list.zimName, pdfs: [p]),
           readPages: readPages,
           stage: false,
           onTiming: rows.add,
         );
-        final end = await run.run();
-        if (end == PdfRunEnd.failed && run.failure?.kind == PdfRunFailureKind.needsModel) {
-          return PdfEstimate(pdfs: todo, low: Duration.zero, high: Duration.zero, indexBytes: 0, needBytes: 0, usable: sp.usable, needsModel: true);
-        }
+        await run.run();
         if (clock().difference(clockStart) > budget) break;
       }
       final ms = rows.fold(0, (s, r) => s + r.totalMs);
@@ -455,13 +438,14 @@ class PdfIndexState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final run = _run = PdfIndexRun(core: core, embed: embed, model: model, zimPath: z.path, list: list, readPages: readPages, battery: battery, clock: clock);
+    final run = _run = PdfIndexRun(core: core, zimPath: z.path, list: list, readPages: readPages, battery: battery, clock: clock);
     _runPath = z.path;
     var lastSaved = -1;
     void onRun() {
       if (run.handled != lastSaved && !run.starting) {
         lastSaved = run.handled;
-        unawaited(_put(z.fileName, {'handled': run.handled, 'skipped': run.skipped, 'uuid': z.uuid}));
+        // What a kill keeps: the committed PDFs (the core commits in batches) and the skipped ones.
+        unawaited(_put(z.fileName, {'handled': run.committed + run.skipped, 'skipped': run.skipped, 'uuid': z.uuid}));
       }
       notifyListeners();
     }
@@ -474,8 +458,7 @@ class PdfIndexState extends ChangeNotifier {
     _runPath = null;
     switch (end) {
       case PdfRunEnd.finished:
-        final m = _manifest(z.path, fresh: true);
-        await _put(z.fileName, {'pause': null, 'handled': null, 'built': m?.fingerprint, 'built_uuid': z.uuid});
+        await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true).$1?.id, 'built_uuid': z.uuid});
         await onIndexReady?.call();
       case PdfRunEnd.paused:
         await _put(z.fileName, {'pause': run.stopped == PdfRunStop.battery ? 'battery' : 'person', 'handled': run.handled});
@@ -504,7 +487,7 @@ class PdfIndexState extends ChangeNotifier {
     }
   }
 
-  /// Pause (the person's): the partial stays; Resume continues from the last finished PDF.
+  /// Pause (the person's): the build stays; Resume continues from the last committed PDF.
   void pause(PdfZimRef z) {
     if (_runPath == z.path) {
       _run?.stop(PdfRunStop.person);
@@ -513,7 +496,7 @@ class PdfIndexState extends ChangeNotifier {
     }
   }
 
-  /// Remove under a paused line: the partial is deleted (a run is cancelled).
+  /// Remove under a paused line: the build is deleted (a run is cancelled).
   Future<void> remove(PdfZimRef z) async {
     _queue.remove(z.path);
     _failures.remove(z.path);
@@ -533,7 +516,7 @@ class PdfIndexState extends ChangeNotifier {
     final hook = autoStart;
     if (hook == null || _run != null) return;
     final e = await measure(z);
-    if (e == null || e.needsModel || !e.fits || !hook(e)) return;
+    if (e == null || !e.fits || !hook(e)) return;
     await start(z);
     say?.call('Making ${e.pdfs} PDFs searchable.');
   }

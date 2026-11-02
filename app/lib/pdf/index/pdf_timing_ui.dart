@@ -19,8 +19,8 @@ Future<Directory> pdfTimingDir() async {
   return Directory('${base.path}${Platform.pathSeparator}pdf-timing');
 }
 
-/// The debug timing switch (debug and developer builds only): choose a library, index its first 20 PDFs without staging them,
-/// and write pages/s, pieces/s and embed ms per piece to a log the developer pulls.
+/// The debug timing switch (debug and developer builds only): choose a library, index its first 20 PDFs in a throwaway build,
+/// and write pages/s and ms a PDF for extract, chunk and add to a log the developer pulls.
 Future<void> runPdfTimingFromSettings(BuildContext context, PdfIndexState state) async {
   final zims = [for (final z in state.zims()) if (z.uuid != null) z];
   final messenger = ScaffoldMessenger.of(context);
@@ -45,8 +45,6 @@ Future<void> runPdfTimingFromSettings(BuildContext context, PdfIndexState state)
     if (list == null) throw StateError('The library could not be read.');
     final r = await runPdfTiming(
       core: state.core,
-      embed: state.embed,
-      model: state.model,
       zimPath: zim.path,
       list: list,
       readPages: state.readPages,
@@ -57,8 +55,8 @@ Future<void> runPdfTimingFromSettings(BuildContext context, PdfIndexState state)
       ..showSnackBar(SnackBar(
         duration: const Duration(seconds: 12),
         content: Text(
-          '${r.pagesPerSecond.toStringAsFixed(1)} pages/s, ${r.piecesPerSecond.toStringAsFixed(1)} pieces/s, '
-          '${r.embedMsPerPiece.toStringAsFixed(0)} ms a piece. Log: ${r.log.path}',
+          '${r.pagesPerSecond.toStringAsFixed(1)} pages/s; a PDF: extract ${r.extractMsPerPdf.toStringAsFixed(0)} ms, '
+          'chunk ${r.chunkMsPerPdf.toStringAsFixed(0)} ms, add ${r.staged ? '${r.addMsPerPdf.toStringAsFixed(0)} ms' : 'not timed'}. Log: ${r.log.path}',
         ),
       ));
   } catch (e) {

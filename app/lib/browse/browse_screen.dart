@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import '../models/search_model.dart' show SearchModel;
 import '../pdf/index/pdf_index_app.dart';
 import '../pdf/index/pdf_index_ui.dart';
 import '../pdf/open_pdf.dart';
@@ -178,11 +177,9 @@ class _BrowseScreenState extends State<BrowseScreen> {
                 }),
       delete: () => sources.remove(z),
       // The PDFs part: make the ZIM's PDFs searchable on this device (nothing shows while the core cannot, or it has none).
-      parts: pdfIndexShared == null ? null : (_) => PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z), getModel: _getSearchModel),
+      parts: pdfIndexShared == null ? null : (_) => PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z)),
     );
   }
-
-  Future<void> _getSearchModel() async => SearchModel.shared?.ensure();
 
   LibraryActions _libraryActions(LibraryItem l) => LibraryActions(
     title: libs!.titleOf(l),

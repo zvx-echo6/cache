@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
-import 'package:cache/pdf/index/pdf_index_core.dart' show PdfIndexPaths, kZimPdfIndexNotShared;
+import 'package:cache/pdf/index/pdf_index_core.dart' show PdfIndexPaths, kZimPdfIndexLocalDeletes, kZimPdfIndexNotShared;
 import 'package:cache/regions/regions_state.dart' show kMapLayersNotShared, kRegionsNotShared;
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/libraries_state.dart';
@@ -77,6 +77,7 @@ void main() {
           icon: Icons.menu_book_outlined,
           shared: () => {'library': zims, 'libraries': libs},
           notShared: const {'libraries': kLibraryNotShared, 'library': kZimPdfIndexNotShared},
+          localDeletes: const {'library': kZimPdfIndexLocalDeletes},
         ),
         DataKind(
           id: 'regions',
@@ -96,20 +97,24 @@ void main() {
     // The engine is told at its start, before its first round, so nothing of an index goes out or comes in even once.
     // The same patterns cache_sync's tests check (packages/cache_search/native/cache_sync/tests/derived_folders.rs): fetched
     // indexes, the viewed-tile cache and TileJSON, and SQLite's -shm and -journal; every downloaded part still syncs.
-    // A ZIM's PDF index (<zim>.pdfindex/) syncs; its staging, a publish in progress and a keyword index inside it do not.
+    // A ZIM's PDF index snapshots (<zim>.pdfindex/snap/) sync; its working folders (.build, the publish's) do not.
     expect(config?['exclude'], {
-      'library': ['*.pdfindex.partial', '*.pdfindex.tmp', '*.pdfindex/index'],
+      'library': ['*.pdfindex/.*'],
       'libraries': ['*/index'],
       'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'],
       'regions': ['index', 'places/index', '**/*-shm', '**/*-journal'],
+    });
+    // A snapshot each device deletes for itself is never deleted elsewhere.
+    expect(config?['local_deletes'], {
+      'library': ['*.pdfindex/snap'],
     });
     // The pattern names exactly where a library keeps its index: <libraries>/<library>/index.
     final item = LibraryItem(dir: Directory('${libs.path}${Platform.pathSeparator}first-aid'), size: 0);
     expect(item.indexPath.substring(libs.path.length + 1).replaceAll(Platform.pathSeparator, '/'), 'first-aid/index');
     // And where a ZIM keeps its PDF index's folders: beside the ZIM, named after its file.
     final paths = PdfIndexPaths('${zims.path}${Platform.pathSeparator}wikimed_en_2026-10.zim');
-    String rel(Directory d) => d.path.substring(zims.path.length + 1);
-    expect([rel(paths.index), rel(paths.partial), rel(paths.tmp)], ['wikimed_en_2026-10.pdfindex', 'wikimed_en_2026-10.pdfindex.partial', 'wikimed_en_2026-10.pdfindex.tmp']);
+    String rel(Directory d) => d.path.substring(zims.path.length + 1).replaceAll(Platform.pathSeparator, '/');
+    expect([rel(paths.build), rel(paths.snaps)], ['wikimed_en_2026-10.pdfindex/.build', 'wikimed_en_2026-10.pdfindex/snap']);
     sharing.dispose();
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
