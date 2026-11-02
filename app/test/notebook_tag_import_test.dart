@@ -530,7 +530,12 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('import-tag-save')));
         await Future<void>.delayed(const Duration(milliseconds: 200));
       });
-      await tester.pumpAndSettle();
+      // the tag is saved to disk before the snack bar: give the file write its time
+      for (var i = 0; i < 10 && find.text('Import tag is #camping.').evaluate().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.pump(const Duration(milliseconds: 500));
       expect(c.target(SyncKind.obsidian)!.tag, '#camping');
       expect(find.text('Import tag is #camping.'), findsOneWidget);
       expect(find.text('Notes already in Cache keep syncing.'), findsOneWidget);
