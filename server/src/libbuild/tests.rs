@@ -1142,22 +1142,22 @@ fn a_book_is_filed_by_meaning_and_an_unsure_one_goes_to_unsorted() {
     drain(&svc);
     let books = svc.books(&lib).unwrap();
     let w = by_title(&books, "The Well Handbook");
-    assert_eq!((w["division"].as_str(), w["class"].as_str(), w["call_number"].as_str()), (Some("510"), Some("500"), Some("510 · WEL")));
+    assert_eq!((w["division"].as_str(), w["class"].as_str(), w["call_number"].as_str()), (Some("510"), Some("500"), Some("CDS 510-001")));
     assert_eq!((w["division_name"].as_str(), w["unsorted"].as_bool()), (Some("Wells"), Some(false)));
     let sug = w["suggestions"].as_array().unwrap();
     assert!(!sug.is_empty() && sug.len() <= 3, "{sug:?}");
     assert_eq!(sug[0]["division"], json!("510"));
     let r = by_title(&books, "Antenna Notes");
-    assert_eq!((r["division"].as_str(), r["class"].as_str(), r["call_number"].as_str()), (Some("710"), Some("700"), Some("710 · ANT")));
+    assert_eq!((r["division"].as_str(), r["class"].as_str(), r["call_number"].as_str()), (Some("710"), Some("700"), Some("CDS 710-001")));
     let k = by_title(&books, "Kiln Craft");
-    assert_eq!((k["division"].is_null(), k["unsorted"].as_bool(), k["call_number"].as_str()), (true, Some(true), Some("KIL")));
+    assert_eq!((k["division"].is_null(), k["unsorted"].as_bool(), k["call_number"].is_null()), (true, Some(true), true), "Unsorted has no call number");
     assert!(k["unsure_reason"].as_str().is_some_and(|m| !m.is_empty()));
     assert_eq!(k["placed_by_hand"], json!(false));
     // the device copies are filed in the tree
-    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf").is_file());
-    assert!(src_file(&d, &lib, "700 Communication/710 Radio/710 · ANT  Antenna Notes.pdf").is_file());
-    assert!(src_file(&d, &lib, "Unsorted/KIL  Kiln Craft.pdf").is_file());
-    assert_eq!(svc.source_path(&lib, w["id"].as_str().unwrap()), src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf"));
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf").is_file());
+    assert!(src_file(&d, &lib, "700 Communication/710 Radio/CDS 710-001  Antenna Notes.pdf").is_file());
+    assert!(src_file(&d, &lib, "Unsorted/Kiln Craft.pdf").is_file());
+    assert_eq!(svc.source_path(&lib, w["id"].as_str().unwrap()), src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf"));
     assert_eq!(w["filed_in"], json!("500 Water and Energy/510 Wells"));
     // the queue says where each went
     let (ia, ic) = (item(&svc, &a), item(&svc, &c));
@@ -1177,13 +1177,28 @@ fn a_book_is_filed_by_meaning_and_an_unsure_one_goes_to_unsorted() {
     assert_eq!(svc.books_q(&lib, "division=520").unwrap().as_array().unwrap().len(), 0);
     assert_eq!(svc.books_q(&lib, "division=unsorted").unwrap().as_array().unwrap().len(), 1);
     assert_eq!(svc.books_q(&lib, "class=700").unwrap()[0]["title"], json!("Antenna Notes"));
-    let by_call: Vec<String> = svc.books_q(&lib, "sort=call").unwrap().as_array().unwrap().iter().map(|b| b["call_number"].as_str().unwrap().to_string()).collect();
-    assert_eq!(by_call, vec!["KIL", "510 · WEL", "710 · ANT"]);
-    // classification is not in the search payloads: the pack header carries none of it
+    let by_call: Vec<String> = svc.books_q(&lib, "sort=call").unwrap().as_array().unwrap().iter().map(|b| b["call_number"].as_str().unwrap_or("").to_string()).collect();
+    assert_eq!(by_call, vec!["", "CDS 510-001", "CDS 710-001"]);
+    // the classifier's guess is a fact of the pack (book.suggested); the call number and the shelf are not: they are in the log
     let doc = w["id"].as_str().unwrap();
     let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
     let header = serde_json::to_string(&p.header).unwrap();
-    assert!(!header.contains("division") && !header.contains("call_number") && !header.contains("suggestions"), "{header}");
+    assert!(!header.contains("call_number") && !header.contains("CDS") && !header.contains("suggestions"), "{header}");
+    let sg = p.header.suggested().expect("the classifier's guess is in the pack");
+    assert_eq!((sg.div.as_str(), sg.source.as_str(), sg.classifier_version), ("510", "classifier", Some(1)));
+    let b = p.header.book.as_ref().unwrap();
+    assert_eq!((b.title.as_str(), b.original_blake3.as_str()), ("The Well Handbook", p.header.source.blake3.as_str()));
+    // this device's log: place and assign for the filed books, unsort for the unsure one
+    let log = svc.live_dir(&lib).join("log").join(format!("{}.jsonl", svc.device));
+    let events = cache_builder::log::parse_log(&std::fs::read_to_string(&log).unwrap()).0;
+    assert_eq!(events.len(), 5, "{events:?}");
+    assert!(events.iter().all(|e| e.dev == svc.device));
+    // and the local view says the same
+    svc.publish(&lib).unwrap();
+    let view: Value = serde_json::from_slice(&std::fs::read(svc.live_dir(&lib).join(".local/docs.json")).unwrap()).unwrap();
+    assert_eq!(view["format"], json!(2));
+    assert_eq!(view["docs"][doc]["call"]["text"], json!("CDS 510-001"));
+    assert_eq!((view["docs"][doc]["shelf"].clone(), view["docs"][doc]["suggested"]["div"].clone()), (json!("510"), json!("510")));
 }
 
 #[test]
@@ -1196,10 +1211,10 @@ fn placing_a_book_moves_its_files_and_changes_its_call_number() {
     drain(&svc);
     let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
     let r = svc.place_book(&lib, &doc, br#"{"division":"510"}"#).unwrap();
-    assert_eq!((r["call_number"].as_str(), r["division"].as_str(), r["placed_by_hand"].as_bool()), (Some("510 · KIL"), Some("510"), Some(true)));
+    assert_eq!((r["call_number"].as_str(), r["division"].as_str(), r["placed_by_hand"].as_bool()), (Some("CDS 510-001"), Some("510"), Some(true)));
     assert_eq!((r["moved_from"].as_str(), r["unsorted"].as_bool()), (Some("Unsorted"), Some(false)));
-    assert!(!src_file(&d, &lib, "Unsorted/KIL  Kiln Craft.pdf").exists());
-    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · KIL  Kiln Craft.pdf").is_file());
+    assert!(!src_file(&d, &lib, "Unsorted/Kiln Craft.pdf").exists());
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  Kiln Craft.pdf").is_file());
     assert!(svc.source_path(&lib, &doc).is_file());
     // refused
     assert_eq!(svc.place_book(&lib, &doc, br#"{"division":"999"}"#).unwrap_err().status, 400);
@@ -1210,15 +1225,15 @@ fn placing_a_book_moves_its_files_and_changes_its_call_number() {
     // a book the person placed stays where it is when the books are looked at again
     let v = svc.reclassify(b"{}").unwrap();
     assert_eq!((v["checked"].as_u64(), v["moved"].as_u64()), (Some(0), Some(0)));
-    // a new title keeps the call number's letters; the filed PDF takes the new name
+    // a new title keeps the call number; the filed PDF takes the new name
     svc.rename_book(&lib, &doc, br#"{"title":"Zebra Notes"}"#).unwrap();
-    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · KIL  Zebra Notes.pdf").is_file());
-    assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("510 · KIL"));
-    // and back to Unsorted
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  Zebra Notes.pdf").is_file());
+    assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("CDS 510-001"));
+    // and back to Unsorted: the number is given up and has no replacement
     let r = svc.place_book(&lib, &doc, br#"{"division":"unsorted"}"#).unwrap();
-    assert_eq!((r["call_number"].as_str(), r["moved_from"].as_str()), (Some("KIL"), Some("510 Wells")));
-    assert!(src_file(&d, &lib, "Unsorted/KIL  Zebra Notes.pdf").is_file());
-    assert!(!src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · KIL  Zebra Notes.pdf").exists());
+    assert_eq!((r["call_number"].is_null(), r["moved_from"].as_str()), (true, Some("510 Wells")));
+    assert!(src_file(&d, &lib, "Unsorted/Zebra Notes.pdf").is_file());
+    assert!(!src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  Zebra Notes.pdf").exists());
 }
 
 #[test]
@@ -1230,32 +1245,32 @@ fn books_from_the_drop_folder_are_filed_in_complete_and_their_files_follow_a_pla
     put(&root, "ingest", "b.pdf", &book("kiln", 3, Some("Kiln Craft")));
     svc.scan();
     drain(&svc);
-    assert_eq!(tree_files(&root.join("complete")), vec!["500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf", "Unsorted/KIL  Kiln Craft.pdf"]);
+    assert_eq!(tree_files(&root.join("complete")), vec!["500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf", "Unsorted/Kiln Craft.pdf"]);
     assert_eq!(names(&root, "ingest"), Vec::<String>::new());
     let v = svc.drop_view();
     let files = v["files"].as_array().unwrap();
-    let well = files.iter().find(|f| f["path"] == json!("500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf")).expect("the well book");
-    assert_eq!((well["class"].as_str(), well["division"].as_str(), well["call_number"].as_str()), (Some("500"), Some("510"), Some("510 · WEL")));
+    let well = files.iter().find(|f| f["path"] == json!("500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf")).expect("the well book");
+    assert_eq!((well["class"].as_str(), well["division"].as_str(), well["call_number"].as_str()), (Some("500"), Some("510"), Some("CDS 510-001")));
     assert_eq!((well["where"].as_str(), well["title"].as_str(), well["reason"].as_str()), (Some("500 Water and Energy/510 Wells"), Some("The Well Handbook"), Some("Filed in 510 Wells")));
-    let kiln = files.iter().find(|f| f["name"] == json!("KIL  Kiln Craft.pdf")).expect("the kiln book");
+    let kiln = files.iter().find(|f| f["name"] == json!("Kiln Craft.pdf")).expect("the kiln book");
     assert_eq!((kiln["division"].is_null(), kiln["where"].as_str(), kiln["reason"].as_str()), (true, Some("Unsorted"), Some("Filed in Unsorted")));
     // placing the unsure book moves the device copy and the copy in complete/
     let doc = svc.books(&lib).unwrap().as_array().unwrap().iter().find(|b| b["title"] == json!("Kiln Craft")).unwrap()["id"].as_str().unwrap().to_string();
     svc.place_book(&lib, &doc, br#"{"division":"520"}"#).unwrap();
-    assert_eq!(tree_files(&root.join("complete")), vec!["500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf", "500 Water and Energy/520 Rain/520 · KIL  Kiln Craft.pdf"]);
-    assert!(src_file(&d, &lib, "500 Water and Energy/520 Rain/520 · KIL  Kiln Craft.pdf").is_file());
+    assert_eq!(tree_files(&root.join("complete")), vec!["500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf", "500 Water and Energy/520 Rain/CDS 520-001  Kiln Craft.pdf"]);
+    assert!(src_file(&d, &lib, "500 Water and Energy/520 Rain/CDS 520-001  Kiln Craft.pdf").is_file());
     let v = svc.drop_view();
-    let moved = v["files"].as_array().unwrap().iter().find(|f| f["path"] == json!("500 Water and Energy/520 Rain/520 · KIL  Kiln Craft.pdf")).expect("the placed book");
+    let moved = v["files"].as_array().unwrap().iter().find(|f| f["path"] == json!("500 Water and Energy/520 Rain/CDS 520-001  Kiln Craft.pdf")).expect("the placed book");
     assert_eq!((moved["moved_from"].as_str(), moved["division"].as_str()), (Some("Unsorted"), Some("520")));
-    // two different books with the same title in one division: the second gets a number
+    // two different books with the same title in one division have their own numbers (which one is built first is not fixed)
     put(&root, "ingest", "c.pdf", &pdf_of("well", 50, 3, "Manual"));
     put(&root, "ingest", "d.pdf", &pdf_of("well", 80, 3, "Manual"));
     svc.scan();
     drain(&svc);
     let tree = tree_files(&root.join("complete"));
-    assert!(tree.contains(&"500 Water and Energy/510 Wells/510 · MAN  Manual.pdf".to_string()), "{tree:?}");
-    assert!(tree.contains(&"500 Water and Energy/510 Wells/510 · MAN  Manual (2).pdf".to_string()), "{tree:?}");
-    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · MAN  Manual (2).pdf").is_file());
+    assert!(tree.contains(&"500 Water and Energy/510 Wells/CDS 510-002  Manual.pdf".to_string()), "{tree:?}");
+    assert!(tree.contains(&"500 Water and Energy/510 Wells/CDS 510-003  Manual.pdf".to_string()), "{tree:?}");
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-003  Manual.pdf").is_file());
 }
 
 #[test]
@@ -1280,7 +1295,7 @@ fn flat_source_paths_are_migrated_at_start_up_and_the_books_are_filed_later() {
     let mut m: Value = serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
     for b in m["books"].as_array_mut().unwrap() {
         let o = b.as_object_mut().unwrap();
-        for k in ["source_rel", "letters", "division", "classified", "suggestions", "unsure", "minhash"] {
+        for k in ["source_rel", "letters", "division", "classified", "suggestions", "unsure", "minhash", "call_text"] {
             o.remove(k);
         }
     }
@@ -1298,9 +1313,9 @@ fn flat_source_paths_are_migrated_at_start_up_and_the_books_are_filed_later() {
     assert!(lock(&svc.st).libs[0].books.iter().all(|b| b.classified));
     let books = svc.books(&lib).unwrap();
     assert_eq!(by_title(&books, "The Well Handbook")["division"], json!("510"));
-    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf").is_file());
-    assert!(src_file(&d, &lib, "Unsorted/KIL  Kiln Craft.pdf").is_file());
-    assert!(!src_file(&d, &lib, "Unsorted/WEL  The Well Handbook.pdf").exists());
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf").is_file());
+    assert!(src_file(&d, &lib, "Unsorted/Kiln Craft.pdf").is_file());
+    assert!(!src_file(&d, &lib, "Unsorted/The Well Handbook.pdf").exists());
 }
 
 #[test]
@@ -1344,7 +1359,7 @@ fn with_no_model_file_every_book_waits_in_unsorted_and_a_model_dropped_in_files_
         let b = by_title(&books, t);
         assert_eq!((b["unsorted"].as_bool(), b["suggestions"].as_array().map(|a| a.len()), b["classifier_version"].is_null()), (Some(true), Some(0), true), "{b}");
     }
-    assert!(src_file(&d, &lib, "Unsorted/WEL  The Well Handbook.pdf").is_file());
+    assert!(src_file(&d, &lib, "Unsorted/The Well Handbook.pdf").is_file());
     assert!(lock(&svc.st).libs[0].books.iter().all(|b| !b.classified));
     svc.maintenance();
     assert!(lock(&svc.st).libs[0].books.iter().all(|b| !b.classified), "nothing to do without a model");
@@ -1365,7 +1380,7 @@ fn with_no_model_file_every_book_waits_in_unsorted_and_a_model_dropped_in_files_
     let w = by_title(&books, "The Well Handbook");
     assert_eq!((w["division"].as_str(), w["classifier_version"].as_u64()), (Some("510"), Some(1)));
     assert_eq!(by_title(&books, "Antenna Notes")["division"], json!("710"));
-    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/510 · WEL  The Well Handbook.pdf").is_file());
+    assert!(src_file(&d, &lib, "500 Water and Energy/510 Wells/CDS 510-001  The Well Handbook.pdf").is_file());
 }
 
 #[test]
@@ -1402,16 +1417,35 @@ fn an_unsure_book_keeps_the_top_three_with_probabilities_and_the_version() {
     assert_eq!((sw["unsorted"].as_bool(), sw["suggestions"][0]["division"].as_str()), (Some(false), Some("510")));
     assert!(sw["unsure_reason"].is_null());
     assert_eq!(svc.suggestions(&lib, "nope").unwrap_err().status, 404);
-    // the choices survive a restart; the pack (what the search payloads are made of) carries none of it
+    // the choices survive a restart; the pack keeps the best guess as a fact (book.suggested), never the list of three
     let (svc2, _) = rig(&d);
     assert_eq!(svc2.suggestions(&lib, doc).unwrap()["suggestions"].as_array().unwrap().len(), 3);
     let p = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
     let header = serde_json::to_string(&p.header).unwrap();
-    assert!(!header.contains("classifier") && !header.contains("suggestions"), "{header}");
+    assert!(!header.contains("suggestions"), "{header}");
+    assert_eq!(p.header.suggested().map(|s| (s.source, s.classifier_version)), Some(("classifier".to_string(), Some(1))));
+}
+
+/// The events of this device's log as short strings: `place 510 user`, `assign 510 1`, `retire 510 1`, `unsort user`.
+fn log_lines(svc: &BuildService, lib: &str) -> Vec<String> {
+    let log = svc.live_dir(lib).join("log").join(format!("{}.jsonl", svc.device));
+    let events = cache_builder::log::parse_log(&std::fs::read_to_string(&log).unwrap()).0;
+    assert!(events.iter().all(|e| e.dev == svc.device && e.at > 0));
+    assert!(events.windows(2).all(|w| w[0].at <= w[1].at), "an event is never earlier than the one before it");
+    events
+        .iter()
+        .map(|e| match &e.kind {
+            cache_builder::log::Kind::Place { div, by, .. } => format!("place {div} {}", by.as_str()),
+            cache_builder::log::Kind::Unsort { by, .. } => format!("unsort {}", by.as_str()),
+            cache_builder::log::Kind::Assign { div, seq, .. } => format!("assign {div} {seq}"),
+            cache_builder::log::Kind::Retire { div, seq, .. } => format!("retire {div} {seq}"),
+            other => format!("{other:?}"),
+        })
+        .collect()
 }
 
 #[test]
-fn every_placement_by_hand_is_logged_for_retraining_outside_the_search_data() {
+fn every_placement_is_written_to_this_devices_log_and_the_view_follows() {
     let d = TempDir::new("m3");
     small_classes(&d);
     let (svc, _) = rig(&d);
@@ -1419,37 +1453,85 @@ fn every_placement_by_hand_is_logged_for_retraining_outside_the_search_data() {
     add(&svc, &lib, "k.pdf", &book("kiln", 3, Some("Kiln Craft")));
     drain(&svc);
     let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
-    let log = svc.corrections_path(&lib);
-    assert!(!log.exists(), "the classifier's own filing is not a correction");
+    // the build shelved it: the classifier was unsure, so it is unsorted (by auto)
+    assert_eq!(log_lines(&svc, &lib), ["unsort auto"]);
     svc.place_book(&lib, &doc, br#"{"division":"510","device":"  tablet 2 "}"#).unwrap();
+    let view_path = svc.live_dir(&lib).join(".local").join("docs.json");
+    let view: Value = serde_json::from_slice(&std::fs::read(&view_path).unwrap()).unwrap();
+    assert_eq!((view["docs"][&doc]["shelf"].clone(), view["docs"][&doc]["call"]["text"].clone()), (json!("510"), json!("CDS 510-001")));
     svc.place_book(&lib, &doc, br#"{"division":"520"}"#).unwrap();
-    // refused placements are not logged
+    // refused placements write nothing
     assert!(svc.place_book(&lib, &doc, br#"{"division":"999"}"#).is_err());
     assert!(svc.place_book(&lib, "nope", br#"{"division":"510"}"#).is_err());
     svc.place_book(&lib, &doc, br#"{"division":"unsorted"}"#).unwrap();
-    let text = std::fs::read_to_string(&log).unwrap();
-    let rows: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!(rows.len(), 3, "{text}");
-    let key = |r: &Value| (r["from"].as_str().unwrap().to_string(), r["to"].as_str().unwrap().to_string());
-    assert_eq!(rows.iter().map(key).collect::<Vec<_>>(), vec![("unsorted".into(), "510".into()), ("510".into(), "520".into()), ("520".into(), "unsorted".into())]);
-    assert!(rows.iter().all(|r| r["doc_id"] == json!(doc) && r["classifier_version"] == json!(1) && r["time"].as_str().is_some_and(|t| t.len() >= 20)));
-    assert_eq!((rows[0]["device"].as_str(), rows[1]["device"].is_null()), (Some("tablet 2"), true));
+    // a move is place, retire the old number, assign a new one; a number is never used again
+    assert_eq!(
+        log_lines(&svc, &lib),
+        ["unsort auto", "place 510 user", "assign 510 1", "place 520 user", "retire 510 1", "assign 520 1", "unsort user", "retire 520 1"]
+    );
+    let view: Value = serde_json::from_slice(&std::fs::read(&view_path).unwrap()).unwrap();
+    assert_eq!((view["docs"][&doc]["shelf"].clone(), view["docs"][&doc]["call"].clone()), (Value::Null, Value::Null));
+    assert_eq!(view["retired"], json!({"510": [1], "520": [1]}));
+    // the user's placements that differ from the guess are the training corrections
+    let log_dir = svc.live_dir(&lib).join("log");
+    let events = cache_builder::log::read_logs(&log_dir).unwrap().events;
+    let pack = read_pack(&svc.packs_dir(&lib).join(format!("{doc}@1.cdoc"))).unwrap();
+    let guess = pack.header.suggested().map(|s| s.div);
+    let want = ["510", "520"].iter().filter(|x| Some(x.to_string()) != guess).count();
+    let corrections = cache_builder::log::corrections(&events, &|_| guess.clone());
+    assert_eq!(corrections.len(), want);
     // it sits at the library's root beside packs/ and shard/, not in either, so no search payload carries it
-    assert_eq!(log, svc.live_dir(&lib).join("corrections.jsonl"));
-    assert!(!svc.packs_dir(&lib).join("corrections.jsonl").exists());
+    assert!(!svc.packs_dir(&lib).join("log").exists() && !svc.live_dir(&lib).join("corrections.jsonl").exists());
     svc.publish(&lib).unwrap();
-    assert!(log.is_file());
+    assert!(view_path.is_file());
     assert!(live_docs(&svc, &lib) >= 1, "the core's own library check passes with the log beside the shard");
-    let found = std::fs::read_dir(svc.live_dir(&lib).join("shard")).unwrap().flatten().count();
-    assert!(found > 0);
     for e in std::fs::read_dir(svc.live_dir(&lib).join("shard")).unwrap().flatten() {
-        assert_ne!(e.file_name().to_string_lossy(), "corrections.jsonl");
+        assert_ne!(e.file_name().to_string_lossy(), "log");
     }
     // it is appended to, never rewritten, and goes with the library
     svc.place_book(&lib, &doc, br#"{"division":"710"}"#).unwrap();
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 4);
+    assert_eq!(log_lines(&svc, &lib).len(), 10);
     svc.delete_library(&lib).unwrap();
-    assert!(!log.exists());
+    assert!(!log_dir.exists());
+}
+
+#[test]
+fn the_device_id_is_kept_and_other_devices_logs_decide_which_number_is_free() {
+    let d = TempDir::new("m4");
+    small_classes(&d);
+    let (svc, _) = rig(&d);
+    assert!(cache_builder::log::valid_device_id(&svc.device) && svc.device.starts_with("server-"));
+    let (svc2, _) = rig(&d);
+    assert_eq!(svc2.device, svc.device, "the id is kept in the data folder");
+    assert_eq!(std::fs::read_to_string(d.0.join("build/device_id")).unwrap().trim(), svc.device);
+    let lib = new_lib(&svc, "L");
+    add(&svc, &lib, "w.pdf", &book("well", 3, Some("The Well Handbook")));
+    drain(&svc);
+    let doc = svc.books(&lib).unwrap()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("CDS 510-001"));
+    // another device took 510-001 earlier and its log has synced here: ours shows as the second claim, and the next free is 2
+    let other = svc.live_dir(&lib).join("log").join("phone-1.jsonl");
+    let lines = [
+        cache_builder::log::Event::new(5, "phone-1", cache_builder::log::Kind::Place { doc: "ghost".into(), div: "510".into(), by: cache_builder::log::By::User }),
+        cache_builder::log::Event::new(6, "phone-1", cache_builder::log::Kind::Assign { doc: "ghost".into(), div: "510".into(), seq: 1 }),
+    ];
+    std::fs::write(&other, lines.iter().map(|e| e.to_line() + "\n").collect::<String>()).unwrap();
+    svc.publish(&lib).unwrap();
+    assert_eq!(svc.books(&lib).unwrap()[0]["call_number"], json!("CDS 510-001.1"));
+    let view: Value = serde_json::from_slice(&std::fs::read(svc.live_dir(&lib).join(".local/docs.json")).unwrap()).unwrap();
+    assert_eq!(view["docs"][&doc]["call"], json!({"div": "510", "seq": 1, "suffix": 1, "text": "CDS 510-001.1"}));
+    assert!(view["docs"].get("ghost").is_none(), "a book with no pack here is not in the view");
+    add(&svc, &lib, "r.pdf", &book("radio", 3, Some("Antenna Notes")));
+    add(&svc, &lib, "w2.pdf", &pdf_of("well", 50, 3, "Second Well Book"));
+    drain(&svc);
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(by_title(&books, "Second Well Book")["call_number"], json!("CDS 510-002"), "the next free number counts the other device's log");
+    // books built before the log existed are shelved at the next publish
+    std::fs::remove_file(svc.live_dir(&lib).join("log").join(format!("{}.jsonl", svc.device))).unwrap();
+    svc.publish(&lib).unwrap();
+    let books = svc.books(&lib).unwrap();
+    assert_eq!(by_title(&books, "The Well Handbook")["division"], json!("510"));
+    assert!(books.as_array().unwrap().iter().all(|b| b["unsorted"] == json!(true) || b["call_number"].as_str().is_some_and(|c| c.starts_with("CDS "))), "{books}");
 }
 
 #[test]
@@ -1463,7 +1545,7 @@ fn the_same_book_in_a_better_file_replaces_the_old_one_and_a_worse_one_is_not_ke
     drain(&svc);
     let b0 = svc.books(&lib).unwrap()[0].clone();
     let doc = b0["id"].as_str().unwrap().to_string();
-    let call = b0["call_number"].as_str().unwrap().to_string();
+    let call = b0["call_number"].clone();
     // a better file of it: more pages with text
     let better = pdf_of("river", 1, 21, "River Guide scan");
     let b = add(&svc, &lib, "guide scan.pdf", &better);
@@ -1474,7 +1556,7 @@ fn the_same_book_in_a_better_file_replaces_the_old_one_and_a_worse_one_is_not_ke
     assert_eq!(books.as_array().unwrap().len(), 1);
     let nb = &books[0];
     assert_eq!((nb["id"].as_str(), nb["doc_version"].as_u64(), nb["title"].as_str(), nb["pages"].as_u64()), (Some(doc.as_str()), Some(2), Some("River Guide"), Some(21)));
-    assert_eq!(nb["call_number"].as_str(), Some(call.as_str()), "the call number stays");
+    assert_eq!(nb["call_number"], call, "the call number stays");
     assert_eq!(std::fs::read(svc.source_path(&lib, &doc)).unwrap(), better);
     assert!(svc.packs_dir(&lib).join(format!("{doc}@2.cdoc")).is_file() && !svc.packs_dir(&lib).join(format!("{doc}@1.cdoc")).exists());
     let r = svc.removed_view();
@@ -1509,7 +1591,7 @@ fn edition_pdf(tail: &str) -> Vec<u8> {
 }
 
 #[test]
-fn a_possible_new_edition_waits_for_a_choice_and_keep_both_adds_a_suffix() {
+fn a_possible_new_edition_waits_for_a_choice_and_keep_both_keeps_both() {
     let d = TempDir::new("c7");
     small_classes(&d);
     tune(&d, json!({"same_cosine": 0.5}));
@@ -1544,11 +1626,11 @@ fn a_possible_new_edition_waits_for_a_choice_and_keep_both_adds_a_suffix() {
     assert_eq!(state(&svc, &b), S::Done);
     let books = svc.books(&lib).unwrap();
     assert_eq!(books.as_array().unwrap().len(), 2);
-    let mut calls: Vec<String> = books.as_array().unwrap().iter().map(|x| x["call_number"].as_str().unwrap().to_string()).collect();
-    calls.sort_by_key(|c| c.len());
-    assert!(calls[0].ends_with("FIE") && calls[1].ends_with("FIE 2e"), "{calls:?}");
+    // each is its own book: with a number each, different from the other (or both in Unsorted, with none)
+    let calls: Vec<Value> = books.as_array().unwrap().iter().map(|x| x["call_number"].clone()).collect();
+    assert!((calls[0].is_null() && calls[1].is_null()) || calls[0] != calls[1], "{calls:?}");
     let files = tree_files(&d.0.join("app/docs/sources").join(&lib));
-    assert!(files.iter().any(|f| f.ends_with("FIE 2e  Field Guide.pdf")) && files.iter().any(|f| f.ends_with("FIE  Field Guide.pdf")), "{files:?}");
+    assert_eq!(files.iter().filter(|f| f.contains("Field Guide")).count(), 2, "{files:?}");
     assert_eq!(svc.removed_view()["count"], json!(0), "keep both removes nothing");
 }
 

@@ -1,21 +1,25 @@
-//! Pack revision 3 (`division`, `samebook`), the better-copy order, `docs.json` and the `--labels` / `--titles` options of
-//! `cache-build library`.
+//! Pack revisions 3 and 4 (`samebook`, the `book` block), the better-copy order, the seed log and the local view, and the
+//! `--labels` / `--titles` options of `cache-build library` and `cache-build pdf`.
 
 mod common;
 
 use cache_builder::build::{build_pack, BuildOptions};
-use cache_builder::docs::{Docs, DOCS_FILE};
 use cache_builder::embed::FakeEmbedder;
-use cache_builder::library::{build_library, LibraryOptions, SETTINGS_FILE, SUMS_FILE};
-use cache_builder::pack::{f16_to_f32, f32_to_f16, pack_bytes, read_pack, read_pack_bytes, write_pack, Division, Pack};
+use cache_builder::library::{build_library, seed_events, LibraryOptions, SETTINGS_FILE, SUMS_FILE};
+use cache_builder::log::{resolve, By, Kind};
+use cache_builder::pack::{f16_to_f32, f32_to_f16, pack_bytes, read_header, read_pack, read_pack_bytes, write_pack, OcrInfo, Pack, Suggested};
+use cache_builder::view::BookFacts;
 use cache_builder::samebook::{best_copy, CopyQuality};
 use common::*;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
 const STAMP: &str = "2026-11-01T00:00:00Z";
+/// 2026-11-01T00:00:00Z in milliseconds.
+const BUILT_AT: u64 = 1793491200000;
 
 fn doc_pdf(title: &str, topic: &str, pages: usize) -> Vec<u8> {
     let mut v = Vec::new();
@@ -77,8 +81,12 @@ fn half_precision_rounds_like_ieee() {
     }
 }
 
+fn suggestion(div: &str, label: &str, source: &str) -> Suggested {
+    Suggested { div: div.into(), label: label.into(), score: Some(0.875), classifier_version: Some(3), source: source.into(), second_div: Some("450".into()) }
+}
+
 #[test]
-fn a_revision_3_pack_round_trips_and_older_packs_still_load() {
+fn a_revision_4_pack_round_trips_and_revision_2_and_3_packs_still_load() {
     let pdf = doc_pdf("Water cycle", "water", 3);
     let mut pack = build(&pdf, "water.pdf");
     let sb = pack.header.samebook.clone().expect("the builder writes samebook");
@@ -87,34 +95,65 @@ fn a_revision_3_pack_round_trips_and_older_packs_still_load() {
     assert_eq!(sb.minhash.len(), 128);
     assert_eq!(sb.mean_vector.len(), 1024);
     assert!(sb.text_pages >= 1 && sb.text_pages <= 3);
-    pack.header.division = Some(Division {
-        division: "440".into(),
-        label: "Water".into(),
-        score: Some(0.875),
-        classifier_version: Some(3),
-        source: "sorter".into(),
-        second_division: Some("450".into()),
-    });
+    // the builder writes the book block: the title, the arrival hash, and nothing it was not told
+    let book = pack.header.book.clone().expect("the builder writes book");
+    assert_eq!(book.title, "Water cycle");
+    assert_eq!(book.source_title, None);
+    assert_eq!(book.original_blake3, pack.header.source.blake3);
+    assert!(book.compression.is_none() && book.ocr.is_none() && book.suggested.is_none());
+    {
+        let b = pack.header.book.as_mut().unwrap();
+        b.suggested = Some(suggestion("440", "Water", "classifier"));
+        b.ocr = Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12 });
+    }
     let bytes = pack_bytes(&pack).unwrap();
-    assert_eq!(read_pack_bytes(&bytes).unwrap(), pack, "a revision 3 pack reads back equal");
+    assert_eq!(read_pack_bytes(&bytes).unwrap(), pack, "a revision 4 pack reads back equal");
     assert_eq!(bytes, pack_bytes(&pack).unwrap(), "and is deterministic");
     let h = header_json(&bytes);
     assert_eq!(h["cdoc"], json!(1));
-    assert_eq!(h["division"]["division"], json!("440"));
-    assert_eq!(h["division"]["second_division"], json!("450"));
+    assert!(h.get("division").is_none(), "revision 3's division is not written any more");
+    assert_eq!(h["book"]["title"], json!("Water cycle"));
+    assert_eq!(h["book"]["original_blake3"], h["source"]["blake3"]);
+    assert_eq!(h["book"]["suggested"]["div"], json!("440"));
+    assert_eq!(h["book"]["suggested"]["second_div"], json!("450"));
+    assert_eq!(h["book"]["suggested"]["source"], json!("classifier"));
+    assert_eq!(h["book"]["compression"], Value::Null);
+    assert_eq!(h["book"]["ocr"], json!({"engine": "doctr", "version": "1.1.0", "pages_ocrd": 12}));
     assert_eq!(h["samebook"]["minhash"].as_array().unwrap().len(), 128);
     // 1024 halves = 2048 bytes = 2732 base64 characters
     assert_eq!(h["samebook"]["mean_vector"].as_str().unwrap().len(), 2732);
 
-    // an older pack has neither key and loads, with both None
+    // a revision 3 pack has a division and no book: it loads, and the division reads as the suggestion
+    let rev3 = rewrite_header(&bytes, |h| {
+        h.remove("book");
+        h.insert("division".into(), json!({"division": "440", "label": "Water", "score": 0.875, "classifier_version": 3, "source": "sorter", "second_division": "450"}));
+    });
+    let back = read_pack_bytes(&rev3).unwrap();
+    assert!(back.header.book.is_none());
+    let sg = back.header.suggested().unwrap();
+    assert_eq!((sg.div.as_str(), sg.label.as_str(), sg.source.as_str(), sg.second_div.as_deref(), sg.score, sg.classifier_version), ("440", "Water", "classifier", Some("450"), Some(0.875), Some(3)));
+    assert_eq!(back.header.book_title(), "Water cycle");
+    assert_eq!(back.pieces, pack.pieces);
+    // a person's or a label's division is a label
+    let user = rewrite_header(&rev3, |h| h["division"]["source"] = json!("user"));
+    assert_eq!(read_pack_bytes(&user).unwrap().header.suggested().unwrap().source, "label");
+    // written again, a revision 3 pack becomes revision 4 with its division as book.suggested
+    let again = header_json(&pack_bytes(&back).unwrap());
+    assert!(again.get("division").is_none());
+    assert_eq!(again["book"]["suggested"]["source"], json!("classifier"));
+    assert_eq!(again["book"]["title"], json!("Water cycle"));
+    assert_eq!(again["book"]["original_blake3"], again["source"]["blake3"]);
+
+    // a revision 2 pack has neither and loads, with nothing suggested
     let old = rewrite_header(&bytes, |h| {
+        h.remove("book");
         h.remove("division");
         h.remove("samebook");
     });
     let back = read_pack_bytes(&old).unwrap();
-    assert!(back.header.division.is_none() && back.header.samebook.is_none());
-    assert_eq!(back.pieces, pack.pieces);
-
+    assert!(back.header.book.is_none() && back.header.division.is_none() && back.header.samebook.is_none());
+    assert!(back.header.suggested().is_none());
+    assert_eq!(back.header.book_title(), "Water cycle");
     // an older reader ignores the new keys: every key it knows is still there with the same value
     let before = header_json(&old);
     let after = header_json(&bytes);
@@ -122,17 +161,24 @@ fn a_revision_3_pack_round_trips_and_older_packs_still_load() {
         assert_eq!(&after[k], v, "{k}");
     }
 
-    // a division with a source this reader does not know is refused; null score and second division are fine
-    let bad = rewrite_header(&bytes, |h| h["division"]["source"] = json!("guess"));
+    // a source this reader does not know is refused; null score and second division are fine
+    let bad = rewrite_header(&bytes, |h| h["book"]["suggested"]["source"] = json!("guess"));
     assert!(read_pack_bytes(&bad).is_err());
+    let bad3 = rewrite_header(&rev3, |h| h["division"]["source"] = json!("guess"));
+    assert!(read_pack_bytes(&bad3).is_err());
     let nulls = rewrite_header(&bytes, |h| {
-        h["division"]["score"] = Value::Null;
-        h["division"]["classifier_version"] = Value::Null;
-        h["division"]["second_division"] = Value::Null;
-        h["division"]["source"] = json!("user");
+        h["book"]["suggested"]["score"] = Value::Null;
+        h["book"]["suggested"]["classifier_version"] = Value::Null;
+        h["book"]["suggested"]["second_div"] = Value::Null;
+        h["book"]["suggested"]["source"] = json!("label");
     });
-    let d = read_pack_bytes(&nulls).unwrap().header.division.unwrap();
-    assert_eq!((d.score, d.classifier_version, d.second_division, d.source.as_str()), (None, None, None, "user"));
+    let d = read_pack_bytes(&nulls).unwrap().header.book.unwrap().suggested.unwrap();
+    assert_eq!((d.score, d.classifier_version, d.second_div, d.source.as_str()), (None, None, None, "label"));
+
+    // the header alone can be read without the vectors
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_pack(&pack, tmp.path()).unwrap();
+    assert_eq!(read_header(&path).unwrap(), pack.header);
 }
 
 #[test]
@@ -150,6 +196,62 @@ fn the_cli_pdf_command_writes_samebook_into_each_pack() {
     assert_eq!((sb.pages, sb.source_size), (2, pdf.len() as u64));
     assert_eq!(sb.minhash.len(), 128);
     assert_eq!(Some(sb), build(&pdf, "water.pdf").header.samebook);
+}
+
+#[test]
+fn the_cli_pdf_command_writes_the_book_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pdf_path = tmp.path().join("water.pdf");
+    let pdf = doc_pdf("Water cycle", "water", 2);
+    std::fs::write(&pdf_path, &pdf).unwrap();
+    let hash = blake3::hash(&pdf).to_hex().to_string();
+
+    // nothing asked: the title from the PDF, the arrival hash is the file's, nothing else
+    let plain = tmp.path().join("plain");
+    let out = cli().arg("pdf").arg(pdf_path.as_path()).arg("--out").arg(plain.as_path()).args(["--fake-embedder", "--in-process", "--created-at", STAMP]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let h = read_header(&plain.join(format!("{hash}@1.cdoc"))).unwrap();
+    let b = h.book.expect("book");
+    assert_eq!((b.title.as_str(), b.original_blake3.as_str()), ("Water cycle", hash.as_str()));
+    assert!(b.source_title.is_none() && b.compression.is_none() && b.ocr.is_none() && b.suggested.is_none());
+
+    // a title, a label, an OCR record and the original's hash (the file given is an OCR copy)
+    let labels = tmp.path().join("labels.json");
+    std::fs::write(&labels, json!([{"id": "w1", "path": "/mnt/library/water.pdf", "final": "440", "second_division": "450"}]).to_string()).unwrap();
+    let full = tmp.path().join("full");
+    let original = "ab".repeat(32);
+    let out = cli()
+        .arg("pdf")
+        .arg(pdf_path.as_path())
+        .arg("--out")
+        .arg(full.as_path())
+        .args(["--fake-embedder", "--in-process", "--created-at", STAMP, "--doc-id", "w1", "--title", "How Water Moves", "--original-blake3", original.as_str()])
+        .args(["--ocr-engine", "doctr", "--ocr-version", "1.1.0", "--ocr-pages", "12", "--labels"])
+        .arg(labels.as_path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let h = read_header(&full.join("w1@1.cdoc")).unwrap();
+    assert_eq!((h.title.as_str(), h.source.blake3.as_str()), ("How Water Moves", hash.as_str()));
+    let b = h.book.expect("book");
+    assert_eq!((b.title.as_str(), b.source_title.as_deref(), b.original_blake3.as_str()), ("How Water Moves", Some("Water cycle"), original.as_str()));
+    assert_eq!(b.ocr, Some(OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 12 }));
+    let sg = b.suggested.expect("suggested from the label");
+    assert_eq!((sg.div.as_str(), sg.label.as_str(), sg.source.as_str(), sg.second_div.as_deref(), sg.score), ("440", "Canning", "label", Some("450"), None));
+
+    // the OCR record from a JSON file keyed by the input's file name
+    let side = tmp.path().join("ocr.json");
+    std::fs::write(&side, json!({"water.pdf": {"engine": "tesseract", "version": "5.5", "pages_ocrd": 3, "original_blake3": original}, "other.pdf": {"engine": "x", "version": "1"}}).to_string()).unwrap();
+    let keyed = tmp.path().join("keyed");
+    let out = cli().arg("pdf").arg(pdf_path.as_path()).arg("--out").arg(keyed.as_path()).args(["--fake-embedder", "--in-process", "--created-at", STAMP, "--ocr-json"]).arg(side.as_path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let b = read_header(&keyed.join(format!("{hash}@1.cdoc"))).unwrap().book.unwrap();
+    assert_eq!(b.ocr, Some(OcrInfo { engine: "tesseract".into(), version: "5.5".into(), pages_ocrd: 3 }));
+    assert_eq!(b.original_blake3, original);
+
+    // --ocr-engine without --ocr-version is refused
+    let out = cli().arg("pdf").arg(pdf_path.as_path()).arg("--out").arg(tmp.path().join("no")).args(["--fake-embedder", "--in-process", "--ocr-engine", "doctr"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
 }
 
 #[test]
@@ -171,50 +273,69 @@ fn the_better_copy_comes_from_the_packs_and_is_the_same_in_any_order() {
 }
 
 fn library_opts() -> LibraryOptions {
-    LibraryOptions { id: "r3".into(), title: "Revision 3".into(), version: "1".into(), vector_datatype: Default::default(), archive: true }
+    LibraryOptions { id: "r3".into(), title: "Revision 3".into(), version: "1".into(), vector_datatype: Default::default(), archive: true, built_at: BUILT_AT }
 }
 
 fn two_packs(dir: &Path) -> (Pack, Pack) {
     let mut a = build(&doc_pdf("Water", "water", 2), "water.pdf");
-    a.header.division = Some(Division { division: "440".into(), label: "Water".into(), score: Some(0.5), classifier_version: Some(2), source: "sorter".into(), second_division: None });
+    a.header.book.as_mut().unwrap().suggested = Some(Suggested { div: "440".into(), label: "Water".into(), score: Some(0.5), classifier_version: Some(2), source: "classifier".into(), second_div: None });
     let b = build(&doc_pdf("Stone", "stone", 2), "stone.pdf");
     write_pack(&a, dir).unwrap();
     write_pack(&b, dir).unwrap();
     (a, b)
 }
 
+fn read_json(p: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
+}
+
 #[test]
-fn docs_json_is_written_atomically_listed_and_never_in_a_payload() {
+fn the_library_writes_a_seed_log_and_the_local_view_and_a_rebuild_is_byte_identical() {
     let tmp = tempfile::tempdir().unwrap();
     let packs = tmp.path().join("packs");
     let (a, b) = two_packs(&packs);
     let lib = tmp.path().join("lib");
     let r = build_library(&packs, &lib, &library_opts()).unwrap();
 
-    // listed in cache-library.json (the guide-schema test pins that this is the only added key)
-    let settings: Value = serde_json::from_slice(&std::fs::read(lib.join(SETTINGS_FILE)).unwrap()).unwrap();
-    assert_eq!(settings["docs"], json!("docs.json"));
-    // well formed, in doc_id order, every key present
-    let raw = std::fs::read(lib.join(DOCS_FILE)).unwrap();
-    let docs = Docs::from_bytes(&raw).unwrap();
-    assert_eq!(docs.format, 1);
-    assert_eq!(docs.docs.len(), 2);
-    let ea = &docs.docs[&a.header.doc_id];
-    assert_eq!((ea.division.as_deref(), ea.label.as_deref(), ea.source.as_deref(), ea.score, ea.classifier_version), (Some("440"), Some("Water"), Some("sorter"), Some(0.5), Some(2)));
-    let eb = &docs.docs[&b.header.doc_id];
-    assert_eq!((eb.division.clone(), eb.source.clone(), eb.second_division.clone(), eb.title.as_str()), (None, None, None, "Stone"));
-    let v: Value = serde_json::from_slice(&raw).unwrap();
-    for k in ["division", "label", "score", "classifier_version", "source", "second_division", "title", "source_title"] {
-        assert!(v["docs"][&b.header.doc_id].as_object().unwrap().contains_key(k), "{k} is always written, null when unknown");
+    // the format 1 files are gone: no docs.json at the root, no overrides.json, and the settings file lists no docs
+    assert!(!lib.join("docs.json").exists() && !lib.join("overrides.json").exists());
+    let settings = read_json(&lib.join(SETTINGS_FILE));
+    assert!(settings.get("docs").is_none());
+
+    // the seed log: place then assign for the book that has a division, nothing for the one that has none
+    let log_path = lib.join("log").join("builder-r3.jsonl");
+    let text = std::fs::read_to_string(&log_path).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert_eq!(lines[0], format!(r#"{{"v":1,"at":{BUILT_AT},"dev":"builder-r3","ev":"place","doc":"{}","div":"440","by":"auto"}}"#, a.header.doc_id));
+    assert_eq!(lines[1], format!(r#"{{"v":1,"at":{BUILT_AT},"dev":"builder-r3","ev":"assign","doc":"{}","div":"440","seq":1}}"#, a.header.doc_id));
+    assert!(!text.contains(&b.header.doc_id));
+
+    // the local view: format 2, rebuilt from the packs and the log
+    let v = read_json(&lib.join(".local").join("docs.json"));
+    assert_eq!(v["format"], json!(2));
+    assert_eq!(v["built_from"]["packs"], json!(2));
+    assert_eq!(v["built_from"]["logs"]["builder-r3.jsonl"], json!(text.len()));
+    let va = &v["docs"][&a.header.doc_id];
+    assert_eq!(va["title"], json!("Water"));
+    assert_eq!(va["shelf"], json!("440"));
+    assert_eq!(va["call"], json!({"div": "440", "seq": 1, "suffix": 0, "text": "CDS 440-001"}));
+    assert_eq!(va["suggested"]["source"], json!("classifier"));
+    assert_eq!(va["removed"], json!(false));
+    let vb = &v["docs"][&b.header.doc_id];
+    assert_eq!((vb["title"].clone(), vb["shelf"].clone(), vb["call"].clone(), vb["suggested"].clone()), (json!("Stone"), Value::Null, Value::Null, Value::Null));
+    for k in ["title", "source_title", "shelf", "call", "suggested", "removed", "compression", "ocr"] {
+        assert!(vb.as_object().unwrap().contains_key(k), "{k} is always written, null when unknown");
     }
-    // atomic: no temporary file is left, and the file is covered by SHA256SUMS
-    assert!(std::fs::read_dir(&lib).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+    assert_eq!(v["retired"], json!({}));
+
+    // SHA256SUMS covers the synced log and leaves the local view out
     let sums = std::fs::read_to_string(lib.join(SUMS_FILE)).unwrap();
-    assert!(sums.lines().any(|l| l.ends_with("  docs.json")));
-    // a rewrite replaces the file whole and leaves no temporary behind
-    cache_builder::docs::write_docs(&lib, &Docs::default()).unwrap();
-    assert_eq!(Docs::from_bytes(&std::fs::read(lib.join(DOCS_FILE)).unwrap()).unwrap().docs.len(), 0);
-    assert!(!lib.join(".docs.json.tmp").exists());
+    assert!(sums.lines().any(|l| l.ends_with("  log/builder-r3.jsonl")), "{sums}");
+    assert!(!sums.contains(".local") && !sums.contains("docs.json"));
+    // atomic: no temporary file is left
+    assert!(std::fs::read_dir(lib.join(".local")).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+
     // never part of a search payload
     let shard = cache_search::library::open_shard_for_scroll(&lib.join("shard")).unwrap();
     let mut sr = edge::ScrollRequest::new();
@@ -225,10 +346,10 @@ fn docs_json_is_written_atomically_listed_and_never_in_a_payload() {
     assert_eq!(recs.len(), r.points);
     for rec in recs {
         for k in rec.payload.unwrap().0.keys() {
-            assert!(!["division", "label", "second_division", "samebook", "source_title"].contains(&k.as_str()), "{k} is in a payload");
+            assert!(!["division", "label", "second_division", "samebook", "source_title", "call", "shelf", "suggested"].contains(&k.as_str()), "{k} is in a payload");
         }
     }
-    // the .cache-library carries it too
+    // the .cache-library holds the settings file and no docs.json
     let arch = r.archive.unwrap();
     let raw = std::fs::read(&arch).unwrap();
     let tar_bytes = if raw.starts_with(&[0x1f, 0x8b]) {
@@ -239,7 +360,68 @@ fn docs_json_is_written_atomically_listed_and_never_in_a_payload() {
         raw
     };
     let names: Vec<String> = tar::Archive::new(&tar_bytes[..]).entries().unwrap().map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned()).collect();
-    assert!(names.contains(&"docs.json".to_string()) && names.contains(&"cache-library.json".to_string()), "{names:?}");
+    assert!(names.contains(&"cache-library.json".to_string()) && !names.contains(&"docs.json".to_string()), "{names:?}");
+
+    // the same inputs and the same --built-at give the same seed log and the same view, byte for byte
+    let lib2 = tmp.path().join("lib2");
+    build_library(&packs, &lib2, &library_opts()).unwrap();
+    assert_eq!(std::fs::read(&log_path).unwrap(), std::fs::read(lib2.join("log").join("builder-r3.jsonl")).unwrap());
+    let view1 = std::fs::read(lib.join(".local").join("docs.json")).unwrap();
+    assert_eq!(view1, std::fs::read(lib2.join(".local").join("docs.json")).unwrap());
+
+    // `cache-build view` makes the view again from the packs and the log
+    std::fs::remove_file(lib.join(".local").join("docs.json")).unwrap();
+    let out = cli().arg("view").arg("--library").arg(lib.as_path()).arg("--packs").arg(packs.as_path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read(lib.join(".local").join("docs.json")).unwrap(), view1);
+    // with no packs folder it says so and fails
+    let out = cli().arg("view").arg("--library").arg(tmp.path().join("nolib")).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn seed_numbers_run_from_1_in_title_then_doc_id_order_within_a_division() {
+    let sug = |d: &str| Some(Suggested { div: d.into(), label: "x".into(), score: None, classifier_version: None, source: "label".into(), second_div: None });
+    let mut facts = BTreeMap::new();
+    facts.insert("id9".to_string(), BookFacts::new("Zinc", sug("440")));
+    facts.insert("id2".to_string(), BookFacts::new("Alpha", sug("440")));
+    facts.insert("id1".to_string(), BookFacts::new("Alpha", sug("440")));
+    facts.insert("id5".to_string(), BookFacts::new("Other", sug("320")));
+    facts.insert("id7".to_string(), BookFacts::new("Shelfless", None));
+    facts.insert("id8".to_string(), BookFacts::new("Bad code", sug("44")));
+    let ev = seed_events(&facts, "builder-x", 5);
+    let order: Vec<(String, String)> = ev
+        .iter()
+        .map(|e| match &e.kind {
+            Kind::Place { doc, div, by } => (format!("place {doc} {div}"), by.as_str().to_string()),
+            Kind::Assign { doc, div, seq } => (format!("assign {doc} {div} {seq}"), String::new()),
+            other => (format!("{other:?}"), String::new()),
+        })
+        .collect();
+    let want = [
+        "place id5 320",
+        "assign id5 320 1",
+        "place id1 440",
+        "assign id1 440 1",
+        "place id2 440",
+        "assign id2 440 2",
+        "place id9 440",
+        "assign id9 440 3",
+    ];
+    assert_eq!(order.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(), want);
+    assert!(ev.iter().all(|e| e.at == 5 && e.dev == "builder-x"));
+    // the same input gives the same events
+    assert_eq!(ev, seed_events(&facts, "builder-x", 5));
+    // a replaced title sorts as the new title, and is recorded as a title event after the placements
+    facts.get_mut("id2").unwrap().title_override = Some("Aardvark".into());
+    let ev = seed_events(&facts, "builder-x", 5);
+    let r = resolve(&ev);
+    let calls: Vec<(String, String)> = ["id2", "id1", "id9"].iter().map(|d| (d.to_string(), r.doc(d).unwrap().call.as_ref().unwrap().text.clone())).collect();
+    assert_eq!(calls, [("id2".to_string(), "CDS 440-001".to_string()), ("id1".to_string(), "CDS 440-002".to_string()), ("id9".to_string(), "CDS 440-003".to_string())]);
+    assert_eq!(r.doc("id2").unwrap().title.as_deref(), Some("Aardvark"));
+    assert_eq!(ev.last().map(|e| e.kind.clone()), Some(Kind::Title { doc: "id2".into(), title: "Aardvark".into() }));
+    assert!(r.doc("id7").is_none() && r.doc("id8").is_none(), "no division, no events");
+    assert!(ev.iter().filter_map(|e| if let Kind::Place { by, .. } = &e.kind { Some(*by) } else { None }).all(|b| b == By::Auto));
 }
 
 fn run_library(packs: &Path, out: &Path, extra: &[&Path]) -> std::process::Output {
@@ -300,26 +482,44 @@ fn labels_and_titles_files_set_the_division_and_the_title() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("labels: 2 matched, 1 ambiguous"), "{stdout}");
-    let docs = Docs::from_bytes(&std::fs::read(lib.join(DOCS_FILE)).unwrap()).unwrap().docs;
+    let view = read_json(&lib.join(".local").join("docs.json"));
+    let docs = &view["docs"];
+    let entry = |p: &Pack| docs[&p.header.doc_id].clone();
 
-    // a: the label overrides the pack's own division; the default class names give the label; the title is replaced
-    let ea = &docs[&a.header.doc_id];
-    assert_eq!(ea.division.as_deref(), Some("440"));
-    assert_eq!(ea.second_division.as_deref(), Some("450"));
-    assert_eq!(ea.source.as_deref(), Some("label"));
-    assert_eq!(ea.label.as_deref(), Some("Canning"));
-    assert_eq!((ea.score, ea.classifier_version), (None, None));
-    assert_eq!((ea.title.as_str(), ea.source_title.as_deref()), ("How Water Moves", Some("Water")));
+    // a: the label overrides the pack's own suggestion; the default class names give the label; the title is replaced
+    let ea = entry(&a);
+    assert_eq!(ea["shelf"], json!("440"));
+    assert_eq!(ea["suggested"]["div"], json!("440"));
+    assert_eq!(ea["suggested"]["second_div"], json!("450"));
+    assert_eq!(ea["suggested"]["source"], json!("label"));
+    assert_eq!(ea["suggested"]["label"], json!("Canning"));
+    assert_eq!((ea["suggested"]["score"].clone(), ea["suggested"]["classifier_version"].clone()), (Value::Null, Value::Null));
+    assert_eq!((ea["title"].clone(), ea["source_title"].clone()), (json!("How Water Moves"), json!("Water")));
     // b: "unsure" is no division; an empty title leaves the old one
-    let eb = &docs[&b.header.doc_id];
-    assert_eq!((eb.division.clone(), eb.title.as_str(), eb.source_title.clone()), (None, "Stone", None));
+    let eb = entry(&b);
+    assert_eq!((eb["shelf"].clone(), eb["title"].clone(), eb["source_title"].clone()), (Value::Null, json!("Stone"), Value::Null));
     // c: found by BLAKE3, the label from the file
-    let ec = &docs[&c.header.doc_id];
-    assert_eq!((ec.division.as_deref(), ec.label.as_deref(), ec.source.as_deref()), (Some("320"), Some("Sand and soil"), Some("label")));
+    let ec = entry(&c);
+    assert_eq!((ec["shelf"].clone(), ec["suggested"]["label"].clone(), ec["suggested"]["source"].clone()), (json!("320"), json!("Sand and soil"), json!("label")));
     // d: two records share the file name, so no label
-    assert_eq!(docs[&d.header.doc_id].division, None);
+    assert_eq!(entry(&d)["shelf"], Value::Null);
     // e: the not-ok title line is skipped, the BLAKE3 one is used
-    assert_eq!((docs[&e.header.doc_id].title.as_str(), docs[&e.header.doc_id].source_title.as_deref()), ("Table Salt", Some("Salt")));
+    let ee = entry(&e);
+    assert_eq!((ee["title"].clone(), ee["source_title"].clone()), (json!("Table Salt"), json!("Salt")));
+    // the seed log records the divisions and the replaced titles, so the view can be made again from the log and the packs
+    let seed = std::fs::read_to_string(lib.join("log").join("builder-r3.jsonl")).unwrap();
+    assert!(seed.contains(&format!(r#""ev":"title","doc":"{}","title":"How Water Moves""#, a.header.doc_id)), "{seed}");
+    assert!(seed.contains(&format!(r#""ev":"title","doc":"{}","title":"Table Salt""#, e.header.doc_id)));
+    std::fs::remove_file(lib.join(".local").join("docs.json")).unwrap();
+    let again = cli().arg("view").arg("--library").arg(lib.as_path()).arg("--packs").arg(packs.as_path()).output().unwrap();
+    assert!(again.status.success(), "{}", String::from_utf8_lossy(&again.stderr));
+    let rebuilt = read_json(&lib.join(".local").join("docs.json"));
+    // titles from the log, divisions (shelf) from the log; the label's own details are in the packs only, so the rebuild shows
+    // the packs' suggestion but the same shelf and title
+    for p in [&a, &b, &c, &d, &e] {
+        let id = &p.header.doc_id;
+        assert_eq!((rebuilt["docs"][id]["shelf"].clone(), rebuilt["docs"][id]["title"].clone(), rebuilt["docs"][id]["call"].clone()), (docs[id]["shelf"].clone(), docs[id]["title"].clone(), docs[id]["call"].clone()));
+    }
 
     // the new title is the library's title: documents.tsv and the payloads
     let tsv = std::fs::read_to_string(lib.join("documents.tsv")).unwrap();
@@ -337,9 +537,9 @@ fn labels_and_titles_files_set_the_division_and_the_title() {
     let plain = tmp.path().join("plain");
     let o = run_library(&packs, &plain, &[]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let plain_docs = Docs::from_bytes(&std::fs::read(plain.join(DOCS_FILE)).unwrap()).unwrap().docs;
-    assert_eq!(plain_docs[&a.header.doc_id].source.as_deref(), Some("sorter"));
-    assert_eq!(plain_docs[&a.header.doc_id].title, "Water");
+    let plain_docs = read_json(&plain.join(".local").join("docs.json"));
+    assert_eq!(plain_docs["docs"][&a.header.doc_id]["suggested"]["source"], json!("classifier"));
+    assert_eq!(plain_docs["docs"][&a.header.doc_id]["title"], json!("Water"));
 
     // a labels file that is not a list is refused before anything is written
     let bad = tmp.path().join("bad.json");
@@ -485,9 +685,8 @@ fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_sam
 }
 
 #[test]
-fn a_compression_outcome_travels_in_docs_json_when_the_caller_has_one() {
+fn a_compression_outcome_and_ocr_travel_in_the_view_when_the_caller_has_them() {
     use cache_builder::compress::CompressionOutcome;
-    use cache_builder::docs::DocEntry;
     use cache_builder::embed::fake_vector;
     use cache_builder::library::{write_library, LibDoc};
     use cache_builder::pack::PackPiece;
@@ -495,9 +694,10 @@ fn a_compression_outcome_travels_in_docs_json_when_the_caller_has_one() {
         let text = format!("passage {i} of the compressed book");
         PackPiece { index: i, vector: fake_vector(&text), text, page: "1".into(), pdf_page: Some(1), page_end: None, pdf_page_end: None, heading_path: vec![] }
     };
-    let doc = |id: &str, c: Option<CompressionOutcome>| {
-        let mut e = DocEntry::new(id, None);
+    let doc = |id: &str, c: Option<CompressionOutcome>, ocr: Option<OcrInfo>| {
+        let mut e = BookFacts::new(id, None);
         e.compression = c;
+        e.ocr = ocr;
         LibDoc {
             title: id.into(),
             doc_id: id.into(),
@@ -520,13 +720,15 @@ fn a_compression_outcome_travels_in_docs_json_when_the_caller_has_one() {
         kept_reason: None,
         psnr_min: Some(41.5),
     };
+    let ocr = OcrInfo { engine: "doctr".into(), version: "1.1.0".into(), pages_ocrd: 7 };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("lib");
-    write_library(&out, &library_opts(), [doc("with", Some(outcome.clone())), doc("without", None)]).unwrap();
-    let docs = Docs::from_bytes(&std::fs::read(out.join(DOCS_FILE)).unwrap()).unwrap();
-    assert_eq!(docs.docs["with"].compression, Some(outcome));
-    assert_eq!(docs.docs["without"].compression, None);
-    let v: Value = serde_json::from_slice(&std::fs::read(out.join(DOCS_FILE)).unwrap()).unwrap();
+    write_library(&out, &library_opts(), [doc("with", Some(outcome), Some(ocr)), doc("without", None, None)]).unwrap();
+    let v = read_json(&out.join(".local").join("docs.json"));
     assert_eq!(v["docs"]["with"]["compression"]["stored_size"], json!(4000));
-    assert!(!v["docs"]["without"].as_object().unwrap().contains_key("compression"));
+    assert_eq!(v["docs"]["with"]["compression"]["preset"], json!("balanced"));
+    assert_eq!(v["docs"]["with"]["ocr"], json!({"engine": "doctr", "version": "1.1.0", "pages_ocrd": 7}));
+    assert_eq!((v["docs"]["without"]["compression"].clone(), v["docs"]["without"]["ocr"].clone()), (Value::Null, Value::Null));
+    // no division and no replaced title: no seed log at all
+    assert!(!out.join("log").exists());
 }

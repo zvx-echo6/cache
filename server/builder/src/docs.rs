@@ -1,109 +1,16 @@
-//! `docs.json`: the per-document sidecar at the library root (listed in `cache-library.json` as `"docs": "docs.json"`).
+//! The `--labels` and `--titles` files of a rebuild (`cache-build library`, and `cache-build pdf`): which division and which
+//! title a book gets from them, and how a pack finds its record.
 //!
-//! It holds what the app shows about a document and the search payloads never carry: its division and its title. It is never
-//! part of a search payload. See PACK-FORMAT.md ("docs.json").
-//!
-//! The writer builds it from the packs' `division` headers and titles. [`Labels`] and [`Titles`] (the `--labels` and `--titles`
-//! files of `cache-build library`) override those for the rebuild. Readers apply the app's `overrides.json` on top; writing
-//! `overrides.json` is the app's job.
+//! The labels become a book's suggested division (source `label`), and a replaced title is kept as `source_title`. Where the
+//! book is shelved and what it is called afterwards is the log's business (see LIBRARY-LOG.md): the seed log records a division
+//! as `place` and `assign`, and a replaced title as `title`.
 
-use crate::compress::CompressionOutcome;
 use crate::error::{Error, Result};
-use crate::pack::{Division, Header};
-use serde::{Deserialize, Serialize};
+use crate::pack::{Header, Suggested};
+use crate::view::BookFacts;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
-
-/// The file name, at the library root.
-pub const DOCS_FILE: &str = "docs.json";
-pub const DOCS_FORMAT: u32 = 1;
-
-/// One document's entry. Every key is always written (`null` when unknown).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DocEntry {
-    pub division: Option<String>,
-    pub label: Option<String>,
-    pub score: Option<f32>,
-    pub classifier_version: Option<u32>,
-    /// `label`, `sorter` or `user`; `null` when the document has no division.
-    pub source: Option<String>,
-    pub second_division: Option<String>,
-    pub title: String,
-    /// The title before a titles file replaced it; `null` when the title was not replaced.
-    pub source_title: Option<String>,
-    /// What compression did to the stored PDF (`CompressionOutcome`: original_size, stored_size, level, preset, kept_original,
-    /// kept_reason, psnr_min). Left out when the book was stored as it arrived or the caller has no record of it.
-    /// TODO: the build service's publish path (libbuild) writes no `docs.json` yet; when it does, it copies `Book.compression` here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compression: Option<CompressionOutcome>,
-}
-
-impl DocEntry {
-    pub fn new(title: &str, division: Option<&Division>) -> DocEntry {
-        DocEntry {
-            division: division.map(|d| d.division.clone()),
-            label: division.map(|d| d.label.clone()),
-            score: division.and_then(|d| d.score),
-            classifier_version: division.and_then(|d| d.classifier_version),
-            source: division.map(|d| d.source.clone()),
-            second_division: division.and_then(|d| d.second_division.clone()),
-            title: title.to_string(),
-            source_title: None,
-            compression: None,
-        }
-    }
-}
-
-/// The whole file: `{"format": 1, "docs": {doc_id: entry}}`, the documents in doc_id order.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Docs {
-    pub format: u32,
-    pub docs: BTreeMap<String, DocEntry>,
-}
-
-impl Default for Docs {
-    fn default() -> Self {
-        Docs { format: DOCS_FORMAT, docs: BTreeMap::new() }
-    }
-}
-
-impl Docs {
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut s = serde_json::to_string_pretty(self).map_err(|e| Error::ctx("docs.json", e))?;
-        s.push('\n');
-        Ok(s.into_bytes())
-    }
-
-    /// Reads a `docs.json`; rejects any format but 1.
-    pub fn from_bytes(b: &[u8]) -> Result<Docs> {
-        let d: Docs = serde_json::from_slice(b).map_err(|e| Error::ctx("docs.json", e))?;
-        if d.format != DOCS_FORMAT {
-            return Err(Error::new(format!("docs.json format {} is not supported (this reads {DOCS_FORMAT})", d.format)));
-        }
-        Ok(d)
-    }
-}
-
-/// Writes `docs.json` in `dir` atomically: a temporary file in the same folder, flushed to disk, then renamed over the name, so a
-/// reader (or a crash) sees the old file or the new one, never half of one.
-pub fn write_docs(dir: &Path, docs: &Docs) -> Result<std::path::PathBuf> {
-    let bytes = docs.to_bytes()?;
-    let path = dir.join(DOCS_FILE);
-    let tmp = dir.join(format!(".{DOCS_FILE}.tmp"));
-    let write = || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, &path)
-    };
-    write().map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        Error::ctx(&format!("writing {}", path.display()), e)
-    })?;
-    Ok(path)
-}
 
 // ------------------------------------------------------------------------------------------------ labels and titles
 
@@ -295,20 +202,22 @@ pub struct Overrides {
 }
 
 impl Overrides {
-    /// The entry for a pack: its own division (or none) and title, then the labels file's division (source `label`) and the
-    /// titles file's title, the original title kept as `source_title`. Returns the title the library should use.
-    pub fn entry(&self, h: &Header, applied: &mut Applied) -> DocEntry {
-        let mut e = DocEntry::new(&h.title, h.division.as_ref());
+    /// The facts for a pack: its own, then the labels file's division (source `label`) and the titles file's title, the old
+    /// title kept as `source_title`.
+    pub fn entry(&self, h: &Header, applied: &mut Applied) -> BookFacts {
+        let mut e = BookFacts::from_header(h);
         if let Some(l) = &self.labels {
             match l.find(h) {
                 Found::One(r) => {
                     applied.labels_matched += 1;
-                    e.division = Some(r.division.clone());
-                    e.label = Some(r.label.clone().or_else(|| self.names.get(&r.division).cloned()).unwrap_or_else(|| r.division.clone()));
-                    e.score = None;
-                    e.classifier_version = None;
-                    e.source = Some("label".into());
-                    e.second_division = r.second_division.clone();
+                    e.suggested = Some(Suggested {
+                        div: r.division.clone(),
+                        label: r.label.clone().or_else(|| self.names.get(&r.division).cloned()).unwrap_or_else(|| r.division.clone()),
+                        score: None,
+                        classifier_version: None,
+                        source: "label".into(),
+                        second_div: r.second_division.clone(),
+                    });
                 }
                 Found::Ambiguous => applied.labels_ambiguous += 1,
                 Found::None => applied.labels_unmatched += 1,
@@ -318,9 +227,9 @@ impl Overrides {
             match t.find(h) {
                 Found::One(r) => {
                     applied.titles_matched += 1;
-                    if r.title != h.title {
-                        e.source_title = Some(h.title.clone());
-                        e.title = r.title.clone();
+                    if r.title != e.title {
+                        e.source_title = Some(e.title.clone());
+                        e.title_override = Some(r.title.clone());
                     }
                 }
                 Found::Ambiguous => applied.titles_ambiguous += 1,

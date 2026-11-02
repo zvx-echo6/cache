@@ -2,15 +2,18 @@
 //! with the ids and payload fields of docs/LIBRARY-FORMAT.md, and `cache-library.json`. The result is checked with the
 //! core's own `check_library`.
 
-use crate::docs::{write_docs, Applied, DocEntry, Docs, Overrides, DOCS_FILE};
+use crate::docs::{valid_division, Applied, Overrides};
 use crate::embed::DIMS;
 use crate::error::{Error, Result};
+use crate::log::{read_logs, resolve, By, Event, Kind, LogWriter, LOG_DIR};
 use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
+use crate::view::{view_value, write_view, BookFacts};
 use edge::{
     Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
     VectorStorageDatatype,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// UUIDv5(URL namespace, "https://github.com/zvx-echo6/cache/library-point"), docs/LIBRARY-FORMAT.md.
@@ -74,8 +77,9 @@ pub struct LibDoc {
     pub pages: Option<usize>,
     /// Each piece carries its own text, printed page label, PDF pages, heading path and vector.
     pub pieces: Vec<PackPiece>,
-    /// What `docs.json` says about the document (division, title before and after). `None`: no division, the title as it is.
-    pub entry: Option<DocEntry>,
+    /// The book's facts for the view and the seed log (suggested division, title before and after, compression, OCR). `None`:
+    /// no division, the title as it is.
+    pub entry: Option<BookFacts>,
 }
 
 impl LibDoc {
@@ -92,7 +96,7 @@ impl LibDoc {
             zim: None,
             pages: Some(h.page_count),
             pieces: pack.pieces.clone(),
-            entry: Some(DocEntry::new(&h.title, h.division.as_ref())),
+            entry: Some(BookFacts::from_header(h)),
         }
     }
 }
@@ -177,6 +181,9 @@ pub struct LibraryOptions {
     pub vector_datatype: VectorDatatype,
     /// Also write `<out>.cache-library` (the shard as a snapshot tar with the settings file at its root).
     pub archive: bool,
+    /// The `at` of every event in the seed log, in UTC milliseconds. A rebuild passes a fixed value, so the same inputs give the
+    /// same log and view byte for byte.
+    pub built_at: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -213,14 +220,6 @@ pub fn live_packs(dir: &Path) -> Result<Vec<Pack>> {
     Ok(best.into_values().collect())
 }
 
-/// The settings file of a library written with a `docs.json`: [`library_settings`] plus `"docs": "docs.json"` (the only key added to
-/// the shipped guide library's).
-pub fn library_settings_with_docs(id: &str, title: &str, version: &str) -> Value {
-    let mut s = library_settings(id, title, version);
-    s["docs"] = json!(DOCS_FILE);
-    s
-}
-
 /// The settings file of a library: the template with this library's id, title and version.
 pub fn library_settings(id: &str, title: &str, version: &str) -> Value {
     let mut s = cache_search::libadd::template_settings();
@@ -242,7 +241,7 @@ pub struct LibraryWriter {
     points: usize,
     ids: std::collections::HashSet<String>,
     rows: Vec<String>,
-    docs: Docs,
+    facts: BTreeMap<String, BookFacts>,
 }
 
 /// A tab-separated field: tabs and line breaks become spaces.
@@ -275,8 +274,8 @@ impl LibraryWriter {
                 return Err(Error::ctx("making the library shard", e));
             }
         };
-        let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), vector_datatype: opts.vector_datatype, archive: opts.archive };
-        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), docs: Docs::default() })
+        let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), vector_datatype: opts.vector_datatype, archive: opts.archive, built_at: opts.built_at };
+        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), facts: BTreeMap::new() })
     }
 
     /// Add one document's pieces.
@@ -324,9 +323,11 @@ impl LibraryWriter {
             up(batch)?;
         }
         self.points += doc.pieces.len();
-        let mut entry = doc.entry.clone().unwrap_or_else(|| DocEntry::new(&doc.title, None));
-        entry.title = doc.title.clone();
-        self.docs.docs.insert(doc.doc_id.clone(), entry);
+        let mut facts = doc.entry.clone().unwrap_or_else(|| BookFacts::new(&doc.title, None));
+        if facts.effective_title() != doc.title {
+            facts.title_override = Some(doc.title.clone());
+        }
+        self.facts.insert(doc.doc_id.clone(), facts);
         self.rows.push(format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
             doc.doc_id,
@@ -339,13 +340,14 @@ impl LibraryWriter {
         Ok(())
     }
 
-    /// Flush the shard and write `cache-library.json`, `documents.tsv` and `SHA256SUMS` (and the archive, when asked).
+    /// Flush the shard and write `cache-library.json`, `documents.tsv` and `SHA256SUMS`, the seed log `log/builder-<library_id>.jsonl` and the local view `.local/docs.json` (and the
+    /// archive, when asked).
     pub fn finish(self) -> Result<LibraryReport> {
-        let LibraryWriter { out, shard_dir, opts, shard, points, rows, docs, .. } = self;
+        let LibraryWriter { out, shard_dir, opts, shard, points, rows, facts, .. } = self;
         shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
         drop(shard);
         cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
-        let settings = library_settings_with_docs(&opts.id, &opts.title, &opts.version);
+        let settings = library_settings(&opts.id, &opts.title, &opts.version);
         let settings_path = out.join(SETTINGS_FILE);
         let text = serde_json::to_string_pretty(&settings).map_err(|e| Error::ctx("settings", e))? + "\n";
         std::fs::write(&settings_path, &text).map_err(|e| Error::ctx(&format!("writing {}", settings_path.display()), e))?;
@@ -356,12 +358,19 @@ impl LibraryWriter {
         }
         let tsv_path = out.join(DOCUMENTS_FILE);
         std::fs::write(&tsv_path, tsv).map_err(|e| Error::ctx(&format!("writing {}", tsv_path.display()), e))?;
-        write_docs(&out, &docs)?;
+        // The seed log (synced, so it is in SHA256SUMS), then the local view made from it (never synced, in no list).
+        let dev = seed_device_id(&opts.id);
+        let seed = seed_events(&facts, &dev, opts.built_at);
+        if !seed.is_empty() {
+            LogWriter::open(&out.join(LOG_DIR), &dev)?.append(&seed)?;
+        }
         write_sha256sums(&out)?;
+        let logs = read_logs(&out.join(LOG_DIR))?;
+        write_view(&out, &view_value(&facts, &resolve(&logs.events), &logs.files))?;
         let archive = if opts.archive {
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "library".into());
             let path = out.with_file_name(format!("{name}.cache-library"));
-            write_archive(&shard_dir, &text, &docs.to_bytes()?, &path)?;
+            write_archive(&shard_dir, &text, &path)?;
             Some(path)
         } else {
             None
@@ -375,6 +384,39 @@ impl LibraryWriter {
         drop(self);
         let _ = std::fs::remove_dir_all(out);
     }
+}
+
+/// The device id of a library's seed log: `builder-<library_id>`, with anything a file name should not hold made a dash.
+pub fn seed_device_id(library_id: &str) -> String {
+    let id: String = library_id.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect();
+    let id = format!("builder-{id}");
+    id.chars().take(64).collect()
+}
+
+/// The events of the seed log, in order: for each division (by number), each of its books as `place` then `assign`; then a `title`
+/// for every book whose title a titles file replaced. A book with no suggested division gets none (it is in Unsorted). Numbers run
+/// from 1 in order of (title, doc_id) within a division, so a rebuild gives the same numbers. Every event has `at`.
+pub fn seed_events(facts: &BTreeMap<String, BookFacts>, dev: &str, at: u64) -> Vec<Event> {
+    let mut by_div: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    for (id, f) in facts {
+        if let Some(s) = f.suggested.as_ref().filter(|s| valid_division(&s.div)) {
+            by_div.entry(s.div.as_str()).or_default().push((f.effective_title(), id.as_str()));
+        }
+    }
+    let mut out = Vec::new();
+    for (div, mut books) in by_div {
+        books.sort();
+        for (n, (_, doc)) in books.iter().enumerate() {
+            out.push(Event::new(at, dev, Kind::Place { doc: doc.to_string(), div: div.to_string(), by: By::Auto }));
+            out.push(Event::new(at, dev, Kind::Assign { doc: doc.to_string(), div: div.to_string(), seq: n as u32 + 1 }));
+        }
+    }
+    for (id, f) in facts {
+        if let Some(t) = &f.title_override {
+            out.push(Event::new(at, dev, Kind::Title { doc: id.clone(), title: t.clone() }));
+        }
+    }
+    out
 }
 
 /// The general writer: the documents (from packs, a ZIM's PDFs, or anything else that makes pieces with vectors) to the
@@ -404,6 +446,10 @@ pub fn write_sha256sums(dir: &Path) -> Result<()> {
         for e in std::fs::read_dir(dir).map_err(|e| Error::ctx(&format!("reading {}", dir.display()), e))? {
             let e = e.map_err(|e| Error::ctx("reading a folder", e))?;
             let path = e.path();
+            // Local files (a name starting with a dot, such as `.local/`) are never listed: they are not part of the library.
+            if e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
             let ft = e.file_type().map_err(|e| Error::ctx("reading a folder", e))?;
             if ft.is_dir() {
                 walk(base, &path, out)?;
@@ -436,7 +482,7 @@ pub fn build_library(packs_dir: &Path, out: &Path, opts: &LibraryOptions) -> Res
     build_library_with(packs_dir, out, opts, &Overrides::default()).map(|(r, _)| r)
 }
 
-/// [`build_library`] with the labels and titles of a rebuild applied: each document's division and title in `docs.json` (and the
+/// [`build_library`] with the labels and titles of a rebuild applied: each document's division (in the seed log) and title (and the
 /// title in the search payloads and `documents.tsv`) come from `over` where it has a match, else from the pack.
 pub fn build_library_with(packs_dir: &Path, out: &Path, opts: &LibraryOptions, over: &Overrides) -> Result<(LibraryReport, Applied)> {
     if opts.id.trim().is_empty() {
@@ -464,7 +510,7 @@ pub fn build_library_with(packs_dir: &Path, out: &Path, opts: &LibraryOptions, o
         .map(|p| {
             let mut d = LibDoc::from_pack(p);
             let e = over.entry(&p.header, &mut applied);
-            d.title = e.title.clone();
+            d.title = e.effective_title().to_string();
             d.entry = Some(e);
             d
         })
@@ -474,7 +520,7 @@ pub fn build_library_with(packs_dir: &Path, out: &Path, opts: &LibraryOptions, o
 
 /// Pack the shard with the core's `pack_snapshot`, then add `cache-library.json` at the archive's root (the core's
 /// snapshot packer writes only the shard; this appends one more tar entry before the end-of-archive marker).
-fn write_archive(shard_dir: &Path, settings: &str, docs_json: &[u8], out: &Path) -> Result<()> {
+fn write_archive(shard_dir: &Path, settings: &str, out: &Path) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     let tmp = out.with_file_name(format!(".{}.tmp", out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
     cache_search::libadd::pack_snapshot(shard_dir, &tmp).map_err(|e| Error::ctx("packing the library", e.message))?;
@@ -497,12 +543,6 @@ fn write_archive(shard_dir: &Path, settings: &str, docs_json: &[u8], out: &Path)
     h.set_mtime(0);
     h.set_cksum();
     b.append_data(&mut h, SETTINGS_FILE, settings.as_bytes()).map_err(|e| Error::ctx("adding the settings file", e))?;
-    let mut h = tar::Header::new_gnu();
-    h.set_size(docs_json.len() as u64);
-    h.set_mode(0o644);
-    h.set_mtime(0);
-    h.set_cksum();
-    b.append_data(&mut h, DOCS_FILE, docs_json).map_err(|e| Error::ctx("adding docs.json", e))?;
     b.finish().map_err(|e| Error::ctx("finishing the archive", e))?;
     drop(b);
     f.sync_all().map_err(|e| Error::ctx("snapshot", e))?;

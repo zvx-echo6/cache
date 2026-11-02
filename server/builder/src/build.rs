@@ -6,7 +6,8 @@ use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, Extracted, EXTRACTOR_NAME, EXTRACTOR_VERSION};
 use crate::fingerprint::{fingerprint, mean_vector};
 use crate::layout::{layout, Element, MIN_PAGE_CHARS};
-use crate::pack::{valid_doc_id, Chunker, EmbeddingInfo, Header, Pack, PackPiece, Samebook, Source, Tool, PACK_FORMAT};
+use crate::compress::CompressionOutcome;
+use crate::pack::{valid_doc_id, BookBlock, Chunker, EmbeddingInfo, Header, OcrInfo, Pack, PackPiece, Samebook, Source, Suggested, Tool, PACK_FORMAT};
 use crate::text::word_count;
 
 /// What the caller chooses for one document.
@@ -24,11 +25,20 @@ pub struct BuildOptions {
     /// Choose the title the way the library does: the PDF's metadata title when it is a real one, else its first big heading,
     /// else the file name tidied. Off by default: the title is then the metadata title or the file name without its extension.
     pub smart_title: bool,
+    /// Revision 4 `book.original_blake3`: the BLAKE3 (hex) of the file as it arrived. Default: the hash of the PDF being built
+    /// (right unless the file was compressed first, or is an OCR copy of the original).
+    pub original_blake3: Option<String>,
+    /// Revision 4 `book.compression`: what compression did to the file, when it was compressed.
+    pub compression: Option<CompressionOutcome>,
+    /// Revision 4 `book.ocr`: set when the text came from OCR.
+    pub ocr: Option<OcrInfo>,
+    /// Revision 4 `book.suggested`: the division the classifier or a label suggests.
+    pub suggested: Option<Suggested>,
 }
 
 impl BuildOptions {
     pub fn new(file_name: &str, created_at: &str) -> Self {
-        BuildOptions { doc_id: None, doc_version: 1, title: None, https: None, file_name: file_name.to_string(), created_at: created_at.to_string(), smart_title: false }
+        BuildOptions { doc_id: None, doc_version: 1, title: None, https: None, file_name: file_name.to_string(), created_at: created_at.to_string(), smart_title: false, original_blake3: None, compression: None, ocr: None, suggested: None }
     }
 }
 
@@ -160,18 +170,16 @@ pub fn build_pack_with_extractor(
     }
     let label = |i: usize| ext.pages.get(i).map(|p| p.label.clone()).unwrap_or_else(|| (i + 1).to_string());
     let first_heading = first_big_heading(&lay.elements);
-    let title = if opts.smart_title {
-        opts.title
-            .clone()
-            .or_else(|| ext.title.as_deref().and_then(usable_metadata_title))
-            .or_else(|| first_heading.clone())
-            .unwrap_or_else(|| tidy_file_title(&opts.file_name))
+    // The title the PDF itself gives; a caller's title replaces it, and the replaced one is kept as `source_title`.
+    let auto_title: String = if opts.smart_title {
+        ext.title.as_deref().and_then(usable_metadata_title).or_else(|| first_heading.clone()).unwrap_or_else(|| tidy_file_title(&opts.file_name))
     } else {
-        opts.title
+        ext.title
             .clone()
-            .or_else(|| ext.title.clone())
             .unwrap_or_else(|| std::path::Path::new(&opts.file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| opts.file_name.clone()))
     };
+    let title = opts.title.clone().unwrap_or_else(|| auto_title.clone());
+    let source_title = (title != auto_title).then_some(auto_title);
     let words: Vec<usize> = pieces.iter().map(|p| word_count(&p.text)).collect();
     let headings_all: Vec<(u8, String)> = lay
         .elements
@@ -200,7 +208,7 @@ pub fn build_pack_with_extractor(
         doc_id,
         doc_version: opts.doc_version,
         title,
-        source: Source { blake3: hash, size: pdf.len() as u64, file_name: opts.file_name.clone(), https: opts.https.clone() },
+        source: Source { blake3: hash.clone(), size: pdf.len() as u64, file_name: opts.file_name.clone(), https: opts.https.clone() },
         extractor: Tool { name: EXTRACTOR_NAME.to_string(), version: EXTRACTOR_VERSION.to_string() },
         chunker: Chunker { version: CHUNKER_VERSION, target_words: TARGET_WORDS as u32, max_words: MAX_WORDS as u32 },
         embedding: EmbeddingInfo { embedder: embedder.name(), dims },
@@ -209,8 +217,17 @@ pub fn build_pack_with_extractor(
         ocr_pages: ocr_pages.clone(),
         pieces: pack_pieces.len(),
         division: None,
+        book: None,
         samebook: None,
     };
+    header.book = Some(BookBlock {
+        title: header.title.clone(),
+        source_title,
+        original_blake3: opts.original_blake3.clone().unwrap_or(hash),
+        compression: opts.compression.clone(),
+        ocr: opts.ocr.clone(),
+        suggested: opts.suggested.clone(),
+    });
     let print = fingerprint(pack_pieces.iter().map(|p| p.text.as_str()));
     let report = Report {
         pages: ext.pages.len(),

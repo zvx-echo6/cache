@@ -573,10 +573,10 @@ function dropFolderPage(kind){ // setup | active | missing | denied
   <div class="treef"><i>complete/</i>
   500 Water and Energy/
     530 Water treatment/
-      530 · KEA  The Water Purification Handbook.pdf
+      CDS 530-001  The Water Purification Handbook.pdf
   800 Outdoors and Navigation/
     830 Foraging and wild edibles/
-      830 · EDI  Edible Wild Plants of the Intermountain West.pdf
+      CDS 830-001  Edible Wild Plants of the Intermountain West.pdf
   Unsorted/
     Collected Pamphlets, Vol 3.pdf   <i>(waits for you to place it)</i>
   ZIM files/
@@ -601,12 +601,12 @@ function dropFolderPage(kind){ // setup | active | missing | denied
   ${r4('','Trapping 1952 scan.pdf','PDF','Protected with a password. Note: Trapping 1952 scan.pdf.why.txt',{c:'color:var(--warning)',btn:'<span class="tbtn">Retry</span>'})}
   ${r4('','backup-2026-10.tar','Other','Not a file Cache can use. Note: backup-2026-10.tar.why.txt',{c:'color:var(--secondary)'})}
   ${sec('Complete · in complete/, filed by subject, newest first')}
-  ${r4('','Water_Purification_Handbook_scan2.pdf','PDF','Replaced: the new copy has 312 text pages vs 298. Rebuilt in place as 530 · KEA, "The Water Purification Handbook"',{btn:'<span class=\"tbtn\">Removed</span>'})}
+  ${r4('','Water_Purification_Handbook_scan2.pdf','PDF','Replaced: the new copy has 312 text pages vs 298. Rebuilt in place as CDS 530-001, "The Water Purification Handbook"',{btn:'<span class=\"tbtn\">Removed</span>'})}
   ${r4('','pamphlets-vol3.pdf','PDF','Not sure where it goes. Filed in Unsorted',{c:'color:var(--warning)',btn:'<span class=\"tbtn\">Place it</span>'})}
-  ${r4('','farm_notes_14.pdf','PDF','Placed by you in 310 Gardening · 310 · FAR (moved from Unsorted)')}
-  ${r4('','Where There Is No Doctor.pdf','PDF','Filed in 230 Diseases and treatment · 230 · WHE')}
-  ${r4('','wilderness_med_7e.pdf','PDF','Exact copy of Wilderness Medicine Handbook, 7th ed (210 · WIL)',{btn:'<span class=\"tbtn\">Removed</span>'})}
-  ${r4('','idaho_regs_2025_lowres.pdf','PDF','Already have a better copy (840 · IDA)',{btn:'<span class=\"tbtn\">Removed</span>'})}
+  ${r4('','farm_notes_14.pdf','PDF','Placed by you in 310 Gardening · CDS 310-001 (moved from Unsorted)')}
+  ${r4('','Where There Is No Doctor.pdf','PDF','Filed in 230 Diseases and treatment · CDS 230-001')}
+  ${r4('','wilderness_med_7e.pdf','PDF','Exact copy of Wilderness Medicine Handbook, 7th ed (CDS 210-001)',{btn:'<span class=\"tbtn\">Removed</span>'})}
+  ${r4('','idaho_regs_2025_lowres.pdf','PDF','Already have a better copy (CDS 840-001)',{btn:'<span class=\"tbtn\">Removed</span>'})}
   ${r4('','survival-guides-extra.zim','Library file','Added to the Library. Filed in ZIM files/')}</div>
   <div class="prose" style="margin-top:14px"><p>Retry moves a file back into ingest/, at the end of the queue.</p></div><div style="margin:6px 0 0 -12px"><span class="tbtn" style="color:var(--secondary)">Removed · 3</span></div>`;
  }
@@ -641,11 +641,11 @@ const clsName = no => { const c=CLS.find(c=>c.no===no); return c.no+' '+c.name; 
 const classOf = no => String(Math.floor(+no/100)*100).padStart(3,'0');
 /* sample books: [call, title, pages, passages, added] */
 const CB = [
- ['150 · REA','Reading the Weather','210','262','5 h ago'],['210 · BAS','Basic Wilderness First Aid','132','176','4 h ago'],['210 · WIL','Wilderness Medicine Handbook, 7th ed','412','480','just now'],
- ['230 · WHE','Where There Is No Doctor','512','702','1 h ago'],['310 · GAR','Gardening in Short Seasons','220','289','6 h ago'],['350 · BEE','Beekeeping for Beginners','156','208','6 h ago'],
- ['440 · HOM','Home Canning and Preserving','244','330','4 h ago'],['530 · KEA','The Water Purification Handbook','298','372','3 h ago'],['670 · SMA','Small Engine Repair','302','410','5 h ago'],
- ['720 · HAM','Ham Radio License Manual','388','521','3 h ago'],['810 · FIE','Field Manual 21-76 Survival','412','480','12 min ago'],['820 · KNO','Knots, Splices and Rope Work','188','203','2 h ago'],
- ['830 · EDI','Edible Wild Plants of the Intermountain West','236','311','12 min ago'],['830 · FOR','Foraging the Mountain West','272','358','2 d ago'],['830 · MUS','Mushrooms Demystified','560','644','1 h ago'],['830 · WIL','Wild Berries of the Northern Rockies','148','201','2 d ago'],['840 · IDA','Idaho Hunting Regulations 2025','96','141','2 h ago'],['870 · BAC','Backcountry Navigation Basics','340','412','yesterday']];
+ ['CDS 150-001','Reading the Weather','210','262','5 h ago'],['CDS 210-002','Basic Wilderness First Aid','132','176','4 h ago'],['CDS 210-001','Wilderness Medicine Handbook, 7th ed','412','480','just now'],
+ ['CDS 230-001','Where There Is No Doctor','512','702','1 h ago'],['CDS 310-002','Gardening in Short Seasons','220','289','6 h ago'],['CDS 350-001','Beekeeping for Beginners','156','208','6 h ago'],
+ ['CDS 440-001','Home Canning and Preserving','244','330','4 h ago'],['CDS 530-001','The Water Purification Handbook','298','372','3 h ago'],['CDS 670-001','Small Engine Repair','302','410','5 h ago'],
+ ['CDS 720-001','Ham Radio License Manual','388','521','3 h ago'],['CDS 810-001','Field Manual 21-76 Survival','412','480','12 min ago'],['CDS 820-001','Knots, Splices and Rope Work','188','203','2 h ago'],
+ ['CDS 830-001','Edible Wild Plants of the Intermountain West','236','311','12 min ago'],['CDS 830-002','Foraging the Mountain West','272','358','2 d ago'],['CDS 830-003','Mushrooms Demystified','560','644','1 h ago'],['CDS 830-004','Wild Berries of the Northern Rockies','148','201','2 d ago'],['CDS 840-001','Idaho Hunting Regulations 2025','96','141','2 h ago'],['CDS 870-001','Backcountry Navigation Basics','340','412','yesterday']];
 const B830 = CB.filter(b=>b[0].startsWith('830'));
 const UNS = [['Collected Pamphlets, Vol 3','126','171','Close between three divisions','today 03:40'],['Farm and Home Notes, Bulletin 14','64','88','Not enough text to tell (mostly tables)','today 03:40'],['Untitled scan 2019-08','210','0','Scanned; the first pages were hard to read','yesterday 22:10']];
 const UNS_N = 3;
@@ -705,7 +705,7 @@ function decideCard(){
  const col = (h,t,rows) => `<div style="flex:1;min-width:0;background:var(--bg);border-radius:10px;padding:10px 12px"><div style="font-size:11px;font-weight:600;color:var(--secondary);margin-bottom:4px">${h}</div><div style="font-size:14px;font-weight:500;margin-bottom:4px">${t}</div>${rows.map(r=>`<div class="de" style="font-size:12px;color:var(--secondary);line-height:1.5">${r}</div>`).join('')}</div>`;
  return `<div class="card notice" style="padding:12px 14px;margin:4px 0 10px"><div class="ti" style="font-size:15px;font-weight:500">Possible new edition</div>
  <div class="de" style="font-size:13px;color:var(--secondary);margin:2px 0 10px;white-space:normal;line-height:1.4">A file in ingest/ looks like a book you already have, but its content differs. Cache will not choose for you.</div>
- <div style="display:flex;gap:10px">${col('IN YOUR LIBRARY','Where There Is No Doctor',['512 pages · 498 with text','2010 edition','Filed in 230 · WHE'])}${col('NEW FILE','Where There Is No Doctor, 2nd ed.pdf',['548 pages · 540 with text','2019 edition','Still in ingest/'])}</div>
+ <div style="display:flex;gap:10px">${col('IN YOUR LIBRARY','Where There Is No Doctor',['512 pages · 498 with text','2010 edition','Filed in CDS 230-001'])}${col('NEW FILE','Where There Is No Doctor, 2nd ed.pdf',['548 pages · 540 with text','2019 edition','Still in ingest/'])}</div>
  <div class="de" style="font-size:13px;color:var(--text);margin:10px 0 8px;white-space:normal;line-height:1.45"><b style="font-weight:500">What differs:</b> most of the text matches. About 1 passage in 5 is new or changed, and 36 pages were added.</div>
  <div style="display:flex;gap:8px;align-items:center"><span class="btn2">Keep both</span><span class="fbtn">Replace the older one</span><span class="de" style="font-size:12px;color:var(--secondary);margin-left:6px;white-space:normal;flex:1">Replacing moves the older copy to Removed for 30 days and rebuilds the book in place.</span></div></div>`;
 }

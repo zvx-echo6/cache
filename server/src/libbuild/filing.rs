@@ -4,8 +4,6 @@
 use super::*;
 use classify::{Classes, Verdict};
 
-pub const CORRECTIONS_FILE: &str = "corrections.jsonl";
-
 pub(crate) fn decision_view(d: &Decision) -> Value {
     let side = |s: &Side| json!({"pages": s.pages, "text_pages": s.text_pages, "year": s.year, "size": s.size, "ppi": s.ppi});
     json!({
@@ -47,7 +45,7 @@ impl BuildService {
             "text_pages": b.quality().text_pages, "year": b.year, "ppi": b.ppi,
             "class": found.map(|(c, _)| c.number.clone()), "class_name": found.map(|(c, _)| c.name.clone()),
             "division": found.map(|(_, d)| d.number.clone()), "division_name": found.map(|(_, d)| d.name.clone()),
-            "call_number": b.call_number(), "unsorted": found.is_none(),
+            "call_number": (!b.call_number().is_empty()).then(|| b.call_number()), "unsorted": found.is_none(),
             "suggestions": suggestions,
             "classifier_version": b.classifier_version,
             "unsure_reason": if found.is_none() { b.unsure.as_deref().map(classify::unsure_message) } else { None },
@@ -179,6 +177,16 @@ impl BuildService {
         let folder_s = folder.to_string_lossy().replace('\\', "/");
         let mut b2 = book.clone();
         b2.division = division.clone();
+        // Shelve it in this device's log: place, retire the old number and assign a new one (or unsort).
+        let by = if by_hand { By::User } else { By::Auto };
+        b2.call_text = match self.shelve_batch(lib, &[(doc.to_string(), division.clone(), by)]) {
+            Ok(mut calls) => calls.remove(doc).filter(|t| !t.is_empty()),
+            Err(e) => {
+                eprintln!("cache-server: writing the library log: {e}");
+                None
+            }
+        };
+        let new_call = b2.call_number();
         if by_hand {
             b2.placed = true;
             b2.moved_from = Some(division_label(&cls, book.division.as_deref()));
@@ -212,18 +220,12 @@ impl BuildService {
                 for it in st.items.iter_mut().filter(|i| i.library_id == lib && i.doc_id.as_deref() == Some(doc) && i.moved_to.is_some() && i.state == S::Done) {
                     it.moved_to = Some(rel.clone());
                     it.division = division.clone();
-                    it.call_number = Some(self.book_call(&book, division.as_deref()));
+                    it.call_number = (!new_call.is_empty()).then(|| new_call.clone());
                 }
                 self.save_queue_locked(&st);
             }
         }
         Ok(())
-    }
-
-    fn book_call(&self, b: &Book, division: Option<&str>) -> String {
-        let mut x = b.clone();
-        x.division = division.map(str::to_string);
-        x.call_number()
     }
 
     /// `POST /api/build/libraries/{id}/books/{doc}/place {"division": "530"}` (`"unsorted"` or null puts it back in Unsorted): the
@@ -242,46 +244,16 @@ impl BuildService {
                 return Err(err(400, "invalid", "There is no such division."));
             }
         }
-        let device = v.get("device").and_then(Value::as_str).map(|d| d.trim().chars().take(64).collect::<String>()).filter(|d| !d.is_empty());
         let _g = lock(&self.ops);
-        let Some(before) = self.book_of(lib, doc) else { return Err(err(404, "not_found", "no such book")) };
+        if self.book_of(lib, doc).is_none() {
+            return Err(err(404, "not_found", "no such book"));
+        }
         self.refile(lib, doc, division, true).map_err(|e| err(500, "server_error", e))?;
         let b = self.book_of(lib, doc).ok_or_else(|| err(404, "not_found", "no such book"))?;
-        // Every placement by hand is kept as training data for the next classifier. A log that cannot be written never fails
-        // the placement itself.
-        if let Err(e) = self.log_correction(lib, &before, &b, device.as_deref()) {
-            eprintln!("cache-server: corrections log: {e}");
-        }
+        // The placement is in this device's log (a `place` by the user, with the retire and assign): that is the training data
+        // too, since a `place` whose division differs from `book.suggested` is a correction. The local view follows.
+        self.rebuild_view_quietly(lib);
         Ok(self.book_json(&cls, &b, false))
-    }
-
-    /// The library's corrections log: one JSON line per placement by hand, kept at the library's root beside `packs/` and
-    /// `shard/` (never inside either, so it is in no search payload). `from` and `to` are division numbers or `"unsorted"`.
-    pub fn corrections_path(&self, lib: &str) -> PathBuf {
-        self.live_dir(lib).join(CORRECTIONS_FILE)
-    }
-
-    fn log_correction(&self, lib: &str, before: &Book, after: &Book, device: Option<&str>) -> std::io::Result<()> {
-        let div = |d: &Option<String>| d.clone().unwrap_or_else(|| "unsorted".to_string());
-        let line = json!({
-            "doc_id": after.doc_id,
-            "from": div(&before.division),
-            "to": div(&after.division),
-            "classifier_version": before.classifier_version,
-            "time": now_rfc3339(),
-            "device": device,
-        });
-        let path = self.corrections_path(lib);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut opts = std::fs::OpenOptions::new();
-        opts.create(true).append(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-        let mut f = opts.open(path)?;
-        f.write_all(format!("{line}\n").as_bytes())?;
-        f.sync_data()
     }
 
     /// `GET /api/build/libraries/{id}/books/{doc}/suggestions`: what "Place it" offers. The sorter's top 3 divisions for the book, as

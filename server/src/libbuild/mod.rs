@@ -5,6 +5,9 @@
 //! - `app/docs/libraries/<library_id>/` is a normal library the core opens (`shard/` and `cache-library.json`, so the helper's scan
 //!   and index jobs treat it like any other) plus `packs/`: one `<doc_id>@<version>.cdoc` per book (see
 //!   server/builder/PACK-FORMAT.md). The packs are the truth; the shard can always be made again from them.
+//!   The library folder also holds `log/<device_id>.jsonl`, this device's append-only log of shelving and title changes (it syncs;
+//!   see [`booklog`] and server/builder/LIBRARY-LOG.md), and `.local/docs.json`, the view made from the packs and every log (it
+//!   never syncs). Where a book is shelved and its call number (`CDS 210-001`) are in the log, not in the pack.
 //! - `app/docs/sources/<library_id>/<doc_id>.pdf` is the original PDF of every built book (see [`BuildService::source_path`]).
 //! - `build/queue.json` is the queue, `build/libs/<library_id>.json` the books of each library, `build/drop.json` the drop folder
 //!   settings, `build/pending/` the uploads waiting to be built, `build/work/<library_id>/shard/` the library's own read-write
@@ -40,7 +43,8 @@ use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr,
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
 use cache_builder::compress::{Compression, CompressionOutcome, Level};
 use cache_builder::isolate::ChildExtractor;
-use cache_builder::pack::{read_pack, write_pack, Pack};
+use cache_builder::log::By;
+use cache_builder::pack::{read_pack, write_pack, Pack, Suggested};
 use cache_builder::fingerprint::{decode_minhash, encode_minhash, jaccard, mean_vector};
 use cache_builder::{build_pack_with_extractor, BuildOptions, Embedder, Progress, Report};
 use http_body_util::BodyExt;
@@ -54,6 +58,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+pub mod booklog;
 pub mod classify;
 pub mod dropdir;
 pub mod filing;
@@ -362,13 +367,16 @@ pub struct Book {
     /// The BLAKE3 hash of the file as it arrived, when compression changed it (`blake3` is then the stored file's hash).
     #[serde(default)]
     pub original_blake3: Option<String>,
+    /// The call number as the logs resolve it (`CDS 210-001`); none in Unsorted. Kept here so file names and lists need no log
+    /// read; the service refreshes it when it publishes and whenever it shelves the book.
+    #[serde(default)]
+    pub call_text: Option<String>,
 }
 
 impl Book {
-    /// `530 · KEA`, or `KEA` while the book is in Unsorted.
+    /// `CDS 530-001` (`CDS 530-001.1` for the second claim on a number), or an empty string while the book is in Unsorted.
     pub fn call_number(&self) -> String {
-        let letters = if self.letters.is_empty() { call_letters(&self.title) } else { self.letters.clone() };
-        classify::call_number(self.division.as_deref(), &letters, self.suffix.as_deref())
+        self.call_text.clone().unwrap_or_default()
     }
 
     fn quality(&self) -> Quality {
@@ -481,6 +489,9 @@ pub struct BuildService {
     models: ModelStore,
     last_maintenance: Mutex<Instant>,
     classify_retry: Mutex<Option<Instant>>,
+    /// This device's id: the name of its library log (`log/<device>.jsonl`). The server has no sync identity of its own, so it
+    /// keeps a random one in `<data>/build/device_id` (see [`booklog::load_device_id`]).
+    pub(crate) device: String,
 }
 
 struct ClassCache {
@@ -650,6 +661,7 @@ impl BuildService {
         let data_for_models = data.clone();
         // The clock for "publish at most every so often" starts now for every library.
         let last_publish: HashMap<String, Instant> = libs.iter().map(|l| (l.id.clone(), Instant::now())).collect();
+        let device = booklog::load_device_id(&data);
         let svc = Arc::new(BuildService {
             data,
             lib,
@@ -676,6 +688,7 @@ impl BuildService {
             models: ModelStore::new(&data_for_models),
             last_maintenance: Mutex::new(Instant::now()),
             classify_retry: Mutex::new(None),
+            device,
         });
         svc.recover();
         svc.save_queue();
@@ -990,6 +1003,8 @@ impl BuildService {
         }
         let mut opts = BuildOptions::new(&item.file_name, &now_rfc3339());
         opts.smart_title = true;
+        opts.original_blake3 = original_hash.clone();
+        opts.compression = compression.clone();
         opts.title = item.title.clone().or_else(|| replacing.as_ref().map(|b| b.title.clone()));
         if let Some(old) = &replacing {
             opts.doc_id = Some(old.doc_id.clone());
@@ -1025,7 +1040,7 @@ impl BuildService {
                             // the call number and the place.
                             pack.header.doc_id = old.doc_id.clone();
                             pack.header.doc_version = old.doc_version + 1;
-                            pack.header.title = old.title.clone();
+                            pack.header.set_title(&old.title);
                             replaced_because = Some(reason);
                             replacing = Some(*old);
                         }
@@ -1037,6 +1052,10 @@ impl BuildService {
                     Some(old) => Placement::of(old),
                     None => self.plan_new(&pack.header.title, &pack.pieces, report.year, edition, &item.library_id),
                 };
+                // The classifier's best guess travels in the pack (`book.suggested`), also when the book is left in Unsorted.
+                if let (Some(s), Some(b)) = (self.suggested_of(&place), pack.header.book.as_mut()) {
+                    b.suggested = Some(s);
+                }
                 match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref(), &report, place, replaced_because.as_deref(), compression.as_ref(), original_hash.as_deref()) {
                     Ok(()) => match replaced_because {
                         Some(r) => Outcome::Replaced(Box::new(pack), format!("Replaced: {r}")),
@@ -1178,6 +1197,7 @@ impl BuildService {
             drop_root: None,
             compression: compression.cloned(),
             original_blake3: original_hash.map(str::to_string),
+            call_text: None,
         };
         if let Some(old) = replacing {
             let reason = format!("Replaced by a better copy: {}", why.unwrap_or("a newer file of the same book"));
@@ -1191,6 +1211,17 @@ impl BuildService {
                 let _ = self.to_removed(&c, &nm, &reason, "drop", &item.library_id);
             }
         }
+        // Shelve it in this device's log: place and assign, or unsort when the classifier was unsure. A replacement keeps its number.
+        book.call_text = match replacing {
+            Some(old) => old.call_text.clone(),
+            None => match self.shelve_batch(&item.library_id, &[(book.doc_id.clone(), book.division.clone(), By::Auto)]) {
+                Ok(mut calls) => calls.remove(&book.doc_id).filter(|t| !t.is_empty()),
+                Err(e) => {
+                    eprintln!("cache-server: writing the library log: {e}");
+                    None
+                }
+            },
+        };
         let folder = cls.folder_rel(book.division.as_deref());
         let dir = root.join(&folder);
         std::fs::create_dir_all(&dir).map_err(|e| io("keeping the PDF", e))?;
@@ -1221,6 +1252,20 @@ impl BuildService {
         }
         self.apply_pending_deletes(&item.library_id);
         Ok(())
+    }
+
+    /// The classifier's best guess as the pack's `book.suggested`, when it made one.
+    fn suggested_of(&self, place: &Placement) -> Option<Suggested> {
+        let top = place.suggestions.first()?;
+        let label = self.classes().find(&top.division).map(|(_, d)| d.name.clone()).unwrap_or_else(|| top.division.clone());
+        Some(Suggested {
+            div: top.division.clone(),
+            label,
+            score: Some(top.score),
+            classifier_version: place.classifier_version,
+            source: "classifier".into(),
+            second_div: place.suggestions.get(1).map(|s| s.division.clone()),
+        })
     }
 
     /// Where a new book goes: its three letters, and the division by meaning (or Unsorted when unsure).
@@ -1327,7 +1372,7 @@ impl BuildService {
                 it.attempts = 0; // this attempt came back
                 if let Some((div, call)) = &filed {
                     it.division = div.clone();
-                    it.call_number = Some(call.clone());
+                    it.call_number = (!call.is_empty()).then(|| call.clone());
                     it.force = None;
                     it.decision = None;
                 }
@@ -1493,7 +1538,6 @@ impl BuildService {
                 }
                 self.rescan();
             }
-            // TODO: also write docs.json here (cache_builder::docs), with each book's division and `Book.compression` as its `compression`.
             let settings = cache_builder::incremental::library_settings_json(id, &meta.title, &seq.to_string());
             write_bytes_atomic(&settings_path, settings.as_bytes()).map_err(|e| io("writing cache-library.json", e))?;
             if let Err(e) = std::fs::rename(&new, &shard) {
@@ -1511,6 +1555,8 @@ impl BuildService {
             let _ = std::fs::remove_dir_all(&old);
             let _ = std::fs::remove_dir_all(&oldindex);
         }
+        // Books the log has never seen are shelved, call numbers follow the logs, and the local view is made again.
+        self.catch_up(id);
         let mut st = lock(&self.st);
         st.last_publish.insert(id.to_string(), Instant::now());
         st.retry_after.remove(id);
@@ -1850,8 +1896,11 @@ impl BuildService {
             .ok_or_else(|| err(404, "not_found", "no such book"))?;
         let pack_path = self.packs_dir(id).join(cache_builder::pack::pack_file_name(&book.doc_id, book.doc_version));
         let mut pack = read_pack(&pack_path).map_err(|e| err(500, "server_error", e.to_string()))?;
-        pack.header.title = title.clone();
+        pack.header.set_title(&title);
         write_pack(&pack, &self.packs_dir(id)).map_err(|e| err(500, "server_error", e.to_string()))?;
+        if let Err(e) = self.log_title(id, doc, &title) {
+            eprintln!("cache-server: writing the library log: {e}");
+        }
         {
             let w = self.open_work(id).map_err(|e| err(500, "server_error", e))?;
             w.upsert_pack(&pack).map_err(|e| err(500, "server_error", e.to_string()))?;
@@ -1884,6 +1933,7 @@ impl BuildService {
                 self.save_meta(&m).map_err(|e| err(500, "server_error", format!("could not save the library: {e}")))?;
             }
         }
+        self.rebuild_view_quietly(id);
         self.poke();
         Ok(json!({"id": doc, "title": title}))
     }
@@ -1912,6 +1962,7 @@ impl BuildService {
             self.save_queue_locked(&st);
         }
         self.apply_pending_deletes(id);
+        self.rebuild_view_quietly(id);
         self.poke();
         Ok(json!({"removed": true, "id": doc}))
     }

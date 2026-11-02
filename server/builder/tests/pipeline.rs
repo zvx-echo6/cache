@@ -343,7 +343,7 @@ fn library_is_checked_by_the_core() {
     let (b2, _) = build_pack(&two_page_doc(), &o2, &FakeEmbedder).unwrap();
     write_pack(&b2, packs.path()).unwrap();
     let lib = out.path().join("lib");
-    let opts = LibraryOptions { id: "test-lib".into(), title: "Test library".into(), version: "1".into(), vector_datatype: Default::default(), archive: true };
+    let opts = LibraryOptions { id: "test-lib".into(), title: "Test library".into(), version: "1".into(), vector_datatype: Default::default(), archive: true, built_at: 0 };
     let r = build_library(packs.path(), &lib, &opts).unwrap();
     assert_eq!(r.documents, 2);
     assert_eq!(r.points, a.pieces.len() + b2.pieces.len());

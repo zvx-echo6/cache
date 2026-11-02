@@ -1,15 +1,25 @@
 //! `cache-build`: the library builder's command line.
 //!
 //!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder | --embed-url URL] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
-//!                                            [--created-at TEXT] [--pieces-out FILE]
+//!                                            [--created-at TEXT] [--pieces-out FILE] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]
+//!                                            [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]
+//!       Writes revision 4 packs: the `book` block holds the title, the arrival hash (`original_blake3`: the hash of the file as it
+//!       came, before compression; --original-blake3 names it when the PDF given is an OCR copy), the compression outcome, the OCR
+//!       (--ocr-engine/--ocr-version/--ocr-pages, or --ocr-json: either {engine, version, pages_ocrd, original_blake3?} or an object
+//!       of those keyed by input file name) and the suggested division (--labels, source "label").
 //!       Each PDF is read in a child process (this program run as the hidden `extract-pdf`), so a PDF that crashes MuPDF fails alone and
 //!       a long batch goes on; --in-process reads in this process instead (for debugging).
-//!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]
-//!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, docs.json, documents.tsv, SHA256SUMS
-//!       --labels sets each document's division (source "label") in docs.json from a labels file ([{id, path, final, second_division}]);
+//!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--built-at TIME]
+//!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, documents.tsv, log/builder-<id>.jsonl
+//!       (the seed log), SHA256SUMS and .local/docs.json (the view)
+//!       --built-at is the `at` of every seed event: UTC milliseconds or YYYY-MM-DDTHH:MM:SSZ (default: now; pass a fixed one so a
+//!       rebuild is byte-identical);
+//!       --labels sets each document's division (source "label") from a labels file ([{id, path, final, second_division}]);
 //!       --titles sets its title from a titles file (JSON Lines {id, path, title, source_title, ok}), keeping the old one as source_title;
 //!       --classes names the divisions (default: the server's classes-default.json). Packs are matched by doc_id = id, then source
 //!       BLAKE3 = blake3, then the PDF's file name when only one record has it (see PACK-FORMAT.md)
+//!   cache-build view --library <libdir> [--packs <packs dir>]
+//!       rebuilds <libdir>/.local/docs.json from the packs (default <libdir>/packs) and every log in <libdir>/log/
 //!   cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]
 //!       (each PDF is read in a child process, like `pdf`, so one that crashes MuPDF counts as failed and the survey goes on)
 //!       counts the ZIM's PDFs, pages, text layers and estimated pieces (JSON on stdout; nothing written, nothing embedded)
@@ -21,7 +31,11 @@ use cache_builder::isolate::ChildExtractor;
 use cache_builder::embed::{Embedder, FakeEmbedder};
 use cache_builder::embed_http::HttpEmbedder;
 use cache_builder::zim::{survey as zim_survey, Survey, ZimPdfOptions};
-use cache_builder::docs::{default_division_names, division_names, load_labels, load_titles, Overrides};
+use cache_builder::docs::{default_division_names, division_names, load_labels, load_titles, Applied, Overrides};
+use cache_builder::log::{now_ms, parse_utc_ms};
+use cache_builder::pack::OcrInfo;
+use cache_builder::view::rebuild_view;
+use serde_json::Value;
 use cache_builder::library::{build_library_with, check_library_dir, LibraryOptions, VectorDatatype};
 use cache_builder::pack::write_pack;
 use std::path::PathBuf;
@@ -30,6 +44,9 @@ use std::time::Instant;
 fn usage() -> ! {
     eprintln!(
         "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>"
+    );
+    eprintln!(
+        "more options:\n  pdf: [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json] [--original-blake3 HEX] [--ocr-engine E --ocr-version V [--ocr-pages N]] [--ocr-json FILE.json]\n  library: [--built-at TIME]\n  cache-build view --library <library dir> [--packs <packs dir>]"
     );
     std::process::exit(2);
 }
@@ -104,6 +121,7 @@ fn main() {
     let code = match argv[0].as_str() {
         "pdf" => cmd_pdf(&a),
         "library" => cmd_library(&a),
+        "view" => cmd_view(&a),
         "zim-pdfs" => cmd_zim_pdfs(&a),
         "dump" => cmd_dump(&a),
         _ => usage(),
@@ -152,6 +170,36 @@ fn cmd_pdf(a: &Args) -> i32 {
         None => None,
     };
     let created = a.get("--created-at").unwrap_or_else(now_utc);
+    let over = match overrides_from(a) {
+        Ok(o) => o,
+        Err(code) => return code,
+    };
+    let use_over = over.labels.is_some() || over.titles.is_some();
+    let mut applied = Applied::default();
+    let flag_ocr = match (a.get("--ocr-engine"), a.get("--ocr-version")) {
+        (Some(engine), Some(version)) => match a.get("--ocr-pages").map_or(Ok(0), |p| p.parse::<u32>()) {
+            Ok(pages_ocrd) => Some(OcrInfo { engine, version, pages_ocrd }),
+            Err(_) => {
+                eprintln!("error: --ocr-pages needs a number");
+                return 2;
+            }
+        },
+        (None, None) => None,
+        _ => {
+            eprintln!("error: --ocr-engine and --ocr-version go together");
+            return 2;
+        }
+    };
+    let sidecar: Option<Value> = match a.get("--ocr-json") {
+        Some(f) => match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+            Some(v) => Some(v),
+            None => {
+                eprintln!("error: --ocr-json {f}: not a readable JSON file");
+                return 2;
+            }
+        },
+        None => None,
+    };
     let child = ChildExtractor::current_exe(std::env::temp_dir());
     let in_process = a.has("--in-process");
     let mut failed = 0;
@@ -166,8 +214,10 @@ fn cmd_pdf(a: &Args) -> i32 {
                 continue;
             }
         };
+        // The file as it arrived: its hash is the book's identity (`book.original_blake3`).
+        let arrival = blake3::hash(&bytes).to_hex().to_string();
         // Compress first, then build from the file that would be kept (its hash is the pack's source hash).
-        let bytes = match &compress {
+        let (bytes, outcome) = match &compress {
             Some(c) => match if in_process { Ok(cache_builder::compress::compress_pdf(&bytes, c)) } else { child.compress(&bytes, c) } {
                 Ok((out, r)) => {
                     println!(
@@ -179,7 +229,7 @@ fn cmd_pdf(a: &Args) -> i32 {
                         r.psnr_min.map(|p| format!(", min PSNR {p:.1} dB")).unwrap_or_default(),
                         r.kept_reason.as_ref().map(|w| format!(", original kept: {w}")).unwrap_or_default()
                     );
-                    out
+                    (out, Some(r))
                 }
                 Err(e) => {
                     eprintln!("{f}: FAILED compressing: {e}");
@@ -187,19 +237,35 @@ fn cmd_pdf(a: &Args) -> i32 {
                     continue;
                 }
             },
-            None => bytes,
+            None => (bytes, None),
         };
         let name = PathBuf::from(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.clone());
         let mut o = BuildOptions::new(&name, &created);
         o.doc_id = a.get("--doc-id");
         o.title = a.get("--title");
         o.https = a.get("--https");
+        let side = match &sidecar {
+            Some(v) if v.get("engine").is_some() => ocr_entry(v),
+            Some(v) => v.get(name.as_str()).map(ocr_entry).unwrap_or((None, None)),
+            None => (None, None),
+        };
+        o.original_blake3 = Some(a.get("--original-blake3").or(side.1).unwrap_or(arrival));
+        o.compression = outcome;
+        o.ocr = flag_ocr.clone().or(side.0);
         if let Some(v) = a.get("--doc-version") {
             o.doc_version = v.parse().unwrap_or(0);
         }
         let extract = |b: &[u8]| if in_process { extract_pdf(b) } else { child.extract(b) };
         match build_pack_with_extractor(&bytes, &o, embedder, &mut |_| {}, &extract) {
-            Ok((pack, r)) => {
+            Ok((mut pack, r)) => {
+                if use_over {
+                    let e = over.entry(&pack.header, &mut applied);
+                    pack.header.set_title(e.effective_title());
+                    if let Some(b) = pack.header.book.as_mut() {
+                        b.source_title = e.source_title.clone();
+                        b.suggested = e.suggested.clone();
+                    }
+                }
                 let path = match write_pack(&pack, &PathBuf::from(&out)) {
                     Ok(p) => p,
                     Err(e) => {
@@ -245,10 +311,81 @@ fn cmd_pdf(a: &Args) -> i32 {
     if let Some(p) = a.get("--pieces-out") {
         let _ = std::fs::write(p, pieces_out);
     }
+    if over.labels.is_some() {
+        println!("labels: {} matched, {} ambiguous (file name shared), {} not found", applied.labels_matched, applied.labels_ambiguous, applied.labels_unmatched);
+    }
+    if over.titles.is_some() {
+        println!("titles: {} matched, {} ambiguous (file name shared), {} not found", applied.titles_matched, applied.titles_ambiguous, applied.titles_unmatched);
+    }
     if failed > 0 {
         1
     } else {
         0
+    }
+}
+
+/// The `--labels`, `--titles` and `--classes` files (the exit code on error).
+fn overrides_from(a: &Args) -> Result<Overrides, i32> {
+    let mut over = Overrides { names: default_division_names(), ..Default::default() };
+    if let Some(f) = a.get("--classes") {
+        match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+            Some(v) => over.names = division_names(&v),
+            None => {
+                eprintln!("error: --classes {f}: not a readable JSON file");
+                return Err(2);
+            }
+        }
+    }
+    if let Some(f) = a.get("--labels") {
+        match load_labels(&PathBuf::from(&f)) {
+            Ok(l) => {
+                println!("labels {f}: {} usable records", l.len());
+                over.labels = Some(l);
+            }
+            Err(e) => {
+                eprintln!("error: --labels: {e}");
+                return Err(2);
+            }
+        }
+    }
+    if let Some(f) = a.get("--titles") {
+        match load_titles(&PathBuf::from(&f)) {
+            Ok(t) => {
+                println!("titles {f}: {} usable records", t.len());
+                over.titles = Some(t);
+            }
+            Err(e) => {
+                eprintln!("error: --titles: {e}");
+                return Err(2);
+            }
+        }
+    }
+    Ok(over)
+}
+
+/// The OCR record and the arrival hash of one entry of an `--ocr-json` file: `{engine, version, pages_ocrd, original_blake3}`.
+fn ocr_entry(v: &Value) -> (Option<OcrInfo>, Option<String>) {
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string).filter(|s| !s.is_empty());
+    let ocr = match (text("engine"), text("version")) {
+        (Some(engine), Some(version)) => Some(OcrInfo { engine, version, pages_ocrd: v.get("pages_ocrd").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0) }),
+        _ => None,
+    };
+    (ocr, text("original_blake3"))
+}
+
+fn cmd_view(a: &Args) -> i32 {
+    let Some(lib) = a.get("--library") else { usage() };
+    let lib = PathBuf::from(lib);
+    let packs = a.get("--packs").map(PathBuf::from).unwrap_or_else(|| lib.join("packs"));
+    match rebuild_view(&lib, &packs) {
+        Ok(r) => {
+            println!("view {}: {} books, {} log files{}", r.path.display(), r.books, r.log_files, if r.skipped > 0 { format!(", {} log lines skipped", r.skipped) } else { String::new() });
+            0
+        }
+        Err(e) => {
+            eprintln!("FAILED: {e}");
+            1
+        }
     }
 }
 
@@ -265,41 +402,21 @@ fn cmd_library(a: &Args) -> i32 {
             }
         },
     };
-    let o = LibraryOptions { id, title, version: a.get("--version").unwrap_or_else(|| "1".into()), vector_datatype, archive: a.has("--archive") };
-    let mut over = Overrides { names: default_division_names(), ..Default::default() };
-    if let Some(f) = a.get("--classes") {
-        match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
-            Some(v) => over.names = division_names(&v),
+    let over = match overrides_from(a) {
+        Ok(o) => o,
+        Err(code) => return code,
+    };
+    let built_at = match a.get("--built-at") {
+        Some(v) => match parse_utc_ms(&v) {
+            Some(t) => t,
             None => {
-                eprintln!("error: --classes {f}: not a readable JSON file");
+                eprintln!("error: --built-at takes UTC milliseconds or YYYY-MM-DDTHH:MM:SSZ");
                 return 2;
             }
-        }
-    }
-    if let Some(f) = a.get("--labels") {
-        match load_labels(&PathBuf::from(&f)) {
-            Ok(l) => {
-                println!("labels {f}: {} usable records", l.len());
-                over.labels = Some(l);
-            }
-            Err(e) => {
-                eprintln!("error: --labels: {e}");
-                return 2;
-            }
-        }
-    }
-    if let Some(f) = a.get("--titles") {
-        match load_titles(&PathBuf::from(&f)) {
-            Ok(t) => {
-                println!("titles {f}: {} usable records", t.len());
-                over.titles = Some(t);
-            }
-            Err(e) => {
-                eprintln!("error: --titles: {e}");
-                return 2;
-            }
-        }
-    }
+        },
+        None => now_ms(),
+    };
+    let o = LibraryOptions { id, title, version: a.get("--version").unwrap_or_else(|| "1".into()), vector_datatype, archive: a.has("--archive"), built_at };
     match build_library_with(&PathBuf::from(&dir), &PathBuf::from(&out), &o, &over) {
         Ok((r, ap)) => {
             println!("library {out}: {} points from {} documents", r.points, r.documents);

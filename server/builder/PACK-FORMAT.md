@@ -1,4 +1,4 @@
-# Document pack format (`.cdoc`), version 1 (revision 3)
+# Document pack format (`.cdoc`), version 1 (revision 4)
 
 **Status: proposed; shared format pending owner/orchestrator approval.** Nothing outside `server/builder` reads or writes
 this format yet. Whole-library output (`cache-build library`) is a normal Cache library and does not depend on it.
@@ -37,7 +37,8 @@ Line 1, the header (one JSON object):
 | `page_count` | Pages in the PDF. |
 | `ocr_pages` | 1-based PDF pages skipped because they have no text layer (OCR comes later). |
 | `pieces` | The number of piece lines that follow. Readers check it. |
-| `division` | Optional (revision 3). The division the document is filed in; see below. |
+| `division` | Revision 3 only; read, never written by revision 4. The division the document was filed in; revision 4 reads it as `book.suggested`. See below. |
+| `book` | Optional (revision 4). The facts about the book: its title, arrival hash, compression, OCR and suggested division; see "Revision 4". |
 | `samebook` | Optional (revision 3). The same-book fingerprint; see below. |
 
 Every other line is a piece:
@@ -70,7 +71,9 @@ Revision 2 makes `pdf_page` optional when reading and adds the optional piece ke
 Revision 3 adds two optional header keys. The header's `cdoc` stays 1. A pack without them loads (both read as absent), and a
 reader that does not know them ignores them, so older and newer packs and readers mix freely.
 
-`division`: the division the document is filed in.
+`division`: the division the document is filed in. **Revision 4 replaces this block with `book.suggested`** (below). A reader still accepts it, and
+maps it into `book.suggested` (`sorter` becomes `classifier`; `label` and `user` become `label`; `division` becomes `div`, `second_division`
+becomes `second_div`). A revision 3 pack that is written again becomes a revision 4 pack.
 
 | Key | Meaning |
 |---|---|
@@ -109,51 +112,71 @@ it ends in a tie-break that cannot tie, so every device picks the same copy from
 `cache_builder::samebook::{CopyQuality, compare_copies, best_copy}` implement it. A pack without `samebook` (an older pack) cannot
 be compared.
 
-## docs.json
+## Revision 4 (compatible): the `book` block
 
-`docs.json` sits at the library root, beside `cache-library.json`, which lists it as `"docs": "docs.json"` (the only key added to
-the settings file; the rest is unchanged). It is never part of search payloads: the shard, the keyword index and the assistant do
-not see it. It is also inside the `.cache-library` archive, at its root. `cache-build library` writes it every time.
+Revision 4 adds one optional header key, `book`. The header's `cdoc` stays 1. A pack without it (revision 2 or 3) loads, and a reader that does not
+know it ignores it, so older and newer packs and readers mix freely: **readers must still accept revision 2 and 3 packs**. A revision 4 reader
+treats a revision 3 `division` as `book.suggested`, a missing `book` as no facts beyond the header's own `title` and `source`, and a pack that has
+neither as having no suggestion.
+
+The pack is immutable and written once, by the device that built the book. It holds the book's **facts**. What a person or a device does with
+the book afterwards (where it is shelved, its call number, a new title, hiding it) is **not** in the pack: it goes in the per-device log
+(LIBRARY-LOG.md). Because nothing that syncs ever has two writers, the pack is never edited to record such a change.
 
 ```json
-{
-  "format": 1,
-  "docs": {
-    "b3f1...": {
-      "division": "440",
-      "label": "Canning",
-      "score": null,
-      "classifier_version": null,
-      "source": "label",
-      "second_division": "450",
-      "title": "How Water Moves",
-      "source_title": "Water cycle"
-    }
-  }
+"book": {
+  "title": "Wilderness Medicine Handbook, 7th ed",
+  "source_title": "wilderness_med_7e.pdf",
+  "original_blake3": "b3f1...",
+  "compression": {"original_size": 58000000, "stored_size": 41000000, "level": "smaller_scans", "preset": "balanced",
+                  "kept_original": false, "kept_reason": null, "psnr_min": 31.2},
+  "ocr": {"engine": "doctr", "version": "1.1.0", "pages_ocrd": 412},
+  "suggested": {"div": "210", "label": "First aid", "score": 0.91, "classifier_version": 3, "source": "classifier", "second_div": "220"}
 }
 ```
 
-- `docs` maps each `doc_id` (in doc_id order) to its entry. Every key is always present: `null` when unknown. A document with no
-  division has `division`, `label`, `score`, `classifier_version`, `source` and `second_division` all `null`.
-- `compression` is optional (the key is left out when unknown): what compression did to the stored PDF, as the build record has it
-  (`original_size`, `stored_size`, `level`, `preset`, `kept_original`, `kept_reason`, `psnr_min`). The builder takes it from the
-  caller (`LibDoc.entry`); the build service does not write `docs.json` yet, so it is not filled in there (TODO).
-- `title` is the title the library uses (also in the search payloads and `documents.tsv`); `source_title` is the title before a
-  titles file replaced it, `null` when it was not replaced.
-- The writer builds it from the packs' `division` headers and titles. `--labels` and `--titles` (below) override them.
-- It is written atomically: a temporary file in the same folder is written and flushed, then renamed over `docs.json`, so a reader
-  sees the old file or the new one. `SHA256SUMS` covers it.
-- Readers apply the app's `overrides.json` on top of it (a person's own division or title for a document wins over `docs.json`).
-  Writing `overrides.json` is the app's job; the builder never writes or reads it.
+| Key | Meaning |
+|---|---|
+| `title` | The book's title as built: the caller's, else the PDF metadata title, else the file name (the same as the header's `title`). |
+| `source_title` | The title before a caller's title or a titles file replaced it, `null` when it was not replaced. |
+| `original_blake3` | BLAKE3 (hex) of the file **as it arrived**. This is the book's identity, even if the stored file was compressed (`source.blake3` is then the stored file's hash) or the text came from an OCR copy that is never shipped. |
+| `compression` | What compression did, as the build record has it (`original_size`, `stored_size`, `level`, `preset`, `kept_original`, `kept_reason`, `psnr_min`), or `null`. |
+| `ocr` | `{engine, version, pages_ocrd}`: the text came from OCR (`pages_ocrd` is how many pages it read), or `null`. |
+| `suggested` | `{div, label, score, classifier_version, source, second_div}` or `null`. `source` is `classifier` or `label` (readers refuse other values). `score`, `classifier_version` and `second_div` are `null` when unknown (a label has no score). It is a suggestion, not a shelf: the shelf is the latest `place` in the log. |
+
+Every key of `book` is always written (`null` when unknown). `cache-build pdf` and the build service write the block on every pack:
+
+- `title` and `source_title`: from `--title` or the PDF metadata, as before (a `--titles` file replaces the title, keeping the old one as `source_title`).
+- `original_blake3`: the hash of the file as it came (before `--compress`). `--original-blake3 HEX` names it when the PDF given is an OCR copy.
+- `compression`: the outcome of `--compress`, else `null`.
+- `ocr`: `--ocr-engine E --ocr-version V [--ocr-pages N]`, or `--ocr-json FILE`. The JSON is either `{"engine", "version", "pages_ocrd", "original_blake3"?}`
+  (applies to every PDF in the call) or an object of those keyed by input file name (a file with no entry has no OCR record). The recon OCR'd
+  copies use this.
+- `suggested`: from `--labels` (source `label`, see below) or, in the build service, the classifier (source `classifier`).
+
+## The library folder and the local view
+
+A built library is the normal library (`shard/`, `cache-library.json`, `documents.tsv`, `SHA256SUMS`) plus:
+
+- `log/builder-<library_id>.jsonl`: the **seed log** (synced; in `SHA256SUMS`). `cache-build library` writes `place` then `assign` for every book that has a suggested
+  division. Numbers run from 1 in order of (title, doc_id) within a division, so a rebuild gives the same numbers. Books with no division get nothing (they are in
+  Unsorted). A title a `--titles` file replaced is recorded as a `title` event. Every event's `at` is `--built-at` (UTC milliseconds or `YYYY-MM-DDTHH:MM:SSZ`; default
+  now), so the same packs and the same `--built-at` give a byte-identical log.
+- `.local/docs.json`: the **view**, format 2, rebuilt from the packs and every log (never synced, not in `SHA256SUMS`, not in any search payload). `cache-build view
+  --library <dir> [--packs <packs dir>]` makes it again (the packs default to `<dir>/packs`). See LIBRARY-LOG.md for its shape.
+
+The format 1 `docs.json` at the library root and `overrides.json` were never released and are gone. `cache-library.json` no longer has a `docs` key, and the
+`.cache-library` archive holds the shard and the settings file only (the seed log travels beside it, in the library folder).
 
 ### `--labels` and `--titles`
 
-`cache-build library ... --labels labels.json --titles titles.jsonl [--classes classes.json]` fill `docs.json` (and the titles)
-for a rebuild:
+`cache-build library ... --labels labels.json --titles titles.jsonl [--classes classes.json]` (and `cache-build pdf`) fill the suggested
+division and the titles for a rebuild:
 
 - `--labels`: a JSON array of `{id, path, final, second_division}` (what `final_labels_v2.json` holds; other keys are ignored).
-  `final` is the division (a record whose `final` is not three digits, such as `"unsure"`, is skipped). The document's division is
-  set with source `"label"`, no score and no classifier version. The label (name) comes from the record's optional `label`, else
+  `final` is the division (a record whose `final` is not three digits, such as `"unsure"`, is skipped). The book's `suggested` is
+  set with source `"label"`, no score and no classifier version (in `cache-build pdf` it goes into the pack; in `cache-build library` it
+  decides the seed log's `place`). The label (name) comes from the record's optional `label`, else
   from `--classes` (default: the server's `classes-default.json`), else the code itself.
 - `--titles`: JSON Lines `{id, path, title, source_title, method, ok}`. A line that is not `ok`, or has an empty title, is
   skipped. Otherwise the document's title is the line's, and its old title is kept as `source_title`.
@@ -172,7 +195,7 @@ for it, so it is not repeated there.
 
 `cache-build library <packs dir> --out <dir> --id ID --title TITLE` takes, for each `doc_id`, the pack with the highest
 `doc_version`, and writes `<dir>/shard/` (a Qdrant Edge shard: one unnamed 1024-dimension Cosine vector) and
-`<dir>/cache-library.json` (format 1), `<dir>/docs.json` (see below), plus `<dir>/documents.tsv` (a header row, then `doc_id`, `version`, `title`, source
+`<dir>/cache-library.json` (format 1), `<dir>/log/builder-<id>.jsonl` and `<dir>/.local/docs.json` (see above), plus `<dir>/documents.tsv` (a header row, then `doc_id`, `version`, `title`, source
 BLAKE3, pieces, pages for each document) and `<dir>/SHA256SUMS` (the SHA-256 of every other file in the folder, `sha256sum -c`
 format). `--packs <dir>` names the packs folder (a first argument works too). No `index/` is written: the keyword index is built
 on the device when the library is added (`keyword_index` "auto"). Packs go through the general writer

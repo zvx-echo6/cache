@@ -313,7 +313,7 @@ impl BuildService {
     }
 
     /// After a drop-folder book is done, skipped, failed or needs OCR: move its file out of `ingest/`. A built book's file is filed in
-    /// `complete/` like its source copy (`<class>/<division>/<call number>  <title>.pdf`); a copy that was not kept goes to Removed.
+    /// `complete/` like its source copy (`<class>/<division>/<call number>  <title>.pdf`, such as `CDS 530-001  <title>.pdf`); a copy that was not kept goes to Removed.
     pub(crate) fn settle_drop_item(&self, id: &str) {
         let Some(it) = lock(&self.st).items.iter().find(|i| i.id == id).cloned() else { return };
         let src = PathBuf::from(&it.path);
@@ -570,7 +570,7 @@ impl BuildService {
                 "position": null, "size": e.size, "progress": null, "item_id": null, "can_retry": false,
                 "reason": dup.map(|i| format!("Duplicate: the same content is already in {}", i.duplicate_of.clone().unwrap_or_default())).or_else(|| done.and_then(|i| i.result.clone())),
                 "note": done.and_then(|i| i.note.clone()),
-                "class": class, "division": division, "call_number": book.map(|b| b.call_number()), "title": book.map(|b| b.title.clone()),
+                "class": class, "division": division, "call_number": book.map(|b| b.call_number()).filter(|c| !c.is_empty()), "title": book.map(|b| b.title.clone()),
                 "moved_from": book.and_then(|b| b.moved_from.clone()),
             }));
         }
