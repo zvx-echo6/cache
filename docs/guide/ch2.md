@@ -220,6 +220,8 @@ What you see:
 4. Home search says "Search Cache" and has no "Ask Cache:" row. See Search Cache from Home.
 5. "Ask about this" on a weather item and "Ask Cache instead" under a guide search are not shown.
 
+![Ask with no model](shot:ask-no-model)
+
 If a model is downloading, the note reads "A model is downloading. Ask turns on when it is ready." and its button is "See download". The "Modules" line reads "Model downloading 40%".
 
 To turn "Ask" on again, tap "Choose a model" in any of those places and download or copy in a model. See Choose a model in chapter 1.
@@ -448,6 +450,8 @@ The reader opens a Library item.
 
 Search in a library reaches more than its pages. It finds words inside the PDFs and EPUB books in a ZIM, and in the captions of its videos. Nothing to switch on and nothing to start. It is always on.
 
+![PDF passages in Home search](shot:search-pdf-hits)
+
 1. Add a Library item that holds PDFs, EPUBs or videos with captions. See Add to your Library in chapter 1.
 2. Leave Cache open. It makes them searchable in the background, a little at a time, so your device stays cool.
 3. Search as usual: the Home search box, "Search this ZIM" in the reader, or a question in "Ask".
@@ -483,6 +487,8 @@ To change how fast Cache builds in the background, see Background indexing speed
 ## The PDF reader
 
 PDFs open in their own reader. It takes the whole window.
+
+![The PDF reader](shot:pdf-reader)
 
 You can open a PDF from:
 - a link in a Library page, or a search result;
@@ -528,6 +534,8 @@ Matches are highlighted and the page scrolls to the current one. A new search re
 
 When you open a PDF from a search result or from a source in "Ask", it opens at the cited page. The cited passage is highlighted, and a strip under the title says "Cited passage".
 
+![A cited passage in a PDF](shot:pdf-cited-passage)
+
 1. Read the highlighted passage.
 2. Tap the page, or tap "Close" on the strip, to clear the highlight.
 
@@ -542,6 +550,8 @@ A cited EPUB opens at its chapter, with the first words of the passage marked.
 ## Videos
 
 "Videos" lists the videos on this device and the video sites where you find more. Open it from "Modules". Saved videos are in this list now. There is no separate "Saved" tile.
+
+![The Videos list](shot:videos-list)
 
 From the top it shows:
 - "Downloading": videos on their way, each with "Pause" or "Resume";
@@ -605,6 +615,8 @@ If the picture can't play, a line under it says why:
 
 The player opens when you tap the picture on the video page.
 
+![The player's settings sheet](shot:video-player)
+
 1. Tap the picture to show or hide the controls. While it plays they hide after 3 seconds. When it is paused they stay.
 2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
 3. Drag the bar to move through the video. The time shows as the time so far and the length.
@@ -644,6 +656,8 @@ On a wide, tall window (at least 900 wide and 600 high, such as a computer's win
 - each line has its time. The line being said is highlighted and kept in view;
 - tap a line to jump there.
 
+![The transcript beside the video](shot:video-transcript)
+
 On a wide window that is too short, tap the gear and "Transcript". It opens as a sheet. On a phone there is no transcript pane.
 
 ## Search saved videos
@@ -679,6 +693,8 @@ To delete a video, tap "Delete from this device". The pop-up asks "Delete this v
 ## Sign in to a video site
 
 You only need this for videos a site keeps behind a sign-in.
+
+![Signing in to a video site](shot:video-sign-in)
 
 1. Open the site and tap the account button at the top right. Its tooltip is "Account and details", or your user name once you are signed in.
 2. Under "Sign in (optional)", look at what the site offers.

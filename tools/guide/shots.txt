@@ -9,11 +9,11 @@ region-row | Regions > Local: one region downloading, its bar labelled with the 
 region-detail | A region's own page: each part (map, directions, places, off-road) with its state and what can be done
 download-popup-new | The download pop-up for a region not on the phone: its parts, the size and the phone's storage
 download-popup-carry-on | The download pop-up for a region partly on the phone: "Carry on" and adding off-road
-settings | Settings, the top page
-settings-storage | Settings > Storage: what uses the phone's space, with "Clean up"
+settings | Settings, the top page, with the quiet line "Getting search ready: 3 of 12" at its foot
+settings-storage | Settings > Storage: what uses the device's space, with "Clean up", and "Advanced" (Background indexing: Gentle) at the foot
 settings-maps | Settings > Maps: one line per region, the layers and Advanced
 weather | Weather and alerts for a saved place: the forecast, an alert and a fire nearby
-library | Library: the libraries on the phone, the built-in Cache guide first
+library | Library: two ZIMs (Wikipedia Medicine "Making PDFs searchable"), the built-in Cache guide and your own library, then "Add to Library"
 library-add | Library > Add: a library from the list, a file or a download link
 guide-reader | The Cache guide open at a section: short paragraphs, labels as chips, a link into the app, Previous and Next
 notebooks | Notebooks: the list of notebooks
@@ -31,7 +31,7 @@ ask-report | Ask: the Report this answer sheet with the three reasons and "Save 
 ask-sources | Ask: an answer with [1] citation marks and the "1 source" line expanded, one Library source with "Open the article"
 chat-list | Ask chat list: "Search chats", Pinned and Today groups, "New chat"
 chat-menu | Chat list with one chat held: Rename, Pin, Share as Markdown, Add to Home, Delete
-connections | Notebooks > Connections: the Obsidian and Logseq rows with Connect, and "Your other devices"
+connections | Notebooks > Connections: an Obsidian vault connected, with the phones' line that Obsidian syncs only while it is open; Logseq with Connect; "Your other devices"
 directions-offroad | Directions panel with Off-road chosen: "On foot", the three land-access choices and "Start"
 directions-panel | Maps: the directions panel with Drive, Walk, Bike and Off-road, a route, distance and time, and "Start"
 edit-home | Edit Home: switches for each block and the "Reset to default" button
@@ -61,18 +61,25 @@ place-card | Maps: a place card at the bottom with Directions, Save place, Add t
 quiet-hours | Quiet hours: the switch, "From" 10 PM and "To" 7 AM
 regions-select | Regions sheet in Select mode: two regions ticked and the "Download 2" button with the total size
 regions-updates-tab | Regions sheet, Updates tab: "Road routing" and "Places" up to date, one map with its date, "Update all" and "Check for updates"
-settings-appearance | Settings > Appearance: the four themes and Module icons Small and Large
+settings-appearance | Settings > Appearance: the four themes, Module icons Small and Large, and "Dark pages" for PDF pages
 settings-assistant | Settings > Cache model and web search: the model row, "Search service" with "Set up", "Search the web when online", "Use my location" and Conversations
 settings-credits | Settings > Credits and licences: Version, Licence, Source code, Credits, Open-source licences
 settings-location-blocked | Settings > Cache model and web search, Location group: "Use my location" row reading "Blocked in the phone's settings" with the "Phone settings" button
 settings-maps-advanced | Settings > Maps > Advanced: layer definitions with switches, the edit button and "Add a layer definition"
 settings-notifications | Settings > Notifications: "Pop up for" with Serious only selected, All alerts, None, and the Quiet hours row
-settings-sharing | Settings > Sharing and sync with two linked devices and the "Shared with linked devices" ticks
+settings-sharing | Settings > Sharing and sync with two linked devices; Library and Notebooks ticked under "Shared with linked devices", with their files and size
 settings-weather | Settings > Weather and alerts: "Updated 1 hour ago" with the refresh button, featured sources with switches, one with "Get key", and "More sources (9 more)"
 source-page | A data source's page: "Use this source", "Replace", "Remove the key" and the About this source facts
 storage-regions | Settings > Storage > Regions list with the "Off-road data" group: one state used by two regions, and the note
 video-download | A video page with "Download" and the size choices
-video-player | The video player with the speed button showing 1x and the Full screen button
-videos-list | Videos: one added instance, "Add an instance", and "Saved on this phone" at the top
 weather-choose-place | The Choose a place sheet: "Find a town or place" with a few matching towns
 zim-reader | The reader open on a Library page with "Search this ZIM" and "Find in page", and the bottom bar Back, Forward, Main page
+videos-list | Videos: one video downloading, four saved videos grouped by channel, and "Video sites" with one site
+video-player | The video player on a phone with the gear's sheet open: Speed, "Quality: 480p (saved)" and Captions
+video-transcript | The video player on a wide window (960 by 640) with the transcript beside the video, the line being said highlighted
+video-sign-in | A video site's sheet: "Sign in (optional)" with two "Sign in with [name]" buttons, then the user name and password
+pdf-reader | The PDF reader at page 12: the title, "12 of 340", Find in this PDF, and the bar with Previous page, Fit page and Next page
+pdf-cited-passage | The PDF reader opened at a cited page: the "Cited passage" strip and the passage highlighted
+search-pdf-hits | Home search with passages from a ZIM's PDFs (title "[PDF], p. 47") among the Library results
+settings-indexing-speed | Settings > Storage > Advanced: "Background indexing speed" with Gentle (ticked) and Normal
+ask-no-model | Ask with no model: "Ask needs a model on this device." with "Choose a model", and the saved chats under it

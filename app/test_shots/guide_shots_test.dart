@@ -25,6 +25,7 @@ import 'package:cache/notebook/notebook_model.dart';
 import 'package:cache/notebook/notebook_state.dart';
 import 'package:cache/notebook/places.dart';
 import 'package:cache/notebook/sync/connections.dart';
+import 'package:cache/notebook/sync/sync_engine.dart' show SyncKind;
 import 'package:cache/notebook/templates.dart';
 import 'package:cache/screens/libraries_screen.dart';
 import 'package:cache/screens/notebooks/connections_screen.dart';
@@ -33,6 +34,7 @@ import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/notebooks_screen.dart';
 import 'package:cache/screens/notebooks/places_screen.dart' show PlaceNotebookDeps;
 import 'package:cache/screens/videos/instance_screen.dart';
+import 'package:cache/screens/videos/instance_sheet.dart';
 import 'package:cache/screens/videos/player_screen.dart';
 import 'package:cache/screens/videos/videos_screen.dart';
 import 'package:cache/screens/weather_screen.dart';
@@ -40,6 +42,7 @@ import 'package:cache/screens/weather_turn_on.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:cache/sources/sources_state.dart';
 import 'package:cache/video/token_store.dart';
+import 'package:cache/video/video_prefs.dart';
 import 'package:cache/video/video_state.dart';
 import 'package:cache/weather/place_alerts.dart';
 import 'package:cache/actions/confirm.dart';
@@ -50,10 +53,11 @@ import 'package:cache/chat/tool.dart';
 import 'package:cache/chat/tool_loop.dart';
 import 'package:cache/models/hf_hub.dart';
 import 'package:cache/models/recommendations.dart';
+import 'package:cache/screens/ask_off.dart';
 import 'package:cache/screens/ask_screen.dart';
 import 'package:cache/screens/model_search_screen.dart';
 import 'package:cache/screens/models_screen.dart';
-import 'package:cache_search/cache_search.dart' show CsNative, MapPlace, MapProgress, MapRoute, MapSearchResponse, VideoTarget;
+import 'package:cache_search/cache_search.dart' show CsNative, DownloadedCaption, MapPlace, MapProgress, MapRoute, MapSearchResponse, VideoTarget;
 import 'package:cache/layout/edit_home_screen.dart';
 import 'package:cache/layout/layout_state.dart';
 import 'package:cache/layout/modules.dart';
@@ -70,7 +74,16 @@ import 'package:cache/screens/download_confirm.dart' show confirmDownload, openS
 import 'package:cache/screens/home_screen.dart';
 import 'package:cache/screens/setup_card.dart';
 import 'package:cache/search/app_search.dart';
+import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/settings/hub.dart';
+import 'package:cache/pdf/index/pdf_index_app.dart' show pdfIndexShared;
+import 'package:cache/pdf/index/pdf_index_core.dart' show PdfIndexCoreMissing;
+import 'package:cache/pdf/index/pdf_index_state.dart' show PdfIndexState, PdfPart, PdfPartPhase, PdfZimRef;
+import 'package:cache/pdf/pdf_reader_screen.dart' show PdfReaderScreen;
+import 'package:cache/pdf/pdf_source.dart' show PdfFileSource;
 import 'package:cache/settings/space.dart';
+import 'package:cache/settings/data_kinds.dart' show DataKind;
+import 'package:cache/sharing/sharing_state.dart' show SharingState;
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache/screens/settings/about_pages.dart';
 import 'package:cache/screens/settings/appearance_page.dart';
@@ -87,16 +100,21 @@ import 'package:cache/weather/curated.dart';
 import 'package:cache/app_state.dart' show ModelEntry;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 
 import '../test/browse/fakes.dart' show FakeSources, catalogWith, fixture;
 import '../test/chat_fakes.dart' show ScriptedBackend, say;
 import '../test/nav_fakes.dart' show FakeBackend, FakeNavPosition, FakeSpeaker, fakeProgressJson, fakeRouteJson, fixAt;
 import '../test/navigation_camera_test.dart' show NoSurface;
-import '../test/video_fake.dart' show VideoFakeNative;
-import '../test/video_player_fakes.dart' show RecordingController;
+import '../test/video_fake.dart' show VideoFakeNative, savedManifest, seededVideoNative;
+import '../test/video_player_fakes.dart' show RecordingController, kKnotCues, kKnotCuesEs, writeCaption;
+import '../test/support/pdf_test_kit.dart' show readerDone;
+import '../test/support/pdfium_for_tests.dart' show pdfiumForTests;
+import '../test/support/sample_pdf.dart' show sampleHandbook;
 import '../test/support/notebook_fake.dart';
 import '../test/support/owner_state.dart';
 import '../test/support/regions_fake.dart';
+import '../test/support/sync_fake.dart' show FakeSync;
 import '../test/support/settings_rig.dart';
 import '../test/support/weather_fakes.dart';
 import 'shot_kit.dart';
@@ -167,6 +185,7 @@ Finder get _dialog => find.descendant(of: find.byType(Dialog), matching: find.by
 void main() {
   setUpAll(() async {
     await loadShotFonts();
+    await pdfiumForTests();
     openStorageForSpace = (_) {};
   });
 
@@ -189,7 +208,22 @@ void main() {
       await r.sources.refresh();
       await r.storage.measure();
     });
-    await show(tester, SettingsScreen(deps: r.deps));
+    // Search indexes are being made in the background: the one quiet line at the foot of Settings.
+    final indexing = _ShotIndexing('Getting search ready: 3 of 12');
+    addTearDown(indexing.dispose);
+    final h = r.hub;
+    r.hub = SettingsHub(
+      settings: h.settings,
+      policy: h.policy,
+      webSearch: h.webSearch,
+      storage: h.storage,
+      weather: h.weather,
+      sharing: h.sharing,
+      regions: h.regions,
+      indexing: indexing,
+      openUrl: h.openUrl,
+    );
+    await show(tester, SettingsScreen(deps: r.deps), height: 1000);
     await shot(tester, 'settings');
 
     await show(tester, MapsPage(deps: r.deps));
@@ -215,13 +249,25 @@ void main() {
     file(leftovers, 'x.part', 38 << 20);
     await tester.runAsync(r.app.refreshModels);
     await tester.runAsync(r.sources.refresh);
-    await show(tester, StoragePage(deps: r.deps));
+    // Tall enough for "Advanced" (Background indexing) at the foot of the page.
+    await show(tester, StoragePage(deps: r.deps), height: 1160);
     for (var i = 0; i < 40 && !r.storage.measured; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
       await tester.pump();
     }
     await settle(tester);
     await shot(tester, 'settings-storage');
+    await r.dispose(tester);
+  });
+
+  testWidgets('settings-indexing-speed', (tester) async {
+    final r = await _rig(tester);
+    await show(tester, StoragePage(deps: r.deps), height: 1160);
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('storage-advanced')));
+    await tester.pumpAndSettle();
+    expect(find.byType(IndexingSpeedPage), findsOneWidget);
+    await shot(tester, 'settings-indexing-speed');
     await r.dispose(tester);
   });
 
@@ -270,12 +316,42 @@ void main() {
     r.sync.peers
       ..add({'id': 'peer1', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': null, 'error': null})
       ..add({'id': 'peer2', 'name': 'Tablet', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 3600000, 'via': null, 'error': null});
-    await show(tester, SharingPage(sharing: r.sharing));
-    await tester.runAsync(() => r.sharing.setUp());
-    await tester.runAsync(() => r.sharing.setShared(r.sharing.kinds.single, true));
+    // The app's kinds (main.dart's dataKinds, with folders here): Library and Notebooks ticked.
+    Directory folder(String name, Map<String, int> files) {
+      final d = Directory('${r.dir.path}/share-$name')..createSync(recursive: true);
+      for (final f in files.entries) {
+        File('${d.path}/${f.key}').openSync(mode: FileMode.write)
+          ..truncateSync(f.value)
+          ..closeSync();
+      }
+      return d;
+    }
+
+    final zims = folder('library', {'wikivoyage_en_idaho.zim': 180 << 20, 'wikipedia_en_medicine.zim': 940 << 20});
+    final models = folder('models', {'gemma-4-E2B-it-Q4_K_M.gguf': 3200 << 20});
+    final notebooks = folder('notebooks', {for (var i = 1; i <= 12; i++) 'Journal 2026-10-$i.md': 2 << 10});
+    final shared = folder('shared', const {});
+    final sync = _CountingSync()..peers.addAll(r.sync.peers);
+    final sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: [
+        DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'library': zims}),
+        DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': models}),
+        DataKind(id: 'notebooks', label: 'Notebooks', icon: Icons.book_outlined, shared: () => {'notebooks': notebooks}),
+        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': shared}, inStorage: false),
+      ],
+      deviceName: 'Android device',
+      opener: (_) async => sync,
+    );
+    await show(tester, SharingPage(sharing: sharing));
+    await tester.runAsync(() => sharing.setUp());
+    await tester.runAsync(() => sharing.setShared(sharing.kinds.first, true));
+    await tester.runAsync(() => sharing.setShared(sharing.kinds[2], true));
     await settle(tester);
     await shot(tester, 'settings-sharing');
     await tester.pumpWidget(const SizedBox());
+    sharing.dispose();
     await r.dispose(tester);
   });
 
@@ -302,7 +378,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('firms-viirs-near')!, 'sample-key-0000'));
-    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'));
+    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'), height: 1000);
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
@@ -366,6 +442,7 @@ void main() {
   testWidgets('modules, modules-hold-menu', (tester) async {
     final h = _HomeRig();
     await homeRig(tester, h);
+    await _gemma(tester, h.r);
     await show(tester, ModulesScreen(layout: h.layout, app: h.r.app, onOpen: (_) {}));
     await shot(tester, 'modules');
     await tester.longPress(find.byKey(const ValueKey('module-videos')));
@@ -573,6 +650,27 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     a.layout.dispose();
     await a.r.dispose(tester);
+  });
+
+  testWidgets('ask-no-model', (tester) async {
+    final r = await _rig(tester);
+    // No model on the device: Ask's page says so, with the saved chats under it (they open read-only).
+    for (final (title, q, ans) in [
+      ('Treating a burn', 'How do I treat a burn?', 'Cool the burn under cool running water for 20 minutes.'),
+      ('Water from a stream', 'How do I make stream water safe?', 'Bring it to a rolling boil for one minute.'),
+      ('Signals for help', 'What is the signal for help?', 'Three of anything: three blasts on a whistle, three fires.'),
+    ]) {
+      final c = r.store.create(title: title);
+      r.store.addMessage(c.id, role: 'user', content: q, message: {'role': 'user', 'content': q});
+      r.store.addMessage(c.id, role: 'assistant', content: ans, message: {'role': 'assistant', 'content': ans});
+    }
+    r.chat.historyRevision.value++;
+    await show(tester, AskOffPage(app: r.app, chat: r.chat, onChooseModel: () {}, onOpenChat: (_) {}));
+    await settle(tester);
+    expect(find.text('Treating a burn'), findsOneWidget);
+    await shot(tester, 'ask-no-model');
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
   });
 
   testWidgets('ask-open-navigation, ask-confirm-card', (tester) async {
@@ -866,8 +964,14 @@ void main() {
     addTearDown(() => dir.deleteSync(recursive: true));
     final c = NotebookConnections(notebook: n.nb, dir: () async => dir);
     await tester.runAsync(c.init);
-    await show(tester, ConnectionsScreen(connections: c, pickFolder: () async => null));
+    // An Obsidian vault connected on a phone: the line that Obsidian syncs only while it is open.
+    final vault = Directory('${dir.path}/Field notes')..createSync();
+    final err = await tester.runAsync(() => c.connect(SyncKind.obsidian, vault.path, display: 'Field notes'));
+    expect(err, isNull);
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await show(tester, ConnectionsScreen(connections: c, pickFolder: () async => null, phone: true));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('obsidian-phone-note')), findsOneWidget);
     await shot(tester, 'connections');
     await tester.pumpWidget(const SizedBox());
   });
@@ -888,6 +992,13 @@ void main() {
       sources.ids[z.path] = z.fileName.hashCode.toRadixString(16).padLeft(8, '0');
       sources.titles[z.path] = z.fileName.contains('medicine') ? 'Wikipedia Medicine' : 'Wikivoyage Idaho';
     }
+    // Wikipedia Medicine's PDFs are being made searchable (the row's note), as on a phone soon after adding it.
+    final pdfs = _ShotPdfIndex(r.dir, {'wikipedia_en_medicine.zim': const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340)});
+    pdfIndexShared = pdfs;
+    addTearDown(() {
+      pdfIndexShared = null;
+      pdfs.dispose();
+    });
     final libs = _Libs(sources);
     libs.libraries = [
       LibraryItem(dir: Directory('${r.dir.path}/libraries/cache-guide'), size: 3 << 20),
@@ -929,12 +1040,47 @@ void main() {
     return v;
   }
 
-  testWidgets('videos-list, video-download', (tester) async {
-    final v = await videoRig(tester);
-    await show(tester, VideosScreen(video: v));
-    await settle(tester);
-    await shot(tester, 'videos-list');
+  /// Videos with saved videos from two channels (their pictures drawn here) and one site.
+  Future<VideoState> savedVideoRig(WidgetTester tester, _VideoPictures p) async {
+    final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('guide-videos')))!;
+    addTearDown(() => dir.deleteSync(recursive: true));
+    Map<String, dynamic> cap(String lang, String label, {bool auto = false}) =>
+        {'language': lang, 'label': label, 'automatic': auto, 'path': '${p.dir.path}/captions-$lang.vtt'};
+    final saved = [
+      savedManifest(uuid: 'knots', title: 'Knots every camper should know', channel: 'Field Skills', at: '2026-10-03T10:00:00Z', durationS: 730, captions: [cap('en', 'English'), cap('es', 'Spanish', auto: true)], thumb: p.thumbs['knots']),
+      savedManifest(uuid: 'fire', title: 'Fire without matches', channel: 'Field Skills', at: '2026-10-01T10:00:00Z', size: 310 << 20, durationS: 580, captions: [cap('en', 'English')], thumb: p.thumbs['fire']),
+      savedManifest(uuid: 'splint', title: 'A splint from a stick', channel: 'Medical Basics', at: '2026-10-02T10:00:00Z', size: 96 << 20, durationS: 312, captions: [cap('en', 'English')], thumb: p.thumbs['splint']),
+      savedManifest(uuid: 'burns', title: 'Treating a burn', channel: 'Medical Basics', at: '2026-09-28T10:00:00Z', size: 140 << 20, durationS: 401, thumb: p.thumbs['burns']),
+    ];
+    final v = VideoState(
+      dirOverride: dir,
+      nativeFactory: seededVideoNative(saved),
+      tokens: MemoryTokenStore(),
+      prefs: VideoPrefs(),
+      spaceOf: () => const Space(free: 40 << 30, reserve: 0),
+    );
+    await tester.runAsync(v.init);
+    await tester.runAsync(() => v.addInstance('tube.example.org'));
+    addTearDown(v.dispose);
+    return v;
+  }
 
+  testWidgets('videos-list', (tester) async {
+    final p = _videoPictures();
+    final v = await savedVideoRig(tester, p);
+    v.tasks.add(
+      DownloadTask(instance: 'example.org', uuid: 'water', title: 'Purifying water in the field', choice: '480', label: '480p', expectedSize: 412 << 20)
+        ..done = 160 << 20
+        ..total = 412 << 20,
+    );
+    await show(tester, VideosScreen(video: v));
+    await _precache(tester, p);
+    await shot(tester, 'videos-list');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('video-download', (tester) async {
+    final v = await videoRig(tester);
     await show(tester, InstanceScreen(video: v, instance: v.instances.last));
     await settle(tester);
     await settle(tester);
@@ -948,14 +1094,103 @@ void main() {
   });
 
   testWidgets('video-player', (tester) async {
-    final c = RecordingController();
-    await show(tester, PlayerScreen(
-      target: VideoTarget(isLocal: true, uuid: 'sample-video', title: 'Water purification at camp', offsetS: 0, durationS: 60, location: 'offline.mp4', captions: const []),
-      controllerFactory: (_) => c,
-    ));
-    await settle(tester);
+    final p = _videoPictures();
+    final c = RecordingController(duration: const Duration(seconds: 730), size: const Size(1280, 720));
+    await show(tester, _knots(p, c, prefs: VideoPrefs()..captions = 'en'));
+    await _precache(tester, p);
+    c.at(const Duration(seconds: 14));
+    await tester.pump();
+    // The gear's sheet: Speed, Quality and Captions over the playing video.
+    await tester.tap(find.byKey(const ValueKey('player-settings')));
+    await tester.pumpAndSettle();
     await shot(tester, 'video-player');
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('video-transcript', (tester) async {
+    final p = _videoPictures();
+    final c = RecordingController(duration: const Duration(seconds: 730), size: const Size(1280, 720));
+    // The smallest window with the transcript beside the video (kTranscriptMinWidth by kTranscriptMinHeight), a computer's window.
+    phone(tester, size: const Size(960, 640), ratio: _ratio);
+    await tester.pumpWidget(shotApp(_knots(p, c, prefs: VideoPrefs()..captions = 'en'), insets: EdgeInsets.zero));
+    await settle(tester);
+    await _precache(tester, p);
+    c.at(const Duration(seconds: 14));
+    await tester.pump();
+    // The pane reads the caption file outside the test's clock.
+    await _until(tester, find.byKey(const ValueKey('player-transcript')));
+    await settle(tester);
+    await shot(tester, 'video-transcript', crop: find.byType(PlayerScreen));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('video-sign-in', (tester) async {
+    final dir = (await tester.runAsync(() => Directory.systemTemp.createTemp('guide-video-sign-in')))!;
+    addTearDown(() => dir.deleteSync(recursive: true));
+    // A site that offers its own sign-in page and a user name and password.
+    final v = VideoState(dirOverride: dir, nativeFactory: seededVideoNative(const [], auth: 'both'), tokens: MemoryTokenStore(), prefs: VideoPrefs());
+    await tester.runAsync(v.init);
+    await tester.runAsync(() => v.addInstance('tube.example.org'));
+    addTearDown(v.dispose);
+    await show(
+      tester,
+      Builder(
+        builder: (context) => Scaffold(
+          appBar: AppBar(title: const Text('tube.example.org')),
+          body: Center(child: TextButton(onPressed: () => showInstanceSheet(context, video: v, instance: v.instances.single), child: const Text('open'))),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await settle(tester);
+    await tester.pumpAndSettle();
+    await shot(tester, 'video-sign-in', crop: _sheet);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  // ---- PDFs -----------------------------------------------------------------------------------------------
+
+  testWidgets('pdf-reader, pdf-cited-passage', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('guide-pdf');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final book = (File('${dir.path}/book.pdf')..writeAsBytesSync(sampleHandbook())).path;
+
+    await _openPdf(tester, PdfReaderScreen(source: PdfFileSource(book, title: 'Water and Shelter Handbook'), initialPage: 12));
+    await _until(tester, find.text('12 of 340'));
+    await settle(tester, rounds: 30);
+    await shot(tester, 'pdf-reader');
+
+    const quote = 'If you cannot boil water, filter it through a clean cloth, then add household bleach without scent: '
+        'two drops to each litre, stir, and wait thirty minutes.';
+    await _openPdf(tester, PdfReaderScreen(source: PdfFileSource(book, title: 'Water and Shelter Handbook'), initialPage: 47, quote: quote));
+    await _until(tester, find.text('Cited passage'));
+    await settle(tester, rounds: 30);
+    await shot(tester, 'pdf-cited-passage');
+    await readerDone(tester);
+  });
+
+  testWidgets('search-pdf-hits', (tester) async {
+    final h = _HomeRig();
+    await homeRig(tester, h);
+    // What the Library's search gives for a passage in a ZIM's PDF (the core's title "<PDF>, p. <page>"; then the ZIM's title
+    // and the page) beside a page of a ZIM. Caption and EPUB hits are not in Home's search (it keeps zim: pages and PDF
+    // passages only), so none is shown.
+    final search = AppSearch([
+      _Found('Library', Icons.menu_book_outlined, [
+        ('Water and Shelter Handbook, p. 47', 'Survival Library, p. 47', 0.9),
+        ('Water purification', 'Wikipedia Medicine', 0.8),
+        ('Field Water Supply, p. 12', 'Survival Library, p. 12', 0.7),
+      ]),
+      _Found('Notebooks', Icons.book_outlined, [('Water cache restocked', 'Journal · Oct 27', 0.5)]),
+    ]);
+    await show(tester, HomeScreen(layout: h.layout, weather: h.weather, search: search, onAsk: (_) {}, onOpenSettings: () {}, onOpenShortcut: (_) {}, onOpenWeather: () {}));
+    await tester.enterText(find.byKey(const ValueKey('home-search')), 'boil water');
+    await tester.pump(const Duration(milliseconds: 400));
+    await settle(tester);
+    await shot(tester, 'search-pdf-hits');
+    await tester.pumpWidget(const SizedBox());
+    h.layout.dispose();
+    await h.r.dispose(tester);
   });
 
   // ---- Maps (the map itself is a platform view and is not drawn) -------------------------------------------
@@ -1155,6 +1390,161 @@ class _GuideWeather extends WeatherState {
       HomeAlert(fire: true, label: 'East Fork fire', detail: '31 mi N · 266 acres · 60% contained'),
     ],
   );
+}
+
+/// The sample videos' pictures and caption files, drawn once (a sky, a ground and a sun in each video's colours; no photo).
+class _VideoPictures {
+  _VideoPictures(this.dir, this.frame, this.thumbs, this.en, this.es);
+
+  final Directory dir;
+  final String frame;
+  final Map<String, String> thumbs;
+  final DownloadedCaption en;
+  final DownloadedCaption es;
+}
+
+_VideoPictures? _pictures;
+
+_VideoPictures _videoPictures() {
+  if (_pictures case final p?) return p;
+  final dir = Directory.systemTemp.createTempSync('guide-video-pictures');
+  String picture(String name, int r, int g, int b, {int w = 640, int h = 360}) {
+    final im = img.Image(width: w, height: h);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final t = y / h;
+        final sun = (x - w * 0.72) * (x - w * 0.72) + (y - h * 0.3) * (y - h * 0.3) < (h * 0.12) * (h * 0.12);
+        if (sun) {
+          im.setPixelRgb(x, y, 250, 226, 160);
+        } else if (y < h * 0.62) {
+          im.setPixelRgb(x, y, (r * (1 - t * 0.5)).round(), (g * (1 - t * 0.4)).round(), (b * (1 - t * 0.2)).round());
+        } else {
+          final hill = (y - h * 0.62) / (h * 0.38);
+          im.setPixelRgb(x, y, (60 + 40 * hill).round(), (90 + 30 * hill).round(), (52 + 10 * hill).round());
+        }
+      }
+    }
+    return (File('${dir.path}/$name.png')..writeAsBytesSync(img.encodePng(im))).path;
+  }
+
+  return _pictures = _VideoPictures(
+    dir,
+    picture('frame', 120, 170, 220, w: 1280, h: 720),
+    {
+      'knots': picture('knots', 110, 160, 210),
+      'fire': picture('fire', 210, 130, 90),
+      'splint': picture('splint', 150, 190, 170),
+      'burns': picture('burns', 190, 160, 200),
+    },
+    writeCaption(dir, 'en', 'English', kKnotCues),
+    writeCaption(dir, 'es', 'Spanish', kKnotCuesEs, automatic: true),
+  );
+}
+
+/// Reads the sample pictures once (an image file loads outside the test's clock).
+Future<void> _precache(WidgetTester tester, _VideoPictures p) async {
+  final ctx = tester.element(find.byType(Scaffold).first);
+  await tester.runAsync(() async {
+    for (final f in [...p.thumbs.values, p.frame]) {
+      await precacheImage(FileImage(File(f)), ctx);
+    }
+  });
+  await tester.pump();
+}
+
+/// The saved knots video in the player: two caption languages, saved at 480p, its frame drawn by [p].
+PlayerScreen _knots(_VideoPictures p, RecordingController c, {VideoPrefs? prefs}) => PlayerScreen(
+  target: VideoTarget(
+    isLocal: true,
+    uuid: 'knots',
+    title: 'Knots every camper should know',
+    offsetS: 0,
+    durationS: 730,
+    location: 'offline.mp4',
+    instance: 'example.org',
+    captions: [p.en, p.es],
+  ),
+  prefs: prefs ?? VideoPrefs(),
+  channel: 'Field Skills',
+  mobileOverride: false,
+  savedQuality: '480p',
+  frame: Image.file(File(p.frame), fit: BoxFit.cover),
+  controllerFactory: (_) => c,
+);
+
+/// [reader] opened over a blank page (so its top-left arrow shows), on the phone.
+Future<void> _openPdf(WidgetTester tester, Widget reader) async {
+  phone(tester, size: const Size(430, 932), ratio: _ratio);
+  final nav = GlobalKey<NavigatorState>();
+  await tester.pumpWidget(MaterialApp(
+    key: UniqueKey(),
+    navigatorKey: nav,
+    debugShowCheckedModeBanner: false,
+    theme: shotTheme(),
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(padding: const EdgeInsets.only(top: 54, bottom: 34), viewPadding: const EdgeInsets.only(top: 54, bottom: 34)),
+      child: DefaultTextStyle.merge(style: const TextStyle(fontFamily: 'Roboto'), child: child!),
+    ),
+    home: const Scaffold(),
+  ));
+  nav.currentState!.push(MaterialPageRoute<void>(builder: (_) => reader));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+}
+
+/// Pumps until [f] finds something (file work runs outside the test's clock).
+Future<void> _until(WidgetTester tester, Finder f, {int max = 200}) async {
+  for (var i = 0; i < max && f.evaluate().isEmpty; i++) {
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+    await tester.pump(const Duration(milliseconds: 30));
+  }
+  expect(f, findsWidgets);
+}
+
+/// The sync engine's stand-in that counts each shared folder's files and bytes, as the real one reports them.
+class _CountingSync extends FakeSync {
+  @override
+  Future<Map<String, dynamic>> call(String method, [Map<String, Object?> args = const {}]) async {
+    final r = await super.call(method, args);
+    if (method != 'status') return r;
+    return {
+      ...r,
+      'shares': [
+        for (final sh in (r['shares'] as List).cast<Map<String, Object?>>())
+          () {
+            final files = Directory(sh['path']! as String).listSync(recursive: true).whereType<File>().toList();
+            return {...sh, 'files': files.length, 'bytes': files.fold<int>(0, (n, f) => n + f.lengthSync())};
+          }(),
+      ],
+    };
+  }
+}
+
+/// The index scheduler as Settings reads it: only its status line, set by the picture (no work is run).
+class _ShotIndexing extends IndexScheduler {
+  _ShotIndexing(this._line) : super(sources: const [], space: () => throw UnimplementedError('no index work in a picture'));
+
+  final String _line;
+
+  @override
+  String? get line => _line;
+}
+
+/// The Library's PDF indexing as the rows read it: each ZIM's PDFs part (by file name), set by the picture (no work is run).
+class _ShotPdfIndex extends PdfIndexState {
+  _ShotPdfIndex(Directory dir, this.parts)
+    : super(
+        core: const PdfIndexCoreMissing(),
+        zims: () => const [],
+        indexesDir: () async => dir,
+        recordFile: () async => File('${dir.path}/pdf-index.json'),
+        autoStart: null,
+      );
+
+  final Map<String, PdfPart> parts;
+
+  @override
+  PdfPart? partOf(PdfZimRef z) => parts[z.path.split(Platform.pathSeparator).last];
 }
 
 /// One module's part of Home's search, with the results it is given.

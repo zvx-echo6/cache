@@ -88,19 +88,18 @@ jobs:
           if not re.fullmatch(r"[A-Za-z0-9:_-]+(,[A-Za-z0-9:_-]+)*", tracks): sys.exit(f"::error::Not a list of track names: {tracks}")
           print(f"tracks {tracks}, release notes {len(notes)} characters")
           PY
-      # The version is 1.0.<build>, the build number the same on iPhone and Android: pubspec.yaml's "version: 1.0.27+27" is
-      # version 1.0.27, versionCode 27. It is the versionCode Play gets (not the run number), so it is checked here.
+      # pubspec.yaml's "version: 1.0.30+31" is the version shown, 1.0.30, and versionCode 31, the same build number on iPhone and
+      # Android. The build number is its own counter: every upload needs a higher one (a test build and the release of the same
+      # version are two builds), so it is not tied to the version's last number. It is the versionCode Play gets (not the run
+      # number), and the next step checks it is higher than every one already on Play.
       - name: Version and versionCode from pubspec.yaml
         id: v
         run: |
           line=$(grep -E '^version:' app/pubspec.yaml | head -n 1)
-          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.([0-9]+))\+([0-9]+)\ *$ ]]; then
-            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<build>+<build>, found: $line"; exit 1
+          if [[ ! "$line" =~ ^version:\ *([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\ *$ ]]; then
+            echo "::error::app/pubspec.yaml's version must be <major>.<minor>.<patch>+<build number>, as in 1.0.30+31, found: $line"; exit 1
           fi
-          name=${BASH_REMATCH[1]} patch=${BASH_REMATCH[2]} build=${BASH_REMATCH[3]}
-          if [[ "$patch" != "$build" ]]; then
-            echo "::error::The version's last number ($patch) must be the build number ($build), as in 1.0.27+27."; exit 1
-          fi
+          name=${BASH_REMATCH[1]} build=${BASH_REMATCH[2]}
           echo "build_name=$name" >> "$GITHUB_OUTPUT"
           echo "build_number=$build" >> "$GITHUB_OUTPUT"
           echo "version $name, versionCode $build"

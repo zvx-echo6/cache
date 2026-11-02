@@ -250,6 +250,8 @@ Cache makes your PDFs, EPUBs, captions and libraries searchable in the backgroun
    - "Gentle": "Keeps the device cool and the battery longer". This is the start setting;
    - "Normal": "Finishes sooner, uses more battery".
 
+![Background indexing speed](shot:settings-indexing-speed)
+
 Changes apply at once. Either way the work eases off when the device warms up, when the battery is low and when you are using Cache. It stops while the model writes an answer. It runs only while Cache is open.
 
 On a computer, with no battery to read, Cache uses the faster pace.
