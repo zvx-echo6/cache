@@ -94,7 +94,7 @@ error: offline, or with the network off, it returns at once with `"ok": false`, 
 The navigate tool calls this itself (with the trip's start, end and via points) when the core's config has a `regions`
 section.
 
-**set_policy** `{"network": bool, "reserve_bytes": n}` (either may be left out): `{"ok": true}`.
+**set_policy** `{"network": bool, "reserve_bytes": n, "hold": bool}` (any may be left out): `{"ok": true}`. `hold` is the person's Pause: while it is true no region tiles are fetched (the regions read `paused`, and `paused` says "Paused"); a `stream` still fetches. It is not kept: the app sets it again when it opens the engine.
 
 **check_update** `{}`: `{"build": "na-2026-11-15", "update": {"build": "na-2026-11-15", "download_bytes": 101234567}}`,
 or `"update": null` when the device has the server's build (a device with no regions just moves to it).

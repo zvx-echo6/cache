@@ -158,7 +158,7 @@ fn headings_get_levels_and_paths() {
     for p in &pack.pieces {
         let n = p.heading_path[0].trim_start_matches("Part ").to_string();
         assert!(p.text.contains(&format!("part {n} ")) || p.text.contains("silt"), "{}", p.text);
-        assert_eq!(p.pdf_page, n.parse::<u32>().unwrap());
+        assert_eq!(p.pdf_page, Some(n.parse::<u32>().unwrap()));
     }
 }
 

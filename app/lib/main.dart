@@ -19,7 +19,9 @@ import 'browse/browse_state.dart';
 import 'browse/web/device_api.dart';
 import 'browse/web/device_fetch.dart';
 import 'browse/web/device_library.dart';
-import 'browse/web/local_files.dart' show createBrowserUploader;
+import 'browse/web/build_api.dart' show HttpBuildApi;
+import 'browse/web/build_state.dart' show BuildController;
+import 'browse/web/local_files.dart' show createBrowserUploader, createRawUploader;
 import 'chat/chat_controller.dart';
 import 'chat/chat_location.dart';
 import 'chat/local_llama_backend.dart';
@@ -56,6 +58,7 @@ import 'regions/regions_state.dart';
 import 'search/core_numbering.dart';
 import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
+import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
@@ -119,7 +122,14 @@ class _CacheAppState extends State<CacheApp> {
     if (!plat.isWeb) return null;
     final api = HttpDeviceApi();
     deviceFetchApi = api;
-    final d = DeviceLibrary(api: api, fs: createAppFs(), uploader: createBrowserUploader(), onItemsChanged: () => sources.refresh());
+    final fs = createAppFs();
+    final d = DeviceLibrary(
+      api: api,
+      fs: fs,
+      uploader: createBrowserUploader(),
+      onItemsChanged: () => sources.refresh(),
+      build: BuildController(api: HttpBuildApi(), uploader: createRawUploader(), fs: fs),
+    );
     sources.removeOnDevice = (z) => d.remove('zim', z.fileName);
     d.addListener(() => sources.setDeviceSizes({for (final i in d.items) if (i.kind == 'zim') i.name: i.bytes}));
     return d;
@@ -233,8 +243,9 @@ class _CacheAppState extends State<CacheApp> {
       label: 'Library',
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
-      // Search indexes are built on each device.
+      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir],
+      notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
     ),
@@ -255,6 +266,8 @@ class _CacheAppState extends State<CacheApp> {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
       },
+      // What each device makes for itself in those folders (fetched indexes, the viewed-tile cache, SQLite's -shm) never syncs.
+      notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
     ),
@@ -494,6 +507,13 @@ class _CacheAppState extends State<CacheApp> {
   void initState() {
     super.initState();
     ModelDownloads.shared = modelDownloads;
+    // A model the recommended list names loads with the settings the list gives it (none today: the usual ones).
+    app.settingsFor = (e) {
+      for (final r in RecommendedModels.shared.models) {
+        if (r.file == e.fileName && r.size == e.size) return r.settings;
+      }
+      return null;
+    };
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
@@ -657,7 +677,7 @@ class _CacheAppState extends State<CacheApp> {
     if (_backendGeneration != app.modelGeneration) {
       _backendGeneration = app.modelGeneration;
       chat.setBackend(
-        app.active == null ? null : LocalLlamaBackend(app.session),
+        app.active == null ? null : LocalLlamaBackend(app.session, extras: () => app.activeSettings.requestExtras),
         modelName: app.active == null ? '' : app.displayName(app.active!),
       );
     }

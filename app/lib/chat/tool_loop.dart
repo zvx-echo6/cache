@@ -8,6 +8,7 @@ import 'citations.dart';
 import 'model_backend.dart';
 import 'navigation_action.dart';
 import 'tool.dart';
+import 'tool_call_text.dart';
 
 /// The plain prompt of the loop when no builder is given (tests). The app passes [buildSystemPrompt].
 const String kSystemPrompt =
@@ -155,6 +156,7 @@ class ToolLoop {
           ?extra,
         ],
         'enable_thinking': enableThinking,
+        'max_tokens': kMaxTokens,
         if (withTools) 'tools': _schemas,
       };
 
@@ -164,7 +166,7 @@ class ToolLoop {
     await host?.dispose();
   }
 
-  String _clean(String s) => checkCitations(s, _results.keys.toSet()).text;
+  String _clean(String s) => checkCitations(stripToolCalls(s), _results.keys.toSet()).text;
 
   /// Asks [userText]. With [seed], the turn starts with that tool call (its arguments as JSON text) and its real result, as if the
   /// model had made it (Ask about this); the seed is not one of the turn's tool rounds.
@@ -239,7 +241,8 @@ class ToolLoop {
           continue;
         }
 
-        final check = checkCitations(last.content, _results.keys.toSet());
+        // The person reads the answer without any tool call the model wrote as text; the conversation keeps what it wrote.
+        final check = checkCitations(stripToolCalls(last.content), _results.keys.toSet());
         _messages.add({'role': 'assistant', 'content': last.content});
         yield TurnUpdate(
           phase: TurnPhase.done,
@@ -274,7 +277,7 @@ class ToolLoop {
         // One line per call for logcat (no arguments or text): which tool ran and which [n] it gave.
         debugPrint('cache tool ${call.name}: new ids ${[for (final i in r.ids) i.n]}, ${r.content.length} chars');
         for (final id in r.ids) {
-          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time)));
+          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time, pdfPage: id.pdfPage, quote: id.quote)));
         }
         if (r.navigationActions.isNotEmpty) onNavigationActions?.call(r.navigationActions);
         return r.content;
@@ -312,7 +315,7 @@ class ToolLoop {
     for (final id in await numbering.ids()) {
       _results.putIfAbsent(
         id.n,
-        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address, link: id.link, time: id.time)),
+        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address, link: id.link, time: id.time, pdfPage: id.pdfPage, quote: id.quote)),
       );
     }
   }

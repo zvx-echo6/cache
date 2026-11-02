@@ -2,6 +2,7 @@ import 'package:cache_search/cache_search.dart' show GeoPoint, MapPlace;
 import 'package:flutter/material.dart';
 
 import '../browse/zim_urls.dart';
+import '../pdf/pdf_address.dart';
 import '../maps/layers/layer_def.dart';
 import '../maps/maps_state.dart';
 import '../nav/nav_backend.dart';
@@ -50,7 +51,8 @@ class LibrarySearchProvider implements AppSearchProvider {
         icon: icon,
         detail: [h.sourceTitle, if (h.page != null) 'p. ${h.page}'].where((s) => s.isNotEmpty).join(', '),
         score: _ranked(i, h.title, query),
-        open: () => openAddress(h.address),
+        // A hit on a page of a PDF entry opens the PDF at that page.
+        open: () => openAddress(h.page != null && isPdfAddress(h.address) && pdfPageOfAddress(h.address) == null ? withPdfPage(h.address, h.page!) : h.address),
       ));
     }
     return out;

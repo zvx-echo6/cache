@@ -19,6 +19,7 @@ import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
+import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
 import '../layout/modules.dart';
@@ -133,6 +134,11 @@ class _ShellState extends State<Shell> {
     openAppPlace = _goToPlace;
     appPlaceScreen = _placeScreen;
     askCacheInstead = _askFromGuide;
+    // The PDF reader's "Open Library" (its file is gone from a library): the Library, over everything.
+    PdfReaderLinks.openLibrary = (context) {
+      Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
+      _goModule(ModuleId.library);
+    };
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
         Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => StoragePage(deps: _settingsDeps)));
@@ -221,7 +227,7 @@ class _ShellState extends State<Shell> {
     if (widget.nav.previewSnapshot(route)) _goModule(ModuleId.maps);
   }
 
-  void _openSource(String address) {
+  void _openSource(String address, [String? quote]) {
     // A citation of the guide opens the guide's reader at that section.
     if (address.startsWith('lib:$kGuideLibrary/')) {
       unawaited(_openGuideAt(address));
@@ -235,7 +241,7 @@ class _ShellState extends State<Shell> {
       return;
     }
     _goModule(ModuleId.library);
-    widget.browse.openAddress(address);
+    widget.browse.openAddress(address, quote: quote);
   }
 
   Future<void> _openGuideAt(String address) async {
@@ -558,7 +564,7 @@ class _ShellState extends State<Shell> {
   );
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
+        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video),

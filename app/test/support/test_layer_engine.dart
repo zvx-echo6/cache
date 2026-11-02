@@ -171,6 +171,17 @@ class TestLayerEngine extends LayerEngine {
   }
 
   @override
+  Future<void> pause(String areaId) async {
+    final a = _areas.where((x) => x.id == areaId).firstOrNull;
+    if (a == null) return;
+    a
+      ..phase = AreaPhase.failed
+      ..error = null
+      ..paused = true;
+    notifyListeners();
+  }
+
+  @override
   Future<void> cancel(String areaId) async {
     final a = _areas.where((x) => x.id == areaId).firstOrNull;
     if (a == null) return;

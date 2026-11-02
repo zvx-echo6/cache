@@ -16,5 +16,5 @@ pub mod text;
 pub use build::{build_pack, build_pack_with, BuildOptions, Progress, Report};
 pub use embed::{Embedder, FakeEmbedder};
 pub use error::{Error, Result};
-pub use library::{build_library, check_library_dir, LibraryOptions};
+pub use library::{build_library, check_library_dir, write_library, LibDoc, LibraryOptions, LibraryWriter, ZimRef};
 pub use pack::{read_pack, write_pack, Pack};

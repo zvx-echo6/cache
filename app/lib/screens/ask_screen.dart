@@ -9,6 +9,7 @@ import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
 import '../browse/zim_urls.dart';
 import '../history/share.dart';
+import '../layout/adaptive.dart' show ReadingWidth;
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart' show LocationPermissionState;
@@ -25,6 +26,7 @@ class AskScreen extends StatefulWidget {
     required this.app,
     required this.chat,
     this.onOpenSource,
+    this.onOpenPassage,
     this.onOpenVideo,
     this.onOpenNavigation,
     this.share = shareMarkdown,
@@ -50,6 +52,10 @@ class AskScreen extends StatefulWidget {
 
   /// Opens the article a citation points at (a `zim:` address) in Browse.
   final void Function(String address)? onOpenSource;
+
+  /// Opens a PDF page a citation points at with its passage ([quote]) highlighted; citations without a passage use
+  /// [onOpenSource].
+  final void Function(String address, String quote)? onOpenPassage;
 
   /// Opens the video a citation points at, at its moment (a library point that maps a link and a time).
   final void Function(String link, double time)? onOpenVideo;
@@ -352,31 +358,38 @@ class _AskScreenState extends State<AskScreen> {
                       ),
                     );
                   }
-                  return ListView.builder(
+                  // A desktop window keeps the conversation to a reading width; it scrolls from anywhere across the page.
+                  return LayoutBuilder(
+                    builder: (context, c) => ListView.builder(
                     controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    padding: ReadingWidth.padFor(context, c.maxWidth, style: _readingStyle).copyWith(top: 8, bottom: 16),
                     itemCount: msgs.length,
                     itemBuilder: (_, i) => msgs[i].isUser
                         ? _UserBubble(msgs[i].text)
                         : _AssistantBlock(
                             msgs[i],
                             onOpenSource: widget.onOpenSource,
+                            onOpenPassage: widget.onOpenPassage,
                             onOpenVideo: widget.onOpenVideo,
                             onOpenNavigation: widget.onOpenNavigation,
                             chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
+                    ),
                   );
                 },
               ),
             ),
 
-            _composer(context),
+            ReadingWidth(style: _readingStyle, child: _composer(context)),
           ],
         ),
       ),
     );
   }
+
+  /// The answers' text, which the reading width is measured in.
+  static const TextStyle _readingStyle = TextStyle(fontSize: 18);
 
   Widget _composer(BuildContext context) {
     final k = context.t;
@@ -476,7 +489,7 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBlock extends StatefulWidget {
-  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenVideo, this.onOpenNavigation, this.onReport, this.chat});
+  const _AssistantBlock(this.msg, {this.onOpenSource, this.onOpenPassage, this.onOpenVideo, this.onOpenNavigation, this.onReport, this.chat});
 
   final ChatMessage msg;
 
@@ -484,6 +497,7 @@ class _AssistantBlock extends StatefulWidget {
   final ChatController? chat;
   final VoidCallback? onReport;
   final void Function(String address)? onOpenSource;
+  final void Function(String address, String quote)? onOpenPassage;
   final void Function(String link, double time)? onOpenVideo;
   final void Function(NavigationAction action)? onOpenNavigation;
 
@@ -659,8 +673,10 @@ class _AssistantBlockState extends State<_AssistantBlock> {
               child: InkWell(
                 onTap: s.result.isVideoMoment && widget.onOpenVideo != null
                     ? () => widget.onOpenVideo!(s.result.link!, s.result.time!)
+                    : widget.onOpenPassage != null && s.result.quote != null && isZimAddress(s.result.address)
+                    ? () => widget.onOpenPassage!(s.result.openAddress, s.result.quote!)
                     : widget.onOpenSource != null && isZimAddress(s.result.address)
-                    ? () => widget.onOpenSource!(s.result.address)
+                    ? () => widget.onOpenSource!(s.result.openAddress)
                     : null,
                 child: Padding(
                   padding: const EdgeInsets.all(12),

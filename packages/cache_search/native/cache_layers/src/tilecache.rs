@@ -25,10 +25,24 @@ fn now() -> i64 {
 }
 
 impl TileCache {
+    /// Opens the cache at `path`, or starts it again empty when the file there does not open as one (it is only a cache: a
+    /// damaged file, or one an earlier version's sync copied from another device without the rest of it).
     pub fn open(path: &Path, max_bytes: u64) -> Result<TileCache> {
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p)?;
         }
+        match Self::open_at(path, max_bytes) {
+            Ok(t) => Ok(t),
+            Err(_) => {
+                for ext in ["", "-wal", "-shm", "-journal"] {
+                    let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+                }
+                Self::open_at(path, max_bytes)
+            }
+        }
+    }
+
+    fn open_at(path: &Path, max_bytes: u64) -> Result<TileCache> {
         let c = Connection::open(path)?;
         let _ = c.pragma_update(None, "journal_mode", "WAL");
         let _ = c.pragma_update(None, "synchronous", "NORMAL");
@@ -151,6 +165,27 @@ mod tests {
         assert!(matches!(c.get("l", 6, 0, 0).unwrap(), Some(Cached::Empty)));
         assert!(c.clear(Some("l")).unwrap() > 0);
         assert_eq!(c.bytes(), 0);
+        drop(c);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A cache file that does not open (damaged, or copied from another device by an earlier version's sync) is started again
+    /// empty instead of keeping the map from opening.
+    #[test]
+    fn a_damaged_cache_starts_again_empty() {
+        let dir = std::env::temp_dir().join(format!("cl-tc-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tiles.sqlite");
+        std::fs::write(&path, vec![0x5au8; 8192]).unwrap();
+        std::fs::write(dir.join("tiles.sqlite-shm"), vec![1u8; 32768]).unwrap();
+        let c = TileCache::open(&path, 10_000).unwrap();
+        assert_eq!(c.bytes(), 0);
+        c.put("l", 5, 1, 2, &[7u8; 100]).unwrap();
+        assert!(matches!(c.get("l", 5, 1, 2).unwrap(), Some(Cached::Tile(_))));
+        drop(c);
+        // A good cache is opened as it is.
+        let c = TileCache::open(&path, 10_000).unwrap();
+        assert!(matches!(c.get("l", 5, 1, 2).unwrap(), Some(Cached::Tile(_))));
         drop(c);
         std::fs::remove_dir_all(&dir).unwrap();
     }

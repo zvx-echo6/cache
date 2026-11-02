@@ -11,6 +11,7 @@ class DataKind {
     required this.icon,
     this.shared = _none,
     this.local = _noDirs,
+    this.notShared = const {},
     this.count,
     this.list,
     this.inStorage = true,
@@ -26,6 +27,10 @@ class DataKind {
 
   /// Folders counted in Storage but never shared: what each device builds for itself (search indexes) or fetches on its own.
   final List<Directory?> Function() local;
+
+  /// What each device builds for itself inside a shared folder, by share id, so it never syncs: path patterns in the sync engine's
+  /// form (segments, `*` for any one segment, each covering everything under it), as `*/index` for every library's search index.
+  final Map<String, List<String>> notShared;
 
   /// How many items there are ("4" in "4 · 113.6 GB"); null when the kind has no items to count.
   final int Function()? count;

@@ -1,0 +1,18 @@
+{
+ "ok": true,
+ "result": [
+  {
+   "id": "hunting-and-field-guides-3bc5df",
+   "title": "Hunting and field guides",
+   "books": 3,
+   "passages": 98,
+   "pages": 109,
+   "created_at": "2026-11-01T23:21:28Z",
+   "published": true,
+   "dirty": false,
+   "waiting": 0,
+   "building": false,
+   "publish_error": null
+  }
+ ]
+}

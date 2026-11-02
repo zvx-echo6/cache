@@ -1,0 +1,56 @@
+# Golden renders of the app's screens for review, drawn by the app's own widgets (app/test_shots), uploaded as an artifact so a
+# builder reads them without the shared Windows desktop. Runs on a push to a branch named renders-*, rel-29-dl or rel-30, or by hand with
+# the test files to run (default: every file in app/test_shots). Nothing is published anywhere else; no secrets are used.
+name: Renders
+
+on:
+  push:
+    branches: [rel-29-dl, rel-30, 'renders-*']
+    paths: ['app/**', '.github/workflows/renders.yml']
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: 'Test files under app/ to run (space separated), e.g. test_shots/downloads_renders_test.dart'
+        required: false
+        default: 'test_shots/downloads_renders_test.dart'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renders-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.8
+
+jobs:
+  renders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Packages
+        working-directory: app
+        run: flutter pub get
+      - name: Draw the renders
+        working-directory: app
+        env:
+          TESTS: ${{ github.event.inputs.tests || (github.ref_name == 'rel-30' && 'test_shots/desktop_renders_test.dart') || 'test_shots/downloads_renders_test.dart' }}
+        run: |
+          # shellcheck disable=SC2086
+          flutter test --no-pub --update-goldens $TESTS
+      - name: Upload the renders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: renders-${{ github.sha }}
+          path: |
+            app/test_shots/*/*.png
+          if-no-files-found: warn
+          retention-days: 14

@@ -105,6 +105,48 @@ pub struct Config {
     /// Bind to this port (tests and fixed firewall rules); 0 or absent picks one.
     #[serde(default)]
     pub port: Option<u16>,
+    /// What never syncs in a shared folder, by share id: things each device builds or caches for itself (a library's search index,
+    /// a viewed-tile cache, SQLite's shared-memory files). Each pattern is a path of segments: `*` within a segment matches any run
+    /// of characters (`*` alone is any one segment, `*-shm` any name ending so), and a `**` segment any number of segments
+    /// (`**/*-shm` is such a file at any depth). A pattern covers what it names and everything in it (`*/index` is the `index`
+    /// folder of every top-level folder, with its files). Such a path is not listed, sent, fetched or deleted; a copy already here
+    /// stays (it is this device's now), and entries for it that an earlier version listed are forgotten, not deleted, so no other
+    /// device loses its own copy.
+    #[serde(default)]
+    pub exclude: BTreeMap<String, Vec<String>>,
+}
+
+/// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
+pub fn excluded(patterns: &[String], rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    patterns.iter().any(|pat| {
+        let segs: Vec<&str> = pat.split('/').filter(|s| !s.is_empty()).collect();
+        !segs.is_empty() && covers(&segs, &parts)
+    })
+}
+
+/// Whether the pattern segments `pat` match the start of `parts` (what follows is inside what they name).
+fn covers(pat: &[&str], parts: &[&str]) -> bool {
+    match pat.split_first() {
+        None => true,
+        Some((&"**", rest)) => covers(rest, parts) || (!parts.is_empty() && covers(pat, &parts[1..])),
+        Some((seg, rest)) => parts.split_first().map(|(p, more)| glob(seg, p) && covers(rest, more)).unwrap_or(false),
+    }
+}
+
+/// One segment against its pattern, where `*` matches any run of characters.
+fn glob(pat: &str, name: &str) -> bool {
+    let Some((head, tail)) = pat.split_once('*') else { return pat == name };
+    let Some(mut rest) = name.strip_prefix(head) else { return false };
+    let pieces: Vec<&str> = tail.split('*').collect();
+    let (last, middle) = pieces.split_last().expect("split gives one piece at least");
+    for piece in middle {
+        match rest.find(piece) {
+            Some(i) => rest = &rest[i + piece.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +271,8 @@ struct Inner {
     settle_again: Arc<AtomicBool>,
     /// The first round has put right what an interrupted write left (see [`Writes`]).
     recovered: AtomicBool,
+    /// What never syncs, by share id ([`Config::exclude`]).
+    exclude: BTreeMap<String, Vec<String>>,
 }
 
 pub struct SyncEngine {
@@ -289,7 +333,7 @@ fn mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
+fn walk(root: &Path, dir: &Path, skip: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
@@ -298,8 +342,11 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf, std::fs::Metada
             continue;
         }
         let Some(rel) = rel_path(root, &p) else { continue };
+        if excluded(skip, &rel) {
+            continue;
+        }
         if m.is_dir() {
-            walk(root, &p, out);
+            walk(root, &p, skip, out);
         } else if m.is_file() {
             out.push((rel, p, m));
         }
@@ -321,15 +368,43 @@ fn find_asides(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Folders a delete left empty go too, up to (not including) the shared folder itself.
-fn prune_empty(root: &Path, removed: &Path) {
+/// Folders a delete left empty go too, up to (not including) the shared folder itself. A folder left holding only what never
+/// syncs (`skip`: a removed library's search index, built here from files that are now gone) counts as empty.
+fn prune_empty(root: &Path, removed: &Path, skip: &[String]) {
     let mut d = removed.parent();
     while let Some(dir) = d {
-        if dir == root || !dir.starts_with(root) || std::fs::remove_dir(dir).is_err() {
+        if dir == root || !dir.starts_with(root) {
+            break;
+        }
+        if std::fs::remove_dir(dir).is_err() && !remove_if_only_excluded(root, dir, skip) {
             break;
         }
         d = dir.parent();
     }
+}
+
+/// Removes `dir` when everything in it is excluded from sync (and there is something); false when anything else is there or a
+/// removal fails.
+fn remove_if_only_excluded(root: &Path, dir: &Path, skip: &[String]) -> bool {
+    let Ok(rd) = std::fs::read_dir(dir) else { return false };
+    let mut derived = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        match rel_path(root, &p) {
+            Some(rel) if excluded(skip, &rel) => derived.push(p),
+            _ => return false,
+        }
+    }
+    if derived.is_empty() {
+        return false;
+    }
+    for p in derived {
+        let gone = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        if gone.is_err() {
+            return false;
+        }
+    }
+    std::fs::remove_dir(dir).is_ok()
 }
 
 /// The BLAKE3 hash of a file's content, as the store names it.
@@ -370,6 +445,20 @@ impl Inner {
     fn save(&self) -> Result<()> {
         let s = self.saved.lock().unwrap().clone();
         write_json(&self.saved_path(), &s)
+    }
+
+    /// The patterns that never sync in `share`.
+    fn skip(&self, share: &str) -> &[String] {
+        self.exclude.get(share).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// `idx` without the paths that never sync in `share` (what a peer lists for them is not looked at).
+    fn without_excluded(&self, share: &str, idx: &Index) -> Index {
+        let skip = self.skip(share);
+        if skip.is_empty() {
+            return idx.clone();
+        }
+        Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect() }
     }
 
     fn load_index(&self, share: &str) -> Index {
@@ -466,6 +555,11 @@ impl Inner {
         }
         // A file being fetched: kept if it is whole, else replaced from the store, or left for the next fetch.
         for (path, entry) in self.load_writes(&sh.id) {
+            // A write an earlier version started into what never syncs now: whatever is there stays, and it is not finished.
+            if excluded(self.skip(&sh.id), &path) {
+                let _ = self.unmark_writing(&sh.id, &path);
+                continue;
+            }
             let Some(full) = safe_join(&sh.path, &path) else {
                 let _ = self.unmark_writing(&sh.id, &path);
                 continue;
@@ -598,13 +692,23 @@ impl Inner {
             bail!("{} is missing", share.path.display());
         }
         let root = share.path.clone();
+        let skip = self.skip(&share.id).to_vec();
         let files = tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
-            walk(&root, &root, &mut v);
+            walk(&root, &root, &skip, &mut v);
             v
         })
         .await?;
         let mut changed = false;
+        // What an earlier version listed under a path that never syncs now is forgotten, not marked deleted: a delete would go to
+        // the other devices and remove their own copies.
+        let forget: Vec<String> = idx.files.keys().filter(|p| excluded(self.skip(&share.id), p)).cloned().collect();
+        for p in forget {
+            idx.files.remove(&p);
+            seen.remove(&p);
+            let _ = self.store.tags().delete(Self::tag_name(&share.id, &p).as_bytes()).await;
+            changed = true;
+        }
         let mut unsettled = false;
         let mut writes = self.load_writes(&share.id);
         let writes_before = writes.len();
@@ -677,7 +781,11 @@ impl Inner {
         let s = self.saved.lock().unwrap().clone();
         RemoteIndex {
             name: s.name.clone(),
-            shares: s.shares.iter().map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.load_index(&sh.id) }).collect(),
+            shares: s
+                .shares
+                .iter()
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.without_excluded(&sh.id, &self.load_index(&sh.id)) })
+                .collect(),
         }
     }
 
@@ -806,6 +914,7 @@ impl Inner {
     }
 
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
+        let remote = &self.without_excluded(&sh.id, remote);
         let actions = index::merge(&self.load_index(&sh.id), remote);
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
@@ -840,7 +949,7 @@ impl Inner {
                             continue;
                         }
                         std::fs::remove_file(&full).with_context(|| format!("could not delete {path}"))?;
-                        prune_empty(&sh.path, &full);
+                        prune_empty(&sh.path, &full, self.skip(&sh.id));
                     }
                     let _ = self.store.tags().delete(Self::tag_name(&sh.id, &path).as_bytes()).await;
                     seen.remove(&path);
@@ -1222,6 +1331,7 @@ impl SyncEngine {
             stop: AtomicBool::new(false),
             settle_again: Arc::default(),
             recovered: AtomicBool::new(false),
+            exclude: cfg.exclude.clone(),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
@@ -1409,7 +1519,8 @@ impl SyncEngine {
                 if let Some(idx) = &st.index {
                     for sh in &idx.shares {
                         if !joined.contains(sh.id.as_str()) {
-                            let live = sh.index.files.values().filter(|e| !e.deleted);
+                            let offered = inner.without_excluded(&sh.id, &sh.index);
+                            let live = offered.files.values().filter(|e| !e.deleted);
                             let (n, b) = live.fold((0u64, 0u64), |(n, b), e| (n + 1, b + e.size));
                             offers.push(json!({"peer": p.id, "peer_name": p.name, "id": sh.id, "name": sh.name, "files": n, "bytes": b}));
                         }
@@ -1429,7 +1540,7 @@ impl SyncEngine {
                 let mut pending_bytes = 0u64;
                 for st in run.peers.values() {
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
-                        for a in index::merge(&idx, &rs.index) {
+                        for a in index::merge(&idx, &inner.without_excluded(&sh.id, &rs.index)) {
                             if let Action::Fetch { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;

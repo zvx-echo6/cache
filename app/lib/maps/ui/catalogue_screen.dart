@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../downloads/download_row.dart';
+
 import '../../settings/data_policy.dart';
 import '../../theme.dart';
 import '../layers/layer_def.dart';
@@ -145,6 +147,36 @@ class _AreaRow extends StatelessWidget {
       case AreaPhase.failed:
         status = area.error ?? 'Could not be downloaded';
         color = k.emergency;
+    }
+    if (area.phase != AreaPhase.done) {
+      // On its way, paused or stopped: the download pattern, with Pause, Resume and Remove.
+      final s = areaDl(area);
+      final a = DlActions(
+        pause: updating ? null : () => engine.pause(area.id),
+        resume: () => _update(context),
+        remove: () => engine.delete(area.id),
+      );
+      return Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          decoration: BoxDecoration(border: Border.all(color: k.secondary.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(12)),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(area.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
+                    DlStatus(state: s, actions: a, keyBase: 'area-${area.id}'),
+                  ],
+                ),
+              ),
+              dlControl(context, s, a, keyBase: 'area-${area.id}'),
+            ],
+          ),
+        ),
+      );
     }
     return Padding(
       padding: const EdgeInsets.only(top: 10),
@@ -364,4 +396,19 @@ class _DefinitionEditorState extends State<DefinitionEditor> {
       ),
     );
   }
+}
+
+/// A map layer area on its way, paused or stopped, as its row shows it. The core counts tiles, not bytes: the size in all is worked
+/// out from the share of tiles done once there is enough of it.
+DlState areaDl(DownloadedArea a) {
+  final done = a.bytes;
+  final total = a.totalTiles > 0 && a.doneTiles >= a.totalTiles / 20 && a.doneTiles > 0 ? (done * a.totalTiles / a.doneTiles).round() : 0;
+  return switch (a.phase) {
+    AreaPhase.running => a.doneTiles == 0
+        ? DlState(DlPhase.starting, total: total)
+        : DlState(DlPhase.running, done: done, total: total, speed: DlMeter.speed('area:${a.id}', done)),
+    AreaPhase.failed when a.error == null => DlState(DlPhase.paused, done: done, total: total),
+    AreaPhase.failed => DlState(DlPhase.failed, done: done, total: total, reason: DlReason.of(a.error)),
+    AreaPhase.done => DlState(DlPhase.done, done: done, total: done),
+  };
 }

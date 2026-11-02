@@ -14,8 +14,13 @@ const String kRecommendedModelsUrl = 'https://data.cached.info/models/recommende
 /// published list cannot be read.
 const String kRecommendedModelsAsset = 'assets/models/recommended.json';
 
-/// The format of the recommendations file this app reads. A file of another format is not used.
-const int kRecommendationsFormat = 1;
+/// The format of the recommendations file this app writes and reads. Format 2 added direct-address entries (`url`), the `revision`
+/// of a Hugging Face entry, the section (`recommended` or `experimental`) and a licence line; format 1 files are still read (every
+/// entry recommended). A file of another format is not used.
+const int kRecommendationsFormat = 2;
+
+/// Where a recommended model is listed on the Models screen.
+enum RecommendationSection { recommended, experimental }
 
 /// How a recommended model stands with Cache.
 enum RecommendationKind {
@@ -41,7 +46,49 @@ enum RecommendationKind {
   }
 }
 
-/// One recommended model file on Hugging Face.
+/// Settings a recommended model may carry, applied when that model is loaded. Every field is optional: a missing one keeps what the
+/// app does for any model (the sampling the GGUF recommends with llama.cpp's defaults for the rest, 8192 tokens of context, no
+/// output cap, the template's own stop). Today the engine takes [temp] and [nCtx]; the others are carried for when it takes them.
+/// [fetchFirst] is reserved (false; not used in 1.0.29).
+class ModelSettings {
+  const ModelSettings({this.temp, this.topK, this.topP, this.minP, this.repeatPenalty, this.nCtx, this.maxTokens, this.stop = const [], this.fetchFirst = false});
+
+  final double? temp;
+  final int? topK;
+  final double? topP;
+  final double? minP;
+  final double? repeatPenalty;
+  final int? nCtx;
+  final int? maxTokens;
+  final List<String> stop;
+  final bool fetchFirst;
+
+  static const none = ModelSettings();
+
+  bool get isEmpty => temp == null && topK == null && topP == null && minP == null && repeatPenalty == null && nCtx == null && maxTokens == null && stop.isEmpty;
+
+  static ModelSettings fromJson(Object? j) {
+    if (j is! Map) return none;
+    double? d(String k) => j[k] is num ? (j[k] as num).toDouble() : null;
+    int? n(String k) => j[k] is int && (j[k] as int) > 0 ? j[k] as int : null;
+    return ModelSettings(
+      temp: d('temp'),
+      topK: n('top_k'),
+      topP: d('top_p'),
+      minP: d('min_p'),
+      repeatPenalty: d('repeat_penalty'),
+      nCtx: n('n_ctx'),
+      maxTokens: n('max_tokens'),
+      stop: [for (final s in (j['stop'] is List ? j['stop'] as List : const [])) if (s is String && s.isNotEmpty) s],
+      fetchFirst: j['fetch_first'] == true,
+    );
+  }
+
+  /// What a generation request carries for these settings (only what the engine takes: temperature).
+  Map<String, dynamic> get requestExtras => {if (temp != null) 'temperature': temp};
+}
+
+/// One recommended model file: on Hugging Face ([repo], [revision]), or at a direct address ([url]).
 class ModelRecommendation {
   const ModelRecommendation({
     required this.name,
@@ -51,7 +98,25 @@ class ModelRecommendation {
     required this.kind,
     this.sha256,
     this.note = '',
+    this.url,
+    this.revision = 'main',
+    this.section = RecommendationSection.recommended,
+    this.licence,
+    this.settings = ModelSettings.none,
   });
+
+  /// The model's own settings (none: the app's usual ones).
+  final ModelSettings settings;
+
+  /// The file's direct address (https), for a file not on Hugging Face; [repo] is then empty.
+  final Uri? url;
+
+  /// The commit (or branch) of a Hugging Face entry.
+  final String revision;
+  final RecommendationSection section;
+
+  /// One line about the licence, for a model Cache tuned ("Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache").
+  final String? licence;
 
   /// What the row is called, for example "Gemma 4 E2B · Q4_K_M".
   final String name;
@@ -68,25 +133,36 @@ class ModelRecommendation {
   /// One plain line about the model.
   final String note;
 
-  HfFile get hfFile => HfFile(repo: repo, path: file, size: size, sha256: sha256);
+  HfFile get hfFile => HfFile(repo: repo, path: file, size: size, sha256: sha256, revision: revision, url: url);
 
   /// Null when an entry lacks what a download needs or has a kind this app does not know.
   static ModelRecommendation? fromJson(Object? j) {
     if (j is! Map) return null;
     final name = j['name'], repo = j['repo'], file = j['file'], size = j['size'], sha = j['sha256'], note = j['note'];
     final kind = RecommendationKind.byId(j['kind']);
-    if (name is! String || repo is! String || !repo.contains('/') || file is! String || !file.toLowerCase().endsWith('.gguf')) {
-      return null;
-    }
+    final url = j['url'] is String ? Uri.tryParse(j['url'] as String) : null;
+    final direct = url != null && url.scheme == 'https' && url.host.isNotEmpty;
+    if (name is! String || file is! String || !file.toLowerCase().endsWith('.gguf')) return null;
+    if (!direct && (repo is! String || !repo.contains('/'))) return null;
+    if (j['url'] != null && !direct) return null;
     if (size is! int || size <= 0 || kind == null) return null;
+    final shaOk = sha is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(sha);
+    // A file at a direct address is only taken with its checksum: nothing else vouches for it.
+    if (direct && !shaOk) return null;
+    final section = j['section'] == 'experimental' ? RecommendationSection.experimental : RecommendationSection.recommended;
     return ModelRecommendation(
       name: name,
-      repo: repo,
+      repo: direct ? '' : repo as String,
       file: file,
       size: size,
       kind: kind,
-      sha256: sha is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(sha) ? sha : null,
+      sha256: shaOk ? sha : null,
       note: note is String ? note : '',
+      url: direct ? url : null,
+      revision: j['revision'] is String && (j['revision'] as String).isNotEmpty ? j['revision'] as String : 'main',
+      section: section,
+      licence: j['licence'] is String ? j['licence'] as String : null,
+      settings: ModelSettings.fromJson(j['settings']),
     );
   }
 }
@@ -94,15 +170,18 @@ class ModelRecommendation {
 /// The recommendations file:
 ///
 /// ```json
-/// {"format": 1, "models": [{"name": "...", "repo": "owner/name", "file": "x.gguf", "size": 123,
-///   "sha256": "... or null", "kind": "tuned_for_cache" | "works_not_tuned", "note": "one line"}]}
+/// {"format": 2, "models": [{"name": "...", "repo": "owner/name", "revision": "commit", "file": "x.gguf", "size": 123,
+///   "sha256": "... or null", "kind": "tuned_for_cache" | "works_not_tuned", "section": "recommended" | "experimental",
+///   "licence": "optional line", "note": "one line", "settings": {"temp": 1.0, "top_k": 64, "top_p": 0.95, "min_p": 0.05,
+///   "repeat_penalty": 1.0, "n_ctx": 8192, "max_tokens": 2048, "stop": [], "fetch_first": false} (every setting optional)},
+///   {"name": "...", "url": "https://...", "file": "x.gguf", "size": 123, "sha256": "required", ...}]}
 /// ```
 ///
 /// Null when the text is not a file of [kRecommendationsFormat]. Entries this app cannot use are left out.
 List<ModelRecommendation>? parseRecommendations(String text) {
   try {
     final j = jsonDecode(text);
-    if (j is! Map || j['format'] != kRecommendationsFormat || j['models'] is! List) return null;
+    if (j is! Map || (j['format'] != kRecommendationsFormat && j['format'] != 1) || j['models'] is! List) return null;
     return [
       for (final m in j['models'] as List)
         ?ModelRecommendation.fromJson(m),

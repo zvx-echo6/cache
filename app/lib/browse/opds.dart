@@ -464,13 +464,8 @@ CatalogPage parseEntries(String body, {Uri? base}) {
         zim = u;
         length = int.tryParse(l.getAttribute('length') ?? '') ?? 0;
       } else if (rel.endsWith('/image/thumbnail') || rel.endsWith('/image')) {
+        // As linked: Kiwix serves /catalog/v2/illustration/<uuid>/ at size=48 only (another size is a 404).
         icon = root.resolve(href);
-        // Ask for a sharper icon than the 48 px the catalogue links.
-        if (icon.queryParameters['size'] == '48') {
-          icon = icon.replace(
-            queryParameters: {...icon.queryParameters, 'size': '96'},
-          );
-        }
       }
     }
     if (zim == null) continue;

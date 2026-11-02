@@ -76,6 +76,10 @@ abstract class LayerEngine extends ChangeNotifier {
   /// Stops a running download and removes what it fetched.
   Future<void> cancel(String areaId);
 
+  /// Pauses a running download: it stops and keeps what it fetched (the area reads as stopped part way, [AreaPhase.failed] with no
+  /// error and [DownloadedArea.paused]); [update] carries it on.
+  Future<void> pause(String areaId) => cancel(areaId);
+
   Future<void> delete(String areaId);
 
   /// Fetches the area again and swaps it in when complete (the old copy stays in use until then).
