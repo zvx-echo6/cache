@@ -111,13 +111,14 @@ class _BrowseScreenState extends State<BrowseScreen> {
       openZimPdf(context, sources, address, quote: quote);
       return;
     }
-    _openZim(z, address: address);
+    // An EPUB chapter opens at the cited block, with the quote's first words marked.
+    _openZim(z, address: address, quote: quote);
   }
 
   /// The list's context inside the two panes (a tablet opens items beside the list).
   BuildContext? _pane;
 
-  void _openZim(ZimFile z, {String? address}) {
+  void _openZim(ZimFile z, {String? address, String? quote}) {
     openDetail(
       _pane ?? context,
       key: 'zim:${z.path}',
@@ -125,6 +126,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           sources: sources,
           zim: z,
           address: address,
+          quote: quote,
           layout: widget.layout,
           itemMenu: (ctx, addPage) => showLibraryMenu(ctx, _zimActions(z, addToHome: addPage)),
         ),

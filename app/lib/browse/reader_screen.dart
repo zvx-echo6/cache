@@ -16,6 +16,7 @@ import '../pdf/pdf_source.dart';
 import '../screens/search_model_line.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
+import 'epub_address.dart';
 import 'zim_urls.dart';
 import 'reader_resources.dart';
 
@@ -90,7 +91,8 @@ class ZimReaderScreen extends StatefulWidget {
   /// with `#page=N`) opens in the PDF reader, at that page.
   final String? address;
 
-  /// The cited passage on that page of a PDF entry (a citation's quote), highlighted when found.
+  /// The cited passage (a citation's quote): on that page of a PDF entry, or in the EPUB chapter opened (its first words are
+  /// found and marked), highlighted when found.
   final String? quote;
 
   @override
@@ -197,7 +199,9 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       return;
     }
     try {
-      final address = widget.address ?? await widget.sources.zimMainPage(id);
+      var address = widget.address ?? await widget.sources.zimMainPage(id);
+      // An EPUB entry opens at its first chapter (a web view would only download it).
+      if (isEpubEntryAddress(address)) address = await epubFirstChapter(address, widget.sources.zimGet) ?? address;
       final url = readerUrl(address, customScheme: _customScheme);
       if (url == null) throw StateError('Not a ZIM address');
       if (mounted) setState(() => _start = url);
@@ -272,6 +276,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     if (isPdfAddress(address)) {
       setState(() => _searching = false);
       _openPdfEntry(address);
+      return;
+    }
+    if (isEpubEntryAddress(address)) {
+      setState(() => _searching = false);
+      unawaited(_openEpub(address));
       return;
     }
     final u = readerUrl(address, customScheme: _customScheme);
@@ -372,6 +381,36 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
   late final PdfZimSource? _pdf = widget.address != null && isPdfAddress(widget.address!) ? zimPdfSource(widget.sources, widget.address!) : null;
 
   /// A link on a page to a PDF entry of the ZIM: the PDF reader over the whole window (the page stays underneath).
+  /// An EPUB entry: its first chapter in this reader.
+  Future<void> _openEpub(String address) async {
+    final chapter = await epubFirstChapter(address, widget.sources.zimGet);
+    if (!mounted) return;
+    if (chapter == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('This book could not be opened.')));
+      return;
+    }
+    final u = readerUrl(chapter, customScheme: _customScheme);
+    if (u != null) await _web?.loadUrl(urlRequest: URLRequest(url: WebUri.uri(u)));
+  }
+
+  /// The quote's first words marked once, on the first page loaded (an EPUB citation).
+  bool _quoteMarked = false;
+
+  void _markQuote() {
+    final q = widget.quote;
+    if (_quoteMarked || q == null || q.trim().isEmpty || widget.address == null || !isEpubInnerAddress(widget.address!)) return;
+    _quoteMarked = true;
+    final probe = quoteProbe(q);
+    if (probe.isEmpty) return;
+    setState(() {
+      _finding = true;
+      _find.text = probe;
+    });
+    _findController.findAll(find: probe);
+  }
+
   void _openPdfEntry(String address) {
     if (!mounted) return;
     openZimPdf(context, widget.sources, address);
@@ -580,6 +619,12 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           if (a != null) WidgetsBinding.instance.addPostFrameCallback((_) => _openPdfEntry(a));
           return WebResourceResponse(contentType: 'text/plain', statusCode: 204, reasonPhrase: 'No Content', data: Uint8List(0));
         }
+        // An EPUB entry the page opened: its first chapter instead (a web view would download it).
+        if (r.status == 200 && request.isForMainFrame == true && r.mime.split(';').first.trim() == 'application/epub+zip') {
+          final a = addressOfUrl(request.url.uriValue);
+          if (a != null) WidgetsBinding.instance.addPostFrameCallback((_) => _openEpub(a));
+          return WebResourceResponse(contentType: 'text/plain', statusCode: 204, reasonPhrase: 'No Content', data: Uint8List(0));
+        }
         if (r.status == 200 && r.mime.split(';').first.trim() == 'text/html') {
           r = ServedEntry(200, r.mime, utf8.encode(withoutPicturePlaceholders(utf8.decode(r.bytes, allowMalformed: true))));
         }
@@ -610,6 +655,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
             _openPdfEntry(u.hasFragment ? '$a#${u.fragment}' : a);
             return NavigationActionPolicy.CANCEL;
           }
+          // A link to an EPUB entry opens its first chapter here.
+          if (a != null && isEpubEntryAddress(a)) {
+            unawaited(_openEpub(a));
+            return NavigationActionPolicy.CANCEL;
+          }
           return NavigationActionPolicy.ALLOW;
         }
         if (mounted) {
@@ -636,6 +686,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       onRenderProcessGone: (c, detail) => _pageStopped(),
       onLoadStop: (c, u) {
         _syncNav();
+        _markQuote();
         _settle ??= Timer(const Duration(milliseconds: 1500), _settleNow);
       },
       onUpdateVisitedHistory: (c, u, r) {
