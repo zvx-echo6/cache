@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:cache/platform/battery.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
