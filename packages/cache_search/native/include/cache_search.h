@@ -191,7 +191,17 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
  * thread ("opening":true until ready). "updating" is false for everything else.
  * A ZIM that could not be opened (file missing, SD card removed, unsupported) is listed with "id":null,
- * "indexed":false and its "error"; the other sources work normally. */
+ * "indexed":false and its "error"; the other sources work normally.
+ * With an indexes_dir the object also has "rejected_snapshots":[{"kind","source_id","build_id","reason","at","path"}]: the
+ * snapshots this device removed or refused, read from its own file <indexes_dir>/.local/rejected.json. "path" is the folder
+ * relative to indexes_dir ("<kind>/<source id>/snap/<build id>"). The app adds these paths to the receiver's exclude list of
+ * the indexes share, so sync does not fetch a snapshot back from a peer that still has it (deletions do not sync).
+ * <indexes_dir>/.local/ is device-local and must never be synced (add it to the share's exclusions). The core writes to it
+ * when, with a usable snapshot of a source in use, it removes (on this device only): a usable duplicate or older snapshot
+ * (reason "superseded: ..."), a snapshot it cannot use (reason "incompatible: ..." for another format, Tantivy version,
+ * tokenizer or chunker; "failed verify: ..."; "is the <kind> snapshot of <id>"), or one that never completed: a snapshot that
+ * is still arriving (no manifest yet, a listed file missing or short) stays until it is complete, or until nothing in it has
+ * changed for 24 hours (reason "incomplete, unchanged for N s"). The list keeps the latest 2000 entries. */
 char *cs_status(cs_handle *h);
 
 /* Last error on this handle: {"code","message"}, or NULL if none.

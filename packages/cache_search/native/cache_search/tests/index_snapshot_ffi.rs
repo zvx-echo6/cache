@@ -550,3 +550,49 @@ fn seal_is_busy_while_a_writer_holds_the_old_index_and_works_after() {
     let p = seal(&e, json!({"index_dir": e.legacy}));
     assert_eq!(p["state"], "done", "{p}");
 }
+
+#[test]
+fn an_old_format_snapshot_is_removed_once_a_usable_one_is_in_use_and_cs_status_lists_it() {
+    let e = env("rejected");
+    let r = build_snapshot(&e);
+    let good = r["snapshot"].as_str().unwrap().to_string();
+    // an older core's snapshot of the same ZIM that arrived by sync: the same files, format 2
+    let old = "20250101T000000Z-aaaaaa";
+    let (from, to) = (zim_root(&e.idx, UUID).join("snap").join(&good), zim_root(&e.idx, UUID).join("snap").join(old));
+    std::fs::create_dir_all(&to).unwrap();
+    for f in std::fs::read_dir(&from).unwrap().flatten() {
+        std::fs::copy(f.path(), to.join(f.file_name())).unwrap();
+    }
+    let mut m: Value = serde_json::from_slice(&std::fs::read(to.join("manifest.json")).unwrap()).unwrap();
+    m["format"] = json!(2);
+    std::fs::write(to.join("manifest.json"), m.to_string()).unwrap();
+    // one still arriving: a manifest-less folder stays
+    let arriving = zim_root(&e.idx, UUID).join("snap").join("20261101T000000Z-bbbbbb");
+    std::fs::create_dir_all(&arriving).unwrap();
+    std::fs::write(arriving.join("meta.json"), b"{").unwrap();
+    let h = open_handle(&e.zim, None, Some(&e.idx));
+    let z = settle(h, true);
+    assert_eq!(z["index"]["snapshot"], good.as_str());
+    let t0 = Instant::now();
+    let st = loop {
+        let st = status(h);
+        if !st["rejected_snapshots"].as_array().unwrap().is_empty() || t0.elapsed() > Duration::from_secs(10) {
+            break st;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(snapshots(&e.idx, UUID), vec!["20261101T000000Z-bbbbbb".to_string(), good.clone()]);
+    let rej = st["rejected_snapshots"].as_array().unwrap();
+    assert_eq!(rej.len(), 1, "{st}");
+    assert_eq!(
+        (rej[0]["kind"].as_str(), rej[0]["source_id"].as_str(), rej[0]["build_id"].as_str()),
+        (Some("zim"), Some(UUID), Some(old))
+    );
+    assert!(rej[0]["reason"].as_str().unwrap().contains("incompatible"), "{st}");
+    assert_eq!(rej[0]["path"], format!("zim/{UUID}/snap/{old}"));
+    // the device-local file is where the app can read it too, outside every kind's folder
+    let file: Value =
+        serde_json::from_slice(&std::fs::read(e.idx.join(".local").join("rejected.json")).unwrap()).unwrap();
+    assert_eq!(file.as_array().unwrap().len(), 1);
+    unsafe { cs_close(h) };
+}

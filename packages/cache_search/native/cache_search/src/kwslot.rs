@@ -54,7 +54,7 @@ impl KwSlot {
                         let opened = KwIndex::open(kind, &pk.name, &pk.dir, pk.manifest.clone()).ok();
                         if opened.is_some() {
                             // local clean-up: usable duplicates and older ones go, the one in use and a rollback stay
-                            snapshot::gc(&p, &pk);
+                            snapshot::gc_local(&p, kind, &id, kwindex::compat_for(kind), &pk);
                         }
                         opened
                     })
