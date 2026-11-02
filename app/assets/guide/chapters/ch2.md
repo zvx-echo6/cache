@@ -607,6 +607,8 @@ If the picture can't play, a line under it says why:
 
 The player opens when you tap the picture on the video page.
 
+![The player's settings sheet](shot:video-player)
+
 1. Tap the picture to show or hide the controls. While it plays they hide after 3 seconds. When it is paused they stay.
 2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
 3. Drag the bar to move through the video. The time shows as the time so far and the length.
