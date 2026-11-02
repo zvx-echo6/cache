@@ -64,6 +64,7 @@ void main() {
   testWidgets('under 1280 the panes are as before: list 340, detail 640, the placeholder while nothing is chosen', (tester) async {
     await _pumpPanes(tester, const Size(1279, 800));
     expect(tester.getSize(find.byType(_List)).width, kWideListWidth);
+    expect(paneShowsDesktopInitial(tester.element(find.text('Alpha'))), isFalse);
     expect(find.text('Choose an item'), findsOneWidget);
     expect(find.byKey(const ValueKey('page-Start')), findsNothing);
     await tester.tap(find.text('Alpha'));
@@ -79,10 +80,13 @@ void main() {
       expect(find.byKey(const ValueKey('page-Start')), findsOneWidget);
       final detail = (size.width - kDesktopListWidth - 1).clamp(0, kDesktopDetailMaxWidth).toDouble();
       expect(tester.getSize(find.byKey(const ValueKey('page-Start'))).width, detail);
+      // The list knows the starting page is beside it (it leaves out its own way there) until an item is chosen.
+      expect(paneShowsDesktopInitial(tester.element(find.text('Alpha'))), isTrue);
       // Choosing an item replaces the starting page.
       await tester.tap(find.text('Alpha'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('page-Start')), findsNothing);
+      expect(paneShowsDesktopInitial(tester.element(find.text('Alpha'))), isFalse);
       expect(tester.getSize(find.byKey(const ValueKey('page-Alpha'))).width, detail);
     });
   }
