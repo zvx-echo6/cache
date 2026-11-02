@@ -22,6 +22,7 @@
 pub mod geo;
 pub mod http;
 pub mod index;
+mod snap;
 mod places;
 
 pub use places::{StreamAnswer, DEFAULT_PLACES_STREAM_TIMEOUT_MS, PLACES_STREAM_DEG};
@@ -156,6 +157,12 @@ pub struct Config {
     /// Cap of the places tiles fetched for searches that belong to no downloaded region.
     #[serde(default = "default_places_cap")]
     pub places_stream_cap_bytes: u64,
+    /// The device's indexes folder (one for every kind of index). With it, each fetched tile index is kept as a syncable
+    /// snapshot, `<indexes_dir>/region-index/<build>/snap/<id>/` and `places-index/...`, a snapshot a peer synced in is
+    /// used before anything is fetched, and an index already in `dir` is sealed into one. Without it the indexes stay in
+    /// `<dir>/index/` as before.
+    #[serde(default)]
+    pub indexes_dir: Option<PathBuf>,
 }
 
 /// A downloaded region: its outline, its parts and, per build, the tiles it needs (one build, or two while an update
@@ -278,6 +285,8 @@ struct Inner {
     db: Mutex<Connection>,
     st: Mutex<State>,
     indexes: Mutex<HashMap<String, Arc<Index>>>,
+    /// Where the routing indexes are kept (snapshots, or the legacy folder).
+    store: snap::IndexStore,
     network: AtomicBool,
     /// The person paused the downloads (`set_policy` `hold`): no region tiles are fetched; a stream (routing near a route, the
     /// places around a search) still is.
@@ -525,10 +534,6 @@ impl Inner {
         p
     }
 
-    fn index_file(&self, build: &str) -> PathBuf {
-        self.dir.join("index").join(format!("{build}.tsv"))
-    }
-
     fn meta_set(&self, db: &Connection, key: &str, value: Option<&str>) -> Result<()> {
         match value {
             Some(v) => db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)", params![key, v])?,
@@ -569,8 +574,7 @@ impl Inner {
         if let Some(i) = self.indexes().get(build) {
             return Some(i.clone());
         }
-        let text = std::fs::read_to_string(self.index_file(build)).ok()?;
-        let idx = Arc::new(Index::parse(build, &text).ok()?);
+        let idx = self.store.find(build, self.seq(), &|t| Index::parse(build, t).ok().map(Arc::new))?;
         self.indexes().insert(build.to_string(), idx.clone());
         Some(idx)
     }
@@ -587,7 +591,7 @@ impl Inner {
         let raw = gunzip(&gz, MAX_INDEX).map_err(|e| Error::new("bad_response", format!("the index of {} is not valid gzip: {e}", c.build)))?;
         let text = String::from_utf8(raw).map_err(|_| Error::new("bad_response", format!("the index of {} is not text", c.build)))?;
         let idx = Arc::new(Index::parse(&c.build, &text).map_err(|m| Error::new("bad_response", m))?);
-        write_whole(&self.index_file(&c.build), text.as_bytes(), self.seq())?;
+        self.store.save(c, &text, self.seq())?;
         self.indexes().insert(c.build.clone(), idx.clone());
         Ok(idx)
     }
@@ -618,7 +622,8 @@ impl Inner {
         match fetched {
             Ok(r) => Ok(r),
             Err(e) => {
-                let known = [dev, self.st().current.as_ref().map(|c| c.build.clone())];
+                // A synced-in snapshot names a build too, for a device that has not been told one yet.
+                let known = [dev, self.st().current.as_ref().map(|c| c.build.clone()), self.store.newest_build()];
                 for b in known.into_iter().flatten() {
                     if let Some(i) = self.cached_index(&b) {
                         return Ok((b, i));
@@ -656,7 +661,7 @@ impl Inner {
         let mut trash = None;
         if let Some(old) = old.filter(|o| o != new) {
             self.indexes().remove(&old);
-            let _ = std::fs::remove_file(self.index_file(&old));
+            self.store.forget(&old);
             let from = self.build_dir(&old);
             if from.exists() {
                 let aside = self.dir.join("tiles").join(format!(".old-{old}-{}", self.seq()));
@@ -978,6 +983,31 @@ impl Inner {
             "update": update,
             "paused": st.paused,
         });
+        // Where each build's index is: its source ids and "snapshot" | "legacy" | "none".
+        let builds = |a: &Option<String>, b: &Option<String>, c: Option<String>| {
+            let mut v: Vec<String> = Vec::new();
+            for x in [a.clone(), b.clone(), c].into_iter().flatten() {
+                if !v.contains(&x) {
+                    v.push(x);
+                }
+            }
+            v
+        };
+        let routing_builds = builds(&st.build, &st.updating, st.current.as_ref().map(|c| c.build.clone()));
+        let mut indexes = serde_json::Map::new();
+        if !routing_builds.is_empty() {
+            indexes.insert("routing".into(), Value::Array(routing_builds.iter().map(|b| self.store.status(b)).collect()));
+        }
+        if let Some(p) = &self.places {
+            let pb = builds(&st.p.build, &st.p.updating, st.p.current.as_ref().map(|c| c.build.clone()));
+            if !pb.is_empty() {
+                indexes.insert("places".into(), Value::Array(pb.iter().map(|b| p.store.status(b)).collect()));
+            }
+        }
+        // Only once a build is known; an engine that knows none reports exactly what it always did.
+        if !indexes.is_empty() {
+            out["indexes"] = Value::Object(indexes);
+        }
         if self.places.is_some() {
             let (places, p_update) = self.p_status(&st);
             out["places"] = places;
@@ -1554,7 +1584,7 @@ impl Regions {
             if !base.ends_with('/') {
                 base.push('/');
             }
-            PlacesPart::new(&cfg.dir, base, cfg.places_stream_cap_bytes)
+            PlacesPart::new(&cfg.dir, base, cfg.places_stream_cap_bytes, cfg.indexes_dir.as_deref())
         });
         if let Some(p) = &places {
             p.open(&db, &mut st)?;
@@ -1591,6 +1621,7 @@ impl Regions {
             db: Mutex::new(db),
             st: Mutex::new(st),
             indexes: Mutex::new(HashMap::new()),
+            store: snap::IndexStore::new(cfg.indexes_dir.as_deref(), false, cfg.dir.join("index")),
             network: AtomicBool::new(true),
             held: AtomicBool::new(false),
             stop: AtomicBool::new(false),
