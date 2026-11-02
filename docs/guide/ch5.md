@@ -339,6 +339,8 @@ Cache says "Stopped syncing. The note stays in both." It takes the Cache ID out 
 
 The entry shows a small mark with a line through two arrows. Its label reads "Not syncing with Obsidian", or Logseq.
 
+![An entry that no longer syncs with Obsidian.](shot:note-sync-off)
+
 To start again, delete the line `cachesync: off` from the note. It is imported again at the next sync.
 
 If you delete the Cache ID from a note by hand, that is the same as stopping.

@@ -86,3 +86,4 @@ ask-no-model | Ask with no model: "Ask needs a model on this device." with "Choo
 import-tag-row | Notebooks > Connections, the Obsidian part: the vault, the phones' line, "Import tag" with "Notes with this tag are added to Cache." and #cachesync, and the private hint
 import-tag-sheet | The Import tag sheet with #camping typed: the helper text, "Use #cachesync" and "Save"
 stop-syncing-note | An entry imported from Obsidian with its menu open: "Stop syncing this note" above "Delete"
+note-sync-off | An entry that stopped syncing, with its "Not syncing with Obsidian" mark
