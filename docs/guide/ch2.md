@@ -450,7 +450,7 @@ The reader opens a Library item.
 
 Search in a library reaches more than its pages. It finds words inside the PDFs and EPUB books in a ZIM, and in the captions of its videos. Nothing to switch on and nothing to start. It is always on.
 
-![PDF passages in Home search](shot:search-pdf-hits)
+![A PDF passage and words said in a video in Home search](shot:search-pdf-hits)
 
 1. Add a Library item that holds PDFs, EPUBs or videos with captions. See Add to your Library in chapter 1.
 2. Leave Cache open. It makes them searchable in the background, a little at a time, so your device stays cool.
