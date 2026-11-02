@@ -29,6 +29,26 @@ class ModelEntry {
   String get key => '$fileName|$size';
 }
 
+/// Why a model that is on this device did not load (Ask shows the fix for it).
+enum LoadFailure {
+  /// The device has too little memory for it.
+  tooBig,
+
+  /// The file did not open as a model: it may be damaged.
+  damaged,
+
+  /// Any other reason (the error says which).
+  other,
+}
+
+/// The failure a load error from the native layer stands for. The native layer's own messages (cache_llama.cpp cl_load), not
+/// anything a person typed.
+LoadFailure loadFailureOf(String error) {
+  if (error.startsWith('cannot create context')) return LoadFailure.tooBig;
+  if (error.startsWith('cannot load model')) return LoadFailure.damaged;
+  return LoadFailure.other;
+}
+
 /// App-wide state: theme, models folder, the active model and the native session.
 /// The model's context window, in tokens. Set on every load (the default of the native layer is the same).
 const int kContextTokens = 8192;
@@ -60,6 +80,17 @@ class AppState extends ChangeNotifier {
   ModelInfo? activeInfo;
   ModelEntry? loading;
   String? loadError;
+
+  /// The model whose last load failed, and why; null once a model loads, is unloaded or that file is deleted.
+  ModelEntry? failed;
+  LoadFailure? failure;
+
+  /// Ask is available: a chat model is on this device (loaded or not). With none, Cache is search only: Ask leaves the bar and is
+  /// greyed in Modules. Before the models folder has been read the answer is not known yet and Ask stays as it was.
+  bool get askAvailable => !started || models.isNotEmpty;
+
+  /// "Not now" on Set up Cache's model row: the person chose search only. Kept until undone; a model on the device overrides it.
+  bool modelDeclined = false;
 
   /// True once the settings and the models folder have been read (a model may still be loading after this).
   bool started = false;
@@ -144,6 +175,7 @@ class AppState extends ChangeNotifier {
       theme = CacheThemeId.values.firstWhere((x) => x.name == t, orElse: () => CacheThemeId.dark);
       largeModuleIcons = j['moduleIcons'] == 'large';
       darkPdfPages = j['pdfDarkPages'] == true;
+      modelDeclined = j['modelDeclined'] == true;
       pdfDarkPages.value = darkPdfPages;
       _unsupported
         ..clear()
@@ -165,6 +197,7 @@ class AppState extends ChangeNotifier {
         'theme': theme.name,
         'moduleIcons': largeModuleIcons ? 'large' : 'small',
         'pdfDarkPages': darkPdfPages,
+        'modelDeclined': modelDeclined,
         'unsupported': _unsupported.toList(),
         'names': _names,
       }));
@@ -180,6 +213,14 @@ class AppState extends ChangeNotifier {
   Future<void> setDarkPdfPages(bool on) async {
     darkPdfPages = on;
     pdfDarkPages.value = on;
+    notifyListeners();
+    await _writeSettings();
+  }
+
+  /// "Not now" (true) or its Undo (false) on Set up Cache's model row.
+  Future<void> setModelDeclined(bool declined) async {
+    if (modelDeclined == declined) return;
+    modelDeclined = declined;
     notifyListeners();
     await _writeSettings();
   }
@@ -220,6 +261,11 @@ class AppState extends ChangeNotifier {
     found.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     models = found;
     searchModel = search;
+    if (failed != null && !found.any((m) => m.path == failed!.path)) {
+      failed = null;
+      failure = null;
+      loadError = null;
+    }
     notifyListeners();
   }
 
@@ -264,6 +310,8 @@ class AppState extends ChangeNotifier {
         }
       } else {
         active = entry;
+        failed = null;
+        failure = null;
         activeInfo = info;
         activeSettings = own;
         _lastModelFile = entry.fileName;
@@ -272,6 +320,8 @@ class AppState extends ChangeNotifier {
       if (active?.path != previous?.path) modelGeneration++;
     } catch (e) {
       loadError = e.toString().replaceFirst('Bad state: ', '');
+      failed = entry;
+      failure = loadFailureOf(loadError!);
       active = null;
       activeInfo = null;
       modelGeneration++;
@@ -288,6 +338,8 @@ class AppState extends ChangeNotifier {
     active = null;
     activeInfo = null;
     loadError = null;
+    failed = null;
+    failure = null;
     _lastModelFile = null;
     modelGeneration++;
     notifyListeners();
