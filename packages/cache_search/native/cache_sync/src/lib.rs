@@ -15,6 +15,7 @@
 //! The engine runs on its own Tokio runtime; [`SyncEngine::call`] is the whole interface (JSON in, JSON out), the same one the C
 //! ABI (`cs_sync_*` in cache_search) and the `cache-sync` desktop binary use.
 
+pub mod identity;
 pub mod index;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -22,7 +23,7 @@ use index::{Action, Entry, Index, Ver};
 use iroh::{
     endpoint::{presets, AfterHandshakeOutcome, Connection, EndpointHooks, VarInt},
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey,
+    Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl,
 };
 use iroh_blobs::{
     api::{
@@ -1368,15 +1369,7 @@ impl SyncEngine {
 
     async fn start(cfg: Config) -> Result<(Arc<Inner>, Router)> {
         std::fs::create_dir_all(&cfg.dir)?;
-        let key_path = cfg.dir.join("identity.key");
-        let secret = match std::fs::read(&key_path) {
-            Ok(b) if b.len() == 32 => SecretKey::from_bytes(&b.try_into().unwrap()),
-            _ => {
-                let k = SecretKey::generate();
-                write_secret(&key_path, &k.to_bytes())?;
-                k
-            }
-        };
+        let (secret, _) = identity::load_or_create(&cfg.dir)?;
         let mut saved: Saved = read_json(&cfg.dir.join("sync.json")).unwrap_or_default();
         if saved.name.is_empty() {
             saved.name = cfg.name.clone().unwrap_or_else(|| "Cache device".into());
@@ -1777,17 +1770,3 @@ impl SyncEngine {
     }
 }
 
-fn write_secret(p: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    let tmp = p.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, p)?;
-    Ok(())
-}
