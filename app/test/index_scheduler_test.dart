@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cache/platform/battery.dart';
 import 'package:cache/search/index_scheduler.dart';
+import 'package:cache/search/index_throttle.dart';
 import 'package:cache/settings/space.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,6 +11,10 @@ const _gb = 1 << 30;
 class _Run implements IndexRun {
   final Completer<bool> _done = Completer<bool>();
   int pauses = 0;
+  final List<IndexDuty> duties = [];
+
+  @override
+  void setDuty(IndexDuty duty) => duties.add(duty);
 
   @override
   Future<bool> get finished => _done.future;

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../platform/battery.dart';
 import '../settings/space.dart';
+import 'index_throttle.dart';
 
 /// One piece of automatic index work: build a source's index (the core's `index_source`), seal an index built before snapshots
 /// (`index_seal`), or make a ZIM's PDFs searchable (the PDF loop). [key] is `<kind>/<source id>`, the same folder the
@@ -44,6 +45,10 @@ abstract class IndexRun {
 
   /// Stops the work, keeping what is done for the next start.
   Future<void> pause();
+
+  /// How the work may run from now on (the throttle's duty, every time it changes): a core job takes it through cs_job_set at
+  /// its next checkpoint; the app's own loops follow the throttle through [indexPermit] and ignore this.
+  void setDuty(IndexDuty duty);
 }
 
 /// Where automatic index work comes from: the core's sources that need a build or a seal, and the PDF loop. Each call answers
@@ -53,7 +58,7 @@ abstract class IndexWorkSource {
 }
 
 /// Why nothing runs right now, when there is work.
-enum IndexWait { none, closed, battery, charging, storage }
+enum IndexWait { none, closed, battery, charging, storage, heat }
 
 /// The one place that decides when automatic index work runs (every kind: index_source, index_seal, the PDF loop). Rules:
 /// only while the app is open; one piece at a time, the most used first and, among those, the smallest; long work needs
@@ -64,11 +69,18 @@ class IndexScheduler extends ChangeNotifier {
   IndexScheduler({
     required this.sources,
     required this.space,
+    this.throttle,
     BatteryReader? battery,
     this.every = const Duration(seconds: 30),
-  }) : _battery = battery ?? readBattery;
+  }) : _battery = battery ?? throttle?.read ?? readBattery {
+    throttle?.addListener(_onDuty);
+  }
 
   final List<IndexWorkSource> sources;
+
+  /// The one throttle (how fast work may run, worked out again every few seconds while work runs): its duty goes to the running
+  /// work whenever it changes. Null in tests that do not need it.
+  final IndexThrottle? throttle;
 
   /// The storage the work writes to (the indexes folder's).
   final Space Function() space;
@@ -98,6 +110,7 @@ class IndexScheduler extends ChangeNotifier {
   String? get line {
     if (_seen.isEmpty || _done.length >= _seen.length) return null;
     final head = 'Getting search ready: ${_done.length} of ${_seen.length}';
+    if (throttle?.warm ?? false) return '$head · slowed down, phone is warm';
     return switch (wait) {
       IndexWait.battery => '$head · paused, battery low',
       IndexWait.charging => '$head · waits for charging',
@@ -184,6 +197,9 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   IndexWait _blocked(IndexTask t, BatteryReading? b, Space s, {required bool running}) {
+    // Too warm: nothing new starts (what runs is held by the throttle's duty, not stopped).
+    final d = throttle?.duty;
+    if (!running && d != null && d.paused && d.hold == IndexHold.heat) return IndexWait.heat;
     if (b != null) {
       if (b.low) return IndexWait.battery;
       // Long work starts only on charge or above half; once running it goes on until the battery is low.
@@ -194,17 +210,28 @@ class IndexScheduler extends ChangeNotifier {
     return IndexWait.none;
   }
 
+  void _onDuty() {
+    final d = throttle?.duty;
+    if (d != null) _run?.setDuty(d);
+    notifyListeners();
+  }
+
   Future<void> _start(IndexTask t) async {
     _current = t;
     _set(IndexWait.none);
     try {
       final run = await t.start();
       _run = run;
+      // The throttle reads the device every few seconds while work runs, and the run follows its duty from the start.
+      throttle?.watch(true);
+      final d = throttle?.duty;
+      if (d != null) run.setDuty(d);
       unawaited(run.finished.then((ok) {
         if (_current?.key != t.key) return;
         if (ok) _done.add(t.key);
         _current = null;
         _run = null;
+        throttle?.watch(false);
         notifyListeners();
         kick();
       }, onError: (Object e) {
@@ -227,6 +254,7 @@ class IndexScheduler extends ChangeNotifier {
     final run = _run;
     _current = null;
     _run = null;
+    throttle?.watch(false);
     _set(why);
     if (run != null) {
       try {
@@ -246,6 +274,7 @@ class IndexScheduler extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    throttle?.removeListener(_onDuty);
     _timer?.cancel();
     final run = _run;
     _run = null;
@@ -256,7 +285,7 @@ class IndexScheduler extends ChangeNotifier {
 }
 
 /// The core's own index work: sources whose index needs a build (cs_status `index.needs_build`, cs_job_start "index_source")
-/// and indexes built before snapshots that need sealing ("index_seal"). The core calls are not in this core yet, so the app
+/// and indexes built before snapshots that need sealing ("index_seal"). Their runs take the throttle's duty through cs_job_set. The core calls are not in this core yet, so the app
 /// uses [IndexCoreCalls.none] until they land; tests use a fake.
 abstract class IndexCoreCalls {
   /// What the core says needs a build or a seal now.

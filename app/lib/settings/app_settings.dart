@@ -87,6 +87,7 @@ class AppSettings extends ChangeNotifier {
   bool _toldNoPopUps = false;
   QuietHours _quiet = const QuietHours();
   bool _mobileForDownloads = false;
+  bool _indexingNormal = false;
   bool _webSearchOn = false;
   Set<String> _liveOn = {};
   Set<String> _watched = {kWatchHere};
@@ -110,6 +111,10 @@ class AppSettings extends ChangeNotifier {
 
   /// Large downloads (maps, library, models, videos) may use mobile data. Off by default: they wait for Wi-Fi.
   bool get mobileForDownloads => _mobileForDownloads;
+
+  /// Background indexing speed (Storage > Advanced): Gentle (false, the default) or Normal (true). The throttle eases either off
+  /// for heat, a low battery and the person using Cache.
+  bool get indexingNormal => _indexingNormal;
 
   /// The person's switch for searching the web. Only has an effect once a search service has a key.
   bool get webSearchOn => _webSearchOn;
@@ -156,7 +161,7 @@ class AppSettings extends ChangeNotifier {
   Map<String, dynamic> _other = {};
 
   static const Set<String> _known = {
-    'popUpFor', 'alertPopups', 'toldNoPopUps', 'quiet', 'mobileForDownloads', 'webSearchOn', 'liveSourcesOn', 'watchedPlaces',
+    'popUpFor', 'alertPopups', 'toldNoPopUps', 'quiet', 'mobileForDownloads', 'indexingSpeed', 'webSearchOn', 'liveSourcesOn', 'watchedPlaces',
     'weatherWatch', 'seenSavedPlaces', 'liveDefaultsSeen', 'catalogueUrl', 'extraCatalogues',
   };
 
@@ -195,6 +200,7 @@ class AppSettings extends ChangeNotifier {
       }
     });
     each(() => _mobileForDownloads = j['mobileForDownloads'] == true);
+    each(() => _indexingNormal = j['indexingSpeed'] == 'normal');
     each(() => _webSearchOn = j['webSearchOn'] == true);
     each(() => _liveOn = _strings(j['liveSourcesOn']).toSet());
     each(() {
@@ -235,6 +241,7 @@ class AppSettings extends ChangeNotifier {
         if (_toldNoPopUps) 'toldNoPopUps': true,
         'quiet': {'on': _quiet.on, 'from': _quiet.from, 'to': _quiet.to},
         'mobileForDownloads': _mobileForDownloads,
+        'indexingSpeed': _indexingNormal ? 'normal' : 'gentle',
         'webSearchOn': _webSearchOn,
         'liveSourcesOn': _liveOn.toList()..sort(),
         'watchedPlaces': _watched.toList()..sort(),
@@ -273,6 +280,12 @@ class AppSettings extends ChangeNotifier {
   void setMobileForDownloads(bool v) {
     if (v == _mobileForDownloads) return;
     _mobileForDownloads = v;
+    _save();
+  }
+
+  void setIndexingNormal(bool v) {
+    if (v == _indexingNormal) return;
+    _indexingNormal = v;
     _save();
   }
 

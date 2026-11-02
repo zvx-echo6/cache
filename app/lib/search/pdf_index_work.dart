@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../pdf/index/pdf_index_state.dart';
 import 'index_scheduler.dart';
+import 'index_throttle.dart' show IndexDuty;
 import 'indexes_share.dart' show encodeSourceId;
 
 /// Making ZIMs' PDFs searchable, as work for the [IndexScheduler]: the scheduler decides when (the PDF state then queues
@@ -62,4 +63,8 @@ class PdfIndexRun implements IndexRun {
 
   @override
   Future<void> pause() => state.hold(zim);
+
+  /// The PDF loop follows the throttle itself: it awaits [indexPermit] between PDFs and between pages.
+  @override
+  void setDuty(IndexDuty duty) {}
 }
