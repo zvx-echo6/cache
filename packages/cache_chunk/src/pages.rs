@@ -70,7 +70,7 @@ pub fn chunk_pages_with_headings(pages: &[PageInput], headings: &[PageHeading]) 
         }
         let mut any = false;
         let mut lines: Vec<&str> = Vec::new();
-        let mut flush = |lines: &mut Vec<&str>, any: &mut bool, elements: &mut Vec<Element>| {
+        let flush = |lines: &mut Vec<&str>, any: &mut bool, elements: &mut Vec<Element>| {
             let text = join_lines(lines.drain(..));
             if !text.is_empty() {
                 *any = true;
