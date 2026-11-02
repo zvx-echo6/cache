@@ -243,8 +243,9 @@ class _CacheAppState extends State<CacheApp> {
       label: 'Library',
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
-      // Search indexes are built on each device.
+      // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir],
+      notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
     ),
@@ -265,6 +266,8 @@ class _CacheAppState extends State<CacheApp> {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
       },
+      // What each device makes for itself in those folders (fetched indexes, the viewed-tile cache, SQLite's -shm) never syncs.
+      notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
     ),

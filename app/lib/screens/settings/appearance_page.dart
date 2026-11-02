@@ -4,7 +4,7 @@ import '../../app_state.dart';
 import '../../theme.dart';
 import 'widgets.dart';
 
-/// Settings > Appearance: the theme, and the size of the Modules screen's icons.
+/// Settings > Appearance: the theme, the size of the Modules screen's icons, and Dark pages for the PDF reader.
 class AppearancePage extends StatelessWidget {
   const AppearancePage({super.key, required this.app});
 
@@ -48,6 +48,18 @@ class AppearancePage extends StatelessWidget {
                     chevron: false,
                     onTap: () => app.setLargeModuleIcons(large),
                   ),
+              ],
+            ),
+            SettingsGroup(
+              label: 'PDF pages',
+              rows: [
+                SwitchRow(
+                  key: const ValueKey('pdf-dark-pages'),
+                  title: 'Dark pages',
+                  status: [Part(app.darkPdfPages ? 'On: in a dark theme, pages are light on dark. Pictures look wrong' : 'Off: pages look as printed, dimmed in a dark theme')],
+                  value: app.darkPdfPages,
+                  onChanged: app.setDarkPdfPages,
+                ),
               ],
             ),
           ],

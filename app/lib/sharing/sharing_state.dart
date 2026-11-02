@@ -67,7 +67,12 @@ class SharingState extends ChangeNotifier {
     notifyListeners();
     try {
       final dir = Directory('${(await supportDir()).path}/sync');
-      _core = await _opener({'dir': dir.path, 'name': deviceName});
+      // What each device builds for itself inside a shared folder never syncs (a library's search index).
+      _core = await _opener({
+        'dir': dir.path,
+        'name': deviceName,
+        'exclude': {for (final k in kinds) ...k.notShared},
+      });
       await _applyPolicy();
       _net = policy.probe.changes.listen((_) async {
         try {

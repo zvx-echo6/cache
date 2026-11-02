@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
-import '../../web/desktop_layout.dart';
+import 'two_column.dart';
 import 'build_api.dart';
 import 'build_common.dart';
 import 'build_state.dart';
@@ -94,7 +94,7 @@ class _BuiltLibraryPageState extends State<BuiltLibraryPage> {
           itemBuilder: (_) => const [PopupMenuItem(value: 'rename', child: Text('Rename library'))],
         ),
       ]),
-      body: TwoColumn(left: _left(context, lib), right: _right(context, lib)),
+      body: ScrollingTwoColumn(left: _left(context, lib), right: _right(context, lib)),
     );
   }
 

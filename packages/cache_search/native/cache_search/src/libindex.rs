@@ -201,15 +201,19 @@ pub fn build_library_index(
     let mut cp = Checkpoint { offset: None, scrolled: 0, indexed: 0, finished: false };
     match read_meta(dir) {
         Some(m) if m.index_format == LIB_INDEX_FORMAT && m.zim_uuid == key => {
-            if m.state == "done" && tantivy_meta_exists {
+            // An index whose files do not all open (part of one that an earlier version's sync copied from another device, or
+            // files lost) is built again from scratch rather than reported done or resumed.
+            let opens = tantivy_meta_exists && LibOpenIndex::open(dir, &m.tokenizer).is_ok();
+            if m.state == "done" && opens {
                 progress(m.total, m.total);
                 return Ok(Outcome::Done);
             }
             meta.tokenizer = m.tokenizer.clone();
-            if tantivy_meta_exists {
+            if opens {
                 index = tv(Index::open_in_dir(dir))?;
                 cp = Checkpoint::from_index(&index);
             } else {
+                wipe_dir(dir);
                 index = tv(Index::create_in_dir(dir, build_schema().0))?;
             }
         }

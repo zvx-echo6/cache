@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../theme.dart';
 import '../../video/format.dart' show formatBytes;
-import '../../web/desktop_layout.dart';
+import '../../layout/adaptive.dart' show ReadingWidth, openDetail;
+import 'two_column.dart';
 import 'build_api.dart';
 import 'build_common.dart';
 import 'build_library_page.dart';
@@ -18,12 +19,10 @@ import 'local_files.dart';
 /// [replace], the page that is leaving, when given).
 void openBuiltLibrary(BuildContext context, BuildController build, String id, {bool replace = false}) {
   Widget page(BuildContext _) => BuiltLibraryPage(build: build, libraryId: id);
-  if (openInDesktopPane(context, key: 'built:$id', builder: page)) return;
-  final nav = Navigator.of(context);
   if (replace) {
-    nav.pushReplacement(MaterialPageRoute<void>(builder: page));
+    Navigator.of(context).pushReplacement(MaterialPageRoute<void>(builder: page));
   } else {
-    nav.push(MaterialPageRoute<void>(builder: page));
+    openDetail(context, key: 'built:$id', builder: page);
   }
 }
 
@@ -31,8 +30,7 @@ void openBuiltLibrary(BuildContext context, BuildController build, String id, {b
 void openBuildPage(BuildContext context, BuildController build, {List<LocalFile> files = const []}) {
   Widget page(BuildContext _) => BuildPage(build: build, initialFiles: files);
   // From a page beside the list (Add to Library) it is pushed there with its back arrow; from the list it takes the detail pane.
-  if (!isInDesktopDetail(context) && openInDesktopPane(context, key: 'build', builder: page)) return;
-  Navigator.of(context).push(MaterialPageRoute<void>(builder: page));
+  openDetail(context, key: 'build', builder: page);
 }
 
 /// "Build from your PDFs": where the books go, then the PDFs (dropped, chosen, or a whole folder). Dropping starts the upload; there is
@@ -151,7 +149,7 @@ class _BuildPageState extends State<BuildPage> {
   Widget _form(BuildContext context) {
     final left = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_where(context)]);
     final right = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_blocked(context), _zone(context), const SizedBox(height: 14), _notes(context)]);
-    return TwoColumn(left: left, right: right);
+    return ScrollingTwoColumn(left: left, right: right);
   }
 
   Widget _blocked(BuildContext context) {
@@ -335,6 +333,7 @@ class _BuildPageState extends State<BuildPage> {
     final k = context.t;
     final style = TextStyle(fontSize: 14, height: 1.5, color: k.text);
     return ReadingWidth(
+      alignment: Alignment.topLeft,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -372,6 +371,7 @@ class _BuildPageState extends State<BuildPage> {
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
       children: [
         ReadingWidth(
+          alignment: Alignment.topLeft,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

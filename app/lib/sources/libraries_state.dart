@@ -32,6 +32,10 @@ const String kGuideLibraryId = 'cache-guide';
 /// The version of the guide in the assets (its cache-library.json `version`); a different copy on the phone is replaced by it.
 const String kGuideVersion = '2026-11-01d';
 
+/// What a library folder holds that the device builds for itself, as sync patterns over the libraries folder (see
+/// DataKind.notShared): its keyword index ([LibraryItem.indexPath]), rebuilt from the library on each device, so it never syncs.
+const List<String> kLibraryNotShared = ['*/index'];
+
 /// One library on the device: a folder in the libraries folder holding `shard/` (the unpacked Qdrant shard), `index/` (its
 /// keyword index, when one is built on the device) and `cache-library.json` (its settings, when it came with them; without
 /// it the core works them out each time it opens the library).

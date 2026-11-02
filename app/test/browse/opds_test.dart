@@ -47,9 +47,9 @@ void main() {
       expect(e.fileName, 'wikivoyage_en_europe_maxi_2026-09.zim');
     });
 
-    test('the icon comes from the catalogue, asked at 96 px', () {
+    test('the icon comes from the catalogue at the 48 px it links (Kiwix serves no other size)', () {
       expect(page.entries.first.iconUrl.toString(),
-          'https://opds.library.kiwix.org/catalog/v2/illustration/cb7785ec-5255-6f7b-c560-822e9c8cf340/?size=96');
+          'https://opds.library.kiwix.org/catalog/v2/illustration/cb7785ec-5255-6f7b-c560-822e9c8cf340/?size=48');
     });
 
     test('entries round-trip through json', () {

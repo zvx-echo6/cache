@@ -277,7 +277,7 @@ class ToolLoop {
         // One line per call for logcat (no arguments or text): which tool ran and which [n] it gave.
         debugPrint('cache tool ${call.name}: new ids ${[for (final i in r.ids) i.n]}, ${r.content.length} chars');
         for (final id in r.ids) {
-          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time)));
+          _results.putIfAbsent(id.n, () => NumberedResult(id.n, SourceResult(title: id.title, snippet: '', address: id.address, link: id.link, time: id.time, pdfPage: id.pdfPage, quote: id.quote)));
         }
         if (r.navigationActions.isNotEmpty) onNavigationActions?.call(r.navigationActions);
         return r.content;
@@ -315,7 +315,7 @@ class ToolLoop {
     for (final id in await numbering.ids()) {
       _results.putIfAbsent(
         id.n,
-        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address, link: id.link, time: id.time)),
+        () => NumberedResult(id.n, SourceResult(title: id.title, snippet: snippets[id.address] ?? '', address: id.address, link: id.link, time: id.time, pdfPage: id.pdfPage, quote: id.quote)),
       );
     }
   }

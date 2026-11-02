@@ -6,10 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../layout/adaptive.dart' show paneShowButton;
+import '../layout/adaptive.dart' show ReadingWidth, paneShowButton;
 import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
+import '../pdf/open_pdf.dart';
+import '../pdf/pdf_address.dart';
+import '../pdf/pdf_reader_screen.dart';
+import '../pdf/pdf_source.dart';
 import '../screens/search_model_line.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
@@ -72,6 +76,7 @@ class ZimReaderScreen extends StatefulWidget {
     this.debugWeb,
     this.zimTokens,
     this.frameBuilder,
+    this.quote,
   });
 
   /// Tests only: behave as in a browser (or not), whatever the platform is.
@@ -96,8 +101,12 @@ class ZimReaderScreen extends StatefulWidget {
   final SourcesState sources;
   final ZimFile zim;
 
-  /// A `zim:<uuid>/<path>` address to open; the ZIM's main page when null.
+  /// A `zim:<uuid>/<path>` address to open; the ZIM's main page when null. A PDF entry (a path ending in .pdf, or an address
+  /// with `#page=N`) opens in the PDF reader, at that page.
   final String? address;
+
+  /// The cited passage on that page of a PDF entry (a citation's quote), highlighted when found.
+  final String? quote;
 
   @override
   State<ZimReaderScreen> createState() => _ZimReaderScreenState();
@@ -335,6 +344,11 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       unawaited(_openInFrame(address));
       return;
     }
+    if (isPdfAddress(address)) {
+      setState(() => _searching = false);
+      _openPdfEntry(address);
+      return;
+    }
     final u = readerUrl(address, customScheme: _customScheme);
     if (u == null) return;
     setState(() {
@@ -429,8 +443,19 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     } catch (_) {}
   }
 
+  /// The PDF reader, when the address opened is a PDF entry.
+  late final PdfZimSource? _pdf = widget.address != null && isPdfAddress(widget.address!) ? zimPdfSource(widget.sources, widget.address!) : null;
+
+  /// A link on a page to a PDF entry of the ZIM: the PDF reader over the whole window (the page stays underneath).
+  void _openPdfEntry(String address) {
+    if (!mounted) return;
+    openZimPdf(context, widget.sources, address);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final pdf = _pdf;
+    if (pdf != null) return PdfReaderScreen(source: pdf, initialPage: pdfPageOfAddress(widget.address!), quote: widget.quote);
     final k = context.t;
     final title = widget.sources.titleOf(widget.zim);
     final nav = Navigator.of(context);
@@ -620,6 +645,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     final start = _start;
     if (start == null) return const Center(child: CircularProgressIndicator());
     if (_isWeb) {
+      // The ZIM's own page in a frame: the whole width it is given (no reading-width cap), as the owner decided.
       return (widget.frameBuilder ?? buildZimFrame)(
         key: ValueKey('reader-frame-$_webGeneration'),
         initialUrl: start.toString(),
@@ -628,7 +654,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         onExternal: openInNewTab,
       );
     }
-    return Listener(
+    // A desktop window keeps the article to a reading width (in the page's 16 px text).
+    return ReadingWidth(
+      style: const TextStyle(fontSize: 16),
+      child: Listener(
       // A touch on the page: it has settled (anything it adds to the history from now on is the person's own).
       onPointerDown: (_) => _settleNow(),
       child: InAppWebView(
@@ -641,6 +670,12 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           serveCustomZimResource(_server, request.url.uriValue),
       shouldInterceptRequest: (controller, request) async {
         var r = await _server.serve(request.url.uriValue);
+        // A PDF entry the page opened (a link whose path does not end in .pdf): the PDF reader shows it; the page stays.
+        if (r.status == 200 && request.isForMainFrame == true && r.mime.split(';').first.trim() == 'application/pdf') {
+          final a = addressOfUrl(request.url.uriValue);
+          if (a != null) WidgetsBinding.instance.addPostFrameCallback((_) => _openPdfEntry(a));
+          return WebResourceResponse(contentType: 'text/plain', statusCode: 204, reasonPhrase: 'No Content', data: Uint8List(0));
+        }
         if (r.status == 200 && r.mime.split(';').first.trim() == 'text/html') {
           r = ServedEntry(200, r.mime, utf8.encode(withoutPicturePlaceholders(utf8.decode(r.bytes, allowMalformed: true))));
         }
@@ -665,6 +700,12 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
       shouldOverrideUrlLoading: (controller, action) async {
         final u = action.request.url?.uriValue;
         if (u != null && isReaderUrl(u, customScheme: _customScheme)) {
+          // A link to a PDF entry opens the PDF reader (a web view cannot show a PDF); `#page=N` opens it at that page.
+          final a = addressOfUrl(u);
+          if (a != null && isPdfAddress(a)) {
+            _openPdfEntry(u.hasFragment ? '$a#${u.fragment}' : a);
+            return NavigationActionPolicy.CANCEL;
+          }
           return NavigationActionPolicy.ALLOW;
         }
         if (mounted) {
@@ -698,6 +739,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         if (uri != null) _currentAddress = addressOfUrl(uri) ?? _currentAddress;
         _syncNav();
       },
+    ),
     ),
     );
   }

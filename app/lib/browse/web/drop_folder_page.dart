@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../../screens/settings/widgets.dart' show GroupLabel;
 import '../../theme.dart';
-import '../../web/desktop_layout.dart';
+import '../../layout/adaptive.dart' show ReadingWidth;
+import 'two_column.dart';
 import 'build_api.dart';
 import 'build_common.dart';
 import 'build_state.dart';
@@ -83,7 +84,7 @@ class _DropFolderPageState extends State<DropFolderPage> {
       appBar: pageBar(context, 'Drop folder'),
       body: d == null
           ? Center(child: Text(c.problem ?? 'One moment…', style: TextStyle(color: context.t.secondary)))
-          : (d.settings.enabled && !_changing) ? TwoColumn(left: _active(context, d), right: _table(context, d)) : TwoColumn(left: _setup(context, d), right: _explain(context)),
+          : (d.settings.enabled && !_changing) ? ScrollingTwoColumn(left: _active(context, d), right: _table(context, d)) : ScrollingTwoColumn(left: _setup(context, d), right: _explain(context)),
     );
   }
 
@@ -315,6 +316,7 @@ class _DropFolderPageState extends State<DropFolderPage> {
         );
     final text = TextStyle(fontSize: 14, height: 1.5, color: k.text);
     return ReadingWidth(
+      alignment: Alignment.topLeft,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

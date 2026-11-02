@@ -6,7 +6,7 @@ import 'package:cache/browse/web/build_text.dart';
 import 'package:cache/browse/web/device_api.dart';
 import 'package:cache/browse/web/drop_folder_page.dart';
 import 'package:cache/theme.dart';
-import 'package:cache/web/desktop_layout.dart';
+import 'package:cache/layout/adaptive.dart' show kDesktopDetailMaxWidth, kDesktopListWidth, kDesktopMinWidth;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

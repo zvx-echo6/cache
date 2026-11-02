@@ -6,7 +6,7 @@ import 'package:cache/browse/web/build_api.dart';
 import 'package:cache/browse/web/build_state.dart';
 import 'package:cache/browse/web/device_library.dart';
 import 'package:cache/theme.dart';
-import 'package:cache/web/desktop_layout.dart';
+import 'package:cache/layout/adaptive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -64,22 +64,18 @@ void main() {
   group('the desktop layout', () {
     testWidgets('from 1280: a list of 380 beside a detail that starts on Add to Library, with the building rows in it', (tester) async {
       await show(tester);
-      expect(WidthClass.of(tester.element(find.byType(BrowseScreen))), WidthClass.desktop);
-      expect(find.byType(DesktopFrame), findsOneWidget);
-      final list = tester.getSize(find.ancestor(of: find.text('Device storage'), matching: find.byType(SizedBox)).first);
+      expect(widthClassOf(tester.element(find.byType(BrowseScreen))), WidthClass.desktop);
       expect(find.text('Choose an item'), findsNothing);
       expect(find.text('Add to Library'), findsNWidgets(2), reason: 'the button in the list and the page beside it');
       expect(find.text('Build from your PDFs'), findsOneWidget);
       expect(find.text('Make a searchable library from PDF files on this computer.'), findsOneWidget);
       expect(find.text('Drop folder'), findsOneWidget);
-      expect(list.width, lessThanOrEqualTo(kDesktopListWidth));
       final divider = tester.getTopLeft(find.byType(VerticalDivider).first);
       expect(divider.dx, kDesktopListWidth, reason: 'the list is 380 wide at the left of the page (the rail is outside this screen)');
     });
 
     testWidgets('below 1280 the tablet layout stays as it was', (tester) async {
       await show(tester, width: 1100);
-      expect(find.byType(DesktopFrame), findsNothing);
       expect(find.text('Choose an item'), findsOneWidget);
     });
 
@@ -128,40 +124,6 @@ void main() {
       expect(find.text('Garden'), findsOneWidget);
       expect(find.text('2 failed'), findsOneWidget);
       expect(find.text('Building 0%'), findsNothing);
-    });
-  });
-
-  group('the full window', () {
-    testWidgets('a page opened full window hides the list and keeps the page without a cap; back brings the list back', (tester) async {
-      tester.view.physicalSize = const Size(1920, 1080);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
-      final key = GlobalKey<DesktopFrameState>();
-      late BuildContext inList;
-      await tester.pumpWidget(screen(DesktopFrame(
-        key: key,
-        list: Builder(builder: (c) {
-          inList = c;
-          return const Center(child: Text('the list'));
-        }),
-        initial: (_) => const Scaffold(body: Text('Add to Library page')),
-      )));
-      expect(find.text('the list'), findsOneWidget);
-      expect(find.text('Add to Library page'), findsOneWidget);
-      expect(openInDesktopPane(inList, key: 'zim', fullWindow: true, builder: (c) => Scaffold(appBar: AppBar(leading: BackButton(onPressed: () => Navigator.of(c).pop())), body: const SizedBox.expand(key: ValueKey('article')))), isTrue);
-      await tester.pumpAndSettle();
-      expect(tester.getSize(find.byKey(const ValueKey('article'))).width, 1920, reason: 'the whole window: no list, no cap');
-      expect(tester.getTopLeft(find.byKey(const ValueKey('article'))).dx, 0);
-      await tester.tap(find.byType(BackButton));
-      await tester.pumpAndSettle();
-      expect(find.text('the list'), findsOneWidget);
-      expect(find.text('Add to Library page'), findsOneWidget, reason: 'what was beside the list comes back');
-      expect(find.byKey(const ValueKey('article')), findsNothing);
-    });
-
-    test('outside the desktop frame nothing is opened', () {
-      // openInDesktopPane answers false without a frame, so the callers open pages as they always did
-      expect(WidthClass.values.length, 3);
     });
   });
 }
