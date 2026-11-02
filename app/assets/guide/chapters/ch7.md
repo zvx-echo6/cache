@@ -102,6 +102,8 @@ When "Use my location" is on, your position goes to the assistant on the device,
 - Once Cache is open, the assistant can read everything in your notebooks, private ones too. It does this on your device.
 - Private is not encryption or a lock. Keep a screen lock on.
 
+A note you tag in Obsidian or Logseq is copied into Cache on the device, and Cache writes its ID into the note. Nothing goes online. Add `private: true` (Logseq: `private:: true`) to a note's properties to keep it private in Cache. See Import notes by tag in chapter 5.
+
 Obsidian and Logseq are an exception. If you connect a folder in ["Notebooks" > "Connections"](cache://notebooks), private entries are written to it too, with a private mark in their properties. Any app that can open that folder can read them as plain Markdown.
 
 Starter logs for health, such as medication or blood pressure, start private. You can switch it off.

@@ -525,6 +525,14 @@ In "Notebooks":
 - "You already have a notebook with this name.": choose another.
 - "Could not attach the file: [reason]": try again.
 
+For a connected Obsidian or Logseq folder (see Import notes by tag in chapter 5):
+- "1 note not added: Cache cannot change it.": the folder is read-only. Make it writable, or tag nothing there.
+- "Use a tag like #cachesync. No spaces.": fix the tag in the "Import tag" sheet.
+- "Cache cannot reach Obsidian right now. Try again when it is connected.": in the "Stop syncing this note?" pop-up. Try later.
+- "Stopped syncing. The note stays in both.": done.
+- "Not syncing with Obsidian": the mark on an entry that stopped syncing. Delete `cachesync: off` from the note to start again.
+- "On phones, Obsidian sends and receives changes only while the Obsidian app is open. Open it to sync.": open Obsidian on the phone.
+
 ## Offline: what still works
 
 With no connection, these work:
