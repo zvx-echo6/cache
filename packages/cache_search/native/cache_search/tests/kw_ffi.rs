@@ -1101,19 +1101,16 @@ fn damaged_and_empty_epubs_are_skipped_not_fatal() {
 }
 
 #[test]
-fn a_zim_without_candidate_mime_types_is_never_walked() {
-    const U1: &str = "0badc0de-0000-4000-8000-000000000d01";
-    const U2: &str = "0badc0de-0000-4000-8000-000000000d02";
+fn the_header_decides_which_zims_are_walked() {
+    const SMALL: &str = "0badc0de-0000-4000-8000-000000000d01";
+    const WITH_VTT: &str = "0badc0de-0000-4000-8000-000000000d02";
+    const BIG: &str = "0badc0de-0000-4000-8000-000000000d03";
+    const NONE: &str = "0badc0de-0000-4000-8000-000000000d04";
     let t = TempDir::new("nowalk");
     let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
-    // the MIME list has only text/html, text/plain and application/octet-stream; the .srt entry (octet-stream, as in ready.gov's
-    // ZIMs) would be found by a walk, so the empty answer shows there was none
-    let plain = t.0.join("plain.zim");
-    write_zim_mimes(
-        &plain,
-        U1,
-        "plain",
-        &[
+    let generic = ["text/html", "text/plain", "application/octet-stream"];
+    let entries = || {
+        vec![
             (
                 "Alpha",
                 "Alpha",
@@ -1126,14 +1123,16 @@ fn a_zim_without_candidate_mime_types_is_never_walked() {
                 "application/octet-stream",
                 srt_of("octet words", 8),
             ),
-        ],
-        &["text/html", "text/plain", "application/octet-stream"],
-    );
-    // a ZIM that lists text/vtt is walked, and then the octet-stream .srt is counted too
+        ]
+    };
+    // small, with only generic types (as ready.gov: its two SRTs are octet-stream): walked, the .srt is found
+    let small = t.0.join("small.zim");
+    write_zim_mimes(&small, SMALL, "small", &entries(), &generic);
+    // a caption type in the list: walked, and the octet-stream .srt is counted beside the .vtt
     let withvtt = t.0.join("withvtt.zim");
     write_zim_mimes(
         &withvtt,
-        U2,
+        WITH_VTT,
         "withvtt",
         &[
             ("Media/a.vtt", "", "text/vtt", vtt_of("vtt words", 8)),
@@ -1146,11 +1145,26 @@ fn a_zim_without_candidate_mime_types_is_never_walked() {
         ],
         &["text/html", "text/plain", "application/octet-stream", "text/vtt"],
     );
-    let mut h = open(&[&plain, &withvtt], &idx, &vdir);
+    // the same as the small one, plus 500,000 filler entries (so the header says more than 500,000): not walked
+    let big = t.0.join("big.zim");
+    let mut many = entries();
+    for i in 0..500_000 {
+        let path: &'static str = Box::leak(format!("f/{i:06}").into_boxed_str());
+        many.push((path, "", "text/html", b"x".to_vec()));
+    }
+    write_zim_mimes(&big, BIG, "big", &many, &generic);
+    // no generic or caption type at all: not walked, whatever the size
+    let none = t.0.join("none.zim");
+    write_zim_mimes(&none, NONE, "none", &entries()[..1], &["text/html", "application/pdf"]);
+
+    let mut h = open(&[&small, &withvtt, &big, &none], &idx, &vdir);
     let t0 = Instant::now();
-    while !(cache_search::kwslot::scan_finished(U1) && cache_search::kwslot::scan_finished(U2)) {
+    while ![SMALL, WITH_VTT, BIG, NONE]
+        .iter()
+        .all(|u| cache_search::kwslot::scan_finished(u))
+    {
         let _ = h.status_json();
-        assert!(t0.elapsed() < Duration::from_secs(30), "the scans never finished");
+        assert!(t0.elapsed() < Duration::from_secs(60), "the scans never finished");
         std::thread::sleep(Duration::from_millis(10));
     }
     let st: Value = serde_json::from_str(&h.status_json()).unwrap();
@@ -1163,12 +1177,20 @@ fn a_zim_without_candidate_mime_types_is_never_walked() {
             .unwrap()
             .clone()
     };
+    assert!(cache_search::kwbuild::was_walked(SMALL));
+    assert_eq!(by_id(SMALL)["captionsindex"]["entries"], 1, "{st}");
+    assert_eq!(by_id(SMALL)["captionsindex"]["needs_build"], true);
+    assert!(by_id(SMALL).get("epubindex").is_none());
+    assert!(cache_search::kwbuild::was_walked(WITH_VTT));
+    assert_eq!(by_id(WITH_VTT)["captionsindex"]["entries"], 2, "{st}");
     assert!(
-        !cache_search::kwbuild::was_walked(U1),
-        "no candidate type in the MIME list: no walk"
+        !cache_search::kwbuild::was_walked(BIG),
+        "over 500,000 entries with only generic types: no walk"
     );
-    assert!(by_id(U1).get("captionsindex").is_none() && by_id(U1).get("epubindex").is_none());
-    assert!(cache_search::kwbuild::was_walked(U2));
-    assert_eq!(by_id(U2)["captionsindex"]["entries"], 2, "{st}");
-    assert!(by_id(U2).get("epubindex").is_none());
+    assert!(by_id(BIG).get("captionsindex").is_none() && by_id(BIG).get("epubindex").is_none());
+    assert!(
+        !cache_search::kwbuild::was_walked(NONE),
+        "no generic or caption type: no walk"
+    );
+    assert!(by_id(NONE).get("captionsindex").is_none());
 }

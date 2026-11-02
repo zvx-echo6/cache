@@ -327,19 +327,29 @@ fn ext_of(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Whether a ZIM's MIME list (in its header, so cheap to read) names a type that caption or EPUB entries have: `text/vtt`,
-/// a SubRip type (`application/x-subrip`, `text/srt`...) or `application/epub+zip`. Only then is the ZIM's entry list walked.
-/// `application/octet-stream` and `text/plain` are in nearly every ZIM, so they never start a walk; but a caption file that
-/// has one of them (a `.srt` or `.vtt` path) is counted when a walk happens anyway.
-pub fn walk_candidates(mime_table: &[String]) -> bool {
-    mime_table.iter().any(|m| {
+/// The most entries (from the header) of a ZIM that is walked for captions on the strength of `application/octet-stream` or
+/// `text/plain` alone. Wikipedia (about 20 million entries) and iFixit (about 895,000) are over it; ready.gov (6,738) is not.
+pub const SMALL_ZIM_ENTRIES: u64 = 500_000;
+
+/// Whether a ZIM's entry list is worth walking for caption and EPUB entries, from what its header says (cheap): its MIME list
+/// has `text/vtt`, a SubRip type (`application/x-subrip`, `text/srt`...) or `application/epub+zip`; or it has
+/// `application/octet-stream` or `text/plain` (which captions of some ZIMs are stored as, and which nearly every ZIM lists) and
+/// at most [`SMALL_ZIM_ENTRIES`] entries. A bigger ZIM with only those two types is never walked.
+pub fn walk_candidates(mime_table: &[String], entries: u64) -> bool {
+    let mut generic = false;
+    for m in mime_table {
         let m = m.to_ascii_lowercase();
-        m.starts_with("text/vtt")
+        if m.starts_with("text/vtt")
             || m.starts_with("application/epub")
             || m.contains("subrip")
             || m.ends_with("/srt")
             || m.ends_with("-srt")
-    })
+        {
+            return true;
+        }
+        generic |= m.starts_with("application/octet-stream") || m.starts_with("text/plain");
+    }
+    generic && entries <= SMALL_ZIM_ENTRIES
 }
 
 /// ZIMs whose entry list has been walked in this process (for the test that a ZIM without candidate types is never walked).
@@ -370,11 +380,11 @@ const GENTLE_EVERY: u32 = 4096;
 const GENTLE_PAUSE: Duration = Duration::from_millis(2);
 
 /// List the caption entries, the EPUB entries and the video entries of a ZIM. HLS segment captions (a `.vtt` in a folder that
-/// also holds `.ts` segments) are left out. A ZIM whose MIME list has no candidate type (`walk_candidates`) is not walked: it
+/// also holds `.ts` segments) are left out. A ZIM that `walk_candidates` rules out is not walked: it
 /// has none. `gentle` lowers the thread's priority and pauses now and then (the status scan; a build does not).
 pub fn scan_zim(src: &ZimSource, gentle: bool) -> Result<ZimMedia> {
     let czim = src.zim()?;
-    if !walk_candidates(&czim.mime_table) {
+    if !walk_candidates(&czim.mime_table, src.entry_count()) {
         return Ok(ZimMedia::default());
     }
     WALKED.lock().unwrap_or_else(|e| e.into_inner()).push(src.id.clone());
@@ -1323,16 +1333,24 @@ mod tests {
     }
 
     #[test]
-    fn only_caption_and_epub_types_start_a_walk() {
+    fn the_header_decides_whether_a_zim_is_walked() {
         let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert!(!walk_candidates(&l(&[
+        let generic = l(&[
             "text/html",
             "text/plain",
             "application/octet-stream",
             "application/pdf",
-            "image/png"
-        ])));
-        assert!(!walk_candidates(&[]));
+            "image/png",
+        ]);
+        // generic types alone: only a small ZIM (ready.gov has 6,738 entries; Wikipedia 20 million; iFixit 895,000)
+        assert!(walk_candidates(&generic, 6_738));
+        assert!(walk_candidates(&generic, SMALL_ZIM_ENTRIES));
+        assert!(!walk_candidates(&generic, SMALL_ZIM_ENTRIES + 1));
+        assert!(!walk_candidates(&generic, 895_000));
+        assert!(!walk_candidates(&generic, 20_000_000));
+        assert!(!walk_candidates(&l(&["text/html", "application/pdf", "image/png"]), 10));
+        assert!(!walk_candidates(&[], 10));
+        // a caption or EPUB type is enough at any size
         for m in [
             "text/vtt",
             "text/vtt; charset=utf-8",
@@ -1341,7 +1359,7 @@ mod tests {
             "application/epub+zip",
             "Application/EPUB+zip",
         ] {
-            assert!(walk_candidates(&l(&["text/html", m])), "{m}");
+            assert!(walk_candidates(&l(&["text/html", m]), 20_000_000), "{m}");
         }
     }
 
