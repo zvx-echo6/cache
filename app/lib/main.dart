@@ -77,6 +77,7 @@ import 'settings/space.dart' show Space;
 import 'search/pdf_index_work.dart';
 import 'platform/battery.dart' show kBatteryChannel;
 import 'search/index_throttle.dart';
+import 'search/core_index_calls.dart';
 import 'search/index_scheduler.dart';
 import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
@@ -162,7 +163,11 @@ class _CacheAppState extends State<CacheApp> {
       openPlanner: (layers) => SearchCore.open(const [], extra: {'layers': layers}),
     ),
   );
-  late final VideoState video = VideoState(policy: policy, captionSearch: CoreCaptionSearch(() => sources.core));
+  late final VideoState video = VideoState(
+    policy: policy,
+    captionSearch: CoreCaptionSearch(() => sources.core),
+    indexesDir: () async => Directory('${(await getApplicationSupportDirectory()).path}/$kIndexesDirName'),
+  );
   late final WebSearchSetup webSearch = WebSearchSetup(
     settings: settings,
     secrets: const SecureTokenStore(),
@@ -296,6 +301,7 @@ class _CacheAppState extends State<CacheApp> {
         exclude: kIndexesNotShared,
         localDeletes: kIndexesLocalDeletes,
         last: kIndexesLast,
+        hidden: kIndexesHidden,
       ),
     ],
   );
@@ -304,6 +310,19 @@ class _CacheAppState extends State<CacheApp> {
   /// IndexCoreCalls.none until the core has index_source and index_seal) and the ZIMs' PDFs (the PDF state queues nothing by
   /// itself: its autoStart is null). It runs while the app is open, with the battery and storage rules, against the storage of
   /// the indexes folder.
+  /// The core's index work (captions and EPUBs of ZIMs, saved videos' captions) through cs_job_start("index_source").
+  late final AppIndexCoreCalls coreIndexCalls = AppIndexCoreCalls(
+    statuses: () => sources.statuses,
+    videos: () => video.saved,
+    startJob: (kind, params) async {
+      final core = sources.core;
+      return core == null ? null : CoreIndexJob(await core.startJob(kind, params));
+    },
+    indexesDir: () => _support(kIndexesDirName)?.path,
+    videoDir: () => video.dir?.path,
+    duty: () => indexThrottle.duty,
+  );
+
   /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person
   /// using Cache and the model generating, applied to core jobs (cs_job_set) and to the PDF loop (indexPermit).
   late final IndexThrottle indexThrottle = IndexThrottle(
@@ -314,7 +333,7 @@ class _CacheAppState extends State<CacheApp> {
   late final IndexScheduler indexing = IndexScheduler(
     throttle: indexThrottle,
     sources: [
-      CoreIndexWork(IndexCoreCalls.none),
+      CoreIndexWork(coreIndexCalls),
       PdfIndexWork(pdfIndex..autoStart = null, () => [for (final z in sources.zims) pdfZimRef(sources, z)]),
     ],
     space: () => Space.of(_support(kIndexesDirName)?.path ?? _supportPath ?? '.'),
@@ -327,7 +346,13 @@ class _CacheAppState extends State<CacheApp> {
   void _onSettingsForIndexing() => indexThrottle.setSpeed(settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle);
 
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
-  void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
+  void _syncIndexesOnly() {
+    unawaited(sharing.setOnly(
+      kIndexesShareId,
+      indexesFetchOnly(sources.statuses, savedVideos: [for (final v in video.saved) v.captionsIndex?.sourceId ?? '${v.instance}/${v.uuid}']),
+    ));
+    unawaited(sharing.setNeverFetch(kIndexesShareId, indexesNeverFetch(sources.rejected)));
+  }
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
@@ -554,6 +579,7 @@ class _CacheAppState extends State<CacheApp> {
     );
     indexing.setOpen(true);
     indexThrottleShared = indexThrottle;
+    coreIndexShared = coreIndexCalls;
     // The model generating an answer pauses background index work; the speed setting applies at once.
     chat.addListener(_onChatForIndexing);
     settings.addListener(_onSettingsForIndexing);
@@ -629,6 +655,9 @@ class _CacheAppState extends State<CacheApp> {
     sources.addListener(_syncIndexesOnly);
     // Sources came or went (a ZIM downloaded, its PDFs listed): the scheduler looks for work at once.
     sources.addListener(_kickIndexing);
+    // Saved videos came or went: their captions' indexes are fetched and built too.
+    video.addListener(_syncIndexesOnly);
+    video.addListener(_kickIndexing);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
@@ -725,6 +754,8 @@ class _CacheAppState extends State<CacheApp> {
     nav.dispose();
     sources.removeListener(_syncIndexesOnly);
     sources.removeListener(_kickIndexing);
+    video.removeListener(_syncIndexesOnly);
+    video.removeListener(_kickIndexing);
     chat.removeListener(_onChatForIndexing);
     settings.removeListener(_onSettingsForIndexing);
     indexing.dispose();

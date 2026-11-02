@@ -43,8 +43,8 @@ abstract class IndexRun {
   /// Ends with true when the work is done, false when it stopped (paused, failed, or found it was not needed).
   Future<bool> get finished;
 
-  /// Stops the work, keeping what is done for the next start.
-  Future<void> pause();
+  /// Stops the work, keeping what is done for the next start; [why] is the scheduler's reason (what the work's own status says).
+  Future<void> pause([IndexWait why = IndexWait.none]);
 
   /// How the work may run from now on (the throttle's duty, every time it changes): a core job takes it through cs_job_set at
   /// its next checkpoint; the app's own loops follow the throttle through [indexPermit] and ignore this.
@@ -58,7 +58,7 @@ abstract class IndexWorkSource {
 }
 
 /// Why nothing runs right now, when there is work.
-enum IndexWait { none, closed, battery, charging, storage, heat }
+enum IndexWait { none, closed, battery, charging, storage, heat, model }
 
 /// The one place that decides when automatic index work runs (every kind: index_source, index_seal, the PDF loop). Rules:
 /// only while the app is open; one piece at a time, the most used first and, among those, the smallest; long work needs
@@ -197,9 +197,15 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   IndexWait _blocked(IndexTask t, BatteryReading? b, Space s, {required bool running}) {
-    // Too warm: nothing new starts (what runs is held by the throttle's duty, not stopped).
+    // Held by the throttle (too warm, a low battery, the model generating): nothing new starts; what runs is held by its duty.
     final d = throttle?.duty;
-    if (!running && d != null && d.paused && d.hold == IndexHold.heat) return IndexWait.heat;
+    if (!running && d != null && d.paused) {
+      return switch (d.hold) {
+        IndexHold.heat => IndexWait.heat,
+        IndexHold.battery => IndexWait.battery,
+        IndexHold.model || IndexHold.none => IndexWait.model,
+      };
+    }
     if (b != null) {
       if (b.low) return IndexWait.battery;
       // Long work starts only on charge or above half; once running it goes on until the battery is low.
@@ -258,7 +264,7 @@ class IndexScheduler extends ChangeNotifier {
     _set(why);
     if (run != null) {
       try {
-        await run.pause();
+        await run.pause(why);
       } catch (e) {
         debugPrint('Index work could not pause: $e');
       }
@@ -279,7 +285,7 @@ class IndexScheduler extends ChangeNotifier {
     final run = _run;
     _run = null;
     _current = null;
-    if (run != null) unawaited(run.pause().catchError((_) {}));
+    if (run != null) unawaited(run.pause(IndexWait.closed).catchError((_) {}));
     super.dispose();
   }
 }
@@ -299,13 +305,16 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir});
 
   final String kind;
   final String sourceId;
 
   /// True for an index built before snapshots ("index_seal"), false for a build ("index_source").
   final bool seal;
+
+  /// For a seal: the old index's folder (cs_status's index "dir"), for when no handle has the source.
+  final String? indexDir;
   final int size;
   final int uses;
   final int bytesNeeded;

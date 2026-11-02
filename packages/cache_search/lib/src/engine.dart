@@ -49,6 +49,12 @@ class SearchEngine {
           SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
       ];
 
+  /// cs_status's "rejected_snapshots": snapshots the core found unusable and removed on this device (none from an older core).
+  List<RejectedSnapshot> rejectedSnapshots() => [
+        for (final r in (_object(_ok(native.status(_h)))['rejected_snapshots'] as List? ?? const []))
+          if (r is Map) RejectedSnapshot.fromJson(r.cast<String, dynamic>()),
+      ];
+
   SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
     final options = {
       'k': k,
@@ -353,6 +359,15 @@ class CoreJob {
   /// Asks the job to stop at its next checkpoint; poll [progress] until it says cancelled.
   void cancel() {
     if (native.jobCancel(_j) < 0) throw CacheSearchException.fromJson(native.lastError(0));
+  }
+
+  /// Changes the job's pace now (cs_job_set): {"work_ms","idle_ms","threads"?,"paused"?,"auto"?}, what is left out stays. Answers
+  /// {"duty","effective","auto","paused"}, or null when this core has no cs_job_set.
+  Map<String, dynamic>? set(Map<String, Object?> pace) {
+    final n = native;
+    if (n is! CsJobNative) return null;
+    final s = (n as CsJobNative).jobSet(_j, jsonEncode(pace));
+    return s == null ? null : _object(s);
   }
 
   /// Frees a job that is done, cancelled or failed.

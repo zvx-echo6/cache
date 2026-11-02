@@ -2,6 +2,8 @@
 //! (`unpack_library`, `check_library`, `library_template`) and the downloads run on their own threads and are polled.
 
 use crate::error::{Error, Result};
+use crate::duty::{self, Duty, Throttle};
+use crate::idxsnap;
 use crate::index::{self, BuildParams, Lock, Outcome};
 use crate::libadd;
 use crate::libindex::{self, LibBuildParams};
@@ -47,12 +49,19 @@ struct Shared {
     phase: Mutex<Option<String>>,
     /// What a finished job returns (`pdfindex_finish`); shown as "result" when set.
     result: Mutex<Option<Value>>,
+    /// The job's pacing (duty.rs): work/idle, pause, writer threads, the self back-off.
+    throttle: Throttle,
+    /// Kinds without their own pace points (downloads, updates) pace at their progress reports.
+    pace_on_progress: bool,
 }
 
 impl Shared {
     fn set_progress(&self, d: u64, t: u64) {
         self.done.store(d, Ordering::SeqCst);
         self.total.store(t, Ordering::SeqCst);
+        if self.pace_on_progress {
+            self.pace();
+        }
     }
 
     fn set_phase(&self, phase: &str, d: u64, t: u64) {
@@ -60,7 +69,26 @@ impl Shared {
             *g = Some(phase.to_string());
         }
         self.set_progress(d, t);
+        // the index kinds pace at every item of a phase (a file hashed, linked or moved)
+        if !self.pace_on_progress {
+            self.pace();
+        }
     }
+
+    /// Called between items: idles, pauses or returns at once on cancel (see duty.rs).
+    fn pace(&self) {
+        self.throttle.tick(&|| self.cancel.load(Ordering::SeqCst));
+    }
+}
+
+thread_local! {
+    /// The duty `Job::start` worked out for the job it is starting (read by `spawn` on the same thread).
+    static PENDING_DUTY: std::cell::Cell<(Duty, bool)> = const { std::cell::Cell::new((Duty::FULL, true)) };
+}
+
+/// The kinds that do background index work, which run gently unless asked otherwise.
+fn gentle_kind(kind: &str) -> bool {
+    matches!(kind, "index_zim" | "index_library" | "index_seal" | "index_source" | "pdfindex_finish" | "test_pace")
 }
 
 /// Layer downloads running in this process, by layer and area: a second one for the same area is `busy`.
@@ -94,7 +122,12 @@ pub struct Job {
 #[derive(Deserialize)]
 struct IndexZimParams {
     zim_path: String,
+    /// The old index folder. Not needed (and not used) when `indexes_dir` is given.
+    #[serde(default)]
     index_dir: String,
+    /// The app's syncable indexes folder: the index is built in `<indexes_dir>/zim/<uuid>/.build/` and published as a snapshot.
+    #[serde(default)]
+    indexes_dir: Option<String>,
     #[serde(default = "default_heap")]
     heap_mb: usize,
     /// Not in the header: articles per checkpoint (default 2000). Tests use a small value.
@@ -105,7 +138,13 @@ struct IndexZimParams {
 #[derive(Deserialize)]
 struct IndexLibraryParams {
     library_path: String,
+    /// The old index folder. Not needed (and not used) when `indexes_dir` is given.
+    #[serde(default)]
     index_dir: String,
+    /// The app's syncable indexes folder: the index is built in `<indexes_dir>/library/<library_id@version>/.build/` and published
+    /// as a snapshot.
+    #[serde(default)]
+    indexes_dir: Option<String>,
     #[serde(default = "default_heap")]
     heap_mb: usize,
     /// The library's settings object, as in `cs_open`; guessed from the payload when absent. It must be the
@@ -185,6 +224,15 @@ impl Job {
     /// Start a job. Parameter errors, an unreadable ZIM and a busy `index_dir` are reported here (the call
     /// returns an error and no job exists); errors during the build make the job `failed`.
     pub fn start(kind: &str, params_json: &str) -> Result<Job> {
+        let gentle = gentle_kind(kind);
+        let duty = duty::from_params(params_json, if gentle { Duty::GENTLE } else { Duty::FULL })?;
+        PENDING_DUTY.with(|c| c.set((duty, !gentle)));
+        let r = Self::start_kind(kind, params_json);
+        PENDING_DUTY.with(|c| c.set((Duty::FULL, true)));
+        r
+    }
+
+    fn start_kind(kind: &str, params_json: &str) -> Result<Job> {
         match kind {
             "index_zim" => Self::start_index_zim(params_json),
             "index_library" => Self::start_index_library(params_json),
@@ -196,6 +244,8 @@ impl Job {
             "video_download" => Self::start_video_download(params_json),
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
+            "index_seal" => Self::start_index_seal(params_json),
+            "test_pace" => Self::start_test_pace(params_json),
             "index_source" => Self::start_index_source(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
@@ -204,10 +254,20 @@ impl Job {
 
     fn start_index_zim(params_json: &str) -> Result<Job> {
         let p: IndexZimParams = serde_json::from_str(params_json)?;
-        if p.zim_path.is_empty() || p.index_dir.is_empty() {
-            return Err(Error::bad_json("zim_path and index_dir must not be empty"));
+        let root = p.indexes_dir.as_deref().filter(|d| !d.is_empty()).map(PathBuf::from);
+        if p.zim_path.is_empty() || (p.index_dir.is_empty() && root.is_none()) {
+            return Err(Error::bad_json("zim_path and index_dir (or indexes_dir) must not be empty"));
         }
         let zim = ZimSource::open(std::path::Path::new(&p.zim_path))?;
+        if let Some(root) = root {
+            // a snapshot build: .build/ of the ZIM's folder, resumable; published when finished
+            let sd = idxsnap::dir_for(&root, idxsnap::KIND_ZIM, &zim.id);
+            let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
+            let (heap_mb, checkpoint, total) = (p.heap_mb, p.checkpoint_articles, zim.entry_count());
+            return Self::spawn("cs-index-zim", lock, total, move |sh| {
+                idxsnap::run_zim(&zim, &sd, heap_mb, checkpoint, &Self::hooks(sh))
+            });
+        }
         let dir = PathBuf::from(&p.index_dir);
         let lock = Lock::acquire(&dir)?;
         let total = zim.entry_count();
@@ -215,7 +275,14 @@ impl Job {
         let checkpoint = p.checkpoint_articles;
         Self::spawn("cs-index-zim", lock, total, move |sh| {
             index::build_zim_index(
-                &BuildParams { zim: &zim, index_dir: &dir, heap_mb, checkpoint_articles: checkpoint },
+                &BuildParams {
+                    zim: &zim,
+                    index_dir: &dir,
+                    heap_mb,
+                    checkpoint_articles: checkpoint,
+                    threads: sh.throttle.threads(),
+                    pace: Some(&|| sh.pace()),
+                },
                 &|d, t| sh.set_progress(d, t),
                 &|| sh.cancel.load(Ordering::SeqCst),
             )
@@ -238,6 +305,57 @@ impl Job {
         })
     }
 
+    /// Start an `index_seal` job: `{"indexes_dir","kind":"zim"|"library","source_id","index_dir"?}`. Seals the index in its old
+    /// folder into a snapshot by hard links (see idxsnap.rs), or adopts a usable snapshot that is already there. Progress phases
+    /// "link", "verify", "manifest", "publish"; cancel is honoured until "publish"; the result is in the progress JSON.
+    fn start_index_seal(params_json: &str) -> Result<Job> {
+        let mut req = idxsnap::prepare_seal(params_json)?;
+        let lock = req.lock.take();
+        Self::spawn("cs-index-seal", lock, 1, move |sh| idxsnap::seal(&req, &Self::hooks(sh)))
+    }
+
+    /// Start a `test_pace` job (not in the header): `{"items","item_ms"}`; each item busy-works `item_ms` and then calls the pace
+    /// point, like an index loop. For the tests of duty.rs.
+    fn start_test_pace(params_json: &str) -> Result<Job> {
+        #[derive(Deserialize)]
+        struct P {
+            items: u64,
+            #[serde(default)]
+            item_ms: u64,
+        }
+        let p: P = serde_json::from_str(params_json)?;
+        Self::spawn("cs-test-pace", (), p.items, move |sh| {
+            for i in 0..p.items {
+                if sh.cancel.load(Ordering::SeqCst) {
+                    return Ok(Outcome::Cancelled);
+                }
+                let t0 = std::time::Instant::now();
+                while t0.elapsed() < std::time::Duration::from_millis(p.item_ms) {
+                    std::hint::spin_loop();
+                }
+                sh.set_progress(i + 1, p.items);
+                sh.pace();
+            }
+            Ok(Outcome::Done)
+        })
+    }
+
+    /// What a snapshot job reports to its poller.
+    fn hooks(sh: &Shared) -> idxsnap::Hooks<'_> {
+        idxsnap::Hooks {
+            progress: Box::new(|d, t| sh.set_progress(d, t)),
+            phase: Box::new(|ph, d, t| sh.set_phase(ph, d, t)),
+            cancelled: Box::new(|| sh.cancel.load(Ordering::SeqCst)),
+            pace: Box::new(|| sh.pace()),
+            threads: sh.throttle.threads(),
+            set_result: Box::new(|v| {
+                if let Ok(mut g) = sh.result.lock() {
+                    *g = Some(v);
+                }
+            }),
+        }
+    }
+
     /// Start an `index_source` job: `{"indexes_dir","kind","source_id"}` with kind `captions`, `zim-captions` or `zim-epub`
     /// (`zim-epub` also takes `"previous": {"zim_uuid"}`). Reads the source, builds the keyword index (resumable, in
     /// `.build/`) and publishes it as a snapshot (see kwbuild.rs). `bad_json` for bad parameters, `not_found` for a saved
@@ -258,8 +376,9 @@ impl Job {
 
     fn start_index_library(params_json: &str) -> Result<Job> {
         let p: IndexLibraryParams = serde_json::from_str(params_json)?;
-        if p.library_path.is_empty() || p.index_dir.is_empty() {
-            return Err(Error::bad_json("library_path and index_dir must not be empty"));
+        let root = p.indexes_dir.as_deref().filter(|d| !d.is_empty()).map(PathBuf::from);
+        if p.library_path.is_empty() || (p.index_dir.is_empty() && root.is_none()) {
+            return Err(Error::bad_json("library_path and index_dir (or indexes_dir) must not be empty"));
         }
         // a bad settings object and a missing folder are reported here; opening the (possibly huge) shard
         // happens on the job's thread
@@ -270,9 +389,38 @@ impl Job {
         if !lib_path.is_dir() {
             return Err(Error::not_found(format!("library folder {} not found", lib_path.display())));
         }
-        let dir = PathBuf::from(&p.index_dir);
         // an update owns the library while it runs: `busy`; and an update cannot start while this build runs
         let token = libreg::entry_for(&lib_path).begin_build()?;
+        if let Some(root) = root {
+            // a snapshot build: the library's source id is what cs_status reports ("library_id@version")
+            let (library_id, version) = match p.settings.as_ref().map(LibrarySettings::parse).transpose()? {
+                Some(st) => (st.library_id, st.version),
+                None => (crate::library::dir_name(&lib_path), None),
+            };
+            let source_id = idxsnap::library_source_id(&library_id, version.as_deref());
+            let sd = idxsnap::dir_for(&root, idxsnap::KIND_LIBRARY, &source_id);
+            let lock = Lock::acquire(&crate::snapshot::build_dir(&sd))?;
+            let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
+            return Self::spawn("cs-index-library", (lock, token), 0, move |sh| {
+                idxsnap::run_library(
+                    &LibBuildParams {
+                        library_path: &lib_path,
+                        settings: settings.as_ref(),
+                        index_dir: &sd,
+                        heap_mb,
+                        checkpoint_docs: checkpoint,
+                        threads: None,
+                        pace: None,
+                    },
+                    &sd,
+                    &source_id,
+                    &library_id,
+                    version.as_deref(),
+                    &Self::hooks(sh),
+                )
+            });
+        }
+        let dir = PathBuf::from(&p.index_dir);
         let lock = Lock::acquire(&dir)?;
         let (heap_mb, checkpoint, settings) = (p.heap_mb, p.checkpoint_docs, p.settings);
         Self::spawn("cs-index-library", (lock, token), 0, move |sh| {
@@ -283,6 +431,8 @@ impl Job {
                     index_dir: &dir,
                     heap_mb,
                     checkpoint_docs: checkpoint,
+                    threads: sh.throttle.threads(),
+                    pace: Some(&|| sh.pace()),
                 },
                 &|d, t| sh.set_progress(d, t),
                 &|| sh.cancel.load(Ordering::SeqCst),
@@ -458,6 +608,7 @@ impl Job {
         total: u64,
         work: impl FnOnce(&Shared) -> Result<Outcome> + Send + 'static,
     ) -> Result<Job> {
+        let pending = PENDING_DUTY.with(|c| c.get());
         let shared = Arc::new(Shared {
             cancel: AtomicBool::new(false),
             done: AtomicU64::new(0),
@@ -466,11 +617,14 @@ impl Job {
             detail: Mutex::new(None),
             phase: Mutex::new(None),
             result: Mutex::new(None),
+            throttle: Throttle::new(pending.0),
+            pace_on_progress: pending.1,
         });
         let sh = shared.clone();
         let th = std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
+                duty::lower_thread_priority();
                 let guard = guard;
                 let r = catch_unwind(AssertUnwindSafe(|| work(&sh)));
                 let st = match r {
@@ -518,11 +672,23 @@ impl Job {
         if let Some(r) = self.shared.result.lock().ok().and_then(|g| g.clone()) {
             v["result"] = r;
         }
+        let t = self.shared.throttle.state_json();
+        v["duty"] = t["duty"].clone();
+        v["effective"] = t["effective"].clone();
+        v["auto"] = t["auto"].clone();
+        v["paused"] = t["paused"].clone();
         v.to_string()
     }
 
     pub fn cancel(&self) {
         self.shared.cancel.store(true, Ordering::SeqCst);
+        self.shared.throttle.wake();
+    }
+
+    /// `cs_job_set`: change the running job's duty, pause or resume it (see duty.rs); returns its state.
+    pub fn set_duty(&self, json: &str) -> Result<String> {
+        let v: Value = serde_json::from_str(json)?;
+        Ok(self.shared.throttle.set(&v)?.to_string())
     }
 }
 
@@ -530,6 +696,7 @@ impl Drop for Job {
     /// Freeing a running job cancels it and waits for its next checkpoint.
     fn drop(&mut self) {
         self.shared.cancel.store(true, Ordering::SeqCst);
+        self.shared.throttle.wake();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

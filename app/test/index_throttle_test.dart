@@ -245,7 +245,7 @@ class _Run implements IndexRun {
   Future<bool> get finished => _done.future;
 
   @override
-  Future<void> pause() async {
+  Future<void> pause([IndexWait why = IndexWait.none]) async {
     if (!_done.isCompleted) _done.complete(false);
   }
 

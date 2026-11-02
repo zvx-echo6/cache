@@ -2,7 +2,7 @@ import 'dart:async';
 
 import '../pdf/index/pdf_index_state.dart';
 import 'index_scheduler.dart';
-import 'index_throttle.dart' show IndexDuty;
+import 'index_throttle.dart' show IndexDuty, IndexHold;
 import 'indexes_share.dart' show encodeSourceId;
 
 /// Making ZIMs' PDFs searchable, as work for the [IndexScheduler]: the scheduler decides when (the PDF state then queues
@@ -33,6 +33,15 @@ class PdfIndexWork implements IndexWorkSource {
       ];
 }
 
+/// The scheduler's reason as the PDF status says it.
+PdfHold pdfHoldOf(IndexWait why) => switch (why) {
+      IndexWait.charging => PdfHold.charging,
+      IndexWait.heat => PdfHold.warm,
+      IndexWait.battery => PdfHold.battery,
+      IndexWait.storage => PdfHold.storage,
+      IndexWait.none || IndexWait.closed || IndexWait.model => PdfHold.waiting,
+    };
+
 /// One ZIM's PDF run as the scheduler sees it: finished when its PDFs are searchable (true) or the run stopped (paused, failed,
 /// no room: false).
 class PdfIndexRun implements IndexRun {
@@ -61,10 +70,17 @@ class PdfIndexRun implements IndexRun {
   @override
   Future<bool> get finished => _done.future;
 
+  /// Held by the scheduler, with its reason for the status (never "low battery" unless it is the battery).
   @override
-  Future<void> pause() => state.hold(zim);
+  Future<void> pause([IndexWait why = IndexWait.none]) => state.hold(zim, pdfHoldOf(why));
 
-  /// The PDF loop follows the throttle itself: it awaits [indexPermit] between PDFs and between pages.
+  /// The PDF loop follows the throttle itself (it awaits [indexPermit] between PDFs and between pages); the duty only tells the
+  /// status why it goes slower or waits.
   @override
-  void setDuty(IndexDuty duty) {}
+  void setDuty(IndexDuty duty) => state.slowed(zim, switch (duty.hold) {
+        IndexHold.heat => PdfHold.warm,
+        IndexHold.battery => PdfHold.battery,
+        IndexHold.model => PdfHold.waiting,
+        IndexHold.none => null,
+      });
 }

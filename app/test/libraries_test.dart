@@ -63,13 +63,16 @@ class _LibNative implements CsNative {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 
   List<Map<String, dynamic>> sources = [];
+  String? indexesDir;
   final Map<int, Map<String, dynamic>> jobs = {};
   int next = 0;
   String? err;
 
   @override
   int open(String configJson) {
-    sources = [for (final s in ((jsonDecode(configJson) as Map)['sources'] as List)) (s as Map).cast<String, dynamic>()];
+    final c = jsonDecode(configJson) as Map;
+    sources = [for (final s in (c['sources'] as List)) (s as Map).cast<String, dynamic>()];
+    indexesDir = c['indexes_dir'] as String?;
     return 1;
   }
 
@@ -101,7 +104,9 @@ class _LibNative implements CsNative {
       'kind': 'library',
       'path': path,
       'title': r['title'],
-      'indexed': File('${s['index_dir']}/done').existsSync(),
+      // Built in the old place, or a snapshot of the library in the indexes folder (built here, or synced in).
+      'indexed': File('${s['index_dir']}/done').existsSync() ||
+          (indexesDir != null && Directory('$indexesDir/library/${r['library_id']}/snap').existsSync()),
       'building': false,
       'opening': reads > 0,
       'updating': false,
@@ -145,7 +150,14 @@ class _LibNative implements CsNative {
       case 'check_library':
         result = done(_check(p['library_path'] as String, (p['settings'] as Map?)?.cast<String, dynamic>()));
       case 'index_library':
-        File('${p['index_dir']}/done').createSync(recursive: true);
+        if (p['indexes_dir'] != null) {
+          // A snapshot of the library's source (its library_id) in the indexes folder; nothing in the old place.
+          final id = ((p['settings'] as Map?)?['library_id'] ?? 'guessed') as String;
+          File('${p['indexes_dir']}/library/$id/snap/b1/manifest.json').createSync(recursive: true);
+          File('${p['indexes_dir']}/params.json').writeAsStringSync(paramsJson);
+        } else {
+          File('${p['index_dir']}/done').createSync(recursive: true);
+        }
         result = done(null);
       case 'library_template':
         File(p['out_path'] as String).writeAsStringSync(jsonEncode({
@@ -220,12 +232,12 @@ void main() {
   String? picked;
   final saved = <String, Uint8List>{};
 
-  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide}) async {
+  Future<void> setUpLibs({bool wifi = true, Future<File?> Function()? guide, String? indexesDir}) async {
     sources = SourcesState(
       zimsDirOverride: Directory('${tmp.path}/zims'),
       indexesDirOverride: Directory('${tmp.path}/indexes'),
       nativeFactory: _makeNative,
-      coreExtras: const {},
+      coreExtras: {'indexes_dir': ?indexesDir},
     );
     downloader = _FakeDownloader({});
     libs = LibrariesState(
@@ -285,6 +297,19 @@ void main() {
       expect(c['path'], endsWith('shard'));
       expect(c['index_dir'], endsWith('index'));
       expect((c['settings'] as Map)['library_id'], 'manuals');
+    });
+
+    test('with an indexes folder the keyword index is built there, as a snapshot that syncs, not in the library', () async {
+      final shared = Directory('${tmp.path}/shared-indexes')..createSync();
+      await setUpLibs(indexesDir: shared.path);
+      await libs.addFile(libFile('manuals.cache-library', _lib(id: 'manuals')), confirmUpdate: never, askSettings: noSettings);
+      final l = libs.libraries.single;
+      final params = jsonDecode(File('${shared.path}/params.json').readAsStringSync()) as Map;
+      expect(params['indexes_dir'], shared.path);
+      expect(params.containsKey('index_dir'), isFalse);
+      expect(Directory('${shared.path}/library/manuals/snap').existsSync(), isTrue);
+      expect(Directory(l.indexPath).existsSync(), isFalse, reason: 'nothing in the library\'s own index/');
+      expect(libs.phaseOf(l), LibraryPhase.ready);
     });
 
     test('a plain snapshot without settings is guessed; when it cannot be, the settings file is asked for', () async {

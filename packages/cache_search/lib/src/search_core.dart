@@ -94,6 +94,11 @@ class SearchCore {
         for (final s in await _call('status') as List) SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
       ];
 
+  /// Snapshots the core found unusable and removed on this device ([SearchEngine.rejectedSnapshots]).
+  Future<List<RejectedSnapshot>> rejectedSnapshots() async => [
+        for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
+      ];
+
   Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
       SearchResponse.fromJson(((await _call('search', {
         'query': query,
@@ -343,6 +348,10 @@ class CoreJobHandle {
 
   Future<void> cancel() => _core._call('jobCancel', {'job': _id});
 
+  /// Changes the job's pace now (cs_job_set; see [CoreJob.set]); null when the core has no cs_job_set.
+  Future<Map<String, dynamic>?> set(Map<String, Object?> pace) async =>
+      ((await _core._call('jobSet', {'job': _id, 'pace': pace})) as Map?)?.cast<String, dynamic>();
+
   /// Frees a job that is done, cancelled or failed.
   Future<void> free() async {
     if (_freed) return;
@@ -406,6 +415,8 @@ void _workerMain(List<dynamic> init) {
           eng().deleteSavedPlace(a['key'] as String);
         case 'setSources':
           eng().setSources(_sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
+        case 'rejected':
+          result = [for (final r in eng().rejectedSnapshots()) r.toJson()];
         case 'status':
           result = [
             for (final s in eng().status())
@@ -425,6 +436,9 @@ void _workerMain(List<dynamic> init) {
                 'whole_library_only': s.wholeLibraryOnly,
                 'source_id': s.sourceId,
                 'index': s.index?.toJson(),
+                'captionsindex': s.captionsIndex?.toJson(),
+                'epubindex': s.epubIndex?.toJson(),
+                'pdfindex': s.pdfIndex?.toJson(),
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];
@@ -449,6 +463,8 @@ void _workerMain(List<dynamic> init) {
                   'source_kind': h.sourceKind,
                   'source_title': h.sourceTitle,
                   'page': h.page,
+                  // The worker passes on every field the app reads (a PDF passage's real page).
+                  if (h.pdfPage != null) 'pdf_page': h.pdfPage,
                 }
             ],
             'total_estimate': r.totalEstimate,
@@ -571,9 +587,13 @@ void _workerMain(List<dynamic> init) {
             if (p.detail != null) 'detail': p.detail,
             if (p.phase != null) 'phase': p.phase,
             if (p.result != null) 'result': p.result,
+            if (p.paused != null) 'paused': p.paused,
+            if (p.effective != null) 'effective': p.effective,
           };
         case 'jobCancel':
           jobs[a['job']]!.cancel();
+        case 'jobSet':
+          result = jobs[a['job']]!.set((a['pace'] as Map).cast<String, Object?>());
         case 'jobFree':
           jobs.remove(a['job'])?.free();
         case 'close':

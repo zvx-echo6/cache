@@ -275,6 +275,10 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
   /// to its source when the sources are set).
   Map<String, dynamic> get _setSourcesExtra => {if (_extra['indexes_dir'] != null) 'indexes_dir': _extra['indexes_dir']};
 
+  /// The device's syncable indexes folder (the core config's indexes_dir), or null without one: ZIM and library keyword indexes
+  /// are built there, as snapshots that sync to every device with the same source.
+  String? get syncIndexesDir => _extra['indexes_dir'] as String?;
+
   /// What the core last said about every source.
   Iterable<SourceStatus> get statuses => _status.values;
 
@@ -468,10 +472,18 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   final Set<String> _loggedStatus = {};
 
+  /// Snapshots the core found unusable and removed on this device: sync never fetches them again (indexes_share.dart).
+  List<RejectedSnapshot> rejected = const [];
+
   Future<void> _readStatus(SearchCore core) async {
     _status
       ..clear()
       ..addEntries([for (final s in await core.status()) MapEntry(s.path, s)]);
+    try {
+      rejected = await core.rejectedSnapshots();
+    } catch (_) {
+      rejected = const [];
+    }
     // One line per change, for logcat: where each source's keyword search comes from (the ZIM's own Xapian index through libzim).
     for (final s in _status.values) {
       final line = 'cache source ${s.title}: indexed=${s.indexed} keyword_source=${s.keywordSource} docs=${s.docs}';
@@ -481,9 +493,11 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
 
   Future<void> _startIndex(SearchCore core, ZimFile z) async {
     try {
+      // Into the indexes folder when there is one (a snapshot that syncs), else beside the other ZIM indexes.
+      final shared = syncIndexesDir;
       _jobs[z.path] = await core.startJob('index_zim', {
         'zim_path': z.path,
-        'index_dir': _indexDir(z),
+        if (shared != null) 'indexes_dir': shared else 'index_dir': _indexDir(z),
         'heap_mb': 200,
       });
       _poll ??= Timer.periodic(const Duration(seconds: 1), (_) => _pollJobs());

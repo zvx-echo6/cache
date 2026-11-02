@@ -40,7 +40,7 @@ abstract class PdfIndexCore {
   /// Adds one PDF's text pieces, replacing any it had (cs_pdfindex_add), with the size and sha256 of its bytes (recorded in the
   /// snapshot's pdfs.tsv, for the next edition's reuse). Durable in batches: the core commits about every 20
   /// PDFs or 30 seconds and lists a path as done only after the commit that holds it.
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256});
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, List<Map<String, dynamic>>? pages, int? size, String? sha256});
 
   /// Marks a PDF that has nothing to index (cs_pdfindex_skip).
   Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256});
@@ -143,12 +143,13 @@ class PdfPageText {
 
 /// What cs_pdf_chunk answers. Each piece is kept as the core wrote it and goes back in cs_pdfindex_add unchanged.
 class PdfChunks {
-  const PdfChunks({required this.pieces, this.emptyPages = const [], this.chunker});
+  const PdfChunks({required this.pieces, this.emptyPages = const [], this.chunker, this.pages});
 
   factory PdfChunks.fromJson(Map<String, dynamic> j) => PdfChunks(
     pieces: [for (final p in (j['pieces'] as List? ?? const [])) (p as Map).cast<String, dynamic>()],
     emptyPages: [for (final i in (j['empty_pages'] as List? ?? const [])) (i as num).toInt()],
     chunker: j['chunker'],
+    pages: j['pages'] is List ? [for (final p in j['pages'] as List) (p as Map).cast<String, dynamic>()] : null,
   );
 
   final List<Map<String, dynamic>> pieces;
@@ -156,6 +157,10 @@ class PdfChunks {
 
   /// The chunker's version (the build is started again when it changes).
   final Object? chunker;
+
+  /// The pages with text, {"pdf_page","label","text"}, handed to cs_pdfindex_add as they are (a citation then lands on its page
+  /// and read gives the whole page); null from a chunker that does not give them.
+  final List<Map<String, dynamic>>? pages;
 }
 
 /// What cs_pdfindex_open answers: the session and what an earlier run already finished.
@@ -238,7 +243,7 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   @override
   Future<PdfReused> reuse(int session, {required String path, required String sha256}) async => _no();
   @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async => _no();
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, List<Map<String, dynamic>>? pages, int? size, String? sha256}) async => _no();
   @override
   Future<void> skip(int session, {required String path, required PdfSkipReason reason, int? size, String? sha256}) async => _no();
   @override
@@ -306,6 +311,10 @@ List<String> pdfIndexUuids(String indexesDir) {
   }
 }
 
+/// The zim-pdf snapshot format this version reads (the core's pdfindex.rs FORMAT). A snapshot of another format is not one here:
+/// the ZIM's PDFs are made searchable again, without a word about the old one.
+const int kPdfIndexFormat = 2;
+
 /// One published snapshot as this device finds it (its manifest.json).
 class PdfSnapshot {
   const PdfSnapshot({required this.id, required this.zimUuid, required this.created, required this.pdfs, required this.skipped, this.pieces = 0, this.zimName});
@@ -326,6 +335,7 @@ class PdfSnapshot {
       final f = File('${dir.path}${Platform.pathSeparator}manifest.json');
       if (!f.existsSync()) return null;
       final j = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
+      if ((j['format'] as num?)?.toInt() != kPdfIndexFormat) return null;
       for (final e in (j['files'] as List? ?? const [])) {
         final m = (e as Map).cast<String, dynamic>();
         final file = File('${dir.path}${Platform.pathSeparator}${(m['path'] as String).replaceAll('/', Platform.pathSeparator)}');

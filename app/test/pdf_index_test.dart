@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -188,6 +189,31 @@ void main() {
       expect(waiting.isCompleted, isTrue);
     });
 
+    test("the PDF's own Title goes to the index when it is a real one; else \"\"", () async {
+      final core = FakePdfIndexCore(zims: {
+        'u1': FakeZim(uuid: 'u1', name: 'guide', pdfs: [
+          FakePdf('A/a.pdf', pages: ['TITLE:Are You Ready?\nwater words here']),
+          FakePdf('A/b.pdf', pages: ['TITLE:Microsoft Word - plan.doc\nfire words here']),
+          FakePdf('A/c.pdf', pages: ['shelter words here']),
+        ]),
+      });
+      expect(await PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), readPages: readFakePdfPages).run(), PdfRunEnd.finished);
+      expect(core.titles, {'A/a.pdf': 'Are You Ready?', 'A/b.pdf': '', 'A/c.pdf': ''});
+      expect(cleanPdfTitle('   '), '');
+      expect(cleanPdfTitle('report_final.pdf'), '');
+      expect(cleanPdfTitle('  Food  and Water in an Emergency '), 'Food and Water in an Emergency');
+      expect(cleanPdfTitle('12345'), '');
+    });
+
+    test("each PDF's page texts go to the index with its pieces (a citation lands on its page; read gives the whole page)", () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      expect(await PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), readPages: readFakePdfPages).run(), PdfRunEnd.finished);
+      final pages = core.pagesAdded['A/one.pdf']!;
+      expect([for (final p in pages) p['pdf_page']], [1, 2]);
+      expect(pages[1]['text'], _words(30, 'fire'));
+      expect(core.pagesAdded['A/two.pdf']!.single['pdf_page'], 1);
+    });
+
     test('cancel discards the build', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
       late PdfIndexRun run;
@@ -270,13 +296,20 @@ void main() {
   });
 
   group('snapshots', () {
-    void snapshot(String id, {required String uuid, required String created, bool whole = true}) {
+    void snapshot(String id, {required String uuid, required String created, bool whole = true, int format = kPdfIndexFormat}) {
       final d = Directory('${PdfIndexPaths(indexes, uuid).snaps.path}/$id')..createSync(recursive: true);
       File('${d.path}/seg').writeAsStringSync(whole ? 'abcd' : 'ab');
       File('${d.path}/manifest.json').writeAsStringSync(
-        '{"zim_uuid":"$uuid","created":"$created","pdfs":3,"pieces":9,"skipped":1,"files":[{"path":"seg","size":4,"sha256":"x"}]}',
+        '{"zim_uuid":"$uuid","format":$format,"created":"$created","pdfs":3,"pieces":9,"skipped":1,"files":[{"path":"seg","size":4,"sha256":"x"}]}',
       );
     }
+
+    test('a snapshot of the old format (1) is not one: the PDFs are made searchable again, quietly', () {
+      snapshot('v1', uuid: 'u1', created: '2026-11-01T00:00:00Z', format: 1);
+      expect(paths.current(), isNull);
+      snapshot('v2', uuid: 'u1', created: '2026-11-02T00:00:00Z');
+      expect(paths.current()?.id, 'v2');
+    });
 
     test('every device picks the same one: the earliest created, then the lowest build id; a half-arrived one does not count', () {
       snapshot('b2', uuid: 'u1', created: '2026-11-02T01:00:00Z');
@@ -302,6 +335,7 @@ void main() {
     late List<PdfZimRef> zims;
     BatteryReading? batteryNow;
     var free = 100 << 30;
+    (String, String?)? coreSays;
     final changes = ValueNotifier(0);
 
     PdfIndexState make({PdfIndexCore? withCore}) => PdfIndexState(
@@ -314,6 +348,7 @@ void main() {
       battery: () async => batteryNow,
       space: (_) => Space(free: free, reserve: 0),
       watchEvery: const Duration(milliseconds: 200),
+      coreIndex: coreSays == null ? null : (_) => coreSays,
     );
 
     Future<PdfPart?> until(PdfZimRef z, bool Function(PdfPart p) ok) async {
@@ -338,6 +373,7 @@ void main() {
       zims = [PdfZimRef(path: zimPath, uuid: 'u1', title: 'Guide')];
       batteryNow = null;
       free = 100 << 30;
+      coreSays = null;
     });
     tearDown(() => state.dispose());
 
@@ -389,13 +425,13 @@ void main() {
       expect((await until(z, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
     });
 
-    test('a low battery on battery pauses it ("Paused: low battery"); charging, it goes on by itself', () async {
+    test('a low battery on battery pauses it ("Paused, battery low"); charging, it goes on by itself', () async {
       batteryNow = const BatteryReading(percent: 10, charging: false);
       state = make();
       await state.init();
       final z = zims.single;
       final p = (await until(z, (p) => p.phase == PdfPartPhase.paused))!;
-      expect(pdfPartLine(p), 'Paused: low battery');
+      expect(pdfPartLine(p), 'Paused, battery low');
       batteryNow = const BatteryReading(percent: 10, charging: true);
       expect((await until(z, (p) => p.phase == PdfPartPhase.done))?.phase, PdfPartPhase.done);
     });
@@ -434,6 +470,35 @@ void main() {
       expect(paths.root.existsSync(), isFalse, reason: 'the old edition, which no ZIM here uses, is removed');
     });
 
+    test("a snapshot the core cannot use (its format changed) is made again, as any ZIM without an index: no error", () async {
+      state = make();
+      await state.init();
+      final z = zims.single;
+      final first = (await until(z, (p) => p.phase == PdfPartPhase.done))!;
+      expect(first.phase, PdfPartPhase.done);
+      final old = paths.current()!.id;
+      // Long after (the core's format changed in an update): the core says it has no usable PDF index for the ZIM.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final rec = File('${dir.path}/support/pdf-index.json');
+      final j = jsonDecode(rec.readAsStringSync()) as Map<String, dynamic>;
+      (j['guide.zim'] as Map)['built_at'] = '2026-01-01T00:00:00.000';
+      rec.writeAsStringSync(jsonEncode(j));
+      coreSays = ('none', null);
+      core.calls.clear();
+      await renew();
+      final again = (await until(z, (p) => p.phase == PdfPartPhase.done && paths.snapshots().length == 2))!;
+      expect(again.phase, PdfPartPhase.done);
+      expect(again.failure, isNull);
+      expect(core.calls, contains('finish'), reason: 'built again');
+      expect(paths.snapshots().map((s) => s.id), contains(old));
+      // The core then uses the new one, built here.
+      final fresh = paths.snapshots().map((s) => s.id).firstWhere((id) => id != old);
+      coreSays = ('ready', fresh);
+      await renew();
+      final p = (await until(z, (p) => p.phase == PdfPartPhase.done))!;
+      expect(p.fromOtherDevice, isFalse, reason: 'record ${rec.readAsStringSync()}, snapshots ${paths.snapshots().map((s) => s.id).toList()}, fresh $fresh, old $old');
+    });
+
     test('a ZIM that goes takes its index with it, on this device', () async {
       state = make();
       await state.init();
@@ -465,7 +530,7 @@ void main() {
     test('every state has its line', () {
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.done, total: 5768, handled: 5768)), 'PDFs: searching ready');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.running, total: 5768, handled: 340)), 'Making PDFs searchable: 340 of 5,768');
-      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery)), 'Paused: low battery');
+      expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery)), 'Paused, battery low');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.person)), 'Paused · 340 of 5,768');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189)), 'Needs 1.2 GB free');
       expect(pdfPartLine(const PdfPart(phase: PdfPartPhase.waiting, total: 5768)), 'Waiting to make PDFs searchable');
@@ -511,7 +576,7 @@ void main() {
       await tester.tap(find.text('Pause'));
       expect(paused, 1);
       await pump(const PdfPart(phase: PdfPartPhase.paused, total: 5768, handled: 340, pause: PdfPause.battery));
-      expect(find.text('Paused: low battery'), findsOneWidget);
+      expect(find.text('Paused, battery low'), findsOneWidget);
       await tester.tap(find.text('Resume'));
       expect(resumed, 1);
       await pump(const PdfPart(phase: PdfPartPhase.needsSpace, total: 5768, needBytes: 1288490189));

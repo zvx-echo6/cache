@@ -1,5 +1,9 @@
-import 'indexes_share.dart' show kIndexesDirName;
+// Rule: this file and everything it imports stay free of Flutter and package:cache_search imports (Cache Server's plain-Dart
+// helper reads it), and dart:ffi stays behind conditional imports with a web stub (the web build cannot import dart:ffi).
+
 import 'dart:io';
+
+import 'indexes_dir.dart' show kIndexesDirName;
 
 /// Where Cache's published data lives (road routing, places, the region catalogue). `https://cache.echo6.co` serves the same
 /// bucket with the same paths: build with `--dart-define=CACHE_DATA_BASE=https://cache.echo6.co` to use it. No trailing slash.
@@ -59,8 +63,13 @@ Map<String, String> notebookConfig(Directory supportDir) =>
     {'db_path': '${supportDir.path}/notebook/notebook.sqlite', 'media_dir': '${supportDir.path}/notebook'};
 
 /// The region engine's config, the same for the search core and the regions screen (one engine per folder in the process).
-Map<String, Object?> regionsConfig(Directory supportDir, {String routingBaseUrl = kRoutingBaseUrl, String placesBaseUrl = kPlacesBaseUrl}) =>
-    {'dir': '${supportDir.path}/regions', 'base_url': routingBaseUrl, 'places_base_url': placesBaseUrl};
+/// Its tile indexes are kept as syncable snapshots in the indexes folder (search/indexes_share.dart).
+Map<String, Object?> regionsConfig(Directory supportDir, {String routingBaseUrl = kRoutingBaseUrl, String placesBaseUrl = kPlacesBaseUrl}) => {
+  'dir': '${supportDir.path}/regions',
+  'base_url': routingBaseUrl,
+  'places_base_url': placesBaseUrl,
+  'indexes_dir': '${supportDir.path}/$kIndexesDirName',
+};
 
 /// The folder Android unpacked this app's native libraries to (where libvalhalla_shim.so is), found from where
 /// libflutter.so is mapped (it is loaded before any Dart runs, unlike the core library, which the core's own isolate opens

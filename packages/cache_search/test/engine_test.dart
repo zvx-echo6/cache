@@ -416,4 +416,23 @@ void main() {
       expect(() => e.livePreview({'definition': {}}), throwsA(isA<CacheSearchException>().having((x) => x.message, 'message', contains('items[0].label'))));
     });
   });
+
+  test("a job's pace goes to cs_job_set as JSON; a core without it answers null", () {
+    final n = _PacedNative();
+    final j = CoreJob.start(n, 'index_source', {'kind': 'zim-epub'});
+    expect(j.set({'paused': true}), {'paused': true, 'duty': null});
+    expect(n.sets, [(5, '{"paused":true}')]);
+    final plain = CoreJob.start(FakeNative(), 'index_source', {'kind': 'zim-epub'});
+    expect(plain.set({'paused': true}), isNull);
+  });
+}
+
+class _PacedNative extends FakeNative implements CsJobNative {
+  final List<(int, String)> sets = [];
+
+  @override
+  String? jobSet(int job, String json) {
+    sets.add((job, json));
+    return '{"paused":true,"duty":null}';
+  }
 }

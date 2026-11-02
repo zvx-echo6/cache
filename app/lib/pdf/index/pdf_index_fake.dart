@@ -40,6 +40,11 @@ Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name, {PdfPermi
   for (var i = 1; i < pages.length; i++) {
     await betweenPages?.call();
   }
+  // A "TITLE:" first line stands for the document's metadata Title.
+  if (pages.isNotEmpty && pages.first.startsWith('TITLE:')) {
+    final title = pages.first.substring(6).split('\n').first;
+    return PdfPagesOutcome.read([pages.first.substring(6 + title.length).trimLeft(), ...pages.skip(1)], title: title);
+  }
   return PdfPagesOutcome.read(pages);
 }
 
@@ -67,6 +72,12 @@ class FakePdfIndexCore implements PdfIndexCore {
 
   /// Calls, for tests: `open`, `add:PATH`, `skip:PATH:REASON`, `commit`, `close`, `discard`, `finish`.
   final List<String> calls = [];
+
+  /// The title each add was given, by path.
+  final Map<String, String> titles = {};
+
+  /// The pages each add was given, by path.
+  final Map<String, List<Map<String, dynamic>>?> pagesAdded = {};
 
   final Map<int, _Session> _sessions = {};
   int _next = 1;
@@ -109,7 +120,10 @@ class FakePdfIndexCore implements PdfIndexCore {
         if (end == words.length) break;
       }
     }
-    return PdfChunks(pieces: pieces, emptyPages: empty, chunker: 1);
+    return PdfChunks(pieces: pieces, emptyPages: empty, chunker: 1, pages: [
+      for (final p in pages)
+        if (p.text.trim().isNotEmpty) {'pdf_page': p.index + 1, 'label': p.label ?? '', 'text': p.text},
+    ]);
   }
 
   @override
@@ -173,8 +187,10 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async {
+  Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, List<Map<String, dynamic>>? pages, int? size, String? sha256}) async {
     calls.add('add:$path');
+    titles[path] = title;
+    pagesAdded[path] = pages;
     final err = failAddWith;
     if (err != null) throw err;
     for (final p in pieces) {
@@ -310,7 +326,7 @@ class _FakeFinish implements PdfFinishJob {
         'kind': 'zim-pdf',
         'zim_uuid': meta['zim_uuid'],
         'zim_name': meta['zim_name'],
-        'format': 1,
+        'format': kPdfIndexFormat,
         'chunker': 1,
         'created': DateTime.now().toUtc().toIso8601String(),
         'pdfs': done.length,

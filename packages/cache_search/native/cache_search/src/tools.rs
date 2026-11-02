@@ -450,6 +450,10 @@ impl Handle {
             self.read_wikipedia(title)?
         } else if let Some(kind) = shown_kind(address) {
             return Err(bad_arguments(format!("[{n}] is {kind} result; everything about it is already shown above")));
+        } else if address.starts_with("zimpdf:") {
+            // a PDF result reads the page its citation opened
+            let page = conv.cite_pdf_page(address);
+            self.read_pdf_cited(&address.clone(), READ_MAX_CHARS, page).map_err(tool_error)?
         } else {
             self.read(&address.clone(), READ_MAX_CHARS).map_err(tool_error)?
         };

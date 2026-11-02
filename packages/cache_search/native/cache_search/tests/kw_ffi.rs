@@ -40,16 +40,21 @@ const MIMES: [&str; 8] = [
     "application/octet-stream",
 ];
 
-fn mime_index(m: &str) -> u16 {
-    MIMES.iter().position(|x| *x == m).unwrap() as u16
+fn mime_index(mimes: &[&str], m: &str) -> u16 {
+    mimes.iter().position(|x| *x == m).unwrap() as u16
 }
 
 /// A minimal valid ZIM (major 6, minor 1) holding `entries` (namespace `C`: path, title, mime, bytes) and the metadata
 /// `Language`, `Title` and `Name`, in one uncompressed cluster.
 fn write_zim(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, Vec<u8>)]) {
+    write_zim_mimes(path, uuid, name, entries, &MIMES);
+}
+
+/// `write_zim` with the header's MIME list given (`text/plain` must be second: the metadata uses it).
+fn write_zim_mimes(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, Vec<u8>)], mimes: &[&str]) {
     let mut all: Vec<(u8, String, String, u16, Vec<u8>)> = entries
         .iter()
-        .map(|(p, t, m, b)| (b'C', p.to_string(), t.to_string(), mime_index(m), b.clone()))
+        .map(|(p, t, m, b)| (b'C', p.to_string(), t.to_string(), mime_index(mimes, m), b.clone()))
         .collect();
     for (k, v) in [("Language", "eng"), ("Title", "Media test"), ("Name", name)] {
         all.push((b'M', k.into(), k.into(), 1, v.as_bytes().to_vec()));
@@ -57,7 +62,7 @@ fn write_zim(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, 
     all.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     let n = all.len();
     let mut mime = Vec::new();
-    for m in MIMES {
+    for m in mimes {
         mime.extend_from_slice(m.as_bytes());
         mime.push(0);
     }
@@ -1093,4 +1098,132 @@ fn damaged_and_empty_epubs_are_skipped_not_fatal() {
         tsv.contains("Books/broken.epub") && tsv.contains("skipped:damaged") && tsv.contains("skipped:no_text"),
         "{tsv}"
     );
+}
+
+#[test]
+fn the_header_decides_which_zims_are_walked() {
+    const SMALL: &str = "0badc0de-0000-4000-8000-000000000d01";
+    const WITH_VTT: &str = "0badc0de-0000-4000-8000-000000000d02";
+    const BIG: &str = "0badc0de-0000-4000-8000-000000000d03";
+    const NONE: &str = "0badc0de-0000-4000-8000-000000000d04";
+    let t = TempDir::new("nowalk");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    let generic = ["text/html", "text/plain", "application/octet-stream"];
+    let entries = || {
+        vec![
+            (
+                "Alpha",
+                "Alpha",
+                "text/html",
+                b"<html><body><p>Alpha.</p></body></html>".to_vec(),
+            ),
+            (
+                "Media/talk_en.srt",
+                "",
+                "application/octet-stream",
+                srt_of("octet words", 8),
+            ),
+        ]
+    };
+    // small, with only generic types (as ready.gov: its two SRTs are octet-stream): walked, the .srt is found
+    let small = t.0.join("small.zim");
+    write_zim_mimes(&small, SMALL, "small", &entries(), &generic);
+    // a caption type in the list: walked, and the octet-stream .srt is counted beside the .vtt
+    let withvtt = t.0.join("withvtt.zim");
+    write_zim_mimes(
+        &withvtt,
+        WITH_VTT,
+        "withvtt",
+        &[
+            ("Media/a.vtt", "", "text/vtt", vtt_of("vtt words", 8)),
+            (
+                "Media/talk_en.srt",
+                "",
+                "application/octet-stream",
+                srt_of("octet words", 8),
+            ),
+        ],
+        &["text/html", "text/plain", "application/octet-stream", "text/vtt"],
+    );
+    // the same as the small one, plus 500,000 filler entries (so the header says more than 500,000): not walked
+    let big = t.0.join("big.zim");
+    let mut many = entries();
+    for i in 0..500_000 {
+        let path: &'static str = Box::leak(format!("f/{i:06}").into_boxed_str());
+        many.push((path, "", "text/html", b"x".to_vec()));
+    }
+    write_zim_mimes(&big, BIG, "big", &many, &generic);
+    // no generic or caption type at all: not walked, whatever the size
+    let none = t.0.join("none.zim");
+    write_zim_mimes(&none, NONE, "none", &entries()[..1], &["text/html", "application/pdf"]);
+
+    let mut h = open(&[&small, &withvtt, &big, &none], &idx, &vdir);
+    let t0 = Instant::now();
+    while ![SMALL, WITH_VTT, BIG, NONE]
+        .iter()
+        .all(|u| cache_search::kwslot::scan_finished(u))
+    {
+        let _ = h.status_json();
+        assert!(t0.elapsed() < Duration::from_secs(60), "the scans never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let st: Value = serde_json::from_str(&h.status_json()).unwrap();
+    let by_id = |id: &str| {
+        st["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert!(cache_search::kwbuild::was_walked(SMALL));
+    assert_eq!(by_id(SMALL)["captionsindex"]["entries"], 1, "{st}");
+    assert_eq!(by_id(SMALL)["captionsindex"]["needs_build"], true);
+    assert!(by_id(SMALL).get("epubindex").is_none());
+    assert!(cache_search::kwbuild::was_walked(WITH_VTT));
+    assert_eq!(by_id(WITH_VTT)["captionsindex"]["entries"], 2, "{st}");
+    assert!(
+        !cache_search::kwbuild::was_walked(BIG),
+        "over 500,000 entries with only generic types: no walk"
+    );
+    assert!(by_id(BIG).get("captionsindex").is_none() && by_id(BIG).get("epubindex").is_none());
+    assert!(
+        !cache_search::kwbuild::was_walked(NONE),
+        "no generic or caption type: no walk"
+    );
+    assert!(by_id(NONE).get("captionsindex").is_none());
+}
+
+#[test]
+fn index_source_is_gentle_by_default_and_takes_a_duty() {
+    const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000077";
+    let t = TempDir::new("duty");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    save_video(&vdir, VIDEO, "Duty", &[("en", vtt_of("sandbag barriers", 30))]);
+    let _h = open(&[], &idx, &vdir);
+    let source = format!("{HOST}/{VIDEO}");
+    // like the other index kinds: work 200 ms, idle 200 ms, one writer thread, unless the caller says otherwise
+    let p = run(job_params(&idx, "captions", &source));
+    assert_eq!(p["duty"], json!({"work_ms": 200, "idle_ms": 200, "threads": 1}), "{p}");
+    assert_eq!((p["auto"].clone(), p["paused"].clone()), (json!(true), json!(false)));
+    let mut again = job_params(&idx, "captions", &source);
+    again["duty"] = json!({"work_ms": 0});
+    let p = run(again);
+    assert_eq!(p["duty"], json!({"work_ms": 0, "idle_ms": 200, "threads": 1}), "{p}");
+    // a running index_source job can be paused and resumed
+    let t2 = TempDir::new("duty-pause");
+    let (idx2, vdir2) = (t2.0.join("indexes"), t2.0.join("video"));
+    save_video(&vdir2, VIDEO, "Duty", &[("en", vtt_of("sandbag barriers", 30))]);
+    let _h2 = open(&[], &idx2, &vdir2);
+    let mut slow = job_params(&idx2, "captions", &source);
+    slow["duty"] = json!({"work_ms": 1, "idle_ms": 60_000});
+    let j = start(slow);
+    j.set_duty(r#"{"paused": true}"#).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let p: Value = serde_json::from_str(&j.progress_json()).unwrap();
+    assert!(p["state"] == "running" || p["state"] == "done", "{p}");
+    j.set_duty(r#"{"paused": false, "work_ms": 0, "idle_ms": 0}"#).unwrap();
+    let p = wait(&j);
+    assert_eq!(p["state"], "done", "{p}");
 }
