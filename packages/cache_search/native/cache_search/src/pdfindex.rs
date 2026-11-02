@@ -366,6 +366,14 @@ impl PdfIndex {
         Ok((hits, count))
     }
 
+    /// A snippet of the piece `text` around what matches `query` (see `search::match_snippet`).
+    pub fn snippet(&self, query: &str, text: &str, max: usize) -> String {
+        let mut qp = QueryParser::for_index(&self.index, vec![self.fields.title, self.fields.text]);
+        qp.set_field_boost(self.fields.title, 2.0);
+        let (q, _errors) = qp.parse_query_lenient(query);
+        crate::search::match_snippet(&self.reader.searcher(), &*q, self.fields.text, text, max)
+    }
+
     /// The piece with key `pid`.
     pub fn get(&self, pid: &str) -> Option<PdfHit> {
         let searcher = self.reader.searcher();

@@ -393,6 +393,14 @@ impl KwIndex {
 
     /// BM25 over title (boosted 2x) and text, best first (ties by piece key), and the number of matching pieces. `lang`
     /// keeps the pieces of that language only.
+    /// A snippet of the piece `text` around what matches `query` (see `search::match_snippet`).
+    pub fn snippet(&self, query: &str, text: &str, max: usize) -> String {
+        let mut qp = QueryParser::for_index(&self.index, vec![self.fields.title, self.fields.text]);
+        qp.set_field_boost(self.fields.title, 2.0);
+        let (q, _errors) = qp.parse_query_lenient(query);
+        crate::search::match_snippet(&self.reader.searcher(), &*q, self.fields.text, text, max)
+    }
+
     pub fn search(&self, query: &str, candidates: usize, lang: Option<&str>) -> Result<(Vec<KwHit>, usize)> {
         let searcher = self.reader.searcher();
         let mut qp = QueryParser::for_index(&self.index, vec![self.fields.title, self.fields.text]);
