@@ -648,6 +648,8 @@ On a wide, tall window (at least 900 wide and 600 high, such as a computer's win
 - each line has its time. The line being said is highlighted and kept in view;
 - tap a line to jump there.
 
+![The transcript beside the video](shot:video-transcript)
+
 On a wide window that is too short, tap the gear and "Transcript". It opens as a sheet. On a phone there is no transcript pane.
 
 ## Search saved videos

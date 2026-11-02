@@ -76,3 +76,4 @@ weather-choose-place | The Choose a place sheet: "Find a town or place" with a f
 zim-reader | The reader open on a Library page with "Search this ZIM" and "Find in page", and the bottom bar Back, Forward, Main page
 videos-list | Videos: one video downloading, four saved videos grouped by channel, and "Video sites" with one site
 video-player | The video player on a phone with the gear's sheet open: Speed, "Quality: 480p (saved)" and Captions
+video-transcript | The video player on a wide window (960 by 640) with the transcript beside the video, the line being said highlighted
