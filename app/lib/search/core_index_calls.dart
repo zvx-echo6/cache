@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:cache_search/cache_search.dart' show CoreJobHandle, DownloadedVideo, JobProgress, JobState, SourceStatus;
+import 'package:cache_search/cache_search.dart' show CacheSearchException, CoreJobHandle, DownloadedVideo, JobProgress, JobState, SourceStatus;
 import 'package:flutter/foundation.dart';
 
 import 'index_scheduler.dart';
@@ -57,7 +57,19 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     this.videoDir,
     this.duty,
     this.poll = const Duration(seconds: 1),
-  });
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
+
+  final DateTime Function() _clock;
+
+  /// Jobs the core said "busy" to (a writer or a merge still at work on that index, another job on it): tried again on a later
+  /// pass, not before this time; the wait doubles each time, 30 s up to 10 min. Never shown as a failure.
+  final Map<String, (DateTime, Duration)> _later = {};
+
+  bool _waits(String key) {
+    final l = _later[key];
+    return l != null && _clock().isBefore(l.$1);
+  }
 
   /// The throttle's duty now (cs_job_start's "duty"; the core's own default is gentle).
   final IndexDuty Function()? duty;
@@ -82,14 +94,14 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     if (indexesDir() == null) return const [];
     return [
       for (final s in statuses())
-        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}'))
+        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}') && !_waits('${i.kind}/${s.sourceId}'))
           CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir),
       for (final s in statuses())
         for (final sub in [s.captionsIndex, s.epubIndex])
-          if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null)
+          if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null && !_waits('${sub.kind}/${sub.sourceId ?? s.sourceId}'))
             CoreIndexNeed(kind: sub.kind!, sourceId: (sub.sourceId ?? s.sourceId)!, seal: false, size: sub.entries ?? 0),
       for (final v in videos())
-        if (v.captionsIndex case final c? when c.needsBuild && c.sourceId.isNotEmpty)
+        if (v.captionsIndex case final c? when c.needsBuild && c.sourceId.isNotEmpty && !_waits('captions/${c.sourceId}'))
           CoreIndexNeed(kind: 'captions', sourceId: c.sourceId, seal: false, size: c.files),
     ];
   }
@@ -102,18 +114,32 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     final d = duty?.call();
     final pace = d == null || d.paused ? null : {'work_ms': d.workMs, 'idle_ms': d.idleMs, 'threads': ?d.threads};
     final key = '${need.kind}/${need.sourceId}';
-    final job = await startJob(need.seal ? 'index_seal' : 'index_source', {
-      'indexes_dir': dir,
-      'kind': need.kind,
-      'source_id': need.sourceId,
-      if (need.seal && need.indexDir != null) 'index_dir': need.indexDir,
-      if (need.kind == 'captions' && vd != null) 'video_dir': vd,
-      'duty': ?pace,
-    });
+    final IndexJob? job;
+    try {
+      job = await startJob(need.seal ? 'index_seal' : 'index_source', {
+        'indexes_dir': dir,
+        'kind': need.kind,
+        'source_id': need.sourceId,
+        if (need.seal && need.indexDir != null) 'index_dir': need.indexDir,
+        if (need.kind == 'captions' && vd != null) 'video_dir': vd,
+        'duty': ?pace,
+      });
+    } on CacheSearchException catch (e) {
+      // Busy (another job or a writer on that index): a later pass, after a wait.
+      if (e.code == 'busy') _backOff(key);
+      rethrow;
+    }
     if (job == null) throw StateError('the search core is not open');
     return CoreIndexRun(job, key, progress, poll: poll, onError: (code) {
       if (need.seal && (code == 'index_missing' || code == 'index_stale')) _skip.add(key);
-    });
+      if (code == 'busy') _backOff(key);
+    }, onDone: () => _later.remove(key));
+  }
+
+  void _backOff(String key) {
+    final prev = _later[key]?.$2;
+    final wait = prev == null ? const Duration(seconds: 30) : (prev * 2 > const Duration(minutes: 10) ? const Duration(minutes: 10) : prev * 2);
+    _later[key] = (_clock().add(wait), wait);
   }
 }
 
@@ -121,7 +147,7 @@ class AppIndexCoreCalls implements IndexCoreCalls {
 /// throttle's duty reaches it through cs_job_set at its next pace point: a pause holds it there (nothing is lost), a duty sets its
 /// bursts and rests.
 class CoreIndexRun implements IndexRun {
-  CoreIndexRun(this.job, this.key, this.progress, {Duration poll = const Duration(seconds: 1), this.onError}) {
+  CoreIndexRun(this.job, this.key, this.progress, {Duration poll = const Duration(seconds: 1), this.onError, this.onDone}) {
     _timer = Timer.periodic(poll, (_) => _check());
     unawaited(_check());
   }
@@ -132,6 +158,9 @@ class CoreIndexRun implements IndexRun {
 
   /// The error code of a job that failed.
   final void Function(String code)? onError;
+
+  /// The job finished.
+  final void Function()? onDone;
   final Completer<bool> _done = Completer<bool>();
   late final Timer _timer;
   bool _checking = false;
@@ -147,6 +176,7 @@ class CoreIndexRun implements IndexRun {
         return;
       }
       if (p.state == JobState.failed && p.errorCode != null) onError?.call(p.errorCode!);
+      if (p.state == JobState.done) onDone?.call();
       _end(p.state == JobState.done);
     } catch (e) {
       debugPrint('Index job $key: $e');

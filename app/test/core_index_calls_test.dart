@@ -62,8 +62,10 @@ void main() {
   late List<(String, Map<String, Object?>)> started;
   late _Job job;
   late AppIndexCoreCalls calls;
+  late DateTime now;
 
   setUp(() {
+    now = DateTime(2026, 11, 2, 12);
     statuses = [];
     videos = [];
     started = [];
@@ -79,6 +81,7 @@ void main() {
       videoDir: () => '/v',
       duty: () => IndexDuty.share(2 / 3, threads: 1),
       poll: const Duration(milliseconds: 10),
+      clock: () => now,
     );
   });
 
@@ -174,12 +177,38 @@ void main() {
     expect(await CoreIndexWork(calls).pending(), isEmpty);
   });
 
-  test('a seal that fails for another reason (busy) is tried again', () async {
+  test('busy (a writer or merge still at work on the index) is tried again on a later pass, waiting longer each time', () async {
     statuses = [_zim('u1', index: {'kind': 'zim', 'location': 'legacy', 'dir': '/i/u1.idx', 'needs_seal': true})];
+    Future<void> busyOnce() async {
+      job = _Job();
+      final run = await (await CoreIndexWork(calls).pending()).single.start();
+      job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'busy');
+      expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
+    }
+
+    await busyOnce();
+    expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'not at once');
+    now = now.add(const Duration(seconds: 31));
+    await busyOnce();
+    now = now.add(const Duration(seconds: 31));
+    expect(await CoreIndexWork(calls).pending(), isEmpty, reason: 'the wait doubled to a minute');
+    now = now.add(const Duration(seconds: 30));
     final run = await (await CoreIndexWork(calls).pending()).single.start();
-    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'busy');
-    expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
-    expect((await CoreIndexWork(calls).pending()).single.key, 'zim/u1');
+    job.now = const JobProgress(state: JobState.done, done: 1, total: 1);
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isTrue);
+  });
+
+  test('busy when starting is a later pass too', () async {
+    calls = AppIndexCoreCalls(
+      statuses: () => [_zim('u1', index: {'kind': 'zim', 'location': 'legacy', 'needs_seal': true})],
+      videos: () => const [],
+      startJob: (k, p) async => throw const CacheSearchException('busy', 'another job builds it'),
+      indexesDir: () => '/s',
+      clock: () => now,
+    );
+    final task = (await CoreIndexWork(calls).pending()).single;
+    await expectLater(task.start(), throwsA(isA<CacheSearchException>()));
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
   });
 
   test('the EPUB line', () {
