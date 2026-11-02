@@ -16,6 +16,9 @@ abstract class PdfIndexCore {
   /// False while the core has none of these calls: nothing about PDF indexing is shown.
   bool get available;
 
+  /// Waits until [available] is known (the search core has opened), and says it.
+  Future<bool> prepare();
+
   /// The ZIM's PDF entries (cs_zim_pdfs): mime application/pdf, redirects resolved, no duplicates.
   Future<ZimPdfList> zimPdfs(String zimId);
 
@@ -161,7 +164,8 @@ class PdfStaging {
   factory PdfStaging.fromJson(Map<String, dynamic> j) => PdfStaging(
     session: (j['session'] as num).toInt(),
     done: {for (final p in (j['done'] as List? ?? const [])) p as String},
-    skipped: {for (final p in (j['skipped'] as List? ?? const [])) p as String},
+    // The core lists skipped PDFs as {"path","reason"}; a plain path is read too.
+    skipped: {for (final p in (j['skipped'] as List? ?? const [])) p is Map ? p['path'] as String : p as String},
     pieces: (j['pieces'] as num?)?.toInt() ?? 0,
     reusable: [for (final r in (j['reusable'] as List? ?? const [])) PdfReusable.fromJson((r as Map).cast<String, dynamic>())],
   );
@@ -220,6 +224,8 @@ class PdfIndexCoreMissing implements PdfIndexCore {
 
   @override
   bool get available => false;
+  @override
+  Future<bool> prepare() async => false;
   @override
   Future<ZimPdfList> zimPdfs(String zimId) async => _no();
   @override

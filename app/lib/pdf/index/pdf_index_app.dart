@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../../sources/sources_state.dart';
+import 'pdf_index_binding.dart';
 import 'pdf_index_core.dart';
 import 'pdf_index_state.dart';
 
@@ -12,11 +13,11 @@ PdfIndexState? pdfIndexShared;
 /// A ZIM of the Library as PDF indexing sees it.
 PdfZimRef pdfZimRef(SourcesState sources, ZimFile z) => PdfZimRef(path: z.path, uuid: sources.idOf(z), title: sources.titleOf(z));
 
-/// The app's PDF indexing over the Library's ZIMs (keyword only). [core] is the search core's PDF calls; until they are in the
-/// core (branch core-pdf) it is [PdfIndexCoreMissing] and nothing about PDF indexing shows.
-PdfIndexState appPdfIndex({required SourcesState sources, PdfIndexCore core = const PdfIndexCoreMissing()}) =>
+/// The app's PDF indexing over the Library's ZIMs (keyword only), on the search core's PDF calls ([CorePdfIndex]); a core
+/// without them shows nothing about it.
+PdfIndexState appPdfIndex({required SourcesState sources, PdfIndexCore? core}) =>
     PdfIndexState(
-      core: core,
+      core: core ?? CorePdfIndex(sources),
       zims: () => [for (final z in sources.zims) pdfZimRef(sources, z)],
       changes: sources,
       indexesDir: () async => Directory('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}$kIndexesDirName'),

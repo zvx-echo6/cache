@@ -159,6 +159,17 @@ void main() {
       );
     });
 
+    test("setSources gives the core the indexes folder again (each cs_set_sources replaces it; a ZIM's PDF index is attached from it)", () {
+      final n = FakeNative();
+      final e = SearchEngine.open(n, [_zim], extra: {'indexes_dir': '/data/indexes', 'snippet_chars': 300});
+      e.setSources([_zim]);
+      final sent = jsonDecode((n.calls.last).substring('setSources:'.length)) as Map;
+      expect(sent['indexes_dir'], '/data/indexes');
+      expect(sent.containsKey('snippet_chars'), isFalse, reason: 'the other sections are kept by the core');
+      final plain = SearchEngine.open(FakeNative(), [_zim]);
+      plain.setSources([_zim]);
+    });
+
     test('setSources raises on a negative result', () {
       final n = FakeNative();
       final e = SearchEngine.open(n, [_zim]);

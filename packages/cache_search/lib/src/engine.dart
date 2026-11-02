@@ -17,8 +17,12 @@ class SearchEngine {
   factory SearchEngine.open(CsNative native, List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
     final h = native.open(jsonEncode(openConfigJson(sources, extra: extra)));
     if (h == 0) throw CacheSearchException.fromJson(native.lastError(0));
-    return SearchEngine(native, h);
+    return SearchEngine(native, h).._indexesDir = extra?['indexes_dir'] as String?;
   }
+
+  /// The indexes folder cs_open was given: every cs_set_sources gives it again (the core replaces it with each call, and a ZIM's
+  /// PDF index is attached from it).
+  String? _indexesDir;
 
   final CsNative native;
   int _handle;
@@ -38,7 +42,8 @@ class SearchEngine {
 
   /// Replaces the source list (a ZIM was added or removed).
   void setSources(List<SourceConfig> sources) {
-    if (native.setSources(_h, jsonEncode(openConfigJson(sources))) < 0) {
+    final keep = _indexesDir == null ? null : <String, dynamic>{'indexes_dir': _indexesDir};
+    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: keep))) < 0) {
       throw CacheSearchException.fromJson(native.lastError(_h));
     }
   }
@@ -205,6 +210,26 @@ class SearchEngine {
     final n = native is CsNotebookNative ? native as CsNotebookNative : null;
     if (n == null || !n.hasNotebook) throw const CacheSearchException('unsupported', 'This build of the core has no Notebook yet');
     return _object(_ok(n.notebook(_h, op, jsonEncode(args))));
+  }
+
+  // ---- PDF indexes of ZIMs (cs_zim_pdfs, cs_pdfindex_*) ----
+
+  CsPdfNative _pdf() {
+    final n = native is CsPdfNative ? native as CsPdfNative : null;
+    if (n == null || !n.hasPdfIndex) throw const CacheSearchException('unsupported', 'This build of the core cannot index PDFs yet');
+    return n;
+  }
+
+  /// True when the loaded core has the PDF index calls.
+  bool get hasPdfIndex => native is CsPdfNative && (native as CsPdfNative).hasPdfIndex;
+
+  /// cs_zim_pdfs of the ZIM [zimId].
+  Map<String, dynamic> zimPdfs(String zimId) => _object(_ok(_pdf().zimPdfs(_h, zimId)));
+
+  /// One call of the handle-less build session ([CsPdfNative.pdfIndex]).
+  Map<String, dynamic> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) {
+    final s = _pdf().pdfIndex(op, session: session, json: jsonEncode(args ?? const {}));
+    return _object(s ?? (throw CacheSearchException.fromJson(native.lastError(0))));
   }
 
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----

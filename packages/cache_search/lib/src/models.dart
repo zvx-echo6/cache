@@ -49,7 +49,8 @@ class SearchHit {
         sourceId: (j['source_id'] ?? '') as String,
         sourceKind: (j['source_kind'] ?? '') as String,
         sourceTitle: (j['source_title'] ?? '') as String,
-        page: j['page'] as int?,
+        // A PDF page's printed label may be text ("iv"): only a number is a page here.
+        page: j['page'] is int ? j['page'] as int : null,
       );
 
   final String address;
@@ -290,7 +291,7 @@ class ToolOutput {
 enum JobState { running, done, cancelled, failed }
 
 class JobProgress {
-  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes, this.detail});
+  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes, this.detail, this.phase, this.result});
 
   factory JobProgress.fromJson(Map<String, dynamic> j) {
     final e = j['error'];
@@ -302,8 +303,16 @@ class JobProgress {
       errorMessage: e is Map ? e['message'] as String? : null,
       bytes: j['detail'] is Map ? ((j['detail'] as Map)['bytes'] as num?)?.toInt() : null,
       detail: j['detail'] is Map ? (j['detail'] as Map).cast<String, dynamic>() : null,
+      phase: j['phase'] as String?,
+      result: j['result'] is Map ? (j['result'] as Map).cast<String, dynamic>() : null,
     );
   }
+
+  /// The step a job kind names, when it does (pdfindex_finish: "merge", "manifest", "publish").
+  final String? phase;
+
+  /// What a finished job made, when its kind says (pdfindex_finish: {"pdfs","pieces","skipped","bytes","snapshot"}).
+  final Map<String, dynamic>? result;
 
   final JobState state;
   final int done;

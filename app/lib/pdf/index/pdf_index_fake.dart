@@ -71,6 +71,9 @@ class FakePdfIndexCore implements PdfIndexCore {
   bool get available => true;
 
   @override
+  Future<bool> prepare() async => true;
+
+  @override
   Future<ZimPdfList> zimPdfs(String zimId) async {
     final z = zims[zimId] ?? (throw StateError('No such ZIM'));
     return ZimPdfList(zimUuid: z.uuid, zimName: z.name, pdfs: [for (final p in z.pdfs) ZimPdf(path: p.path, title: p.title, size: p.bytes.length)]);

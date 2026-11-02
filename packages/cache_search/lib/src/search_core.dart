@@ -212,6 +212,16 @@ class SearchCore {
   /// One op of the Notebook (cs_notebook; cache_search.h lists the ops and their answers).
   Future<Map<String, dynamic>> notebook(String op, [Map<String, dynamic> args = const {}]) => _map('notebook', {'op': op, 'args': args});
 
+  /// True when the core has the PDF index calls (cs_zim_pdfs, cs_pdfindex_*).
+  Future<bool> hasPdfIndex() async => (await _call('hasPdfIndex')) as bool;
+
+  /// The ZIM's PDF entries (cs_zim_pdfs).
+  Future<Map<String, dynamic>> zimPdfs(String zimId) => _map('zimPdfs', {'zimId': zimId});
+
+  /// One call of the PDF index build session: `open`, `add`, `skip`, `close`, `discard` (see cache_search.h).
+  Future<Map<String, dynamic>> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) =>
+      _map('pdfIndex', {'op': op, 'session': session, 'args': args});
+
   /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
   Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
 
@@ -500,6 +510,12 @@ void _workerMain(List<dynamic> init) {
           result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
         case 'notebook':
           result = eng().notebook(a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
+        case 'hasPdfIndex':
+          result = eng().hasPdfIndex;
+        case 'zimPdfs':
+          result = eng().zimPdfs(a['zimId'] as String);
+        case 'pdfIndex':
+          result = eng().pdfIndex(a['op'] as String, session: (a['session'] as int?) ?? 0, args: (a['args'] as Map?)?.cast<String, dynamic>());
         case 'userLayers':
           result = eng().userLayers(a['call'] as String, a['arg'] as String?);
         case 'placesList':
@@ -537,6 +553,8 @@ void _workerMain(List<dynamic> init) {
             'total': p.total,
             'error': p.errorCode == null ? null : {'code': p.errorCode, 'message': p.errorMessage},
             if (p.detail != null) 'detail': p.detail,
+            if (p.phase != null) 'phase': p.phase,
+            if (p.result != null) 'result': p.result,
           };
         case 'jobCancel':
           jobs[a['job']]!.cancel();

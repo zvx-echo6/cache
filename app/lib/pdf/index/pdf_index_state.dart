@@ -179,6 +179,7 @@ class PdfIndexState extends ChangeNotifier {
   Future<void> init() async {
     if (_loaded) return;
     try {
+      await core.prepare();
       _indexes = (await indexesDir()).path;
       final f = await recordFile();
       if (f.existsSync()) _record = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
