@@ -5,6 +5,7 @@
 pub mod act;
 pub mod budget;
 pub mod conv;
+pub mod duty;
 pub mod error;
 pub mod ext;
 pub mod ffi;

@@ -2,6 +2,7 @@
 //! (`unpack_library`, `check_library`, `library_template`) and the downloads run on their own threads and are polled.
 
 use crate::error::{Error, Result};
+use crate::duty::{self, Duty, Throttle};
 use crate::idxsnap;
 use crate::index::{self, BuildParams, Lock, Outcome};
 use crate::libadd;
@@ -48,12 +49,19 @@ struct Shared {
     phase: Mutex<Option<String>>,
     /// What a finished job returns (`pdfindex_finish`); shown as "result" when set.
     result: Mutex<Option<Value>>,
+    /// The job's pacing (duty.rs): work/idle, pause, writer threads, the self back-off.
+    throttle: Throttle,
+    /// Kinds without their own pace points (downloads, updates) pace at their progress reports.
+    pace_on_progress: bool,
 }
 
 impl Shared {
     fn set_progress(&self, d: u64, t: u64) {
         self.done.store(d, Ordering::SeqCst);
         self.total.store(t, Ordering::SeqCst);
+        if self.pace_on_progress {
+            self.pace();
+        }
     }
 
     fn set_phase(&self, phase: &str, d: u64, t: u64) {
@@ -61,8 +69,26 @@ impl Shared {
             *g = Some(phase.to_string());
         }
         self.set_progress(d, t);
+        // the index kinds pace at every item of a phase (a file hashed, linked or moved)
+        if !self.pace_on_progress {
+            self.pace();
+        }
     }
 
+    /// Called between items: idles, pauses or returns at once on cancel (see duty.rs).
+    fn pace(&self) {
+        self.throttle.tick(&|| self.cancel.load(Ordering::SeqCst));
+    }
+}
+
+thread_local! {
+    /// The duty `Job::start` worked out for the job it is starting (read by `spawn` on the same thread).
+    static PENDING_DUTY: std::cell::Cell<(Duty, bool)> = const { std::cell::Cell::new((Duty::FULL, true)) };
+}
+
+/// The kinds that do background index work, which run gently unless asked otherwise.
+fn gentle_kind(kind: &str) -> bool {
+    matches!(kind, "index_zim" | "index_library" | "index_seal" | "pdfindex_finish" | "test_pace")
 }
 
 /// Layer downloads running in this process, by layer and area: a second one for the same area is `busy`.
@@ -198,6 +224,15 @@ impl Job {
     /// Start a job. Parameter errors, an unreadable ZIM and a busy `index_dir` are reported here (the call
     /// returns an error and no job exists); errors during the build make the job `failed`.
     pub fn start(kind: &str, params_json: &str) -> Result<Job> {
+        let gentle = gentle_kind(kind);
+        let duty = duty::from_params(params_json, if gentle { Duty::GENTLE } else { Duty::FULL })?;
+        PENDING_DUTY.with(|c| c.set((duty, !gentle)));
+        let r = Self::start_kind(kind, params_json);
+        PENDING_DUTY.with(|c| c.set((Duty::FULL, true)));
+        r
+    }
+
+    fn start_kind(kind: &str, params_json: &str) -> Result<Job> {
         match kind {
             "index_zim" => Self::start_index_zim(params_json),
             "index_library" => Self::start_index_library(params_json),
@@ -210,6 +245,7 @@ impl Job {
             "layer_download" => Self::start_layer_download(params_json),
             "pdfindex_finish" => Self::start_pdfindex_finish(params_json),
             "index_seal" => Self::start_index_seal(params_json),
+            "test_pace" => Self::start_test_pace(params_json),
             "index_pack" => Err(Error::unsupported("index_pack is not supported yet")),
             other => Err(Error::bad_json(format!("unknown job kind {other:?}"))),
         }
@@ -238,7 +274,14 @@ impl Job {
         let checkpoint = p.checkpoint_articles;
         Self::spawn("cs-index-zim", lock, total, move |sh| {
             index::build_zim_index(
-                &BuildParams { zim: &zim, index_dir: &dir, heap_mb, checkpoint_articles: checkpoint },
+                &BuildParams {
+                    zim: &zim,
+                    index_dir: &dir,
+                    heap_mb,
+                    checkpoint_articles: checkpoint,
+                    threads: sh.throttle.threads(),
+                    pace: Some(&|| sh.pace()),
+                },
                 &|d, t| sh.set_progress(d, t),
                 &|| sh.cancel.load(Ordering::SeqCst),
             )
@@ -270,12 +313,40 @@ impl Job {
         Self::spawn("cs-index-seal", lock, 1, move |sh| idxsnap::seal(&req, &Self::hooks(sh)))
     }
 
+    /// Start a `test_pace` job (not in the header): `{"items","item_ms"}`; each item busy-works `item_ms` and then calls the pace
+    /// point, like an index loop. For the tests of duty.rs.
+    fn start_test_pace(params_json: &str) -> Result<Job> {
+        #[derive(Deserialize)]
+        struct P {
+            items: u64,
+            #[serde(default)]
+            item_ms: u64,
+        }
+        let p: P = serde_json::from_str(params_json)?;
+        Self::spawn("cs-test-pace", (), p.items, move |sh| {
+            for i in 0..p.items {
+                if sh.cancel.load(Ordering::SeqCst) {
+                    return Ok(Outcome::Cancelled);
+                }
+                let t0 = std::time::Instant::now();
+                while t0.elapsed() < std::time::Duration::from_millis(p.item_ms) {
+                    std::hint::spin_loop();
+                }
+                sh.set_progress(i + 1, p.items);
+                sh.pace();
+            }
+            Ok(Outcome::Done)
+        })
+    }
+
     /// What a snapshot job reports to its poller.
     fn hooks(sh: &Shared) -> idxsnap::Hooks<'_> {
         idxsnap::Hooks {
             progress: Box::new(|d, t| sh.set_progress(d, t)),
             phase: Box::new(|ph, d, t| sh.set_phase(ph, d, t)),
             cancelled: Box::new(|| sh.cancel.load(Ordering::SeqCst)),
+            pace: Box::new(|| sh.pace()),
+            threads: sh.throttle.threads(),
             set_result: Box::new(|v| {
                 if let Ok(mut g) = sh.result.lock() {
                     *g = Some(v);
@@ -319,6 +390,8 @@ impl Job {
                         index_dir: &sd,
                         heap_mb,
                         checkpoint_docs: checkpoint,
+                        threads: None,
+                        pace: None,
                     },
                     &sd,
                     &source_id,
@@ -339,6 +412,8 @@ impl Job {
                     index_dir: &dir,
                     heap_mb,
                     checkpoint_docs: checkpoint,
+                    threads: sh.throttle.threads(),
+                    pace: Some(&|| sh.pace()),
                 },
                 &|d, t| sh.set_progress(d, t),
                 &|| sh.cancel.load(Ordering::SeqCst),
@@ -514,6 +589,7 @@ impl Job {
         total: u64,
         work: impl FnOnce(&Shared) -> Result<Outcome> + Send + 'static,
     ) -> Result<Job> {
+        let pending = PENDING_DUTY.with(|c| c.get());
         let shared = Arc::new(Shared {
             cancel: AtomicBool::new(false),
             done: AtomicU64::new(0),
@@ -522,11 +598,14 @@ impl Job {
             detail: Mutex::new(None),
             phase: Mutex::new(None),
             result: Mutex::new(None),
+            throttle: Throttle::new(pending.0),
+            pace_on_progress: pending.1,
         });
         let sh = shared.clone();
         let th = std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
+                duty::lower_thread_priority();
                 let guard = guard;
                 let r = catch_unwind(AssertUnwindSafe(|| work(&sh)));
                 let st = match r {
@@ -574,11 +653,23 @@ impl Job {
         if let Some(r) = self.shared.result.lock().ok().and_then(|g| g.clone()) {
             v["result"] = r;
         }
+        let t = self.shared.throttle.state_json();
+        v["duty"] = t["duty"].clone();
+        v["effective"] = t["effective"].clone();
+        v["auto"] = t["auto"].clone();
+        v["paused"] = t["paused"].clone();
         v.to_string()
     }
 
     pub fn cancel(&self) {
         self.shared.cancel.store(true, Ordering::SeqCst);
+        self.shared.throttle.wake();
+    }
+
+    /// `cs_job_set`: change the running job's duty, pause or resume it (see duty.rs); returns its state.
+    pub fn set_duty(&self, json: &str) -> Result<String> {
+        let v: Value = serde_json::from_str(json)?;
+        Ok(self.shared.throttle.set(&v)?.to_string())
     }
 }
 
@@ -586,6 +677,7 @@ impl Drop for Job {
     /// Freeing a running job cancels it and waits for its next checkpoint.
     fn drop(&mut self) {
         self.shared.cancel.store(true, Ordering::SeqCst);
+        self.shared.throttle.wake();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

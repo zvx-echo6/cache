@@ -370,14 +370,18 @@ fn adopted(sd: &Path, kind: &str, source_id: &str) -> Option<String> {
 
 /// A job's phase report: (phase, done, total).
 pub type PhaseFn<'a> = dyn Fn(&str, u64, u64) + 'a;
-/// One build loop: (working folder, progress, cancelled).
-type BuildFn<'a> = dyn Fn(&Path, &dyn Fn(u64, u64), &dyn Fn() -> bool) -> Result<Outcome> + 'a;
+/// One build loop: (working folder, progress, cancelled, pace).
+type BuildFn<'a> = dyn Fn(&Path, &dyn Fn(u64, u64), &dyn Fn() -> bool, &dyn Fn()) -> Result<Outcome> + 'a;
 
 /// What a snapshot build reports to its job.
 pub struct Hooks<'a> {
     pub progress: Box<dyn Fn(u64, u64) + 'a>,
     pub phase: Box<PhaseFn<'a>>,
     pub cancelled: Box<dyn Fn() -> bool + 'a>,
+    /// Called between items of a build loop (duty.rs).
+    pub pace: Box<dyn Fn() + 'a>,
+    /// The cap on Tantivy writer threads (duty.rs).
+    pub threads: Option<usize>,
     pub set_result: Box<dyn Fn(Value) + 'a>,
 }
 
@@ -410,7 +414,7 @@ fn run_build(
         }
         false
     };
-    let out = build_fn(&build, &*h.progress, &cancelled)?;
+    let out = build_fn(&build, &*h.progress, &cancelled, &*h.pace)?;
     if out == Outcome::Cancelled {
         if peer.get() {
             if let Some(name) = adopted(sd, kind, source_id) {
@@ -443,9 +447,16 @@ pub fn run_zim(zim: &ZimSource, sd: &Path, heap_mb: usize, checkpoint: usize, h:
         index::tokenizer_name_for(zim.language.as_deref()),
         extra,
         h,
-        &|build, progress, cancelled| {
+        &|build, progress, cancelled, pace| {
             index::build_zim_index(
-                &BuildParams { zim, index_dir: build, heap_mb, checkpoint_articles: checkpoint },
+                &BuildParams {
+                    zim,
+                    index_dir: build,
+                    heap_mb,
+                    checkpoint_articles: checkpoint,
+                    threads: h.threads,
+                    pace: Some(pace),
+                },
                 progress,
                 cancelled,
             )
@@ -467,7 +478,7 @@ pub fn run_library(
     if let Some(v) = version {
         extra.insert("version".into(), json!(v));
     }
-    run_build(sd, KIND_LIBRARY, source_id, crate::libindex::TOKENIZER, extra, h, &|build, progress, cancelled| {
+    run_build(sd, KIND_LIBRARY, source_id, crate::libindex::TOKENIZER, extra, h, &|build, progress, cancelled, pace| {
         crate::libindex::build_library_index(
             &crate::libindex::LibBuildParams {
                 library_path: p.library_path,
@@ -475,6 +486,8 @@ pub fn run_library(
                 index_dir: build,
                 heap_mb: p.heap_mb,
                 checkpoint_docs: p.checkpoint_docs,
+                threads: h.threads,
+                pace: Some(pace),
             },
             progress,
             cancelled,

@@ -341,6 +341,25 @@ pub unsafe extern "C" fn cs_job_cancel(j: *mut Job) -> i32 {
     })
 }
 
+/// Change a job's duty or pause/resume it (see duty.rs). NULL on error (`bad_json` for a NULL job or bad JSON).
+///
+/// # Safety
+/// `j` NULL or a live job; `json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_job_set(j: *mut Job, json: *const c_char) -> *mut c_char {
+    let r = guarded(|| {
+        if j.is_null() {
+            return Err(Error::bad_json("null job"));
+        }
+        let p = arg_str(json, "json")?;
+        out_string((*j).set_duty(p)?)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
+    })
+}
+
 /// Free a job. A job still running is cancelled and waited for (until its next checkpoint).
 ///
 /// # Safety

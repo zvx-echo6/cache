@@ -1016,9 +1016,31 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);
 
-/* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"}}
- * layer_download jobs add "detail":{"bytes":N} (bytes written so far). */
+/* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"},
+ *  "duty":{"work_ms","idle_ms","threads"},"effective":{"work_ms","idle_ms","threads"},"auto":bool,"paused":bool}
+ * layer_download jobs add "detail":{"bytes":N} (bytes written so far). "duty" is what the app set, "effective" adds the
+ * job's own back-off (see "Job pacing" below); "threads" is null when the job chooses its own. */
 char *cs_job_progress(cs_job *j);
+
+/* --- Job pacing (duty) ---
+ * Background work stays gentle on a phone. Every cs_job_start may carry "duty":{"work_ms","idle_ms","threads"?}: the job
+ * idles idle_ms after each work_ms of work (checked between items: articles, points, files, batches), and "threads" caps the
+ * Tantivy writer threads of an index build (default up to 4, by the cores). Fields left out keep the kind's default.
+ * The default of the index kinds (index_zim, index_library, index_seal, pdfindex_finish) is gentle: work_ms 200, idle_ms 200,
+ * threads 1 (duty.rs). The default of every other kind is unthrottled. "duty":{"work_ms":0} means
+ * unthrottled (no idle). Job threads also lower their OS priority (Linux and Android: nice 10 on the thread; other platforms
+ * leave it unchanged). "threads" is read when the build opens its writer, so cs_job_set cannot change it for a running job.
+ * Self back-off ("auto", on by default, only while work_ms > 0): the job keeps a baseline of its time per item (the first 16
+ * items); when recent items take more than twice the baseline for a sustained stretch (thermal throttling) it adds idle time on
+ * top of idle_ms (doubling, up to 4000 ms added) and gives it back as times recover. It can only make the job slower than the
+ * app's duty, never faster. */
+
+/* Change a running job: {"work_ms"?,"idle_ms"?,"threads"?,"paused"?:bool,"auto"?:bool}. What is left out stays. Takes effect at
+ * the job's next pace point; "paused":true blocks the job there (without holding any lock) until "paused":false; cancel and
+ * cs_job_free still end a paused or idling job promptly. Every call resets the idle the back-off added, so the newest setting
+ * always wins; "auto":false switches the back-off off, "auto":true on again. Returns {"duty","effective","auto","paused"} (as
+ * in the progress JSON), or NULL with "bad_json" for a NULL job or bad JSON. Free the string with cs_free_string. */
+char *cs_job_set(cs_job *j, const char *json);
 
 /* Ask the job to stop at its next checkpoint. Returns 0. Poll cs_job_progress until "cancelled". */
 int32_t cs_job_cancel(cs_job *j);
