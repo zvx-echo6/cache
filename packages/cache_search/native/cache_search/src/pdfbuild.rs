@@ -318,6 +318,34 @@ struct NewPiece {
     heading_path: Vec<String>,
 }
 
+/// A page's text to store (see `pdfindex::PageDoc`).
+struct NewPage {
+    pdf_page: u64,
+    label: String,
+    text: String,
+}
+
+fn parse_pages(v: Option<&Value>) -> Result<Vec<NewPage>> {
+    let Some(arr) = v.filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let arr = arr.as_array().ok_or_else(|| Error::bad_json("pages must be an array"))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (k, p) in arr.iter().enumerate() {
+        let bad = |what: &str| Error::bad_json(format!("pages[{k}]: {what}"));
+        let pdf_page = p.get("pdf_page").and_then(Value::as_u64).filter(|n| *n >= 1).ok_or_else(|| bad("pdf_page must be a whole number from 1"))?;
+        let text = p.get("text").and_then(Value::as_str).ok_or_else(|| bad("text must be text"))?;
+        let label = match p.get("label") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            None | Some(Value::Null) => String::new(),
+            Some(_) => return Err(bad("label must be text")),
+        };
+        if !text.trim().is_empty() {
+            out.push(NewPage { pdf_page, label, text: text.to_string() });
+        }
+    }
+    Ok(out)
+}
+
 fn parse_pieces(v: &Value) -> Result<Vec<NewPiece>> {
     let arr = v.as_array().ok_or_else(|| Error::bad_json("pieces must be an array"))?;
     let mut out = Vec::with_capacity(arr.len());
@@ -383,7 +411,15 @@ fn optional_size_and_sha(v: &Value) -> Result<(Option<u64>, String)> {
 }
 
 /// Replace the pieces of `path` with `pieces`, record the PDF and commit when a batch is full.
-fn put_pdf(s: &mut Session, path: &str, title: &str, pieces: &[NewPiece], size: Option<u64>, sha: &str) -> Result<()> {
+fn put_pdf(
+    s: &mut Session,
+    path: &str,
+    title: &str,
+    pieces: &[NewPiece],
+    pages: &[NewPage],
+    size: Option<u64>,
+    sha: &str,
+) -> Result<()> {
     let f = s.fields;
     {
         let w = s.writer.as_mut().ok_or_else(|| Error::internal("session is closed"))?;
@@ -403,6 +439,15 @@ fn put_pdf(s: &mut Session, path: &str, title: &str, pieces: &[NewPiece], size: 
                 d.add_u64(f.pdf_page_end, e);
             }
             tv(w.add_document(d))?;
+        }
+        for pg in pages {
+            tv(w.add_document(doc!(
+                f.zim_path => path,
+                f.is_page => 1u64,
+                f.pdf_page => pg.pdf_page,
+                f.page => pg.label.as_str(),
+                f.page_text => pg.text.as_str()
+            )))?;
         }
     }
     s.rec.skipped.remove(path);
@@ -424,14 +469,14 @@ pub fn add(session: u64, params_json: &str) -> Result<String> {
         .and_then(Value::as_str)
         .filter(|p| !p.is_empty())
         .ok_or_else(|| Error::bad_json("path must be a non-empty string"))?;
-    let title = v.get("title").and_then(Value::as_str).unwrap_or("");
-    let title =
-        if title.trim().is_empty() { path.rsplit('/').next().unwrap_or(path).trim_end_matches(".pdf") } else { title };
+    // the app normally gives the PDF's own title; without one (or with just the path) a readable one comes from the file name
+    let title = pdfindex::title_for(v.get("title").and_then(Value::as_str).unwrap_or(""), path);
     let pieces = parse_pieces(v.get("pieces").unwrap_or(&Value::Null))?;
+    let pages = parse_pages(v.get("pages"))?;
     let (size, sha) = optional_size_and_sha(&v)?;
     let s = session_of(session)?;
     let mut s = lock_s(&s);
-    put_pdf(&mut s, path, title, &pieces, size, &sha)?;
+    put_pdf(&mut s, path, &title, &pieces, &pages, size, &sha)?;
     Ok(json!({"pieces": s.pieces(), "committed": s.rec.lines}).to_string())
 }
 
@@ -450,9 +495,9 @@ pub fn reuse(session: u64, params_json: &str) -> Result<String> {
     let found = s.previous.as_ref().and_then(|pv| {
         let row = pv.rows.get(path).filter(|r| r.status == "added" && !sha.is_empty() && r.sha256 == sha)?;
         let stored = pv.index.pieces_of(path);
-        (stored.len() as u64 == row.pieces && !stored.is_empty()).then_some((row.size, stored))
+        (stored.len() as u64 == row.pieces && !stored.is_empty()).then(|| (row.size, stored, pv.index.pages_of(path)))
     });
-    let Some((size, stored)) = found else { return Ok(json!({"reused": false}).to_string()) };
+    let Some((size, stored, pv_pages)) = found else { return Ok(json!({"reused": false}).to_string()) };
     let title = stored[0].title.clone();
     let pieces: Vec<NewPiece> = stored
         .into_iter()
@@ -465,7 +510,9 @@ pub fn reuse(session: u64, params_json: &str) -> Result<String> {
             heading_path: p.heading_path,
         })
         .collect();
-    put_pdf(&mut s, path, &title, &pieces, size, &sha)?;
+    let pages: Vec<NewPage> =
+        pv_pages.into_iter().map(|p| NewPage { pdf_page: p.pdf_page, label: p.label, text: p.text }).collect();
+    put_pdf(&mut s, path, &title, &pieces, &pages, size, &sha)?;
     Ok(json!({"reused": true, "pieces": pieces.len()}).to_string())
 }
 
@@ -636,7 +683,8 @@ pub fn finish(
         return Ok((Outcome::Cancelled, None));
     }
 
-    let docs = tv(index.reader())?.searcher().num_docs();
+    // the pieces (the page documents are not counted)
+    let docs: u64 = rec.done.values().map(|a| a.pieces).sum();
     // 2. pdfs.tsv (one row per PDF), then the snapshot's files, moved into the publish folder and hashed as they are read
     let mut rows: Vec<PdfRow> = rec
         .done

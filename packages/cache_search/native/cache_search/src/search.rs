@@ -102,6 +102,9 @@ struct PdfKw {
     count: usize,
 }
 
+/// The most pieces of one PDF a result list shows (so a long document does not fill it).
+const PDF_HITS_PER_DOCUMENT: usize = 2;
+
 /// One library's keyword list.
 struct LibKw {
     src_i: usize,
@@ -250,10 +253,23 @@ struct KwItem {
 /// least `min_cov` and its `rel` at least `min_rel`; the others are dropped unless fewer than `need` good hits would
 /// remain, in which case the best of the dropped ones fill up to `need` (after all the good ones). Ties on score go
 /// to the higher raw score, then the smaller address.
+#[cfg(test)]
 fn merge_keyword(lists: &[Vec<KwItem>], min_cov: f32, min_rel: f32, need: usize) -> Vec<Merged> {
+    let own: Vec<usize> = (0..lists.len()).collect();
+    merge_keyword_grouped(lists, &own, min_cov, min_rel, need)
+}
+
+/// [`merge_keyword`] where lists with the same `group` are normalised against the best raw score of the whole group (the list
+/// of a ZIM and the list of its PDF index are one group when both are Tantivy BM25).
+fn merge_keyword_grouped(lists: &[Vec<KwItem>], group: &[usize], min_cov: f32, min_rel: f32, need: usize) -> Vec<Merged> {
     let mut all: Vec<Merged> = Vec::new();
     for (si, l) in lists.iter().enumerate() {
-        let top = l.iter().map(|h| h.raw).fold(f32::MIN, f32::max);
+        let top = lists
+            .iter()
+            .enumerate()
+            .filter(|(sj, _)| group[*sj] == group[si])
+            .flat_map(|(_, l)| l.iter().map(|h| h.raw))
+            .fold(f32::MIN, f32::max);
         for (hi, h) in l.iter().enumerate() {
             let rel = if top > 0.0 { (h.raw / top) as f64 } else { 1.0 };
             let factor = (1.0 - TITLE_WEIGHT) * h.coverage as f64 + TITLE_WEIGHT * h.title_cov as f64;
@@ -643,7 +659,12 @@ impl Handle {
         lists.extend(pdf_kw.iter().map(|k| {
             k.hits
                 .iter()
-                .map(|h| KwItem { addr: pdfindex::address_of(&k.zim_id, &h.pid), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
+                .map(|h| KwItem {
+                    addr: pdfindex::address_of(&k.zim_id, &h.pid),
+                    raw: h.raw,
+                    coverage: h.coverage,
+                    title_cov: h.coverage,
+                })
                 .collect()
         }));
         lists.extend(kw_kw.iter().map(|k| {
@@ -653,7 +674,15 @@ impl Handle {
                 .collect()
         }));
         let need = opts.offset + opts.k;
-        let merged = merge_keyword(&lists, min_cov, min_rel, need);
+        // A ZIM's PDF index is Tantivy BM25 like the ZIM's own index, so the two lists are normalised together (against the
+        // best raw score of both): a PDF piece does not look twice as strong only because its list has its own best hit.
+        let mut group: Vec<usize> = (0..lists.len()).collect();
+        for (pi, k) in pdf_kw.iter().enumerate() {
+            if let Some(zi) = per.iter().position(|p| p.id == k.zim_id && matches!(p.engine, Engine::Tantivy { .. })) {
+                group[per.len() + lib_kw.len() + pi] = zi;
+            }
+        }
+        let merged = merge_keyword_grouped(&lists, &group, min_cov, min_rel, need);
         let entry_of = |m: &Merged| {
             if m.si < per.len() {
                 Entry::Zim(m.si, m.hi)
@@ -744,6 +773,8 @@ impl Handle {
             Kw(usize, usize),
         }
         let mut seen: HashSet<String> = HashSet::new();
+        let mut per_pdf: HashMap<(usize, String), usize> = HashMap::new();
+        let mut first_pdf_of_text: HashMap<String, (usize, String)> = HashMap::new();
         let mut shown: Vec<Shown> = Vec::new();
         for e in order {
             if shown.len() >= need {
@@ -751,7 +782,25 @@ impl Handle {
             }
             match e {
                 Entry::Zim(si, hi) => shown.push(Shown::Zim(si, hi)),
-                Entry::Pdf(pi, hi) => shown.push(Shown::Pdf(pi, hi)),
+                Entry::Pdf(pi, hi) => {
+                    let h = &pdf_kw[pi].hits[hi];
+                    // identical text in another PDF (the ZIM keeps copies of the same document): the first stays
+                    let key = compact(&h.text);
+                    match first_pdf_of_text.get(&key) {
+                        Some(first) if *first != (pi, h.zim_path.clone()) => continue,
+                        Some(_) => {}
+                        None => {
+                            first_pdf_of_text.insert(key, (pi, h.zim_path.clone()));
+                        }
+                    }
+                    // at most PDF_HITS_PER_DOCUMENT pieces of one PDF in the results
+                    let n = per_pdf.entry((pi, h.zim_path.clone())).or_insert(0);
+                    if *n >= PDF_HITS_PER_DOCUMENT {
+                        continue;
+                    }
+                    *n += 1;
+                    shown.push(Shown::Pdf(pi, hi))
+                }
                 Entry::Kw(ki, hi) => shown.push(Shown::Kw(ki, hi)),
                 Entry::Lib(li, hi) => {
                     let h = &libs[li].1[hi];
@@ -819,6 +868,7 @@ impl Handle {
                         "source_kind": "zim",
                         "source_title": k.zim_title,
                         "page": page_value(&h.label),
+                        "pdf_page": h.pdf_page,
                     }));
                     continue;
                 }
@@ -977,7 +1027,7 @@ impl Handle {
             .to_string());
         }
         if address.starts_with("zimpdf:") {
-            return self.read_pdf_page(address, max_chars as usize);
+            return self.read_pdf_page(address, max_chars as usize, None);
         }
         if address.starts_with("cap:") || address.starts_with("zimcap:") || address.starts_with("zimepub:") {
             return self.read_kw(address, max_chars as usize);
@@ -1021,18 +1071,34 @@ fn page_value(label: &str) -> Value {
 }
 
 impl Handle {
+    /// `read` of a PDF piece as cited: the whole PDF page the citation opened (`cited`, 1-based), not the piece's first page.
+    pub fn read_pdf_cited(&self, address: &str, max_chars: i32, cited: Option<u64>) -> Result<String> {
+        if max_chars <= 0 {
+            return Err(Error::bad_json("max_chars must be positive"));
+        }
+        self.read_pdf_page(address, max_chars as usize, cited)
+    }
+
     /// `read` of a PDF piece: the text of its whole PDF page (every piece that starts on it, in order), in the shape of a
     /// library read: title, page label, text.
-    fn read_pdf_page(&self, address: &str, max_chars: usize) -> Result<String> {
+    fn read_pdf_page(&self, address: &str, max_chars: usize, cited: Option<u64>) -> Result<String> {
         let (zim_id, pid) = pdfindex::parse_address(address)?;
         let idx = self.pdf_index(&zim_id).ok_or_else(|| Error::not_found(format!("no pdf index for zim {zim_id:?}")))?;
         let hit = idx.get(&pid).ok_or_else(|| Error::not_found(format!("no piece {pid:?} in the pdf index of zim {zim_id}")))?;
-        let full = idx.page_text(&hit.zim_path, hit.pdf_page);
+        // the page the citation opened (inside the piece's pages), else the piece's first page
+        let page = cited.filter(|p| *p >= hit.pdf_page && *p <= hit.pdf_page_end).unwrap_or(hit.pdf_page);
+        let doc = idx.page_doc(&hit.zim_path, page);
+        let label = match &doc {
+            Some(d) if !d.label.is_empty() => d.label.clone(),
+            _ if page == hit.pdf_page => hit.label.clone(),
+            _ => String::new(),
+        };
+        let full = idx.page_text(&hit.zim_path, page);
         let full = if full.trim().is_empty() { hit.text.clone() } else { full };
         let (text, truncated) = html::cut_at_paragraph(full.trim(), max_chars);
         Ok(json!({
             "address": address, "title": hit.title, "text": text, "truncated": truncated,
-            "author": Value::Null, "page": page_value(&hit.label), "source_type": Value::Null,
+            "author": Value::Null, "page": page_value(&label), "source_type": Value::Null,
         })
         .to_string())
     }
@@ -1216,6 +1282,22 @@ mod tests {
         let lists = vec![vec![(10.0, 0.45), (1.0, 0.9)]];
         let m = merge_keyword(&addr(&lists), 0.5, 0.0, 2);
         assert_eq!(order(&m), vec![(0, 1), (0, 0)]);
+    }
+
+
+    #[test]
+    fn a_zims_pdf_list_is_normalised_with_the_zim_not_on_its_own() {
+        // list 0: a ZIM (best raw 10); list 1: its PDF index (best raw 30, a different corpus). On their own both best hits
+        // are 1.0 and the PDF hit wins the tie on raw; grouped, the PDF hit is 1.0 and the ZIM hit 0.33.
+        let lists = vec![vec![item(10.0, 1.0, "z".to_string())], vec![item(30.0, 1.0, "p".to_string())]];
+        let alone = merge_keyword(&lists, 0.5, 0.0, 2);
+        assert!((alone[0].score - 1.0).abs() < 1e-9 && (alone[1].score - 1.0).abs() < 1e-9);
+        let grouped = merge_keyword_grouped(&lists, &[0, 0], 0.5, 0.0, 2);
+        assert!((grouped[0].score - 1.0).abs() < 1e-9 && (grouped[1].score - 10.0 / 30.0).abs() < 1e-6, "{:?}", grouped.iter().map(|m| m.score).collect::<Vec<_>>());
+        // lists in other groups keep their own best
+        let lists3 = vec![lists[0].clone(), lists[1].clone(), vec![item(2.0, 1.0, "q".to_string())]];
+        let g = merge_keyword_grouped(&lists3, &[0, 0, 2], 0.5, 0.0, 3);
+        assert!(g.iter().any(|m| m.addr == "q" && (m.score - 1.0).abs() < 1e-9));
     }
 
     #[test]

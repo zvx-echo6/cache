@@ -138,6 +138,8 @@ void main() {
     expect(r.sync.argsOf['set_only']!.single, {'id': 'indexes', 'only': ['zim/A', 'zim/B']});
     await tester.runAsync(() => sharing.setOnly('indexes', ['zim/A', 'zim/B']));
     expect(r.sync.argsOf['set_only'], hasLength(1), reason: 'the same list again is not sent');
+    await tester.runAsync(() => sharing.setNeverFetch('indexes', ['zim/A/snap/bad']));
+    expect(r.sync.argsOf['set_never_fetch']!.single, {'id': 'indexes', 'never_fetch': ['zim/A/snap/bad']});
     sharing.dispose();
 
     // A restart: already shared, so not added again; the engine starts with what was last set.

@@ -47,4 +47,16 @@ void main() {
     expect(kIndexesLocalDeletes, ['*/*/snap']);
     expect(kIndexesLast, ['*/*/snap/*/manifest.json']);
   });
+
+  test('snapshots the core rejected are never fetched again; its own notes (.local) never travel', () {
+    expect(kIndexesNotShared, contains('.local'));
+    expect(
+      indexesNeverFetch(const [
+        RejectedSnapshot(kind: 'zim-pdf', sourceId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8', buildId: 'b-7', reason: 'format'),
+        RejectedSnapshot(kind: 'library', sourceId: 'guide@2', buildId: 'b-1'),
+        RejectedSnapshot(kind: '', sourceId: 'x', buildId: 'y'),
+      ]),
+      ['library/guide@2/snap/b-1', 'zim-pdf/6ba7b810-9dad-11d1-80b4-00c04fd430c8/snap/b-7'],
+    );
+  });
 }

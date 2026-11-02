@@ -44,4 +44,10 @@ void main() {
     expect(v.captionsIndex!.sourceId, 'p.example/v');
     expect(v.captionsIndex!.needsBuild, isTrue);
   });
+
+  test('a rejected snapshot as cs_status lists it', () {
+    final r = RejectedSnapshot.fromJson({'kind': 'zim-pdf', 'source_id': 'u', 'build_id': 'b-7', 'reason': 'format 1'});
+    expect([r.kind, r.sourceId, r.buildId, r.reason], ['zim-pdf', 'u', 'b-7', 'format 1']);
+    expect(RejectedSnapshot.fromJson(r.toJson()).buildId, 'b-7');
+  });
 }

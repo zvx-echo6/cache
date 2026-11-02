@@ -296,13 +296,20 @@ void main() {
   });
 
   group('snapshots', () {
-    void snapshot(String id, {required String uuid, required String created, bool whole = true}) {
+    void snapshot(String id, {required String uuid, required String created, bool whole = true, int format = kPdfIndexFormat}) {
       final d = Directory('${PdfIndexPaths(indexes, uuid).snaps.path}/$id')..createSync(recursive: true);
       File('${d.path}/seg').writeAsStringSync(whole ? 'abcd' : 'ab');
       File('${d.path}/manifest.json').writeAsStringSync(
-        '{"zim_uuid":"$uuid","created":"$created","pdfs":3,"pieces":9,"skipped":1,"files":[{"path":"seg","size":4,"sha256":"x"}]}',
+        '{"zim_uuid":"$uuid","format":$format,"created":"$created","pdfs":3,"pieces":9,"skipped":1,"files":[{"path":"seg","size":4,"sha256":"x"}]}',
       );
     }
+
+    test('a snapshot of the old format (1) is not one: the PDFs are made searchable again, quietly', () {
+      snapshot('v1', uuid: 'u1', created: '2026-11-01T00:00:00Z', format: 1);
+      expect(paths.current(), isNull);
+      snapshot('v2', uuid: 'u1', created: '2026-11-02T00:00:00Z');
+      expect(paths.current()?.id, 'v2');
+    });
 
     test('every device picks the same one: the earliest created, then the lowest build id; a half-arrived one does not count', () {
       snapshot('b2', uuid: 'u1', created: '2026-11-02T01:00:00Z');

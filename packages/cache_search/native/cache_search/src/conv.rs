@@ -152,6 +152,11 @@ impl Conversation {
         }
     }
 
+    /// The PDF page the citation of `address` opens, if it has one.
+    pub fn cite_pdf_page(&self, address: &str) -> Option<u64> {
+        self.cites.get(address).and_then(|c| c.pdf_page)
+    }
+
     /// `{"n","address","title"}` for number `n` (from 1); `n` must have been given.
     pub fn id_value(&self, n: usize) -> Value {
         self.id_json(n - 1)

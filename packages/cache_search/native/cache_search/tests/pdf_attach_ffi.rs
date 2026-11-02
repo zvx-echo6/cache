@@ -358,6 +358,19 @@ fn the_snapshot_is_attached_and_its_hits_cite_the_page() {
         s["results"].as_array().unwrap().iter().any(|r| r["address"].as_str().unwrap().starts_with("zimpdf:")),
         "{s}"
     );
+    // a PDF result carries the real 1-based page ("pdf_page") next to the printed label ("page"); other results get no new key
+    for r in s["results"].as_array().unwrap() {
+        if r["address"].as_str().unwrap().starts_with("zimpdf:") {
+            let t = r["title"].as_str().unwrap();
+            let want = if t.starts_with("Manual A") { 2 } else { 7 };
+            assert_eq!(r["pdf_page"], want, "{r}");
+            assert_eq!(r["page"], want, "{r}");
+        } else {
+            assert!(r.get("pdf_page").is_none(), "{r}");
+        }
+    }
+    let s = call(unsafe { cs_search(h, cstr("flood").as_ptr(), o.as_ptr()) });
+    assert!(s["results"].as_array().unwrap().iter().all(|r| r.get("pdf_page").is_none()), "{s}");
     let o = cstr(&json!({"k": 5, "sources": [OTHER]}).to_string());
     let s = call(unsafe { cs_search(h, cstr("torque").as_ptr(), o.as_ptr()) });
     assert!(s["results"].as_array().unwrap().is_empty());
@@ -712,4 +725,212 @@ fn the_snapshot_lists_its_pdfs_and_a_new_edition_reuses_unchanged_ones() {
     let s3 = call(unsafe { cs_pdfindex_open(cstr(&open.to_string()).as_ptr()) });
     assert_eq!(s3["reusable"], json!([]));
     close(s3["session"].as_u64().unwrap());
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Page documents (cite and read the right page), results that do not crowd out the ZIM, readable titles
+
+fn add_raw(session: u64, v: Value) -> Value {
+    call(unsafe { cs_pdfindex_add(session, cstr(&v.to_string()).as_ptr()) })
+}
+
+fn piece(i: u64, text: &str, page: u64, end: Option<u64>) -> Value {
+    let mut p = json!({"i": i, "text": text, "page": page.to_string(), "pdf_page": page, "heading_path": []});
+    if let Some(e) = end {
+        p["pdf_page_end"] = json!(e);
+    }
+    p
+}
+
+/// A guide whose second piece starts on page 2 and ends on page 3, where its sentence about refuelling is; page 3 also holds
+/// text that no piece starts on.
+fn guide_session(e: &Env, title: &str) {
+    let s = open_session(&e.idx, UUID, None);
+    let id = s["session"].as_u64().unwrap();
+    add_raw(
+        id,
+        json!({
+            "path": "Guides/storm_kit-guide.pdf", "title": title,
+            "pieces": [
+                piece(0, "Introduction about generators. Read this first.", 1, None),
+                piece(1, "Fuel storage rules for generators are simple. Never refuel a hot generator. Keep canisters outside.", 2, Some(3)),
+            ],
+            "pages": [
+                {"pdf_page": 1, "label": "1", "text": "Introduction about generators. Read this first."},
+                {"pdf_page": 2, "label": "2", "text": "Fuel storage rules for generators are simple."},
+                {"pdf_page": 3, "label": "3", "text": "Never refuel a hot generator. Keep canisters outside.\n\nAppendix: zebrafish checklist."},
+            ],
+        }),
+    );
+    close(id);
+    finish(&e.idx, UUID);
+}
+
+#[test]
+fn a_hit_is_cited_at_the_page_that_matches_and_read_returns_that_whole_page() {
+    let e = env("pages");
+    guide_session(&e, "");
+    let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
+    let st = settle(h);
+    assert_eq!(st["sources"][0]["pdfindex"]["pieces"], 2, "the page documents are not counted as pieces: {st}");
+    assert_eq!(st["sources"][0]["pdfindex"]["format"], 2);
+    let c = cs_conversation_new();
+    // the sentence is on page 3, the piece starts on page 2
+    let r = tool(h, c, "search", json!({"query": "never refuel a hot generator canisters"}));
+    let a = r["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["address"].as_str().unwrap().starts_with("zimpdf:"))
+        .unwrap()
+        .clone();
+    assert_eq!(a["pdf_page"], 3, "{a}");
+    assert!(a["link"].as_str().unwrap().ends_with("storm_kit-guide.pdf#page=3"), "{a}");
+    // no title given: a readable one from the file name, never the path
+    assert_eq!(a["title"], "storm kit guide, p. 3", "{a}");
+    assert!(!r["content"].as_str().unwrap().contains("Guides/"), "{}", r["content"]);
+    // read: the whole of page 3 (the appendix no piece starts on, and nothing of page 2), under the same title and page header
+    let rd = tool(h, c, "read", json!({"n": a["n"]}));
+    let text = rd["content"].as_str().unwrap();
+    assert!(text.starts_with(&format!("[{}] storm kit guide\nPage: 3\n\n", a["n"])), "{text}");
+    assert!(text.contains("Never refuel a hot generator") && text.contains("Appendix: zebrafish checklist."), "{text}");
+    assert!(!text.contains("Fuel storage rules"), "{text}");
+    // a query that matches the first page of the range cites that page
+    let c2 = cs_conversation_new();
+    let r = tool(h, c2, "search", json!({"query": "fuel storage rules for generators"}));
+    unsafe { cs_conversation_free(c2) };
+    let b = r["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["address"].as_str().unwrap().starts_with("zimpdf:"))
+        .unwrap()
+        .clone();
+    assert_eq!(b["pdf_page"], 2, "{b}");
+    // cs_search carries the same page, and cs_read of the address alone (no citation) is the piece's first page
+    let s = call(unsafe { cs_search(h, cstr("never refuel a hot generator").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) });
+    assert_eq!(s["results"][0]["pdf_page"], 3, "{s}");
+    let addr = s["results"][0]["address"].as_str().unwrap().to_string();
+    let rr = call(unsafe { cs_read(h, cstr(&addr).as_ptr(), 4000) });
+    assert!(
+        rr["text"].as_str().unwrap().contains("Fuel storage rules")
+            && !rr["text"].as_str().unwrap().contains("zebrafish"),
+        "{rr}"
+    );
+    unsafe { cs_conversation_free(c) };
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn a_title_equal_to_the_path_is_made_readable_and_a_given_title_is_kept() {
+    let e = env("titles");
+    guide_session(&e, "Guides/storm_kit-guide.pdf");
+    let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
+    settle(h);
+    let s = call(unsafe { cs_search(h, cstr("fuel storage rules generators").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) });
+    assert_eq!(s["results"][0]["title"], "storm kit guide, p. 2", "{s}");
+    unsafe { cs_close(h) };
+    let e2 = env("titles-given");
+    guide_session(&e2, "Storm Kit Guide (2024)");
+    let h = open_handle(&e2.zim, Some(&e2.idx), Some(&e2.zim_idx));
+    settle(h);
+    let s = call(unsafe { cs_search(h, cstr("fuel storage rules generators").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) });
+    assert_eq!(s["results"][0]["title"], "Storm Kit Guide (2024), p. 2", "{s}");
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn a_long_pdf_does_not_fill_the_results_and_a_copy_of_a_document_shows_once() {
+    let e = env("crowd");
+    let s = open_session(&e.idx, UUID, None);
+    let id = s["session"].as_u64().unwrap();
+    let long: Vec<Value> = (0..5)
+        .map(|i| {
+            piece(
+                i,
+                &format!(
+                    "Tornado shelter basement advice number {i}: stay low and cover your head in the basement shelter."
+                ),
+                i + 1,
+                None,
+            )
+        })
+        .collect();
+    add_raw(id, json!({"path": "A/tornado_long.pdf", "title": "Tornado Long", "pieces": long}));
+    // another PDF whose piece text is exactly one of the first PDF's pieces
+    let copy = piece(
+        0,
+        "Tornado shelter basement advice number 3: stay low and cover your head in the basement shelter.",
+        1,
+        None,
+    );
+    add_raw(id, json!({"path": "B/tornado_copy.pdf", "title": "Tornado Copy", "pieces": [copy]}));
+    add_raw(
+        id,
+        json!({"path": "C/other.pdf", "title": "Other", "pieces": [piece(0, "Tornado shelter basement list kept by the other guide.", 1, None)]}),
+    );
+    close(id);
+    finish(&e.idx, UUID);
+    let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
+    settle(h);
+    let s = call(unsafe { cs_search(h, cstr("tornado shelter basement").as_ptr(), cstr(r#"{"k":10}"#).as_ptr()) });
+    let r: Vec<&str> = s["results"].as_array().unwrap().iter().map(|x| x["title"].as_str().unwrap()).collect();
+    let n = |t: &str| r.iter().filter(|x| x.starts_with(t)).count();
+    assert_eq!(n("Tornado Long"), 2, "at most two pieces of one PDF: {r:?}");
+    assert_eq!(n("Other"), 1, "{r:?}");
+    assert!(n("Tornado Copy") <= 1, "{r:?}");
+    // the identical text appears once across the two documents
+    let same = s["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["snippet"].as_str().unwrap().contains("advice number 3"))
+        .count();
+    assert!(same <= 1, "{s}");
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn a_reused_pdf_keeps_its_page_documents() {
+    let e = env("reuse-pages");
+    let s = open_session(&e.idx, UUID, None);
+    let id = s["session"].as_u64().unwrap();
+    add_raw(
+        id,
+        json!({
+            "path": "Guides/storm_kit-guide.pdf", "title": "Storm Kit Guide", "size": 10, "sha256": SHA_A,
+            "pieces": [piece(0, "Fuel storage rules for generators. Never refuel a hot generator.", 2, Some(3))],
+            "pages": [
+                {"pdf_page": 2, "label": "2", "text": "Fuel storage rules for generators."},
+                {"pdf_page": 3, "label": "3", "text": "Never refuel a hot generator.\n\nAppendix: zebrafish checklist."},
+            ],
+        }),
+    );
+    close(id);
+    finish(&e.idx, UUID);
+    let open = json!({"indexes_dir": e.idx, "zim_uuid": OTHER, "zim_name": "tiny", "previous": {"zim_uuid": UUID}});
+    let s2 = call(unsafe { cs_pdfindex_open(cstr(&open.to_string()).as_ptr()) });
+    let id2 = s2["session"].as_u64().unwrap();
+    assert_eq!(reuse(id2, "Guides/storm_kit-guide.pdf", SHA_A), json!({"reused": true, "pieces": 1}));
+    close(id2);
+    let built = finish(&e.idx, OTHER)["result"].clone();
+    assert_eq!(built["pieces"], 1, "{built}");
+    let zim2 = e.root.join("tiny2.zim");
+    write_tiny_zim(&zim2, OTHER);
+    let h = open_handle(&zim2, Some(&e.idx), None);
+    settle(h);
+    let c = cs_conversation_new();
+    let r = tool(h, c, "search", json!({"query": "never refuel hot generator"}));
+    let a = r["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["address"].as_str().unwrap().starts_with("zimpdf:"))
+        .unwrap()
+        .clone();
+    assert_eq!(a["pdf_page"], 3, "{a}");
+    let rd = tool(h, c, "read", json!({"n": a["n"]}));
+    assert!(rd["content"].as_str().unwrap().contains("zebrafish checklist"), "{rd}");
+    unsafe { cs_conversation_free(c) };
+    unsafe { cs_close(h) };
 }

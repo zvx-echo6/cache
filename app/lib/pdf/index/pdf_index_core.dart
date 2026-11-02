@@ -311,6 +311,10 @@ List<String> pdfIndexUuids(String indexesDir) {
   }
 }
 
+/// The zim-pdf snapshot format this version reads (the core's pdfindex.rs FORMAT). A snapshot of another format is not one here:
+/// the ZIM's PDFs are made searchable again, without a word about the old one.
+const int kPdfIndexFormat = 2;
+
 /// One published snapshot as this device finds it (its manifest.json).
 class PdfSnapshot {
   const PdfSnapshot({required this.id, required this.zimUuid, required this.created, required this.pdfs, required this.skipped, this.pieces = 0, this.zimName});
@@ -331,6 +335,7 @@ class PdfSnapshot {
       final f = File('${dir.path}${Platform.pathSeparator}manifest.json');
       if (!f.existsSync()) return null;
       final j = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
+      if ((j['format'] as num?)?.toInt() != kPdfIndexFormat) return null;
       for (final e in (j['files'] as List? ?? const [])) {
         final m = (e as Map).cast<String, dynamic>();
         final file = File('${dir.path}${Platform.pathSeparator}${(m['path'] as String).replaceAll('/', Platform.pathSeparator)}');

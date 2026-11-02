@@ -305,13 +305,16 @@ abstract class IndexCoreCalls {
 
 /// One source the core says needs index work.
 class CoreIndexNeed {
-  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0});
+  const CoreIndexNeed({required this.kind, required this.sourceId, required this.seal, this.size = 0, this.uses = 0, this.bytesNeeded = 0, this.indexDir});
 
   final String kind;
   final String sourceId;
 
   /// True for an index built before snapshots ("index_seal"), false for a build ("index_source").
   final bool seal;
+
+  /// For a seal: the old index's folder (cs_status's index "dir"), for when no handle has the source.
+  final String? indexDir;
   final int size;
   final int uses;
   final int bytesNeeded;
