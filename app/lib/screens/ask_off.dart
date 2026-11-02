@@ -56,17 +56,18 @@ class AskOffNote extends StatelessWidget {
                 style: TextStyle(fontSize: 16, color: k.text),
               ),
               const SizedBox(height: 8),
-              Row(
+              // Wraps: a large text size or a narrow window puts Close under the button.
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   FilledButton(
                     key: const ValueKey('ask-off-choose'),
                     onPressed: onChooseModel,
                     child: Text(coming ? 'See download' : 'Choose a model'),
                   ),
-                  if (onClose != null) ...[
-                    const SizedBox(width: 8),
-                    TextButton(key: const ValueKey('ask-off-close'), onPressed: onClose, child: const Text('Close')),
-                  ],
+                  if (onClose != null) TextButton(key: const ValueKey('ask-off-close'), onPressed: onClose, child: const Text('Close')),
                 ],
               ),
             ],
