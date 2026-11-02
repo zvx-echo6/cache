@@ -27,18 +27,26 @@ pub struct Conversation {
 
 /// Where a citation opens: a link, and the moment in it (seconds) for a recording. All optional. A PDF piece also
 /// carries its 1-based PDF page and its text (`quote`, at most 300 words, verbatim), for the app to open the PDF at
-/// that page and highlight the passage.
+/// that page and highlight the passage. A caption passage carries its end (`time_end`, seconds), its text (`quote`) and its
+/// language (`lang`) as well; an EPUB passage its text, with the chapter and block in the link's address.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Cite {
     pub link: Option<String>,
     pub time: Option<serde_json::Number>,
     pub pdf_page: Option<u64>,
     pub quote: Option<String>,
+    pub time_end: Option<serde_json::Number>,
+    pub lang: Option<String>,
 }
 
 impl Cite {
     pub fn is_empty(&self) -> bool {
-        self.link.is_none() && self.time.is_none() && self.pdf_page.is_none() && self.quote.is_none()
+        self.link.is_none()
+            && self.time.is_none()
+            && self.pdf_page.is_none()
+            && self.quote.is_none()
+            && self.time_end.is_none()
+            && self.lang.is_none()
     }
 }
 
@@ -84,6 +92,10 @@ struct ExportId {
     pdf_page: Option<u64>,
     #[serde(default)]
     quote: Option<String>,
+    #[serde(default)]
+    time_end: Option<serde_json::Number>,
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,8 +132,14 @@ impl Conversation {
             if let Some(p) = c.pdf_page {
                 v["pdf_page"] = json!(p);
             }
+            if let Some(t) = &c.time_end {
+                v["time_end"] = Value::Number(t.clone());
+            }
             if let Some(q) = &c.quote {
                 v["quote"] = json!(q);
+            }
+            if let Some(l) = &c.lang {
+                v["lang"] = json!(l);
             }
         }
         v
@@ -254,7 +272,7 @@ impl Conversation {
             if !c.number(&id.address, &id.title).1 {
                 return Err(Error::bad_json(format!("conversation export: address {:?} is numbered twice", id.address)));
             }
-            c.note_cite(&id.address, Cite { link: id.link, time: id.time, pdf_page: id.pdf_page, quote: id.quote });
+            c.note_cite(&id.address, Cite { link: id.link, time: id.time, pdf_page: id.pdf_page, quote: id.quote, time_end: id.time_end, lang: id.lang });
         }
         if e.next_n != c.entries.len() as u64 + 1 {
             return Err(Error::bad_json(format!("conversation export: next_n is {} but {} ids end at {}", e.next_n, c.entries.len(), c.entries.len())));
