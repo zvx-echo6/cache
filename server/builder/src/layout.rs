@@ -579,7 +579,7 @@ fn reading_order_with(blocks: &[Block], style: &Style) -> Vec<(Block, bool)> {
         // The column blocks of this band: those below k full blocks and above the next.
         let mut band: Vec<(usize, &Block)> = Vec::new();
         for (c, b) in &in_columns {
-            if full.iter().filter(|f| cy(*f) < cy(b)).count() == k {
+            if full.iter().filter(|f| cy(f) < cy(b)).count() == k {
                 band.push((*c, b));
             }
         }
