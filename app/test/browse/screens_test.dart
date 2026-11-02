@@ -175,16 +175,15 @@ void main() {
     expect(find.byKey(const ValueKey('library-empty')), findsOneWidget, reason: 'the list stays');
     expect(find.byType(AddToLibraryScreen), findsOneWidget);
     expect(find.text('Choose an item'), findsNothing);
-    // The button opens it in the detail pane too, not as a page over the list.
-    await tester.tap(find.byKey(const ValueKey('add-to-library')));
-    await tester.pumpAndSettle();
-    expect(find.byType(AddToLibraryScreen), findsOneWidget);
-    expect(find.byKey(const ValueKey('library-empty')), findsOneWidget);
+    // One way to one place: with Add to Library beside it, the list has no Add to Library button of its own.
+    expect(find.byKey(const ValueKey('add-to-library')), findsNothing);
+    expect(find.text('Add to Library'), findsOneWidget, reason: "only the page's own title");
 
     tester.view.physicalSize = const Size(1279, 800);
     await tester.pumpWidget(app(BrowseScreen(key: UniqueKey(), browse: b, active: true)));
     await tester.pumpAndSettle();
     expect(find.byType(AddToLibraryScreen), findsNothing);
     expect(find.text('Choose an item'), findsOneWidget);
+    expect(find.byKey(const ValueKey('add-to-library')), findsOneWidget, reason: 'narrower windows keep the button');
   });
 }

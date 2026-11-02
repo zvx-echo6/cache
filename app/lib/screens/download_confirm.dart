@@ -66,6 +66,12 @@ Future<DownloadChoice> confirmDownload(
   return choice ?? DownloadChoice.cancel;
 }
 
+/// The storage [askToDownload] reads when it is given none: the device's ([Space.of]). The app's tests set a fixed one
+/// (test/flutter_test_config.dart), so a pop-up never depends on the free space of the machine running them: with too little
+/// room it is "Not enough space" instead of "Download ...?".
+@visibleForTesting
+Space Function(String dir) downloadSpaceOf = Space.of;
+
 /// [confirmDownload] with the storage of [dir] and the mobile-data rule read now.
 Future<DownloadChoice> askToDownload(
   BuildContext context, {
@@ -73,7 +79,7 @@ Future<DownloadChoice> askToDownload(
   List<DownloadLine> lines = const [],
   required String dir,
   DataPolicy? policy,
-  Space Function(String dir) spaceOf = Space.of,
+  Space Function(String dir)? spaceOf,
   List<String>? summary,
   int? bytes,
   String action = 'Download',
@@ -83,7 +89,7 @@ Future<DownloadChoice> askToDownload(
   final blocked = policy != null && await policy.blocksDownload();
   if (!context.mounted) return DownloadChoice.cancel;
   return confirmDownload(context,
-      title: title, lines: lines, space: spaceOf(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name, footnote: footnote);
+      title: title, lines: lines, space: (spaceOf ?? downloadSpaceOf)(dir), mobileBlocked: blocked, summary: summary, bytes: bytes, action: action, name: name, footnote: footnote);
 }
 
 /// Delete always asks first, in the same shape: what it frees, the storage after, that it can come back, and a red Delete.
@@ -93,6 +99,7 @@ Future<bool> confirmDelete(
   required int bytes,
   int? free,
   String again = 'You can download it again later.',
+  String? warning,
 }) async {
   final yes = await showDialog<bool>(
     context: context,
@@ -111,6 +118,10 @@ Future<bool> confirmDelete(
             ],
             const SizedBox(height: 8),
             Text(again, style: TextStyle(fontSize: 13, color: k.secondary)),
+            if (warning != null) ...[
+              const SizedBox(height: 8),
+              Text(warning, key: const ValueKey('confirm-delete-warning'), style: TextStyle(fontSize: 13, color: k.text)),
+            ],
           ],
         ),
         actions: [

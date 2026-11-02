@@ -114,6 +114,20 @@ pub struct Config {
     /// device loses its own copy.
     #[serde(default)]
     pub exclude: BTreeMap<String, Vec<String>>,
+    /// Paths whose deletion stays on this device, by share id (patterns as for `exclude`): when such a file goes here, the other
+    /// devices are not told (they keep theirs), and a delete of one from another device is not done here. This device remembers
+    /// what it deleted, so it does not fetch it back. For things each device replaces on its own (sealed search index snapshots).
+    #[serde(default)]
+    pub local_deletes: BTreeMap<String, Vec<String>>,
+    /// What this device fetches from the others, by share id (patterns as for `exclude`): a share listed here takes only the paths
+    /// its patterns cover (an empty list: nothing), until `set_only` replaces the list. Its own files are offered to the others
+    /// all the same. A share not listed fetches everything.
+    #[serde(default)]
+    pub only: BTreeMap<String, Vec<String>>,
+    /// Fetched after everything else that comes in the same round, by share id (patterns as for `exclude`): a file whose arrival
+    /// says the rest is there (a snapshot's manifest).
+    #[serde(default)]
+    pub last: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -273,6 +287,12 @@ struct Inner {
     recovered: AtomicBool,
     /// What never syncs, by share id ([`Config::exclude`]).
     exclude: BTreeMap<String, Vec<String>>,
+    /// [`Config::local_deletes`].
+    local_deletes: BTreeMap<String, Vec<String>>,
+    /// [`Config::only`], as `set_only` last left it.
+    only: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::last`].
+    last: BTreeMap<String, Vec<String>>,
 }
 
 pub struct SyncEngine {
@@ -459,6 +479,43 @@ impl Inner {
             return idx.clone();
         }
         Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect() }
+    }
+
+    /// A deletion of `rel` in `share` stays on this device ([`Config::local_deletes`]).
+    fn delete_stays_here(&self, share: &str, rel: &str) -> bool {
+        self.local_deletes.get(share).map(|p| excluded(p, rel)).unwrap_or(false)
+    }
+
+    /// This device fetches `rel` in `share` from the others ([`Config::only`]).
+    fn wants(&self, share: &str, rel: &str) -> bool {
+        self.only.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(true)
+    }
+
+    /// What this device takes from a peer's list of `share`: not what never syncs, not what it does not fetch, and not a delete
+    /// that stays on the device it was made on.
+    fn remote_view(&self, share: &str, remote: &Index) -> Index {
+        let skip = self.skip(share);
+        Index {
+            files: remote
+                .files
+                .iter()
+                .filter(|(p, e)| !excluded(skip, p) && self.wants(share, p) && !(e.deleted && self.delete_stays_here(share, p)))
+                .map(|(p, e)| (p.clone(), e.clone()))
+                .collect(),
+        }
+    }
+
+    /// What this device offers the others of `share`: not what never syncs, and not its deletes that stay here.
+    fn offered(&self, share: &str, idx: &Index) -> Index {
+        let skip = self.skip(share);
+        Index {
+            files: idx
+                .files
+                .iter()
+                .filter(|(p, e)| !excluded(skip, p) && !(e.deleted && self.delete_stays_here(share, p)))
+                .map(|(p, e)| (p.clone(), e.clone()))
+                .collect(),
+        }
     }
 
     fn load_index(&self, share: &str) -> Index {
@@ -784,7 +841,7 @@ impl Inner {
             shares: s
                 .shares
                 .iter()
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.without_excluded(&sh.id, &self.load_index(&sh.id)) })
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id, &self.load_index(&sh.id)) })
                 .collect(),
         }
     }
@@ -914,8 +971,12 @@ impl Inner {
     }
 
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
-        let remote = &self.without_excluded(&sh.id, remote);
-        let actions = index::merge(&self.load_index(&sh.id), remote);
+        let remote = &self.remote_view(&sh.id, remote);
+        let mut actions = index::merge(&self.load_index(&sh.id), remote);
+        // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
+        if let Some(last) = self.last.get(&sh.id) {
+            actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
+        }
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -1332,6 +1393,9 @@ impl SyncEngine {
             settle_again: Arc::default(),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
+            local_deletes: cfg.local_deletes.clone(),
+            only: Mutex::new(cfg.only.clone()),
+            last: cfg.last.clone(),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
@@ -1458,6 +1522,42 @@ impl SyncEngine {
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
+            "set_only" => {
+                // What this device fetches of a share from now on (null: everything). Deletes kept here under paths it starts
+                // fetching again are forgotten, so what it lists comes back (a source added again gets its snapshots again).
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let new: Option<Vec<String>> = match args.get("only") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Array(a)) => Some(a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+                    Some(_) => bail!("only must be a list of patterns or null"),
+                };
+                let was = inner.only.lock().unwrap().get(&id).cloned();
+                let now_wanted = |p: &str| new.as_ref().map(|n| excluded(n, p)).unwrap_or(true);
+                let was_wanted = |p: &str| was.as_ref().map(|n| excluded(n, p)).unwrap_or(true);
+                let mut idx = inner.load_index(&id);
+                let back: Vec<String> = idx
+                    .files
+                    .iter()
+                    .filter(|(p, e)| e.deleted && inner.delete_stays_here(&id, p) && now_wanted(p) && !was_wanted(p))
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                if !back.is_empty() {
+                    let seen = inner.load_seen(&id);
+                    for p in &back {
+                        idx.files.remove(p);
+                    }
+                    inner.store_index(&id, &idx, &seen)?;
+                }
+                {
+                    let mut only = inner.only.lock().unwrap();
+                    match new {
+                        Some(n) => only.insert(id.clone(), n),
+                        None => only.remove(&id),
+                    };
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
             "share_remove" => {
                 // Stops sharing; the files stay where they are.
                 let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
@@ -1540,7 +1640,7 @@ impl SyncEngine {
                 let mut pending_bytes = 0u64;
                 for st in run.peers.values() {
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
-                        for a in index::merge(&idx, &inner.without_excluded(&sh.id, &rs.index)) {
+                        for a in index::merge(&idx, &inner.remote_view(&sh.id, &rs.index)) {
                             if let Action::Fetch { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;
@@ -1552,6 +1652,7 @@ impl SyncEngine {
                     "id": sh.id, "name": sh.name, "path": sh.path,
                     "files": live.len(), "bytes": live.iter().map(|e| e.size).sum::<u64>(),
                     "pending_files": pending, "pending_bytes": pending_bytes,
+                    "only": inner.only.lock().unwrap().get(&sh.id).cloned(),
                 })
             })
             .collect();
