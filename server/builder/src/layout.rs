@@ -430,6 +430,23 @@ fn column_of(l: &Line, gutters: &[(f32, f32)]) -> Option<usize> {
     Some(gutters.iter().filter(|g| (g.0 + g.1) / 2.0 < centre).count())
 }
 
+/// Whether the lines of a column region start at (nearly) one x: at least 6 in 10 characters in lines whose left edge is
+/// within 4 points of one common left edge.
+fn one_left_edge(blocks: &[&Block]) -> bool {
+    let mut edges: Vec<(f32, usize)> = Vec::new();
+    for b in blocks {
+        for l in &b.lines {
+            edges.push((l.x0, l.text.chars().count()));
+        }
+    }
+    let total: usize = edges.iter().map(|e| e.1).sum();
+    if total == 0 {
+        return true;
+    }
+    let best = edges.iter().map(|&(x, _)| edges.iter().filter(|e| (e.0 - x).abs() <= 4.0).map(|e| e.1).sum::<usize>()).max().unwrap_or(0);
+    best * 10 >= total * 6
+}
+
 /// Rows of a table band: when the lines of a band (each with its column) sit in rows across the columns and are short
 /// next to the spacing of the columns (cells, not running text), the blocks of the band are its rows, each row's cells
 /// left to right. Otherwise None and the band is read column by column.
@@ -525,8 +542,9 @@ pub fn reading_blocks(blocks: &[Block], body: f32) -> Vec<Block> {
 ///
 /// A page with no gutter is read in the order MuPDF found (the content stream), which is top to bottom for ordinary pages.
 /// A page with gutters (two or more columns) is read in bands: a block whose lines cross a gutter (a title, a heading)
-/// ends one band and starts the next, and inside a band each column is read top to bottom, left to right. A block with
-/// lines in several columns is first cut into one block per column. A band whose lines sit in rows across short cells is
+/// ends one band and starts the next, and inside a band each column is read top to bottom, left to right (a column whose
+/// lines do not share one left edge keeps MuPDF's order instead of being sorted by height). A block with lines in several
+/// columns is first cut into one block per column. A band whose lines sit in rows across short cells is
 /// a table and is read row by row. Pull-quotes, sidebars and blocks in a distinct style go after the page's text.
 fn reading_order_with(blocks: &[Block], style: &Style) -> Vec<(Block, bool)> {
     let refs: Vec<&Block> = blocks.iter().collect();
@@ -538,9 +556,10 @@ fn reading_order_with(blocks: &[Block], style: &Style) -> Vec<(Block, bool)> {
     let x_max = blocks.iter().map(|b| b.x1).fold(f32::MIN, f32::max);
     let w = x_max - x_min;
     let mut full: Vec<Block> = Vec::new();
-    let mut in_columns: Vec<(usize, Block)> = Vec::new();
+    // (column, index of the block it came from, block)
+    let mut in_columns: Vec<(usize, usize, Block)> = Vec::new();
     let mut deferred: Vec<Block> = Vec::new();
-    for b in blocks {
+    for (bi, b) in blocks.iter().enumerate() {
         let heading = b.lines.first().is_some_and(|l| style.heading_level(l, b.lines.get(1), false).is_some());
         if !heading && is_aside_style(b, style) {
             // A pull-quote, epigraph, caption or note in a distinct style.
@@ -565,10 +584,18 @@ fn reading_order_with(blocks: &[Block], style: &Style) -> Vec<(Block, bool)> {
                 }
             }
             if !lines.is_empty() {
-                in_columns.push((c, Block::from_lines(lines)));
+                in_columns.push((c, bi, Block::from_lines(lines)));
             }
         }
     }
+    // A column is sorted by height only when its lines start at one x (a real column); a region of several left edges (columns
+    // the gutter search could not separate, photos with captions) keeps the order MuPDF found.
+    let by_height: Vec<bool> = (0..=gutters.len())
+        .map(|c| {
+            let region: Vec<&Block> = in_columns.iter().filter(|e| e.0 == c).map(|e| &e.2).collect();
+            one_left_edge(&region)
+        })
+        .collect();
     let cy = |b: &Block| (b.y0 + b.y1) / 2.0;
     full.sort_by(|a, b| cy(a).total_cmp(&cy(b)));
     let mut out: Vec<(Block, bool)> = Vec::with_capacity(blocks.len());
@@ -577,23 +604,28 @@ fn reading_order_with(blocks: &[Block], style: &Style) -> Vec<(Block, bool)> {
             out.push((full[k - 1].clone(), false));
         }
         // The column blocks of this band: those below k full blocks and above the next.
-        let mut band: Vec<(usize, &Block)> = Vec::new();
-        for (c, b) in &in_columns {
+        let mut band: Vec<(usize, usize, &Block)> = Vec::new();
+        for (c, bi, b) in &in_columns {
             if full.iter().filter(|f| cy(f) < cy(b)).count() == k {
-                band.push((*c, b));
+                band.push((*c, *bi, b));
             }
         }
-        if let Some(rows) = table_rows(&band, gutters.len() + 1) {
+        let cells: Vec<(usize, &Block)> = band.iter().map(|&(c, _, b)| (c, b)).collect();
+        if let Some(rows) = table_rows(&cells, gutters.len() + 1) {
             out.extend(rows.into_iter().map(|r| (r, false)));
             continue;
         }
-        for c in 0..=gutters.len() {
-            let mut v: Vec<&Block> = band.iter().filter(|(col, _)| *col == c).map(|(_, b)| *b).collect();
-            v.sort_by(|a, b| a.y0.total_cmp(&b.y0));
-            out.extend(v.into_iter().map(|b| (b.clone(), false)));
+        for (c, sort_by_height) in by_height.iter().enumerate() {
+            let mut v: Vec<(usize, &Block)> = band.iter().filter(|e| e.0 == c).map(|e| (e.1, e.2)).collect();
+            if *sort_by_height {
+                v.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
+            } else {
+                v.sort_by_key(|e| e.0);
+            }
+            out.extend(v.into_iter().map(|e| (e.1.clone(), false)));
         }
     }
-    deferred.sort_by(|a, b| a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)));
+    // The deferred blocks keep MuPDF's order too (a sidebar's own columns stay whole, in the order its text layer gives).
     out.extend(deferred.into_iter().map(|b| (b, true)));
     out
 }
@@ -878,6 +910,33 @@ mod tests {
         assert_eq!(got.len(), 5, "one block per row: {got:?}");
         let rows: Vec<String> = got.iter().map(|b| b.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ")).collect();
         assert_eq!(rows, vec!["Item Qty Cost", "bolt 40 1250", "nut 250 875", "washer 90 310", "screw 12 4400"]);
+    }
+
+    #[test]
+    fn a_side_that_is_not_one_column_keeps_the_order_of_the_text_layer() {
+        // Two pages side by side; on the left page two columns of text that overlap in x (so no gutter between them), written
+        // column after column. Sorting the left page by height would mix them; only the spine is a gutter.
+        let mut a1 = column("a", 40.0, 100.0, 8);
+        let mut a2 = column("a", 40.0, 220.0, 8);
+        let mut b1 = column("b", 100.0, 100.0, 8);
+        let mut b2 = column("b", 100.0, 220.0, 8);
+        // make the lines of the second column overlap the first column's x range
+        for b in [&mut b1, &mut b2] {
+            for l in &mut b.lines {
+                l.x1 += 60.0;
+            }
+            *b = Block::from_lines(std::mem::take(&mut b.lines));
+        }
+        for b in [&mut a1, &mut a2] {
+            for l in &mut b.lines {
+                l.x1 += 30.0;
+            }
+            *b = Block::from_lines(std::mem::take(&mut b.lines));
+        }
+        let r1 = column("r", 380.0, 100.0, 8);
+        let r2 = column("r", 380.0, 220.0, 8);
+        let blocks = vec![a1.clone(), a2.clone(), b1.clone(), b2.clone(), r1.clone(), r2.clone()];
+        assert_eq!(order(&blocks), blocks);
     }
 
     #[test]
