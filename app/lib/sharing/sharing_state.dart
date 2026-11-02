@@ -12,8 +12,17 @@ import '../settings/data_policy.dart';
 /// The sync engine as the Sharing screen sees it: set up or not, its status (polled while anything watches), and the actions.
 /// Sharing starts only once the person sets it up; until then nothing is published or listened for.
 class SharingState extends ChangeNotifier {
-  SharingState({required this.policy, required this.supportDir, required this.kinds, this.deviceName = 'Cache device', SyncOpener? opener})
-    : _opener = opener ?? _openReal;
+  SharingState({
+    required this.policy,
+    required this.supportDir,
+    required this.kinds,
+    this.always = const [],
+    this.deviceName = 'Cache device',
+    SyncOpener? opener,
+  }) : _opener = opener ?? _openReal;
+
+  /// Folders linked devices keep the same whatever the person ticks (the search indexes), once sharing is set up.
+  final List<AlwaysShared> always;
 
   final DataPolicy policy;
   final Future<Directory> Function() supportDir;
@@ -71,9 +80,15 @@ class SharingState extends ChangeNotifier {
       _core = await _opener({
         'dir': dir.path,
         'name': deviceName,
-        'exclude': {for (final k in kinds) ...k.notShared},
+        'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
+        'local_deletes': {for (final a in always) a.id: a.localDeletes},
+        'last': {for (final a in always) a.id: a.last},
+        // An always-shared folder fetches nothing until the app says what it may fetch (setOnly).
+        'only': {for (final a in always) a.id: _only[a.id] ?? const <String>[]},
       });
       await _applyPolicy();
+      await refresh();
+      await _addAlways();
       _net = policy.probe.changes.listen((_) async {
         try {
           await _core?.call('network_changed');
@@ -91,6 +106,41 @@ class SharingState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// What each always-shared folder may fetch, as last set (see [setOnly]).
+  final Map<String, List<String>> _only = {};
+
+  /// Shares every always-shared folder that is not shared yet (its folder is made if it is missing).
+  Future<void> _addAlways() async {
+    for (final a in always) {
+      final d = a.dir();
+      if (d == null || shareOf(a.id) != null) continue;
+      try {
+        await d.create(recursive: true);
+        await _call('share_add', {'id': a.id, 'name': a.name, 'path': d.path});
+      } catch (e) {
+        debugPrint('Could not share ${a.name}: $e');
+      }
+    }
+  }
+
+  /// What this device fetches of the always-shared folder [id] from now on: the paths [patterns] cover (the sync engine's
+  /// patterns), as the sources on this device change. Kept, and given to the engine at its next start too.
+  Future<void> setOnly(String id, List<String> patterns) async {
+    final sorted = [...patterns]..sort();
+    final before = _only[id];
+    if (before != null && listEquals(before, sorted)) return;
+    _only[id] = sorted;
+    final c = _core;
+    if (c == null) return;
+    try {
+      await c.call('set_only', {'id': id, 'only': sorted});
+    } catch (e) {
+      debugPrint('Could not set what ${_nameOf(id)} fetches: $e');
+    }
+  }
+
+  String _nameOf(String id) => always.where((x) => x.id == id).firstOrNull?.name ?? id;
 
   bool? _lastMobile;
 
@@ -200,6 +250,20 @@ class SharingState extends ChangeNotifier {
     _core?.close();
     super.dispose();
   }
+}
+
+/// A folder linked devices keep the same whatever the person ticks, and its sync rules (the sync engine's patterns, see
+/// cache_sync's Config): [exclude] never travels, a delete under [localDeletes] stays on the device that made it, a file under
+/// [last] comes after the rest of what arrives with it. What it fetches is set with [SharingState.setOnly].
+class AlwaysShared {
+  const AlwaysShared({required this.id, required this.name, required this.dir, this.exclude = const [], this.localDeletes = const [], this.last = const []});
+
+  final String id;
+  final String name;
+  final Directory? Function() dir;
+  final List<String> exclude;
+  final List<String> localDeletes;
+  final List<String> last;
 }
 
 /// What the state needs from the engine (the real one is [SyncCore]; tests give a fake).
