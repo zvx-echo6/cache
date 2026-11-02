@@ -5,12 +5,14 @@
 pub mod act;
 pub mod budget;
 pub mod conv;
+pub mod duty;
 pub mod error;
 pub mod ext;
 pub mod ffi;
 pub mod handle;
-pub mod html;
 pub mod epub;
+pub mod html;
+pub mod idxsnap;
 pub mod index;
 pub mod job;
 pub mod kwbuild;

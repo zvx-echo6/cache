@@ -7,6 +7,7 @@
 use crate::conv::Cite;
 use crate::error::{Error, Result};
 use crate::html;
+use crate::idxsnap::{self, SnapSlot};
 use crate::index::{self, IndexState};
 use crate::libindex::{self, LibOpenIndex};
 use crate::libreg::{self, LibEntry, ShardCell};
@@ -448,12 +449,22 @@ pub struct LibSlot {
     /// The settings object as the handle was given it (`None` when guessed); set by the handle.
     pub given: Option<Value>,
     pub docs: usize,
-    /// The opened device keyword index (reopened when it changes on disk).
+    /// The opened device keyword index in `index_dir` (reopened when it changes on disk).
     pub kw: Option<LibOpenIndex>,
+    /// The `indexes_dir` of the sources config (set by the handle): where this library's snapshot lives.
+    pub indexes_dir: Option<PathBuf>,
+    /// The library's device index snapshot (kind `library`), once one is published and verified.
+    pub snap: SnapSlot<LibOpenIndex>,
     /// The collection has a BM25-scored text index on the mapped text field.
     pub own_scoring: bool,
     /// The library's points lack `doc_id`/`doc_version` (see [`whole_library_only`]).
     pub whole_library_only: bool,
+}
+
+fn new_snap_slot() -> SnapSlot<LibOpenIndex> {
+    SnapSlot::new(idxsnap::KIND_LIBRARY, |dir, m| {
+        LibOpenIndex::open(dir, m.tokenizer.as_ref().map(|t| t.name.as_str()).unwrap_or(libindex::TOKENIZER))
+    })
 }
 
 /// The library's folder name, used as its id and title when settings are guessed.
@@ -659,7 +670,7 @@ pub fn open_library(path: &Path, index_dir: Option<PathBuf>, settings: Option<&V
     let shard = Arc::new(ShardCell::new(Arc::new(shard), vector));
     entry.register(&shard);
     Ok(LibSlot {
-        path: path.to_path_buf(), index_dir, settings, shard, entry, seen_gen, given: None, docs, kw: None, own_scoring,
+        path: path.to_path_buf(), index_dir, settings, shard, entry, seen_gen, given: None, docs, kw: None, indexes_dir: None, snap: new_snap_slot(), own_scoring,
         whole_library_only: whole,
     })
 }
@@ -683,7 +694,7 @@ pub fn slot_from_cell(
         (settings, docs, own, whole_library_only(&g))
     };
     Some(LibSlot {
-        path: path.to_path_buf(), index_dir, settings, shard: cell, entry, seen_gen, given, docs, kw: None, own_scoring,
+        path: path.to_path_buf(), index_dir, settings, shard: cell, entry, seen_gen, given, docs, kw: None, indexes_dir: None, snap: new_snap_slot(), own_scoring,
         whole_library_only: whole,
     })
 }
@@ -978,14 +989,49 @@ impl LibSlot {
         matches!(self.settings.keyword_index.as_str(), "auto" | "on")
     }
 
-    /// State of the device keyword index in `index_dir`.
+    /// The library's source id for sync and snapshots: `library_id`, with `@version` when the settings give one.
+    pub fn source_id(&self) -> String {
+        idxsnap::library_source_id(&self.settings.library_id, self.settings.version.as_deref())
+    }
+
+    /// Look at the snapshot folder again (a pick runs on a background thread). When a snapshot has just become the one in use,
+    /// the old index it was sealed from is removed.
+    pub fn refresh_snapshot(&mut self) {
+        let sid = self.source_id();
+        if let Some(name) = self.snap.refresh(self.indexes_dir.as_deref(), &sid) {
+            self.kw = None;
+            if let Some(root) = &self.indexes_dir {
+                idxsnap::finish_seal(&idxsnap::dir_for(root, idxsnap::KIND_LIBRARY, &sid), &name);
+            }
+        }
+    }
+
+    /// State of the device keyword index: a snapshot in use is `Done`; else a build in `.build/`; else the index in `index_dir`.
     pub fn device_state(&self) -> IndexState {
+        if let Some(s) = self.snap.ready() {
+            return IndexState::Done(idxsnap::meta_of(&s.manifest, &libindex::source_key(self.id())));
+        }
+        if let Some(root) = &self.indexes_dir {
+            if idxsnap::build_live(root, idxsnap::KIND_LIBRARY, &self.source_id()) {
+                return IndexState::Building;
+            }
+        }
+        self.legacy_state()
+    }
+
+    /// State of the index in `index_dir` alone.
+    pub fn legacy_state(&self) -> IndexState {
         index::index_state_for(self.index_dir.as_deref(), &libindex::source_key(self.id()), index::LIB_INDEX_FORMAT)
     }
 
-    /// The opened device index if (and only if) it is `done`.
+    /// The opened device index if (and only if) it is `done`: the snapshot when one is in use, else the one in `index_dir`.
     pub fn device_index(&mut self) -> Result<Option<&LibOpenIndex>> {
-        let IndexState::Done(meta) = self.device_state() else {
+        self.refresh_snapshot();
+        if self.snap.ready().is_some() {
+            self.kw = None;
+            return Ok(self.snap.ready().map(|s| &s.index));
+        }
+        let IndexState::Done(meta) = self.legacy_state() else {
             self.kw = None;
             return Ok(None);
         };

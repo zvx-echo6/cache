@@ -184,7 +184,7 @@ fn job_progress_order() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     let v: Value = serde_json::from_str(&p).unwrap();
-    assert_eq!(keys(&v), ["state", "done", "total", "error"], "{p}");
+    assert_eq!(keys(&v), ["state", "done", "total", "error", "duty", "effective", "auto", "paused"], "{p}");
     assert_eq!(v["state"], "done");
     unsafe { cs_job_free(j) };
 }

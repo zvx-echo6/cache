@@ -1194,3 +1194,36 @@ fn the_header_decides_which_zims_are_walked() {
     );
     assert!(by_id(NONE).get("captionsindex").is_none());
 }
+
+#[test]
+fn index_source_is_gentle_by_default_and_takes_a_duty() {
+    const VIDEO: &str = "9f2e1c4a-1111-4222-8333-000000000077";
+    let t = TempDir::new("duty");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    save_video(&vdir, VIDEO, "Duty", &[("en", vtt_of("sandbag barriers", 30))]);
+    let _h = open(&[], &idx, &vdir);
+    let source = format!("{HOST}/{VIDEO}");
+    // like the other index kinds: work 200 ms, idle 200 ms, one writer thread, unless the caller says otherwise
+    let p = run(job_params(&idx, "captions", &source));
+    assert_eq!(p["duty"], json!({"work_ms": 200, "idle_ms": 200, "threads": 1}), "{p}");
+    assert_eq!((p["auto"].clone(), p["paused"].clone()), (json!(true), json!(false)));
+    let mut again = job_params(&idx, "captions", &source);
+    again["duty"] = json!({"work_ms": 0});
+    let p = run(again);
+    assert_eq!(p["duty"], json!({"work_ms": 0, "idle_ms": 200, "threads": 1}), "{p}");
+    // a running index_source job can be paused and resumed
+    let t2 = TempDir::new("duty-pause");
+    let (idx2, vdir2) = (t2.0.join("indexes"), t2.0.join("video"));
+    save_video(&vdir2, VIDEO, "Duty", &[("en", vtt_of("sandbag barriers", 30))]);
+    let _h2 = open(&[], &idx2, &vdir2);
+    let mut slow = job_params(&idx2, "captions", &source);
+    slow["duty"] = json!({"work_ms": 1, "idle_ms": 60_000});
+    let j = start(slow);
+    j.set_duty(r#"{"paused": true}"#).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let p: Value = serde_json::from_str(&j.progress_json()).unwrap();
+    assert!(p["state"] == "running" || p["state"] == "done", "{p}");
+    j.set_duty(r#"{"paused": false, "work_ms": 0, "idle_ms": 0}"#).unwrap();
+    let p = wait(&j);
+    assert_eq!(p["state"], "done", "{p}");
+}

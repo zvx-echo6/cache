@@ -1105,3 +1105,114 @@ fn a_library_and_a_zim_with_a_builtin_index_merge() {
     }
     unsafe { cs_close(h) };
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// The device keyword index as a syncable snapshot: sealing the old index folder, and a library update
+
+fn open_with_indexes(path: &Path, st: &Value, index_dir: &Path, indexes_dir: &Path) -> *mut Handle {
+    let src = json!({"kind":"library","path":path.to_str().unwrap(),"index_dir":index_dir.to_str().unwrap(),"settings":st});
+    let cfg = cstr(&json!({"sources":[src],"indexes_dir":indexes_dir.to_str().unwrap()}).to_string());
+    let h = unsafe { cs_open(cfg.as_ptr()) };
+    assert!(!h.is_null(), "cs_open failed: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
+    wait_ready(h);
+    h
+}
+
+fn run_job(kind: &str, params: Value) -> Value {
+    let j = unsafe { cs_job_start(cstr(kind).as_ptr(), cstr(&params.to_string()).as_ptr()) };
+    assert!(!j.is_null(), "job {kind} failed to start: {:?}", take(unsafe { cs_last_error(ptr::null_mut()) }));
+    let p = wait_not_running(j);
+    unsafe { cs_job_free(j) };
+    p
+}
+
+fn until_snapshot(h: *mut Handle) -> Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let v = status(h);
+        if v["sources"][0]["index"]["location"] == "snapshot" {
+            return v["sources"][0].clone();
+        }
+        assert!(t0.elapsed().as_secs() < 60, "snapshot did not open: {v}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn file_stamps(dir: &Path) -> Vec<(String, u64, std::time::SystemTime)> {
+    let mut v: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            let m = e.metadata().unwrap();
+            (e.file_name().to_string_lossy().into_owned(), m.len(), m.modified().unwrap())
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn library_index_seal_switch_and_update_make_new_snapshots() {
+    let f = make_fixture("snapseal");
+    let root = f._tmp.0.clone();
+    let (indexes, legacy) = (root.join("indexes"), root.join("kw_idx"));
+    let mut st = settings(default_leave_out(), true);
+    st["version"] = json!("1");
+    let params = |index: Value| {
+        let mut p = json!({"library_path": f.dir.to_str().unwrap(), "heap_mb": 50, "settings": st.clone(), "checkpoint_docs": 300});
+        for (k, v) in index.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        p
+    };
+    // the old way: an index beside the library
+    let p = run_job("index_library", params(json!({"index_dir": legacy.to_str().unwrap()})));
+    assert_eq!(p["state"], "done", "{p}");
+    let h = open_with_indexes(&f.dir, &st, &legacy, &indexes);
+    let s = status(h)["sources"][0].clone();
+    assert_eq!(s["source_id"], "t@1");
+    assert_eq!(s["index"]["location"], "legacy");
+    assert_eq!(s["index"]["needs_seal"], true);
+    assert_eq!(s["keyword_source"], "device");
+    let before = addrs(&ksearch(h, "xylophonic", 5));
+    assert_eq!(before, vec!["lib:t/1234"]);
+
+    // seal by hard links, then the handle switches and the old names go
+    let p = run_job("index_seal", json!({"indexes_dir": indexes.to_str().unwrap(), "kind": "library", "source_id": "t@1"}));
+    assert_eq!(p["state"], "done", "{p}");
+    assert_eq!(p["result"]["method"], "link");
+    let s = until_snapshot(h);
+    let snap1 = s["index"]["snapshot"].as_str().unwrap().to_string();
+    assert_eq!(snap1, p["result"]["snapshot"].as_str().unwrap());
+    let dir1 = indexes.join("library").join("t@1").join("snap").join(&snap1);
+    let stamps = file_stamps(&dir1);
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
+    assert_eq!(status(h)["sources"][0]["keyword_source"], "device");
+    assert_eq!(file_stamps(&dir1), stamps, "opening and searching wrote into the snapshot");
+    assert!(!legacy.join("meta.json").exists() && !legacy.join("cache_search_index.json").exists());
+    assert!(status(h)["sources"][0]["index"].get("needs_seal").is_none());
+    unsafe { cs_close(h) };
+
+    // an update is a new version: a new source id, so a new snapshot beside the old one
+    let mut st2 = st.clone();
+    st2["version"] = json!("2");
+    let mut up = params(json!({"indexes_dir": indexes.to_str().unwrap()}));
+    up["settings"] = st2.clone();
+    let p = run_job("index_library", up);
+    assert_eq!(p["state"], "done", "{p}");
+    let snap2 = p["result"]["snapshot"].as_str().unwrap().to_string();
+    let dir2 = indexes.join("library").join("t@2").join("snap").join(&snap2);
+    assert!(dir2.join("manifest.json").is_file());
+    let m: Value = serde_json::from_str(&std::fs::read_to_string(dir2.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(m["kind"], "library");
+    assert_eq!(m["source_id"], "t@2");
+    assert_eq!(m["format"], 2);
+    assert_eq!(file_stamps(&dir1), stamps, "the old version's snapshot is untouched");
+    assert!(!indexes.join("library").join("t@2").join(".build").exists());
+    let h = open_with_indexes(&f.dir, &st2, &root.join("none"), &indexes);
+    let s = until_snapshot(h);
+    assert_eq!(s["source_id"], "t@2");
+    assert_eq!(s["index"]["snapshot"], snap2.as_str());
+    assert_eq!(addrs(&ksearch(h, "xylophonic", 5)), before);
+    unsafe { cs_close(h) };
+}
