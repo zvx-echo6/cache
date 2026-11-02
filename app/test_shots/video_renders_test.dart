@@ -187,7 +187,7 @@ void main() {
       await _show(tester, VideosScreen(video: v), theme);
       await _snap(tester, '1a-list-downloading-grouped', theme);
 
-      v = await _state(tester, const []);
+      v = await _state(tester, const [], site: false);
       await _show(tester, VideosScreen(video: v), theme);
       await _snap(tester, '1b-list-empty', theme);
 
