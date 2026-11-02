@@ -428,6 +428,9 @@ class _ShellState extends State<Shell> {
         if (id != null) _openSource(await widget.sources.zimMainPage(id));
       },
       openAddress: _openSource,
+      // Words said in a video and passages of EPUB books open as their citations in Ask do.
+      openVideo: _openVideo,
+      openPassage: _openSource,
     ),
     PlacesSearchProvider(
       backend: widget.nav.backend,
