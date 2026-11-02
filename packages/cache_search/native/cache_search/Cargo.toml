@@ -19,6 +19,8 @@ cc = "1"
 
 [dependencies]
 zim = "0.5.0"
+# The passage chunker, shared with the library builder (cs_pdf_chunk).
+cache_chunk = { path = "../../../cache_chunk" }
 cache_tool = { path = "../cache_tool" }
 # Saved places and live data live in their own crates; this crate wires them into the handle and exports their C ABI.
 cache_user = { path = "../cache_user" }
@@ -39,6 +41,8 @@ cache_sync = { path = "../cache_sync" }
 # Road tiles by region (downloads, the stream cache for routes planned online, updates): cs_regions_*, and the navigate
 # tool's tile folder and stream from the "regions" section of the config.
 cache_regions = { path = "../cache_regions" }
+# Syncable index snapshots (layout, manifest, verify, pick, gc, stage, publish): re-exported as crate::snapshot.
+cache_snapshot = { path = "../cache_snapshot" }
 # The Notebook (Journal and Logbook) in notebook.sqlite, from the "notebook" section of the config: cs_notebook.
 cache_notebook = { path = "../cache_notebook" }
 serde.workspace = true
@@ -63,6 +67,9 @@ tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # Free-space check of update_library: statvfs on unix, GetDiskFreeSpaceExW on Windows (both already in the lockfile).
+# sha256 of the PDF index snapshot files (manifest.json); already in the lockfile.
+sha2 = "0.10"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

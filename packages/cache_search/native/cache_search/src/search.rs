@@ -1,8 +1,10 @@
 //! `cs_search` and `cs_read`.
 
 use crate::error::{Error, Result};
+use crate::conv::Cite;
 use crate::handle::{Handle, Source};
 use crate::library::{self, LibHit, LibKwHit};
+use crate::pdfindex::{self, PdfHit};
 use crate::html;
 use crate::zimsrc;
 use crate::index;
@@ -72,6 +74,16 @@ enum Entry {
     Lib(usize, usize),
     /// A library keyword hit: (index into `lib_kw`, hit).
     LibKw(usize, usize),
+    /// A hit in a ZIM's PDF index: (index into `pdf_kw`, hit).
+    Pdf(usize, usize),
+}
+
+/// One ZIM's PDF index keyword list.
+struct PdfKw {
+    zim_id: String,
+    zim_title: String,
+    hits: Vec<PdfHit>,
+    count: usize,
 }
 
 /// One library's keyword list.
@@ -549,6 +561,21 @@ impl Handle {
             }
         }
 
+        // The PDF index of each ZIM is searched with it (a `sources` filter on the ZIM includes it).
+        let mut pdf_kw: Vec<PdfKw> = Vec::new();
+        for s in self.sources.iter() {
+            let Source::Pdf(p) = s else { continue };
+            if let Some(f) = &filter {
+                if !f.contains(&p.zim_id) {
+                    continue;
+                }
+            }
+            let Some(idx) = p.index() else { continue };
+            if let Ok((hits, count)) = idx.search(query, candidates) {
+                pdf_kw.push(PdfKw { zim_id: p.zim_id.clone(), zim_title: p.zim_title.clone(), hits, count });
+            }
+        }
+
         let mut lists: Vec<Vec<KwItem>> = per
             .iter()
             .map(|p| {
@@ -569,13 +596,21 @@ impl Handle {
                 .map(|h| KwItem { addr: h.address.clone(), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
                 .collect()
         }));
+        lists.extend(pdf_kw.iter().map(|k| {
+            k.hits
+                .iter()
+                .map(|h| KwItem { addr: pdfindex::address_of(&k.zim_id, &h.pid), raw: h.raw, coverage: h.coverage, title_cov: h.coverage })
+                .collect()
+        }));
         let need = opts.offset + opts.k;
         let merged = merge_keyword(&lists, min_cov, min_rel, need);
         let entry_of = |m: &Merged| {
             if m.si < per.len() {
                 Entry::Zim(m.si, m.hi)
-            } else {
+            } else if m.si < per.len() + lib_kw.len() {
                 Entry::LibKw(m.si - per.len(), m.hi)
+            } else {
+                Entry::Pdf(m.si - per.len() - lib_kw.len(), m.hi)
             }
         };
 
@@ -641,7 +676,7 @@ impl Handle {
             .flat_map(|(_, hits)| hits.iter().map(|h| h.score))
             .fold(None, |m: Option<f32>, x| Some(m.map_or(x, |m| m.max(x))));
         let order = demote_guide(order, gate_score, GUIDE_GATE, |e| match e {
-            Entry::Zim(..) => false,
+            Entry::Zim(..) | Entry::Pdf(..) => false,
             Entry::Lib(li, _) => is_guide(libs[*li].0),
             Entry::LibKw(ki, _) => is_guide(lib_kw[*ki].src_i),
         });
@@ -653,6 +688,7 @@ impl Handle {
         enum Shown {
             Zim(usize, usize),
             Lib(usize, Box<LibHit>),
+            Pdf(usize, usize),
         }
         let mut seen: HashSet<String> = HashSet::new();
         let mut shown: Vec<Shown> = Vec::new();
@@ -662,6 +698,7 @@ impl Handle {
             }
             match e {
                 Entry::Zim(si, hi) => shown.push(Shown::Zim(si, hi)),
+                Entry::Pdf(pi, hi) => shown.push(Shown::Pdf(pi, hi)),
                 Entry::Lib(li, hi) => {
                     let h = &libs[li].1[hi];
                     if seen.insert(h.key.clone()) {
@@ -704,6 +741,29 @@ impl Handle {
                         "source_kind": "library",
                         "source_title": l.settings.title,
                         "page": h.page,
+                    }));
+                    continue;
+                }
+                Shown::Pdf(pi, hi) => {
+                    let (k, h) = (&pdf_kw[pi], &pdf_kw[pi].hits[hi]);
+                    let address = pdfindex::address_of(&k.zim_id, &h.pid);
+                    self.last_cites.push((
+                        address.clone(),
+                        Cite {
+                            link: Some(pdfindex::link_of(&k.zim_id, &h.zim_path, h.pdf_page)),
+                            time: None,
+                            pdf_page: Some(h.pdf_page),
+                            quote: Some(pdfindex::first_words(&h.text, pdfindex::QUOTE_WORDS)),
+                        },
+                    ));
+                    results.push(json!({
+                        "address": address,
+                        "title": if h.label.is_empty() { h.title.clone() } else { format!("{}, p. {}", h.title, h.label) },
+                        "snippet": html::snippet_from_text(&h.text, snippet_chars),
+                        "source_id": k.zim_id,
+                        "source_kind": "zim",
+                        "source_title": k.zim_title,
+                        "page": page_value(&h.label),
                     }));
                     continue;
                 }
@@ -772,6 +832,7 @@ impl Handle {
             "results": results,
             "total_estimate": per.iter().map(|p| p.count).sum::<usize>()
                 + lib_kw.iter().map(|k| k.count).sum::<usize>()
+                + pdf_kw.iter().map(|k| k.count).sum::<usize>()
                 + libs.iter().map(|(_, h)| h.len()).sum::<usize>(),
             "vector_sources": vector_sources,
             "keyword_only_sources": keyword_only,
@@ -844,8 +905,38 @@ impl Handle {
             })
             .to_string());
         }
+        if address.starts_with("zimpdf:") {
+            return self.read_pdf_page(address, max_chars as usize);
+        }
         let e = self.zim_get(address)?;
         read_zim_entry(address, &e, max_chars)
+    }
+}
+
+/// A page label as a result's `page`: a number when it is one, else its text, else null.
+fn page_value(label: &str) -> Value {
+    match label.parse::<u64>() {
+        Ok(n) if label == n.to_string() => json!(n),
+        _ if label.trim().is_empty() => Value::Null,
+        _ => json!(label),
+    }
+}
+
+impl Handle {
+    /// `read` of a PDF piece: the text of its whole PDF page (every piece that starts on it, in order), in the shape of a
+    /// library read: title, page label, text.
+    fn read_pdf_page(&self, address: &str, max_chars: usize) -> Result<String> {
+        let (zim_id, pid) = pdfindex::parse_address(address)?;
+        let idx = self.pdf_index(&zim_id).ok_or_else(|| Error::not_found(format!("no pdf index for zim {zim_id:?}")))?;
+        let hit = idx.get(&pid).ok_or_else(|| Error::not_found(format!("no piece {pid:?} in the pdf index of zim {zim_id}")))?;
+        let full = idx.page_text(&hit.zim_path, hit.pdf_page);
+        let full = if full.trim().is_empty() { hit.text.clone() } else { full };
+        let (text, truncated) = html::cut_at_paragraph(full.trim(), max_chars);
+        Ok(json!({
+            "address": address, "title": hit.title, "text": text, "truncated": truncated,
+            "author": Value::Null, "page": page_value(&hit.label), "source_type": Value::Null,
+        })
+        .to_string())
     }
 }
 
