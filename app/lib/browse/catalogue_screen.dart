@@ -314,7 +314,7 @@ class _AddToLibraryScreenState extends State<AddToLibraryScreen> {
     return GridView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(0, 4, 0, 24),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisExtent: 64, crossAxisSpacing: 8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisExtent: 88, crossAxisSpacing: 8),
       itemCount: b.entries.length,
       itemBuilder: (context, i) => EntryTile(browse: b, entry: b.entries[i]),
     );
