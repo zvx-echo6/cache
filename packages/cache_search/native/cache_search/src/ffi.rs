@@ -227,6 +227,13 @@ pub unsafe extern "C" fn cs_pdfindex_skip(session: u64, params_json: *const c_ch
     string_call(|| crate::pdfbuild::skip(session, arg_str(params_json, "params_json")?))
 }
 
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_reuse(session: u64, params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::reuse(session, arg_str(params_json, "params_json")?))
+}
+
 #[no_mangle]
 pub extern "C" fn cs_pdfindex_close(session: u64) -> *mut c_char {
     string_call(|| crate::pdfbuild::close(session))
@@ -237,6 +244,13 @@ pub extern "C" fn cs_pdfindex_close(session: u64) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn cs_pdfindex_discard(zim_path: *const c_char) -> *mut c_char {
     string_call(|| crate::pdfbuild::discard(arg_str(zim_path, "zim_path")?))
+}
+
+/// # Safety
+/// `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdf_chunk(request_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfindex::chunk_request(arg_str(request_json, "request_json")?))
 }
 
 /// Run a handle-less call that returns JSON; NULL with `cs_last_error(NULL)` on failure.

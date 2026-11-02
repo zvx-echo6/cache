@@ -838,6 +838,7 @@ version = "0.1.0"
 dependencies = [
  "cache_act",
  "cache_calc",
+ "cache_chunk",
  "cache_layers",
  "cache_live",
  "cache_navigate",

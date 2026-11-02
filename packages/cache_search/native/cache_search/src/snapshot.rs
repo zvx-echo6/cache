@@ -18,8 +18,8 @@
 //! Rules: a snapshot is usable when its manifest is there and names this kind and source id, [`Compat`] (the kind's own
 //! check of format, tantivy version, tokenizer, chunker) accepts it, and every listed file has the listed size and sha256.
 //! Of several usable snapshots every device takes the earliest `created`, then the lowest build id. [`gc`] removes the
-//! usable ones that are neither the one in use nor the newest other one (kept as a rollback), and only on this device:
-//! deletions under `snap/` never sync.
+//! usable ones that are neither the one in use nor the newest usable one older than it (kept as a rollback), and only on
+//! this device: deletions under `snap/` never sync.
 //!
 //! Tantivy's reader creates `.tantivy-meta.lock` when an index is opened. [`stage`] puts an empty one in every snapshot, so
 //! opening a published snapshot never writes into it; it is not listed in the manifest.
@@ -204,14 +204,15 @@ pub fn pick(source_dir: &Path, kind: &str, source_id: &str, compat: Compat) -> O
     })
 }
 
-/// Remove, on this device only, the usable snapshots that are neither `in_use` nor the newest other one (kept as a rollback:
-/// an older core may still need it). Snapshots that are not usable here are left alone (another core may read them).
-/// Returns the names removed.
+/// Remove, on this device only, the usable snapshots that are neither the one in use nor the newest usable one older than it
+/// (kept as a rollback: an older core may still need it). Snapshots that are not usable here are left alone (another core
+/// may read them). Returns the names removed.
 pub fn gc(source_dir: &Path, picked: &Picked) -> Vec<String> {
-    let keep_other = picked.usable.iter().rfind(|(_, n)| *n != picked.name).map(|(_, n)| n.clone());
+    let in_use = picked.usable.iter().position(|(_, n)| *n == picked.name).unwrap_or(0);
+    let previous = in_use.checked_sub(1);
     let mut removed = Vec::new();
-    for (_, name) in &picked.usable {
-        if *name == picked.name || Some(name) == keep_other.as_ref() {
+    for (k, (_, name)) in picked.usable.iter().enumerate() {
+        if k == in_use || Some(k) == previous {
             continue;
         }
         if std::fs::remove_dir_all(source_dir.join(SNAP_DIR).join(name)).is_ok() {
@@ -255,17 +256,21 @@ fn civil(t: u64) -> (i64, u32, u32, u32, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d, (rem / 3600) as u32, (rem % 3600 / 60) as u32, (rem % 60) as u32)
 }
 
-/// A snapshot being written: its files are copied and hashed, `manifest.json` is not there yet.
+/// A snapshot being written: its files are moved in and hashed, `manifest.json` is not there yet.
 pub struct Stage {
     pub build_id: String,
     pub dir: PathBuf,
     pub files: Vec<FileEntry>,
     pub bytes: u64,
+    /// Where the files came from, to put them back if the stage is aborted.
+    from: PathBuf,
 }
 
-/// Copy the files of the finished `build` folder, except those in `exclude` (locks, bookkeeping), into
-/// `<build>/publish-<build id>/` (inside the working folder, so sync never sees it) and hash them. `progress(done, total)` after each file; `cancelled()` before each one:
-/// when it is true the temporary folder is removed and `None` comes back. Also puts the empty [`META_LOCK`] in.
+/// MOVE the files of the finished `build` folder, except those in `exclude` (locks, bookkeeping), into
+/// `<build>/publish-<build id>/` (inside the working folder, so sync never sees it; a rename on the same file system, so
+/// nothing is copied) and hash them as they are read. `progress(done, total)` after each file; `cancelled()` before each one:
+/// when it is true, or on an error, the files are put back (the build stays as it was) and `None` comes back. Also puts the
+/// empty [`META_LOCK`] in.
 pub fn stage(
     build: &Path,
     exclude: &[&str],
@@ -274,7 +279,14 @@ pub fn stage(
 ) -> Result<Option<Stage>> {
     let build_id = new_build_id();
     let dir = build.join(format!("publish-{build_id}"));
-    let run = || -> Result<Option<(Vec<FileEntry>, u64)>> {
+    let mut moved: Vec<String> = Vec::new();
+    let put_back = |moved: &[String]| {
+        for n in moved {
+            let _ = std::fs::rename(dir.join(n), build.join(n));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    };
+    let mut run = || -> Result<Option<(Vec<FileEntry>, u64)>> {
         std::fs::create_dir_all(&dir).map_err(|e| Error::io(format!("{}: {e}", dir.display())))?;
         let mut names: Vec<String> = std::fs::read_dir(build)
             .map_err(|e| Error::io(format!("{}: {e}", build.display())))?
@@ -291,7 +303,8 @@ pub fn stage(
             if cancelled() {
                 return Ok(None);
             }
-            std::fs::copy(build.join(n), dir.join(n)).map_err(|e| Error::io(format!("{n}: {e}")))?;
+            std::fs::rename(build.join(n), dir.join(n)).map_err(|e| Error::io(format!("{n}: {e}")))?;
+            moved.push(n.clone());
             let (sha256, size) = hash_file(&dir.join(n))?;
             bytes += size;
             files.push(FileEntry { path: n.clone(), size, sha256 });
@@ -300,21 +313,30 @@ pub fn stage(
         std::fs::write(dir.join(META_LOCK), b"").map_err(|e| Error::io(format!("{}: {e}", dir.display())))?;
         Ok(Some((files, bytes)))
     };
-    match run() {
-        Ok(Some((files, bytes))) => Ok(Some(Stage { build_id, dir, files, bytes })),
+    let result = run();
+    match result {
+        Ok(Some((files, bytes))) => Ok(Some(Stage { build_id, dir, files, bytes, from: build.to_path_buf() })),
         Ok(None) => {
-            let _ = std::fs::remove_dir_all(&dir);
+            put_back(&moved);
             Ok(None)
         }
         Err(e) => {
-            let _ = std::fs::remove_dir_all(&dir);
+            put_back(&moved);
             Err(e)
         }
     }
 }
 
-/// Remove a staged snapshot that will not be published.
+/// Give up a staged snapshot that will not be published: its files go back to the working folder, which stays resumable.
 pub fn abort(stage: &Stage) {
+    if let Ok(rd) = std::fs::read_dir(&stage.dir) {
+        for e in rd.flatten() {
+            let n = e.file_name();
+            if n != META_LOCK && !n.to_string_lossy().starts_with(MANIFEST) {
+                let _ = std::fs::rename(e.path(), stage.from.join(n));
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&stage.dir);
 }
 
@@ -364,6 +386,33 @@ mod tests {
         assert_eq!(encode_source_id("my-lib@3"), "my-lib@3");
         assert_eq!(encode_source_id("a/b"), "a%2Fb");
         assert_eq!(encode_source_id(".."), "%2E.");
+    }
+
+    #[test]
+    fn stage_moves_files_and_an_aborted_stage_puts_them_back() {
+        let root = std::env::temp_dir().join(format!("cs-snapshot-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let build = root.join(BUILD_DIR);
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("meta.json"), b"{}").unwrap();
+        std::fs::write(build.join("a.idx"), b"abc").unwrap();
+        std::fs::write(build.join("lock"), b"x").unwrap();
+        let st = stage(&build, &["lock"], &|_, _| {}, &|| false).unwrap().unwrap();
+        // moved, not copied: the build no longer holds them; the stage does, hashed, plus the empty meta lock
+        assert!(!build.join("a.idx").exists() && build.join("lock").exists());
+        assert_eq!(st.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["a.idx", "meta.json"]);
+        assert_eq!(std::fs::metadata(st.dir.join(META_LOCK)).unwrap().len(), 0);
+        abort(&st);
+        assert!(build.join("a.idx").exists() && build.join("meta.json").exists() && !st.dir.exists());
+        // cancelled part way: whatever was moved is put back
+        let n = std::cell::Cell::new(0);
+        let none = stage(&build, &["lock"], &|_, _| {}, &|| {
+            n.set(n.get() + 1);
+            n.get() > 1
+        })
+        .unwrap();
+        assert!(none.is_none() && build.join("a.idx").exists() && build.join("meta.json").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
