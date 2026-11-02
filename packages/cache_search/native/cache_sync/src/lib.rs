@@ -1702,6 +1702,12 @@ impl SyncEngine {
         })
     }
 
+    /// The UDP port this device listens on (IPv4): the one `port` named, or the one the system gave when `port` was 0 or
+    /// absent. A device found again only by its address (no lookup service) is opened again on it.
+    pub fn port(&self) -> Option<u16> {
+        self.inner.endpoint.bound_sockets().into_iter().find(|a| a.is_ipv4()).map(|a| a.port())
+    }
+
     /// Stops the rounds, closes connections and flushes the store.
     pub fn close(mut self) {
         self.inner.stop.store(true, Ordering::Relaxed);
