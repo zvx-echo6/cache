@@ -105,11 +105,13 @@ pub struct Config {
     /// Bind to this port (tests and fixed firewall rules); 0 or absent picks one.
     #[serde(default)]
     pub port: Option<u16>,
-    /// What never syncs in a shared folder, by share id: things each device builds for itself from the folder's files (a library's
-    /// search index). Each pattern is a path of segments where `*` matches any one segment (`*/index` is the `index` folder of every
-    /// top-level folder) and covers what it names and everything in it. Such a path is not listed, sent, fetched or deleted; a copy
-    /// already here stays (it is this device's now), and entries for it that an earlier version listed are forgotten, not deleted,
-    /// so no other device loses its own copy.
+    /// What never syncs in a shared folder, by share id: things each device builds or caches for itself (a library's search index,
+    /// a viewed-tile cache, SQLite's shared-memory files). Each pattern is a path of segments: `*` within a segment matches any run
+    /// of characters (`*` alone is any one segment, `*-shm` any name ending so), and a `**` segment any number of segments
+    /// (`**/*-shm` is such a file at any depth). A pattern covers what it names and everything in it (`*/index` is the `index`
+    /// folder of every top-level folder, with its files). Such a path is not listed, sent, fetched or deleted; a copy already here
+    /// stays (it is this device's now), and entries for it that an earlier version listed are forgotten, not deleted, so no other
+    /// device loses its own copy.
     #[serde(default)]
     pub exclude: BTreeMap<String, Vec<String>>,
 }
@@ -119,8 +121,32 @@ pub fn excluded(patterns: &[String], rel: &str) -> bool {
     let parts: Vec<&str> = rel.split('/').collect();
     patterns.iter().any(|pat| {
         let segs: Vec<&str> = pat.split('/').filter(|s| !s.is_empty()).collect();
-        !segs.is_empty() && segs.len() <= parts.len() && segs.iter().zip(&parts).all(|(s, p)| *s == "*" || s == p)
+        !segs.is_empty() && covers(&segs, &parts)
     })
+}
+
+/// Whether the pattern segments `pat` match the start of `parts` (what follows is inside what they name).
+fn covers(pat: &[&str], parts: &[&str]) -> bool {
+    match pat.split_first() {
+        None => true,
+        Some((&"**", rest)) => covers(rest, parts) || (!parts.is_empty() && covers(pat, &parts[1..])),
+        Some((seg, rest)) => parts.split_first().map(|(p, more)| glob(seg, p) && covers(rest, more)).unwrap_or(false),
+    }
+}
+
+/// One segment against its pattern, where `*` matches any run of characters.
+fn glob(pat: &str, name: &str) -> bool {
+    let Some((head, tail)) = pat.split_once('*') else { return pat == name };
+    let Some(mut rest) = name.strip_prefix(head) else { return false };
+    let pieces: Vec<&str> = tail.split('*').collect();
+    let (last, middle) = pieces.split_last().expect("split gives one piece at least");
+    for piece in middle {
+        match rest.find(piece) {
+            Some(i) => rest = &rest[i + piece.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

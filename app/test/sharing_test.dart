@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cache/screens/settings/sharing_page.dart';
 import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
+import 'package:cache/regions/regions_state.dart' show kMapLayersNotShared, kRegionsNotShared;
 import 'package:cache/sharing/sharing_state.dart';
 import 'package:cache/sources/libraries_state.dart';
 import 'package:flutter/material.dart';
@@ -60,7 +61,7 @@ void main() {
     await r.dispose(tester);
   });
 
-  testWidgets("a library's search index is built on each device and never syncs", (tester) async {
+  testWidgets("what each device builds or caches for itself never syncs: a library's index, the regions' caches", (tester) async {
     final r = await SettingsRig.create(tester);
     final libs = Directory('${r.dir.path}/libraries')..createSync();
     Map<String, Object?>? config;
@@ -69,6 +70,13 @@ void main() {
       supportDir: () async => r.dir,
       kinds: [
         DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'libraries': libs}, notShared: const {'libraries': kLibraryNotShared}),
+        DataKind(
+          id: 'regions',
+          label: 'Regions',
+          icon: Icons.map_outlined,
+          shared: () => {'maps': Directory('${r.dir.path}/maps'), 'regions': Directory('${r.dir.path}/regions')},
+          notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
+        ),
         DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': Directory('${r.dir.path}/Shared')}),
       ],
       opener: (c) async {
@@ -78,7 +86,13 @@ void main() {
     );
     await tester.runAsync(sharing.setUp);
     // The engine is told at its start, before its first round, so nothing of an index goes out or comes in even once.
-    expect(config?['exclude'], {'libraries': ['*/index']});
+    // The same patterns cache_sync's tests check (packages/cache_search/native/cache_sync/tests/derived_folders.rs): fetched
+    // indexes, the viewed-tile cache and TileJSON, and SQLite's -shm and -journal; every downloaded part still syncs.
+    expect(config?['exclude'], {
+      'libraries': ['*/index'],
+      'maps': ['tiles.sqlite*', 'tilejson', '**/*-shm', '**/*-journal'],
+      'regions': ['index', 'places/index', '**/*-shm', '**/*-journal'],
+    });
     // The pattern names exactly where a library keeps its index: <libraries>/<library>/index.
     final item = LibraryItem(dir: Directory('${libs.path}${Platform.pathSeparator}first-aid'), size: 0);
     expect(item.indexPath.substring(libs.path.length + 1).replaceAll(Platform.pathSeparator, '/'), 'first-aid/index');

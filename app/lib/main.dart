@@ -236,6 +236,8 @@ class _CacheAppState extends State<CacheApp> {
         'maps': sources.layersSection['dir'] is String ? Directory(sources.layersSection['dir'] as String) : null,
         'regions': _support('regions'),
       },
+      // What each device makes for itself in those folders (fetched indexes, the viewed-tile cache, SQLite's -shm) never syncs.
+      notShared: const {'maps': kMapLayersNotShared, 'regions': kRegionsNotShared},
       count: () => regions.local.length,
       list: () => RegionsScreen(regions: regions, initialTab: 1),
     ),
