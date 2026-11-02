@@ -49,11 +49,14 @@ String encodeSourceId(String id) {
   return out.toString();
 }
 
-/// What this device fetches of the indexes folder: the regions' tile indexes ([kIndexKindsAlways]), and the index folders of the
-/// sources the core has open (their `source_id` in cs_status), every kind each of them has. A source the core could not open
-/// (no source id) fetches nothing.
-List<String> indexesFetchOnly(Iterable<SourceStatus> sources) => {
+/// What this device fetches of the indexes folder: the regions' tile indexes ([kIndexKindsAlways]), the captions of the videos
+/// saved here ([savedVideos], their `<instance>/<uuid>`), and the index folders of the sources the core has open (their
+/// `source_id` in cs_status), every kind each of them has. A source the core could not open (no source id) fetches nothing.
+List<String> indexesFetchOnly(Iterable<SourceStatus> sources, {Iterable<String> savedVideos = const []}) => {
   ...kIndexKindsAlways,
+  // Each saved video's captions ("<instance>/<video uuid>"), on whichever device indexed them.
+  for (final v in savedVideos)
+    if (v.isNotEmpty) 'captions/${encodeSourceId(v)}',
   for (final s in sources)
     if (s.sourceId != null && s.sourceId!.isNotEmpty)
       for (final kind in kIndexKindsOfSource[s.kind] ?? const <String>[]) '$kind/${encodeSourceId(s.sourceId!)}',

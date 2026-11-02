@@ -58,7 +58,7 @@ abstract class IndexWorkSource {
 }
 
 /// Why nothing runs right now, when there is work.
-enum IndexWait { none, closed, battery, charging, storage, heat }
+enum IndexWait { none, closed, battery, charging, storage, heat, model }
 
 /// The one place that decides when automatic index work runs (every kind: index_source, index_seal, the PDF loop). Rules:
 /// only while the app is open; one piece at a time, the most used first and, among those, the smallest; long work needs
@@ -197,9 +197,15 @@ class IndexScheduler extends ChangeNotifier {
   }
 
   IndexWait _blocked(IndexTask t, BatteryReading? b, Space s, {required bool running}) {
-    // Too warm: nothing new starts (what runs is held by the throttle's duty, not stopped).
+    // Held by the throttle (too warm, a low battery, the model generating): nothing new starts; what runs is held by its duty.
     final d = throttle?.duty;
-    if (!running && d != null && d.paused && d.hold == IndexHold.heat) return IndexWait.heat;
+    if (!running && d != null && d.paused) {
+      return switch (d.hold) {
+        IndexHold.heat => IndexWait.heat,
+        IndexHold.battery => IndexWait.battery,
+        IndexHold.model || IndexHold.none => IndexWait.model,
+      };
+    }
     if (b != null) {
       if (b.low) return IndexWait.battery;
       // Long work starts only on charge or above half; once running it goes on until the battery is low.

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../pdf/index/pdf_index_app.dart';
 import '../pdf/index/pdf_index_ui.dart';
+import '../search/core_index_calls.dart' show coreIndexShared;
+import '../search/epub_index_row.dart';
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
 import '../layout/adaptive.dart';
@@ -178,8 +180,25 @@ class _BrowseScreenState extends State<BrowseScreen> {
                   if (mounted) modules.addToHome(context, layout, Shortcut.page(address: address, title: sources.titleOf(z), library: 'Library'));
                 }),
       delete: () => sources.remove(z),
-      // The PDFs part: make the ZIM's PDFs searchable on this device (nothing shows while the core cannot, or it has none).
-      parts: pdfIndexShared == null ? null : (_) => PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z)),
+      // The PDFs part: make the ZIM's PDFs searchable on this device (nothing shows while the core cannot, or it has none); its
+      // EPUBs beside it (the scheduler's core work).
+      parts: pdfIndexShared == null && coreIndexShared == null
+          ? null
+          : (_) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (pdfIndexShared != null) PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z)),
+                ListenableBuilder(
+                  listenable: Listenable.merge([sources, ?coreIndexShared?.progress]),
+                  builder: (context, _) {
+                    final e = sources.statusAt(z.path)?.epubIndex;
+                    final id = e?.sourceId ?? sources.idOf(z);
+                    return EpubIndexRow(epub: e, progress: id == null ? null : coreIndexShared?.progress.value['zim-epub/$id']);
+                  },
+                ),
+              ],
+            ),
     );
   }
 
