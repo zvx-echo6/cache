@@ -1,0 +1,280 @@
+# What Cache does on each kind of device. Source for cached.info/features (tools/site/gen_features.py).
+# Each cell is "now" (works in this version), a release such as "1.1" (coming), or "-" (doesn't apply, or not planned).
+# Claim "now" only for what the app really does in `version`, as the guide (docs/guide) describes it.
+# Linux & Pi is Cache Server: the full app in a browser, shipping in 1.1.
+version: "1.0.30"
+areas:
+  - area: Ask
+    features:
+      - feature: Ask in plain words
+        text: A private assistant that runs on your device and answers from your own sources.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Sources for every answer
+        text: Tap a source to open the page, the PDF at its page, or the video at that moment.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Choose your model
+        text: Pick a recommended model, or any suitable model from Hugging Face. Without one, Cache still searches.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Saved chats
+        text: Chats are kept, and can be searched, pinned, renamed or shared.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Web search
+        text: Optional, with your own Kagi key, when you are online.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Long chats
+        text: Keep a conversation going for 30 to 40 questions.
+        android: "1.1"
+        ios: "1.1"
+        linux: "1.1"
+
+  - area: Search and Library
+    features:
+      - feature: One search box
+        text: Home searches your library, notebooks, places and map layers at once.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Kiwix libraries
+        text: Wikipedia, medical guides and survival manuals from the Kiwix catalogue, offline.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Search inside PDFs, e-books and captions
+        text: Text inside a library's PDFs, EPUBs and video captions is searchable, and answers cite the page.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: PDF reader
+        text: Read PDFs in Cache, find text, go to a page, and turn on dark pages.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Add your own library
+        text: Add a library from a file or a download link.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Build libraries from your PDFs
+        text: Turn your own PDFs into a searchable library, updated one book at a time.
+        android: "1.1"
+        ios: "1.1"
+        linux: "1.1"
+      - feature: Books sorted by subject
+        text: Cache files your books by subject, and asks when it isn't sure.
+        android: "1.1"
+        ios: "1.1"
+        linux: "1.1"
+      - feature: Smaller PDFs
+        text: Make PDFs smaller as you add them, without losing quality.
+        android: "1.2"
+        ios: "1.2"
+        linux: "1.1"
+
+  - area: Maps and Directions
+    features:
+      - feature: Offline regions
+        text: Download a region, from part of a state to a country, for maps, directions and places with no signal.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Directions
+        text: Drive, walk or bike, with stops on the way.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Off-road routes
+        text: Routes away from roads, on foot or by vehicle, with a choice of land access.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Turn-by-turn guidance
+        text: Spoken directions that keep going with the screen locked.
+        android: now
+        ios: now
+        linux: "-"
+      - feature: Map tools
+        text: Press and hold the map for directions from or to a spot, measuring, and saving it to a notebook.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Your own map files
+        text: Add places or repeater lists from a file as a map layer.
+        android: now
+        ios: now
+        linux: "1.1"
+
+  - area: Places
+    features:
+      - feature: Place search
+        text: Find towns, addresses and coordinates offline.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Saved places
+        text: Save places to the Places notebook; they show on the map.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Read about it
+        text: Places with a Wikipedia article show a short summary and open the article.
+        android: now
+        ios: now
+        linux: "1.1"
+
+  - area: Notebooks
+    features:
+      - feature: Journal, logs and notes
+        text: Dated entries, repeat logs with ready-made templates, and notes, written in Markdown.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Repeater lists
+        text: Import a RepeaterBook or CHIRP list; each repeater shows on the map with its details.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Add from Ask
+        text: Tell Ask to log something, such as a generator test, and check the card before it saves.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Obsidian and Logseq
+        text: Keep entries as Markdown files in an Obsidian vault or Logseq graph.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Private notebooks
+        text: Keep a notebook or an entry out of sync and sharing.
+        android: now
+        ios: now
+        linux: "1.1"
+
+  - area: Videos
+    features:
+      - feature: Video sites
+        text: Browse and search PeerTube sites, and sign in to play private videos.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Save videos offline
+        text: Download a video at the size you choose, with its captions.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Video player
+        text: Captions, speed, quality, and resume where you stopped.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Search your videos
+        text: Find saved videos by what's said in them.
+        android: now
+        ios: now
+        linux: "1.1"
+
+  - area: Weather and Alerts
+    features:
+      - feature: Forecasts
+        text: Weather for where you are and for the places you save.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Weather and emergency alerts
+        text: National Weather Service alerts and FEMA emergency alerts, shown together.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Wildfires and more
+        text: Wildfires, earthquakes, river levels, space weather and more, switched on as you need them.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Pop-up alerts
+        text: Choose which alerts pop up, with quiet hours and settings for each place.
+        android: now
+        ios: now
+        linux: "-"
+
+  - area: Sync and Devices
+    features:
+      - feature: Link your devices
+        text: Your own devices keep in step directly, linked by a one-time code, with no account.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Shared search indexes
+        text: A search index built on one device is used by your others.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Tablets and big screens
+        text: Two panes side by side on tablets, and a wide layout for big screens.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Downloads from your own devices
+        text: Downloads come from your linked devices first, then the internet.
+        android: "1.1"
+        ios: "1.1"
+        linux: "1.1"
+      - feature: Background sync
+        text: Devices keep in step even while Cache is closed.
+        android: "1.1"
+        ios: "1.1"
+        linux: "-"
+
+  - area: Privacy and Offline
+    features:
+      - feature: No account, no tracking
+        text: No accounts, analytics or ads. Your chats, notes and keys stay on your device.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Works with no signal
+        text: Library, maps, directions, places, notebooks and saved videos work offline.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Your location, your choice
+        text: Separate switches for location in Ask, on the map, and for weather.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Sign-in for the browser
+        text: Cache Server asks for a password or a security key.
+        android: "-"
+        ios: "-"
+        linux: "1.1"
+
+  - area: Settings
+    features:
+      - feature: Your Home screen
+        text: Choose Home's blocks, shortcuts and the modules on the bar.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Storage
+        text: See what Cache uses, clean up, and always keep room free for the device.
+        android: now
+        ios: now
+        linux: "1.1"
+      - feature: Downloads on Wi-Fi
+        text: Big downloads ask first, and wait for Wi-Fi unless you allow mobile data.
+        android: now
+        ios: now
+        linux: "-"
+      - feature: Appearance
+        text: Themes, dark PDF pages and module icon size.
+        android: now
+        ios: now
+        linux: "1.1"

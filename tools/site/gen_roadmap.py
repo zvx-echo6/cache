@@ -194,7 +194,7 @@ footer .wrap {{ display:flex; gap:1rem 1.5rem; flex-wrap:wrap; }}
 <section aria-labelledby="later"><h2 id="later">Later</h2><p class="note">Planned for later releases. Details and dates are not set.</p><div class="later-grid">{later_html}</div></section>
 <p class="meta">Updated <time datetime="{today}">{today}</time>. Generated from the <a href="{PROJECT_URL}">Cache roadmap project on GitHub</a>.</p>
 </main>
-<footer><div class="wrap"><span>Happy Little LLC</span><a href="mailto:info@happylittlellc.com">info@happylittlellc.com</a><a href="/changes">What's new</a><a href="/privacy">Privacy</a></div></footer>
+<footer><div class="wrap"><span>Happy Little LLC</span><a href="mailto:info@happylittlellc.com">info@happylittlellc.com</a><a href="/changes">What's new</a><a href="/roadmap">Roadmap</a><a href="/features">Features</a><a href="/privacy">Privacy</a></div></footer>
 </body>
 </html>
 """

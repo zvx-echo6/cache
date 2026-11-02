@@ -1,6 +1,6 @@
-# Rebuilds cached.info/roadmap from the public "Cache roadmap" GitHub project, hourly and on demand.
-# It uploads only when the page changed (compared with the stored object's MD5), and never uploads if the
-# generator finds a blocked word (tools/site/gen_roadmap.py stops before writing anything).
+# Rebuilds cached.info/roadmap (from the public "Cache roadmap" GitHub project) and cached.info/features
+# (from docs/features.yml), hourly and on demand. Each page is uploaded only when it changed (compared with the stored object's MD5), and never uploads if the
+# generator finds a blocked word (the generators in tools/site stop before writing anything).
 #
 # Secrets:
 #   ROADMAP_GH_TOKEN   read-only access to user projects (the built-in token cannot read them). Until it exists, runs skip.
@@ -46,14 +46,19 @@ jobs:
         if: steps.ready.outputs.go == 'true'
       - name: Generate
         if: steps.ready.outputs.go == 'true'
-        run: python3 tools/site/gen_roadmap.py roadmap.html
-      - name: Upload if changed
+        run: |
+          python3 -m pip install --quiet pyyaml==6.0.2
+          python3 tools/site/gen_roadmap.py roadmap.html
+          python3 tools/site/gen_features.py docs/features.yml features.html
+      - name: Upload what changed
         if: steps.ready.outputs.go == 'true'
         run: |
-          new=$(md5sum roadmap.html | cut -d' ' -f1)
-          old=$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket cached-site --key roadmap.html \
-                  --query ETag --output text 2>/dev/null | tr -d '"' || true)
-          if [ "$new" = "$old" ]; then echo "Unchanged; nothing uploaded."; exit 0; fi
-          aws s3 cp roadmap.html s3://cached-site/roadmap.html --endpoint-url "$R2_ENDPOINT" \
-            --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300' --only-show-errors
-          echo "Uploaded roadmap.html ($old -> $new)."
+          for page in roadmap.html features.html; do
+            new=$(md5sum "$page" | cut -d' ' -f1)
+            old=$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket cached-site --key "$page" \
+                    --query ETag --output text 2>/dev/null | tr -d '"' || true)
+            if [ "$new" = "$old" ]; then echo "$page unchanged."; continue; fi
+            aws s3 cp "$page" "s3://cached-site/$page" --endpoint-url "$R2_ENDPOINT" \
+              --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300' --only-show-errors
+            echo "Uploaded $page."
+          done
