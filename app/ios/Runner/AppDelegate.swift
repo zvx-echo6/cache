@@ -64,7 +64,7 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
-    // Making a library's PDFs searchable pauses by itself when the battery runs low and the iPhone is not plugged in.
+    // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
     let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
     battery.setMethodCallHandler { call, result in
       guard call.method == "read" else {

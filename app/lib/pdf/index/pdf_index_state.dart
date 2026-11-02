@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../../settings/space.dart';
-import 'battery.dart';
+import '../../platform/battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_index_run.dart';
 import 'pdf_pages.dart';

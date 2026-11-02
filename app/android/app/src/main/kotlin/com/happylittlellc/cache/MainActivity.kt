@@ -53,8 +53,8 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    // Making a library's PDFs searchable pauses by itself when the battery runs low and the phone is not plugged in.
-    // The sticky battery broadcast answers at once and needs no permission.
+    // Battery level and whether the phone is plugged in (lib/platform/battery.dart): long automatic work (search indexes)
+    // waits for charging or enough battery. The sticky battery broadcast answers at once and needs no permission.
     private fun battery(): Map<String, Any> {
         val status: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = status?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1

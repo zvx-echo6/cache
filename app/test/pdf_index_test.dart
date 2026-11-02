@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cache/pdf/index/battery.dart';
+import 'package:cache/platform/battery.dart';
 import 'package:cache/pdf/index/pdf_index_core.dart';
 import 'package:cache/pdf/index/pdf_index_fake.dart';
 import 'package:cache/pdf/index/pdf_index_run.dart';

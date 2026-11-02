@@ -5,7 +5,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 
 import '../pdf_source.dart' show isNoSpace;
-import 'battery.dart';
+import '../../platform/battery.dart';
 import 'pdf_index_core.dart';
 import 'pdf_pages.dart';
 
