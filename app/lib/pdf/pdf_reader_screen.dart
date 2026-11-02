@@ -54,6 +54,9 @@ class PdfReaderScreen extends StatefulWidget {
     this.debugPhase,
     this.debugFileBytes,
     this.debugZoomLimited = false,
+    this.debugFindStallAfter,
+    this.debugPlaceholders = false,
+    this.debugBrowser = false,
   });
 
   final PdfSource source;
@@ -72,6 +75,15 @@ class PdfReaderScreen extends StatefulWidget {
 
   /// Renders and tests: zoom is capped on this device (the label shows).
   final bool debugZoomLimited;
+
+  /// Renders and tests: find stops reading pages after this page (to show a search still running).
+  final int? debugFindStallAfter;
+
+  /// Renders and tests: every page but the current one is drawn as not yet read (a large file while scrolling).
+  final bool debugPlaceholders;
+
+  /// Renders and tests: word the slow-opening line as in a browser.
+  final bool debugBrowser;
 
   @override
   State<PdfReaderScreen> createState() => _PdfReaderScreenState();
@@ -261,7 +273,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       final start = widget.initialPage ?? 1;
       _page = start >= 1 && start <= _pageCount ? start : 1;
       _announcedPage = _page;
-      _find = PdfFind(pageCount: _pageCount, pageText: _plainText)..onCurrent = _goToMatch;
+      final stall = widget.debugFindStallAfter;
+      _find = PdfFind(pageCount: _pageCount, pageText: stall == null ? _plainText : (p) => p > stall ? Completer<String>().future : _plainText(p))
+        ..onCurrent = _goToMatch;
       _setPhase(_Phase.open, () => _wrongPassword = false);
       unawaited(_afterOpen(start));
     } on PdfPasswordException {
@@ -522,16 +536,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Future<void> _askToOpen(Uri url) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        content: const Text('Open this link in your browser? It needs a connection.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Open')),
-        ],
-      ),
-    );
+    final ok = await askToOpenPdfLink(context);
     if (ok == true) {
       try {
         await openInSystemBrowser(url.toString());
@@ -543,7 +548,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   void _paintPage(ui.Canvas canvas, Rect rect, PdfPage page) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    if (!page.isLoaded) {
+    if (!page.isLoaded || (widget.debugPlaceholders && page.pageNumber != _page)) {
       // Not read yet (a large file): a grey page with its number.
       canvas.drawRect(rect, Paint()..color = const Color(0xFFBDBDBD));
       final tp = TextPainter(
@@ -954,7 +959,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
               const SizedBox(height: 16),
               Text(
                 _slow
-                    ? (kIsWeb ? 'Still opening. Big files can be slow in a browser.' : 'Still opening.${_fileBytes == null ? '' : ' This file is ${formatBytes(_fileBytes!)}.'}')
+                    ? (kIsWeb || widget.debugBrowser ? 'Still opening. Big files can be slow in a browser.' : 'Still opening.${_fileBytes == null ? '' : ' This file is ${formatBytes(_fileBytes!)}.'}')
                     : 'Opening...',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16, color: k.text),
@@ -1178,6 +1183,18 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     if (n != null && mounted) _goToPage(n, animate: false);
   }
 }
+
+/// A web link in a PDF: "Open this link in your browser? It needs a connection." Open or Cancel.
+Future<bool?> askToOpenPdfLink(BuildContext context) => showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        content: const Text('Open this link in your browser? It needs a connection.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Open')),
+        ],
+      ),
+    );
 
 /// The "Go to page" sheet: a number field (number keypad), "of 340", a slider, and Go. A number outside the PDF shows
 /// "Pages 1 to 340" in red and Go is off.

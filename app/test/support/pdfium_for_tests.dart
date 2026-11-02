@@ -9,9 +9,7 @@ const String kTestPdfiumRelease = 'chromium%2F7811';
 /// person would point at it: PDFIUM_PATH, a copy the build hook already made under .dart_tool or build/, or else the same
 /// release from pdfium-binaries, downloaded once into the system temp folder (tests on CI have a network).
 Future<void> pdfiumForTests() async {
-  if (Pdfrx.pdfiumModulePath == null) {
-    Pdfrx.pdfiumModulePath = _fromEnv() ?? _built() ?? await _downloaded();
-  }
+  Pdfrx.pdfiumModulePath ??= _fromEnv() ?? _built() ?? await _downloaded();
   await pdfrxInitialize(tmpPath: Directory.systemTemp.createTempSync('pdfrx-cache').path);
 }
 

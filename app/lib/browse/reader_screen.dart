@@ -12,6 +12,7 @@ import '../layout/modules_screen.dart' show addToHome;
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
 import '../pdf/pdf_reader_screen.dart';
+import '../pdf/pdf_source.dart';
 import '../screens/search_model_line.dart';
 import '../sources/sources_state.dart';
 import '../theme.dart';
