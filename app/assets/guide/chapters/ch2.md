@@ -484,6 +484,8 @@ To change how fast Cache builds in the background, see Background indexing speed
 
 PDFs open in their own reader. It takes the whole window.
 
+![The PDF reader](shot:pdf-reader)
+
 You can open a PDF from:
 - a link in a Library page, or a search result;
 - a source in "Ask";
