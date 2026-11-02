@@ -420,6 +420,7 @@ void _workerMain(List<dynamic> init) {
                 'index': s.index?.toJson(),
                 'captionsindex': s.captionsIndex?.toJson(),
                 'epubindex': s.epubIndex?.toJson(),
+                'pdfindex': s.pdfIndex?.toJson(),
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];

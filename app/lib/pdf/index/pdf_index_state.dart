@@ -138,6 +138,7 @@ class PdfIndexState extends ChangeNotifier {
     this.onIndexReady,
     this.autoStart = pdfAutoStartAlways,
     this.watchEvery = const Duration(seconds: 30),
+    this.coreIndex,
     DateTime Function()? clock,
   }) : space = space ?? ((d) => Space.of(d)),
        clock = clock ?? DateTime.now {
@@ -164,6 +165,12 @@ class PdfIndexState extends ChangeNotifier {
   PdfAutoStart? autoStart;
   final Duration watchEvery;
   final DateTime Function() clock;
+
+  /// How the core uses [z]'s PDF index (cs_status "pdfindex"): its state ("opening", "ready", "none") and the snapshot it uses;
+  /// null when the core has not reported on the ZIM yet. "none" with a snapshot here means the snapshot is not one this core
+  /// can use (another format: the core's format changed, or a newer core built it), so it is made again here, as any ZIM
+  /// with PDFs and no index is; no error is shown.
+  final (String, String?)? Function(PdfZimRef z)? coreIndex;
 
   /// The index scheduler's throttle (its permit call), awaited before each PDF and between pages; null never waits. Set by the
   /// app where the scheduler is made.
@@ -259,6 +266,8 @@ class PdfIndexState extends ChangeNotifier {
   /// The ZIMs changed: list the new ones' PDFs, stop a run whose ZIM went (and remove its index), and queue what needs doing.
   void _onZims() {
     if (!_loaded || !available) return;
+    // What the core says about each ZIM's index may have changed with the sources.
+    _snaps.clear();
     final now = zims();
     final paths = {for (final z in now) z.path};
     if (_runPath != null && !paths.contains(_runPath)) _run?.stop(PdfRunStop.cancel);
@@ -325,7 +334,26 @@ class PdfIndexState extends ChangeNotifier {
     final m = _snaps[z.path];
     final now = clock();
     if (!fresh && m != null && now.difference(m.$1) < const Duration(seconds: 10)) return m.$2;
-    final s = _paths(z)?.current();
+    final paths = _paths(z);
+    final c = coreIndex?.call(z);
+    PdfSnapshot? s;
+    if (paths == null) {
+      s = null;
+    } else if (c == null) {
+      // The core has not said: the snapshots here decide.
+      s = paths.current();
+    } else if (c.$1 == 'none') {
+      // No snapshot the core can use: incompatible ones here are rebuilt. One this device has just published is trusted for a
+      // minute while the core attaches it.
+      final built = _rec(z.fileName)['built'];
+      final at = DateTime.tryParse('${_rec(z.fileName)['built_at']}');
+      final mine = built is String ? PdfSnapshot.read(Directory('${paths.snaps.path}${Platform.pathSeparator}$built')) : null;
+      s = mine != null && at != null && now.difference(at) < const Duration(minutes: 1) ? mine : null;
+    } else {
+      // Ready or opening: the snapshot the core uses.
+      final id = c.$2;
+      s = (id == null ? null : PdfSnapshot.read(Directory('${paths.snaps.path}${Platform.pathSeparator}$id'))) ?? paths.current();
+    }
     _snaps[z.path] = (now, s);
     return s;
   }
@@ -635,7 +663,13 @@ class PdfIndexState extends ChangeNotifier {
     // This device built it: recorded before the run lets go, so the snapshot never shows as one from another device (a kill
     // right after the publish would otherwise leave it so).
     if (end == PdfRunEnd.finished) {
-      await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true)?.id, 'built_uuid': z.uuid});
+      await _put(z.fileName, {
+        'pause': null,
+        'handled': null,
+        'built': run.result?['snapshot'] ?? _paths(z)?.current()?.id,
+        'built_uuid': z.uuid,
+        'built_at': clock().toIso8601String(),
+      });
     }
     _run = null;
     _runPath = null;
