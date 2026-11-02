@@ -120,9 +120,9 @@ void main() {
       changes: ValueNotifier(0),
       indexesDir: () async => Directory('${dir.path}/shared-indexes'),
       recordFile: () async => File('${dir.path}/pdf-index.json'),
-      readPages: (bytes, name) async {
+      readPages: (bytes, name, {betweenPages}) async {
         await Future<void>.delayed(const Duration(milliseconds: 30));
-        return readFakePdfPages(bytes, name);
+        return readFakePdfPages(bytes, name, betweenPages: betweenPages);
       },
       battery: () async => battery,
       space: (_) => const Space(free: 100 << 30, reserve: 0),
