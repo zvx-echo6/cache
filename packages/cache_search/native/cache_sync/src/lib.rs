@@ -769,6 +769,19 @@ impl Inner {
             v
         })
         .await?;
+        #[cfg(feature = "test-hooks")]
+        {
+            // A rescan caught between reading the index and storing it: held while `<dir>/hold-rescan` exists (it says so with
+            // `<dir>/hold-rescan.held`), so a test can call in meanwhile.
+            let hold = self.dir.join("hold-rescan");
+            if hold.exists() {
+                let _ = std::fs::write(self.dir.join("hold-rescan.held"), b"");
+                while hold.exists() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                let _ = std::fs::remove_file(self.dir.join("hold-rescan.held"));
+            }
+        }
         let mut changed = refetched;
         // What an earlier version listed under a path that never syncs now is forgotten, not marked deleted: a delete would go to
         // the other devices and remove their own copies.

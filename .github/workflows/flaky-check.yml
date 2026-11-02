@@ -27,7 +27,7 @@ jobs:
           workspaces: packages/cache_search/native -> target
           cache-on-failure: true
       - name: Build the test
-        run: cargo test -p cache_sync --locked --test index_share --no-run
+        run: cargo test -p cache_sync --locked --test index_share --test set_only_race --no-run
       - name: The index_share test 12 times, 3 at once (busy, as on the shared runner)
         run: |
           fails=0
