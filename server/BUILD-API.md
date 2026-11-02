@@ -40,7 +40,7 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 | `POST /api/build/libraries` | `{"title"}` | the new library; 409 `name_taken` ("You already have a library called "X". Choose another name, or add to it.") |
 | `PATCH /api/build/libraries/{id}` | `{"title"}` | the library; 404, 409 `name_taken` |
 | `DELETE /api/build/libraries/{id}` | | `{removed:true,id}`; deletes books, packs, PDF copies and search data. 409 `busy` while a book of it is being built. Confirm in the UI. |
-| `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
+| `GET /api/build/libraries/{id}/books` | query `division=<number>\|unsorted`, `class=<number>`, `sort=title\|call` | `[{id,doc_version,title,pages,passages,ocr_pages,partial,file_name,size,added_at,status, text_pages,year,ppi, class,class_name,division,division_name,call_number,unsorted,suggestions,classifier_version,unsure_reason,placed_by_hand,moved_from,filed_in,compression}]`, by title (default) or, with `sort=call`, Unsorted first and then by call number; `status` is `ready` or `replacing`; `partial` is e.g. `"partial: 2 pages need OCR"` or null |
 | `PATCH /api/build/libraries/{id}/books/{doc}` | `{"title"}` | `{id,title}`. Nothing is embedded again. The call number keeps its letters; the filed PDF takes the new title in its name. |
 | `GET /api/build/libraries/{id}/books/{doc}/suggestions` | | "Place it": `{id,unsorted,classifier_version,suggestions:[{division,name,class,score}],unsure_reason}`: the sorter's top 3 divisions for the book as stored when it was sorted, best first (`score` is the probability; the list is empty for a book that has not been sorted, e.g. with no model file). 404. |
 | `POST /api/build/libraries/{id}/books/{doc}/place` | `{"division": "530", "device"?: "Kitchen tablet"}` (`"unsorted"` or null puts it back) | the book (as listed). The placement is added to the corrections log (see "Filing by subject"). The device copy and the copy in the drop folder's `complete/` move, the call number takes the new division, `placed_by_hand` is true and `moved_from` names where it was ("Unsorted" or "530 Water treatment"). 400 `invalid` for a division that does not exist or is unassigned; 404. |
@@ -53,8 +53,42 @@ list of source ids; a built library's source id is its `library_id` (the id in `
 
 `POST /api/build/upload?library_id=<id>&name=<file name>` with the PDF as the body (streamed to disk, any size, `Content-Length`
 required). Result: the queue item. Errors: 404 (no such library), 400 `invalid_name`, 400 `not_pdf`, 411, 507 `no_space`
-("Not enough space on this device..."). Upload one request per file. Building starts at once when the search model is there, and
+("Not enough space on this device..."). Optional: `&compression=off|lossless|smaller_scans` and `&preset=high|balanced|smallest`
+(see "Compression" below; 400 `invalid` for anything else). Upload one request per file. Building starts at once when the search model is there, and
 waits (item stays `queued`, the queue says `blocked`) while it is not, so PDFs may be added during the model download.
+
+## Compression
+
+Optional, per book, chosen before the book is stored. The app keeps its own default (a device setting, not synced) and sends the choice
+with each upload; a drop-folder file has nobody to ask, so the drop folder has its own setting (`PUT /api/build/drop`, `compression`).
+A file with no choice is stored as it arrived (`off`).
+
+| level | what it does |
+|---|---|
+| `off` | the file is stored as it is |
+| `lossless` | MuPDF rewrites the file: unused and duplicate objects removed, every stream deflated (at the best level), objects packed into object streams. Pages must render pixel-identical. |
+| `smaller_scans` + `preset` | `lossless`, after the page pictures are recompressed (JPEG) and downsampled. Text, fonts, vector drawings, one-bit pictures and pictures with masks are not touched. `preset` is `high`, `balanced` (the default) or `smallest`. |
+
+Presets: `high` JPEG quality 85, pictures drawn finer than 360 pixels per inch go down to 300; `balanced` quality 70, above 240 down to 200;
+`smallest` quality 50, above 180 down to 150. The resolution is measured from where the page really draws the picture.
+
+Safety, for every file: five pages spread through the book are drawn before and after at 100 dpi and the lowest PSNR is kept
+(`psnr_min`; 100 means pixel-identical). `lossless` must be identical. A `smaller_scans` result must stay at or above its floor
+(`high` 30 dB, `balanced` 26 dB, `smallest` 24 dB); if a page falls below it, or the pictures did not get smaller, the book is stored
+with the `lossless` result instead (pictures untouched) and `kept_reason` says why. If the result is not at least 2% smaller than the
+original, or the file is encrypted, signed or damaged, the original is kept. The result is never larger.
+
+Order: the file is compressed first, then hashed (BLAKE3) and stored, so the book's `blake3`, the pack's source hash and the device
+copy in `sources/` all refer to the stored file. The text is read from the same stored file, so passages and page numbers are those of what
+is kept. The hash of the file as it arrived is kept too (`original_blake3`), so the same upload again is still found as an exact copy.
+(A drop-folder file in `complete/` stays the person's own file, not the compressed one.) The compression runs in the same crash-proof
+child as reading, with the same time and memory limits; a PDF that crashes it fails only its own book.
+
+What happened is on the book (`compression` in the book list, and on the queue item as the choice asked for):
+`{"original_size", "stored_size", "level", "preset", "kept_original", "kept_reason", "psnr_min"}`. `level` and `preset` are what was asked
+for; `kept_original` is true when the stored file is the original; `kept_reason` says why (also set when `smaller_scans` fell back to
+`lossless`); `psnr_min` is null when no check ran. `cache-build pdf <in.pdf> --out <dir> --compress off|lossless|smaller_scans[:preset]`
+does the same from the command line and prints the result.
 
 ## Queue
 
@@ -68,7 +102,7 @@ waits (item stays `queued`, the queue says `blocked`) while it is not, so PDFs m
   "pieces_per_second": 1.4 | null,
   "items": [ {id, library_id, file_name, title, state, size,
               progress: {pages, pieces, pieces_total, ocr_pages},
-              error, note, replace, doc_id, duplicate_of, drop, position, created_at, started_at, finished_at,
+              error, note, replace, compression, doc_id, duplicate_of, drop, position, created_at, started_at, finished_at,
               result, division, call_number, decision} ] }
 ```
 
@@ -129,11 +163,11 @@ folder". `no_library` ("Choose the library the PDFs go into") means PDFs are wai
 
 | Call | Body | Result |
 |---|---|---|
-| `PUT /api/build/drop` | any of `{"folder": "/absolute/path", "enabled": bool, "library_id": id or null}` | the same as GET. Turning it on makes the folder and the three subfolders. |
+| `PUT /api/build/drop` | any of `{"folder": "/absolute/path", "enabled": bool, "library_id": id or null, "compression": {"level": "off\|lossless\|smaller_scans", "preset"?: "high\|balanced\|smallest"}}` | the same as GET. Turning it on makes the folder and the three subfolders. |
 | `POST /api/build/drop/check` | | the same as GET, after looking now |
 | `POST /api/build/drop/retry` | `{"name"}` (a file in `failed/`) | the same as GET. The file goes back to `ingest/` and joins the end of the queue. |
 
-Default folder: `<data>/drop`, off, no library chosen. Deleting the chosen library clears the choice.
+Default folder: `<data>/drop`, off, no library chosen, compression off. `settings.compression` is the drop folder's compression (below). Deleting the chosen library clears the choice.
 
 ## Filing by subject
 

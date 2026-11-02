@@ -52,6 +52,7 @@ impl BuildService {
             "classifier_version": b.classifier_version,
             "unsure_reason": if found.is_none() { b.unsure.as_deref().map(classify::unsure_message) } else { None },
             "placed_by_hand": b.placed, "moved_from": b.moved_from,
+            "compression": b.compression,
             "filed_in": b.source_rel.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d),
         })
     }

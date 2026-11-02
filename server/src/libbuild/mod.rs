@@ -38,6 +38,7 @@ use removed::RemovedEntry;
 use same::{Match, Quality};
 use crate::library::{free_bytes, now_rfc3339, random_hex, sanitize_name, ApiErr, Library};
 use cache_builder::incremental::{publish_copy, rebuild_from_packs, WorkShard};
+use cache_builder::compress::{Compression, CompressionOutcome, Level};
 use cache_builder::isolate::ChildExtractor;
 use cache_builder::pack::{read_pack, write_pack, Pack};
 use cache_builder::fingerprint::{decode_minhash, encode_minhash, jaccard, mean_vector};
@@ -206,6 +207,9 @@ pub struct Item {
     /// The book this one replaces (a new edition): same `doc_id`, `doc_version + 1`.
     #[serde(default)]
     pub replace: Option<String>,
+    /// Compression chosen for this upload; a drop-folder file uses the drop folder's setting, anything else is stored as it is.
+    #[serde(default)]
+    pub compression: Option<Compression>,
     pub state: S,
     #[serde(default)]
     pub pages: Option<u32>,
@@ -266,6 +270,7 @@ impl Item {
             origin,
             title: None,
             replace: None,
+            compression: None,
             state: S::Queued,
             pages: None,
             pieces_done: 0,
@@ -351,6 +356,12 @@ pub struct Book {
     pub drop_copy: Option<String>,
     #[serde(default)]
     pub drop_root: Option<String>,
+    /// What compression did to the stored PDF (see `cache_builder::compress`); none for a book stored as it arrived.
+    #[serde(default)]
+    pub compression: Option<CompressionOutcome>,
+    /// The BLAKE3 hash of the file as it arrived, when compression changed it (`blake3` is then the stored file's hash).
+    #[serde(default)]
+    pub original_blake3: Option<String>,
 }
 
 impl Book {
@@ -475,6 +486,17 @@ pub struct BuildService {
 struct ClassCache {
     mtime: Option<std::time::SystemTime>,
     classes: Arc<Classes>,
+}
+
+/// `compression=off|lossless|smaller_scans` and `preset=high|balanced|smallest` on an upload; none when the query has neither.
+fn compression_from_query(query: &str) -> Result<Option<Compression>, ApiErr> {
+    let level = crate::fetch::query_param(query, "compression");
+    let preset = crate::fetch::query_param(query, "preset");
+    let Some(level) = level else {
+        return if preset.is_some() { Err(err(400, "invalid", "a preset needs compression=smaller_scans")) } else { Ok(None) };
+    };
+    let level: Level = serde_json::from_value(Value::String(level)).map_err(|_| err(400, "invalid", "compression is off, lossless or smaller_scans"))?;
+    Compression::from_parts(level, preset.as_deref()).map(Some).map_err(|m| err(400, "invalid", m))
 }
 
 fn write_json(path: &Path, v: &impl Serialize) -> std::io::Result<()> {
@@ -922,16 +944,46 @@ impl BuildService {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && item.origin == Origin::Drop => return Outcome::Gone,
             Err(e) => return Outcome::Failed(format!("The file could not be read: {e}")),
         };
-        let hash = blake3::hash(&bytes).to_hex().to_string();
+        let mut bytes = bytes;
+        let mut hash = blake3::hash(&bytes).to_hex().to_string();
+        // An exact copy is found by the hash of the file as it arrived, or of the file as it was stored (a book kept after compression).
+        let find = |h: &str| {
+            let st = lock(&self.st);
+            let m = st.libs.iter().find(|l| l.id == item.library_id)?;
+            Some(m.books.iter().find(|b| b.blake3 == h || b.original_blake3.as_deref() == Some(h)).map(|b| b.title.clone()))
+        };
         let (known, replacing) = {
             let st = lock(&self.st);
             let Some(m) = st.libs.iter().find(|l| l.id == item.library_id) else { return Outcome::Failed("That library no longer exists.".into()) };
-            let dup = m.books.iter().find(|b| b.blake3 == hash).map(|b| b.title.clone());
+            let dup = m.books.iter().find(|b| b.blake3 == hash || b.original_blake3.as_deref() == Some(hash.as_str())).map(|b| b.title.clone());
             let old = item.replace.as_ref().and_then(|d| m.books.iter().find(|b| &b.doc_id == d).cloned());
             (dup, old)
         };
         if let Some(of) = known {
             return Outcome::Duplicate(of);
+        }
+        // Compress first (in the crash-proof child, with the reading limits), then hash and keep the file that is stored: the
+        // bookshelf hash, the pack's source hash and the device copy all refer to it. Reading (text, pages, resolution) is done on
+        // that same file, so page numbers and the "better copy" comparison see what is really kept.
+        let choice = item.compression.unwrap_or_else(|| if item.origin == Origin::Drop { self.drop_compression() } else { Compression::OFF });
+        let mut compression: Option<CompressionOutcome> = None;
+        let mut original_hash: Option<String> = None;
+        if choice.level != Level::Off {
+            let extractor = lock(&self.extractor).clone();
+            match extractor.compress(&bytes, &choice) {
+                Ok((out, outcome)) => {
+                    if !outcome.kept_original {
+                        original_hash = Some(hash.clone());
+                        bytes = out;
+                        hash = blake3::hash(&bytes).to_hex().to_string();
+                        if let Some(Some(of)) = find(&hash) {
+                            return Outcome::Duplicate(of);
+                        }
+                    }
+                    compression = Some(outcome);
+                }
+                Err(e) => return Outcome::Failed(friendly_error(&e.0)),
+            }
         }
         if item.replace.is_some() && replacing.is_none() {
             return Outcome::Failed("The book to replace is no longer in this library.".into());
@@ -985,7 +1037,7 @@ impl BuildService {
                     Some(old) => Placement::of(old),
                     None => self.plan_new(&pack.header.title, &pack.pieces, report.year, edition, &item.library_id),
                 };
-                match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref(), &report, place, replaced_because.as_deref()) {
+                match self.store_book(item, &bytes, &pack, &hash, replacing.as_ref(), &report, place, replaced_because.as_deref(), compression.as_ref(), original_hash.as_deref()) {
                     Ok(()) => match replaced_because {
                         Some(r) => Outcome::Replaced(Box::new(pack), format!("Replaced: {r}")),
                         None => Outcome::Built(Box::new(pack)),
@@ -1083,7 +1135,7 @@ impl BuildService {
     /// Write the pack, keep the PDF (filed by subject), put the pieces in the work shard and record the book. For a replacement the
     /// old device copy (and the old copy in the drop folder's `complete/`) go to Removed.
     #[allow(clippy::too_many_arguments)]
-    fn store_book(&self, item: &Item, pdf: &[u8], pack: &Pack, hash: &str, replacing: Option<&Book>, rep: &Report, place: Placement, why: Option<&str>) -> Result<(), String> {
+    fn store_book(&self, item: &Item, pdf: &[u8], pack: &Pack, hash: &str, replacing: Option<&Book>, rep: &Report, place: Placement, why: Option<&str>, compression: Option<&CompressionOutcome>, original_hash: Option<&str>) -> Result<(), String> {
         let _g = lock(&self.ops);
         let io = |what: &str, e: std::io::Error| {
             if is_disk_full(&e) {
@@ -1124,6 +1176,8 @@ impl BuildService {
             source_rel: None,
             drop_copy: None,
             drop_root: None,
+            compression: compression.cloned(),
+            original_blake3: original_hash.map(str::to_string),
         };
         if let Some(old) = replacing {
             let reason = format!("Replaced by a better copy: {}", why.unwrap_or("a newer file of the same book"));
@@ -1497,6 +1551,7 @@ impl BuildService {
             "drop": it.origin == Origin::Drop, "position": position, "created_at": it.created_at, "started_at": it.started_at,
             "finished_at": it.finished_at, "result": it.result, "division": it.division, "call_number": it.call_number,
             "decision": it.decision.as_ref().map(decision_view),
+            "compression": it.compression,
         })
     }
 
@@ -1880,6 +1935,7 @@ impl BuildService {
                 }
             }
         }
+        let compression = compression_from_query(query)?;
         let name = crate::fetch::query_param(query, "name").ok_or_else(|| err(400, "invalid_name", "A file name is needed."))?;
         let name = sanitize_name(&name, "pdf").map_err(|m| err(400, "invalid_name", m))?;
         let len = content_length.ok_or_else(|| err(411, "length_required", "The upload needs a Content-Length."))?;
@@ -1938,6 +1994,7 @@ impl BuildService {
         guard.0 = Some(path.clone());
         let mut item = Item::new(id.clone(), library_id.clone(), path.to_string_lossy().into_owned(), name, got, Origin::Upload);
         item.replace = replace.map(str::to_string);
+        item.compression = compression;
         let view = self.enqueue(item)?;
         guard.0 = None;
         Ok(view)

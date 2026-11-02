@@ -3,6 +3,7 @@
 
 pub mod build;
 pub mod chunk;
+pub mod compress;
 pub mod embed;
 pub mod embed_http;
 pub mod error;

@@ -26,6 +26,10 @@ cache_search = { path = "../../packages/cache_search/native/cache_search" }
 cache_chunk = { path = "../../packages/cache_chunk" }
 # The read-write shard (the same Qdrant revision as cache_search).
 edge = { git = "https://github.com/qdrant/qdrant", rev = "0f8c4d791a37a4946347d80486d08c168c2229f1", features = ["serverless"] }
+# PDF compression (compress.rs): the pure-Rust JPEG encoder for recompressed page images (no dependencies), and mupdf-sys for the
+# object-stream flag of MuPDF's save options (the mupdf crate has no setter for it); mupdf-sys is already in the lockfile.
+jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
+mupdf-sys = { version = "0.8.0", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 # Packs are gzip-compressed JSON Lines; the same pure-Rust flate2 as cache_search (already in the lockfile).

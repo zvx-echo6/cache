@@ -9,6 +9,7 @@
 //!
 //! On Linux the child also gets an address-space limit (RLIMIT_AS), so a PDF that makes MuPDF ask for runaway memory fails alone.
 
+use crate::compress::{compress_pdf, Compression, CompressionOutcome};
 use crate::error::{Error, Result};
 use crate::extract::{extract_pdf, Extracted};
 use std::ffi::OsString;
@@ -29,6 +30,10 @@ const ENV_IN: &str = "CACHE_EXTRACT_IN";
 const ENV_OUT: &str = "CACHE_EXTRACT_OUT";
 const ENV_MEM: &str = "CACHE_EXTRACT_MEM";
 /// Test-only: makes the child misbehave ("segv", "abort", "hang", "exit"). Set by the parent from [`ChildExtractor::fault`] only.
+/// What the child does: unset or `extract` (read the PDF), `compress` (see [`crate::compress`]; `CACHE_EXTRACT_ARG` is the
+/// [`Compression`] as JSON and the result is the outcome and the new PDF).
+const ENV_JOB: &str = "CACHE_EXTRACT_JOB";
+const ENV_ARG: &str = "CACHE_EXTRACT_ARG";
 const ENV_FAULT: &str = "CACHE_EXTRACT_FAULT";
 
 /// How to run the reading child and what it may use.
@@ -68,6 +73,20 @@ impl ChildExtractor {
 
     /// [`extract_pdf`] in a child process. An ordinary error (encrypted, cannot be opened) comes back with the same text as in-process.
     pub fn extract(&self, pdf: &[u8]) -> Result<Extracted> {
+        let bytes = self.run_job("extract", "", pdf)?;
+        Extracted::from_wire(&bytes).map_err(|_| Error::new(CRASH_MSG))
+    }
+
+    /// [`compress_pdf`] in a child process, with the same time and memory limits as reading. A PDF that crashes MuPDF, runs out of
+    /// time or memory makes this one book fail (the error text is the same as for reading); the parent is never touched.
+    pub fn compress(&self, pdf: &[u8], c: &Compression) -> Result<(Vec<u8>, CompressionOutcome)> {
+        let arg = serde_json::to_string(c).map_err(|e| Error::ctx("compression settings", e))?;
+        let bytes = self.run_job("compress", &arg, pdf)?;
+        decode_compressed(&bytes).ok_or_else(|| Error::new(CRASH_MSG))
+    }
+
+    /// Run `job` in the child on `pdf`; the bytes it wrote on success.
+    fn run_job(&self, job: &str, arg: &str, pdf: &[u8]) -> Result<Vec<u8>> {
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let dir = self.tmp_dir.join(format!("extract-{}-{}-{nanos}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
@@ -82,7 +101,7 @@ impl ChildExtractor {
         let (input, output) = (dir.join("in.pdf"), dir.join("out.bin"));
         std::fs::write(&input, pdf).map_err(|e| Error::ctx("saving the PDF to read it", e))?;
         let mut cmd = Command::new(&self.exe);
-        cmd.args(&self.args).envs(self.env.iter().map(|(k, v)| (k, v))).env(ENV_IN, &input).env(ENV_OUT, &output).env(ENV_MEM, self.memory_for(pdf.len()).to_string());
+        cmd.args(&self.args).envs(self.env.iter().map(|(k, v)| (k, v))).env(ENV_IN, &input).env(ENV_OUT, &output).env(ENV_MEM, self.memory_for(pdf.len()).to_string()).env(ENV_JOB, job).env(ENV_ARG, arg);
         match &self.fault {
             Some(f) => cmd.env(ENV_FAULT, f),
             None => cmd.env_remove(ENV_FAULT),
@@ -107,7 +126,7 @@ impl ChildExtractor {
             }
         };
         if status.success() {
-            return std::fs::read(&output).ok().and_then(|b| Extracted::from_wire(&b).ok()).ok_or_else(|| Error::new(CRASH_MSG));
+            return std::fs::read(&output).map_err(|_| Error::new(CRASH_MSG));
         }
         if status.code() == Some(EXIT_ERROR) {
             if let Ok(m) = std::fs::read_to_string(dir.join("out.err")) {
@@ -154,11 +173,19 @@ pub fn child_main() -> i32 {
             _ => {}
         }
     }
-    let result = std::fs::read(&input).map_err(|e| Error::ctx("reading the PDF", e)).and_then(|b| extract_pdf(&b));
+    let job = std::env::var(ENV_JOB).unwrap_or_default();
+    let result = std::fs::read(&input).map_err(|e| Error::ctx("reading the PDF", e)).and_then(|b| match job.as_str() {
+        "compress" => {
+            let c: Compression = std::env::var(ENV_ARG).ok().and_then(|a| serde_json::from_str(&a).ok()).ok_or_else(|| Error::new("compression settings missing"))?;
+            let (pdf, outcome) = compress_pdf(&b, &c);
+            Ok(encode_compressed(&pdf, &outcome))
+        }
+        _ => extract_pdf(&b).map(|e| e.to_wire()),
+    });
     match result {
         Ok(ext) => {
             let tmp = output.with_extension("tmp");
-            if std::fs::write(&tmp, ext.to_wire()).and_then(|_| std::fs::rename(&tmp, &output)).is_err() {
+            if std::fs::write(&tmp, ext).and_then(|_| std::fs::rename(&tmp, &output)).is_err() {
                 return 1;
             }
             0
@@ -168,4 +195,20 @@ pub fn child_main() -> i32 {
             EXIT_ERROR
         }
     }
+}
+
+/// The child's answer to a compress job: the outcome as JSON (length first, 4 bytes little-endian), then the PDF.
+fn encode_compressed(pdf: &[u8], o: &CompressionOutcome) -> Vec<u8> {
+    let j = serde_json::to_vec(o).unwrap_or_default();
+    let mut out = Vec::with_capacity(4 + j.len() + pdf.len());
+    out.extend_from_slice(&(j.len() as u32).to_le_bytes());
+    out.extend_from_slice(&j);
+    out.extend_from_slice(pdf);
+    out
+}
+
+fn decode_compressed(b: &[u8]) -> Option<(Vec<u8>, CompressionOutcome)> {
+    let n = u32::from_le_bytes(b.get(..4)?.try_into().ok()?) as usize;
+    let outcome: CompressionOutcome = serde_json::from_slice(b.get(4..4 + n)?).ok()?;
+    Some((b[4 + n..].to_vec(), outcome))
 }
