@@ -14,6 +14,7 @@
 //!       (each PDF is read in a child process, like `pdf`, so one that crashes MuPDF counts as failed and the survey goes on)
 //!       counts the ZIM's PDFs, pages, text layers and estimated pieces (JSON on stdout; nothing written, nothing embedded)
 //!   cache-build dump <in.pdf> <page>     (the blocks and lines MuPDF reports for a 1-based page; for debugging)
+//!   cache-build passages <in.pdf> <page> (the paragraphs the layout reads from a 1-based page, in reading order, and the passages that touch it; for debugging)
 
 use cache_builder::build::{build_pack_with_extractor, BuildOptions};
 use cache_builder::extract::extract_pdf;
@@ -29,7 +30,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>\n  cache-build passages <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -106,6 +107,7 @@ fn main() {
         "library" => cmd_library(&a),
         "zim-pdfs" => cmd_zim_pdfs(&a),
         "dump" => cmd_dump(&a),
+        "passages" => cmd_passages(&a),
         _ => usage(),
     };
     std::process::exit(code);
@@ -383,5 +385,30 @@ fn cmd_dump(a: &Args) -> i32 {
     }
     let order = cache_builder::layout::reading_order(&pg.blocks, cache_builder::layout::body_size(&ext.pages));
     println!("reading order: {order:?}");
+    0
+}
+
+fn cmd_passages(a: &Args) -> i32 {
+    let (Some(f), Some(p)) = (a.pos.first(), a.pos.get(1)) else { usage() };
+    let page: usize = p.parse().unwrap_or(1);
+    let bytes = std::fs::read(f).expect("read");
+    let ext = cache_builder::extract::extract_pdf(&bytes).expect("extract");
+    let lay = cache_builder::layout::layout(&ext);
+    println!("paragraphs of page {page}:");
+    for e in &lay.elements {
+        match e {
+            cache_builder::layout::Element::Heading { level, text, page: pg } if *pg + 1 == page => println!("  H{level}: {text}"),
+            cache_builder::layout::Element::Para { text, page: pg, aside, .. } if *pg + 1 == page => {
+                println!("  P{}: {text}", if *aside { " (aside)" } else { "" })
+            }
+            _ => {}
+        }
+    }
+    println!("passages touching page {page}:");
+    for piece in cache_builder::chunk::chunk(&lay.elements) {
+        if piece.page < page && page <= piece.page_end + 1 {
+            println!("  [{}] pages {}-{} words {}: {}", piece.index, piece.page + 1, piece.page_end + 1, piece.text.split_whitespace().count(), piece.text);
+        }
+    }
     0
 }
