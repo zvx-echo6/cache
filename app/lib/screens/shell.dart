@@ -124,7 +124,8 @@ class _ShellState extends State<Shell> {
   late bool _askOn = widget.app.askAvailable;
 
   /// The models folder has been read and held no chat model: the next one to arrive turns Ask on, and says so.
-  late bool _noModelSeen = widget.app.started && widget.app.models.isEmpty;
+  /// Set in initState (a lazy initializer would first run after the model had already arrived).
+  bool _noModelSeen = false;
 
   void _onApp() {
     final app = widget.app;
@@ -164,6 +165,7 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    _noModelSeen = widget.app.started && widget.app.models.isEmpty;
     widget.app.addListener(_onApp);
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));

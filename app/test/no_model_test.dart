@@ -61,7 +61,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     nav.dispose();
     layout.dispose();
-    await tearDownRig(tester);
+    await r.dispose(tester);
   }
 
   /// A chat model arrives in the models folder (downloaded, copied in or synced).

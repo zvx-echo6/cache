@@ -109,11 +109,13 @@ void main() {
     expect(find.byKey(const ValueKey('weather-turn-on')), findsNothing, reason: '"Turn on weather" appears once, in the setup card');
     expect(find.byKey(const ValueKey('setup-tick')), findsNothing);
     expect(find.byKey(const ValueKey('setup-progress')), findsNothing);
-    for (final k in ['setup-model', 'setup-area', 'setup-weather', 'setup-library']) {
-      await tester.tap(row(k));
+    // Each row by its title (the model row also has "Not now" at its right, which does something else).
+    for (final (k, t) in [('setup-model', 'Choose a model'), ('setup-area', 'Get your area'), ('setup-weather', 'Turn on weather'), ('setup-library', 'Add a library')]) {
+      await tester.tap(find.descendant(of: row(k), matching: find.text(t)));
       await tester.pump();
     }
     expect(opened, ['models', 'area', 'weather', 'library']);
+    expect(r.app.modelDeclined, isFalse, reason: 'tapping the row opens Models; it is not "Not now"');
     await r.dispose(tester);
   });
 
