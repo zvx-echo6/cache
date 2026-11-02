@@ -10,6 +10,10 @@ class _Job implements IndexJob {
   JobProgress now = const JobProgress(state: JobState.running, done: 0, total: 85, phase: 'read');
   int cancels = 0;
   bool freed = false;
+  final List<Map<String, Object?>> paces = [];
+
+  @override
+  Future<void> pace(Map<String, Object?> pace) async => paces.add(pace);
 
   @override
   Future<JobProgress> progress() async => now;
@@ -24,7 +28,7 @@ class _Job implements IndexJob {
   Future<void> free() async => freed = true;
 }
 
-SourceStatus _zim(String uuid, {Map<String, dynamic>? captions, Map<String, dynamic>? epub}) => SourceStatus.fromJson({
+SourceStatus _zim(String uuid, {Map<String, dynamic>? captions, Map<String, dynamic>? epub, Map<String, dynamic>? index}) => SourceStatus.fromJson({
       'id': uuid,
       'kind': 'zim',
       'path': '/z/$uuid.zim',
@@ -33,6 +37,7 @@ SourceStatus _zim(String uuid, {Map<String, dynamic>? captions, Map<String, dyna
       'docs': 1,
       'source_id': uuid,
       'captionsindex': ?captions,
+      'index': ?index,
       'epubindex': ?epub,
     });
 
@@ -72,6 +77,7 @@ void main() {
       },
       indexesDir: () => '/s/shared-indexes',
       videoDir: () => '/v',
+      duty: () => IndexDuty.share(2 / 3, threads: 1),
       poll: const Duration(milliseconds: 10),
     );
   });
@@ -94,7 +100,13 @@ void main() {
     expect(tasks.every((t) => t.long), isTrue);
     await tasks.last.start();
     expect(started.single.$1, 'index_source');
-    expect(started.single.$2, {'indexes_dir': '/s/shared-indexes', 'kind': 'captions', 'source_id': 'peertube.example/v1', 'video_dir': '/v'});
+    expect(started.single.$2, {
+      'indexes_dir': '/s/shared-indexes',
+      'kind': 'captions',
+      'source_id': 'peertube.example/v1',
+      'video_dir': '/v',
+      'duty': {'work_ms': 2000, 'idle_ms': 1000, 'threads': 1},
+    });
   });
 
   test('no indexes folder, no work', () async {
@@ -114,19 +126,60 @@ void main() {
     expect(job.freed, isTrue);
   });
 
-  test('pause cancels the job, which keeps what it did; a paused duty does the same until cs_job_set is in the core', () async {
+  test("the throttle's duty reaches a running job through cs_job_set; the scheduler's pause cancels it (it keeps what it did)", () async {
     var run = await calls.start(const CoreIndexNeed(kind: 'zim-epub', sourceId: 'u2', seal: false));
+    run.setDuty(IndexDuty.share(0.2, workMs: 1000));
+    run.setDuty(const IndexDuty(workMs: 0, idleMs: 0, paused: true, hold: IndexHold.heat));
+    run.setDuty(IndexDuty.share(2 / 3));
+    await _ticks();
+    expect(job.paces, [
+      {'work_ms': 1000, 'idle_ms': 4000, 'paused': false},
+      {'paused': true},
+      {'work_ms': 2000, 'idle_ms': 1000, 'paused': false},
+    ], reason: 'a pause holds the job at its next pace point; it is not cancelled');
+    expect(job.cancels, 0);
     await run.pause(IndexWait.charging);
     expect(job.cancels, 1);
     expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
-    job = _Job();
-    run = await calls.start(const CoreIndexNeed(kind: 'zim-epub', sourceId: 'u2', seal: false));
-    run.setDuty(IndexDuty.share(2 / 3));
-    await _ticks();
-    expect(job.cancels, 0, reason: 'a running duty changes nothing yet');
-    run.setDuty(const IndexDuty(workMs: 0, idleMs: 0, paused: true, hold: IndexHold.heat));
+  });
+
+  test('index_seal: an index in the old place is moved into a snapshot; missing or stale ones are dropped quietly', () async {
+    statuses = [
+      _zim('u1', index: {'kind': 'zim', 'location': 'legacy', 'format': 3, 'dir': '/i/u1.idx', 'needs_seal': true}),
+      _zim('u2', index: {'kind': 'zim', 'location': 'snapshot', 'snapshot': 'b1', 'format': 3}),
+      SourceStatus.fromJson({
+        'id': 'lib', 'kind': 'library', 'path': '/l', 'title': 'L', 'indexed': true, 'docs': 1, 'source_id': 'field-guide@2',
+        'index': {'kind': 'library', 'location': 'legacy', 'dir': '/l/index', 'needs_seal': true},
+      }),
+    ];
+    final tasks = await CoreIndexWork(calls).pending();
+    expect([for (final t in tasks) t.key], ['zim/u1', 'library/field-guide@2']);
+    expect(tasks.every((t) => !t.long), isTrue, reason: 'a seal links files, it is short');
+    final run = await tasks.first.start();
+    expect(started.single.$1, 'index_seal');
+    expect(started.single.$2, {
+      'indexes_dir': '/s/shared-indexes',
+      'kind': 'zim',
+      'source_id': 'u1',
+      'index_dir': '/i/u1.idx',
+      'duty': {'work_ms': 2000, 'idle_ms': 1000, 'threads': 1},
+    });
+    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'index_missing');
     expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
-    expect(job.cancels, 1);
+    expect([for (final t in await CoreIndexWork(calls).pending()) t.key], ['library/field-guide@2'], reason: 'not tried again');
+    job = _Job();
+    final r2 = await (await CoreIndexWork(calls).pending()).single.start();
+    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'index_stale');
+    expect(await r2.finished.timeout(const Duration(seconds: 2)), isFalse);
+    expect(await CoreIndexWork(calls).pending(), isEmpty);
+  });
+
+  test('a seal that fails for another reason (busy) is tried again', () async {
+    statuses = [_zim('u1', index: {'kind': 'zim', 'location': 'legacy', 'dir': '/i/u1.idx', 'needs_seal': true})];
+    final run = await (await CoreIndexWork(calls).pending()).single.start();
+    job.now = const JobProgress(state: JobState.failed, done: 0, total: 0, errorCode: 'busy');
+    expect(await run.finished.timeout(const Duration(seconds: 2)), isFalse);
+    expect((await CoreIndexWork(calls).pending()).single.key, 'zim/u1');
   });
 
   test('the EPUB line', () {

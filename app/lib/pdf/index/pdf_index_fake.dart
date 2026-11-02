@@ -310,7 +310,7 @@ class _FakeFinish implements PdfFinishJob {
         'kind': 'zim-pdf',
         'zim_uuid': meta['zim_uuid'],
         'zim_name': meta['zim_name'],
-        'format': 1,
+        'format': kPdfIndexFormat,
         'chunker': 1,
         'created': DateTime.now().toUtc().toIso8601String(),
         'pdfs': done.length,

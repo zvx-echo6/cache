@@ -317,6 +317,7 @@ class _CacheAppState extends State<CacheApp> {
     },
     indexesDir: () => _support(kIndexesDirName)?.path,
     videoDir: () => video.dir?.path,
+    duty: () => indexThrottle.duty,
   );
 
   /// The one throttle for background index work (search/index_throttle.dart): a control loop over heat, battery, the person

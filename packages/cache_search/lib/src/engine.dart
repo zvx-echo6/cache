@@ -343,6 +343,15 @@ class CoreJob {
     if (native.jobCancel(_j) < 0) throw CacheSearchException.fromJson(native.lastError(0));
   }
 
+  /// Changes the job's pace now (cs_job_set): {"work_ms","idle_ms","threads"?,"paused"?,"auto"?}, what is left out stays. Answers
+  /// {"duty","effective","auto","paused"}, or null when this core has no cs_job_set.
+  Map<String, dynamic>? set(Map<String, Object?> pace) {
+    final n = native;
+    if (n is! CsJobNative) return null;
+    final s = n.jobSet(_j, jsonEncode(pace));
+    return s == null ? null : _object(s);
+  }
+
   /// Frees a job that is done, cancelled or failed.
   void free() {
     if (_job != 0) native.jobFree(_job);

@@ -336,6 +336,10 @@ class CoreJobHandle {
 
   Future<void> cancel() => _core._call('jobCancel', {'job': _id});
 
+  /// Changes the job's pace now (cs_job_set; see [CoreJob.set]); null when the core has no cs_job_set.
+  Future<Map<String, dynamic>?> set(Map<String, Object?> pace) async =>
+      ((await _core._call('jobSet', {'job': _id, 'pace': pace})) as Map?)?.cast<String, dynamic>();
+
   /// Frees a job that is done, cancelled or failed.
   Future<void> free() async {
     if (_freed) return;
@@ -562,9 +566,13 @@ void _workerMain(List<dynamic> init) {
             if (p.detail != null) 'detail': p.detail,
             if (p.phase != null) 'phase': p.phase,
             if (p.result != null) 'result': p.result,
+            if (p.paused != null) 'paused': p.paused,
+            if (p.effective != null) 'effective': p.effective,
           };
         case 'jobCancel':
           jobs[a['job']]!.cancel();
+        case 'jobSet':
+          result = jobs[a['job']]!.set((a['pace'] as Map).cast<String, Object?>());
         case 'jobFree':
           jobs.remove(a['job'])?.free();
         case 'close':

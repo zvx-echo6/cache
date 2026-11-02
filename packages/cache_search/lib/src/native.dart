@@ -85,6 +85,13 @@ abstract class CsNative {
   void jobFree(int job);
 }
 
+/// cs_job_set: changes a running job's pace ({"work_ms","idle_ms","threads","paused","auto"}, what is left out stays) and answers
+/// {"duty","effective","auto","paused"}; null when the core is older than the call (or on bad input). Kept apart from
+/// [CsNative] so its fakes do not change.
+abstract class CsJobNative {
+  String? jobSet(int job, String json);
+}
+
 /// The map calls (cs_map_search, cs_map_route, cs_map_progress) and saved places (cs_place_*). Kept apart from [CsNative] so
 /// the fakes of the older seam do not change. [FfiCsNative] implements it; [hasMap] is false when the loaded core is older
 /// than the map calls (the symbols are looked up when first used, never at load).
@@ -223,7 +230,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative {
+class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -533,6 +540,11 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
       return null;
     }
   }
+
+  late final _HStrStr? _jobSet = _lookupHS('cs_job_set');
+
+  @override
+  String? jobSet(int job, String json) => _callHS(_jobSet, job, json);
 
   late final _HStrStr? _mapSearch = _lookupHS('cs_map_search');
   late final _HStrStr? _mapRoute = _lookupHS('cs_map_route');

@@ -258,16 +258,24 @@ class ZimSubIndex {
 
 /// cs_status's `index` of a source: where its search index is and what it is.
 class SourceIndex {
-  const SourceIndex({required this.location, this.snapshot, this.format, this.kind});
+  const SourceIndex({required this.location, this.snapshot, this.format, this.kind, this.dir, this.needsSeal = false});
 
   factory SourceIndex.fromJson(Map<String, dynamic> j) => SourceIndex(
     location: (j['location'] ?? 'none') as String,
     snapshot: j['snapshot'] as String?,
     format: (j['format'] as num?)?.toInt(),
     kind: j['kind'] as String?,
+    dir: j['dir'] as String?,
+    needsSeal: j['needs_seal'] == true,
   );
 
-  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind};
+  Map<String, dynamic> toJson() => {'location': location, 'snapshot': snapshot, 'format': format, 'kind': kind, 'dir': dir, if (needsSeal) 'needs_seal': true};
+
+  /// The folder of the index in use (a snapshot's, or the old index_dir), when there is one.
+  final String? dir;
+
+  /// Only an index in the old place exists and the indexes folder is set: an index_seal job moves it into a snapshot.
+  final bool needsSeal;
 
   /// "snapshot" (a sealed snapshot in the indexes folder), "legacy" (built where indexes were kept before) or "none".
   final String location;
@@ -347,7 +355,7 @@ class ToolOutput {
 enum JobState { running, done, cancelled, failed }
 
 class JobProgress {
-  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes, this.detail, this.phase, this.result});
+  const JobProgress({required this.state, required this.done, required this.total, this.errorCode, this.errorMessage, this.bytes, this.detail, this.phase, this.result, this.paused, this.effective});
 
   factory JobProgress.fromJson(Map<String, dynamic> j) {
     final e = j['error'];
@@ -361,6 +369,8 @@ class JobProgress {
       detail: j['detail'] is Map ? (j['detail'] as Map).cast<String, dynamic>() : null,
       phase: j['phase'] as String?,
       result: j['result'] is Map ? (j['result'] as Map).cast<String, dynamic>() : null,
+      paused: j['paused'] as bool?,
+      effective: j['effective'] is Map ? (j['effective'] as Map).cast<String, dynamic>() : null,
     );
   }
 
@@ -369,6 +379,12 @@ class JobProgress {
 
   /// What a finished job made, when its kind says (pdfindex_finish: {"pdfs","pieces","skipped","bytes","snapshot"}).
   final Map<String, dynamic>? result;
+
+  /// Held by cs_job_set's "paused" (null from a core without job pacing).
+  final bool? paused;
+
+  /// The pace in effect: the app's duty plus the job's own back-off ({"work_ms","idle_ms","threads"}).
+  final Map<String, dynamic>? effective;
 
   final JobState state;
   final int done;

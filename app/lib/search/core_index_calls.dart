@@ -14,6 +14,9 @@ abstract class IndexJob {
   Future<JobProgress> progress();
   Future<void> cancel();
   Future<void> free();
+
+  /// cs_job_set: {"work_ms","idle_ms","paused"} at the job's next pace point (about a second).
+  Future<void> pace(Map<String, Object?> pace);
 }
 
 /// [IndexJob] over the search core's job handle.
@@ -30,15 +33,21 @@ class CoreIndexJob implements IndexJob {
 
   @override
   Future<void> free() => handle.free();
+
+  @override
+  Future<void> pace(Map<String, Object?> pace) => handle.set(pace);
 }
 
 /// Starts a core job ([kind], [params]); null when the core is not open.
 typedef IndexJobStarter = Future<IndexJob?> Function(String kind, Map<String, Object?> params);
 
-/// The core's own index work, for real: the caption files and EPUBs of each ZIM whose cs_status `captionsindex` or `epubindex`
-/// says needs_build, and each saved video whose `captions_index` says so, built with cs_job_start("index_source"). Progress of
-/// the running job is in [progress], by `<kind>/<source id>` (what the Library shows: "Making EPUBs searchable: 40 of 85").
-/// index_seal (indexes built before snapshots) is not in this core yet.
+/// The core's own index work: the caption files and EPUBs of each ZIM whose cs_status `captionsindex` or `epubindex` says
+/// needs_build, and each saved video whose `captions_index` says so, built with cs_job_start("index_source"); and each ZIM or
+/// library whose keyword index is still in the old place (`index.needs_seal`), moved into a snapshot with "index_seal". A seal
+/// that fails index_missing (nothing to move) or index_stale (an unfinished or old-format index: the source's own index job
+/// builds it again) is not tried again this session, and says nothing. Progress of the running job is in [progress], by
+/// `<kind>/<source id>` (what the Library shows: "Making EPUBs searchable: 40 of 85"). Every job starts with the throttle's
+/// duty ([duty]) and follows it through cs_job_set.
 class AppIndexCoreCalls implements IndexCoreCalls {
   AppIndexCoreCalls({
     required this.statuses,
@@ -46,8 +55,15 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     required this.startJob,
     required this.indexesDir,
     this.videoDir,
+    this.duty,
     this.poll = const Duration(seconds: 1),
   });
+
+  /// The throttle's duty now (cs_job_start's "duty"; the core's own default is gentle).
+  final IndexDuty Function()? duty;
+
+  /// Seals that will not work (index_missing, index_stale), by key: not listed again this session.
+  final Set<String> _skip = {};
 
   final Iterable<SourceStatus> Function() statuses;
   final List<DownloadedVideo> Function() videos;
@@ -66,6 +82,9 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     if (indexesDir() == null) return const [];
     return [
       for (final s in statuses())
+        if (s.index case final i? when i.needsSeal && s.sourceId != null && (i.kind == 'zim' || i.kind == 'library') && !_skip.contains('${i.kind}/${s.sourceId}'))
+          CoreIndexNeed(kind: i.kind!, sourceId: s.sourceId!, seal: true, indexDir: i.dir),
+      for (final s in statuses())
         for (final sub in [s.captionsIndex, s.epubIndex])
           if (sub != null && sub.needsBuild == true && sub.kind != null && (sub.sourceId ?? s.sourceId) != null)
             CoreIndexNeed(kind: sub.kind!, sourceId: (sub.sourceId ?? s.sourceId)!, seal: false, size: sub.entries ?? 0),
@@ -80,22 +99,29 @@ class AppIndexCoreCalls implements IndexCoreCalls {
     final dir = indexesDir();
     if (dir == null) throw StateError('no indexes folder');
     final vd = videoDir?.call();
-    final job = await startJob('index_source', {
+    final d = duty?.call();
+    final pace = d == null || d.paused ? null : {'work_ms': d.workMs, 'idle_ms': d.idleMs, 'threads': ?d.threads};
+    final key = '${need.kind}/${need.sourceId}';
+    final job = await startJob(need.seal ? 'index_seal' : 'index_source', {
       'indexes_dir': dir,
       'kind': need.kind,
       'source_id': need.sourceId,
+      if (need.seal && need.indexDir != null) 'index_dir': need.indexDir,
       if (need.kind == 'captions' && vd != null) 'video_dir': vd,
+      'duty': ?pace,
     });
     if (job == null) throw StateError('the search core is not open');
-    return CoreIndexRun(job, '${need.kind}/${need.sourceId}', progress, poll: poll);
+    return CoreIndexRun(job, key, progress, poll: poll, onError: (code) {
+      if (need.seal && (code == 'index_missing' || code == 'index_stale')) _skip.add(key);
+    });
   }
 }
 
-/// One index_source job: finished when it is done (true) or stopped (false). Its progress goes to the shared map while it runs.
-/// The core's cs_job_set is not in this core yet, so a paused duty (heat, a low battery, the model generating) cancels the job,
-/// which keeps what it did and goes on from there when the scheduler starts it again; a running duty changes nothing yet.
+/// One index job: finished when it is done (true) or stopped (false). Its progress goes to the shared map while it runs. The
+/// throttle's duty reaches it through cs_job_set at its next pace point: a pause holds it there (nothing is lost), a duty sets its
+/// bursts and rests.
 class CoreIndexRun implements IndexRun {
-  CoreIndexRun(this.job, this.key, this.progress, {Duration poll = const Duration(seconds: 1)}) {
+  CoreIndexRun(this.job, this.key, this.progress, {Duration poll = const Duration(seconds: 1), this.onError}) {
     _timer = Timer.periodic(poll, (_) => _check());
     unawaited(_check());
   }
@@ -103,6 +129,9 @@ class CoreIndexRun implements IndexRun {
   final IndexJob job;
   final String key;
   final ValueNotifier<Map<String, (int, int)>> progress;
+
+  /// The error code of a job that failed.
+  final void Function(String code)? onError;
   final Completer<bool> _done = Completer<bool>();
   late final Timer _timer;
   bool _checking = false;
@@ -117,6 +146,7 @@ class CoreIndexRun implements IndexRun {
         if (p.phase == null || p.phase == 'read') progress.value = {...progress.value, key: (p.done, p.total)};
         return;
       }
+      if (p.state == JobState.failed && p.errorCode != null) onError?.call(p.errorCode!);
       _end(p.state == JobState.done);
     } catch (e) {
       debugPrint('Index job $key: $e');
@@ -145,8 +175,12 @@ class CoreIndexRun implements IndexRun {
     await _check();
   }
 
+  /// cs_job_set: paused holds the job at its next pace point; otherwise its bursts and rests (an explicit set always wins over the
+  /// core's own back-off). Writer threads are fixed when the job starts.
   @override
   void setDuty(IndexDuty duty) {
-    if (duty.paused) unawaited(pause());
+    if (_done.isCompleted) return;
+    final pace = duty.paused ? {'paused': true} : {'work_ms': duty.workMs, 'idle_ms': duty.idleMs, 'paused': false};
+    unawaited(job.pace(pace).catchError((Object e) => debugPrint('Index job $key: $e')));
   }
 }
