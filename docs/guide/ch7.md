@@ -32,6 +32,7 @@ Cache goes online only for these, each talking directly to the service named:
 - Downloads you start: models from Hugging Face, ZIMs from Kiwix, regions from Cache's data server, videos and their captions from your video sites, libraries from the link you gave.
 - Video sites: each site you add gets requests for its list, its videos and the video you play. If you sign in, the site gets your sign-in. If the site offers its own way in, its page opens inside Cache and the site sees what you type there.
 - A web link in a PDF: only if you tap it and then tap "Open" on "Open this link in your browser? It needs a connection."
+- New versions, on a phone: each time Cache starts, it reads https://data.cached.info/app/latest.json. The update banners come from that file. Nothing about you or your device is sent beyond a normal web request. It uses any connection, and with no connection it does nothing.
 - Lists Cache reads itself: regions, data sources, map layers and recommended models.
 - Sharing and sync, if you set it up: your own linked devices.
 
