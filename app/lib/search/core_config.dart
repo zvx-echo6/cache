@@ -1,6 +1,8 @@
 import 'dart:io';
 import '../platform.dart' as plat;
 
+import 'indexes_dir.dart' show kIndexesDirName;
+
 /// Where Cache's published data lives (road routing, places, the region catalogue). `https://cache.echo6.co` serves the same
 /// bucket with the same paths: build with `--dart-define=CACHE_DATA_BASE=https://cache.echo6.co` to use it. No trailing slash.
 const String kDataBaseUrl = String.fromEnvironment('CACHE_DATA_BASE', defaultValue: 'https://data.cached.info');
@@ -30,6 +32,8 @@ Map<String, dynamic> buildCoreExtras({
   String placesBaseUrl = kPlacesBaseUrl,
 }) {
   return {
+    // The syncable search indexes (search/indexes_share.dart); cs_set_sources is given it again each time.
+    'indexes_dir': '${supportDir.path}/$kIndexesDirName',
     'user': {'db_path': '${supportDir.path}/user.sqlite'},
     'live': {'db_path': '${supportDir.path}/live.sqlite', 'sources_dir': '${filesDir.path}/live-defs'},
     'places': {'packs': const <String>[], 'merged_dir': '${supportDir.path}/regions/places'},
@@ -57,8 +61,13 @@ Map<String, String> notebookConfig(Directory supportDir) =>
     {'db_path': '${supportDir.path}/notebook/notebook.sqlite', 'media_dir': '${supportDir.path}/notebook'};
 
 /// The region engine's config, the same for the search core and the regions screen (one engine per folder in the process).
-Map<String, Object?> regionsConfig(Directory supportDir, {String routingBaseUrl = kRoutingBaseUrl, String placesBaseUrl = kPlacesBaseUrl}) =>
-    {'dir': '${supportDir.path}/regions', 'base_url': routingBaseUrl, 'places_base_url': placesBaseUrl};
+/// Its tile indexes are kept as syncable snapshots in the indexes folder (search/indexes_share.dart).
+Map<String, Object?> regionsConfig(Directory supportDir, {String routingBaseUrl = kRoutingBaseUrl, String placesBaseUrl = kPlacesBaseUrl}) => {
+  'dir': '${supportDir.path}/regions',
+  'base_url': routingBaseUrl,
+  'places_base_url': placesBaseUrl,
+  'indexes_dir': '${supportDir.path}/$kIndexesDirName',
+};
 
 /// The folder Android unpacked this app's native libraries to (where libvalhalla_shim.so is), found from where
 /// libflutter.so is mapped (it is loaded before any Dart runs, unlike the core library, which the core's own isolate opens

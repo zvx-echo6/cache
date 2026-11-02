@@ -548,3 +548,251 @@ fn offline_with_nothing_on_the_device_neither_part_plans() {
     assert_eq!(plan["parts"]["routing"]["code"], "fetch_failed");
     assert_eq!(plan["parts"]["places"]["tiles"], 1);
 }
+
+// ---- the fetched indexes as syncable snapshots (kinds region-index and places-index) ----
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let t = to.join(e.file_name());
+        if e.path().is_dir() {
+            copy_tree(&e.path(), &t);
+        } else {
+            std::fs::copy(e.path(), &t).unwrap();
+        }
+    }
+}
+
+/// The published snapshot folders of one source: `<ix>/<kind>/<build>/snap/*`.
+fn snaps(ix: &Path, kind: &str, build: &str) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(ix.join(kind).join(build).join("snap"))
+        .map(|rd| rd.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+fn legacy(dir: &Path, places: bool, build: &str) -> PathBuf {
+    let base = if places { dir.join("places") } else { dir.to_path_buf() };
+    base.join("index").join(format!("{build}.tsv"))
+}
+
+fn index_location(e: &Regions, part: &str, build: &str) -> Value {
+    let st = call(e, "status", json!({}));
+    let list = st["indexes"][part].as_array().cloned().unwrap_or_default();
+    list.iter().find(|i| i["source_id"] == build).cloned().unwrap_or(Value::Null)
+}
+
+fn compat_any(_: &cache_snapshot::Manifest) -> Result<(), String> {
+    Ok(())
+}
+
+#[test]
+fn a_fetched_index_is_stored_as_a_snapshot() {
+    let srv = Server::start("snap-fetch");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-fetch");
+    let ix = t.0.join("ix");
+    let e = engine(&t.0, &srv, json!({"indexes_dir": ix}));
+    call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+    wait_state(&e, "a", "ready");
+
+    for (kind, build, places) in [("region-index", "r1", false), ("places-index", "p1", true)] {
+        let s = snaps(&ix, kind, build);
+        assert_eq!(s.len(), 1, "{kind}");
+        let m = cache_snapshot::verify(&s[0], kind, build, compat_any).unwrap();
+        assert_eq!((m.kind.as_str(), m.source_id.as_str(), m.format), (kind, build, 1));
+        assert_eq!(m.files.len(), 1);
+        assert_eq!(m.files[0].path, "index.tsv");
+        assert!(!s[0].join(".tantivy-meta.lock").exists(), "no Tantivy lock file in a tile index snapshot");
+        assert_eq!(m.extra.get("tile_schema").and_then(Value::as_u64), if places { Some(1) } else { None });
+        let gz_sha = hex(&srv.files.lock().unwrap()[&format!("/{}/{build}/index.tsv.gz", if places { "places" } else { "routing" })]);
+        assert_eq!(m.extra["index_sha256"], gz_sha, "the server's checksum is recorded");
+        assert!(!legacy(&t.0, places, build).exists(), "no copy in the old place");
+        assert!(!ix.join(kind).join(build).join(".build").read_dir().map(|mut d| d.next().is_some()).unwrap_or(false), "no working folder left");
+        let loc = index_location(&e, if places { "places" } else { "routing" }, build);
+        assert_eq!((loc["kind"].as_str(), loc["location"].as_str()), (Some(kind), Some("snapshot")));
+    }
+}
+
+#[test]
+fn a_second_engine_with_no_network_and_a_copied_snapshot_plans_and_adds() {
+    let srv = Server::start("snap-peer");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-peer");
+    let ix = t.0.join("ix");
+    {
+        let e = engine(&t.0.join("dev1"), &srv, json!({"indexes_dir": ix}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+    }
+    // The peer: its own folders, no regions.sqlite, only the synced snapshots.
+    let ix2 = t.0.join("ix2");
+    copy_tree(&ix, &ix2);
+    let e = engine(&t.0.join("dev2"), &srv, json!({"indexes_dir": ix2}));
+    call(&e, "set_policy", json!({"network": false}));
+    let before = srv.total();
+    assert_eq!(index_location(&e, "routing", "r1"), Value::Null, "nothing is known about a build before it is used");
+    let plan = call(&e, "plan", json!({"geometry": region_a()}));
+    assert_eq!(plan["tiles"], 3);
+    let added = call(&e, "add", json!({"id": "a", "geometry": region_a(), "parts": ["routing"]}));
+    assert_eq!(added["tiles"], 3);
+    assert_eq!(srv.total(), before, "nothing was fetched");
+    assert_eq!(call(&e, "status", json!({}))["build"], "r1");
+    assert_eq!(index_location(&e, "routing", "r1")["location"], "snapshot");
+    assert!(!legacy(&t.0.join("dev2"), false, "r1").exists());
+}
+
+#[test]
+fn a_legacy_index_is_sealed_into_a_snapshot_on_next_use() {
+    let srv = Server::start("snap-legacy");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-legacy");
+    let ix = t.0.join("ix");
+    let bytes = {
+        let e = engine(&t.0, &srv, json!({}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+        assert_eq!(index_location(&e, "routing", "r1")["location"], "legacy");
+        std::fs::read(legacy(&t.0, false, "r1")).unwrap()
+    };
+    assert!(legacy(&t.0, true, "p1").is_file() && snaps(&ix, "region-index", "r1").is_empty());
+    let e = engine(&t.0, &srv, json!({"indexes_dir": ix}));
+    call(&e, "plan", json!({"geometry": region_a()}));
+    let p = call(&e, "plan", json!({"geometry": region_a(), "parts": ["places"]}));
+    assert_eq!(p["parts"]["places"]["tiles"], 1);
+    assert_eq!(srv.hits_of("/routing/r1/index.tsv.gz"), 1, "sealed from the file, not fetched again");
+    let s = snaps(&ix, "region-index", "r1");
+    assert_eq!(s.len(), 1);
+    assert_eq!(std::fs::read(s[0].join("index.tsv")).unwrap(), bytes, "the same bytes, moved");
+    assert!(!legacy(&t.0, false, "r1").exists(), "moved, not copied");
+    assert_eq!(snaps(&ix, "places-index", "p1").len(), 1);
+    assert!(!legacy(&t.0, true, "p1").exists());
+    assert_eq!(index_location(&e, "routing", "r1")["location"], "snapshot");
+    assert_eq!(index_location(&e, "places", "p1")["location"], "snapshot");
+}
+
+#[test]
+fn opening_the_places_part_never_deletes_snapshots() {
+    let srv = Server::start("snap-clean");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-clean");
+    // The indexes folder is placed inside the places folder, the worst case for the open-time cleanup.
+    let ix = t.0.join("places").join("indexes");
+    {
+        let e = engine(&t.0, &srv, json!({"indexes_dir": ix}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+    }
+    // A snapshot of a build this device does not keep, as a peer would have synced it in.
+    let other = ix.join("places-index").join("p0");
+    copy_tree(&ix.join("places-index").join("p1"), &other);
+    let kept: Vec<PathBuf> = snaps(&ix, "places-index", "p1").into_iter().chain(snaps(&ix, "places-index", "p0")).chain(snaps(&ix, "region-index", "r1")).collect();
+    assert_eq!(kept.len(), 3);
+    // And a stray legacy index for a build that is not kept does go, as before.
+    std::fs::create_dir_all(t.0.join("places").join("index")).unwrap();
+    std::fs::write(legacy(&t.0, true, "old"), b"x").unwrap();
+    drop(engine(&t.0, &srv, json!({"indexes_dir": ix})));
+    for k in &kept {
+        assert!(k.join("manifest.json").is_file() && k.join("index.tsv").is_file(), "{} survived", k.display());
+    }
+    assert!(!legacy(&t.0, true, "old").exists());
+}
+
+#[test]
+fn a_half_copied_snapshot_is_ignored_and_the_index_is_fetched_again() {
+    let srv = Server::start("snap-half");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-half");
+    let ix = t.0.join("ix");
+    {
+        let e = engine(&t.0.join("dev1"), &srv, json!({"indexes_dir": ix}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+    }
+    for (name, drop_file) in [("no-manifest", "manifest.json"), ("no-file", "index.tsv")] {
+        let ix2 = t.0.join(format!("ix-{name}"));
+        copy_tree(&ix, &ix2);
+        for (kind, build) in [("region-index", "r1"), ("places-index", "p1")] {
+            std::fs::remove_file(snaps(&ix2, kind, build)[0].join(drop_file)).unwrap();
+        }
+        let e = engine(&t.0.join(format!("dev-{name}")), &srv, json!({"indexes_dir": ix2}));
+        assert_eq!(index_location(&e, "routing", "r1"), Value::Null);
+        // Offline the broken snapshot gives nothing (plan fails: no build is known), online the engine fetches.
+        call(&e, "set_policy", json!({"network": false}));
+        assert_eq!(e.call("plan", &json!({"geometry": region_a()})).unwrap_err().code, "offline", "{name}");
+        call(&e, "set_policy", json!({"network": true}));
+        let before = srv.hits_of("/routing/r1/index.tsv.gz");
+        assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+        assert_eq!(srv.hits_of("/routing/r1/index.tsv.gz"), before + 1, "{name}: fetched again");
+        let good = snaps(&ix2, "region-index", "r1")
+            .into_iter()
+            .filter(|s| cache_snapshot::verify(s, "region-index", "r1", compat_any).is_ok())
+            .count();
+        assert_eq!(good, 1, "{name}: a complete snapshot now sits beside the broken one");
+        assert_eq!(index_location(&e, "routing", "r1")["location"], "snapshot");
+    }
+}
+
+#[test]
+fn a_snapshot_of_another_publish_is_ignored_when_current_json_is_known() {
+    let srv = Server::start("snap-sha");
+    srv.publish_routing("r1");
+    srv.publish_places("p1");
+    let t = Tmp::new("snap-sha");
+    let ix = t.0.join("ix");
+    {
+        let e = engine(&t.0.join("dev1"), &srv, json!({"indexes_dir": ix}));
+        call(&e, "add", json!({"id": "a", "geometry": region_a()}));
+        wait_state(&e, "a", "ready");
+    }
+    // A copy whose snapshots record a checksum the server's current.json does not name (a different publish of the build).
+    let tamper = |ix: &Path| {
+        for (kind, build) in [("region-index", "r1"), ("places-index", "p1")] {
+            let m = snaps(ix, kind, build)[0].join("manifest.json");
+            let mut v: Value = serde_json::from_slice(&std::fs::read(&m).unwrap()).unwrap();
+            v["index_sha256"] = json!("0".repeat(64));
+            std::fs::write(&m, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+        }
+    };
+    let ix2 = t.0.join("ix2");
+    copy_tree(&ix, &ix2);
+    tamper(&ix2);
+
+    // Online (current.json known): the mismatching snapshot is skipped, the index is fetched, a good snapshot is published,
+    // and the synced-in one is not deleted.
+    let e = engine(&t.0.join("dev2"), &srv, json!({"indexes_dir": ix2}));
+    let before = srv.hits_of("/routing/r1/index.tsv.gz");
+    let p_before = srv.hits_of("/places/p1/index.tsv.gz");
+    assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+    assert_eq!(srv.hits_of("/routing/r1/index.tsv.gz"), before + 1, "fetched, not trusted");
+    let p = call(&e, "plan", json!({"geometry": region_a(), "parts": ["places"]}));
+    assert_eq!(p["parts"]["places"]["tiles"], 1);
+    assert_eq!(srv.hits_of("/places/p1/index.tsv.gz"), p_before + 1);
+    for (kind, build) in [("region-index", "r1"), ("places-index", "p1")] {
+        assert_eq!(snaps(&ix2, kind, build).len(), 2, "{kind}: the other publish's snapshot is kept");
+    }
+    drop(e);
+    // The next start knows current.json from regions.sqlite: still the matching one, no new fetch.
+    let e = engine(&t.0.join("dev2"), &srv, json!({"indexes_dir": ix2}));
+    let hits = srv.hits_of("/routing/r1/index.tsv.gz");
+    call(&e, "set_policy", json!({"network": false}));
+    assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+    assert_eq!(srv.hits_of("/routing/r1/index.tsv.gz"), hits);
+    drop(e);
+
+    // Offline with no current.json known: the verified manifest is trusted, as before.
+    let ix3 = t.0.join("ix3");
+    copy_tree(&ix, &ix3);
+    tamper(&ix3);
+    let e = engine(&t.0.join("dev3"), &srv, json!({"indexes_dir": ix3}));
+    call(&e, "set_policy", json!({"network": false}));
+    let before = srv.total();
+    assert_eq!(call(&e, "plan", json!({"geometry": region_a()}))["tiles"], 3);
+    assert_eq!(srv.total(), before);
+}

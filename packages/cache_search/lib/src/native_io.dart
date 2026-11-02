@@ -49,7 +49,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative {
+class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -360,6 +360,11 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
     }
   }
 
+  late final _HStrStr? _jobSet = _lookupHS('cs_job_set');
+
+  @override
+  String? jobSet(int job, String json) => _callHS(_jobSet, job, json);
+
   late final _HStrStr? _mapSearch = _lookupHS('cs_map_search');
   late final _HStrStr? _mapRoute = _lookupHS('cs_map_route');
   late final _HStrStr? _mapProgress = _lookupHS('cs_map_progress');
@@ -538,6 +543,63 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
     };
     return _callHS(f, handle, arg ?? '');
   }
+
+  // ---- PDF indexes of ZIMs: looked up on first use ----
+
+  late final _HStrStr? _zimPdfs = _lookupHS('cs_zim_pdfs');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfOpen = _lookupStr1('cs_pdfindex_open');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfDiscard = _lookupStr1('cs_pdfindex_discard');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfAdd = _lookupSessionStr('cs_pdfindex_add');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfSkip = _lookupSessionStr('cs_pdfindex_skip');
+  late final Pointer<Utf8> Function(int)? _pdfClose = _lookupSession('cs_pdfindex_close');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfReuse = _lookupSessionStr('cs_pdfindex_reuse');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfChunk = _lookupStr1('cs_pdf_chunk');
+
+  Pointer<Utf8> Function(Pointer<Utf8>)? _lookupStr1(String name) {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Pointer<Utf8>), Pointer<Utf8> Function(Pointer<Utf8>)>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  Pointer<Utf8> Function(int, Pointer<Utf8>)? _lookupSessionStr(String name) {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Uint64, Pointer<Utf8>), Pointer<Utf8> Function(int, Pointer<Utf8>)>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  Pointer<Utf8> Function(int)? _lookupSession(String name) {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Uint64), Pointer<Utf8> Function(int)>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  @override
+  bool get hasPdfIndex => _zimPdfs != null && _pdfOpen != null && _pdfAdd != null && _pdfSkip != null && _pdfClose != null && _pdfDiscard != null;
+
+  @override
+  String? zimPdfs(int handle, String zimId) => _callHS(_zimPdfs, handle, zimId);
+
+  @override
+  String? pdfIndex(String op, {int session = 0, String json = '{}'}) => using((a) {
+    final j = json.toNativeUtf8(allocator: a);
+    final open = _pdfOpen, discard = _pdfDiscard, add = _pdfAdd, skip = _pdfSkip, close = _pdfClose, reuse = _pdfReuse, chunk = _pdfChunk;
+    return switch (op) {
+      'reuse' when reuse != null => _take(reuse(session, j)),
+      'chunk' when chunk != null => _take(chunk(j)),
+      'open' when open != null => _take(open(j)),
+      'discard' when discard != null => _take(discard(j)),
+      'add' when add != null => _take(add(session, j)),
+      'skip' when skip != null => _take(skip(session, j)),
+      'close' when close != null => _take(close(session)),
+      _ => null,
+    };
+  });
 
   // The saved-places calls are bound with the rest of the core's calls above (cs_places_list, cs_place_save, cs_place_delete).
   @override

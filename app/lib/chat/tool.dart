@@ -23,8 +23,13 @@ class SourceResult {
   /// A video moment: tapping it opens the player at [time].
   bool get isVideoMoment => link != null && time != null;
 
-  /// Where tapping the citation opens: [address], at [pdfPage] when the address names no page itself.
-  String get openAddress => pdfPage != null && pdfPageOfAddress(address) == null ? withPdfPage(address, pdfPage!) : address;
+  /// Where tapping the citation opens: a ZIM PDF passage's link (`zim:<uuid>/<pdf>#page=N`, its search address being the
+  /// index's own), else [address], at [pdfPage] when the address names no page itself.
+  String get openAddress {
+    final l = link;
+    if (l != null && time == null && l.startsWith('zim:')) return l;
+    return pdfPage != null && pdfPageOfAddress(address) == null ? withPdfPage(address, pdfPage!) : address;
+  }
 }
 
 /// A tool result with its conversation-wide number.

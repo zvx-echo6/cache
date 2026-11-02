@@ -187,7 +187,7 @@ void main() {
       'settings': {'name': 'Guide'},
     });
     final x = serverCoreExtras(dirs);
-    expect(x.keys.toSet(), {'user', 'live', 'places', 'layers', 'routing', 'notebook', 'regions'});
+    expect(x.keys.toSet(), {'indexes_dir', 'user', 'live', 'places', 'layers', 'routing', 'notebook', 'regions'});
     expect((x['live'] as Map)['sources_dir'], '${docs.path}/live-defs');
     expect((x['notebook'] as Map)['db_path'], '${support.path}/notebook/notebook.sqlite');
     expect(Directory('${docs.path}/live-defs').existsSync(), isTrue);

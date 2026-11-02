@@ -1,3 +1,4 @@
+import '../search/index_scheduler.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
@@ -25,6 +26,7 @@ class SettingsHub {
     required this.weather,
     this.sharing,
     this.regions,
+    this.indexing,
     this.openUrl = openInSystemBrowser,
   });
 
@@ -39,6 +41,9 @@ class SettingsHub {
 
   /// Regions and downloads (road routing and map by region); null where the app has none (tests).
   final RegionsState? regions;
+
+  /// The automatic search index work (its one status line); null where the app has none (tests).
+  final IndexScheduler? indexing;
   final UrlOpener openUrl;
 
   Listenable get changes => Listenable.merge([settings, webSearch, storage, weather]);

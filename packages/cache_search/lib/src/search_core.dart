@@ -44,10 +44,17 @@ class SearchCore {
   Future<Map<String, dynamic>> version() async => (await _call('version') as Map).cast<String, dynamic>();
 
   /// Replaces the source list (a ZIM was added or removed).
-  Future<void> setSources(List<SourceConfig> sources) => _call('setSources', {'sources': jsonSources(sources)});
+  /// Replaces the source list; [extra] are the config fields cs_set_sources takes again each time (`indexes_dir`).
+  Future<void> setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) =>
+      _call('setSources', {'sources': jsonSources(sources), 'extra': extra});
 
   Future<List<SourceStatus>> status() async => [
         for (final s in await _call('status') as List) SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
+      ];
+
+  /// Snapshots the core found unusable and removed on this device ([SearchEngine.rejectedSnapshots]).
+  Future<List<RejectedSnapshot>> rejectedSnapshots() async => [
+        for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
       ];
 
   Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
@@ -180,6 +187,17 @@ class SearchCore {
   /// One op of the Notebook (cs_notebook; cache_search.h lists the ops and their answers).
   Future<Map<String, dynamic>> notebook(String op, [Map<String, dynamic> args = const {}]) => _map('notebook', {'op': op, 'args': args});
 
+  /// True when the core has the PDF index calls (cs_zim_pdfs, cs_pdfindex_*).
+  Future<bool> hasPdfIndex() async => (await _call('hasPdfIndex')) as bool;
+
+  /// The ZIM's PDF entries (cs_zim_pdfs).
+  Future<Map<String, dynamic>> zimPdfs(String zimId) => _map('zimPdfs', {'zimId': zimId});
+
+  /// One handle-less PDF call: the build session (`open`, `add`, `reuse`, `skip`, `close`, `discard`) or `chunk` (cs_pdf_chunk);
+  /// see cache_search.h.
+  Future<Map<String, dynamic>> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) =>
+      _map('pdfIndex', {'op': op, 'session': session, 'args': args});
+
   /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
   Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
 
@@ -287,6 +305,10 @@ class CoreJobHandle {
       JobProgress.fromJson(((await _core._call('jobProgress', {'job': _id})) as Map).cast<String, dynamic>());
 
   Future<void> cancel() => _core._call('jobCancel', {'job': _id});
+
+  /// Changes the job's pace now (cs_job_set; see [CoreJob.set]); null when the core has no cs_job_set.
+  Future<Map<String, dynamic>?> set(Map<String, Object?> pace) async =>
+      ((await _core._call('jobSet', {'job': _id, 'pace': pace})) as Map?)?.cast<String, dynamic>();
 
   /// Frees a job that is done, cancelled or failed.
   Future<void> free() async {
