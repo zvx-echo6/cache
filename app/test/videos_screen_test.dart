@@ -127,6 +127,9 @@ void main() {
     expect(find.byKey(const ValueKey('videos-search')), findsNothing, reason: 'search from 8 videos');
     await tester.scrollUntilVisible(find.text('Example PeerTube'), 200);
     expect(find.text('Find videos on a site'), findsOneWidget);
+    expect(find.text('Add a video site'), findsNothing, reason: 'a site exists: only the quiet Add at the heading');
+    expect(find.byKey(const ValueKey('videos-add-site')), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsNothing);
   });
 
   testWidgets('Search from 8 videos: a caption match shows its line and time and opens the player there with the line marked', timeout: const Timeout(Duration(seconds: 60)), (tester) async {

@@ -189,7 +189,19 @@ class _VideosScreenState extends State<VideosScreen> {
         if (twoAcross) ..._pairs([for (final d in g.videos) _savedRow(context, d)]) else for (final d in g.videos) _savedRow(context, d),
       ],
       if (widget.showSites) ...[
-        const SectionHeading('Video sites', top: 24),
+        // With a site already listed, adding another is a quiet Add at the heading's right; with none, the empty state's button.
+        SectionHeading(
+          'Video sites',
+          top: 24,
+          trailing: video.instances.isEmpty
+              ? null
+              : Semantics(
+                  label: 'Add a video site',
+                  excludeSemantics: true,
+                  button: true,
+                  child: TextButton(key: const ValueKey('videos-add-site'), onPressed: _add, child: const Text('Add')),
+                ),
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
           child: Text('Find videos on a site', style: TextStyle(fontSize: 15, color: k.secondary)),
@@ -216,7 +228,8 @@ class _VideosScreenState extends State<VideosScreen> {
               ),
             ),
           ),
-        Padding(
+        if (video.instances.isEmpty)
+          Padding(
           padding: const EdgeInsets.only(top: 8),
           child: Align(
             alignment: Alignment.centerLeft,

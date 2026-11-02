@@ -137,7 +137,7 @@ Future<bool> confirmDeleteVideo(BuildContext context, {required int bytes}) asyn
 
 /// A small capital heading over a part of a list ("DOWNLOADING", "ON THIS DEVICE · 14 videos · 3.2 GB").
 class SectionHeading extends StatelessWidget {
-  const SectionHeading(this.text, {super.key, this.detail, this.top = 16});
+  const SectionHeading(this.text, {super.key, this.detail, this.top = 16, this.trailing});
 
   /// Shown in capitals.
   final String text;
@@ -146,12 +146,13 @@ class SectionHeading extends StatelessWidget {
   final String? detail;
   final double top;
 
+  /// A quiet control at the right of the heading ("Add").
+  final Widget? trailing;
+
   @override
   Widget build(BuildContext context) {
     final k = context.t;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(4, top, 4, 6),
-      child: Semantics(
+    final heading = Semantics(
         header: true,
         label: detail == null ? text : '$text, $detail',
         excludeSemantics: true,
@@ -159,7 +160,10 @@ class SectionHeading extends StatelessWidget {
           detail == null ? text.toUpperCase() : '${text.toUpperCase()} · $detail',
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: k.secondary),
         ),
-      ),
+      );
+    return Padding(
+      padding: EdgeInsets.fromLTRB(4, trailing == null ? top : top - 8, 0, trailing == null ? 6 : 0),
+      child: trailing == null ? heading : Row(children: [Expanded(child: heading), trailing!]),
     );
   }
 }
