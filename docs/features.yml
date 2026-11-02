@@ -1,7 +1,7 @@
 # What Cache does on each kind of device. Source for cached.info/features (tools/site/gen_features.py).
 # Each cell is "now" (works in this version), a release such as "1.1" (coming), or "-" (doesn't apply, or not planned).
 # Claim "now" only for what the app really does in `version`, as the guide (docs/guide) describes it.
-# Linux & Pi is Cache Server: the full app in a browser, shipping in 1.1.
+# Linux & Pi: Cache on Linux and Pi, the full app in a browser, coming in 1.1.
 version: "1.0.30"
 areas:
   - area: Ask
@@ -251,7 +251,7 @@ areas:
         ios: now
         linux: "1.1"
       - feature: Sign-in for the browser
-        text: Cache Server asks for a password or a security key.
+        text: Cache on Linux and Pi asks for a password or a security key.
         android: "-"
         ios: "-"
         linux: "1.1"

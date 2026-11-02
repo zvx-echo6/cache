@@ -7,10 +7,12 @@ import yaml
 src, out = sys.argv[1], sys.argv[2]
 if not os.environ.get("ROADMAP_BLOCKLIST"): sys.exit("STOP: ROADMAP_BLOCKLIST is not set")
 BANNED = re.compile(os.environ["ROADMAP_BLOCKLIST"], re.I)
+# Retired product names: never published, whatever the blocklist secret says.
+RETIRED = re.compile(r"\bcache\s+server\b", re.I)
 PLATFORMS = [("android", "Android"), ("ios", "iPhone & iPad"), ("linux", "Linux & Pi")]
 
 raw = open(src, encoding="utf-8").read()
-if BANNED.search(raw): sys.exit("STOP: a blocked word was found in the features file; nothing was written")
+if BANNED.search(raw) or RETIRED.search(raw): sys.exit("STOP: a blocked word was found in the features file; nothing was written")
 data = yaml.safe_load(raw)
 version = str(data["version"])
 
@@ -116,12 +118,12 @@ footer .wrap {{ display:flex; gap:1rem 1.5rem; flex-wrap:wrap; }}
 <thead><tr><th scope="col">Feature</th>{"".join(f'<th scope="col">{html.escape(l)}</th>' for _, l in PLATFORMS)}</tr></thead>
 {"".join(body)}
 </table>
-<p class="meta">Linux &amp; Pi is Cache Server: the full app in a browser, from 1.1. Windows comes in 1.2.</p>
+<p class="meta">Cache on Linux and Pi is the full app in a browser, from 1.1. Windows comes in 1.2.</p>
 </main>
 <footer><div class="wrap"><span>Happy Little LLC</span><a href="mailto:info@happylittlellc.com">info@happylittlellc.com</a><a href="/changes">What's new</a><a href="/roadmap">Roadmap</a><a href="/features">Features</a><a href="/privacy">Privacy</a></div></footer>
 </body>
 </html>
 """
-if BANNED.search(page): sys.exit("STOP: a blocked word was found in the finished page; nothing was written")
+if BANNED.search(page) or RETIRED.search(page): sys.exit("STOP: a blocked word was found in the finished page; nothing was written")
 open(out, "w", encoding="utf-8").write(page)
 print(sum(len(a["features"]) for a in data["areas"]), "features in", len(data["areas"]), "areas, version", version)
