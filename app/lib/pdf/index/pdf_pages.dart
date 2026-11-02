@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
+import 'package:pdfium_dart/pdfium_dart.dart' as pdfium_bindings;
 import 'package:pdfrx/pdfrx.dart';
 
 /// What reading a PDF's pages gave: each page's text in order (an empty string for a page with none, so page numbers stay
@@ -12,12 +15,10 @@ class PdfPagesOutcome {
 
   final List<String> pages;
 
-  /// The document's own Title (its metadata), when the reader gives it. pdfrx 2.4.8 has no call for it (PDFium's
-  /// FPDF_GetMetaText is not reached through pdfrx), so it is null today.
+  /// The document's own Title (its metadata, PDFium's FPDF_GetMetaText), or null when it has none.
   final String? title;
 
-  /// Each page's printed label ("iv", "A-3"), when the reader gives them. pdfrx 2.4.8 has no call for it (FPDF_GetPageLabel), so
-  /// null today: the pages go to cs_pdf_chunk with an empty label.
+  /// Each page's printed label ("iv", "A-3"; PDFium's FPDF_GetPageLabel), null for a page with none; null when not read.
   final List<String?>? labels;
   final bool locked;
   final bool damaged;
@@ -58,6 +59,12 @@ Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {Pdf
     return const PdfPagesOutcome.damaged();
   }
   try {
+    // The Title and the page labels, which pdfrx does not wrap: PDFium's own calls on the document, while pdfrx's worker is held
+    // (PDFium is not thread-safe). A PDF that says neither gives null.
+    ({String? title, List<String?>? labels}) meta = (title: null, labels: null);
+    try {
+      meta = await doc.useNativeDocumentHandle((handle) => readPdfMeta(handle, doc.pages.length));
+    } catch (_) {}
     final pages = <String>[];
     for (final page in doc.pages) {
       if (pages.isNotEmpty) await betweenPages?.call();
@@ -70,10 +77,45 @@ Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {Pdf
         pages.add('');
       }
     }
-    return PdfPagesOutcome.read(pages);
+    return PdfPagesOutcome.read(pages, title: meta.title, labels: meta.labels);
   } catch (_) {
     return const PdfPagesOutcome.damaged();
   } finally {
     await doc.dispose();
+  }
+}
+
+pdfium_bindings.PDFium? _pdfium;
+
+/// The PDFium pdfrx loaded (the same library: pdfrx's module path).
+pdfium_bindings.PDFium get _lib => _pdfium ??= pdfium_bindings.getPdfium(modulePath: Pdfrx.pdfiumModulePath);
+
+/// A PDFium call that fills a UTF-16LE buffer and answers its length in bytes with the closing 0 (asked first with no buffer).
+String? _utf16(int Function(Pointer<Void> buffer, int length) call) {
+  final n = call(nullptr, 0);
+  if (n <= 2) return null;
+  final buf = calloc<Uint8>(n);
+  try {
+    final got = call(buf.cast<Void>(), n);
+    if (got <= 2) return null;
+    final s = String.fromCharCodes(buf.cast<Uint16>().asTypedList((got < n ? got : n) ~/ 2 - 1));
+    return s.trim().isEmpty ? null : s;
+  } finally {
+    calloc.free(buf);
+  }
+}
+
+/// The metadata Title and each page's printed label of the document [handle] (an FPDF_DOCUMENT, from
+/// PdfDocument.useNativeDocumentHandle), with [pageCount] pages.
+({String? title, List<String?>? labels}) readPdfMeta(int handle, int pageCount) {
+  final pdfium = _lib;
+  final doc = Pointer<pdfium_bindings.fpdf_document_t__>.fromAddress(handle);
+  final tag = 'Title'.toNativeUtf8();
+  try {
+    final title = _utf16((b, n) => pdfium.FPDF_GetMetaText(doc, tag.cast<Char>(), b, n));
+    final labels = [for (var i = 0; i < pageCount; i++) _utf16((b, n) => pdfium.FPDF_GetPageLabel(doc, i, b, n))];
+    return (title: title, labels: labels.any((l) => l != null) ? labels : null);
+  } finally {
+    calloc.free(tag);
   }
 }

@@ -45,7 +45,8 @@ SamplePage sampleTextPage(int n) => SamplePage(
 
 /// A PDF with [pages], written by hand (a few hundred bytes a page): the header, one object per catalogue, page tree, font, page
 /// and content stream, the cross-reference table and the trailer.
-Uint8List samplePdf(List<SamplePage> pages, {String title = 'Water and Shelter Handbook'}) {
+/// [pageLabels] is a /PageLabels number tree's /Nums array, as written in the file (`0 << /S /r >> 2 << /S /D >>`: i, ii, 1, 2...).
+Uint8List samplePdf(List<SamplePage> pages, {String title = 'Water and Shelter Handbook', String? pageLabels}) {
   final out = BytesBuilder(copy: false);
   final offsets = <int>[];
   void add(String s) => out.add(latin1.encode(s));
@@ -59,7 +60,7 @@ Uint8List samplePdf(List<SamplePage> pages, {String title = 'Water and Shelter H
   add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
   // 1 catalogue, 2 pages, 3 font, 4 info; then a page and its content for each page.
   final kids = [for (var i = 0; i < pages.length; i++) '${5 + i * 2} 0 R'].join(' ');
-  obj('<< /Type /Catalog /Pages 2 0 R >>');
+  obj('<< /Type /Catalog /Pages 2 0 R${pageLabels == null ? '' : ' /PageLabels << /Nums [$pageLabels] >>'} >>');
   obj('<< /Type /Pages /Kids [$kids] /Count ${pages.length} >>');
   obj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
   obj('<< /Title (${esc(title)}) /Producer (Cache tests) >>');
