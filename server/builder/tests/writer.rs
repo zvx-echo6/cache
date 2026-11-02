@@ -131,7 +131,8 @@ fn settings_and_payload_fields_match_the_shipped_guide_library() {
         let want = class(&mine[name]);
         for v in theirs {
             // a page is a whole number or a label, as text
-            let ok = class(v) == want || (name == "page" && matches!(class(v), "number" | "string"));
+            // and a null is a field that is not set on that entry
+            let ok = class(v) == want || class(v) == "null" || (name == "page" && matches!(class(v), "number" | "string"));
             assert!(ok, "{name}: the guide has a {} and the writer a {want}", class(v));
         }
         assert_eq!(mine["source"], json!("book"));
@@ -140,6 +141,8 @@ fn settings_and_payload_fields_match_the_shipped_guide_library() {
     let mut guide_keys: Vec<&String> = gp.iter().flat_map(|p| p.keys()).collect();
     guide_keys.sort();
     guide_keys.dedup();
+    let names: Vec<&str> = guide_keys.iter().map(|k| k.as_str()).collect();
+    assert_eq!(names, ["doc_id", "doc_version", "link", "page", "source", "text", "title"], "the guide library's payload fields");
     for k in &guide_keys {
         assert!(mine.contains_key(k.as_str()), "the guide payload has a field {k} the writer does not write (guide fields: {guide_keys:?})");
     }
