@@ -1,4 +1,4 @@
-//! Cache Decimal Classification: the classes, how a book is scored against them, call numbers and the names of filed files.
+//! Cache Decimal System (CDS): the classes, how a book is scored against them, call numbers and the names of filed files.
 //! The classes are `build/classes.json` (a built-in default is written when it is missing, and any edit to it is picked up); it
 //! names the folders and says which divisions are in use. Which division a book goes in is decided by the trained classifier
 //! (`cache_classify`): its weights are a data file, `<data>/models/cache-classifier-<version>.bin`, loaded by [`ModelStore`].

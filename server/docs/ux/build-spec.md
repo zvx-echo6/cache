@@ -53,7 +53,7 @@ One device-wide folder on this device (a device path, not a browser upload). Cac
 ## ZIM pages open full window (owner decision)
 State `reader-full-window` (desktop 1920): the list pane is hidden, the rail stays, the article fills the width with no 70ch cap (the ZIM's own layout, including its infobox). Back arrow and X close it the normal way, back to the Library with the list pane restored. Find in this article sits in the top bar.
 
-## Cache Decimal Classification in the UI (owner approved; source vault/projects/cache-classification.md)
+## Cache Decimal System (CDS) in the UI (owner approved; source vault/projects/cache-classification.md)
 States `library-classes`, `library-division`, `unsorted-place`, and the drop folder states `ingest-active` and `ingest-setup`; desktop class, 1920, light and dark. The tablet layout is not re-rendered for this.
 - **Browsing:** no new page. Selecting a built library expands it in the Library list pane: first "Unsorted" (with a "3 to place" badge), then the 10 classes as number, name and book count. A class expands to its divisions with counts. Selecting a division fills the detail pane's right column with that division's books by call number; selecting the library itself lists all books by call number. A breadcrumb (library / class / division) sits above the table.
 - **Call number:** a quiet monospace label before the title (`CDS 530-001`), in every book row; Unsorted books have none.

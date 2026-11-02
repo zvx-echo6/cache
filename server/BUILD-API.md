@@ -171,7 +171,7 @@ Default folder: `<data>/drop`, off, no library chosen, compression off. `setting
 
 ## Filing by subject
 
-The classes are Cache Decimal Classification (`vault/projects/cache-classification.md`): 10 classes of 9 divisions (060 is unassigned). They are
+The classes are Cache Decimal System, CDS (`vault/projects/cache-classification.md`): 10 classes of 9 divisions (060 is unassigned). They are
 `<data>/build/classes.json`, written from the built-in default (see `server/docs/classes-default.md`) when missing, and read again when the
 file changes. A division has a `number`, a `name` and a `description`; the file names the folders and says which divisions are in use (an empty
 description means not in use). The descriptions are not used to sort books, and are never shown to the assistant.
