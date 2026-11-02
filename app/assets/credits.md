@@ -31,6 +31,7 @@ No data, library content or language model ships inside Cache. The maps, library
 - Boost (used by Valhalla): Boost Software License 1.0. Protocol Buffers: BSD-3-Clause, Copyright Google LLC. zlib: zlib licence.
 - MapLibre Native (draws the map, through the maplibre_gl package): BSD-2-Clause. https://maplibre.org
 - SQLite (through the sqlite3 package): public domain. https://sqlite.org
+- PDFium (draws PDF pages and reads their text, through the pdfrx package; the pdfium-binaries build chromium/7811): BSD-3-Clause, Copyright 2014 The PDFium Authors. Inside it: FreeType (FreeType Licence), Little CMS (MIT), libjpeg-turbo (IJG and BSD-3-Clause), OpenJPEG (BSD-2-Clause), libpng (PNG Reference Library Licence 2), zlib (zlib licence), libtiff (libtiff licence), Anti-Grain Geometry 2.3, Abseil (Apache-2.0), ICU (Unicode Licence v3), fast_float and simdutf (MIT), and LLVM libc (Apache-2.0 with LLVM exceptions). The build itself: MIT, Copyright 2014-2025 Benoit Blanchon. https://pdfium.googlesource.com/pdfium/ and https://github.com/bblanchon/pdfium-binaries
 - LLVM libc++ (libc++_shared.so from the Android NDK): Apache-2.0 with LLVM exceptions.
 - Flutter and Dart (framework, engine and tools): BSD-3-Clause, Copyright the Flutter Authors and the Dart project authors. The licences of the libraries inside the Flutter engine are listed under Open-source licences.
 
@@ -148,6 +149,10 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - path_provider_linux 2.2.2: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - path_provider_platform_interface 2.1.3: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - path_provider_windows 2.3.0: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
+- pdfium_dart 0.2.5: MIT (Copyright (c) 2025 @espresso3389 (Takashi Kawasaki))
+- pdfium_flutter 0.2.3: MIT (Copyright (c) 2025 @espresso3389 (Takashi Kawasaki))
+- pdfrx 2.4.8: MIT (Copyright (c) 2018 @espresso3389 (Takashi Kawasaki))
+- pdfrx_engine 0.4.7: MIT (Copyright (c) 2018 @espresso3389 (Takashi Kawasaki))
 - petitparser 7.0.2: MIT (Copyright (c) 2006-2024 Lukas Renggli.)
 - platform 3.2.0: BSD-3-Clause (Copyright 2017, the Dart project authors. All rights reserved.)
 - plugin_platform_interface 2.1.8: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
@@ -157,6 +162,7 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - qr 3.0.2: BSD-3-Clause (Copyright 2014, the Dart QR project authors. All rights reserved.)
 - qr_flutter 4.1.0: BSD-3-Clause (Copyright (c) 2020, Luke Freeman. All rights reserved.)
 - record_use 0.6.0: BSD-3-Clause (Copyright 2024, the Dart project authors.)
+- rxdart 0.28.0: Apache-2.0
 - saf_stream 4.0.3: BSD-3-Clause (Copyright (c) 2023, Mgenware. All rights reserved.)
 - saf_util 3.1.1: BSD-3-Clause (Copyright (c) 2023, Mgenware. All rights reserved.)
 - share_plus 13.3.1: BSD-3-Clause (Copyright 2017, the Flutter project authors. All rights reserved.)
@@ -167,11 +173,16 @@ Taken from `app/pubspec.lock` (every package the app is built with, direct and i
 - stream_channel 2.1.4: BSD-3-Clause (Copyright 2015, the Dart project authors.)
 - string_scanner 1.4.1: BSD-3-Clause (Copyright 2014, the Dart project authors.)
 - sync_http 0.3.1: BSD-3-Clause (Copyright 2017, the Dart project authors.)
+- synchronized 3.5.0: MIT (Copyright (c) 2016, Alexandre Roux Tekartik.)
 - term_glyph 1.2.2: BSD-3-Clause (Copyright 2017, the Dart project authors.)
 - test_api 0.7.11: BSD-3-Clause (Copyright 2018, the Dart project authors.)
 - timezone 0.11.2: BSD-3-Clause (Copyright (c) 2014, timezone project authors. All rights reserved.)
 - typed_data 1.4.0: BSD-3-Clause (Copyright 2015, the Dart project authors.)
+- url_launcher 6.3.3: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- url_launcher_android 6.3.33: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- url_launcher_ios 6.4.2: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - url_launcher_linux 3.2.3: BSD-3-Clause (Copyright 2013 The Flutter Authors)
+- url_launcher_macos 3.2.6: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - url_launcher_platform_interface 2.3.2: BSD-3-Clause (Copyright 2013 The Flutter Authors. All rights reserved.)
 - url_launcher_web 2.4.3: BSD-3-Clause (Copyright 2013 The Flutter Authors)
 - url_launcher_windows 3.1.6: BSD-3-Clause (Copyright 2013 The Flutter Authors)

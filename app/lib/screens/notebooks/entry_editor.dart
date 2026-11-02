@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../layout/adaptive.dart' show ReadingWidth;
 import '../../notebook/markdown_text.dart';
 import '../../notebook/media.dart';
+import '../../notebook/open_attached.dart';
 import '../../notebook/notebook_model.dart';
 import '../../notebook/notebook_state.dart';
 import '../../notebook/notebook_text.dart';
@@ -260,7 +261,7 @@ class _EntryEditorState extends State<EntryEditor> {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.description_outlined, color: k.secondary),
                   title: Text(f.name),
-                  onTap: () => openFile(widget.notebook, f),
+                  onTap: () => openAttached(context, widget.notebook, f),
                   trailing: IconButton(
                     tooltip: 'Remove',
                     icon: const Icon(Icons.close),

@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../pdf/open_pdf.dart';
+import '../pdf/pdf_address.dart';
 import '../layout/adaptive.dart';
 
 import '../guide/guide_book.dart';
@@ -85,19 +87,26 @@ class _BrowseScreenState extends State<BrowseScreen> {
   void _onBrowse() {
     final a = b.requestedAddress;
     if (a == null || !widget.active) return;
+    final quote = b.requestedQuote;
     b.requestedAddress = null;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openAddress(a));
+    b.requestedQuote = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openAddress(a, quote: quote));
   }
 
   void _say(String text) => ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(text)));
 
-  void _openAddress(String address) {
+  void _openAddress(String address, {String? quote}) {
     final id = zimIdOfAddress(address);
     final z = id == null ? null : sources.zimById(id);
     if (z == null) {
       _say('That source is not on this device any more.');
+      return;
+    }
+    // A PDF entry takes the whole window, not the pane beside the list.
+    if (isPdfAddress(address)) {
+      openZimPdf(context, sources, address, quote: quote);
       return;
     }
     _openZim(z, address: address);
