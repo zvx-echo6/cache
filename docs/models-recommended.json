@@ -1,6 +1,6 @@
 {
   "format": 2,
-  "updated": "2026-11-01",
+  "updated": "2026-11-02",
   "models": [
     {
       "name": "Gemma 4 E2B · tuned for Cache",
@@ -45,6 +45,17 @@
       "kind": "works_not_tuned",
       "section": "experimental",
       "note": "An uncensored E4B. Larger and slower."
+    },
+    {
+      "name": "Gemma 4 E2B Q6 · tuned for Cache",
+      "url": "https://data.cached.info/models/cache-1.0/e2b-stock-cache-1.0-Q6_K.gguf",
+      "file": "e2b-stock-cache-1.0-Q6_K.gguf",
+      "size": 3845346304,
+      "sha256": "09694d33cbca622556148e5e56fe97f1ecfeadbbdfbd24c4df6ede0708a6e330",
+      "kind": "tuned_for_cache",
+      "section": "experimental",
+      "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
+      "note": "Larger and a little slower; in our tests it answered from your sources more reliably than the standard version."
     }
   ]
 }
