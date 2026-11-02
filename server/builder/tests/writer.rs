@@ -42,7 +42,7 @@ fn doc(id: &str) -> LibDoc {
 }
 
 fn opts() -> LibraryOptions {
-    LibraryOptions { id: "writer-test".into(), title: "Writer test".into(), version: "1".into(), archive: false }
+    LibraryOptions { id: "writer-test".into(), title: "Writer test".into(), version: "1".into(), vector_datatype: Default::default(), archive: false }
 }
 
 fn payloads(dir: &Path) -> Vec<Map<String, Value>> {

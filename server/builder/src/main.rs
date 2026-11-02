@@ -4,7 +4,7 @@
 //!                                            [--created-at TEXT] [--pieces-out FILE]
 //!       Each PDF is read in a child process (this program run as the hidden `extract-pdf`), so a PDF that crashes MuPDF fails alone and
 //!       a long batch goes on; --in-process reads in this process instead (for debugging).
-//!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]
+//!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]
 //!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, docs.json, documents.tsv, SHA256SUMS
 //!       --labels sets each document's division (source "label") in docs.json from a labels file ([{id, path, final, second_division}]);
 //!       --titles sets its title from a titles file (JSON Lines {id, path, title, source_title, ok}), keeping the old one as source_title;
@@ -22,14 +22,14 @@ use cache_builder::embed::{Embedder, FakeEmbedder};
 use cache_builder::embed_http::HttpEmbedder;
 use cache_builder::zim::{survey as zim_survey, Survey, ZimPdfOptions};
 use cache_builder::docs::{default_division_names, division_names, load_labels, load_titles, Overrides};
-use cache_builder::library::{build_library_with, check_library_dir, LibraryOptions};
+use cache_builder::library::{build_library_with, check_library_dir, LibraryOptions, VectorDatatype};
 use cache_builder::pack::write_pack;
 use std::path::PathBuf;
 use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -224,7 +224,17 @@ fn cmd_pdf(a: &Args) -> i32 {
 fn cmd_library(a: &Args) -> i32 {
     let (Some(out), Some(id), Some(title)) = (a.get("--out"), a.get("--id"), a.get("--title")) else { usage() };
     let Some(dir) = a.get("--packs").or_else(|| a.pos.first().cloned()) else { usage() };
-    let o = LibraryOptions { id, title, version: a.get("--version").unwrap_or_else(|| "1".into()), archive: a.has("--archive") };
+    let vector_datatype = match a.get("--vector-datatype") {
+        None => VectorDatatype::default(),
+        Some(v) => match VectorDatatype::parse(&v) {
+            Some(d) => d,
+            None => {
+                eprintln!("error: --vector-datatype takes f32 or f16");
+                return 2;
+            }
+        },
+    };
+    let o = LibraryOptions { id, title, version: a.get("--version").unwrap_or_else(|| "1".into()), vector_datatype, archive: a.has("--archive") };
     let mut over = Overrides { names: default_division_names(), ..Default::default() };
     if let Some(f) = a.get("--classes") {
         match std::fs::read(&f).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {

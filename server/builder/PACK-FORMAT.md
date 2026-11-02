@@ -163,6 +163,10 @@ for a rebuild:
 
 ## From packs to a library
 
+`--vector-datatype f32|f16` (default `f32`) chooses how the written shard stores its vectors: Qdrant's `float32` or `float16`. Packs
+stay f32, and queries are f32 either way. The choice is recorded only in the shard's own config; `cache-library.json` has no field
+for it, so it is not repeated there.
+
 `cache-build library <packs dir> --out <dir> --id ID --title TITLE` takes, for each `doc_id`, the pack with the highest
 `doc_version`, and writes `<dir>/shard/` (a Qdrant Edge shard: one unnamed 1024-dimension Cosine vector) and
 `<dir>/cache-library.json` (format 1), `<dir>/docs.json` (see below), plus `<dir>/documents.tsv` (a header row, then `doc_id`, `version`, `title`, source

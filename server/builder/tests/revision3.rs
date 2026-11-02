@@ -171,7 +171,7 @@ fn the_better_copy_comes_from_the_packs_and_is_the_same_in_any_order() {
 }
 
 fn library_opts() -> LibraryOptions {
-    LibraryOptions { id: "r3".into(), title: "Revision 3".into(), version: "1".into(), archive: true }
+    LibraryOptions { id: "r3".into(), title: "Revision 3".into(), version: "1".into(), vector_datatype: Default::default(), archive: true }
 }
 
 fn two_packs(dir: &Path) -> (Pack, Pack) {
@@ -347,4 +347,77 @@ fn labels_and_titles_files_set_the_division_and_the_title() {
     let out = cli().arg("library").arg("--packs").arg(packs.as_path()).arg("--out").arg(tmp.path().join("nolib")).args(["--id", "r3", "--title", "T", "--labels"]).arg(bad.as_path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(!tmp.path().join("nolib").exists());
+}
+
+fn dir_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                dir_bytes(&p)
+            } else {
+                std::fs::metadata(&p).unwrap().len()
+            }
+        })
+        .sum()
+}
+
+/// The shard sizes (f32, f16) of the same packs written both ways, and the top-1 of each query in both.
+fn f16_vs_f32(tmp: &Path) -> (u64, u64) {
+    use cache_builder::embed::fake_vector;
+    use cache_builder::library::VectorDatatype;
+    let packs = tmp.join("packs");
+    let mut texts = Vec::new();
+    for (title, topic) in [("Water", "water"), ("Stone", "stone"), ("Sand", "sand"), ("Clay", "clay")] {
+        let p = build(&doc_pdf(title, topic, 3), &format!("{topic}.pdf"));
+        texts.extend(p.pieces.iter().map(|x| x.text.clone()));
+        write_pack(&p, &packs).unwrap();
+    }
+    let mk = |name: &str, dt: VectorDatatype| {
+        let out = tmp.join(name);
+        let o = LibraryOptions { vector_datatype: dt, archive: false, ..library_opts() };
+        build_library(&packs, &out, &o).unwrap();
+        out
+    };
+    let (a, b) = (mk("f32", VectorDatatype::F32), mk("f16", VectorDatatype::F16));
+    // the f16 shard says so in its own config; cache-library.json is the same apart from nothing (no field for it)
+    let cfg = std::fs::read_to_string(b.join("shard/edge_config.json")).unwrap_or_default();
+    if !cfg.is_empty() {
+        assert!(cfg.to_lowercase().contains("float16"), "{cfg}");
+        assert!(!std::fs::read_to_string(a.join("shard/edge_config.json")).unwrap().to_lowercase().contains("float16"));
+    }
+    assert_eq!(std::fs::read(a.join(SETTINGS_FILE)).unwrap(), std::fs::read(b.join(SETTINGS_FILE)).unwrap());
+    let open = |d: &Path| {
+        let s: Value = serde_json::from_slice(&std::fs::read(d.join(SETTINGS_FILE)).unwrap()).unwrap();
+        cache_search::library::open_library(&d.join("shard"), None, Some(&s)).unwrap()
+    };
+    let (sa, sb) = (open(&a), open(&b));
+    assert_eq!((sa.docs, sb.docs), (texts.len(), texts.len()));
+    // queries are f32 (the pieces' own vectors, and a nearby one); both libraries answer with the same top-1
+    for t in texts.iter().step_by(3) {
+        let v = fake_vector(t);
+        let mut near = v.clone();
+        near.iter_mut().step_by(7).for_each(|x| *x *= 1.02);
+        for q in [&v, &near] {
+            let ha = sa.dense_search(q, 1, 1, 200).unwrap();
+            let hb = sb.dense_search(q, 1, 1, 200).unwrap();
+            assert_eq!(ha[0].address, hb[0].address, "top-1 differs for {t:.40}");
+        }
+    }
+    (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")))
+}
+
+#[test]
+fn an_f16_library_opens_and_answers_like_the_f32_one_in_less_space() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (f32_bytes, f16_bytes) = f16_vs_f32(tmp.path());
+    assert!(f16_bytes < f32_bytes, "f16 {f16_bytes} bytes, f32 {f32_bytes} bytes");
+
+    // the command line takes the option, and refuses anything else
+    let packs = tmp.path().join("packs");
+    let out = cli().arg("library").arg("--packs").arg(packs.as_path()).arg("--out").arg(tmp.path().join("cli16")).args(["--id", "r3", "--title", "T", "--vector-datatype", "f16"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = cli().arg("library").arg("--packs").arg(packs.as_path()).arg("--out").arg(tmp.path().join("cli8")).args(["--id", "r3", "--title", "T", "--vector-datatype", "f8"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
 }

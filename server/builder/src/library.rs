@@ -6,7 +6,10 @@ use crate::docs::{write_docs, Applied, DocEntry, Docs, Overrides, DOCS_FILE};
 use crate::embed::DIMS;
 use crate::error::{Error, Result};
 use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
-use edge::{Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation};
+use edge::{
+    Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation,
+    VectorStorageDatatype,
+};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -138,10 +141,40 @@ pub fn payload_of(pack: &Pack, i: usize) -> Value {
     doc_payload(&d, 0)
 }
 
+/// How the shard stores its vectors. Packs always hold f32; this changes only the written shard. Queries are f32 either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VectorDatatype {
+    /// Single precision (Qdrant `float32`), the default.
+    #[default]
+    F32,
+    /// Half precision (Qdrant `float16`): about half the vector storage. The choice lives only in the shard's own config
+    /// (`cache-library.json` has no field for it), so a reader needs nothing extra.
+    F16,
+}
+
+impl VectorDatatype {
+    pub fn parse(s: &str) -> Option<VectorDatatype> {
+        match s {
+            "f32" => Some(VectorDatatype::F32),
+            "f16" => Some(VectorDatatype::F16),
+            _ => None,
+        }
+    }
+
+    fn storage(self) -> VectorStorageDatatype {
+        match self {
+            VectorDatatype::F32 => VectorStorageDatatype::Float32,
+            VectorDatatype::F16 => VectorStorageDatatype::Float16,
+        }
+    }
+}
+
 pub struct LibraryOptions {
     pub id: String,
     pub title: String,
     pub version: String,
+    /// How the shard stores vectors (default f32).
+    pub vector_datatype: VectorDatatype,
     /// Also write `<out>.cache-library` (the shard as a snapshot tar with the settings file at its root).
     pub archive: bool,
 }
@@ -233,7 +266,8 @@ impl LibraryWriter {
         std::fs::create_dir_all(&shard_dir).map_err(|e| Error::ctx(&format!("creating {}", shard_dir.display()), e))?;
         cache_search::library::ensure_init();
         // As libadd::make_blank_shard: one unnamed dense vector, Cosine, no write-ahead log; here it stays open to be written.
-        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(DIMS, Distance::Cosine).build()).wal_enabled(false).build();
+        let params = EdgeVectorParamsBuilder::new(DIMS, Distance::Cosine).datatype(opts.vector_datatype.storage()).build();
+        let cfg = EdgeConfig::builder().vector("", params).wal_enabled(false).build();
         let shard = match EdgeShard::new(&shard_dir, cfg) {
             Ok(s) => s,
             Err(e) => {
@@ -241,7 +275,7 @@ impl LibraryWriter {
                 return Err(Error::ctx("making the library shard", e));
             }
         };
-        let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), archive: opts.archive };
+        let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), vector_datatype: opts.vector_datatype, archive: opts.archive };
         Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new(), docs: Docs::default() })
     }
 
