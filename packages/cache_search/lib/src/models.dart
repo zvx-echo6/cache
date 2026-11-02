@@ -211,6 +211,26 @@ class SourceStatus {
   bool get searchable => id != null && indexed && !building && !opening && !updating && error == null;
 }
 
+/// One of cs_status's "rejected_snapshots": a snapshot the core found unusable and removed on this device (kept in
+/// `<indexes_dir>/.local/rejected.json`), which sync then never fetches again.
+class RejectedSnapshot {
+  const RejectedSnapshot({required this.kind, required this.sourceId, required this.buildId, this.reason});
+
+  factory RejectedSnapshot.fromJson(Map<String, dynamic> j) => RejectedSnapshot(
+    kind: (j['kind'] ?? '') as String,
+    sourceId: (j['source_id'] ?? '') as String,
+    buildId: (j['build_id'] ?? '') as String,
+    reason: j['reason'] as String?,
+  );
+
+  final String kind;
+  final String sourceId;
+  final String buildId;
+  final String? reason;
+
+  Map<String, dynamic> toJson() => {'kind': kind, 'source_id': sourceId, 'build_id': buildId, 'reason': reason};
+}
+
 /// cs_status's `captionsindex` or `epubindex` of a ZIM: its caption files' or EPUBs' keyword index.
 class ZimSubIndex {
   const ZimSubIndex({required this.state, this.kind, this.snapshot, this.sourceId, this.entries, this.items, this.pieces, this.needsBuild});

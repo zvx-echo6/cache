@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:cache_search/cache_search.dart' show SourceStatus;
+import 'package:cache_search/cache_search.dart' show RejectedSnapshot, SourceStatus;
 
 /// The device's syncable search indexes (the core's `indexes_dir`): one folder, `<kind>/<source id>/`, each with its working
 /// `.build/` and its sealed snapshots `snap/<build-id>/` (manifest.json written last). It is shared with every linked device
@@ -13,9 +13,10 @@ const String kIndexesShareId = 'indexes';
 /// The indexes folder, under the app's support folder.
 const String kIndexesDirName = 'shared-indexes';
 
-/// What never syncs from it: each index's build (which also holds a publish in progress, renamed into `snap/` in one step),
-/// and SQLite's working files, which belong to the device that opened the database.
-const List<String> kIndexesNotShared = ['*/*/.build', '**/*-shm', '**/*-wal', '**/*-journal'];
+/// What never syncs from it: each index's build (which also holds a publish in progress, renamed into `snap/` in one step), the
+/// core's own notes about this device (`.local/`, such as the snapshots it rejected), and SQLite's working files, which belong to
+/// the device that opened the database.
+const List<String> kIndexesNotShared = ['*/*/.build', '.local', '**/*-shm', '**/*-wal', '**/*-journal'];
 
 /// Where a delete stays on the device that made it: each device clears out the snapshots it no longer uses on its own, and
 /// never fetches back one it deleted.
@@ -60,4 +61,11 @@ List<String> indexesFetchOnly(Iterable<SourceStatus> sources, {Iterable<String> 
   for (final s in sources)
     if (s.sourceId != null && s.sourceId!.isNotEmpty)
       for (final kind in kIndexKindsOfSource[s.kind] ?? const <String>[]) '$kind/${encodeSourceId(s.sourceId!)}',
+}.toList()..sort();
+
+/// What this device never fetches of the indexes folder: the snapshots its core found unusable and removed. Sync already keeps
+/// a snapshot this device deleted from coming back (the delete stays here); this holds even when that record is gone.
+List<String> indexesNeverFetch(Iterable<RejectedSnapshot> rejected) => {
+  for (final r in rejected)
+    if (r.kind.isNotEmpty && r.sourceId.isNotEmpty && r.buildId.isNotEmpty) '${r.kind}/${encodeSourceId(r.sourceId)}/snap/${r.buildId}',
 }.toList()..sort();

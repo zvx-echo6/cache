@@ -128,6 +128,10 @@ pub struct Config {
     /// says the rest is there (a snapshot's manifest).
     #[serde(default)]
     pub last: BTreeMap<String, Vec<String>>,
+    /// What this device never fetches, by share id (patterns as for `exclude`), on top of `only`: snapshots its own core found
+    /// unusable and removed. `set_never_fetch` replaces a share's list later. Its own files are offered all the same.
+    #[serde(default)]
+    pub never_fetch: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -293,6 +297,8 @@ struct Inner {
     only: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::last`].
     last: BTreeMap<String, Vec<String>>,
+    /// [`Config::never_fetch`], as `set_never_fetch` last left it.
+    never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
     /// round, so a round already running cannot write them back (set_only does not wait for the round).
     refetch: Mutex<HashMap<String, Vec<String>>>,
@@ -489,9 +495,10 @@ impl Inner {
         self.local_deletes.get(share).map(|p| excluded(p, rel)).unwrap_or(false)
     }
 
-    /// This device fetches `rel` in `share` from the others ([`Config::only`]).
+    /// This device fetches `rel` in `share` from the others ([`Config::only`], [`Config::never_fetch`]).
     fn wants(&self, share: &str, rel: &str) -> bool {
-        self.only.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(true)
+        let only = self.only.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(true);
+        only && !self.never_fetch.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false)
     }
 
     /// What this device takes from a peer's list of `share`: not what never syncs, not what it does not fetch, and not a delete
@@ -1422,6 +1429,7 @@ impl SyncEngine {
             local_deletes: cfg.local_deletes.clone(),
             only: Mutex::new(cfg.only.clone()),
             last: cfg.last.clone(),
+            never_fetch: Mutex::new(cfg.never_fetch.clone()),
             refetch: Mutex::new(HashMap::new()),
         });
         inner.save()?;
@@ -1583,6 +1591,25 @@ impl SyncEngine {
                 inner.wake.notify_one();
                 Ok(json!({"ok": true, "fetchable_again": back.len()}))
             }
+            "set_never_fetch" => {
+                // What this device never fetches of a share from now on, on top of what it fetches (null or []: nothing more).
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let list: Vec<String> = match args.get("never_fetch") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("never_fetch must be a list of patterns or null"),
+                };
+                {
+                    let mut nf = inner.never_fetch.lock().unwrap();
+                    if list.is_empty() {
+                        nf.remove(&id);
+                    } else {
+                        nf.insert(id.clone(), list);
+                    }
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
+            }
             "share_remove" => {
                 // Stops sharing; the files stay where they are.
                 let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
@@ -1678,6 +1705,7 @@ impl SyncEngine {
                     "files": live.len(), "bytes": live.iter().map(|e| e.size).sum::<u64>(),
                     "pending_files": pending, "pending_bytes": pending_bytes,
                     "only": inner.only.lock().unwrap().get(&sh.id).cloned(),
+                    "never_fetch": inner.never_fetch.lock().unwrap().get(&sh.id).cloned(),
                 })
             })
             .collect();

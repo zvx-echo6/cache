@@ -94,6 +94,11 @@ class SearchCore {
         for (final s in await _call('status') as List) SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
       ];
 
+  /// Snapshots the core found unusable and removed on this device ([SearchEngine.rejectedSnapshots]).
+  Future<List<RejectedSnapshot>> rejectedSnapshots() async => [
+        for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
+      ];
+
   Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
       SearchResponse.fromJson(((await _call('search', {
         'query': query,
@@ -403,6 +408,8 @@ void _workerMain(List<dynamic> init) {
           eng().deleteSavedPlace(a['key'] as String);
         case 'setSources':
           eng().setSources(_sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
+        case 'rejected':
+          result = [for (final r in eng().rejectedSnapshots()) r.toJson()];
         case 'status':
           result = [
             for (final s in eng().status())

@@ -49,6 +49,12 @@ class SearchEngine {
           SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
       ];
 
+  /// cs_status's "rejected_snapshots": snapshots the core found unusable and removed on this device (none from an older core).
+  List<RejectedSnapshot> rejectedSnapshots() => [
+        for (final r in (_object(_ok(native.status(_h)))['rejected_snapshots'] as List? ?? const []))
+          if (r is Map) RejectedSnapshot.fromJson(r.cast<String, dynamic>()),
+      ];
+
   SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
     final options = {
       'k': k,

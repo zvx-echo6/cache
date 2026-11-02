@@ -85,6 +85,7 @@ class SharingState extends ChangeNotifier {
         'last': {for (final a in always) a.id: a.last},
         // An always-shared folder fetches nothing until the app says what it may fetch (setOnly).
         'only': {for (final a in always) a.id: _only[a.id] ?? const <String>[]},
+        'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
       });
       await _applyPolicy();
       await refresh();
@@ -137,6 +138,23 @@ class SharingState extends ChangeNotifier {
       await c.call('set_only', {'id': id, 'only': sorted});
     } catch (e) {
       debugPrint('Could not set what ${_nameOf(id)} fetches: $e');
+    }
+  }
+
+  final Map<String, List<String>> _neverFetch = {};
+
+  /// What this device never fetches of the always-shared folder [id] (on top of [setOnly]): kept, and given to the engine at its
+  /// next start too.
+  Future<void> setNeverFetch(String id, List<String> patterns) async {
+    final sorted = [...patterns]..sort();
+    if (listEquals(_neverFetch[id] ?? const <String>[], sorted)) return;
+    _neverFetch[id] = sorted;
+    final c = _core;
+    if (c == null) return;
+    try {
+      await c.call('set_never_fetch', {'id': id, 'never_fetch': sorted});
+    } catch (e) {
+      debugPrint('Could not set what ${_nameOf(id)} never fetches: $e');
     }
   }
 

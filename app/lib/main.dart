@@ -343,10 +343,13 @@ class _CacheAppState extends State<CacheApp> {
   void _onSettingsForIndexing() => indexThrottle.setSpeed(settings.indexingNormal ? IndexSpeed.normal : IndexSpeed.gentle);
 
   /// Tells sharing which indexes this device fetches: those of the sources the core has open.
-  void _syncIndexesOnly() => unawaited(sharing.setOnly(
-    kIndexesShareId,
-    indexesFetchOnly(sources.statuses, savedVideos: [for (final v in video.saved) v.captionsIndex?.sourceId ?? '${v.instance}/${v.uuid}']),
-  ));
+  void _syncIndexesOnly() {
+    unawaited(sharing.setOnly(
+      kIndexesShareId,
+      indexesFetchOnly(sources.statuses, savedVideos: [for (final v in video.saved) v.captionsIndex?.sourceId ?? '${v.instance}/${v.uuid}']),
+    ));
+    unawaited(sharing.setNeverFetch(kIndexesShareId, indexesNeverFetch(sources.rejected)));
+  }
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
