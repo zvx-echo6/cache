@@ -21,7 +21,7 @@ String videoErrorText(Object e) {
       case 'quota':
         return 'The video site asked us to slow down. Try again in a minute.';
       case 'auth_failed':
-        return 'The video site needs you to log in again.';
+        return 'The video site needs you to sign in again.';
       case 'otp_required':
         return 'This account needs its two-factor code.';
       case 'not_found':

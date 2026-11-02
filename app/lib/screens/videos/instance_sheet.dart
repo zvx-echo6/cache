@@ -157,15 +157,15 @@ class _InstanceSheetState extends State<_InstanceSheet> {
               Text(i.host + (i.version.isEmpty ? '' : ' · PeerTube ${i.version}'), style: TextStyle(fontSize: 15, color: k.secondary)),
               const SizedBox(height: 20),
               if (user != null) ...[
-                Text('Logged in as $user', style: TextStyle(fontSize: 17, color: k.text)),
+                Text('Signed in as $user', style: TextStyle(fontSize: 17, color: k.text)),
                 const SizedBox(height: 10),
-                OutlinedButton(onPressed: () => widget.video.logout(i.id), child: const Text('Log out')),
+                OutlinedButton(onPressed: () => widget.video.logout(i.id), child: const Text('Sign out')),
               ] else if (_methods == null) ...[
                 const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator())),
               ] else ...[
-                Text('Log in (optional)', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                Text('Sign in (optional)', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
                 const SizedBox(height: 4),
-                Text('Only needed for videos the site keeps behind a login.', style: TextStyle(fontSize: 14, color: k.secondary)),
+                Text('Only needed for videos the site keeps behind a sign-in.', style: TextStyle(fontSize: 14, color: k.secondary)),
                 const SizedBox(height: 10),
                 // the site's own sign-in methods (its auth plugins), each under the site's own name for it
                 for (final a in _methods!.external) ...[
@@ -194,7 +194,7 @@ class _InstanceSheetState extends State<_InstanceSheet> {
                   TextField(controller: _otp, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Two-factor code')),
                 ],
                 const SizedBox(height: 10),
-                FilledButton(onPressed: _busy ? null : _login, child: Text(_busy ? 'Logging in…' : 'Log in')),
+                FilledButton(onPressed: _busy ? null : _login, child: Text(_busy ? 'Signing in…' : 'Sign in')),
               ],
               if (_error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_error!, style: TextStyle(fontSize: 15, color: k.emergency))),
               const SizedBox(height: 20),

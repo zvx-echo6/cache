@@ -111,7 +111,7 @@ void main() {
     expect(find.text('That sign-in took too long or was already used. Try again.'), findsOneWidget);
     expect(v.userOf('tube.example.org'), isNull);
     await tapSignIn();
-    expect(find.text('Logged in as bob'), findsOneWidget);
+    expect(find.text('Signed in as bob'), findsOneWidget);
     expect(opened.toSet(), {'https://tube.example.org/plugins/auth-openid-connect/1.2.0/auth/openid-connect'});
     expect(tokens.values['video.tube.example.org.access'], 'A1');
     expect(tokens.values['video.tube.example.org.refresh'], 'R1', reason: 'refreshed like a password login');

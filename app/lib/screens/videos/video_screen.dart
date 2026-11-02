@@ -233,13 +233,13 @@ class _VideoScreenState extends State<VideoScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Log in to ${widget.video.instanceById(widget.instanceId)?.name ?? 'the site'} to play this video',
+                    'Sign in to ${widget.video.instanceById(widget.instanceId)?.name ?? 'the site'} to play this video',
                     key: const ValueKey('video-login-line'),
                     style: TextStyle(fontSize: 15, color: k.text),
                   ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton(key: const ValueKey('video-login'), onPressed: _login, child: const Text('Log in')),
+                FilledButton(key: const ValueKey('video-login'), onPressed: _login, child: const Text('Sign in')),
               ],
             ),
           ),
