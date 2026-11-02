@@ -82,6 +82,8 @@ import 'package:cache/pdf/index/pdf_index_state.dart' show PdfIndexState, PdfPar
 import 'package:cache/pdf/pdf_reader_screen.dart' show PdfReaderScreen;
 import 'package:cache/pdf/pdf_source.dart' show PdfFileSource;
 import 'package:cache/settings/space.dart';
+import 'package:cache/settings/data_kinds.dart' show DataKind;
+import 'package:cache/sharing/sharing_state.dart' show SharingState;
 import 'package:cache/weather/weather_state.dart';
 import 'package:cache/screens/settings/about_pages.dart';
 import 'package:cache/screens/settings/appearance_page.dart';
@@ -313,12 +315,41 @@ void main() {
     r.sync.peers
       ..add({'id': 'peer1', 'name': 'Desk', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 120000, 'via': null, 'error': null})
       ..add({'id': 'peer2', 'name': 'Tablet', 'linked': 1, 'last_seen': DateTime.now().millisecondsSinceEpoch - 3600000, 'via': null, 'error': null});
-    await show(tester, SharingPage(sharing: r.sharing));
-    await tester.runAsync(() => r.sharing.setUp());
-    await tester.runAsync(() => r.sharing.setShared(r.sharing.kinds.single, true));
+    // The app's kinds (main.dart's dataKinds, with folders here): Library and Notebooks ticked.
+    Directory folder(String name, Map<String, int> files) {
+      final d = Directory('${r.dir.path}/share-$name')..createSync(recursive: true);
+      for (final f in files.entries) {
+        File('${d.path}/${f.key}').openSync(mode: FileMode.write)
+          ..truncateSync(f.value)
+          ..closeSync();
+      }
+      return d;
+    }
+
+    final zims = folder('library', {'wikivoyage_en_idaho.zim': 180 << 20, 'wikipedia_en_medicine.zim': 940 << 20});
+    final models = folder('models', {'gemma-4-E2B-it-Q4_K_M.gguf': 3200 << 20});
+    final notebooks = folder('notebooks', {for (var i = 1; i <= 12; i++) 'Journal 2026-10-$i.md': 2 << 10});
+    final shared = folder('shared', const {});
+    final sharing = SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: [
+        DataKind(id: 'library', label: 'Library', icon: Icons.menu_book_outlined, shared: () => {'library': zims}),
+        DataKind(id: 'models', label: 'Models', icon: Icons.memory, shared: () => {'models': models}),
+        DataKind(id: 'notebooks', label: 'Notebooks', icon: Icons.book_outlined, shared: () => {'notebooks': notebooks}),
+        DataKind(id: 'shared', label: 'Shared folder', icon: Icons.folder_shared_outlined, shared: () => {'shared': shared}, inStorage: false),
+      ],
+      deviceName: 'Android device',
+      opener: (_) async => r.sync,
+    );
+    await show(tester, SharingPage(sharing: sharing));
+    await tester.runAsync(() => sharing.setUp());
+    await tester.runAsync(() => sharing.setShared(sharing.kinds.first, true));
+    await tester.runAsync(() => sharing.setShared(sharing.kinds[2], true));
     await settle(tester);
     await shot(tester, 'settings-sharing');
     await tester.pumpWidget(const SizedBox());
+    sharing.dispose();
     await r.dispose(tester);
   });
 
@@ -345,7 +376,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.runAsync(() => r.weather.saveKey(r.weather.sourceById('firms-viirs-near')!, 'sample-key-0000'));
-    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'));
+    await show(tester, SourcePage(deps: r.deps, sourceId: 'firms-viirs-near'), height: 1000);
     await tester.pumpAndSettle();
     await shot(tester, 'source-page');
 
@@ -409,6 +440,7 @@ void main() {
   testWidgets('modules, modules-hold-menu', (tester) async {
     final h = _HomeRig();
     await homeRig(tester, h);
+    await _gemma(tester, h.r);
     await show(tester, ModulesScreen(layout: h.layout, app: h.r.app, onOpen: (_) {}));
     await shot(tester, 'modules');
     await tester.longPress(find.byKey(const ValueKey('module-videos')));
@@ -633,7 +665,7 @@ void main() {
     r.chat.historyRevision.value++;
     await show(tester, AskOffPage(app: r.app, chat: r.chat, onChooseModel: () {}, onOpenChat: (_) {}));
     await settle(tester);
-    expect(find.text('Saved chats'), findsOneWidget);
+    expect(find.text('Treating a burn'), findsOneWidget);
     await shot(tester, 'ask-no-model');
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
@@ -1083,8 +1115,9 @@ void main() {
     await _precache(tester, p);
     c.at(const Duration(seconds: 14));
     await tester.pump();
+    // The pane reads the caption file outside the test's clock.
+    await _until(tester, find.byKey(const ValueKey('player-transcript')));
     await settle(tester);
-    expect(find.text('Transcript'), findsWidgets);
     await shot(tester, 'video-transcript', crop: find.byType(PlayerScreen));
     await tester.pumpWidget(const SizedBox());
   });
@@ -1137,13 +1170,14 @@ void main() {
   testWidgets('search-pdf-hits', (tester) async {
     final h = _HomeRig();
     await homeRig(tester, h);
-    // What the Library's search gives for a passage in a ZIM's PDF (the passage's title, the PDF's book and the page) beside a
-    // page of a ZIM. Caption and EPUB hits are not in Home's search (only zim: pages and PDF passages are), so none is shown.
+    // What the Library's search gives for a passage in a ZIM's PDF (the core's title "<PDF>, p. <page>"; then the ZIM's title
+    // and the page) beside a page of a ZIM. Caption and EPUB hits are not in Home's search (it keeps zim: pages and PDF
+    // passages only), so none is shown.
     final search = AppSearch([
       _Found('Library', Icons.menu_book_outlined, [
-        ('Boiling water', 'Water and Shelter Handbook, p. 47', 0.9),
+        ('Water and Shelter Handbook, p. 47', 'Survival Library, p. 47', 0.9),
         ('Water purification', 'Wikipedia Medicine', 0.8),
-        ('Water filters', 'Water and Shelter Handbook, p. 52', 0.7),
+        ('Field Water Supply, p. 12', 'Survival Library, p. 12', 0.7),
       ]),
       _Found('Notebooks', Icons.book_outlined, [('Water cache restocked', 'Journal · Oct 27', 0.5)]),
     ]);
