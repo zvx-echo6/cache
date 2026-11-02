@@ -925,9 +925,8 @@ impl Handle {
                     Shown::Kw(ki, hi) => {
                         let (k, h) = (&kw_kw[ki], &kw_kw[ki].hits[hi]);
                         let (address, cite, title) = kw_result(k.kind, &k.source_id, &h.piece);
-                        self.last_cites.push((address.clone(), cite));
-                        results.push(json!({
-                            "address": address,
+                        let mut r = json!({
+                            "address": address.clone(),
                             "title": title,
                             "snippet": self
                                 .kw_index(k.kind, &k.source_id)
@@ -937,7 +936,28 @@ impl Handle {
                             "source_kind": if k.kind == kwindex::CAPTIONS { "video" } else { "zim" },
                             "source_title": k.source_title,
                             "page": Value::Null,
-                        }));
+                        });
+                        // Where the hit opens, as its citation does (the app's own search opens it the same way): a caption
+                        // hit's video link, its moment and end (seconds) and language; an EPUB hit's chapter link with its
+                        // block anchor; the passage's first words. Never part of what the model reads (the search tool shows
+                        // titles and snippets only).
+                        if let Some(l) = &cite.link {
+                            r["link"] = json!(l);
+                        }
+                        if let Some(t) = &cite.time {
+                            r["time"] = json!(t);
+                        }
+                        if let Some(t) = &cite.time_end {
+                            r["time_end"] = json!(t);
+                        }
+                        if let Some(l) = &cite.lang {
+                            r["lang"] = json!(l);
+                        }
+                        if let Some(q) = &cite.quote {
+                            r["quote"] = json!(q);
+                        }
+                        self.last_cites.push((address, cite));
+                        results.push(r);
                         break 'item;
                     }
                     Shown::Zim(si, hi) => (si, hi),

@@ -234,6 +234,9 @@ void cs_close(cs_handle *h);
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
  *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
  *          "page", the printed label; no other result has that key)
+ *          (a caption or EPUB result, address "cap:", "zimcap:" or "zimepub:", also has where it opens, as its citation:
+ *          "link" (the video, or the EPUB chapter with its "#cache-b<n>" anchor), "quote" (the passage's first words), and for
+ *          a caption "time" and "time_end" (seconds) and "lang" when known; never shown to the model)
  *          (the snippet of a PDF, caption or EPUB result is cut around the part of the piece that matches the query best, from the
  *          start of its sentence where that fits, at most the same length as before; the start of the piece when nothing
  *          matches or when the piece is short. Results with the same title and the same snippet are one, the first, across

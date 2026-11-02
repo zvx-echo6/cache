@@ -41,6 +41,11 @@ class SearchHit {
     required this.sourceTitle,
     this.page,
     this.pdfPage,
+    this.link,
+    this.time,
+    this.timeEnd,
+    this.lang,
+    this.quote,
   });
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
@@ -53,6 +58,11 @@ class SearchHit {
         // A PDF page's printed label may be text ("iv"): only a number is a page here.
         page: j['page'] is int ? j['page'] as int : null,
         pdfPage: (j['pdf_page'] as num?)?.toInt(),
+        link: j['link'] is String ? j['link'] as String : null,
+        time: (j['time'] as num?)?.toDouble(),
+        timeEnd: (j['time_end'] as num?)?.toDouble(),
+        lang: j['lang'] is String ? j['lang'] as String : null,
+        quote: j['quote'] is String ? j['quote'] as String : null,
       );
 
   final String address;
@@ -65,6 +75,18 @@ class SearchHit {
 
   /// For a passage of a ZIM's PDF ("zimpdf:" address): the real 1-based PDF page it is on ([page] is the printed label).
   final int? pdfPage;
+
+  /// Where a caption or EPUB hit ("cap:", "zimcap:", "zimepub:") opens, as its citation does: the video (a watch link or a
+  /// `zim:` entry) or the EPUB chapter with its `#cache-b<n>` anchor; null for other hits and from older cores.
+  final String? link;
+
+  /// A caption hit's moment and end in the video, in seconds, and its language code.
+  final double? time;
+  final double? timeEnd;
+  final String? lang;
+
+  /// A caption or EPUB hit's first words, for the place it opens to mark them.
+  final String? quote;
 
   /// The shape cs_format takes.
   Map<String, dynamic> toFormatJson() => {'address': address, 'title': title, 'snippet': snippet};
