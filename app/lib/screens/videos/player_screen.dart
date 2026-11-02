@@ -22,6 +22,9 @@ const double kTranscriptPaneWidth = 320;
 /// A window shorter than this has no room for the transcript beside the video: it opens from the Captions sheet instead.
 const double kTranscriptMinHeight = 600;
 
+/// The controls on the picture hide after this much playback with no touch.
+const Duration kControlsHide = Duration(seconds: 3);
+
 /// How long "Resumed at 3:42. Start over" stays.
 const Duration kResumedNotice = Duration(seconds: 5);
 
@@ -113,6 +116,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Timer? _resumedTimer;
   Timer? _keep;
 
+  /// "-10 s" or "+10 s" briefly after a double tap.
+  int? _flash;
+  Timer? _flashTimer;
+  Offset? _lastDoubleTap;
+
   /// Playback began (from here on the place is kept).
   bool _started = false;
   int _lastCue = -1;
@@ -186,6 +194,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (!mounted) return;
       await c.play();
       _started = true;
+      _showOverlay();
       _keep = Timer.periodic(const Duration(seconds: 5), (_) => _remember());
     } catch (e) {
       if (mounted) setState(() => _error = t.isLocal ? "This file can't be played." : "This video can't be played.");
@@ -242,7 +251,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
         if (i >= 0 && _transcriptBeside(context)) WidgetsBinding.instance.addPostFrameCallback((_) => _scrollTo(i));
       }
     }
-    if (!c.value.isPlaying && c.value.isInitialized) _remember();
+    if (!c.value.isPlaying && c.value.isInitialized) {
+      _remember();
+      // paused: the controls stay
+      if (!_overlay) _overlay = true;
+    }
     setState(() {});
   }
 
@@ -263,6 +276,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void dispose() {
     _remember();
     _hide?.cancel();
+    _flashTimer?.cancel();
     _keep?.cancel();
     _resumedTimer?.cancel();
     _focus.dispose();
@@ -305,15 +319,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await SystemChrome.setPreferredOrientations(const []);
   }
 
-  /// Shows the full-screen controls for a few seconds.
+  /// Shows the controls on the picture; while it plays they hide after [kControlsHide] (never while paused or scrubbing).
   void _showOverlay() {
     _hide?.cancel();
     if (mounted) setState(() => _overlay = true);
-    if (_full) {
-      _hide = Timer(const Duration(seconds: 3), () {
-        if (mounted && (_c?.value.isPlaying ?? false)) setState(() => _overlay = false);
-      });
-    }
+    _hide = Timer(kControlsHide, () {
+      if (mounted && (_c?.value.isPlaying ?? false) && !_dragging) setState(() => _overlay = false);
+    });
+  }
+
+  /// A tap on the picture shows or hides the controls.
+  void _tapPicture() => _overlay ? setState(() => _overlay = false) : _showOverlay();
+
+  /// A double tap on the left or right half skips 10 seconds back or forward, with a brief "-10 s" or "+10 s".
+  void _doubleTap(Offset at, double width) {
+    final back = at.dx < width / 2;
+    _skip(back ? -10 : 10);
+    _flashTimer?.cancel();
+    setState(() => _flash = back ? -10 : 10);
+    _flashTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _flash = null);
+    });
   }
 
   Future<void> _pickSpeed() async {
@@ -355,15 +381,71 @@ class _PlayerScreenState extends State<PlayerScreen> {
     widget.prefs?.captions = track == null ? 'off' : _tracks[track].language;
   }
 
-  /// The Captions control: one language turns on and off; more than one (or a transcript with no room beside the video) opens
-  /// the sheet: Off, each language, and Transcript.
-  Future<void> _captions() async {
-    final hiddenTranscript = !_transcriptBeside(context) && _wide(context);
-    if (_tracks.length == 1 && !hiddenTranscript) {
-      await _setCaptions(_on == null ? 0 : null);
-      return;
+  /// The CC button: captions on (the language last chosen, else the first) or off.
+  Future<void> _toggleCaptions() async {
+    _showOverlay();
+    if (_on != null) return _setCaptions(null);
+    final kept = widget.prefs?.captions;
+    final i = kept == null ? -1 : _tracks.indexWhere((x) => x.language == kept);
+    await _setCaptions(i >= 0 ? i : 0);
+  }
+
+  /// The gear: Speed, Captions (the language sheet, when there are captions) and Transcript (a wide window with no room for it
+  /// beside the video).
+  Future<void> _settings() async {
+    final c = _c;
+    if (c == null) return;
+    _hide?.cancel();
+    final hiddenTranscript = _hasCaptions && !_transcriptBeside(context) && _wide(context);
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const ValueKey('settings-speed'),
+              minTileHeight: 48,
+              leading: const Icon(Icons.speed),
+              title: const Text('Speed'),
+              trailing: Text(c.value.playbackSpeed == 1 ? 'Normal' : '${_speedText(c.value.playbackSpeed)}x'),
+              onTap: () => Navigator.pop(ctx, 'speed'),
+            ),
+            if (_hasCaptions)
+              ListTile(
+                key: const ValueKey('settings-captions'),
+                minTileHeight: 48,
+                leading: const Icon(Icons.closed_caption_outlined),
+                title: const Text('Captions'),
+                trailing: Text(_on == null ? 'Off' : _tracks[_on!].name),
+                onTap: () => Navigator.pop(ctx, 'captions'),
+              ),
+            if (hiddenTranscript)
+              ListTile(
+                key: const ValueKey('captions-transcript'),
+                minTileHeight: 48,
+                leading: const Icon(Icons.subject),
+                title: const Text('Transcript'),
+                onTap: () => Navigator.pop(ctx, 'transcript'),
+              ),
+          ],
+        ),
+      ),
+    );
+    switch (picked) {
+      case 'speed':
+        await _pickSpeed();
+      case 'captions':
+        await _captionSheet();
+      case 'transcript':
+        await _openTranscriptSheet();
     }
-    final k = context.t;
+    _showOverlay();
+  }
+
+  /// The captions sheet: Off and each language (from the gear, or a long press on CC when there are two or more languages).
+  Future<void> _captionSheet() async {
     final picked = await showModalBottomSheet<int>(
       context: context,
       showDragHandle: true,
@@ -386,26 +468,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 trailing: _on == i ? const Icon(Icons.check) : null,
                 onTap: () => Navigator.pop(ctx, i),
               ),
-            if (hiddenTranscript) ...[
-              Divider(height: 1, color: k.secondary.withValues(alpha: 0.3)),
-              ListTile(
-                key: const ValueKey('captions-transcript'),
-                minTileHeight: 48,
-                leading: const Icon(Icons.subject),
-                title: const Text('Transcript'),
-                onTap: () => Navigator.pop(ctx, -2),
-              ),
-            ],
           ],
         ),
       ),
     );
     if (picked == null) return;
-    if (picked == -2) {
-      await _openTranscriptSheet();
-    } else {
-      await _setCaptions(picked < 0 ? null : picked);
-    }
+    await _setCaptions(picked < 0 ? null : picked);
   }
 
   Future<void> _openTranscriptSheet() async {
@@ -449,6 +517,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final c = _c;
     if (c == null || !c.value.isInitialized) return;
     c.value.isPlaying ? c.pause() : c.play();
+    _showOverlay();
   }
 
   static bool _wide(BuildContext context) => MediaQuery.sizeOf(context).width >= kTranscriptMinWidth;
@@ -459,9 +528,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// "Play (Space)" on a desktop window, where the keys work; "Play" elsewhere.
   String _tip(BuildContext context, String words, String key) => isDesktop(context) ? '$words ($key)' : words;
-
-  /// [child] with a tooltip naming its key, on a desktop window only (a labelled button needs none on a phone).
-  Widget _keyTip(BuildContext context, String message, Widget child) => isDesktop(context) ? Tooltip(message: message, child: child) : child;
 
   @override
   Widget build(BuildContext context) {
@@ -494,7 +560,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (ready && !t.isAudio) _setFull(!_full);
         },
         const SingleActivator(LogicalKeyboardKey.keyC): () {
-          if (_hasCaptions) _captions();
+          if (_hasCaptions) _toggleCaptions();
         },
         const SingleActivator(LogicalKeyboardKey.escape): () {
           if (_full) _setFull(false);
@@ -545,13 +611,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * (beside ? 0.62 : 0.55)),
                 child: AspectRatio(
               aspectRatio: ready && !t.isAudio ? c!.value.aspectRatio : 16 / 9,
-                  child: !ready ? const Center(child: CircularProgressIndicator()) : _picture(context, c!, overlayCaptions: true),
+                  child: !ready ? const Center(child: CircularProgressIndicator()) : _videoStack(context, c!, full: false),
                 ),
               ),
             ),
           ),
           if (_resumedAt != null) _resumedBar(context),
-          if (ready) _controls(context, c!),
           _info(context),
         ],
       ),
@@ -568,53 +633,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  /// The video (or the sound's picture), with the caption on it at the bottom in a dark band so nothing moves when a cue comes.
-  Widget _picture(BuildContext context, VideoPlayerController c, {required bool overlayCaptions, double bottom = 0}) {
+  /// The video, or the sound's picture.
+  Widget _picture(BuildContext context, VideoPlayerController c) {
     final Widget video = widget.frame ?? VideoPlayer(c);
-    final cue = _currentCue(c);
-    final k = context.t;
+    if (!t.isAudio) return video;
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (t.isAudio) ...[
-          if (widget.thumbnail != null) Opacity(opacity: 0.4, child: VideoThumb(path: widget.thumbnail, width: 400)),
-          const Center(child: Icon(Icons.music_note, size: 72, color: Colors.white70)),
-          Offstage(child: video),
-        ] else
-          video,
-        if (overlayCaptions && cue != null)
-          Positioned(
-            left: 12,
-            right: 12,
-            bottom: 10 + bottom,
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (cue.$2)
-                    Container(
-                      key: const ValueKey('caption-match'),
-                      margin: const EdgeInsets.only(bottom: 4),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(color: k.accent, borderRadius: BorderRadius.circular(6)),
-                      child: Text('Match', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.onPrimary)),
-                    ),
-                  DecoratedBox(
-                    key: const ValueKey('caption-band'),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.72),
-                      borderRadius: BorderRadius.circular(6),
-                      border: cue.$2 ? Border.all(color: k.accent, width: 2) : null,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      child: Text(cue.$1.text, textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, height: 1.3, color: Colors.white)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        if (widget.thumbnail != null) Opacity(opacity: 0.4, child: VideoThumb(path: widget.thumbnail, width: 400)),
+        const Center(child: Icon(Icons.music_note, size: 72, color: Colors.white70)),
+        Offstage(child: video),
       ],
     );
   }
@@ -740,7 +768,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  /// The video alone on black; a tap shows or hides the controls; Back leaves full screen.
+  /// Full screen: the video alone on black with the same controls on it; Back (or the arrow, or Esc) leaves full screen.
   Widget _fullScreen(BuildContext context, VideoPlayerController c) => PopScope(
     canPop: false,
     onPopInvokedWithResult: (didPop, _) {
@@ -748,132 +776,299 @@ class _PlayerScreenState extends State<PlayerScreen> {
     },
     child: Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
-        key: const ValueKey('player-full'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () => _overlay ? setState(() => _overlay = false) : _showOverlay(),
-        child: Stack(
-          children: [
-            Center(
-              child: AspectRatio(
-                aspectRatio: t.isAudio ? 16 / 9 : c.value.aspectRatio,
-                child: _picture(context, c, overlayCaptions: false),
+      body: _videoStack(context, c, full: true),
+    ),
+  );
+
+  /// The video with its controls on it, the familiar way: a dark scrim top and bottom while they show; top, the title and Back
+  /// (full screen) and the CC and settings buttons; centre, back 10 / play or pause / forward 10; bottom, the scrubber over the
+  /// whole width, the time and the full-screen button. A tap shows or hides them (they hide by themselves after 3 s of
+  /// playback); a double tap on the left or right half skips 10 s. The caption sits low, and above the bottom bar while the
+  /// controls show.
+  Widget _videoStack(BuildContext context, VideoPlayerController c, {required bool full}) {
+    final cue = _currentCue(c);
+    final show = _overlay || _dragging;
+    final big = full || MediaQuery.sizeOf(context).width >= kTranscriptMinWidth;
+    final pad = MediaQuery.paddingOf(context);
+    final bottomBar = big ? 76.0 : 64.0;
+    return LayoutBuilder(
+      builder: (context, box) => Stack(
+        key: ValueKey(full ? 'player-full' : 'player-inline'),
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: t.isAudio ? 16 / 9 : c.value.aspectRatio,
+              child: _picture(context, c),
+            ),
+          ),
+          // taps anywhere on the picture (the controls above take their own)
+          GestureDetector(
+            key: const ValueKey('player-surface'),
+            behavior: HitTestBehavior.opaque,
+            onTap: _tapPicture,
+            onDoubleTapDown: (d) => _lastDoubleTap = d.localPosition,
+            onDoubleTap: () => _doubleTap(_lastDoubleTap ?? Offset(box.maxWidth / 2, 0), box.maxWidth),
+          ),
+          if (_flash != null)
+            Positioned(
+              left: _flash! < 0 ? 0 : box.maxWidth / 2,
+              width: box.maxWidth / 2,
+              top: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: Center(
+                  child: Container(
+                    key: const ValueKey('player-skip-flash'),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55), borderRadius: BorderRadius.circular(28)),
+                    child: Text(_flash! < 0 ? '−10 s' : '+10 s', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white)),
+                  ),
+                ),
               ),
             ),
-            if (_currentCue(c) case final cue?)
+          if (show) ...[
+            const Positioned(left: 0, right: 0, top: 0, height: 96, child: IgnorePointer(child: _Scrim(top: true))),
+            Positioned(left: 0, right: 0, bottom: 0, height: bottomBar + 40 + (full ? pad.bottom : 0), child: const IgnorePointer(child: _Scrim(top: false))),
+          ],
+          if (cue != null)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 180),
+              left: 16,
+              right: 16,
+              bottom: (show ? bottomBar + 4 : 12) + (full ? pad.bottom : 0),
+              child: IgnorePointer(child: _captionBand(context, cue, big: big)),
+            ),
+          if (show) ...[
+            Positioned(
+              left: full ? pad.left : 0,
+              right: full ? pad.right : 0,
+              top: full ? pad.top : 0,
+              child: _topBar(context, full: full, big: big),
+            ),
+            Center(child: _centre(context, c, big: big)),
+            Positioned(
+              left: full ? pad.left : 0,
+              right: full ? pad.right : 0,
+              bottom: full ? pad.bottom : 0,
+              height: bottomBar,
+              child: _bottomBar(context, c, full: full),
+            ),
+            if (_dragging)
               Positioned(
-                left: 24,
-                right: 24,
-                bottom: _overlay ? 170 : 32,
-                child: Center(
-                  child: DecoratedBox(
-                    key: const ValueKey('caption-band'),
-                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(6)),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      child: Text(cue.$1.text, textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, height: 1.3, color: Colors.white)),
+                bottom: bottomBar + (full ? pad.bottom : 0),
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Container(
+                      key: const ValueKey('player-scrub-time'),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.7), borderRadius: BorderRadius.circular(8)),
+                      child: Text(formatDuration(_dragValue / 1000), style: TextStyle(fontSize: big ? 20 : 16, fontWeight: FontWeight.w600, color: Colors.white)),
                     ),
                   ),
                 ),
               ),
-            if (_overlay)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  color: Colors.black54,
-                  child: SafeArea(top: false, child: Theme(data: ThemeData.dark(), child: _controls(context, c))),
-                ),
-              ),
           ],
-        ),
-      ),
-    ),
-  );
-
-  Widget _controls(BuildContext context, VideoPlayerController c) {
-    final k = context.t;
-    final dur = c.value.duration.inMilliseconds.toDouble();
-    final pos = _dragging ? _dragValue : c.value.position.inMilliseconds.clamp(0, dur.toInt()).toDouble();
-    final label = TextStyle(fontSize: 15, color: _full ? Colors.white : k.text);
-    final time = TextStyle(fontSize: 14, color: _full ? Colors.white70 : k.secondary);
-    final captionWord = _on == null ? 'Off' : _tracks[_on!].name;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const SizedBox(width: 8),
-              Text(formatDuration(pos / 1000), style: time),
-              Expanded(
-                child: Slider(
-                  value: dur <= 0 ? 0 : pos,
-                  max: dur <= 0 ? 1 : dur,
-                  onChangeStart: (_) => _dragging = true,
-                  onChanged: (v) => setState(() => _dragValue = v),
-                  onChangeEnd: (v) async {
-                    await c.seekTo(Duration(milliseconds: v.round()));
-                    if (mounted) setState(() => _dragging = false);
-                  },
-                ),
-              ),
-              Text(formatDuration(dur / 1000), style: time),
-              const SizedBox(width: 8),
-            ],
-          ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(iconSize: 32, tooltip: 'Back 10 seconds', icon: const Icon(Icons.replay_10), onPressed: () => _skip(-10)),
-              const SizedBox(width: 16),
-              IconButton.filled(
-                iconSize: 40,
-                tooltip: _tip(context, c.value.isPlaying ? 'Pause' : 'Play', 'Space'),
-                icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow),
-                onPressed: _playPause,
-              ),
-              const SizedBox(width: 16),
-              IconButton(iconSize: 32, tooltip: 'Forward 10 seconds', icon: const Icon(Icons.forward_10), onPressed: () => _skip(10)),
-            ],
-          ),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 4,
-            children: [
-              if (_hasCaptions)
-                _keyTip(
-                  context,
-                  'Captions (C)',
-                  TextButton.icon(
-                    key: const ValueKey('player-captions'),
-                    onPressed: _captions,
-                    icon: Icon(_on == null ? Icons.closed_caption_outlined : Icons.closed_caption, size: 22, color: _on == null ? label.color : k.accent),
-                    label: Text('Captions: $captionWord', style: label),
-                  ),
-                ),
-              TextButton(
-                key: const ValueKey('player-speed'),
-                onPressed: _pickSpeed,
-                child: Text('Speed ${_speedText(c.value.playbackSpeed)}x', style: label),
-              ),
-              if (!t.isAudio)
-                _keyTip(
-                  context,
-                  _full ? 'Leave full screen (Esc)' : 'Full screen (F)',
-                  TextButton.icon(
-                    key: const ValueKey('player-fullscreen'),
-                    onPressed: () => _setFull(!_full),
-                    icon: Icon(_full ? Icons.fullscreen_exit : Icons.fullscreen, size: 22, color: label.color),
-                    label: Text(_full ? 'Leave full screen' : 'Full screen', style: label),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
         ],
       ),
     );
   }
+
+  Widget _captionBand(BuildContext context, (Cue, bool) cue, {required bool big}) {
+    final k = context.t;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (cue.$2)
+            Container(
+              key: const ValueKey('caption-match'),
+              margin: const EdgeInsets.only(bottom: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: k.accent, borderRadius: BorderRadius.circular(6)),
+              child: Text('Match', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.onPrimary)),
+            ),
+          DecoratedBox(
+            key: const ValueKey('caption-band'),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(6),
+              border: cue.$2 ? Border.all(color: k.accent, width: 2) : null,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              child: Text(cue.$1.text, textAlign: TextAlign.center, style: TextStyle(fontSize: big ? 20 : 17, height: 1.3, color: Colors.white)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// An icon button for the dark scrim: white icon, the tooltip as its screen-reader label.
+  Widget _iconButton({required Key key, required IconData icon, required String tooltip, required VoidCallback onPressed, VoidCallback? onLongPress, double size = 26, Color? color}) {
+    if (onLongPress == null) {
+      return IconButton(key: key, tooltip: tooltip, iconSize: size, color: color ?? Colors.white, onPressed: onPressed, icon: Icon(icon));
+    }
+    // A long press has its own job here, so the tooltip does not take it (it still names the button to a screen reader).
+    return Tooltip(
+      message: tooltip,
+      triggerMode: TooltipTriggerMode.manual,
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: IconButton(key: key, iconSize: size, color: color ?? Colors.white, onPressed: onPressed, icon: Icon(icon)),
+      ),
+    );
+  }
+
+  Widget _topBar(BuildContext context, {required bool full, required bool big}) {
+    final k = context.t;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+      child: Row(
+        children: [
+          if (full) ...[
+            _iconButton(key: const ValueKey('player-full-back'), icon: Icons.arrow_back, tooltip: 'Leave full screen', onPressed: () => _setFull(false)),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                t.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+              ),
+            ),
+          ] else
+            const Spacer(),
+          if (_hasCaptions)
+            _iconButton(
+              key: const ValueKey('player-captions'),
+              icon: _on == null ? Icons.closed_caption_off_outlined : Icons.closed_caption,
+              color: _on == null ? Colors.white : k.accent,
+              tooltip: _tip(context, _on == null ? 'Captions: Off' : 'Captions: ${_tracks[_on!].name}', 'C'),
+              onPressed: _toggleCaptions,
+              onLongPress: _tracks.length > 1 ? _captionSheet : null,
+            ),
+          _iconButton(key: const ValueKey('player-settings'), icon: Icons.settings_outlined, tooltip: 'Settings', onPressed: _settings),
+        ],
+      ),
+    );
+  }
+
+  Widget _centre(BuildContext context, VideoPlayerController c, {required bool big}) {
+    final k = context.t;
+    final icon = big ? 40.0 : 32.0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _iconButton(key: const ValueKey('player-back-10'), icon: Icons.replay_10, tooltip: 'Back 10 seconds', size: icon, onPressed: () {
+          _skip(-10);
+          _showOverlay();
+        }),
+        SizedBox(width: big ? 40 : 28),
+        Material(
+          color: k.accent.withValues(alpha: 0.92),
+          shape: const CircleBorder(),
+          child: IconButton(
+            key: const ValueKey('player-play'),
+            iconSize: big ? 52 : 40,
+            color: k.onPrimary,
+            tooltip: _tip(context, c.value.isPlaying ? 'Pause' : 'Play', 'Space'),
+            onPressed: _playPause,
+            icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow),
+          ),
+        ),
+        SizedBox(width: big ? 40 : 28),
+        _iconButton(key: const ValueKey('player-forward-10'), icon: Icons.forward_10, tooltip: 'Forward 10 seconds', size: icon, onPressed: () {
+          _skip(10);
+          _showOverlay();
+        }),
+      ],
+    );
+  }
+
+  /// The scrubber over the whole width (thin; thicker while dragging), the time, and the full-screen button.
+  Widget _bottomBar(BuildContext context, VideoPlayerController c, {required bool full}) {
+    final k = context.t;
+    final dur = c.value.duration.inMilliseconds.toDouble();
+    final pos = _dragging ? _dragValue : c.value.position.inMilliseconds.clamp(0, dur.toInt()).toDouble();
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        SizedBox(
+          height: 24,
+          child: SliderTheme(
+            data: SliderThemeData(
+              trackHeight: _dragging ? 6 : 3,
+              activeTrackColor: k.accent,
+              inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
+              thumbColor: k.accent,
+              overlayShape: SliderComponentShape.noOverlay,
+              thumbShape: RoundSliderThumbShape(enabledThumbRadius: _dragging ? 9 : 6),
+              trackShape: const RectangularSliderTrackShape(),
+            ),
+            child: Slider(
+              key: const ValueKey('player-scrubber'),
+              value: dur <= 0 ? 0 : pos,
+              max: dur <= 0 ? 1 : dur,
+              semanticFormatterCallback: (v) => formatDuration(v / 1000),
+              onChangeStart: (v) {
+                _hide?.cancel();
+                setState(() {
+                  _dragging = true;
+                  _dragValue = v;
+                });
+              },
+              onChanged: (v) => setState(() => _dragValue = v),
+              onChangeEnd: (v) async {
+                await c.seekTo(Duration(milliseconds: v.round()));
+                if (mounted) setState(() => _dragging = false);
+                _showOverlay();
+              },
+            ),
+          ),
+        ),
+        Row(
+          children: [
+            const SizedBox(width: 16),
+            Text(
+              '${formatDuration(pos / 1000)} / ${formatDuration(dur / 1000)}',
+              key: const ValueKey('player-time'),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white),
+            ),
+            const Spacer(),
+            if (!t.isAudio)
+              _iconButton(
+                key: const ValueKey('player-fullscreen'),
+                icon: _full ? Icons.fullscreen_exit : Icons.fullscreen,
+                tooltip: _tip(context, _full ? 'Leave full screen' : 'Full screen', _full ? 'Esc' : 'F'),
+                size: 28,
+                onPressed: () => _setFull(!_full),
+              ),
+            const SizedBox(width: 4),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The dark gradient behind the controls at the top or the bottom of the picture.
+class _Scrim extends StatelessWidget {
+  const _Scrim({required this.top});
+
+  final bool top;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: top ? Alignment.topCenter : Alignment.bottomCenter,
+        end: top ? Alignment.bottomCenter : Alignment.topCenter,
+        colors: [Colors.black.withValues(alpha: 0.7), Colors.black.withValues(alpha: 0)],
+      ),
+    ),
+  );
 }

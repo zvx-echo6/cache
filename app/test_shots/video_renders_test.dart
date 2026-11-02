@@ -213,12 +213,15 @@ void main() {
       c.at(const Duration(seconds: 14));
       await tester.pump();
       await _snap(tester, '2a-player-captions-on', theme);
-      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.longPress(find.byKey(const ValueKey('player-captions')));
       await tester.pumpAndSettle();
       await _snap(tester, '2b-captions-sheet', theme);
       await tester.tapAt(const Offset(200, 120));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('player-speed')));
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      await _snap(tester, '2d-settings-sheet', theme);
+      await tester.tap(find.byKey(const ValueKey('settings-speed')));
       await tester.pumpAndSettle();
       await _snap(tester, '2c-speed-sheet', theme);
       await tester.pumpWidget(const SizedBox());
@@ -250,8 +253,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('player-fullscreen')));
       await tester.pumpAndSettle();
       await _snap(tester, '5a-full-screen-captions-controls', theme);
-      await tester.tap(find.byKey(const ValueKey('player-full')), warnIfMissed: false);
-      await tester.pump();
+      await tester.tapAt(const Offset(466, 130));
+      await tester.pump(const Duration(milliseconds: 400));
       await _snap(tester, '5b-full-screen-captions', theme);
       await tester.pumpWidget(const SizedBox());
     });

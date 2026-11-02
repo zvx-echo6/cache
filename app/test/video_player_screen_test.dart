@@ -86,9 +86,10 @@ void main() {
         await tester.tap(find.byTooltip('Pause'));
         await tester.pump();
         expect(find.byTooltip('Play'), findsOneWidget, reason: 'paused');
-        expect(find.text('Speed 1x'), findsOneWidget);
-        expect(find.text('Full screen'), findsOneWidget);
-        expect(find.textContaining('Captions:'), findsNothing, reason: 'no captions: no Captions button');
+        expect(find.byTooltip('Settings'), findsOneWidget);
+        expect(find.byTooltip('Full screen'), findsOneWidget);
+        expect(find.text('0:00 / 1:00'), findsOneWidget);
+        expect(find.byKey(const ValueKey('player-captions')), findsNothing, reason: 'no captions: no CC button');
         await close(tester);
         expect(c.calls.last, 'dispose');
       });
@@ -136,6 +137,46 @@ void main() {
       await close(tester);
     });
 
+    testWidgets('The controls hide after 3 s of playback, never while paused; a tap brings them back', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget());
+      expect(find.byKey(const ValueKey('player-play')), findsOneWidget);
+      await tester.pump(kControlsHide + const Duration(milliseconds: 100));
+      expect(find.byKey(const ValueKey('player-play')), findsNothing, reason: 'playing: hidden');
+      await tester.tapAt(tester.getCenter(find.byKey(const ValueKey('player-surface'))));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const ValueKey('player-play')), findsOneWidget);
+      await tester.tap(find.byTooltip('Pause'));
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.byKey(const ValueKey('player-play')), findsOneWidget, reason: 'paused: they stay');
+      await close(tester);
+    });
+
+    testWidgets('A double tap on the right half skips forward 10 s, on the left back 10 s, with a brief +10 s / -10 s', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget());
+      c.at(const Duration(seconds: 20));
+      await tester.pump();
+      final box = tester.getRect(find.byKey(const ValueKey('player-surface')));
+      Future<void> doubleTap(Offset p) async {
+        await tester.tapAt(p);
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.tapAt(p);
+        await tester.pump();
+      }
+
+      await doubleTap(Offset(box.right - 12, box.center.dy));
+      expect(c.calls.last, 'seek:30000');
+      expect(find.text('+10 s'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(find.text('+10 s'), findsNothing);
+      await doubleTap(Offset(box.left + 12, box.center.dy));
+      expect(c.calls.last, 'seek:20000');
+      expect(find.text('−10 s'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 800));
+      await close(tester);
+    });
+
     testWidgets('Skips clamp to zero and duration', (tester) async {
       final c = RecordingController();
       await open(tester, c, playerTarget(offset: 3));
@@ -150,23 +191,31 @@ void main() {
       await close(tester);
     });
 
-    testWidgets('Speed sheet, and true full screen with the controls on a tap; Back leaves full screen', (tester) async {
+    testWidgets('Speed from the gear, and true full screen: title and Back on the picture, controls on a tap; Back leaves it', (tester) async {
       final c = RecordingController();
       await open(tester, c, playerTarget());
-      await tester.tap(find.byKey(const ValueKey('player-speed')));
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.text('Speed'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('settings-speed')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('speed-1.5')));
       await tester.pumpAndSettle();
       expect(c.calls.last, 'speed:1.5');
-      expect(find.text('Speed 1.5x'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.text('1.5x'), findsOneWidget);
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('player-fullscreen')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('player-full')), findsOneWidget);
       expect(find.byType(AppBar), findsNothing, reason: 'the video alone');
-      expect(find.text('Leave full screen'), findsOneWidget, reason: 'the controls show at first');
-      await tester.tap(find.byKey(const ValueKey('player-full')), warnIfMissed: false);
-      await tester.pump();
-      expect(find.text('Leave full screen'), findsNothing, reason: 'a tap hides them');
+      expect(find.byKey(const ValueKey('player-full-back')), findsOneWidget, reason: 'the controls show at first');
+      expect(find.descendant(of: find.byKey(const ValueKey('player-full')), matching: find.text('Saved video')), findsOneWidget, reason: 'the title on the picture');
+      await tester.tapAt(tester.getCenter(find.byKey(const ValueKey('player-surface'))) + const Offset(0, 150));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const ValueKey('player-full-back')), findsNothing, reason: 'a tap hides them');
       final nav = tester.state<NavigatorState>(find.byType(Navigator));
       await nav.maybePop();
       await tester.pumpAndSettle();
@@ -305,14 +354,14 @@ void main() {
       final prefs = VideoPrefs();
       final c = RecordingController();
       await open(tester, c, playerTarget(captions: english()), prefs: prefs);
-      expect(find.text('Captions: Off'), findsOneWidget, reason: 'off the first time');
+      expect(find.byTooltip('Captions: Off'), findsOneWidget, reason: 'off the first time');
       c.at(const Duration(seconds: 13));
       await tester.pump();
       expect(find.text('It makes a loop that will not slip or jam.'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('player-captions')));
       await tester.pump();
-      expect(find.text('Captions: English'), findsOneWidget);
-      expect(find.byKey(const ValueKey('captions-off')), findsNothing, reason: 'one language: no sheet');
+      expect(find.byTooltip('Captions: English'), findsOneWidget);
+      expect(find.byKey(const ValueKey('captions-off')), findsNothing, reason: 'CC toggles: no sheet');
       expect(find.descendant(of: find.byKey(const ValueKey('caption-band')), matching: find.text('It makes a loop that will not slip or jam.')), findsOneWidget);
       expect(prefs.captions, 'en');
       expect(find.byKey(const ValueKey('player-transcript')), findsNothing, reason: 'a phone has no transcript');
@@ -320,27 +369,32 @@ void main() {
 
       final c2 = RecordingController();
       await open(tester, c2, playerTarget(captions: english(), uuid: 'other'), prefs: prefs);
-      expect(find.text('Captions: English'), findsOneWidget, reason: 'the kept choice');
+      expect(find.byTooltip('Captions: English'), findsOneWidget, reason: 'the kept choice');
       await tester.tap(find.byKey(const ValueKey('player-captions')));
       await tester.pump();
-      expect(find.text('Captions: Off'), findsOneWidget);
+      expect(find.byTooltip('Captions: Off'), findsOneWidget);
       expect(prefs.captions, 'off');
       expect(network.attempts, 0);
       await close(tester);
     });
 
-    testWidgets('Two languages: the sheet has Off and each language; the choice is kept by language', (tester) async {
+    testWidgets('Two languages: a long press on CC (or Captions in the gear) opens Off and each language; kept by language', (tester) async {
       final prefs = VideoPrefs();
       final c = RecordingController();
       await open(tester, c, playerTarget(captions: two()), prefs: prefs);
-      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('settings-captions')), findsOneWidget);
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.byKey(const ValueKey('player-captions')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('captions-off')), findsOneWidget);
       expect(find.text('English'), findsOneWidget);
       expect(find.text('Spanish (automatic)'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('captions-es')));
       await tester.pumpAndSettle();
-      expect(find.text('Captions: Spanish (automatic)'), findsOneWidget);
+      expect(find.byTooltip('Captions: Spanish (automatic)'), findsOneWidget);
       expect(prefs.captions, 'es');
       c.at(const Duration(seconds: 7));
       await tester.pump();
@@ -350,7 +404,7 @@ void main() {
       // a video without the kept language starts with its first one
       final c2 = RecordingController();
       await open(tester, c2, playerTarget(captions: english(), uuid: 'other'), prefs: prefs);
-      expect(find.text('Captions: English'), findsOneWidget);
+      expect(find.byTooltip('Captions: English'), findsOneWidget);
       await close(tester);
     });
 
@@ -429,11 +483,11 @@ void main() {
       await close(tester);
     });
 
-    testWidgets('A wide window too short for the transcript beside: Captions opens the sheet with Transcript', (tester) async {
+    testWidgets('A wide window too short for the transcript beside: the gear has Transcript', (tester) async {
       final c = RecordingController();
       await open(tester, c, playerTarget(captions: english()), size: _shortWide);
       expect(find.byKey(const ValueKey('player-transcript')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('captions-transcript')));
       await tester.pumpAndSettle();
