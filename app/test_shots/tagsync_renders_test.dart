@@ -118,17 +118,17 @@ void main() {
   testWidgets('1: the Import tag row, default and changed; light and dark', (tester) async {
     final k = await _Kit.boot(tester);
     for (final theme in [CacheThemeId.light, CacheThemeId.dark]) {
-      await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null), theme: theme);
+      await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null, phone: true), theme: theme);
       await snap(tester, _out, '1a-import-tag-row-default${theme == CacheThemeId.dark ? '-dark' : ''}');
     }
     await tester.runAsync(() => k.c.setImportTag('obsidian', '#camping'));
-    await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null));
+    await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null, phone: true));
     await snap(tester, _out, '1b-import-tag-row-changed');
   });
 
   testWidgets('2: the Import tag sheet, valid and invalid', (tester) async {
     final k = await _Kit.boot(tester);
-    await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null));
+    await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null, phone: true));
     await tester.tap(find.byKey(const ValueKey('import-tag-obsidian')));
     await _settle(tester);
     await tester.enterText(find.byKey(const ValueKey('import-tag-field')), '#camping');
@@ -187,7 +187,7 @@ void main() {
     await _settle(tester, 30);
     await snap(tester, _out, '4b-added-two');
     k = await _Kit.boot(tester, notes: {'Locked.md': 'Keep this. #cachesync\n'}, readOnly: {'Locked.md'});
-    await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null));
+    await _show(tester, ConnectionsScreen(connections: k.c, pickFolder: () async => null, phone: true));
     await snap(tester, _out, '4c-not-added');
   });
 

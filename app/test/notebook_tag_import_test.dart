@@ -628,6 +628,15 @@ void main() {
       expect(find.text('Notes already in Cache keep syncing.'), findsOneWidget);
     });
 
+    testWidgets('on phones the Obsidian section says Obsidian syncs only while it is open; not on a computer', (tester) async {
+      final (c, _, _) = await connected(tester);
+      for (final phone in [true, false]) {
+        await tester.pumpWidget(MaterialApp(
+            key: UniqueKey(), theme: buildTheme(CacheThemeId.dark), home: ConnectionsScreen(connections: c, pickFolder: () async => null, phone: phone)));
+        expect(find.text('On phones, Obsidian sends and receives changes only while the Obsidian app is open. Open it to sync.'), phone ? findsOneWidget : findsNothing);
+      }
+    });
+
     testWidgets('an imported entry offers "Stop syncing this note"; afterwards it shows the sync-off mark', (tester) async {
       final (c, mem, nb) = await connected(tester);
       final id = _idIn(mem.text['Gear.md']!);

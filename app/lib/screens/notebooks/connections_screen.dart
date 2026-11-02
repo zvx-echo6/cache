@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../../notebook/sync/connections.dart';
@@ -12,7 +14,12 @@ typedef PickFolder = Future<({String path, String display})?> Function();
 /// Notebooks > Connections: Obsidian and Logseq folders, and notebook sync between your devices. Each says once what it does,
 /// its status line, and the changes that need a decision.
 class ConnectionsScreen extends StatelessWidget {
-  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true});
+  const ConnectionsScreen({super.key, required this.connections, this.pickFolder = pickSyncFolder, this.shareAvailable = false, this.folders = true, this.phone});
+
+  /// On a phone (Android, iOS): the Obsidian section says that Obsidian syncs only while it is open. Null: this device.
+  final bool? phone;
+
+  bool get _phone => phone ?? (Platform.isAndroid || Platform.isIOS);
 
   final NotebookConnections connections;
   final PickFolder pickFolder;
@@ -165,6 +172,11 @@ class ConnectionsScreen extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 14, color: k.text),
             ),
+            // Owner, 2026-11-02: Obsidian on a phone sends and receives only while it is open (Obsidian Sync does not run in
+            // the background), so changes made in Cache reach other devices after Obsidian has been opened.
+            if (_phone && target.kind == SyncKind.obsidian)
+              Text('On phones, Obsidian sends and receives changes only while the Obsidian app is open. Open it to sync.',
+                  key: const ValueKey('obsidian-phone-note'), style: TextStyle(fontSize: 14, color: k.secondary)),
             if (connections.status(target.id) case final s?) Text(s, key: ValueKey('status-$key'), style: TextStyle(fontSize: 14, color: s.startsWith("Can't") ? k.warning : k.text)),
             if (merged.isNotEmpty)
               Text(
