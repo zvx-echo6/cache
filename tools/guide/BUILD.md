@@ -16,6 +16,9 @@ by hand on the branch that has the chapters, with the version as its input:
 
     gh workflow run guide-library.yml --ref <branch> -f version=YYYY-MM-DD
 
+Until the workflow is on the default branch (`main`), GitHub cannot run it by hand: push the commit to a branch named
+`guide-library-YYYY-MM-DD` instead (the version is taken from the name), and delete that branch after.
+
 It does every step below on Linux: it builds `libcache_llama.so` (CPU) from `packages/cache_llama/src` and the Linux `cs`,
 downloads bge-m3 and checks its sha256, then splits, embeds, assembles, writes the snapshot, packages, unpacks, indexes and
 runs `verify.py`; a failed check fails the run. The artifact `cache-guide-<version>` holds `cache-guide-<version>.cache-library`
