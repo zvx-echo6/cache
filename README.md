@@ -3,7 +3,7 @@
 Cache is an offline survival and preparedness app for Android and iPhone. It puts an assistant, a reference library, maps with
 turn-by-turn directions, weather and alerts, and your own notebooks on the phone, and keeps them working with no connection.
 The assistant runs on the device with a local language model and answers from what you have downloaded, with citations you can
-open. Nothing depends on anyone's servers: there is no account, no sign-in and no Cache server in the middle, and what you keep
+open. Nothing depends on anyone's servers: there is no account, no sign-in and no server of ours in the middle, and what you keep
 stays on your device. Cache is a framework. No data or models ship inside the app: you choose the models, libraries, regions
 and sources you want, and Cache uses them offline.
 
@@ -63,7 +63,7 @@ Website: [cached.info](https://cached.info)
   and a transcript. Saved videos are searchable by what is said in them.
 
 **Your devices**
-- Sharing and sync links your own devices directly (iroh), with no Cache server. You choose what is shared: Library, Maps,
+- Sharing and sync links your own devices directly (iroh), with no server of ours in between. You choose what is shared: Library, Maps,
   Models, Videos, Notebooks and a shared folder. Search indexes built on one device are used by the others.
 - Layouts for phones, tablets (two panes) and wide windows.
 
@@ -79,7 +79,7 @@ Cache is in testing.
 
 Android 9 (API 28) or later on a 64-bit (arm64) phone, or iOS 16.3 or later.
 
-A Linux Cache Server (including Raspberry Pi) is planned for 1.1.
+Cache on Linux and Raspberry Pi, with its interface in a browser, coming in 1.1.
 
 ## Build from source
 
