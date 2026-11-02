@@ -43,13 +43,18 @@ String _encodePath(String p) {
 }
 
 /// The page address for a `zim:<uuid>/<path>` address, or null if [address] is not one. The address's own
-/// escapes (%25 for a % and %23 for a # in the entry path) are kept as they are.
+/// escapes (%25 for a % and %23 for a # in the entry path) are kept as they are. A file inside an EPUB entry
+/// (`<epub path>!/<inner path>`) keeps its `!/` (so links in a chapter resolve inside the EPUB) and its `#cache-b<n>` anchor
+/// (where a citation points); other addresses open at the top.
 Uri? readerUrl(String address, {bool customScheme = false}) {
   final m = _zimAddress.firstMatch(address);
   if (m == null) return null;
-  final path = m.group(2)!.split('#').first;
+  final parts = m.group(2)!.split('#');
+  final path = parts.first;
+  final epubInner = path.toLowerCase().contains('.epub!/');
+  final fragment = epubInner && parts.length > 1 && parts[1].isNotEmpty ? '#${_encodePath(parts.sublist(1).join('#'))}' : '';
   return Uri.parse(
-    '${customScheme ? zimReaderScheme : 'https'}://$zimHost/${m.group(1)!.toLowerCase()}/${_encodePath(path)}',
+    '${customScheme ? zimReaderScheme : 'https'}://$zimHost/${m.group(1)!.toLowerCase()}/${_encodePath(path)}$fragment',
   );
 }
 

@@ -42,7 +42,7 @@ class LibrarySearchProvider implements AppSearchProvider {
     ];
     if (!sources.coreReady) return out;
     final r = await sources.searchIn(query, k: limit);
-    final hits = [for (final h in r.results) if (isZimAddress(h.address)) h];
+    final hits = [for (final h in r.results) if (isZimAddress(h.address) || pdfEntryOfIndexHit(h.address) != null) h];
     for (var i = 0; i < hits.length; i++) {
       final h = hits[i];
       out.add(AppSearchResult(
@@ -51,8 +51,14 @@ class LibrarySearchProvider implements AppSearchProvider {
         icon: icon,
         detail: [h.sourceTitle, if (h.page != null) 'p. ${h.page}'].where((s) => s.isNotEmpty).join(', '),
         score: _ranked(i, h.title, query),
-        // A hit on a page of a PDF entry opens the PDF at that page.
-        open: () => openAddress(h.page != null && isPdfAddress(h.address) && pdfPageOfAddress(h.address) == null ? withPdfPage(h.address, h.page!) : h.address),
+        // A hit on a page of a PDF entry opens the PDF at that page (a hit in a ZIM's PDF index: its PDF, at the printed page
+        // when that is a number).
+        open: () {
+          final a = pdfEntryOfIndexHit(h.address) ?? h.address;
+          // The real PDF page the passage is on when the core says it (a ZIM's PDF index), else the printed page.
+          final page = h.pdfPage ?? h.page;
+          openAddress(page != null && isPdfAddress(a) && pdfPageOfAddress(a) == null ? withPdfPage(a, page) : a);
+        },
       ));
     }
     return out;

@@ -16,7 +16,7 @@ import 'web/device_api.dart' show DeviceException;
 /// What the Library's hold menu (and the "..." of an opened item) offers for one item. An action that does not apply is null and
 /// is left out of the menu.
 class LibraryActions {
-  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free, this.again});
+  const LibraryActions({required this.title, required this.bytes, this.delete, this.checkUpdate, this.changeIcon, this.addToHome, this.free, this.again, this.parts});
 
   /// The last line of the delete confirm; null: "You can download it again later."
   final String? again;
@@ -31,6 +31,9 @@ class LibraryActions {
   final VoidCallback? addToHome;
   /// Null for an item that cannot be deleted (the guide that ships in the app).
   final Future<void> Function()? delete;
+
+  /// The item's parts above the actions (a ZIM's PDFs, which can be made searchable); null for none.
+  final WidgetBuilder? parts;
 }
 
 /// The one menu: Check for update, Change icon, Add to Home, Delete (which confirms first).
@@ -56,6 +59,7 @@ Future<void> showLibraryMenu(BuildContext context, LibraryActions a) async {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
               child: Text(a.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: k.text)),
             ),
+            if (a.parts != null) Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: a.parts!(ctx)),
             if (a.checkUpdate != null) item('update', Icons.system_update_alt, 'Check for update'),
             if (a.changeIcon != null) item('icon', Icons.image_outlined, 'Change icon'),
             if (a.addToHome != null) item('home', Icons.add_to_home_screen, 'Add to Home'),

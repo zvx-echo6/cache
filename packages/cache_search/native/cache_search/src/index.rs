@@ -344,6 +344,8 @@ pub struct OpenIndex {
     pub fields: Fields,
     pub docs: u64,
     stamp: Option<(SystemTime, u64)>,
+    /// Tells `index_seal` this folder is open (it may not move files out from under it).
+    _guard: crate::idxsnap::OpenGuard,
 }
 
 pub(crate) fn stamp_of(dir: &Path) -> Option<(SystemTime, u64)> {
@@ -359,7 +361,7 @@ impl OpenIndex {
         let fields = fields_of(&index)?;
         let reader = tv(index.reader_builder().reload_policy(ReloadPolicy::Manual).try_into())?;
         let docs = reader.searcher().num_docs();
-        Ok(OpenIndex { index, reader, fields, docs, stamp })
+        Ok(OpenIndex { index, reader, fields, docs, stamp, _guard: crate::idxsnap::OpenGuard::new(dir) })
     }
     /// True if the index files changed on disk since this was opened.
     pub fn is_outdated(&self, dir: &Path) -> bool {
@@ -374,6 +376,10 @@ pub struct BuildParams<'a> {
     pub index_dir: &'a Path,
     pub heap_mb: usize,
     pub checkpoint_articles: usize,
+    /// Cap on Tantivy writer threads (default: up to 4, by the cores).
+    pub threads: Option<usize>,
+    /// Called after each article (the job's pace point, see duty.rs).
+    pub pace: Option<&'a dyn Fn()>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -468,6 +474,7 @@ pub fn build_zim_index(
     write_meta(dir, &meta)?;
 
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4);
+    let threads = p.threads.map(|t| t.clamp(1, threads)).unwrap_or(threads);
     let heap = p.heap_mb.max(15 * threads) * 1_000_000;
     let mut writer = tv(index.writer_with_num_threads::<TantivyDocument>(threads, heap))?;
 
@@ -524,6 +531,9 @@ pub fn build_zim_index(
                             f.lead => lead,
                             f.body => body
                         )))?;
+                        if let Some(pace) = p.pace {
+                            pace();
+                        }
                     }
                 }
             }

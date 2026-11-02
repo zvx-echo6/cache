@@ -115,6 +115,23 @@ char *cs_version(void);
  *                                  cs_set_sources in the process sets it). What it holds is about 8 times larger once
  *                                  decompressed, and that is taken off the top of zim_budget_mb
  *   "zim_dirent_cache": 512        optional, default 512 (libzim's own default): dirents each open archive's dirent cache holds
+ *   "indexes_dir": "<path>"        optional: the folder of the app's syncable indexes. Every index kind lives in
+ *                                  <indexes_dir>/<kind>/<source id>/ (.build/ while building, snap/<build-id>/ once published):
+ *                                    zim            a ZIM's own keyword index          (jobs index_zim, index_seal; source id the ZIM uuid)
+ *                                    library        a library's device keyword index   (index_library, index_seal; library_id[@version])
+ *                                    zim-pdf        the PDFs inside a ZIM              (cs_pdfindex_*, pdfindex_finish; ZIM uuid)
+ *                                    captions       a saved video's caption files      (index_source; <host>/<video uuid>)
+ *                                    zim-captions   a ZIM's standalone caption entries (index_source; ZIM uuid)
+ *                                    zim-epub       a ZIM's EPUB entries               (index_source; ZIM uuid)
+ *                                    region-index   routing tile index per build       (cache_regions; see cs_regions_open)
+ *                                    places-index   places tile index per build        (cache_regions)
+ *                                  These are also the "kind" of every manifest.json, of cs_status's "index" and, for the
+ *                                  searchable ones, of cs_search's "kinds". A ZIM whose PDF index has a published
+ *                                  snapshot at <indexes_dir>/zim-pdf/<its uuid>/snap/<build-id>/ is searched together with
+ *                                  that snapshot (see "PDF indexes" below); without indexes_dir no PDF index is attached.
+ *                                  Each cs_set_sources replaces it. A snapshot of a ZIM that is not loaded is never attached.
+ *                                  The handle looks for snapshots on every call, so one published or synced later is used
+ *                                  without another cs_set_sources (see "Caption and EPUB indexes" below).
  * }
  * A library is a Qdrant collection's shard opened read-only with Qdrant Edge; opening never modifies its files.
  * "settings" is the library settings file's JSON (see DESIGN.md; the app reads cache-library.json and passes it
@@ -150,6 +167,25 @@ int32_t cs_set_sources(cs_handle *h, const char *config_json);
  * is still opening. A ZIM that carries its own Xapian index (builds with the "xapian" feature: Windows, Android) is
  * searched through it with no index_dir: it is "indexed":true, "building":false, "stale":false, "docs" its entry
  * count, and has "keyword_source":"own" (placed after "embedding_model"); other ZIMs have no "keyword_source" field. A library that finished opening is reported as before.
+ * Every source entry also has "source_id" (the id sync filters by: the ZIM's lowercase UUID; a library's library_id, with
+ * "@<version>" when its settings give a version; null for a source that failed to open) and "index":{"kind":"zim"|"library",
+ * "location":"snapshot"|"legacy"|"none","snapshot":<build id in use, or null>,"format":N,"dir":<folder in use, or null>,
+ * "needs_seal":true?}. "snapshot" means the keyword index is a published snapshot under "indexes_dir"; "legacy" an index in the
+ * source's "index_dir" and no snapshot (it keeps being used); "none" neither. "needs_seal" is present (true) only when
+ * "indexes_dir" is set and only a legacy index exists: the app starts an "index_seal" job for it. While a snapshot is being
+ * verified on a background thread the source keeps its legacy index (or has none).
+ * A ZIM with a published PDF index snapshot has "pdfindex":{"state":"opening"|"ready"|"none","kind":"zim-pdf","snapshot":
+ * "<build-id>","format":N,"pdfs":N,"pieces":N,"created":"..."} (the state-only forms for "opening" and "none"); other
+ * sources have no "pdfindex" key.
+ * With an indexes_dir, a ZIM that holds standalone caption files (text/vtt, .srt) has "captionsindex" and one that holds EPUBs has
+ * "epubindex", each {"state":"opening"|"ready"|"none","kind":"zim-captions"|"zim-epub","snapshot","format","files"|"epubs":N,
+ * "pieces":N,"created", "source_id":"<zim uuid>","entries":N (how many such entries the ZIM has),"needs_build":bool (entries
+ * and no published snapshot)} (the state-only forms for "opening" and "none"). The core looks at the ZIM's entries once, on a
+ * low-priority background thread, the first time cs_status is asked, and only for a ZIM that its header makes
+ * worth it: the MIME list has text/vtt, a SubRip type or application/epub+zip, or it has application/octet-stream or text/plain
+ * and at most 500,000 entries (ready.gov's SRTs are octet-stream; Wikipedia and iFixit are never walked). Any other ZIM is not
+ * walked and has no keys; in a walk a .srt/.vtt path counts whatever its type. The index_source job uses the same rule; until it is done these keys are absent (a ZIM that has an index but not
+ * been looked at yet shows the index without "entries" and "needs_build"). Without an indexes_dir there are none of these keys.
  * "error" codes of a library source include "damaged" (see above) as well as "not_found" and "io".
  * "updating" is true for a library an update_library job owns (see cs_job_start): its shard is closed, search skips
  * it, cs_read for it fails with code "busy", and when the job has ended the core opens it again on a background
@@ -171,10 +207,23 @@ void cs_close(cs_handle *h);
  *   "k": 5, "offset": 0,                      paging for Browse "See all"
  *   "sources": ["<id>", ...] | null,          null = all sources
  *   "query_vector": {"model":"<embedding model id>","vector":[...]} | null
+ *   "kinds": ["zim","library","zim-pdf","captions","zim-captions","zim-epub"] | null   null = all kinds; else only these
  * }
  * The vector is used only for libraries whose settings embedding.model matches this model id; other sources
  * are keyword-only.
+ * Caption and EPUB passages (see "Caption and EPUB indexes") take part like any other: the address is "cap:<host>/<video uuid>/
+ * <piece>" (a saved video), "zimcap:<zim uuid>/<piece>" or "zimepub:<zim uuid>/<piece>"; the title the model sees is
+ * "<video name>, at mm:ss" (h:mm:ss from an hour) for captions and "<book title>, <chapter heading>" for EPUBs (the chapter's file
+ * name without the heading); source_kind is "video" for a saved video's captions, else "zim"; source_id is "<host>/<uuid>" or the
+ * ZIM's id and a "sources" filter on the ZIM includes its indexes. cs_tool's "ids" entries for them carry:
+ *   caption:  "link":"https://<host>/w/<video uuid>" (a ZIM caption: "zim:<uuid>/<video entry path>", else the caption entry's path),
+ *             "time":<start, seconds>,"time_end":<seconds>,"quote":"<the passage>","lang":"<code>"
+ *   EPUB:     "link":"zim:<uuid>/<epub path>!/<chapter path>#cache-b<block>","quote":"<the piece, at most 300 words>"
+ * (whole seconds are integers). cs_read of a caption address returns the passages from 60 s before to 60 s after, one
+ * "[mm:ss] text" line each; of an EPUB address the chapter's text from a few blocks before the passage, after "Chapter: <heading>".
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
+ *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
+ *          "page", the printed label; no other result has that key)
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);
 
@@ -197,11 +246,102 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
  * the searches use, so they count against zim_budget_mb and keep that archive recently used; a ZIM libzim cannot open, and a
  * build without the feature, use the Rust zim crate reader. The bytes, MIME type, title and errors are identical either way.
  * address: "zim:<uuid>/<path>". *mime_out is set to a string freed with cs_free_string.
+ * Inside an EPUB: "zim:<uuid>/<epub path>!/<inner path>" (when no entry has that whole path) returns that file from the EPUB with
+ * a media type from its extension (XHTML application/xhtml+xml, CSS, images, fonts); an XHTML or HTML file has id="cache-b<n>"
+ * added to every p, li, h1-h6 and td start tag, numbered 0, 1, 2... in document order (an element that has an id keeps it and
+ * gets an empty <a id="cache-b<n>"></a> right after its start tag), the numbering the zim-epub index uses for a citation's
+ * "#cache-b<n>". "not_found" when the EPUB or the file is not there.
  * Returns NULL on error (cs_last_error). Free the buffer with cs_free_bytes. */
 uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t *len_out);
 
+/* cs_captions_search: {"query","k"?:10,"lang"?:"<code>"} -> {"videos":[{"source_id","link","title","host","saved":bool,
+ * "hits":[{"start_s","end_s","text","lang"}]}]}: the videos whose captions match, best video first, up to 3 hits each (best
+ * first), grouped per video; a saved video has source_id "<host>/<uuid>", link the PeerTube watch link, host its instance and
+ * saved true; a video in a ZIM has source_id the ZIM's uuid, link "zim:<uuid>/<video entry path>" (the caption entry's path
+ * when no video was found), host null and saved false. "lang" keeps one language's captions. NULL on bad input (cs_last_error). */
+char *cs_captions_search(cs_handle *h, const char *request_json);
+
+/* --- Caption and EPUB indexes ---
+ *
+ * Keyword-only snapshot indexes (same model as the PDF indexes above: .build/ and snap/<build-id>/ with manifest.json last,
+ * verified, never written to, deterministic pick, local-only clean-up), built entirely by the core with the job "index_source":
+ *   <indexes_dir>/captions/<host>%2F<video uuid>/      the caption files (captions-<lang>.vtt) of one saved PeerTube video
+ *   <indexes_dir>/zim-captions/<zim uuid>/             the standalone caption entries (text/vtt, .srt) of one ZIM; HLS segment
+ *                                                       captions (a .vtt in a folder that also holds .ts entries) are skipped
+ *   <indexes_dir>/zim-epub/<zim uuid>/                 the EPUB entries (application/epub+zip, .epub) of one ZIM
+ * A snapshot holds items.tsv (epubs.tsv for zim-epub): path, size, sha256, pieces, status per caption file or EPUB.
+ * A caption passage is consecutive cues of one file joined to about 40-80 words, never over 45 s, never across a language;
+ * it starts at a cue. A caption's language comes from its file name (captions-<lang>.vtt, <name>_<lang>.srt, <name>.<lang>.vtt).
+ * A caption entry is paired with the video entry of the same folder and base name (FEMA_x_en.srt -> FEMA_x.mp4). */
+
 /* {"address":"zim:<uuid>/<main page path>"} */
 char *cs_zim_main_page(cs_handle *h, const char *zim_id);
+
+/* --- PDF indexes of ZIMs ---
+ *
+ * A ZIM's PDFs are searched by keyword like the rest of the ZIM: one Tantivy index per ZIM, no vectors, one document per piece
+ * (about 200 words) with its text, title, printed page label and 1-based PDF page. It is kept as an immutable, syncable snapshot:
+ *   <indexes_dir>/zim-pdf/<zim uuid>/.build/           the working index while it is being built (never synced)
+ *   <indexes_dir>/zim-pdf/<zim uuid>/snap/<build-id>/  published: Tantivy files and manifest.json, written last
+ * A snapshot is used only when manifest.json is there, every listed file has the listed size and sha256, its kind and source id
+ * match, and its format, Tantivy version, tokenizer and chunker are ones this core reads. Of several usable snapshots every device
+ * uses the earliest "created", then the lowest build id; the core removes, on this device only, the usable ones other than that
+ * one and the newest usable one older than it (the rollback). A published snapshot is never written to (not even by opening it). Attach happens in cs_open and
+ * cs_set_sources (snapshots are checked and opened on a background thread; cs_status shows "pdfindex"); call cs_set_sources
+ * again after a snapshot is published or arrives by sync.
+ * Search results from it have the address "zimpdf:<zim uuid>/<pdf path>@<piece>", title "<title>, p. <printed page label>"
+ * (the model sees exactly that and the snippet, nothing else), source_id the ZIM's id, and honour a "sources" filter on the ZIM.
+ * cs_tool's "ids" entries for such a result also carry "link":"zim:<uuid>/<pdf path>#page=<pdf page>", "pdf_page":N and
+ * "quote":"<the piece's text verbatim, at most 300 words>"; ids of other results have none of these three keys. A piece that
+ * runs over several PDF pages is cited at the page, inside its range, whose text matches the query best (the first page when none
+ * does): that page is the result's "pdf_page" (cs_search results from a PDF index carry "pdf_page" next to "page", the
+ * printed label; no other result has the key), the "#page=" of the link and the page "read" opens. The index stores every
+ * PDF page's text as a document of its own (not searched, not counted in "pieces"). cs_read of such an address returns the
+ * piece's first page; cs_tool "read" [n] returns the whole text of the page [n] was cited at, from the stored page, under the
+ * same title and "Page:" header. In a result list a PDF contributes at most 2 pieces, a piece whose text another PDF of the ZIM
+ * already showed is left out (ZIMs keep copies of the same document), and the PDF list of a ZIM is scored together with the
+ * ZIM's own keyword list (both BM25), not against its own best hit.
+ *
+ * cs_zim_pdfs: {"zim_uuid","zim_name" (the ZIM's metadata Name),"pdfs":[{"path","title","size"}]} for the entries whose mime type
+ * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id. */
+char *cs_zim_pdfs(cs_handle *h, const char *zim_id);
+
+/* cs_pdf_chunk: pure (no handle, nothing read or written): the shared passage chunker (packages/cache_chunk) on the text of a
+ * PDF's pages. {"pages":[{"index" (0-based),"label" (printed page label, may be ""),"text"}]} ->
+ * {"pieces":[{"i","text","page" (label, or the 1-based PDF page as text without one),"pdf_page" (1-based),"pdf_page_end"? (only
+ * when the piece crosses a page break),"heading_path":[]}],"empty_pages":[0-based indexes with no text],
+ * "pages":[{"pdf_page" (1-based),"label","text"}] (the pages with text, to hand to cs_pdfindex_add as is),"chunker":N}. Pieces are
+ * verbatim and about 200 words. "chunker" is the rule's version; an index built with another is not used. NULL on bad input. */
+char *cs_pdf_chunk(const char *request_json);
+
+/* The build session (handle-less; resumable across kills). Every call takes {"indexes_dir","zim_uuid"} (or a session from open).
+ * cs_pdfindex_open({"indexes_dir","zim_uuid","zim_name","language"?,"previous"?:{"zim_uuid"}}) -> {"session":N,"done":[paths
+ *   added],"skipped":[{"path","reason"}],"pieces":N,"reusable":[{"path","size","sha256"}]}. Opens or creates .build/ (zim_name is
+ *   the ZIM's metadata Name; language is the ZIM's Language, which picks the stemmer; English when absent). A .build made for
+ *   another uuid, format, chunker or tokenizer is discarded and restarted. "busy" while another session or the finish job has
+ *   it. "previous" names an older edition of the ZIM: when it has a usable snapshot of the same zim_name, "reusable" lists the
+ *   PDFs added there (with the size and sha256 of their bytes), else it is [].
+ * cs_pdfindex_add(session, {"path","title","pieces":[{"i","text","page","pdf_page","pdf_page_end"?,"heading_path"}],
+ *   "pages":[{"pdf_page","label"?,"text"}]?,"size"?,"sha256"?}) -> {"pieces":total,"committed":n}. "pages" is the text of each
+ *   PDF page (cs_pdf_chunk returns it); without it the PDF is indexed but cited at its pieces' first pages and read from
+ *   its pieces. An empty "title", or one equal to the path, is replaced by a readable one from the file name (folder and .pdf
+ *   dropped, _ and - turned into spaces): the model never sees a raw path. size and sha256 are those of the PDF's bytes (they are recorded in the
+ *   snapshot's pdfs.tsv). Replaces any pieces of that path, then adds. All or nothing per PDF. Durable in batches:
+ *   the core commits about every 20 PDFs or 30 s and records a path as done only after the commit that holds it, so a kill
+ *   redoes at most the PDFs after the last commit. "committed" counts the PDFs durably recorded, added and skipped.
+ * cs_pdfindex_reuse(session, {"path","sha256"}) -> {"reused":true,"pieces":n} | {"reused":false}: when the "previous" snapshot holds
+ *   that PDF with that sha256, its stored pieces are copied into this build (no extraction, no chunking) and the PDF is
+ *   recorded like an add; otherwise nothing changes and the app extracts as usual.
+ * cs_pdfindex_skip(session, {"path","reason":"no_text"|"locked"|"damaged","size"?,"sha256"?}) -> {"skipped":N}
+ * cs_pdfindex_close(session) -> {"pieces","committed"}: commits and keeps .build for resume.
+ * cs_pdfindex_discard({"indexes_dir","zim_uuid"}) -> {"discarded":bool}: deletes .build ("busy" while it is in use).
+ * Publishing is the job kind "pdfindex_finish" (cs_job_start) below. All of these return NULL with cs_last_error(NULL) on failure. */
+char *cs_pdfindex_open(const char *params_json);
+char *cs_pdfindex_add(uint64_t session, const char *params_json);
+char *cs_pdfindex_reuse(uint64_t session, const char *params_json);
+char *cs_pdfindex_skip(uint64_t session, const char *params_json);
+char *cs_pdfindex_close(uint64_t session);
+char *cs_pdfindex_discard(const char *params_json);
 
 /* Title suggestions for the address bar.
  * options_json: {"k":10,"sources":[ids]|null}. Returns {"suggestions":[{"title","address","source_id"}]}
@@ -724,7 +864,10 @@ char *cs_video_search(cs_handle *h, const char *request_json);
  * video can only be streamed: a video_download job refuses it. */
 char *cs_video_get(cs_handle *h, const char *request_json);
 
-/* Downloaded videos, newest first: {"downloads":[<manifest>],"total_bytes"} (works without any network or instance). */
+/* Downloaded videos, newest first: {"downloads":[<manifest>],"total_bytes"} (works without any network or instance).
+ * With an indexes_dir in the cs_open config, a downloaded video that has caption files also has
+ * "captions_index":{"source_id":"<instance>/<video uuid>","kind":"captions","files":N,"built":bool,"needs_build":bool}:
+ * the source id the index_source job takes, and whether a snapshot of its captions is published. */
 char *cs_video_downloads(cs_handle *h);
 
 /* request_json: {"instance","video"}. Deletes the downloaded video's files (and a half-finished download of it).
@@ -821,6 +964,25 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
 /* kind "index_zim":  {"zim_path","index_dir","heap_mb":200}
  * kind "index_library": {"library_path","index_dir","heap_mb":200}
  *   builds the device Tantivy index from the library's mapped text field.
+ * Both also take "indexes_dir" (the folder of cs_open's "indexes_dir"; "index_dir" is then not needed and not used). The index
+ *   is then built in <indexes_dir>/zim/<zim uuid>/.build/ (index_zim) or <indexes_dir>/library/<library_id[@version]>/.build/
+ *   (index_library; the source id is cs_status's "source_id", so a library update with a new version is a new source and a new
+ *   snapshot), resumable as before, and published as snapshots/<build-id>/ with manifest.json written last (kind, source_id,
+ *   format, tantivy, tokenizer, core, created, files [path,size,sha256]) by one rename; .build is then removed. If a usable
+ *   snapshot of that source is already there (or arrives while building, synced from a peer) the job builds nothing more and
+ *   ends done. When done, "result":{"adopted":bool,"snapshot":"<build-id>","bytes"?}.
+ * kind "index_seal": {"indexes_dir","kind":"zim"|"library","source_id","index_dir"?}
+ *   moves an index from its old location (cs_open's "index_dir" of that source; "index_dir" here names it when no handle has
+ *   the source) into a snapshot without copying or merging: its files are HARD-LINKED into .build/publish-<id>/, hashed,
+ *   an empty .tantivy-meta.lock is added, manifest.json is written last and the folder is renamed to snap/<id>/. If hard
+ *   links fail the files are renamed instead, but only when no handle has the index open; otherwise the job fails "busy"
+ *   (try again later). If a usable snapshot of the source already exists (for example synced from a peer) nothing is sealed:
+ *   done with "result":{"adopted":true,"snapshot"}. An old index that is not finished or is of another format fails
+ *   "index_stale" (run index_zim / index_library with "indexes_dir" instead); none at all fails "index_missing". Progress
+ *   "phase":"link"|"verify"|"manifest"|"publish"; cs_job_cancel is honoured until "publish". When done "result":
+ *   {"adopted":false,"snapshot","files","bytes","method":"link"|"rename"}. A handle with "indexes_dir" uses the snapshot once it
+ *   has verified it (until then the old index, as before), and after its first successful open from a sealed snapshot removes
+ *   the old index's files from the old folder.
  * kind "update_library": {"library_path","snapshot_path","snapshot_manifest_path"}
  *   closes the library, applies a partial snapshot to a REAL COPY of its shard directory
  *   (<library_path>.cs-stage, beside it, no hard links), rewrites the copy's segments_manifest.json, swaps the copy
@@ -883,6 +1045,29 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   library_id, version 1, the bge-m3 embedding model) and blank-library.snapshot (an empty shard snapshot: one unnamed
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
+ * kind "pdfindex_finish": {"indexes_dir","zim_uuid"}
+ *   publishes the PDF index build of a ZIM: merges .build/ to one segment, moves its files into
+ *   .build/publish-<build-id>/ (hashing them with sha256 as they are read), writes manifest.json there last (kind "zim-pdf", source_id, format, tantivy, tokenizer, chunker,
+ *   core, created, zim_uuid, zim_name, pdfs, pieces, skipped, files [path,size,sha256]; the files are MOVED, not copied, and
+ *   include pdfs.tsv: path, size, sha256, pieces, status "added"|"skipped:<reason>" per PDF), renames the folder to
+ *   snap/<build-id>/ in one step and removes .build. cs_job_start fails with "not_found" (no build) or "busy" (a session or
+ *   another finish has it). The progress JSON adds "phase":"merge"|"manifest"|"publish" (done/total count within the phase);
+ *   cs_job_cancel is honoured until "publish" (the build is kept and resumes); when done it adds
+ *   "result":{"pdfs","pieces","skipped","bytes","snapshot":"<build-id>"}.
+ * kind "index_source": {"indexes_dir","kind":"captions"|"zim-captions"|"zim-epub","source_id","previous"?:{"zim_uuid"}}
+ *   builds a keyword index of a source and publishes it as a snapshot (see "Caption and EPUB indexes"). The core does the
+ *   whole build. source_id: "<instance>/<video uuid>" for captions (a video saved on the device; its folder is found through
+ *   the "video" section of the handles' config), the ZIM's uuid for the others (found through the ZIMs the handles have
+ *   open). cs_job_start fails with "bad_json" (bad parameters), "not_found" (no such saved video, or no such ZIM open) or
+ *   "busy" (another job builds it). The progress JSON has "phase":"read"|"index"|"merge"|"manifest"|"publish" (done/total
+ *   count within the phase; "read" counts the source's items: caption files, caption entries, EPUBs). The build is resumable
+ *   (.build/, a commit every 20 items or 30 s) and cs_job_cancel is honoured until "publish"; the work done is kept. A source
+ *   that already has a usable snapshot (or gets one from sync while this runs) is not built: the job ends done with that
+ *   snapshot. When done it adds "result":{"items","pieces","skipped","bytes","snapshot":"<build-id>","resumed":N (items
+ *   found done from an earlier run),"reused":N (EPUBs copied from "previous")}. A caption file or EPUB that cannot be read, or
+ *   has no text, is recorded as skipped and does not fail the job. "previous" (zim-epub only) is the uuid of an older
+ *   edition of the ZIM: its snapshot, if usable and of the same ZIM Name, supplies the pieces of EPUBs with an unchanged
+ *   sha256 (no extraction). Optional "video_dir" and "zim_path" override where the source is looked for.
  * kind "video_download": {"dir","instance","video","choice"?:"lowest","token"?}
  *   downloads one video for offline use. "dir" is the "video" folder of the cs_open config; "choice" is "audio",
  *   "lowest", "highest" or a resolution from cs_video_get's options (a resolution the video lacks gives the nearest one
@@ -916,9 +1101,31 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  * tokenizer (from the ZIM or library language; English stemmer by default) are recorded in index_dir. */
 cs_job *cs_job_start(const char *kind, const char *params_json);
 
-/* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"}}
- * layer_download jobs add "detail":{"bytes":N} (bytes written so far). */
+/* {"state":"running"|"done"|"cancelled"|"failed","done":N,"total":N,"error":null|{"code","message"},
+ *  "duty":{"work_ms","idle_ms","threads"},"effective":{"work_ms","idle_ms","threads"},"auto":bool,"paused":bool}
+ * layer_download jobs add "detail":{"bytes":N} (bytes written so far). "duty" is what the app set, "effective" adds the
+ * job's own back-off (see "Job pacing" below); "threads" is null when the job chooses its own. */
 char *cs_job_progress(cs_job *j);
+
+/* --- Job pacing (duty) ---
+ * Background work stays gentle on a phone. Every cs_job_start may carry "duty":{"work_ms","idle_ms","threads"?}: the job
+ * idles idle_ms after each work_ms of work (checked between items: articles, points, files, batches), and "threads" caps the
+ * Tantivy writer threads of an index build (default up to 4, by the cores). Fields left out keep the kind's default.
+ * The default of the index kinds (index_zim, index_library, index_seal, index_source, pdfindex_finish) is gentle: work_ms 200, idle_ms 200,
+ * threads 1 (duty.rs). The default of every other kind is unthrottled. "duty":{"work_ms":0} means
+ * unthrottled (no idle). Job threads also lower their OS priority (Linux and Android: nice 10 on the thread; other platforms
+ * leave it unchanged). "threads" is read when the build opens its writer, so cs_job_set cannot change it for a running job.
+ * Self back-off ("auto", on by default, only while work_ms > 0): the job keeps a baseline of its time per item (the first 16
+ * items); when recent items take more than twice the baseline for a sustained stretch (thermal throttling) it adds idle time on
+ * top of idle_ms (doubling, up to 4000 ms added) and gives it back as times recover. It can only make the job slower than the
+ * app's duty, never faster. */
+
+/* Change a running job: {"work_ms"?,"idle_ms"?,"threads"?,"paused"?:bool,"auto"?:bool}. What is left out stays. Takes effect at
+ * the job's next pace point; "paused":true blocks the job there (without holding any lock) until "paused":false; cancel and
+ * cs_job_free still end a paused or idling job promptly. Every call resets the idle the back-off added, so the newest setting
+ * always wins; "auto":false switches the back-off off, "auto":true on again. Returns {"duty","effective","auto","paused"} (as
+ * in the progress JSON), or NULL with "bad_json" for a NULL job or bad JSON. Free the string with cs_free_string. */
+char *cs_job_set(cs_job *j, const char *json);
 
 /* Ask the job to stop at its next checkpoint. Returns 0. Poll cs_job_progress until "cancelled". */
 int32_t cs_job_cancel(cs_job *j);
@@ -948,7 +1155,10 @@ typedef struct cs_regions cs_regions;
 
 /* Opens the regions engine. config_json: {"dir": "<private folder>", optional "base_url" (default
  * "https://data.cached.info/routing/"), "stream_cap_bytes" (default 2147483648), "user_agent" (default "Cache/<version>"),
- * "reserve_bytes" (default 1 GiB: downloads pause rather than leave less free)}. One engine per folder in the process: a
+ * "reserve_bytes" (default 1 GiB: downloads pause rather than leave less free), optional "indexes_dir" (the device's indexes
+ * folder: each fetched tile index is then kept as a syncable snapshot, <indexes_dir>/region-index/<build>/snap/<id>/ and
+ * places-index/..., a snapshot synced in from a peer is used before anything is fetched, and an index kept in "dir" by an
+ * earlier version is sealed into one; without it the indexes stay in <dir>/index/)}. One engine per folder in the process: a
  * second open of the same folder, or a cs_open config whose "regions" section names it, shares it (its own config is not
  * used). NULL on failure (reason in cs_last_error(NULL)). Downloads run on its own thread and carry on after a restart. */
 cs_regions *cs_regions_open(const char *config_json);
@@ -959,7 +1169,9 @@ cs_regions *cs_regions_open(const char *config_json);
  *                  "regions": [{"id","name","state":"downloading"|"ready"|"paused"|"failed","tiles","bytes","done_tiles",
  *                               "done_bytes","error"}],
  *                  "stream": {"tiles","bytes","cap"}, "update": null|{"build","download_bytes","downloading"},
- *                  "paused": null|"<reason>"}
+ *                  "paused": null|"<reason>",
+ *                  "indexes"?: {"routing"|"places": [{"kind":"region-index"|"places-index","source_id":"<build>",
+ *                               "location":"snapshot"|"legacy"|"none","snapshots":["<id>"]}]}}  (once a build is known)
  *   plan          {"id"?, "name"?, "geometry": <GeoJSON Feature, Polygon or MultiPolygon>}
  *                 -> {"tiles","bytes","download_bytes","shared_tiles"}; "offline" when the index is not on the device and
  *                    cannot be fetched

@@ -57,7 +57,9 @@ class CoreDispatcher {
       case 'deleteSavedPlace':
         eng().deleteSavedPlace(a['key'] as String);
       case 'setSources':
-        eng().setSources(sourcesFrom(a['sources'] as List));
+        eng().setSources(sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
+      case 'rejected':
+        result = [for (final r in eng().rejectedSnapshots()) r.toJson()];
       case 'status':
         result = [
           for (final s in eng().status())
@@ -75,6 +77,11 @@ class CoreDispatcher {
               'keyword_source': s.keywordSource,
               'embedding_model': s.embeddingModel,
               'whole_library_only': s.wholeLibraryOnly,
+              'source_id': s.sourceId,
+              'index': s.index?.toJson(),
+              'captionsindex': s.captionsIndex?.toJson(),
+              'epubindex': s.epubIndex?.toJson(),
+              'pdfindex': s.pdfIndex?.toJson(),
               'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
             }
         ];
@@ -99,6 +106,8 @@ class CoreDispatcher {
                 'source_kind': h.sourceKind,
                 'source_title': h.sourceTitle,
                 'page': h.page,
+                // The worker passes on every field the app reads (a PDF passage's real page).
+                if (h.pdfPage != null) 'pdf_page': h.pdfPage,
               }
           ],
           'total_estimate': r.totalEstimate,
@@ -172,6 +181,12 @@ class CoreDispatcher {
         result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
       case 'notebook':
         result = eng().notebook(a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
+      case 'hasPdfIndex':
+        result = eng().hasPdfIndex;
+      case 'zimPdfs':
+        result = eng().zimPdfs(a['zimId'] as String);
+      case 'pdfIndex':
+        result = eng().pdfIndex(a['op'] as String, session: (a['session'] as int?) ?? 0, args: (a['args'] as Map?)?.cast<String, dynamic>());
       case 'userLayers':
         result = eng().userLayers(a['call'] as String, a['arg'] as String?);
       case 'placesList':
@@ -209,9 +224,15 @@ class CoreDispatcher {
           'total': p.total,
           'error': p.errorCode == null ? null : {'code': p.errorCode, 'message': p.errorMessage},
           if (p.detail != null) 'detail': p.detail,
+          if (p.phase != null) 'phase': p.phase,
+          if (p.result != null) 'result': p.result,
+          if (p.paused != null) 'paused': p.paused,
+          if (p.effective != null) 'effective': p.effective,
         };
       case 'jobCancel':
         jobs[a['job']]!.cancel();
+      case 'jobSet':
+        result = jobs[a['job']]!.set((a['pace'] as Map).cast<String, Object?>());
       case 'jobFree':
         jobs.remove(a['job'])?.free();
       case 'close':

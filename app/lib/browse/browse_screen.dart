@@ -2,6 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../pdf/index/pdf_index_app.dart';
+import '../pdf/index/pdf_index_ui.dart';
+import '../search/core_index_calls.dart' show coreIndexShared;
+import '../search/epub_index_row.dart';
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
 import '../layout/adaptive.dart';
@@ -118,13 +122,14 @@ class _BrowseScreenState extends State<BrowseScreen> {
       openZimPdf(context, sources, address, quote: quote);
       return;
     }
-    _openZim(z, address: address);
+    // An EPUB chapter opens at the cited block, with the quote's first words marked.
+    _openZim(z, address: address, quote: quote);
   }
 
   /// The list's context inside the two panes (a tablet opens items beside the list).
   BuildContext? _pane;
 
-  void _openZim(ZimFile z, {String? address}) {
+  void _openZim(ZimFile z, {String? address, String? quote}) {
     // A browser on a desktop window opens a ZIM in the full window: the list slides away (rail stays), its Show button brings it back.
     if (plat.isWeb && _pane != null && isDesktop(context)) _pane!.findAncestorStateOfType<TwoPaneState>()?.setListHidden(true);
     openDetail(
@@ -134,6 +139,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
           sources: sources,
           zim: z,
           address: address,
+          quote: quote,
           layout: widget.layout,
           itemMenu: (ctx, addPage) => showLibraryMenu(ctx, _zimActions(z, addToHome: addPage)),
         ),
@@ -187,6 +193,25 @@ class _BrowseScreenState extends State<BrowseScreen> {
                 }),
       delete: () => sources.remove(z),
       again: b.device?.wasUploaded(z.fileName) == true ? kUploadedAgain : null,
+      // The PDFs part: make the ZIM's PDFs searchable on this device (nothing shows while the core cannot, or it has none); its
+      // EPUBs beside it (the scheduler's core work).
+      parts: pdfIndexShared == null && coreIndexShared == null
+          ? null
+          : (_) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (pdfIndexShared != null) PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z)),
+                ListenableBuilder(
+                  listenable: Listenable.merge([sources, ?coreIndexShared?.progress]),
+                  builder: (context, _) {
+                    final e = sources.statusAt(z.path)?.epubIndex;
+                    final id = e?.sourceId ?? sources.idOf(z);
+                    return EpubIndexRow(epub: e, progress: id == null ? null : coreIndexShared?.progress.value['zim-epub/$id']);
+                  },
+                ),
+              ],
+            ),
     );
   }
 
@@ -280,7 +305,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
       appBar: AppBar(title: const Text('Library'), actions: [?paneHideButton(context)]),
       bottomNavigationBar: b.device == null ? null : DeviceStorageFooter(device: b.device!),
       body: ListenableBuilder(
-        listenable: Listenable.merge([b, sources, ?libs]),
+        listenable: Listenable.merge([b, sources, ?libs, ?pdfIndexShared]),
         builder: (context, _) {
           _maybeCheck();
           final transfers = b.transfers.values.toList();
@@ -362,7 +387,11 @@ class _BrowseScreenState extends State<BrowseScreen> {
       key: ValueKey('zim-${z.fileName}'),
       icon: sources.iconOf(z),
       title: sources.titleOf(z),
-      detail: [if (o != null && o.summary.isNotEmpty) o.summary, formatBytes(z.size)].join(' · '),
+      detail: [
+        if (o != null && o.summary.isNotEmpty) o.summary,
+        formatBytes(z.size),
+        ?pdfRowNote(pdfIndexShared?.partOf(pdfZimRef(sources, z))),
+      ].join(' · '),
       badge: badge,
       onTap: canOpen ? () => _openZim(z) : null,
       onHold: () => showLibraryMenu(context, _zimActions(z)),

@@ -197,6 +197,81 @@ pub unsafe extern "C" fn cs_zim_main_page(h: *mut Handle, zim_id: *const c_char)
 }
 
 /// # Safety
+/// `h` NULL or live; `zim_id` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_zim_pdfs(h: *mut Handle, zim_id: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| {
+        let id = arg_str(zim_id, "zim_id")?;
+        out_string(h.zim_pdfs(id)?)
+    })
+}
+
+/// # Safety
+/// `h` NULL or live; `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_captions_search(h: *mut Handle, request_json: *const c_char) -> *mut c_char {
+    with_handle(h, ptr::null_mut(), |h| out_string(h.captions_search(arg_str(request_json, "request_json")?)?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_open(params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::open_session(arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_add(session: u64, params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::add(session, arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_skip(session: u64, params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::skip(session, arg_str(params_json, "params_json")?))
+}
+
+/// # Safety
+/// `params_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_reuse(session: u64, params_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::reuse(session, arg_str(params_json, "params_json")?))
+}
+
+#[no_mangle]
+pub extern "C" fn cs_pdfindex_close(session: u64) -> *mut c_char {
+    string_call(|| crate::pdfbuild::close(session))
+}
+
+/// # Safety
+/// `zim_path` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdfindex_discard(zim_path: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfbuild::discard(arg_str(zim_path, "zim_path")?))
+}
+
+/// # Safety
+/// `request_json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_pdf_chunk(request_json: *const c_char) -> *mut c_char {
+    string_call(|| crate::pdfindex::chunk_request(arg_str(request_json, "request_json")?))
+}
+
+/// Run a handle-less call that returns JSON; NULL with `cs_last_error(NULL)` on failure.
+fn string_call(f: impl FnOnce() -> Result<String>) -> *mut c_char {
+    match guarded(|| out_string(f()?)) {
+        Ok(p) => p,
+        Err(e) => {
+            set_thread_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// # Safety
 /// `h` NULL or live; `query` NULL or NUL-terminated; `options_json` NULL (defaults) or NUL-terminated.
 #[no_mangle]
 pub unsafe extern "C" fn cs_search(h: *mut Handle, query: *const c_char, options_json: *const c_char) -> *mut c_char {
@@ -270,6 +345,25 @@ pub unsafe extern "C" fn cs_job_cancel(j: *mut Job) -> i32 {
     r.unwrap_or_else(|e| {
         set_thread_error(e);
         -1
+    })
+}
+
+/// Change a job's duty or pause/resume it (see duty.rs). NULL on error (`bad_json` for a NULL job or bad JSON).
+///
+/// # Safety
+/// `j` NULL or a live job; `json` NULL or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn cs_job_set(j: *mut Job, json: *const c_char) -> *mut c_char {
+    let r = guarded(|| {
+        if j.is_null() {
+            return Err(Error::bad_json("null job"));
+        }
+        let p = arg_str(json, "json")?;
+        out_string((*j).set_duty(p)?)
+    });
+    r.unwrap_or_else(|e| {
+        set_thread_error(e);
+        ptr::null_mut()
     })
 }
 
@@ -787,7 +881,7 @@ pub unsafe extern "C" fn cs_video_get(h: *mut Handle, request_json: *const c_cha
 /// `h` NULL or live.
 #[no_mangle]
 pub unsafe extern "C" fn cs_video_downloads(h: *mut Handle) -> *mut c_char {
-    with_handle(h, ptr::null_mut(), |h| out_string(h.ext.video_downloads()?))
+    with_handle(h, ptr::null_mut(), |h| out_string(h.video_downloads_json()?))
 }
 
 /// # Safety
@@ -1106,6 +1200,7 @@ mod tests {
             assert!(cs_video_search(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_get(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_downloads(ptr::null_mut()).is_null());
+            assert!(cs_captions_search(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_delete(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_video_resolve(ptr::null_mut(), ptr::null()).is_null());
             assert!(cs_layers_list(ptr::null_mut()).is_null());

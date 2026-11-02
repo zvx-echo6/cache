@@ -159,6 +159,14 @@ void main() {
       );
     });
 
+    test('setSources passes the fields it takes again each time (indexes_dir)', () {
+      final n = FakeNative();
+      final e = SearchEngine.open(n, [_zim]);
+      e.setSources([_zim], extra: {'indexes_dir': '/d/shared-indexes'});
+      final last = n.calls.lastWhere((c) => c.startsWith('setSources:'));
+      expect(jsonDecode(last.substring('setSources:'.length))['indexes_dir'], '/d/shared-indexes');
+    });
+
     test('setSources raises on a negative result', () {
       final n = FakeNative();
       final e = SearchEngine.open(n, [_zim]);
@@ -408,4 +416,23 @@ void main() {
       expect(() => e.livePreview({'definition': {}}), throwsA(isA<CacheSearchException>().having((x) => x.message, 'message', contains('items[0].label'))));
     });
   });
+
+  test("a job's pace goes to cs_job_set as JSON; a core without it answers null", () {
+    final n = _PacedNative();
+    final j = CoreJob.start(n, 'index_source', {'kind': 'zim-epub'});
+    expect(j.set({'paused': true}), {'paused': true, 'duty': null});
+    expect(n.sets, [(5, '{"paused":true}')]);
+    final plain = CoreJob.start(FakeNative(), 'index_source', {'kind': 'zim-epub'});
+    expect(plain.set({'paused': true}), isNull);
+  });
+}
+
+class _PacedNative extends FakeNative implements CsJobNative {
+  final List<(int, String)> sets = [];
+
+  @override
+  String? jobSet(int job, String json) {
+    sets.add((job, json));
+    return '{"paused":true,"duty":null}';
+  }
 }

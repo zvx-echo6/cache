@@ -82,6 +82,13 @@ abstract class CsNative {
   void jobFree(int job);
 }
 
+/// cs_job_set: changes a running job's pace ({"work_ms","idle_ms","threads","paused","auto"}, what is left out stays) and answers
+/// {"duty","effective","auto","paused"}; null when the core is older than the call (or on bad input). Kept apart from
+/// [CsNative] so its fakes do not change.
+abstract class CsJobNative {
+  String? jobSet(int job, String json);
+}
+
 /// The map calls (cs_map_search, cs_map_route, cs_map_progress) and saved places (cs_place_*). Kept apart from [CsNative] so
 /// the fakes of the older seam do not change. [FfiCsNative] implements it; [hasMap] is false when the loaded core is older
 /// than the map calls (the symbols are looked up when first used, never at load).
@@ -164,4 +171,18 @@ abstract class CsUserLayersNative {
   /// [call] is one of `import`, `list`, `get`, `set_visible`, `delete`, `export`; [arg] the call's JSON or id (none for `list`).
   /// The answer, or null on error (ask [CsNative.lastError]).
   String? userLayers(int handle, String call, String? arg);
+}
+
+/// The PDF indexes of ZIMs (cs_zim_pdfs, cs_pdfindex_open/add/skip/close/discard; cache_search.h). Kept apart from [CsNative]
+/// like the Notebook; [hasPdfIndex] is false when the loaded core is older than these calls (looked up when first used).
+abstract class CsPdfNative {
+  bool get hasPdfIndex;
+
+  /// cs_zim_pdfs: {"zim_uuid","zim_name","pdfs":[{"path","title","size"}]}, or null on error (ask [CsNative.lastError]).
+  String? zimPdfs(int handle, String zimId);
+
+  /// The handle-less calls: [op] is `open`, `add`, `reuse`, `skip`, `close`, `discard` (the build session; [session] is open's
+  /// session for add, reuse, skip and close) or `chunk` (cs_pdf_chunk, pure); [json] the call's JSON (none for close). The
+  /// answer, or null on error or when the core lacks that call (ask [CsNative.lastError] with 0).
+  String? pdfIndex(String op, {int session = 0, String json = '{}'});
 }
