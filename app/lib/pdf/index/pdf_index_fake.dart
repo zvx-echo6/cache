@@ -56,7 +56,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   /// When set, cs_pdfindex_add fails with it (a full device: FileSystemException with ENOSPC).
   Object? failAddWith;
 
-  /// Calls, for tests: "open", "add:<path>", "skip:<path>:<reason>", "close", "discard", "finish".
+  /// Calls, for tests: `open`, `add:PATH`, `skip:PATH:REASON`, `close`, `discard`, `finish`.
   final List<String> calls = [];
 
   final Map<int, ({String zimPath, String uuid, String model})> _sessions = {};

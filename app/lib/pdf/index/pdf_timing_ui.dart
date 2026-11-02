@@ -6,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'pdf_index_state.dart';
 import 'pdf_timing.dart';
 
-/// Where the timing log goes: on Android the app's folder on shared storage (adb pull /sdcard/Android/data/<app>/files/pdf-timing),
+/// Where the timing log goes: on Android the app's folder on shared storage (`adb pull /sdcard/Android/data/APP/files/pdf-timing`),
 /// elsewhere the app's support folder.
 Future<Directory> pdfTimingDir() async {
   Directory? base;
