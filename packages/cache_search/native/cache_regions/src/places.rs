@@ -67,6 +67,10 @@ pub(crate) struct PlacesPart {
     generation: AtomicU64,
     /// Held while the first places build is set up, so two callers never make two databases.
     init: Mutex<()>,
+    /// Where the places indexes are kept (snapshots, or `<dir>/places/index`).
+    pub store: crate::snap::IndexStore,
+    /// The indexes folder, when the config has one: never cleaned by `open` (a snapshot synced in lives there).
+    indexes_root: Option<PathBuf>,
 }
 
 fn perr(e: cache_places::pack::Error) -> Error {
@@ -94,7 +98,7 @@ fn remove_db_files(db: &Path) {
 }
 
 impl PlacesPart {
-    pub fn new(dir: &Path, base: String, cap: u64) -> PlacesPart {
+    pub fn new(dir: &Path, base: String, cap: u64, indexes_dir: Option<&Path>) -> PlacesPart {
         PlacesPart {
             base,
             cap,
@@ -104,6 +108,8 @@ impl PlacesPart {
             inflight: (Mutex::new(HashSet::new()), Condvar::new()),
             generation: AtomicU64::new(0),
             init: Mutex::new(()),
+            store: crate::snap::IndexStore::new(indexes_dir, true, dir.join("places").join("index")),
+            indexes_root: indexes_dir.map(Path::to_path_buf),
         }
     }
 
@@ -113,10 +119,6 @@ impl PlacesPart {
 
     fn common_file(&self, build: &str) -> PathBuf {
         self.dir.join(build).join("common.sqlite")
-    }
-
-    fn index_file(&self, build: &str) -> PathBuf {
-        self.dir.join("index").join(format!("{build}.tsv"))
     }
 
     fn current_file(&self) -> PathBuf {
@@ -174,6 +176,9 @@ impl PlacesPart {
         st.p.build = build.clone();
         st.p.updating = meta("places.updating")?.filter(|b| index::safe_build(b)).filter(|b| Some(b) != build.as_ref());
         st.p.current = meta("places.current")?.and_then(|c| serde_json::from_str(&c).ok());
+        if let Some(c) = &st.p.current {
+            self.store.note(c);
+        }
         st.p.update = meta("places.update")?.and_then(|u| serde_json::from_str::<(String, u64)>(&u).ok());
         let keep: Vec<String> = [build, st.p.updating.clone()].into_iter().flatten().collect();
         if let Ok(rd) = std::fs::read_dir(&self.dir) {
@@ -181,6 +186,10 @@ impl PlacesPart {
                 let name = e.file_name().to_string_lossy().into_owned();
                 let p = e.path();
                 if name == "CURRENT" || name == "index" {
+                    continue;
+                }
+                // Never touch the indexes folder (or a folder holding it): snapshots synced in live there.
+                if self.indexes_root.as_ref().is_some_and(|r| r.starts_with(&p) || p.starts_with(r)) {
                     continue;
                 }
                 if p.is_dir() {
@@ -279,6 +288,7 @@ impl Inner {
         let body = self.p_get(&format!("{}current.json", p.base), timeout)?;
         let c: Current = serde_json::from_slice(&body).map_err(|e| Error::new("bad_response", format!("places current.json is not valid: {e}")))?;
         let common = c.check_places(TILE_SCHEMA).map_err(|m| Error::new("bad_response", m))?;
+        p.store.note(&c);
         let text = serde_json::to_string(&c).unwrap_or_default();
         let mut st = self.st();
         if st.p.current.as_ref() != Some(&c) {
@@ -293,8 +303,7 @@ impl Inner {
         if let Some(i) = lock(&p.indexes).get(build) {
             return Some(i.clone());
         }
-        let text = std::fs::read_to_string(p.index_file(build)).ok()?;
-        let idx = Arc::new(Index::parse(build, &text).ok()?);
+        let idx = p.store.find(build, self.seq(), &|t| Index::parse(build, t).ok().map(Arc::new))?;
         lock(&p.indexes).insert(build.to_string(), idx.clone());
         Some(idx)
     }
@@ -310,7 +319,7 @@ impl Inner {
         let raw = gunzip(&gz, MAX_INDEX).map_err(|e| Error::new("bad_response", format!("the index of {} is not valid gzip: {e}", c.build)))?;
         let text = String::from_utf8(raw).map_err(|_| Error::new("bad_response", format!("the index of {} is not text", c.build)))?;
         let idx = Arc::new(Index::parse(&c.build, &text).map_err(|m| Error::new("bad_response", m))?);
-        write_whole(&p.index_file(&c.build), text.as_bytes(), self.seq())?;
+        p.store.save(c, &text, self.seq())?;
         lock(&p.indexes).insert(c.build.clone(), idx.clone());
         Ok(idx)
     }
@@ -955,7 +964,7 @@ impl Inner {
         st.p.present.entry(new.to_string()).or_default();
         if let Some(old) = old.filter(|o| o != new) {
             lock(&p.indexes).remove(&old);
-            let _ = std::fs::remove_file(p.index_file(&old));
+            p.store.forget(&old);
             remove_db_files(&p.db_file(&old));
             let _ = std::fs::remove_dir_all(p.dir.join(&old));
         }
@@ -978,7 +987,7 @@ impl Inner {
         }
         for b in [st.p.build.take(), st.p.updating.take()].into_iter().flatten() {
             lock(&p.indexes).remove(&b);
-            let _ = std::fs::remove_file(p.index_file(&b));
+            p.store.forget(&b);
             remove_db_files(&p.db_file(&b));
             let _ = std::fs::remove_dir_all(p.dir.join(&b));
         }

@@ -66,6 +66,19 @@ pub struct Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<cache_snapshot::Error> for Error {
+    fn from(e: cache_snapshot::Error) -> Self {
+        use cache_snapshot::ErrorCode as C;
+        let code = match e.code {
+            C::BadJson => ErrorCode::BadJson,
+            C::Unsupported => ErrorCode::Unsupported,
+            C::Io => ErrorCode::Io,
+            C::Internal => ErrorCode::Internal,
+        };
+        Error::new(code, e.message)
+    }
+}
+
 impl Error {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Error { code, message: message.into(), space: None }
