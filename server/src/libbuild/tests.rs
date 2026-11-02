@@ -1716,3 +1716,62 @@ fn stopping_the_service_on_purpose_does_not_count_as_a_crash() {
     assert_eq!(state(&svc, &id), S::Failed);
     let _ = lib;
 }
+
+#[test]
+fn a_book_is_compressed_before_it_is_hashed_and_stored() {
+    let d = TempDir::new("cmp1");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    let pdf = book("well", 12, Some("Wells"));
+    let a = add(&svc, &lib, "wells.pdf", &pdf);
+    update_compression(&svc, &a, Some(Compression::LOSSLESS));
+    drain(&svc);
+    assert_eq!(state(&svc, &a), S::Done, "{:?}", item(&svc, &a).error);
+    let b = lock(&svc.st).libs[0].books[0].clone();
+    let c = b.compression.clone().expect("the outcome is recorded");
+    assert!(!c.kept_original, "{:?}", c.kept_reason);
+    assert_eq!((c.level.as_str(), c.original_size, c.stored_size), ("lossless", pdf.len() as u64, b.size));
+    assert!(b.size < pdf.len() as u64);
+    // the hash and the device copy are of the stored file, and the arrival hash is kept
+    let stored = std::fs::read(svc.source_of(&lib, &b)).unwrap();
+    assert_eq!(stored.len() as u64, b.size);
+    assert_eq!(b.blake3, blake3::hash(&stored).to_hex().to_string());
+    assert_eq!(b.original_blake3.as_deref(), Some(blake3::hash(&pdf).to_hex().to_string().as_str()));
+    // the same file again is still an exact copy
+    let again = add(&svc, &lib, "wells again.pdf", &pdf);
+    update_compression(&svc, &again, Some(Compression::LOSSLESS));
+    drain(&svc);
+    assert_eq!(state(&svc, &again), S::SkippedDuplicate);
+    // the outcome is in the book list
+    let listed = svc.books_q(&lib, "").unwrap();
+    assert_eq!(listed[0]["compression"]["level"], json!("lossless"));
+}
+
+#[test]
+fn a_book_with_no_compression_chosen_is_stored_as_it_arrived() {
+    let d = TempDir::new("cmp2");
+    let (svc, _) = rig(&d);
+    let lib = new_lib(&svc, "Water systems");
+    let pdf = book("tank", 6, Some("Tanks"));
+    let a = add(&svc, &lib, "tanks.pdf", &pdf);
+    drain(&svc);
+    assert_eq!(state(&svc, &a), S::Done);
+    let b = lock(&svc.st).libs[0].books[0].clone();
+    assert!(b.compression.is_none() && b.original_blake3.is_none());
+    assert_eq!(std::fs::read(svc.source_of(&lib, &b)).unwrap(), pdf);
+}
+
+#[test]
+fn the_upload_query_and_the_drop_setting_choose_compression() {
+    assert_eq!(compression_from_query("library_id=x&name=a.pdf").unwrap(), None);
+    assert_eq!(compression_from_query("compression=lossless").unwrap(), Some(Compression::LOSSLESS));
+    let c = compression_from_query("compression=smaller_scans&preset=smallest").unwrap().unwrap();
+    assert_eq!((c.level, c.effective_preset().map(|p| p.name())), (Level::SmallerScans, Some("smallest")));
+    for bad in ["compression=zip", "preset=high", "compression=lossless&preset=high", "compression=smaller_scans&preset=tiny"] {
+        assert_eq!(compression_from_query(bad).unwrap_err().status, 400, "{bad}");
+    }
+}
+
+fn update_compression(svc: &BuildService, id: &str, c: Option<Compression>) {
+    svc.update_item(id, |it| it.compression = c);
+}

@@ -135,6 +135,9 @@ not see it. It is also inside the `.cache-library` archive, at its root. `cache-
 
 - `docs` maps each `doc_id` (in doc_id order) to its entry. Every key is always present: `null` when unknown. A document with no
   division has `division`, `label`, `score`, `classifier_version`, `source` and `second_division` all `null`.
+- `compression` is optional (the key is left out when unknown): what compression did to the stored PDF, as the build record has it
+  (`original_size`, `stored_size`, `level`, `preset`, `kept_original`, `kept_reason`, `psnr_min`). The builder takes it from the
+  caller (`LibDoc.entry`); the build service does not write `docs.json` yet, so it is not filled in there (TODO).
 - `title` is the title the library uses (also in the search payloads and `documents.tsv`); `source_title` is the title before a
   titles file replaced it, `null` when it was not replaced.
 - The writer builds it from the packs' `division` headers and titles. `--labels` and `--titles` (below) override them.

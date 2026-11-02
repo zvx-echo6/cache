@@ -29,7 +29,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE] [--compress off|lossless|smaller_scans[:high|balanced|smallest]] [--in-process]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive] [--vector-datatype f32|f16] [--labels FILE.json] [--titles FILE.jsonl] [--classes FILE.json]\n  cache-build zim-pdfs <ZIM> --survey [--limit N] [--skip PATH]... [--in-process]\n  cache-build dump <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -143,6 +143,14 @@ fn cmd_pdf(a: &Args) -> i32 {
         eprintln!("error: --doc-id, --title and --https apply to a single PDF");
         return 2;
     }
+    let compress = match a.get("--compress").map(|v| cache_builder::compress::Compression::parse(&v)) {
+        Some(Err(e)) => {
+            eprintln!("error: --compress: {e}");
+            return 2;
+        }
+        Some(Ok(c)) => Some(c),
+        None => None,
+    };
     let created = a.get("--created-at").unwrap_or_else(now_utc);
     let child = ChildExtractor::current_exe(std::env::temp_dir());
     let in_process = a.has("--in-process");
@@ -157,6 +165,29 @@ fn cmd_pdf(a: &Args) -> i32 {
                 failed += 1;
                 continue;
             }
+        };
+        // Compress first, then build from the file that would be kept (its hash is the pack's source hash).
+        let bytes = match &compress {
+            Some(c) => match if in_process { Ok(cache_builder::compress::compress_pdf(&bytes, c)) } else { child.compress(&bytes, c) } {
+                Ok((out, r)) => {
+                    println!(
+                        "{f}: compression {}{}: {} -> {} bytes{}{}",
+                        r.level,
+                        r.preset.as_ref().map(|p| format!(":{p}")).unwrap_or_default(),
+                        r.original_size,
+                        r.stored_size,
+                        r.psnr_min.map(|p| format!(", min PSNR {p:.1} dB")).unwrap_or_default(),
+                        r.kept_reason.as_ref().map(|w| format!(", original kept: {w}")).unwrap_or_default()
+                    );
+                    out
+                }
+                Err(e) => {
+                    eprintln!("{f}: FAILED compressing: {e}");
+                    failed += 1;
+                    continue;
+                }
+            },
+            None => bytes,
         };
         let name = PathBuf::from(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.clone());
         let mut o = BuildOptions::new(&name, &created);

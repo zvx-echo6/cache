@@ -13,6 +13,7 @@
 //! stay where they are and the next check tries again.
 
 use super::{lock, Item, Origin, S};
+use cache_builder::compress::Compression;
 use crate::library::{now_rfc3339, random_hex, sanitize_name, ApiErr};
 use crate::libbuild::BuildService;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,9 @@ pub struct DropSettings {
     pub enabled: bool,
     #[serde(default)]
     pub library_id: Option<String>,
+    /// How files from the folder are compressed when they are stored (off unless chosen).
+    #[serde(default)]
+    pub compression: Compression,
 }
 
 #[derive(Clone, Default)]
@@ -53,7 +57,7 @@ pub struct DropState {
 
 impl DropState {
     pub fn load(data: &Path) -> DropState {
-        let default = DropSettings { folder: data.join("drop").to_string_lossy().into_owned(), enabled: false, library_id: None };
+        let default = DropSettings { folder: data.join("drop").to_string_lossy().into_owned(), enabled: false, library_id: None, compression: Compression::OFF };
         let settings = std::fs::read_to_string(data.join("build/drop.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(default);
         DropState {
             settings: Mutex::new(settings),
@@ -182,6 +186,10 @@ fn has_gzip_magic(p: &Path) -> bool {
 }
 
 impl BuildService {
+    pub(crate) fn drop_compression(&self) -> Compression {
+        self.drop_settings().compression
+    }
+
     fn drop_settings(&self) -> DropSettings {
         lock(&self.drop.settings).clone()
     }
@@ -241,6 +249,12 @@ impl BuildService {
                 Some(_) => return Err(super::err(404, "not_found", "no such library")),
                 None => return Err(super::err(400, "invalid", "\"library_id\" is a library id or null")),
             }
+        }
+        if let Some(c) = v.get("compression") {
+            s.compression = serde_json::from_value::<Compression>(c.clone())
+                .ok()
+                .and_then(|c| Compression::from_parts(c.level, c.preset.map(|p| p.name())).ok())
+                .ok_or_else(|| super::err(400, "invalid", "\"compression\" is {\"level\": off|lossless|smaller_scans, \"preset\": high|balanced|smallest}"))?;
         }
         super::write_json(&self.data.join("build/drop.json"), &s).map_err(|e| super::err(500, "server_error", format!("could not save the settings: {e}")))?;
         *lock(&self.drop.settings) = s.clone();
@@ -617,7 +631,7 @@ impl BuildService {
             "ok"
         };
         json!({
-            "settings": {"folder": s.folder, "enabled": s.enabled, "library_id": s.library_id, "library_title": s.library_id.as_deref().and_then(|l| self.lib_title(l))},
+            "settings": {"folder": s.folder, "enabled": s.enabled, "library_id": s.library_id, "library_title": s.library_id.as_deref().and_then(|l| self.lib_title(l)), "compression": s.compression},
             "status": {
                 "state": state, "last_check": status.last_check, "found": status.found, "counts": counts,
                 "error": status.error.as_ref().map(|(c, m)| json!({"code": c, "message": m})), "stale": stale,

@@ -7,6 +7,7 @@
 //! files of `cache-build library`) override those for the rebuild. Readers apply the app's `overrides.json` on top; writing
 //! `overrides.json` is the app's job.
 
+use crate::compress::CompressionOutcome;
 use crate::error::{Error, Result};
 use crate::pack::{Division, Header};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,11 @@ pub struct DocEntry {
     pub title: String,
     /// The title before a titles file replaced it; `null` when the title was not replaced.
     pub source_title: Option<String>,
+    /// What compression did to the stored PDF (`CompressionOutcome`: original_size, stored_size, level, preset, kept_original,
+    /// kept_reason, psnr_min). Left out when the book was stored as it arrived or the caller has no record of it.
+    /// TODO: the build service's publish path (libbuild) writes no `docs.json` yet; when it does, it copies `Book.compression` here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<CompressionOutcome>,
 }
 
 impl DocEntry {
@@ -44,6 +50,7 @@ impl DocEntry {
             second_division: division.and_then(|d| d.second_division.clone()),
             title: title.to_string(),
             source_title: None,
+            compression: None,
         }
     }
 }

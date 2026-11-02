@@ -483,3 +483,50 @@ fn an_f16_shard_is_smaller_once_the_vectors_fill_a_chunk_and_still_finds_the_sam
         assert_eq!(ha[0].address, format!("lib:r3/{}", cache_builder::library::point_uuid("big", 1, i as u32)), "piece {i} is its own nearest");
     }
 }
+
+#[test]
+fn a_compression_outcome_travels_in_docs_json_when_the_caller_has_one() {
+    use cache_builder::compress::CompressionOutcome;
+    use cache_builder::docs::DocEntry;
+    use cache_builder::embed::fake_vector;
+    use cache_builder::library::{write_library, LibDoc};
+    use cache_builder::pack::PackPiece;
+    let piece = |i: u32| {
+        let text = format!("passage {i} of the compressed book");
+        PackPiece { index: i, vector: fake_vector(&text), text, page: "1".into(), pdf_page: Some(1), page_end: None, pdf_page_end: None, heading_path: vec![] }
+    };
+    let doc = |id: &str, c: Option<CompressionOutcome>| {
+        let mut e = DocEntry::new(id, None);
+        e.compression = c;
+        LibDoc {
+            title: id.into(),
+            doc_id: id.into(),
+            doc_version: 1,
+            source_blake3: "ab".repeat(32),
+            link: String::new(),
+            author: None,
+            zim: None,
+            pages: Some(1),
+            pieces: vec![piece(0), piece(1)],
+            entry: Some(e),
+        }
+    };
+    let outcome = CompressionOutcome {
+        original_size: 9000,
+        stored_size: 4000,
+        level: "smaller_scans".into(),
+        preset: Some("balanced".into()),
+        kept_original: false,
+        kept_reason: None,
+        psnr_min: Some(41.5),
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("lib");
+    write_library(&out, &library_opts(), [doc("with", Some(outcome.clone())), doc("without", None)]).unwrap();
+    let docs = Docs::from_bytes(&std::fs::read(out.join(DOCS_FILE)).unwrap()).unwrap();
+    assert_eq!(docs.docs["with"].compression, Some(outcome));
+    assert_eq!(docs.docs["without"].compression, None);
+    let v: Value = serde_json::from_slice(&std::fs::read(out.join(DOCS_FILE)).unwrap()).unwrap();
+    assert_eq!(v["docs"]["with"]["compression"]["stored_size"], json!(4000));
+    assert!(!v["docs"]["without"].as_object().unwrap().contains_key("compression"));
+}
