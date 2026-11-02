@@ -2,6 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../models/search_model.dart' show SearchModel;
+import '../pdf/index/pdf_index_app.dart';
+import '../pdf/index/pdf_index_ui.dart';
 import '../pdf/open_pdf.dart';
 import '../pdf/pdf_address.dart';
 import '../layout/adaptive.dart';
@@ -174,8 +177,12 @@ class _BrowseScreenState extends State<BrowseScreen> {
                   if (mounted) modules.addToHome(context, layout, Shortcut.page(address: address, title: sources.titleOf(z), library: 'Library'));
                 }),
       delete: () => sources.remove(z),
+      // The PDFs part: make the ZIM's PDFs searchable on this device (nothing shows while the core cannot, or it has none).
+      parts: pdfIndexShared == null ? null : (_) => PdfIndexPartRow(state: pdfIndexShared!, zim: pdfZimRef(sources, z), getModel: _getSearchModel),
     );
   }
+
+  Future<void> _getSearchModel() async => SearchModel.shared?.ensure();
 
   LibraryActions _libraryActions(LibraryItem l) => LibraryActions(
     title: libs!.titleOf(l),
@@ -226,7 +233,7 @@ class _BrowseScreenState extends State<BrowseScreen> {
       resizeToAvoidBottomInset: false,
       appBar: AppBar(title: const Text('Library'), actions: [?paneHideButton(context)]),
       body: ListenableBuilder(
-        listenable: Listenable.merge([b, sources, ?libs]),
+        listenable: Listenable.merge([b, sources, ?libs, ?pdfIndexShared]),
         builder: (context, _) {
           _maybeCheck();
           final transfers = b.transfers.values.toList();
@@ -294,7 +301,11 @@ class _BrowseScreenState extends State<BrowseScreen> {
       key: ValueKey('zim-${z.fileName}'),
       icon: sources.iconOf(z),
       title: sources.titleOf(z),
-      detail: [if (o != null && o.summary.isNotEmpty) o.summary, formatBytes(z.size)].join(' · '),
+      detail: [
+        if (o != null && o.summary.isNotEmpty) o.summary,
+        formatBytes(z.size),
+        ?pdfRowNote(pdfIndexShared?.partOf(pdfZimRef(sources, z))),
+      ].join(' · '),
       badge: badge,
       onTap: canOpen ? () => _openZim(z) : null,
       onHold: () => showLibraryMenu(context, _zimActions(z)),

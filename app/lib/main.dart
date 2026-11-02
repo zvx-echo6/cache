@@ -52,6 +52,9 @@ import 'settings/app_settings.dart';
 import 'models/model_downloads.dart';
 import 'models/recommendations.dart' show RecommendedModels;
 import 'models/search_model.dart';
+import 'pdf/index/pdf_index_app.dart';
+import 'pdf/index/pdf_index_core.dart' show kZimPdfIndexNotShared;
+import 'pdf/index/pdf_index_state.dart';
 import 'settings/data_kinds.dart';
 import 'settings/data_policy.dart';
 import 'settings/hub.dart';
@@ -143,6 +146,7 @@ class _CacheAppState extends State<CacheApp> {
     downloads: modelDownloads,
     modelsDir: () async => Directory('${((Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory()).path}/models'),
   );
+  late final PdfIndexState pdfIndex = appPdfIndex(sources: sources, searchModel: searchModel);
   late final MapsState maps = MapsState(
     engine: CoreLayerEngine(
       openCore: sources.whenCoreReady,
@@ -215,7 +219,8 @@ class _CacheAppState extends State<CacheApp> {
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
       local: () => [sources.indexesDir],
-      notShared: const {'libraries': kLibraryNotShared},
+      // A ZIM's PDF index (<zim>.pdfindex/) syncs, so its PDFs are indexed once on any device; its staging never does.
+      notShared: const {'libraries': kLibraryNotShared, 'library': kZimPdfIndexNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
     ),
@@ -487,6 +492,8 @@ class _CacheAppState extends State<CacheApp> {
     // The meaning search of the map uses the search model to embed the query; so do the library search and the assistant.
     SearchModel.shared = searchModel;
     sources.embedding = searchModel;
+    // Making a ZIM's PDFs searchable on this device, with the same search model.
+    pdfIndexShared = pdfIndex;
     app.addListener(_onApp);
     // Back on the screen: a weather update that is due runs now (iOS runs background tasks only when it chooses).
     _lifecycle = AppLifecycleListener(onResume: () {
@@ -556,6 +563,7 @@ class _CacheAppState extends State<CacheApp> {
     settingsRead.then((_) => regions.init());
     layout.init();
     sources.init();
+    unawaited(pdfIndex.init());
     libraries.init();
     browse.init();
     video.init();
@@ -645,6 +653,7 @@ class _CacheAppState extends State<CacheApp> {
     app.session.dispose();
     browse.dispose();
     nav.dispose();
+    pdfIndex.dispose();
     searchModel.dispose();
     libraries.dispose();
     sources.dispose();

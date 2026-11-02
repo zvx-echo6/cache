@@ -1,7 +1,10 @@
 package com.happylittlellc.cache
 
 import android.Manifest
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.BatteryManager
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -41,6 +44,24 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "co.cache/battery")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "read" -> result.success(battery())
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    // Making a library's PDFs searchable pauses by itself when the battery runs low and the phone is not plugged in.
+    // The sticky battery broadcast answers at once and needs no permission.
+    private fun battery(): Map<String, Any> {
+        val status: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = status?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = status?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val plugged = status?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val percent = if (level >= 0 && scale > 0) level * 100 / scale else -1
+        return mapOf("percent" to percent, "charging" to (plugged != 0))
     }
 
     private fun notificationsGranted() =

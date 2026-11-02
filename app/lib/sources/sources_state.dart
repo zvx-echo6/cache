@@ -12,6 +12,7 @@ import '../chat/system_prompt.dart';
 import '../chat/tool.dart';
 import '../files.dart';
 import '../maps/layers/starter_defs.dart';
+import '../pdf/index/pdf_index_core.dart' show PdfIndexPaths;
 import '../search/core_config.dart';
 import '../search/icu_data.dart';
 import '../search/search_access.dart';
@@ -756,6 +757,8 @@ class SourcesState extends ChangeNotifier implements SearchAccess {
       }
       final idx = Directory(_indexDir(z));
       if (idx.existsSync()) idx.deleteSync(recursive: true);
+      // Its PDF index, staging and any publish in progress go with it.
+      PdfIndexPaths(z.path).deleteAll();
     } catch (e) {
       error = 'Could not remove the file: $e';
     }

@@ -7,9 +7,10 @@ use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
 /// The app's patterns (app/lib/sources/libraries_state.dart kLibraryNotShared, app/lib/regions/regions_state.dart
-/// kRegionsNotShared and kMapLayersNotShared); keep them equal.
+/// kRegionsNotShared and kMapLayersNotShared, app/lib/pdf/index/pdf_index_core.dart kZimPdfIndexNotShared); keep them equal.
 fn app_patterns() -> Value {
     json!({
+        "library": ["*.pdfindex.partial", "*.pdfindex.tmp", "*.pdfindex/index"],
         "libraries": ["*/index"],
         "regions": ["index", "places/index", "**/*-shm", "**/*-journal"],
         "maps": ["tiles.sqlite*", "tilejson", "**/*-shm", "**/*-journal"],
@@ -91,6 +92,82 @@ fn globs_within_a_segment_and_at_any_depth() {
     }
     let mid = vec!["a*b*c".to_string()];
     assert!(excluded(&mid, "abc") && excluded(&mid, "aXbYc") && !excluded(&mid, "acb") && !excluded(&mid, "ab"));
+}
+
+/// A ZIM's PDF index: the published `<zim>.pdfindex/` is matched by nothing (it travels, vectors and all); this device's staging,
+/// a publish in progress and a keyword index built inside the published index are.
+#[test]
+fn zim_pdf_index_patterns() {
+    let p: Vec<String> = ["*.pdfindex.partial", "*.pdfindex.tmp", "*.pdfindex/index"].iter().map(|s| s.to_string()).collect();
+    for yes in [
+        "wikimed_en_2026-10.pdfindex.partial",
+        "wikimed_en_2026-10.pdfindex.partial/done.tsv",
+        "wikimed_en_2026-10.pdfindex.partial/shard/segment.bin",
+        "wikimed_en_2026-10.pdfindex.tmp",
+        "wikimed_en_2026-10.pdfindex.tmp/SHA256SUMS",
+        "wikimed_en_2026-10.pdfindex/index",
+        "wikimed_en_2026-10.pdfindex/index/meta.json",
+    ] {
+        assert!(excluded(&p, yes), "{yes} is excluded");
+    }
+    for no in [
+        "wikimed_en_2026-10.zim",
+        "wikimed_en_2026-10.zim.origin.json",
+        "wikimed_en_2026-10.pdfindex",
+        "wikimed_en_2026-10.pdfindex/cache-library.json",
+        "wikimed_en_2026-10.pdfindex/shard/segment.bin",
+        "wikimed_en_2026-10.pdfindex/documents.tsv",
+        "wikimed_en_2026-10.pdfindex/skipped.tsv",
+        "wikimed_en_2026-10.pdfindex/SHA256SUMS",
+        "wikimed_en_2026-10.pdfindex/indexes/x",
+        "wikimed_en_2026-10.pdfindex/shard/index/x",
+    ] {
+        assert!(!excluded(&p, no), "{no} syncs");
+    }
+}
+
+/// The ZIM folder end to end: the ZIM and its finished PDF index reach the other device; the staging and a publish in progress
+/// stay where they were made.
+#[test]
+fn a_zim_pdf_index_travels_and_its_staging_never_does() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (da, db) = (tmp.path().join("a"), tmp.path().join("b"));
+    let (za, zb) = (tmp.path().join("zims-a"), tmp.path().join("zims-b"));
+    let parts = [
+        "guide.zim",
+        "guide.pdfindex/cache-library.json",
+        "guide.pdfindex/shard/segment.bin",
+        "guide.pdfindex/documents.tsv",
+        "guide.pdfindex/skipped.tsv",
+        "guide.pdfindex/SHA256SUMS",
+    ];
+    let staging = ["other.pdfindex.partial/done.tsv", "other.pdfindex.partial/shard/segment.bin", "other.pdfindex.tmp/SHA256SUMS", "guide.pdfindex/index/meta.json"];
+    for f in parts.iter().chain(&staging) {
+        write(&za.join(f), &format!("A {f}"));
+    }
+    std::fs::create_dir_all(&zb).unwrap();
+    let (pa, pb) = (port(), port());
+    let a = engine(&da, "Desk", pa, true);
+    let b = engine(&db, "Phone", pb, true);
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    for (e, z) in [(&a, &za), (&b, &zb)] {
+        call(e, "share_add", json!({"id": "library", "name": "Library (library)", "path": z}));
+    }
+    std::thread::sleep(Duration::from_secs(6));
+    until("the ZIM and its PDF index on B", 90, &a, &b, || parts.iter().all(|f| zb.join(f).exists()));
+    rounds(&a, &b);
+    for f in &parts {
+        assert_eq!(std::fs::read_to_string(zb.join(f)).unwrap(), format!("A {f}"), "{f} travels whole");
+    }
+    for f in &staging {
+        assert!(!zb.join(f).exists(), "{f} must not travel");
+        assert!(za.join(f).exists(), "A keeps its {f}");
+    }
+    let st = call(&b, "status", json!({}));
+    assert_eq!(st["shares"][0]["files"], parts.len(), "{st}");
+    a.close();
+    b.close();
 }
 
 /// The Regions folders: every downloaded part travels; what a device fetched or cached for itself, and SQLite's -shm, never does.

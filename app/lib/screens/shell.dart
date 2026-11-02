@@ -20,6 +20,9 @@ import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
+import '../models/search_model.dart' show SearchModel;
+import '../pdf/index/pdf_index_app.dart';
+import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
@@ -121,6 +124,8 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    // PDF indexing's messages ("Another device finished this. Using its index.").
+    pdfIndexShared?.say = _sayIfMounted;
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
       if (e is MapRequested && mounted) _goModule(ModuleId.maps);
@@ -186,6 +191,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     widget.maps.removeListener(_onMaps);
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
@@ -428,6 +434,10 @@ class _ShellState extends State<Shell> {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WeatherPage(deps: _settingsDeps)));
   }
 
+  void _sayIfMounted(String text) {
+    if (mounted) _say(text);
+  }
+
   void _say(String text) {
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
@@ -580,6 +590,18 @@ class _ShellState extends State<Shell> {
     turnOn: _weatherTurnOn,
     setup: _setup,
     search: _search,
+    searchFootnote: pdfIndexShared == null
+        ? null
+        : PdfSearchNote(
+            state: pdfIndexShared!,
+            open: (z) {
+              if (z == null) {
+                _goModule(ModuleId.library);
+              } else {
+                unawaited(showPdfPartSheet(context, pdfIndexShared!, z, getModel: () async => SearchModel.shared?.ensure()));
+              }
+            },
+          ),
     onAsk: _askFromHome,
     onOpenSettings: _openSettings,
     onOpenShortcut: _openShortcut,
