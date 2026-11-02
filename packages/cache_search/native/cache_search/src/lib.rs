@@ -10,6 +10,7 @@ pub mod ext;
 pub mod ffi;
 pub mod handle;
 pub mod html;
+pub mod epub;
 pub mod index;
 pub mod job;
 pub mod kwbuild;

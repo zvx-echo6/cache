@@ -5,14 +5,15 @@
 //! (see `kwindex.rs`); the handle looks again whenever it polls, so a snapshot published by a job or a sync is searched
 //! without another `cs_set_sources`.
 
-use crate::error::{Error, Result};
+use crate::epub;
+use crate::error::{Error, ErrorCode, Result};
 use crate::handle::{Handle, Source};
 use crate::html;
 use crate::kwbuild;
 use crate::kwindex::{self, KwHit, KwIndex, StoredPiece, CAPTIONS, ZIM_CAPTIONS, ZIM_EPUB};
 use crate::snapshot;
 use crate::vtt;
-use crate::zimsrc;
+use crate::zimsrc::{self, RawEntry};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -452,6 +453,9 @@ impl Handle {
         let hit = idx
             .get(&pid)
             .ok_or_else(|| Error::not_found(format!("no piece {pid:?} in the {kind} index of {source_id}")))?;
+        if kind == ZIM_EPUB {
+            return self.read_epub(address, &source_id, idx, &hit, max_chars);
+        }
         // the passages from 60 s before to 60 s after, one line each: "[mm:ss] text"
         let (lo, hi) = (hit.start_ms.saturating_sub(READ_WINDOW_MS), hit.end_ms + READ_WINDOW_MS);
         let lines: Vec<String> = idx
@@ -467,6 +471,103 @@ impl Handle {
         };
         let (text, truncated) = html::cut_at_paragraph(full.trim(), max_chars);
         Ok(page_json(address, &caption_title(&hit), &text, truncated))
+    }
+
+    fn read_epub(
+        &self,
+        address: &str,
+        zim_id: &str,
+        idx: &KwIndex,
+        hit: &StoredPiece,
+        max_chars: usize,
+    ) -> Result<String> {
+        let heading = hit.heading_path.last().cloned().unwrap_or_default();
+        let head = if heading.is_empty() {
+            String::new()
+        } else {
+            format!("Chapter: {heading}\n\n")
+        };
+        // the chapter's own text from the EPUB, a few blocks before the passage onward; the stored pieces when the EPUB cannot be read
+        let from_epub = (|| -> Option<String> {
+            let bytes = epub_bytes(self, zim_id, &hit.item).ok()?;
+            let zip = epub::Zip::open(&bytes).ok()?;
+            let xhtml = String::from_utf8_lossy(&zip.read(&hit.chapter).ok()?).into_owned();
+            let blocks = epub::blocks(&xhtml);
+            let first = hit.block.saturating_sub(3) as u32;
+            let text: Vec<String> = blocks
+                .into_iter()
+                .filter(|b| b.n >= first && !b.text.is_empty())
+                .map(|b| b.text)
+                .collect();
+            (!text.is_empty()).then(|| text.join("\n\n"))
+        })();
+        let body = from_epub.unwrap_or_else(|| {
+            idx.chapter_pieces(&hit.item, &hit.chapter)
+                .into_iter()
+                .map(|p| p.text)
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        });
+        let body = if body.trim().is_empty() { hit.text.clone() } else { body };
+        let (text, truncated) = html::cut_at_paragraph(format!("{head}{body}").trim(), max_chars);
+        Ok(page_json(address, &epub_title(hit), &text, truncated))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Files inside an EPUB
+
+static LAST_EPUB: Mutex<Option<(String, Arc<Vec<u8>>)>> = Mutex::new(None);
+
+/// The bytes of an EPUB entry of a ZIM; the last one read is kept, since a chapter asks for its images and styles one by one.
+fn epub_bytes(h: &Handle, zim_id: &str, epub_path: &str) -> Result<Arc<Vec<u8>>> {
+    let key = format!("{zim_id}/{epub_path}");
+    if let Some((k, b)) = LAST_EPUB.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *k == key {
+            return Ok(b.clone());
+        }
+    }
+    let e = h.zim(zim_id)?.get(epub_path)?;
+    let bytes = Arc::new(e.bytes);
+    *LAST_EPUB.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, bytes.clone()));
+    Ok(bytes)
+}
+
+impl Handle {
+    /// `cs_zim_get` for `zim:<uuid>/<epub path>!/<inner path>`: the file inside the EPUB with its media type; for XHTML, with
+    /// `id="cache-b<n>"` on every block element (the numbering the index uses). `Ok(None)` when the path has no `!/`.
+    pub(crate) fn zim_get_in_epub(&self, zim_id: &str, path: &str) -> Result<Option<RawEntry>> {
+        let path = path.split('#').next().unwrap_or(path);
+        let Some((epub_path, inner)) = path.split_once("!/") else {
+            return Ok(None);
+        };
+        if epub_path.is_empty() || inner.is_empty() {
+            return Err(Error::not_found(format!("no file {inner:?} in epub {epub_path:?}")));
+        }
+        let bytes = epub_bytes(self, zim_id, epub_path)?;
+        let zip = epub::Zip::open(&bytes)?;
+        let candidates: Vec<String> = zimsrc::percent_decode(inner)
+            .into_iter()
+            .chain(std::iter::once(inner.to_string()))
+            .collect();
+        let name = candidates.iter().find(|c| zip.contains(c)).ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                format!("no file {inner:?} in epub {epub_path:?} of zim {zim_id}"),
+            )
+        })?;
+        let mut data = zip.read(name)?;
+        let mime = epub::mime_of(name);
+        if mime == "application/xhtml+xml" || mime == "text/html" {
+            data = epub::add_block_ids(&String::from_utf8_lossy(&data)).into_bytes();
+        }
+        let title = name.rsplit('/').next().unwrap_or(name).to_string();
+        Ok(Some(RawEntry {
+            bytes: data,
+            mime: mime.to_string(),
+            path: format!("{epub_path}!/{name}"),
+            title,
+        }))
     }
 }
 

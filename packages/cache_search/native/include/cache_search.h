@@ -227,6 +227,11 @@ char *cs_read(cs_handle *h, const char *address, int32_t max_chars);
  * the searches use, so they count against zim_budget_mb and keep that archive recently used; a ZIM libzim cannot open, and a
  * build without the feature, use the Rust zim crate reader. The bytes, MIME type, title and errors are identical either way.
  * address: "zim:<uuid>/<path>". *mime_out is set to a string freed with cs_free_string.
+ * Inside an EPUB: "zim:<uuid>/<epub path>!/<inner path>" (when no entry has that whole path) returns that file from the EPUB with
+ * a media type from its extension (XHTML application/xhtml+xml, CSS, images, fonts); an XHTML or HTML file has id="cache-b<n>"
+ * added to every p, li, h1-h6 and td start tag, numbered 0, 1, 2... in document order (an element that has an id keeps it and
+ * gets an empty <a id="cache-b<n>"></a> right after its start tag), the numbering the zim-epub index uses for a citation's
+ * "#cache-b<n>". "not_found" when the EPUB or the file is not there.
  * Returns NULL on error (cs_last_error). Free the buffer with cs_free_bytes. */
 uint8_t *cs_zim_get(cs_handle *h, const char *address, char **mime_out, int64_t *len_out);
 

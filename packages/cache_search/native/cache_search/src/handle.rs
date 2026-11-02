@@ -955,7 +955,15 @@ impl Handle {
 
     pub fn zim_get(&self, address: &str) -> Result<zimsrc::RawEntry> {
         let a = zimsrc::parse_address(address)?;
-        self.zim(&a.id)?.get(&a.path)
+        let z = self.zim(&a.id)?;
+        match z.get(&a.path) {
+            // an address with `!/` also names a file inside an EPUB (kwslot.rs); the entry itself is tried first
+            Err(e) if e.code == crate::ErrorCode::NotFound && a.path.contains("!/") => match self.zim_get_in_epub(&a.id, &a.path)? {
+                Some(entry) => Ok(entry),
+                None => Err(e),
+            },
+            other => other,
+        }
     }
 
     pub fn zim_main_page(&self, zim_id: &str) -> Result<String> {

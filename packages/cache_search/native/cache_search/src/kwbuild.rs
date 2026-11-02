@@ -13,6 +13,7 @@
 //! found through the places the open handles were given (`register_locations`, called by `set_sources`); `video_dir` and
 //! `zim_path` in the parameters override that for a host that runs the job without a handle.
 
+use crate::epub;
 use crate::error::{Error, Result};
 use crate::index::{make_analyzer, tv, Lock, Outcome, ANALYZER, LOCK_FILE};
 use crate::kwindex::{
@@ -465,6 +466,130 @@ impl ItemSource for ZimCaptionsSource {
     }
 }
 
+struct ZimEpubSource {
+    src: ZimSource,
+    media: ZimMedia,
+}
+
+/// The pieces of one EPUB: chapter by chapter in spine order, each chapter cut into blocks and chunked.
+pub fn epub_pieces(bytes: &[u8]) -> Result<(Option<String>, Vec<StoredPiece>)> {
+    let zip = epub::Zip::open(bytes)?;
+    let pkg = epub::package(&zip);
+    let mut out: Vec<StoredPiece> = Vec::new();
+    for chapter in &pkg.spine {
+        let Ok(raw) = zip.read(chapter) else { continue };
+        let xhtml = String::from_utf8_lossy(&raw);
+        let mut elements: Vec<cache_chunk::Element> = Vec::new();
+        for b in epub::blocks(&xhtml) {
+            if b.text.is_empty() {
+                continue;
+            }
+            elements.push(if b.level > 0 {
+                cache_chunk::Element::Heading {
+                    level: b.level,
+                    text: b.text,
+                    page: b.n as usize,
+                }
+            } else {
+                cache_chunk::Element::Para {
+                    text: b.text,
+                    page: b.n as usize,
+                    bullet: b.item,
+                    aside: false,
+                }
+            });
+        }
+        for p in cache_chunk::chunk(&elements) {
+            out.push(StoredPiece {
+                text: p.text,
+                chapter: chapter.clone(),
+                block: p.page as u64,
+                heading_path: p.heading_path,
+                ..Default::default()
+            });
+        }
+    }
+    Ok((pkg.title, out))
+}
+
+impl ItemSource for ZimEpubSource {
+    fn tokenizer(&self) -> String {
+        crate::index::tokenizer_name_for(self.src.language.as_deref()).to_string()
+    }
+
+    fn name(&self) -> String {
+        zim_name_of(&self.src)
+    }
+
+    fn extra(&self) -> Map<String, Value> {
+        let mut m = Map::new();
+        m.insert("zim_uuid".into(), json!(self.src.id));
+        m.insert("zim_name".into(), json!(zim_name_of(&self.src)));
+        m
+    }
+
+    fn items(&self) -> Result<Vec<String>> {
+        Ok(self.media.epubs.iter().map(|(p, _)| p.clone()).collect())
+    }
+
+    fn load(&self, key: &str, previous: Option<&Previous>) -> Result<Item> {
+        let e = self.src.get(key)?;
+        let size = e.bytes.len() as u64;
+        if e.bytes.len() > MAX_EPUB_BYTES {
+            return Ok(Item::Skipped {
+                reason: "too_large".into(),
+                size: Some(size),
+                sha256: String::new(),
+            });
+        }
+        let sha = sha_hex(&e.bytes);
+        let entry_title = self
+            .media
+            .epubs
+            .iter()
+            .find(|(p, _)| p == key)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_default();
+        if let Some(stored) = previous.and_then(|p| p.reusable(key, &sha)) {
+            let title = stored.first().map(|p| p.title.clone());
+            return Ok(Item::Added(Loaded {
+                title,
+                pieces: stored,
+                size: Some(size),
+                sha256: sha,
+                reused: true,
+            }));
+        }
+        let (book, pieces) = match epub_pieces(&e.bytes) {
+            Ok(r) => r,
+            Err(_) => {
+                return Ok(Item::Skipped {
+                    reason: "damaged".into(),
+                    size: Some(size),
+                    sha256: sha,
+                })
+            }
+        };
+        if pieces.is_empty() {
+            return Ok(Item::Skipped {
+                reason: "no_text".into(),
+                size: Some(size),
+                sha256: sha,
+            });
+        }
+        let title = book
+            .or_else(|| (!entry_title.is_empty() && entry_title != key).then_some(entry_title))
+            .unwrap_or_else(|| stem_title(key));
+        Ok(Item::Added(Loaded {
+            title: Some(title),
+            pieces,
+            size: Some(size),
+            sha256: sha,
+            reused: false,
+        }))
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // The record of a build
 
@@ -889,7 +1014,7 @@ pub fn run(
         req.src = if req.kind == ZIM_CAPTIONS {
             Box::new(ZimCaptionsSource { src: zim, media })
         } else {
-            return Err(Error::unsupported("zim-epub is not built by this core yet"));
+            Box::new(ZimEpubSource { src: zim, media })
         };
     }
     if cancelled() {

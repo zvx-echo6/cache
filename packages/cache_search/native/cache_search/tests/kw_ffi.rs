@@ -133,6 +133,86 @@ fn write_zim(path: &Path, uuid: &str, name: &str, entries: &[(&str, &str, &str, 
     std::fs::write(path, out).unwrap();
 }
 
+/// A zip of stored members.
+fn zip(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut dir: Vec<u8> = Vec::new();
+    for (name, data) in members {
+        let off = out.len() as u32;
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        dir.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        dir.extend_from_slice(&[20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        dir.extend_from_slice(&0u32.to_le_bytes());
+        dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        dir.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        dir.extend_from_slice(&[0u8; 12]);
+        dir.extend_from_slice(&off.to_le_bytes());
+        dir.extend_from_slice(name.as_bytes());
+    }
+    let (dir_off, dir_len) = (out.len() as u32, dir.len() as u32);
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out.extend_from_slice(&(members.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(members.len() as u16).to_le_bytes());
+    out.extend_from_slice(&dir_len.to_le_bytes());
+    out.extend_from_slice(&dir_off.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+fn words(seed: &str, n: usize) -> String {
+    // sentences of 12 words that all mention the seed, so a keyword search finds them
+    (0..n / 12 + 1)
+        .map(|i| format!("In part {i} the {seed} guidance says that people should check the plan and keep every neighbour informed."))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// An EPUB: chapters are (file name, heading, topic word, number of words).
+fn epub(title: &str, chapters: &[(&str, &str, &str, usize)]) -> Vec<u8> {
+    let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    let mut manifest = String::from(
+        r#"<item id="css" href="style.css" media-type="text/css"/><item id="img" href="pic.png" media-type="image/png"/>"#,
+    );
+    let mut spine = String::new();
+    for (i, (file, _, _, _)) in chapters.iter().enumerate() {
+        manifest.push_str(&format!(
+            r#"<item id="c{i}" href="{file}" media-type="application/xhtml+xml"/>"#
+        ));
+        spine.push_str(&format!(r#"<itemref idref="c{i}"/>"#));
+    }
+    let opf = format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title></metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>"#
+    );
+    let mut members: Vec<(String, Vec<u8>)> = vec![
+        ("mimetype".into(), b"application/epub+zip".to_vec()),
+        ("META-INF/container.xml".into(), container.as_bytes().to_vec()),
+        ("OEBPS/content.opf".into(), opf.into_bytes()),
+        ("OEBPS/style.css".into(), b"p { margin: 0 }".to_vec()),
+        ("OEBPS/pic.png".into(), vec![0x89, b'P', b'N', b'G', 1, 2, 3]),
+    ];
+    for (file, heading, topic, n) in chapters {
+        let body = format!(
+            "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{heading}</title><link rel=\"stylesheet\" href=\"style.css\"/></head><body><h1>{heading}</h1><p>{}</p><p>{}</p><img src=\"pic.png\" alt=\"\"/></body></html>",
+            words(topic, *n),
+            words(&format!("{topic} second"), n / 2)
+        );
+        members.push((format!("OEBPS/{file}"), body.into_bytes()));
+    }
+    let refs: Vec<(&str, Vec<u8>)> = members.iter().map(|(n, d)| (n.as_str(), d.clone())).collect();
+    zip(&refs)
+}
+
 fn srt(cues: &[(u32, &str)]) -> Vec<u8> {
     // one cue every 4 seconds starting at `start`, numbered; times as SRT writes them
     let mut s = String::new();
@@ -766,5 +846,251 @@ fn zim_captions_skip_hls_pair_videos_and_cite_the_zim() {
         tree(&src_dir.join("snap")),
         snap_before,
         "a published snapshot is never written to"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// zim-epub
+
+#[test]
+fn zim_epub_build_cite_read_serve_and_reuse_across_editions() {
+    const U1: &str = "0badc0de-0000-4000-8000-000000000b01";
+    const U2: &str = "0badc0de-0000-4000-8000-000000000b02";
+    let t = TempDir::new("epub");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    let guide = epub(
+        "Field Guide",
+        &[
+            ("ch1.xhtml", "Floods", "flood", 300),
+            ("ch2.xhtml", "Wildfire", "wildfire", 300),
+        ],
+    );
+    let second = epub("Second Book", &[("a.xhtml", "Stoves", "stove", 200)]);
+    let third = epub("Third Book", &[("a.xhtml", "Radios", "radio", 200)]);
+    let (d1, d2) = (t.0.join("e1"), t.0.join("e2"));
+    std::fs::create_dir_all(&d1).unwrap();
+    std::fs::create_dir_all(&d2).unwrap();
+    let (z1, z2) = (d1.join("media.zim"), d2.join("media.zim"));
+    write_zim(
+        &z1,
+        U1,
+        "media_test",
+        &media_entries(&[
+            ("guide.epub", guide.clone()),
+            ("second.epub", second.clone()),
+            ("third.epub", third.clone()),
+        ]),
+    );
+    let mut h = open(&[&z1], &idx, &vdir);
+    let st = wait_status(&mut h, |v| v["sources"][0]["epubindex"]["entries"].is_u64());
+    assert_eq!(
+        (
+            st["sources"][0]["epubindex"]["entries"].as_u64(),
+            st["sources"][0]["epubindex"]["needs_build"].as_bool()
+        ),
+        (Some(3), Some(true))
+    );
+
+    let mut p = job_params(&idx, "zim-epub", U1);
+    p["batch_items"] = json!(1);
+    p["crash_after"] = json!(2);
+    assert_eq!(wait(&start(p.clone()))["state"], "failed");
+    p.as_object_mut().unwrap().remove("crash_after");
+    let done = run(p);
+    assert_eq!(
+        (
+            done["result"]["items"].as_u64(),
+            done["result"]["resumed"].as_u64(),
+            done["result"]["skipped"].as_u64()
+        ),
+        (Some(3), Some(2), Some(0)),
+        "{done}"
+    );
+    let src_dir = idx.join("zim-epub").join(U1);
+    assert!(src_dir
+        .join("snap")
+        .read_dir()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("epubs.tsv")
+        .is_file());
+    let st = wait_status(&mut h, |v| v["sources"][0]["epubindex"]["state"] == "ready");
+    assert_eq!(st["sources"][0]["epubindex"]["needs_build"], false);
+    assert_eq!(st["sources"][0]["epubindex"]["epubs"], 3);
+    let snap_before = tree(&src_dir.join("snap"));
+
+    // search and cite
+    let r = search(&mut h, "wildfire guidance", json!({"kinds": ["zim-epub"]}));
+    let first = &r["results"][0];
+    let addr = first["address"].as_str().unwrap().to_string();
+    assert!(addr.starts_with(&format!("zimepub:{U1}/Books/guide.epub@")), "{addr}");
+    assert_eq!(first["title"], "Field Guide, Wildfire");
+    assert_eq!(first["source_kind"], "zim");
+    let (_, c) = h.last_cites.iter().find(|(a, _)| *a == addr).unwrap().clone();
+    let link = c.link.clone().unwrap();
+    let (path, frag) = link.split_once('#').unwrap();
+    assert_eq!(path, format!("zim:{U1}/Books/guide.epub!/OEBPS/ch2.xhtml"));
+    assert!(frag.starts_with("cache-b"), "{frag}");
+    assert!(c.quote.as_ref().unwrap().contains("wildfire"));
+    assert!(c.time.is_none());
+    // read: the chapter around the passage, with its heading
+    let read: Value = serde_json::from_str(&h.read(&addr, 6000).unwrap()).unwrap();
+    assert_eq!(read["title"], "Field Guide, Wildfire");
+    let text = read["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("Chapter: Wildfire\n\n") && text.contains("wildfire guidance"),
+        "{}",
+        &text[..text.len().min(200)]
+    );
+
+    // serving: the chapter has the cache-b ids, numbered as the index numbered the blocks; other files come with their types
+    let e = h.zim_get(path).unwrap();
+    assert_eq!(e.mime, "application/xhtml+xml");
+    let html = String::from_utf8(e.bytes).unwrap();
+    let id = format!("id=\"{frag}\"");
+    let at = html.find(&id).unwrap_or_else(|| panic!("{id} not in {html}"));
+    let after = &html[at..];
+    let body = after[after.find('>').unwrap() + 1..].split('<').next().unwrap();
+    let quote_start: String = c
+        .quote
+        .as_ref()
+        .unwrap()
+        .split_whitespace()
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        body.contains(&quote_start)
+            || c.quote
+                .as_ref()
+                .unwrap()
+                .contains(body.split_whitespace().take(4).collect::<Vec<_>>().join(" ").as_str()),
+        "block {frag} starts {body:?}, the quote {quote_start:?}"
+    );
+    assert!(html.contains("id=\"cache-b0\"") && html.contains("<h1 id=\"cache-b0\">"));
+    let css = h
+        .zim_get(&format!("zim:{U1}/Books/guide.epub!/OEBPS/style.css"))
+        .unwrap();
+    assert_eq!(
+        (css.mime.as_str(), css.bytes.as_slice()),
+        ("text/css", b"p { margin: 0 }".as_slice())
+    );
+    let png = h.zim_get(&format!("zim:{U1}/Books/guide.epub!/OEBPS/pic.png")).unwrap();
+    assert_eq!(png.mime, "image/png");
+    assert_eq!(
+        h.zim_get(&format!("zim:{U1}/Books/guide.epub!/OEBPS/nope.png"))
+            .err()
+            .unwrap()
+            .code,
+        cache_search::ErrorCode::NotFound
+    );
+    assert_eq!(
+        h.zim_get(&format!("zim:{U1}/Books/missing.epub!/a.png"))
+            .err()
+            .unwrap()
+            .code,
+        cache_search::ErrorCode::NotFound
+    );
+    // plain entries are served as before
+    assert_eq!(h.zim_get(&format!("zim:{U1}/Alpha")).unwrap().mime, "text/html");
+    assert_eq!(
+        tree(&src_dir.join("snap")),
+        snap_before,
+        "a published snapshot is never written to"
+    );
+
+    // the next edition: guide.epub is the same file, second.epub changed, third.epub is gone, fourth.epub is new
+    let second_v2 = epub("Second Book", &[("a.xhtml", "Stoves", "stove", 260)]);
+    let fourth = epub("Fourth Book", &[("a.xhtml", "Tents", "tent", 200)]);
+    write_zim(
+        &z2,
+        U2,
+        "media_test",
+        &media_entries(&[
+            ("guide.epub", guide),
+            ("second.epub", second_v2),
+            ("fourth.epub", fourth),
+        ]),
+    );
+    let mut h2 = open(&[&z1, &z2], &idx, &vdir);
+    let mut p = job_params(&idx, "zim-epub", U2);
+    p["previous"] = json!({"zim_uuid": U1});
+    let done = run(p);
+    assert_eq!(
+        (done["result"]["items"].as_u64(), done["result"]["reused"].as_u64()),
+        (Some(3), Some(1)),
+        "only the unchanged EPUB is copied: {done}"
+    );
+    let r = loop {
+        let r = search(
+            &mut h2,
+            "wildfire guidance",
+            json!({"kinds": ["zim-epub"], "sources": [U2]}),
+        );
+        if !r["results"].as_array().unwrap().is_empty() {
+            break r;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(r["results"][0]["address"]
+        .as_str()
+        .unwrap()
+        .starts_with(&format!("zimepub:{U2}/")));
+    let radio = search(
+        &mut h2,
+        "radio guidance",
+        json!({"kinds": ["zim-epub"], "sources": [U2]}),
+    );
+    assert!(
+        radio["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| !r["title"].as_str().unwrap().contains("Third Book")),
+        "third.epub is not in the new edition"
+    );
+    assert!(!search(
+        &mut h2,
+        "tent guidance",
+        json!({"kinds": ["zim-epub"], "sources": [U2]})
+    )["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn damaged_and_empty_epubs_are_skipped_not_fatal() {
+    const U1: &str = "0badc0de-0000-4000-8000-000000000c01";
+    let t = TempDir::new("badepub");
+    let (idx, vdir) = (t.0.join("indexes"), t.0.join("video"));
+    let zim = t.0.join("media.zim");
+    let good = epub("Good", &[("a.xhtml", "Ok", "sturdy", 200)]);
+    let empty = epub("Empty", &[]);
+    write_zim(
+        &zim,
+        U1,
+        "media_test",
+        &media_entries(&[
+            ("good.epub", good),
+            ("broken.epub", b"this is not a zip".to_vec()),
+            ("empty.epub", empty),
+        ]),
+    );
+    let _h = open(&[&zim], &idx, &vdir);
+    let done = run(job_params(&idx, "zim-epub", U1));
+    assert_eq!(
+        (done["result"]["items"].as_u64(), done["result"]["skipped"].as_u64()),
+        (Some(1), Some(2)),
+        "{done}"
+    );
+    let snap = snap_dirs(&idx.join("zim-epub").join(U1));
+    let tsv = std::fs::read_to_string(snap[0].join("epubs.tsv")).unwrap();
+    assert!(
+        tsv.contains("Books/broken.epub") && tsv.contains("skipped:damaged") && tsv.contains("skipped:no_text"),
+        "{tsv}"
     );
 }
