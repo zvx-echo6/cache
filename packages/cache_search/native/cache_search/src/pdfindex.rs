@@ -26,8 +26,8 @@ use tantivy::{Index, IndexReader, ReloadPolicy, TantivyDocument, Term};
 
 /// The version of this index's schema (the manifest's `format`).
 pub const FORMAT: u32 = 1;
-/// The chunker the pieces were made with (`server/builder`'s `CHUNKER_VERSION`). Changes with the shared chunker crate.
-pub const CHUNKER_VERSION: u32 = 1;
+/// The chunker the pieces were made with (the shared `cache_chunk` crate's version).
+pub use cache_chunk::CHUNKER_VERSION;
 /// The Tantivy version the files are written by (the manifest's `tantivy`).
 pub const TANTIVY: &str = "0.27";
 /// The manifest's `kind`.
@@ -151,11 +151,88 @@ fn extra_u64(m: &Manifest, key: &str) -> u64 {
 /// An opened snapshot.
 pub struct PdfIndex {
     pub snapshot: String,
+    /// The snapshot folder.
+    pub dir: PathBuf,
     pub manifest: Manifest,
     index: Index,
     reader: IndexReader,
     pub fields: Fields,
     pub docs: u64,
+}
+
+/// A piece as stored.
+#[derive(Debug, Clone)]
+pub struct StoredPiece {
+    pub i: u64,
+    pub title: String,
+    pub text: String,
+    pub page: String,
+    pub pdf_page: u64,
+    pub pdf_page_end: Option<u64>,
+    pub heading_path: Vec<String>,
+}
+
+/// One row of a snapshot's `pdfs.tsv`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PdfRow {
+    pub path: String,
+    pub size: Option<u64>,
+    pub sha256: String,
+    pub pieces: u64,
+    /// `added` or `skipped:<reason>`.
+    pub status: String,
+}
+
+/// `pdfs.tsv` in a snapshot: `path<TAB>size<TAB>sha256<TAB>pieces<TAB>status` per PDF (tab, newline and backslash in a path are
+/// written `\t`, `\n`, `\\`).
+pub const PDFS_FILE: &str = "pdfs.tsv";
+
+pub fn rows_to_tsv(rows: &[PdfRow]) -> String {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n");
+    let mut out = String::new();
+    for r in rows {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\n",
+            esc(&r.path),
+            r.size.map(|n| n.to_string()).unwrap_or_default(),
+            r.sha256,
+            r.pieces,
+            r.status
+        ));
+    }
+    out
+}
+
+pub fn rows_from_tsv(text: &str) -> Vec<PdfRow> {
+    let unesc = |s: &str| {
+        let mut out = String::new();
+        let mut it = s.chars();
+        while let Some(c) = it.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match it.next() {
+                Some('t') => out.push('\t'),
+                Some('n') => out.push('\n'),
+                Some(o) => out.push(o),
+                None => out.push('\\'),
+            }
+        }
+        out
+    };
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (f.len() == 5).then(|| PdfRow {
+                path: unesc(f[0]),
+                size: f[1].parse().ok(),
+                sha256: f[2].to_string(),
+                pieces: f[3].parse().unwrap_or(0),
+                status: f[4].to_string(),
+            })
+        })
+        .collect()
 }
 
 /// A keyword hit: a piece.
@@ -183,7 +260,7 @@ impl PdfIndex {
         let fields = fields_of(&index)?;
         let reader = tv(index.reader_builder().reload_policy(ReloadPolicy::Manual).try_into())?;
         let docs = reader.searcher().num_docs();
-        Ok(PdfIndex { snapshot: snapshot.to_string(), manifest, index, reader, fields, docs })
+        Ok(PdfIndex { snapshot: snapshot.to_string(), dir: dir.to_path_buf(), manifest, index, reader, fields, docs })
     }
 
     fn hit_of(
@@ -235,6 +312,32 @@ impl PdfIndex {
         self.hit_of(&searcher, addr, 0.0, 1.0)
     }
 
+    /// Every stored piece of the PDF `zim_path`, in document order (for reusing them in a later edition's index).
+    pub fn pieces_of(&self, zim_path: &str) -> Vec<StoredPiece> {
+        let searcher = self.reader.searcher();
+        let q = TermQuery::new(Term::from_field_text(self.fields.zim_path, zim_path), IndexRecordOption::Basic);
+        let Ok(found) = searcher.search(&q, &DocSetCollector) else { return Vec::new() };
+        let f = &self.fields;
+        let mut v: Vec<StoredPiece> = found
+            .into_iter()
+            .filter_map(|addr| {
+                let doc: TantivyDocument = searcher.doc(addr).ok()?;
+                let s = |fl: Field| doc.get_first(fl).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                Some(StoredPiece {
+                    i: doc.get_first(f.piece).and_then(|x| x.as_u64()).unwrap_or(0),
+                    title: s(f.title),
+                    text: s(f.text),
+                    page: s(f.page),
+                    pdf_page: doc.get_first(f.pdf_page).and_then(|x| x.as_u64()).unwrap_or(0),
+                    pdf_page_end: doc.get_first(f.pdf_page_end).and_then(|x| x.as_u64()),
+                    heading_path: serde_json::from_str(&s(f.heading_path)).unwrap_or_default(),
+                })
+            })
+            .collect();
+        v.sort_by_key(|p| p.i);
+        v
+    }
+
     /// The text of PDF page `pdf_page` of the PDF `zim_path`: every piece that starts on it, in document order, joined by
     /// blank lines.
     pub fn page_text(&self, zim_path: &str, pdf_page: u64) -> String {
@@ -269,6 +372,45 @@ impl PdfIndex {
         pieces.sort();
         pieces.into_iter().map(|(_, t)| t).collect::<Vec<_>>().join("\n\n")
     }
+}
+
+/// `cs_pdf_chunk`: `{"pages":[{"index","label","text"}]}` -> `{"pieces":[{"i","text","page","pdf_page","pdf_page_end"?,
+/// "heading_path"}],"empty_pages":[...],"chunker":N}`. Pure: the shared chunker on plain page text (nothing is read or written).
+pub fn chunk_request(request_json: &str) -> Result<String> {
+    let v: Value = serde_json::from_str(request_json)?;
+    let arr = v.get("pages").and_then(Value::as_array).ok_or_else(|| Error::bad_json("pages must be an array"))?;
+    let mut pages = Vec::with_capacity(arr.len());
+    for (k, p) in arr.iter().enumerate() {
+        let bad = |what: &str| Error::bad_json(format!("pages[{k}]: {what}"));
+        pages.push(cache_chunk::PageInput {
+            index: p.get("index").and_then(Value::as_u64).ok_or_else(|| bad("index must be a whole number from 0"))?
+                as usize,
+            label: match p.get("label") {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Number(n)) => n.to_string(),
+                Some(_) => return Err(bad("label must be text")),
+            },
+            text: match p.get("text") {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(s)) => s.clone(),
+                Some(_) => return Err(bad("text must be text")),
+            },
+        });
+    }
+    let done = cache_chunk::chunk_pages(&pages);
+    let pieces: Vec<Value> = done
+        .pieces
+        .into_iter()
+        .map(|p| {
+            let mut o = json!({"i": p.i, "text": p.text, "page": p.page, "pdf_page": p.pdf_page, "heading_path": p.heading_path});
+            if let Some(e) = p.pdf_page_end {
+                o["pdf_page_end"] = json!(e);
+            }
+            o
+        })
+        .collect();
+    Ok(json!({"pieces": pieces, "empty_pages": done.empty_pages, "chunker": CHUNKER_VERSION}).to_string())
 }
 
 /// `zimpdf:<zim uuid>/<piece key>`: the address of a piece. The key is escaped like a ZIM path.
@@ -316,6 +458,43 @@ mod tests {
         assert!(a.starts_with("zimpdf:0badc0de"));
         assert_eq!(parse_address(&a).unwrap(), (id.to_string(), "Manuals/a#1.pdf@3".to_string()));
         assert_eq!(link_of(id, "Manuals/a#1.pdf", 4), format!("zim:{id}/Manuals/a%231.pdf#page=4"));
+    }
+
+    #[test]
+    fn chunk_request_makes_pieces_and_lists_empty_pages() {
+        let text = "First sentence of the page. Second sentence follows here. Third one ends it.";
+        let req = json!({"pages": [{"index": 0, "label": "i", "text": text}, {"index": 1, "label": "", "text": "  \n"}, {"index": 2, "label": "3", "text": text}]});
+        let out: Value = serde_json::from_str(&chunk_request(&req.to_string()).unwrap()).unwrap();
+        assert_eq!(out["chunker"], CHUNKER_VERSION);
+        assert_eq!(out["empty_pages"], json!([1]));
+        let p = out["pieces"].as_array().unwrap();
+        assert!(!p.is_empty());
+        assert_eq!(p[0]["i"], 0);
+        assert_eq!(p[0]["page"], "i");
+        assert_eq!(p[0]["pdf_page"], 1);
+        assert!(p[0]["heading_path"].is_array());
+        assert!(chunk_request("{}").is_err());
+    }
+
+    #[test]
+    fn pdfs_tsv_round_trips() {
+        let rows = vec![
+            PdfRow {
+                path: "a/b\tc.pdf".into(),
+                size: Some(10),
+                sha256: "ab".into(),
+                pieces: 3,
+                status: "added".into(),
+            },
+            PdfRow {
+                path: "z.pdf".into(),
+                size: None,
+                sha256: String::new(),
+                pieces: 0,
+                status: "skipped:no_text".into(),
+            },
+        ];
+        assert_eq!(rows_from_tsv(&rows_to_tsv(&rows)), rows);
     }
 
     #[test]

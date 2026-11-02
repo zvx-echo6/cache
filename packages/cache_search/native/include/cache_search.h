@@ -221,8 +221,8 @@ char *cs_zim_main_page(cs_handle *h, const char *zim_id);
  *   <indexes_dir>/zim-pdf/<zim uuid>/snap/<build-id>/  published: Tantivy files and manifest.json, written last
  * A snapshot is used only when manifest.json is there, every listed file has the listed size and sha256, its kind and source id
  * match, and its format, Tantivy version, tokenizer and chunker are ones this core reads. Of several usable snapshots every device
- * uses the earliest "created", then the lowest build id; the core removes, on this device only, the others except one newer
- * one kept as a rollback. A published snapshot is never written to (not even by opening it). Attach happens in cs_open and
+ * uses the earliest "created", then the lowest build id; the core removes, on this device only, the usable ones other than that
+ * one and the newest usable one older than it (the rollback). A published snapshot is never written to (not even by opening it). Attach happens in cs_open and
  * cs_set_sources (snapshots are checked and opened on a background thread; cs_status shows "pdfindex"); call cs_set_sources
  * again after a snapshot is published or arrives by sync.
  * Search results from it have the address "zimpdf:<zim uuid>/<pdf path>@<piece>", title "<title>, p. <printed page label>"
@@ -235,21 +235,35 @@ char *cs_zim_main_page(cs_handle *h, const char *zim_id);
  * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id. */
 char *cs_zim_pdfs(cs_handle *h, const char *zim_id);
 
+/* cs_pdf_chunk: pure (no handle, nothing read or written): the shared passage chunker (packages/cache_chunk) on the text of a
+ * PDF's pages. {"pages":[{"index" (0-based),"label" (printed page label, may be ""),"text"}]} ->
+ * {"pieces":[{"i","text","page" (label, or the 1-based PDF page as text without one),"pdf_page" (1-based),"pdf_page_end"? (only
+ * when the piece crosses a page break),"heading_path":[]}],"empty_pages":[0-based indexes with no text],"chunker":N}. Pieces are
+ * verbatim and about 200 words. "chunker" is the rule's version; an index built with another is not used. NULL on bad input. */
+char *cs_pdf_chunk(const char *request_json);
+
 /* The build session (handle-less; resumable across kills). Every call takes {"indexes_dir","zim_uuid"} (or a session from open).
- * cs_pdfindex_open({"indexes_dir","zim_uuid","zim_name","language"?}) -> {"session":N,"done":[paths added],"skipped":[{"path",
- *   "reason"}],"pieces":N}. Opens or creates .build/ (language is the ZIM's Language, which picks the stemmer; English when
- *   absent). A .build made for another uuid, format, chunker or tokenizer is discarded and restarted. "busy" while another
- *   session or the finish job has it.
- * cs_pdfindex_add(session, {"path","title","pieces":[{"i","text","page","pdf_page","pdf_page_end"?,"heading_path"}]}) ->
- *   {"pieces":total,"committed":n}. Replaces any pieces of that path, then adds. All or nothing per PDF. Durable in batches:
+ * cs_pdfindex_open({"indexes_dir","zim_uuid","zim_name","language"?,"previous"?:{"zim_uuid"}}) -> {"session":N,"done":[paths
+ *   added],"skipped":[{"path","reason"}],"pieces":N,"reusable":[{"path","size","sha256"}]}. Opens or creates .build/ (zim_name is
+ *   the ZIM's metadata Name; language is the ZIM's Language, which picks the stemmer; English when absent). A .build made for
+ *   another uuid, format, chunker or tokenizer is discarded and restarted. "busy" while another session or the finish job has
+ *   it. "previous" names an older edition of the ZIM: when it has a usable snapshot of the same zim_name, "reusable" lists the
+ *   PDFs added there (with the size and sha256 of their bytes), else it is [].
+ * cs_pdfindex_add(session, {"path","title","pieces":[{"i","text","page","pdf_page","pdf_page_end"?,"heading_path"}],"size"?,
+ *   "sha256"?}) -> {"pieces":total,"committed":n}. size and sha256 are those of the PDF's bytes (they are recorded in the
+ *   snapshot's pdfs.tsv). Replaces any pieces of that path, then adds. All or nothing per PDF. Durable in batches:
  *   the core commits about every 20 PDFs or 30 s and records a path as done only after the commit that holds it, so a kill
  *   redoes at most the PDFs after the last commit. "committed" counts the PDFs durably recorded, added and skipped.
- * cs_pdfindex_skip(session, {"path","reason":"no_text"|"locked"|"damaged"}) -> {"skipped":N}
+ * cs_pdfindex_reuse(session, {"path","sha256"}) -> {"reused":true,"pieces":n} | {"reused":false}: when the "previous" snapshot holds
+ *   that PDF with that sha256, its stored pieces are copied into this build (no extraction, no chunking) and the PDF is
+ *   recorded like an add; otherwise nothing changes and the app extracts as usual.
+ * cs_pdfindex_skip(session, {"path","reason":"no_text"|"locked"|"damaged","size"?,"sha256"?}) -> {"skipped":N}
  * cs_pdfindex_close(session) -> {"pieces","committed"}: commits and keeps .build for resume.
  * cs_pdfindex_discard({"indexes_dir","zim_uuid"}) -> {"discarded":bool}: deletes .build ("busy" while it is in use).
  * Publishing is the job kind "pdfindex_finish" (cs_job_start) below. All of these return NULL with cs_last_error(NULL) on failure. */
 char *cs_pdfindex_open(const char *params_json);
 char *cs_pdfindex_add(uint64_t session, const char *params_json);
+char *cs_pdfindex_reuse(uint64_t session, const char *params_json);
 char *cs_pdfindex_skip(uint64_t session, const char *params_json);
 char *cs_pdfindex_close(uint64_t session);
 char *cs_pdfindex_discard(const char *params_json);
@@ -935,9 +949,10 @@ uint8_t *cs_layers_tile(cs_handle *h, const char *layer, int32_t z, int32_t x, i
  *   dense vector of 1024 dimensions, Cosine). Made in a hidden folder beside out_path and renamed into place. Progress
  *   in steps, total 3.
  * kind "pdfindex_finish": {"indexes_dir","zim_uuid"}
- *   publishes the PDF index build of a ZIM: merges .build/ to one segment, copies its files with their sha256 into
- *   .build/publish-<build-id>/, writes manifest.json there last (kind "zim-pdf", source_id, format, tantivy, tokenizer, chunker,
- *   core, created, zim_uuid, zim_name, pdfs, pieces, skipped, files [path,size,sha256]), renames the folder to
+ *   publishes the PDF index build of a ZIM: merges .build/ to one segment, moves its files into
+ *   .build/publish-<build-id>/ (hashing them with sha256 as they are read), writes manifest.json there last (kind "zim-pdf", source_id, format, tantivy, tokenizer, chunker,
+ *   core, created, zim_uuid, zim_name, pdfs, pieces, skipped, files [path,size,sha256]; the files are MOVED, not copied, and
+ *   include pdfs.tsv: path, size, sha256, pieces, status "added"|"skipped:<reason>" per PDF), renames the folder to
  *   snap/<build-id>/ in one step and removes .build. cs_job_start fails with "not_found" (no build) or "busy" (a session or
  *   another finish has it). The progress JSON adds "phase":"merge"|"manifest"|"publish" (done/total count within the phase);
  *   cs_job_cancel is honoured until "publish" (the build is kept and resumes); when done it adds
