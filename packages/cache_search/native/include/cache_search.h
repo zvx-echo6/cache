@@ -292,8 +292,15 @@ char *cs_zim_main_page(cs_handle *h, const char *zim_id);
  * Search results from it have the address "zimpdf:<zim uuid>/<pdf path>@<piece>", title "<title>, p. <printed page label>"
  * (the model sees exactly that and the snippet, nothing else), source_id the ZIM's id, and honour a "sources" filter on the ZIM.
  * cs_tool's "ids" entries for such a result also carry "link":"zim:<uuid>/<pdf path>#page=<pdf page>", "pdf_page":N and
- * "quote":"<the piece's text verbatim, at most 300 words>"; ids of other results have none of these three keys. cs_read of
- * such an address (cs_tool "read") returns the text of its whole PDF page (every piece that starts on it, in order).
+ * "quote":"<the piece's text verbatim, at most 300 words>"; ids of other results have none of these three keys. A piece that
+ * runs over several PDF pages is cited at the page, inside its range, whose text matches the query best (the first page when none
+ * does): that page is the result's "pdf_page" (cs_search results from a PDF index carry "pdf_page" next to "page", the
+ * printed label; no other result has the key), the "#page=" of the link and the page "read" opens. The index stores every
+ * PDF page's text as a document of its own (not searched, not counted in "pieces"). cs_read of such an address returns the
+ * piece's first page; cs_tool "read" [n] returns the whole text of the page [n] was cited at, from the stored page, under the
+ * same title and "Page:" header. In a result list a PDF contributes at most 2 pieces, a piece whose text another PDF of the ZIM
+ * already showed is left out (ZIMs keep copies of the same document), and the PDF list of a ZIM is scored together with the
+ * ZIM's own keyword list (both BM25), not against its own best hit.
  *
  * cs_zim_pdfs: {"zim_uuid","zim_name" (the ZIM's metadata Name),"pdfs":[{"path","title","size"}]} for the entries whose mime type
  * is application/pdf, by path; their bytes are read with cs_zim_get("zim:<uuid>/<path>"). NULL (cs_last_error) for an unknown id. */
@@ -302,7 +309,8 @@ char *cs_zim_pdfs(cs_handle *h, const char *zim_id);
 /* cs_pdf_chunk: pure (no handle, nothing read or written): the shared passage chunker (packages/cache_chunk) on the text of a
  * PDF's pages. {"pages":[{"index" (0-based),"label" (printed page label, may be ""),"text"}]} ->
  * {"pieces":[{"i","text","page" (label, or the 1-based PDF page as text without one),"pdf_page" (1-based),"pdf_page_end"? (only
- * when the piece crosses a page break),"heading_path":[]}],"empty_pages":[0-based indexes with no text],"chunker":N}. Pieces are
+ * when the piece crosses a page break),"heading_path":[]}],"empty_pages":[0-based indexes with no text],
+ * "pages":[{"pdf_page" (1-based),"label","text"}] (the pages with text, to hand to cs_pdfindex_add as is),"chunker":N}. Pieces are
  * verbatim and about 200 words. "chunker" is the rule's version; an index built with another is not used. NULL on bad input. */
 char *cs_pdf_chunk(const char *request_json);
 
@@ -313,8 +321,11 @@ char *cs_pdf_chunk(const char *request_json);
  *   another uuid, format, chunker or tokenizer is discarded and restarted. "busy" while another session or the finish job has
  *   it. "previous" names an older edition of the ZIM: when it has a usable snapshot of the same zim_name, "reusable" lists the
  *   PDFs added there (with the size and sha256 of their bytes), else it is [].
- * cs_pdfindex_add(session, {"path","title","pieces":[{"i","text","page","pdf_page","pdf_page_end"?,"heading_path"}],"size"?,
- *   "sha256"?}) -> {"pieces":total,"committed":n}. size and sha256 are those of the PDF's bytes (they are recorded in the
+ * cs_pdfindex_add(session, {"path","title","pieces":[{"i","text","page","pdf_page","pdf_page_end"?,"heading_path"}],
+ *   "pages":[{"pdf_page","label"?,"text"}]?,"size"?,"sha256"?}) -> {"pieces":total,"committed":n}. "pages" is the text of each
+ *   PDF page (cs_pdf_chunk returns it); without it the PDF is indexed but cited at its pieces' first pages and read from
+ *   its pieces. An empty "title", or one equal to the path, is replaced by a readable one from the file name (folder and .pdf
+ *   dropped, _ and - turned into spaces): the model never sees a raw path. size and sha256 are those of the PDF's bytes (they are recorded in the
  *   snapshot's pdfs.tsv). Replaces any pieces of that path, then adds. All or nothing per PDF. Durable in batches:
  *   the core commits about every 20 PDFs or 30 s and records a path as done only after the commit that holds it, so a kill
  *   redoes at most the PDFs after the last commit. "committed" counts the PDFs durably recorded, added and skipped.
