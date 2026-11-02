@@ -603,7 +603,9 @@ class PdfIndexState extends ChangeNotifier {
     if (root == null || list.zimName.isEmpty) return;
     final kept = {for (final x in zims()) ?x.uuid};
     for (final u in pdfIndexUuids(root)) {
-      if (kept.contains(u)) continue;
+      // Never the edition just published (its ZIM may have gone meanwhile: an update arriving as it finished, whose new edition
+      // reuses it).
+      if (kept.contains(u) || u == z.uuid) continue;
       final p = PdfIndexPaths(root, u);
       if (p.current()?.zimName == list.zimName) p.deleteAll();
     }
