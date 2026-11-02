@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -188,6 +189,22 @@ void main() {
       expect(waiting.isCompleted, isTrue);
     });
 
+    test("the PDF's own Title goes to the index when it is a real one; else \"\"", () async {
+      final core = FakePdfIndexCore(zims: {
+        'u1': FakeZim(uuid: 'u1', name: 'guide', pdfs: [
+          FakePdf('A/a.pdf', pages: ['TITLE:Are You Ready?\nwater words here']),
+          FakePdf('A/b.pdf', pages: ['TITLE:Microsoft Word - plan.doc\nfire words here']),
+          FakePdf('A/c.pdf', pages: ['shelter words here']),
+        ]),
+      });
+      expect(await PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), readPages: readFakePdfPages).run(), PdfRunEnd.finished);
+      expect(core.titles, {'A/a.pdf': 'Are You Ready?', 'A/b.pdf': '', 'A/c.pdf': ''});
+      expect(cleanPdfTitle('   '), '');
+      expect(cleanPdfTitle('report_final.pdf'), '');
+      expect(cleanPdfTitle('  Food  and Water in an Emergency '), 'Food and Water in an Emergency');
+      expect(cleanPdfTitle('12345'), '');
+    });
+
     test('cancel discards the build', () async {
       final core = FakePdfIndexCore(zims: {'u1': _zim()});
       late PdfIndexRun run;
@@ -309,6 +326,7 @@ void main() {
     late List<PdfZimRef> zims;
     BatteryReading? batteryNow;
     var free = 100 << 30;
+    (String, String?)? coreSays;
     final changes = ValueNotifier(0);
 
     PdfIndexState make({PdfIndexCore? withCore}) => PdfIndexState(
@@ -321,6 +339,7 @@ void main() {
       battery: () async => batteryNow,
       space: (_) => Space(free: free, reserve: 0),
       watchEvery: const Duration(milliseconds: 200),
+      coreIndex: coreSays == null ? null : (_) => coreSays,
     );
 
     Future<PdfPart?> until(PdfZimRef z, bool Function(PdfPart p) ok) async {
@@ -345,6 +364,7 @@ void main() {
       zims = [PdfZimRef(path: zimPath, uuid: 'u1', title: 'Guide')];
       batteryNow = null;
       free = 100 << 30;
+      coreSays = null;
     });
     tearDown(() => state.dispose());
 
@@ -439,6 +459,35 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 25));
       }
       expect(paths.root.existsSync(), isFalse, reason: 'the old edition, which no ZIM here uses, is removed');
+    });
+
+    test("a snapshot the core cannot use (its format changed) is made again, as any ZIM without an index: no error", () async {
+      state = make();
+      await state.init();
+      final z = zims.single;
+      final first = (await until(z, (p) => p.phase == PdfPartPhase.done))!;
+      expect(first.phase, PdfPartPhase.done);
+      final old = paths.current()!.id;
+      // Long after (the core's format changed in an update): the core says it has no usable PDF index for the ZIM.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final rec = File('${dir.path}/support/pdf-index.json');
+      final j = jsonDecode(rec.readAsStringSync()) as Map<String, dynamic>;
+      (j['guide.zim'] as Map)['built_at'] = '2026-01-01T00:00:00.000';
+      rec.writeAsStringSync(jsonEncode(j));
+      coreSays = ('none', null);
+      core.calls.clear();
+      await renew();
+      final again = (await until(z, (p) => p.phase == PdfPartPhase.done && paths.snapshots().length == 2))!;
+      expect(again.phase, PdfPartPhase.done);
+      expect(again.failure, isNull);
+      expect(core.calls, contains('finish'), reason: 'built again');
+      expect(paths.snapshots().map((s) => s.id), contains(old));
+      // The core then uses the new one, built here.
+      final fresh = paths.snapshots().map((s) => s.id).firstWhere((id) => id != old);
+      coreSays = ('ready', fresh);
+      await renew();
+      final p = (await until(z, (p) => p.phase == PdfPartPhase.done))!;
+      expect(p.fromOtherDevice, isFalse, reason: 'record ${rec.readAsStringSync()}, snapshots ${paths.snapshots().map((s) => s.id).toList()}, fresh $fresh, old $old');
     });
 
     test('a ZIM that goes takes its index with it, on this device', () async {

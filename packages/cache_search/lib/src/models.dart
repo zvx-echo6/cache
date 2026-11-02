@@ -146,6 +146,7 @@ class SourceStatus {
     this.index,
     this.captionsIndex,
     this.epubIndex,
+    this.pdfIndex,
   });
 
   factory SourceStatus.fromJson(Map<String, dynamic> j) {
@@ -168,6 +169,7 @@ class SourceStatus {
       index: j['index'] is Map ? SourceIndex.fromJson((j['index'] as Map).cast<String, dynamic>()) : null,
       captionsIndex: j['captionsindex'] is Map ? ZimSubIndex.fromJson((j['captionsindex'] as Map).cast<String, dynamic>()) : null,
       epubIndex: j['epubindex'] is Map ? ZimSubIndex.fromJson((j['epubindex'] as Map).cast<String, dynamic>()) : null,
+      pdfIndex: j['pdfindex'] is Map ? ZimSubIndex.fromJson((j['pdfindex'] as Map).cast<String, dynamic>()) : null,
       error: e is Map ? CoreSourceError(e['code'] as String, (e['message'] ?? '') as String) : null,
     );
   }
@@ -206,6 +208,10 @@ class SourceStatus {
   /// entries, and without an indexes_dir.
   final ZimSubIndex? captionsIndex;
   final ZimSubIndex? epubIndex;
+
+  /// A ZIM's PDF index as the core uses it (cs_status "pdfindex": "opening", "ready" with its snapshot, or "none" when no
+  /// usable snapshot is attached, an incompatible one among them); null when the core reports none for this source.
+  final ZimSubIndex? pdfIndex;
 
   /// True when search can use this source right now.
   bool get searchable => id != null && indexed && !building && !opening && !updating && error == null;

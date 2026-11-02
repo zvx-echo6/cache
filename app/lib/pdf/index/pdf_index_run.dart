@@ -45,8 +45,11 @@ class PdfTimingRow {
 
 /// One PDF read, extracted and chunked: its text pieces, or why it is skipped.
 class _OnePdf {
-  _OnePdf.pieces(this.pieces, {this.size, this.sha256}) : skip = null;
-  _OnePdf.skip(this.skip, {this.size, this.sha256}) : pieces = const [];
+  _OnePdf.pieces(this.pieces, {this.size, this.sha256, this.title = ''}) : skip = null;
+  _OnePdf.skip(this.skip, {this.size, this.sha256}) : pieces = const [], title = '';
+
+  /// cs_pdfindex_add's "title": the document's own Title, cleaned ([cleanPdfTitle]), or "".
+  final String title;
 
   final List<Map<String, dynamic>> pieces;
   final PdfSkipReason? skip;
@@ -325,7 +328,8 @@ class PdfIndexRun extends ChangeNotifier {
           skipped++;
         } else {
           if (session != null) {
-            final a = await core.add(session, path: pdf.path, title: pdf.name, pieces: one.pieces, size: one.size, sha256: one.sha256);
+            // The PDF's own Title when it has a real one, else "" (the core names it from its file name).
+            final a = await core.add(session, path: pdf.path, title: one.title, pieces: one.pieces, size: one.size, sha256: one.sha256);
             pieces = a.pieces;
             committed = a.committed;
           } else {
@@ -455,14 +459,17 @@ class PdfIndexRun extends ChangeNotifier {
     }
     _checkStop();
     sw.reset();
-    final chunks = await core.chunk([for (var i = 0; i < pages.pages.length; i++) PdfPageText(i, pages.pages[i])]);
+    final labels = pages.labels;
+    final chunks = await core.chunk([
+      for (var i = 0; i < pages.pages.length; i++) PdfPageText(i, pages.pages[i], label: labels != null && i < labels.length ? labels[i] : null),
+    ]);
     row.chunkMs = sw.elapsedMilliseconds;
     if (chunks.pieces.isEmpty) {
       row.skipped = PdfSkipReason.noText;
       return _OnePdf.skip(PdfSkipReason.noText, size: size, sha256: sha);
     }
     row.pieces = chunks.pieces.length;
-    return _OnePdf.pieces(chunks.pieces, size: size, sha256: sha);
+    return _OnePdf.pieces(chunks.pieces, size: size, sha256: sha, title: cleanPdfTitle(pages.title));
   }
 }
 

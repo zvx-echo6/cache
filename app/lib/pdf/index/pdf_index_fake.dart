@@ -40,6 +40,11 @@ Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name, {PdfPermi
   for (var i = 1; i < pages.length; i++) {
     await betweenPages?.call();
   }
+  // A "TITLE:" first line stands for the document's metadata Title.
+  if (pages.isNotEmpty && pages.first.startsWith('TITLE:')) {
+    final title = pages.first.substring(6).split('\n').first;
+    return PdfPagesOutcome.read([pages.first.substring(6 + title.length).trimLeft(), ...pages.skip(1)], title: title);
+  }
   return PdfPagesOutcome.read(pages);
 }
 
@@ -67,6 +72,9 @@ class FakePdfIndexCore implements PdfIndexCore {
 
   /// Calls, for tests: `open`, `add:PATH`, `skip:PATH:REASON`, `commit`, `close`, `discard`, `finish`.
   final List<String> calls = [];
+
+  /// The title each add was given, by path.
+  final Map<String, String> titles = {};
 
   final Map<int, _Session> _sessions = {};
   int _next = 1;
@@ -175,6 +183,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   @override
   Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces, int? size, String? sha256}) async {
     calls.add('add:$path');
+    titles[path] = title;
     final err = failAddWith;
     if (err != null) throw err;
     for (final p in pieces) {

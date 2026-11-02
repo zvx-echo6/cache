@@ -28,6 +28,13 @@ PdfIndexState appPdfIndex({required SourcesState sources, PdfIndexCore? core}) =
       recordFile: () async => File('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}pdf-index.json'),
       // A new snapshot (built here or arrived): the core is given the sources again so it attaches it.
       onIndexReady: sources.refresh,
+      // What the core says of each ZIM's PDF index (cs_status): a snapshot it cannot use is built again.
+      coreIndex: (z) {
+        final st = sources.statusAt(z.path);
+        if (st == null) return null;
+        final p = st.pdfIndex;
+        return p == null ? ('none', null) : (p.state, p.snapshot);
+      },
     )
       // The index throttle (bursts and rests, heat, the person using Cache, the model answering): before each PDF and between pages.
       ..permit = indexPermit;
