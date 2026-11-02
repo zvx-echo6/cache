@@ -98,8 +98,18 @@ class SetupCache {
 
   Listenable get changes => Listenable.merge([app, weather, sources, ?regions, ?browse, ?browse?.libraries, ?downloads]);
 
-  /// A chat model on the phone (loaded or not) is done; a chat model downloading or being copied in runs.
+  /// A chat model on the phone (loaded or not) is done; a chat model downloading or being copied in runs; "Not now" with neither is
+  /// done too (models are never required), and says what was chosen.
   SetupLine get modelLine {
+    final line = modelLineIgnoringChoice;
+    if (line.phase == SetupPhase.todo && app.modelDeclined) {
+      return const SetupLine(SetupPhase.done, detail: 'Search only on this device. Tap to add one.');
+    }
+    return line;
+  }
+
+  /// The model row from what is on the phone alone.
+  SetupLine get modelLineIgnoringChoice {
     final e = app.active ?? app.models.firstOrNull;
     if (e != null) return SetupLine(SetupPhase.done, detail: '${app.displayName(e)} · ${formatBytes(e.size)}');
     final d = downloads;
@@ -195,7 +205,7 @@ class SetupCard extends StatelessWidget {
   final VoidCallback? onHide;
 
   static const _titles = ['Choose a model', 'Get your area', 'Turn on weather', 'Add a library'];
-  static const _reasons = ['The AI that answers your questions', 'Maps, directions and places for your area', 'Forecasts and alerts for your places', 'Wikipedia, medical and survival guides'];
+  static const _reasons = ['Optional. Lets you ask in plain words.', 'Maps, directions and places for your area', 'Forecasts and alerts for your places', 'Wikipedia, medical and survival guides'];
   static const _keys = ['setup-model', 'setup-area', 'setup-weather', 'setup-library'];
 
   @override
@@ -211,6 +221,20 @@ class SetupCard extends StatelessWidget {
       },
     ),
   );
+
+  /// "Not now" on the model row: search only, which counts as done, with Undo. Never asked again on its own.
+  void _notNow(BuildContext context) {
+    final app = setup.app;
+    app.setModelDeclined(true);
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('setup-not-now-done'),
+      persist: false,
+      content: const Text('Ask is off. You can add a model any time.'),
+      action: SnackBarAction(label: 'Undo', onPressed: () => app.setModelDeclined(false)),
+    ));
+  }
 
   Widget _card(BuildContext context, SetupStatus s) {
     final k = context.t;
@@ -270,6 +294,7 @@ class SetupCard extends StatelessWidget {
               starts: starts[i],
               onTap: () => actions[i](context),
               onGuide: setup.openGuide == null ? null : () => setup.openGuide!(context, SetupCache.guideTitles[i]),
+              onNotNow: i == 0 && s.model.phase == SetupPhase.todo ? () => _notNow(context) : null,
             ),
         ],
       ),
@@ -278,7 +303,10 @@ class SetupCard extends StatelessWidget {
 }
 
 class _SetupRow extends StatefulWidget {
-  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap, this.onGuide, this.starts = false});
+  const _SetupRow({super.key, required this.title, required this.reason, required this.line, required this.onTap, this.onGuide, this.starts = false, this.onNotNow});
+
+  /// "Not now", a small text button before the chevron (the model row while it is to do); null leaves it out.
+  final VoidCallback? onNotNow;
 
   final String title;
   final String reason;
@@ -384,6 +412,13 @@ class _SetupRowState extends State<_SetupRow> {
               ],
             ),
           ),
+          if (widget.onNotNow != null && !line.done && !_starting)
+            TextButton(
+              key: const ValueKey('setup-not-now'),
+              onPressed: widget.onNotNow,
+              style: TextButton.styleFrom(minimumSize: const Size(48, 40), padding: const EdgeInsets.symmetric(horizontal: 10)),
+              child: const Text('Not now'),
+            ),
           if (!line.done && !_starting) ...[
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: k.secondary),

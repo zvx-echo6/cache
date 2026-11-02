@@ -208,7 +208,15 @@ class _ModelsScreenState extends State<ModelsScreen> {
 
   Future<void> _confirmDelete(BuildContext context, ModelEntry m) async {
     final dir = app.modelsDir;
-    if (await confirmDelete(context, name: app.displayName(m), bytes: m.size, free: dir == null ? null : freeBytesOnDisk(dir.path))) {
+    // The last chat model on this device: Ask turns off (search only), and says so before.
+    final last = app.models.length == 1 && app.models.first.path == m.path;
+    if (await confirmDelete(
+      context,
+      name: app.displayName(m),
+      bytes: m.size,
+      free: dir == null ? null : freeBytesOnDisk(dir.path),
+      warning: last ? 'Ask will turn off. Saved chats stay readable.' : null,
+    )) {
       await app.deleteModel(m);
     }
   }

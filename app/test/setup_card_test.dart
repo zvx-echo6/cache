@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:cache/app_state.dart';
@@ -100,7 +101,8 @@ void main() {
     for (final t in ['Choose a model', 'Get your area', 'Turn on weather', 'Add a library']) {
       expect(find.text(t), findsOneWidget);
     }
-    expect(find.text('The AI that answers your questions'), findsOneWidget);
+    expect(find.text('Optional. Lets you ask in plain words.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('setup-not-now')), findsOneWidget, reason: 'models are never required');
     expect(find.text('Maps, directions and places for your area'), findsOneWidget);
     expect(find.text('Forecasts and alerts for your places'), findsOneWidget);
     expect(find.text('Wikipedia, medical and survival guides'), findsOneWidget);
@@ -112,6 +114,45 @@ void main() {
       await tester.pump();
     }
     expect(opened, ['models', 'area', 'weather', 'library']);
+    await r.dispose(tester);
+  });
+
+  testWidgets('"Not now" on the model row: search only, ticked and counted, with Undo; kept, and a model replaces it', (tester) async {
+    await rig(tester);
+    await home(tester);
+    expect(count(0), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('setup-not-now')));
+    await tester.pump();
+    expect(opened, isEmpty, reason: '"Not now" does not open Models');
+    expect(find.text('Ask is off. You can add a model any time.'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(tickIn('setup-model'), findsOneWidget);
+    expect(find.text('Search only on this device. Tap to add one.'), findsOneWidget);
+    expect(count(1), findsOneWidget);
+    expect(find.byKey(const ValueKey('setup-not-now')), findsNothing);
+    expect(r.app.modelDeclined, isTrue);
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(jsonDecode(File('${r.dir.path}/settings.json').readAsStringSync())['modelDeclined'], isTrue, reason: 'kept on this device');
+    // A done row is never dead: it opens Models, where the person can change their mind.
+    await tester.tap(row('setup-model'));
+    await tester.pump();
+    expect(opened, ['models']);
+    // Undo puts the row back as it was.
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(r.app.modelDeclined, isFalse);
+    expect(tickIn('setup-model'), findsNothing);
+    expect(find.text('Optional. Lets you ask in plain words.'), findsOneWidget);
+    // Declined again, then a model arrives: the row shows the model.
+    await tester.tap(find.byKey(const ValueKey('setup-not-now')));
+    await tester.pumpAndSettle();
+    model();
+    await tester.runAsync(() => r.app.setTheme(r.app.theme));
+    await tester.pumpAndSettle();
+    expect(find.text('gemma-4-E2B-it-Q4_K_M · 3.0 GB'), findsOneWidget);
     await r.dispose(tester);
   });
 
