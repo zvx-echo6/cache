@@ -333,6 +333,8 @@ You can stop an imported note from following its entry. The entry stays in Cache
 2. Open its menu and tap "Stop syncing this note". It is above "Delete".
 3. The pop-up asks "Stop syncing this note?" It says the Cache ID is removed from the note and they will no longer change each other. Tap "Stop syncing".
 
+![Stop syncing an imported note.](shot:stop-syncing-note)
+
 Cache says "Stopped syncing. The note stays in both." It takes the Cache ID out of the note and writes `cachesync: off` in its place (`cachesync:: off` in Logseq). Cache never imports that note again, even with the tag.
 
 The entry shows a small mark with a line through two arrows. Its label reads "Not syncing with Obsidian", or Logseq.

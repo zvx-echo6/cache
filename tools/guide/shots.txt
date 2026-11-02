@@ -85,3 +85,4 @@ settings-indexing-speed | Settings > Storage > Advanced: "Background indexing sp
 ask-no-model | Ask with no model: "Ask needs a model on this device." with "Choose a model", and the saved chats under it
 import-tag-row | Notebooks > Connections, the Obsidian part: the vault, the phones' line, "Import tag" with "Notes with this tag are added to Cache." and #cachesync, and the private hint
 import-tag-sheet | The Import tag sheet with #camping typed: the helper text, "Use #cachesync" and "Save"
+stop-syncing-note | An entry imported from Obsidian with its menu open: "Stop syncing this note" above "Delete"
