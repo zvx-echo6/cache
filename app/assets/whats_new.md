@@ -12,7 +12,7 @@ written by the owner (lead words in **bold**). A version with no lines shows no 
 - **Search your videos:** find saved videos by what's said in them.
 - **Video sites:** sign in with whatever methods your site offers, and play private videos.
 - **No model needed:** Cache works for search and reading without a model; saved chats stay readable, and Ask returns when you add one.
-- **Import notes by tag:** tag a note `#cachesync` in Obsidian or Logseq to bring it into Cache.
+- **Import notes by tag:** tag a note #cachesync in Obsidian or Logseq to bring it into Cache.
 - **Wide screens:** a layout made for computers and the big iPad sideways.
 - **Fixes:** the Kiwix icon shows correctly; Regions no longer syncs files each device builds for itself; Add to Library no longer appears twice on wide screens.
 

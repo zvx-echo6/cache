@@ -19,7 +19,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.happylittlellc.cache"
+        // A side-by-side test build (android-test-apk.yml sets the Gradle property cacheTestApk=true): its own package
+        // (com.happylittlellc.cache.test, so its own data) and the label "Cache test". Plugin providers use ${applicationId}.
+        val testApk = (project.findProperty("cacheTestApk") as String?) == "true"
+        applicationId = if (testApk) "com.happylittlellc.cache.test" else "com.happylittlellc.cache"
+        manifestPlaceholders["appLabel"] = if (testApk) "Cache test" else "Cache"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 28 // llama.cpp needs API 28

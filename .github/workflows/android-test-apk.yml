@@ -1,0 +1,206 @@
+# A side-by-side test APK of Cache for Android: package com.happylittlellc.cache.test, label "Cache test", so it installs next to
+# the Play install with its own data. Run by hand on any branch that has the cacheTestApk switch in
+# app/android/app/build.gradle.kts (rel-30 and later); it builds that branch's commit. Uploads the APK as a workflow artifact;
+# nothing goes to Google Play. The release build (android-play.yml) never sets the switch, so it is unchanged.
+#
+# Signing: the Play upload key, exactly as android-play.yml handles it (decoded into the runner's temp folder, removed after,
+# never uploaded). The Play install is signed with Google's app signing key, so this APK can never update it; the upload key
+# only gives the test package a signature that stays the same from run to run, so a newer test APK installs over an older one
+# and keeps its data.
+name: Android test APK
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: android-test-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: 3.44.8
+  NDK_VERSION: 28.2.13676358
+  CARGO_NDK_VERSION: 4.1.2
+
+jobs:
+  routing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          command -v ninja > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ninja-build; }
+      - name: Native toolchain identity
+        id: toolchain
+        run: |
+          echo "id=$( { cat "$ANDROID_NDK_HOME/source.properties"; cmake --version; ninja --version; uname -m; lsb_release -rs; } | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Finished library cache
+        id: out
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/routing-out
+          key: routing-android-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/**') }}
+      - name: Free disk space
+        if: steps.out.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: Valhalla source and dependency cache
+        id: routing-cache
+        if: steps.out.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/valhalla/downloads
+            ~/.cache/vcpkg/archives
+          key: valhalla-android-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('packages/valhalla/vcpkg.json', 'packages/valhalla/triplets/**') }}
+      - name: Build Valhalla and the shim
+        if: steps.out.outputs.cache-hit != 'true'
+        run: bash packages/valhalla/scripts/build-android.sh "$RUNNER_TEMP/valhalla" "$RUNNER_TEMP/routing-out"
+      - name: Save Valhalla dependencies
+        if: always() && steps.out.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-hit != 'true' && steps.routing-cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/valhalla/downloads
+            ~/.cache/vcpkg/archives
+          key: ${{ steps.routing-cache.outputs.cache-primary-key }}
+      - run: cat "$RUNNER_TEMP/routing-out/valhalla-build.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-routing
+          path: ${{ runner.temp }}/routing-out/libvalhalla_shim.so
+          retention-days: 2
+
+  app:
+    needs: routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+          # libzim is fetched by Gradle into a folder outside the repository (fetch-libzim.sh refuses one inside it).
+          echo "CACHE_LIBZIM_BUILD_DIR=$RUNNER_TEMP/libzim" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-routing
+          path: app/android/app/src/main/jniLibs/arm64-v8a
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: Rust for Android
+        id: rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+          echo "id=$( { rustc -vV; cat "$ANDROID_NDK_HOME/source.properties"; } | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          rustc --version
+      - name: cargo-ndk cache
+        id: cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK_VERSION }}-${{ steps.rust.outputs.id }}
+      - name: Install cargo-ndk
+        if: steps.cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-home-android-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}
+          restore-keys: cargo-home-android-
+      - name: Cargo target cache
+        uses: actions/cache@v4
+        with:
+          path: packages/cache_search/native/target
+          key: cargo-target-android-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: cargo-target-android-${{ steps.rust.outputs.id }}-${{ hashFiles('packages/cache_search/native/Cargo.lock') }}-
+      - name: libzim download cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/libzim
+          key: libzim-android-9.8.2-1
+      - name: Upload key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/upload.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > app/android/key.properties
+          keytool -list -v -keystore "$RUNNER_TEMP/upload.jks" -storetype PKCS12 -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" 2>/dev/null \
+            | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f' > "$RUNNER_TEMP/upload-cert.sha256"
+          test -s "$RUNNER_TEMP/upload-cert.sha256" || { echo "::error::The upload keystore did not open with the store password and alias"; exit 1; }
+          echo "upload certificate SHA-256: $(cat "$RUNNER_TEMP/upload-cert.sha256")"
+      - name: Build the test APK
+        working-directory: app
+        env:
+          ORG_GRADLE_PROJECT_cacheTestApk: 'true'
+        run: |
+          flutter --version
+          flutter pub get
+          flutter build apk --release
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/out/Cache-test-${GITHUB_SHA::7}.apk"
+      - name: Verify the APK
+        run: |
+          apk=$(ls out/*.apk)
+          ls -l "$apk"; sha256sum "$apk"
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n 1)
+          "$aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          grep -E "^package:|^application-label:|^native-code:" "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='com.happylittlellc.cache.test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::Not the .test package"; exit 1; }
+          grep -q "^application-label:'Cache test'" "$RUNNER_TEMP/badging.txt" || { echo "::error::The label is not Cache test"; exit 1; }
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -E 'android:authorities' || true
+          if "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" | grep -E 'android:authorities' | grep -v 'com.happylittlellc.cache.test'; then
+            echo "::error::A provider authority is not under the .test package"; exit 1
+          fi
+          for lib in libcache_search.so libvalhalla_shim.so libzim.so libc++_shared.so libcache_icu_data.so libcache_llama.so; do
+            unzip -l "$apk" "lib/arm64-v8a/$lib" > /dev/null || { echo "::error::$lib is missing from lib/arm64-v8a"; exit 1; }
+          done
+          # minSdk 28: APK Signature Scheme v2/v3 only (no JAR signature), so apksigner, not keytool -jarfile.
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          "$apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/apksigner.txt" 2>&1 || { cat "$RUNNER_TEMP/apksigner.txt"; echo "::error::apksigner verify failed"; exit 1; }
+          grep -E "Verified using|SHA-256 digest" "$RUNNER_TEMP/apksigner.txt"
+          signer=$(sed -n 's/^.*Signer.*certificate SHA-256 digest: *//p' "$RUNNER_TEMP/apksigner.txt" | head -n 1 | tr -d ': ' | tr 'A-F' 'a-f')
+          if [[ "$signer" != "$(cat "$RUNNER_TEMP/upload-cert.sha256")" ]]; then
+            echo "::error::The APK is not signed with the upload key (signer $signer)"; exit 1
+          fi
+          echo "signed with the upload key"
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks" "$RUNNER_TEMP/upload-cert.sha256" "$RUNNER_TEMP/apksigner.txt" app/android/key.properties
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cache-test-apk
+          path: out/*.apk
+          retention-days: 7
