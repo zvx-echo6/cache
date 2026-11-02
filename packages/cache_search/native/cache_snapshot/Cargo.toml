@@ -1,0 +1,13 @@
+[package]
+name = "cache_snapshot"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's syncable index snapshots: the kind-neutral core (layout, manifest, verify, pick, gc, stage, publish) shared by cache_search and cache_regions"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# sha256 of the snapshot files (manifest.json).
+sha2 = "0.10"
+thiserror = "1"

@@ -84,7 +84,10 @@ void main() {
         'dir': '${support.path}/regions',
         'base_url': 'https://data.cached.info/routing/',
         'places_base_url': 'https://data.cached.info/places/',
+        // the fetched tile indexes are snapshots in the syncable indexes folder
+        'indexes_dir': '${support.path}/shared-indexes',
       });
+      expect(c['indexes_dir'], '${support.path}/shared-indexes', reason: 'the search core uses the same folder');
     });
 
     test('the data host can be another one that serves the same bucket', () {

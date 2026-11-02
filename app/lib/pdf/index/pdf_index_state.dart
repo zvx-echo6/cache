@@ -30,8 +30,11 @@ class PdfZimRef {
 /// status, Pause and Resume, and the fix when there is no room.
 enum PdfPartPhase { waiting, starting, running, pausing, finishing, paused, needsSpace, failed, done }
 
-/// Who paused it.
-enum PdfPause { person, battery, closed }
+/// Who paused it: the person, a low battery (the run's own check), Cache closing, or the app's index scheduler ([held]).
+enum PdfPause { person, battery, closed, held }
+
+/// Why the app's index scheduler holds a library's PDFs back or slows them down, in the Settings line's words.
+enum PdfHold { waiting, charging, warm, battery, storage }
 
 /// What the PDFs part of one library shows.
 class PdfPart {
@@ -46,6 +49,7 @@ class PdfPart {
     this.finishFraction,
     this.needBytes = 0,
     this.newCount = 0,
+    this.hold,
   });
 
   final PdfPartPhase phase;
@@ -68,6 +72,9 @@ class PdfPart {
 
   /// A new edition of a ZIM whose older edition's PDFs are reused: the PDFs not in it (new or changed), "22 new PDFs".
   final int newCount;
+
+  /// The scheduler's reason: why it is held ([PdfPause.held]), or why a running one is slowed down.
+  final PdfHold? hold;
 
   double? get fraction => total > 0 ? (handled / total).clamp(0.0, 1.0) : null;
 
@@ -178,6 +185,11 @@ class PdfIndexState extends ChangeNotifier {
   /// Libraries held back before they start: no room (with the room needed), or a long job on a low battery.
   final Map<String, (PdfPartPhase, int)> _blocked = {};
   final List<String> _queue = [];
+
+  /// What the index scheduler said, by ZIM path: why it holds one back (stopped or not started), and why a running one goes
+  /// slower or waits (heat, the model generating).
+  final Map<String, PdfHold> _holds = {};
+  final Map<String, PdfHold> _slowed = {};
   PdfIndexRun? _run;
   String? _runPath;
   bool _picking = false;
@@ -421,7 +433,7 @@ class PdfIndexState extends ChangeNotifier {
       if (run.finishing) return PdfPart(phase: PdfPartPhase.finishing, total: total, handled: run.handled, unreadable: run.skipped, finishFraction: run.finishFraction);
       if (run.stopped != PdfRunStop.none) return PdfPart(phase: PdfPartPhase.pausing, total: total, handled: run.handled);
       if (run.starting) return PdfPart(phase: PdfPartPhase.starting, total: total, handled: run.handled, newCount: _newCount(z));
-      return PdfPart(phase: PdfPartPhase.running, total: total, handled: run.handled, unreadable: run.skipped, newCount: _newCount(z));
+      return PdfPart(phase: PdfPartPhase.running, total: total, handled: run.handled, unreadable: run.skipped, newCount: _newCount(z), hold: _slowed[z.path]);
     }
     final m = _snapshot(z);
     if (m != null) {
@@ -435,6 +447,8 @@ class PdfIndexState extends ChangeNotifier {
       }
       return PdfPart(phase: PdfPartPhase.failed, total: total, handled: handled, failure: failure);
     }
+    final held = _holds[z.path];
+    if (held != null && rec['pause'] != 'person') return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.held, hold: held);
     final blocked = _blocked[z.path];
     if (blocked?.$1 == PdfPartPhase.needsSpace) return PdfPart(phase: PdfPartPhase.needsSpace, total: total, handled: handled, needBytes: blocked!.$2);
     if (blocked?.$1 == PdfPartPhase.paused) return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.battery);
@@ -630,7 +644,9 @@ class PdfIndexState extends ChangeNotifier {
         _cleanOldEditions(z, list);
         await onIndexReady?.call();
       case PdfRunEnd.paused:
-        await _put(z.fileName, {'pause': run.stopped == PdfRunStop.battery ? 'battery' : 'person', 'handled': run.handled});
+        // Held by the index scheduler: not a pause of its own (the scheduler starts it again), and not the battery's.
+        final why = _holds.containsKey(z.path) ? 'held' : (run.stopped == PdfRunStop.battery ? 'battery' : 'person');
+        await _put(z.fileName, {'pause': why, 'handled': run.handled});
       case PdfRunEnd.cancelled:
         await _put(z.fileName, {'pause': null, 'handled': null});
       case PdfRunEnd.superseded:
@@ -663,6 +679,7 @@ class PdfIndexState extends ChangeNotifier {
 
   /// Pause (the person's): the build stays; it does not start again by itself until Resume.
   Future<void> pause(PdfZimRef z) async {
+    _holds.remove(z.path);
     if (_runPath == z.path) {
       _run?.stop(PdfRunStop.person);
       return;
@@ -695,9 +712,23 @@ class PdfIndexState extends ChangeNotifier {
 
   /// The index scheduler's pause (the app went to the back, the battery ran low): a run of [z] stops and keeps its build, but not
   /// as the person's Pause, so the scheduler starts it again later; a queued [z] leaves the queue.
-  Future<void> hold(PdfZimRef z) async {
+  Future<void> hold(PdfZimRef z, [PdfHold why = PdfHold.waiting]) async {
+    _holds[z.path] = why;
+    _slowed.remove(z.path);
     _queue.remove(z.path);
     if (_runPath == z.path) _run?.stop(PdfRunStop.battery);
+    notifyListeners();
+  }
+
+  /// The index scheduler's word on a run going slower or waiting meanwhile (the throttle: warm, the model generating); null when
+  /// it runs as usual. For the status only.
+  void slowed(PdfZimRef z, PdfHold? why) {
+    if (_slowed[z.path] == why) return;
+    if (why == null) {
+      _slowed.remove(z.path);
+    } else {
+      _slowed[z.path] = why;
+    }
     notifyListeners();
   }
 
@@ -708,6 +739,7 @@ class PdfIndexState extends ChangeNotifier {
   Future<void> resume(PdfZimRef z) async {
     _failures.remove(z.path);
     _blocked.remove(z.path);
+    _holds.remove(z.path);
     await _put(z.fileName, {'pause': null});
     if (!_queue.contains(z.path) && z.path != _runPath) _queue.insert(0, z.path);
     notifyListeners();

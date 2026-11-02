@@ -32,12 +32,14 @@ void main() {
     ]);
     expect(only, [
       'library/field-guide@2',
+      'places-index',
+      'region-index',
       'zim-captions/6ba7b810-9dad-11d1-80b4-00c04fd430c8',
       'zim-epub/6ba7b810-9dad-11d1-80b4-00c04fd430c8',
       'zim-pdf/6ba7b810-9dad-11d1-80b4-00c04fd430c8',
       'zim/6ba7b810-9dad-11d1-80b4-00c04fd430c8',
     ]);
-    expect(indexesFetchOnly(const []), isEmpty);
+    expect(indexesFetchOnly(const []), ['places-index', 'region-index'], reason: 'the regions\' tile indexes, before any region');
   });
 
   test("the folder's rules: builds and SQLite working files stay, deletes stay, manifests last", () {
