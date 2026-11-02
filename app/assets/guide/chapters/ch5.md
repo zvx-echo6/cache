@@ -301,6 +301,8 @@ A note you wrote in Obsidian or Logseq can come into Cache when you tag it. This
 4. Let Cache sync. Cache adds the note as an entry in your Journal. If you have no Journal, it goes to a notebook called Notes.
 5. Cache writes its ID into the note: `cache_id: <id>` in Obsidian, or `cache-id::` in Logseq. From then on the ID decides, not the tag. Changes in either place update the other.
 
+![The Import tag row in Connections.](shot:import-tag-row)
+
 Cache says "Added from Obsidian: [title]." for one note, or `3 notes added from Obsidian`. When all went to one notebook the message has "Show". Tap it to open the notebook.
 
 To choose the notebook, add it after the tag: `#cachesync/Camping` adds the note to the notebook Camping. Cache makes it if it is not there.

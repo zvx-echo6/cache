@@ -83,3 +83,4 @@ pdf-cited-passage | The PDF reader opened at a cited page: the "Cited passage" s
 search-pdf-hits | Home search with passages from a ZIM's PDFs (title "[PDF], p. 47") among the Library results
 settings-indexing-speed | Settings > Storage > Advanced: "Background indexing speed" with Gentle (ticked) and Normal
 ask-no-model | Ask with no model: "Ask needs a model on this device." with "Choose a model", and the saved chats under it
+import-tag-row | Notebooks > Connections, the Obsidian part: the vault, the phones' line, "Import tag" with "Notes with this tag are added to Cache." and #cachesync, and the private hint
