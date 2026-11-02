@@ -47,11 +47,11 @@ fn isbn10_ok(b: &[u8]) -> bool {
         };
         total += v * (10 - i as u32);
     }
-    total % 11 == 0
+    total.is_multiple_of(11)
 }
 
 fn isbn13_check(first12: &[u8]) -> u8 {
-    let sum: u32 = first12.iter().enumerate().map(|(i, &c)| u32::from(c - b'0') * if i % 2 == 0 { 1 } else { 3 }).sum();
+    let sum: u32 = first12.iter().enumerate().map(|(i, &c)| u32::from(c - b'0') * if i.is_multiple_of(2) { 1 } else { 3 }).sum();
     b'0' + ((10 - sum % 10) % 10) as u8
 }
 
