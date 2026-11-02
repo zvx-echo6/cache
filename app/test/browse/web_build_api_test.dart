@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 /// What the device really answers (taken from a running Cache Server), read by the browser's own parsers.
-String sample(String name) => File('test/fixtures/build/$name.json').readAsStringSync();
+String sample(String name) => File('test/fixtures/device_build/$name.json').readAsStringSync();
 
 void main() {
   final calls = <String>[];

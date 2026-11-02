@@ -1,0 +1,72 @@
+{
+ "ok": true,
+ "result": {
+  "settings": {
+   "folder": "/var/lib/cache-server/drop",
+   "enabled": true,
+   "library_id": "hunting-and-field-guides-3bc5df",
+   "library_title": "Hunting and field guides"
+  },
+  "status": {
+   "state": "ok",
+   "last_check": "2026-11-01T23:27:59Z",
+   "found": 0,
+   "counts": {
+    "all": 4,
+    "queue": 0,
+    "complete": 2,
+    "failed": 2
+   },
+   "error": null,
+   "stale": false
+  },
+  "files": [
+   {
+    "name": "newer-edition.pdf",
+    "folder": "complete",
+    "state": "done",
+    "position": null,
+    "size": 396907,
+    "progress": null,
+    "item_id": null,
+    "can_retry": false,
+    "reason": null,
+    "note": null
+   },
+   {
+    "name": "Expatriates.pdf",
+    "folder": "complete",
+    "state": "done",
+    "position": null,
+    "size": 389922,
+    "progress": null,
+    "item_id": null,
+    "can_retry": false,
+    "reason": null,
+    "note": null
+   },
+   {
+    "name": "truncated.pdf",
+    "folder": "failed",
+    "state": "failed",
+    "position": null,
+    "size": 150000,
+    "progress": null,
+    "item_id": null,
+    "reason": "no text found in the PDF",
+    "can_retry": true
+   },
+   {
+    "name": "backup-2026-10.tar",
+    "folder": "failed",
+    "state": "unsupported",
+    "position": null,
+    "size": 6,
+    "progress": null,
+    "item_id": null,
+    "reason": "Not a file Cache can use",
+    "can_retry": false
+   }
+  ]
+ }
+}
