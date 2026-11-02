@@ -9,6 +9,7 @@ import '../chat/tool_loop.dart';
 import '../chat/navigation_action.dart';
 import '../browse/zim_urls.dart';
 import '../history/share.dart';
+import '../layout/adaptive.dart' show ReadingWidth;
 import '../layout/layout_state.dart';
 import '../location/location_service.dart';
 import '../location/position_source.dart' show LocationPermissionState;
@@ -357,9 +358,11 @@ class _AskScreenState extends State<AskScreen> {
                       ),
                     );
                   }
-                  return ListView.builder(
+                  // A desktop window keeps the conversation to a reading width; it scrolls from anywhere across the page.
+                  return LayoutBuilder(
+                    builder: (context, c) => ListView.builder(
                     controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    padding: ReadingWidth.padFor(context, c.maxWidth, style: _readingStyle).copyWith(top: 8, bottom: 16),
                     itemCount: msgs.length,
                     itemBuilder: (_, i) => msgs[i].isUser
                         ? _UserBubble(msgs[i].text)
@@ -372,17 +375,21 @@ class _AskScreenState extends State<AskScreen> {
                             chat: widget.chat,
                             onReport: () => _report(msgs[i], i > 0 && msgs[i - 1].isUser ? msgs[i - 1].text : ''),
                           ),
+                    ),
                   );
                 },
               ),
             ),
 
-            _composer(context),
+            ReadingWidth(style: _readingStyle, child: _composer(context)),
           ],
         ),
       ),
     );
   }
+
+  /// The answers' text, which the reading width is measured in.
+  static const TextStyle _readingStyle = TextStyle(fontSize: 18);
 
   Widget _composer(BuildContext context) {
     final k = context.t;

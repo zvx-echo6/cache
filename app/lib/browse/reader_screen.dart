@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../layout/adaptive.dart' show paneShowButton;
+import '../layout/adaptive.dart' show ReadingWidth, paneShowButton;
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
 import '../pdf/open_pdf.dart';
@@ -558,7 +558,10 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     if (_pageGone) return ReaderPageGone(onReload: _reload);
     final start = _start;
     if (start == null) return const Center(child: CircularProgressIndicator());
-    return Listener(
+    // A desktop window keeps the article to a reading width (in the page's 16 px text).
+    return ReadingWidth(
+      style: const TextStyle(fontSize: 16),
+      child: Listener(
       // A touch on the page: it has settled (anything it adds to the history from now on is the person's own).
       onPointerDown: (_) => _settleNow(),
       child: InAppWebView(
@@ -640,6 +643,7 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
         if (uri != null) _currentAddress = addressOfUrl(uri) ?? _currentAddress;
         _syncNav();
       },
+    ),
     ),
     );
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../layout/adaptive.dart' show ReadingWidth;
 import '../../notebook/markdown_text.dart';
 import '../../notebook/media.dart';
 import '../../notebook/open_attached.dart';
@@ -194,8 +195,10 @@ class _EntryEditorState extends State<EntryEditor> {
               ),
           ],
         ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        // A desktop window keeps the entry to a reading width.
+        body: LayoutBuilder(
+          builder: (context, c) => ListView(
+          padding: ReadingWidth.padFor(context, c.maxWidth, style: const TextStyle(fontSize: 17)).copyWith(top: 8, bottom: 32),
           children: [
             if (_failed)
               MaterialBanner(
@@ -315,6 +318,7 @@ class _EntryEditorState extends State<EntryEditor> {
                 },
               ),
           ],
+        ),
         ),
       ),
     );
