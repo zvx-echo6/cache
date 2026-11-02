@@ -15,6 +15,7 @@ import 'package:cache/screens/notebooks/entry_editor.dart';
 import 'package:cache/screens/notebooks/notebook_screen.dart';
 import 'package:cache/screens/notebooks/notebooks_screen.dart';
 import 'package:cache/theme.dart';
+import 'package:cache/update/update_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -212,5 +213,24 @@ void main() {
     await snap(tester, _out, '6a-private-in-list');
     await _show(tester, EntryEditor(notebook: k.nb, book: k.nb.notebook(e.notebookId)!, places: PlaceChoices.none, entry: e, connections: k.c, now: k.deps.now));
     await snap(tester, _out, '6b-private-entry');
+  });
+
+  testWidgets('7: What\'s new in 1.0.30 (the owner\'s lines), phone light and dark, iPad', (tester) async {
+    final lines = whatsNewLines(File('assets/whats_new.md').readAsStringSync(), '1.0.30');
+    expect(lines.length, 11);
+    for (final (name, size, ratio, theme) in [
+      ('phone', const Size(430, 932), 3.0, CacheThemeId.light),
+      ('phone-dark', const Size(430, 932), 3.0, CacheThemeId.dark),
+      ('ipad', const Size(820, 1180), 2.0, CacheThemeId.light),
+    ]) {
+      phone(tester, size: size, ratio: ratio);
+      await tester.pumpWidget(shotApp(
+          Scaffold(body: Builder(builder: (c) => Center(child: TextButton(onPressed: () => showWhatsNew(c, version: '1.0.30', lines: lines), child: const Text('open'))))),
+          theme: theme));
+      await tester.tap(find.text('open'));
+      await _settle(tester);
+      await tester.pump(const Duration(milliseconds: 400));
+      await snap(tester, _out, '7-whats-new-1.0.30-$name');
+    }
   });
 }
