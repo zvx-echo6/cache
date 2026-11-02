@@ -220,6 +220,8 @@ What you see:
 4. Home search says "Search Cache" and has no "Ask Cache:" row. See Search Cache from Home.
 5. "Ask about this" on a weather item and "Ask Cache instead" under a guide search are not shown.
 
+![Ask with no model](shot:ask-no-model)
+
 If a model is downloading, the note reads "A model is downloading. Ask turns on when it is ready." and its button is "See download". The "Modules" line reads "Model downloading 40%".
 
 To turn "Ask" on again, tap "Choose a model" in any of those places and download or copy in a model. See Choose a model in chapter 1.
