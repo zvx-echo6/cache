@@ -19,7 +19,7 @@ class VideoCore {
 
   /// Starts the worker and opens a handle whose `video` folder is [dir] (instances.json and downloads live
   /// there). Throws a [CacheSearchException] if the native library is missing or cs_open fails.
-  static Future<VideoCore> open(String dir, {CsNativeFactory native = _openNative}) async {
+  static Future<VideoCore> open(String dir, {String? indexesDir, CsNativeFactory native = _openNative}) async {
     final rp = ReceivePort();
     final errors = ReceivePort();
     final isolate = await Isolate.spawn(_workerMain, [rp.sendPort, native], debugName: 'cache_video', onError: errors.sendPort);
@@ -34,7 +34,7 @@ class VideoCore {
       }
     }());
     try {
-      await core._call('open', {'dir': dir});
+      await core._call('open', {'dir': dir, 'indexes_dir': indexesDir});
     } catch (_) {
       await core.close();
       rethrow;
@@ -190,7 +190,7 @@ void _workerMain(List<dynamic> init) {
       switch (msg['op']) {
         case 'open':
           native = factory();
-          handle = native!.open(jsonEncode({'sources': <Object>[], 'video': {'dir': a['dir']}}));
+          handle = native!.open(jsonEncode({'sources': <Object>[], 'video': {'dir': a['dir']}, if (a['indexes_dir'] != null) 'indexes_dir': a['indexes_dir']}));
           if (handle == 0) throw CacheSearchException.fromJson(native!.lastError(0));
         case 'video':
           if (handle == 0) throw const CacheSearchException('internal', 'The video core is not open');
