@@ -47,6 +47,8 @@ struct Shared {
     detail: Mutex<Option<Value>>,
     /// The step a multi-step job is in (`pdfindex_finish`: merge, manifest, publish); shown as "phase" when set.
     phase: Mutex<Option<String>>,
+    /// Every phase the job has entered, in order (each once in a row): what a poller that missed a short phase can still see.
+    phases: Mutex<Vec<String>>,
     /// What a finished job returns (`pdfindex_finish`); shown as "result" when set.
     result: Mutex<Option<Value>>,
     /// The job's pacing (duty.rs): work/idle, pause, writer threads, the self back-off.
@@ -67,6 +69,11 @@ impl Shared {
     fn set_phase(&self, phase: &str, d: u64, t: u64) {
         if let Ok(mut g) = self.phase.lock() {
             *g = Some(phase.to_string());
+        }
+        if let Ok(mut g) = self.phases.lock() {
+            if g.last().map(String::as_str) != Some(phase) {
+                g.push(phase.to_string());
+            }
         }
         self.set_progress(d, t);
         // the index kinds pace at every item of a phase (a file hashed, linked or moved)
@@ -616,6 +623,7 @@ impl Job {
             state: Mutex::new((State::Running, None)),
             detail: Mutex::new(None),
             phase: Mutex::new(None),
+            phases: Mutex::new(Vec::new()),
             result: Mutex::new(None),
             throttle: Throttle::new(pending.0),
             pace_on_progress: pending.1,
@@ -668,6 +676,9 @@ impl Job {
         }
         if let Some(p) = self.shared.phase.lock().ok().and_then(|g| g.clone()) {
             v["phase"] = json!(p);
+        }
+        if let Some(ps) = self.shared.phases.lock().ok().filter(|g| !g.is_empty()).map(|g| g.clone()) {
+            v["phases"] = json!(ps);
         }
         if let Some(r) = self.shared.result.lock().ok().and_then(|g| g.clone()) {
             v["result"] = r;
