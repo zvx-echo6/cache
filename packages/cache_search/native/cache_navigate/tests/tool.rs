@@ -190,7 +190,7 @@ fn schema_needs_the_routing_data_and_lists_the_modes_and_types() {
     let s = tool(fake(), None).schema().unwrap();
     let p = &s["function"]["parameters"]["properties"];
     assert_eq!(s["function"]["name"], "navigate");
-    // AIDA's modes (off-road legs come inside the result), then the two off-road modes
+    // The reference assistant's modes (off-road legs come inside the result), then the two off-road modes
     assert_eq!(p["mode"]["enum"], json!(["drive", "walk", "bike", "offroad_foot", "offroad_vehicle"]));
     assert!(p["mode"]["description"].as_str().unwrap().contains("offroad_vehicle"));
     assert_eq!(p["to_type"]["enum"][0], "emergency_room");
@@ -204,7 +204,7 @@ fn schema_needs_the_routing_data_and_lists_the_modes_and_types() {
 }
 
 #[test]
-fn road_route_has_aidas_shape() {
+fn road_route_has_the_recorded_shape() {
     let t = tool(fake(), None);
     let v = run(&t, Some(&here()), json!({"to": "42.60,-113.70", "mode": "drive"})).unwrap();
     assert_eq!(
@@ -254,7 +254,7 @@ fn names_resolve_through_coordinates_saved_places_and_the_places_pack() {
     // no fix and no near: the matched start is the area
     assert_eq!(v["location_bias"], "from_place");
     assert_eq!(v["mode"], "walk");
-    // a name nothing knows: AIDA's fields, no detail, no matched places
+    // a name nothing knows: the reference assistant's fields, no detail, no matched places
     let e = run(&t, Some(&here()), json!({"to": "Cassia Regional Hospital", "mode": "drive"})).unwrap_err();
     assert_eq!(e.to_json(), json!({"ok": false, "error": {"type": "geocode_empty", "which": "to", "query": "Cassia Regional Hospital", "searched_within_km": null}}));
     // a from that is not found says to omit it, because the phone's position is known
@@ -341,7 +341,7 @@ fn nearest_of_a_type_is_ranked_by_travel_time() {
     assert_eq!((c["place_name"].clone(), c["drive_min"].clone()), (json!("Far Hospital"), json!(57.5)));
     let k = keys(&v);
     assert_eq!(k[k.iter().position(|x| *x == "other_destination_candidates").unwrap() + 1], "nearest_search");
-    // nothing of that type: AIDA's fields, and the start beside the error
+    // nothing of that type: the reference assistant's fields, and the start beside the error
     let t = tool(fake(), Some(Arc::new(Pack { empty: true })));
     let e = run(&t, Some(&here()), json!({"to_type": "hospital", "mode": "drive"})).unwrap_err();
     let j = e.to_json();
@@ -352,7 +352,7 @@ fn nearest_of_a_type_is_ranked_by_travel_time() {
     assert_eq!(code(run(&t, Some(&here()), json!({"to_type": "pharmacy", "mode": "drive"}))), "bad_arguments");
 }
 
-/// AIDA passes navi's `nearest_search` through: `ranked_by` is `drive` or `distance` (never the travel mode) and
+/// The reference assistant passes the reference server's `nearest_search` through: `ranked_by` is `drive` or `distance` (never the travel mode) and
 /// `warnings` is a list.
 #[test]
 fn nearest_search_ranked_by_is_drive_or_distance_and_warnings_is_a_list() {

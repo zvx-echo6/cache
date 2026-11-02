@@ -165,7 +165,7 @@ impl PlaceSource for PackPlaceSource {
             .map(|r| {
                 let mut m = from_row(&packs, &r.row, title, Some(q.from));
                 m.distance_km = Some(r.km);
-                // navi's tiers: 1 = a hospital with an emergency department listing (confirmed), 3 = a hospital without one (likely).
+                // The reference server's tiers: 1 = a hospital with an emergency department listing (confirmed), 3 = a hospital without one (likely).
                 m.er_tier = match r.tier.as_deref() {
                     Some("confirmed") => Some(1),
                     Some("likely") => Some(3),

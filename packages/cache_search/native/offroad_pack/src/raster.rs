@@ -1,5 +1,5 @@
 //! GeoTIFF mosaic reader (WGS84 lon/lat rasters, PixelIsArea): the pure-Rust replacement for the
-//! GDAL/VRT reads navi does. Nearest sampling only. A mosaic is a set of GeoTIFFs (a VRT of
+//! GDAL/VRT reads the reference server does. Nearest sampling only. A mosaic is a set of GeoTIFFs (a VRT of
 //! non-overlapping tiles reads the same way; uncovered pixels are 0 = nodata).
 use std::cell::RefCell;
 use std::collections::HashMap;

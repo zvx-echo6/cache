@@ -16,7 +16,7 @@ pub struct PlaceMatch {
     pub locality: Option<String>,
     pub county: Option<String>,
     pub state: Option<String>,
-    /// How far the match is from the search's bias point, in km (AIDA's geocoder gives it).
+    /// How far the match is from the search's bias point, in km (the reference assistant's geocoder gives it).
     pub distance_km: Option<f64>,
     /// Emergency rooms only: the evidence tier (1 = a hospital with an emergency department listing).
     pub er_tier: Option<i64>,

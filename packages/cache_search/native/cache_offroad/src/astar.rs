@@ -1,8 +1,8 @@
-//! The multimode A* kernel: a line-by-line port of navi `astar.py::astar_multigoal_multimode`
+//! The multimode A* kernel: a line-by-line port of the reference server `astar.py::astar_multigoal_multimode`
 //! (with `_speed_kmh` and `_movement_edge_time`), and the single-mode `astar_multigoal` that the
-//! navi tests use as the foot-parity oracle. State planes are f32 (g) / i32 (parent) like navi's.
+//! The reference server tests use as the foot-parity oracle. State planes are f32 (g) / i32 (parent) like the reference server's.
 
-// A line-by-line port: the negated float comparisons keep navi's NaN behaviour (a NaN is never "less than"), and the index loops
+// A line-by-line port: the negated float comparisons keep the reference server's NaN behaviour (a NaN is never "less than"), and the index loops
 // keep its shape so the two can be read side by side.
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop)]
 
@@ -425,10 +425,10 @@ pub fn astar_multigoal_multimode(inp: &MultiModeInput) -> Result<SearchResult, S
     Ok(SearchResult { goal_idx: -1, path: vec![], cost: INF, expanded })
 }
 
-// ---- single-mode kernel (navi astar_multigoal; float64 planes) ---------------------------------
+// ---- single-mode kernel (the reference server astar_multigoal; float64 planes) ---------------------------------
 
 /// Single-mode, multi-goal A* (`astar_multigoal`): the oracle for the foot-only parity test and the
-/// `test_multimode_no_transitions_independent` comparison. cost_mult is f64 here (as in the navi tests).
+/// `test_multimode_no_transitions_independent` comparison. cost_mult is f64 here (as in the reference server tests).
 #[allow(clippy::too_many_arguments)]
 pub fn astar_multigoal(
     cost_mult: &[f64], elevation: &[f64], rows: usize, cols: usize, cell_size_lat_m: f64, cell_size_lon_m: f64,

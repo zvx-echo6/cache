@@ -5,7 +5,7 @@
 //! router (`cache_offroad`: the downloaded region packs with the map's elevation layer, or one pack and an elevation file).
 //! `schema()` is built from what is installed:
 //! nothing without the Valhalla tiles and the shim library; the `to_type` enum from the places pack's categories
-//! (TOOLS.md's list while no places pack is installed). The result is AIDA's navigate contract (build.rs). Off-road
+//! (TOOLS.md's list while no places pack is installed). The result is the reference assistant's navigate contract (build.rs). Off-road
 //! legs come back inside the route when an end is away from the roads and the off-road pack and elevation exist;
 //! without them the road route is returned with an `offroad_unavailable` warning.
 //!
@@ -203,9 +203,9 @@ impl ElevationSource for NoElevation {
     }
 }
 
-/// The modes of the tool: AIDA's drive, walk, bike, where off-road legs come back inside the result when an end is away
+/// The modes of the tool: the reference assistant's drive, walk, bike, where off-road legs come back inside the result when an end is away
 /// from the road network (drive searches with the vehicle-class modes, walk on foot, bike on a two-wheeler); and the
-/// off-road modes, which route the whole trip off-road: offroad_foot on foot, offroad_vehicle with navi's unified Auto
+/// off-road modes, which route the whole trip off-road: offroad_foot on foot, offroad_vehicle with the reference server's unified Auto
 /// search (4x4, ATV, two-wheeler, on foot where no vehicle can go).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ModeArg {
@@ -650,7 +650,7 @@ impl Tool for NavigateTool {
 impl NavigateTool {
     /// The nearest place of a category by travel time from `from`: the winner, how the ranking was done (`"drive"` when
     /// routing ranked the candidates, whatever the travel mode, or `"distance"` when no candidate could be routed and the
-    /// straight-line order stood: navi's `_rank` values), the warnings (a list, empty when there are none), and the others
+    /// straight-line order stood: the reference server's `_rank` values), the warnings (a list, empty when there are none), and the others
     /// (at most 2, with `drive_min`).
     fn nearest(&self, valhalla: &dyn Valhalla, a: &Args, cat: &str, from: &resolve::Resolved) -> Result<NearestEnd, ToolError> {
         let not_set_up = || err(ToolError::NOT_SET_UP, "finding the nearest place of a type needs the places data, which is not installed on this phone");

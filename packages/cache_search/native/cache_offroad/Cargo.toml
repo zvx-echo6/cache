@@ -3,7 +3,7 @@ name = "cache_offroad"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "Off-road unified multi-mode router (port of navi_offroute's Auto search) over an offline region pack"
+description = "Off-road unified multi-mode router (port of the reference server's off-road Auto search) over an offline region pack"
 
 [lib]
 crate-type = ["rlib"]

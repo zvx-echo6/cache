@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cross-build Valhalla 3.7.0 + valhalla_shim for Android arm64-v8a (API 24) on a Linux host (the GitHub Actions runner).
-# The same build as build-android.bat (the desktop's), with the Linux host triplet. All downloads and build products stay in $1.
+# The same build as build-android.bat (the Windows build), with the Linux host triplet. All downloads and build products stay in $1.
 # Output: $2/libvalhalla_shim.so (stripped, the copy the app ships) and $2/valhalla-build.txt.
 # Usage: build-android.sh <work-dir> <output-dir>    NDK: ANDROID_NDK_HOME (r28, 28.2.13676358, the one Flutter's build uses).
 set -euo pipefail
@@ -45,7 +45,7 @@ bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 for symbol in version init route matrix locate trace_attributes string_free destroy last_error last_error_code; do
   grep -Eq " T valhalla_shim_${symbol}$" "$work/valhalla-symbols.txt" || { echo "missing shim export: $symbol" >&2; exit 1; }
 done
-# Only the system libraries the desktop build needs (static libc++).
+# Only the system libraries the build needs (static libc++).
 needed=$("$bin/llvm-readelf" -d "$out/libvalhalla_shim.so" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | LC_ALL=C sort | tr '\n' ' ')
 echo "NEEDED: $needed"
 for lib in $needed; do
