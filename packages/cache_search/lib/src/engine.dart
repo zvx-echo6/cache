@@ -36,9 +36,10 @@ class SearchEngine {
   /// {"version":..,"index_format":..}
   Map<String, dynamic> version() => _object(native.version() ?? '{}');
 
-  /// Replaces the source list (a ZIM was added or removed).
-  void setSources(List<SourceConfig> sources) {
-    if (native.setSources(_h, jsonEncode(openConfigJson(sources))) < 0) {
+  /// Replaces the source list (a ZIM was added or removed). [extra] are the config's other fields cs_set_sources takes again
+  /// each time (`indexes_dir`).
+  void setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: extra))) < 0) {
       throw CacheSearchException.fromJson(native.lastError(_h));
     }
   }

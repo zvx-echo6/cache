@@ -71,6 +71,7 @@ import 'weather/weather_state.dart';
 import 'maps/layers/starter_defs.dart' show readLiveSourceAssets;
 import 'search/numbering_state.dart';
 import 'search/core_tool_host.dart';
+import 'search/indexes_share.dart';
 import 'sources/libraries_state.dart';
 import 'sources/sources_state.dart';
 import 'video/video_state.dart';
@@ -214,7 +215,7 @@ class _CacheAppState extends State<CacheApp> {
       icon: Icons.menu_book_outlined,
       shared: () => {'library': sources.zimsDir, 'libraries': libraries.dir},
       // Search indexes are built on each device: the ZIMs' in a folder of their own, each library's inside the library.
-      local: () => [sources.indexesDir],
+      local: () => [sources.indexesDir, _support(kIndexesDirName)],
       notShared: const {'libraries': kLibraryNotShared},
       count: () => sources.zims.length + libraries.libraries.length,
       list: () => BrowseScreen(browse: browse, active: true, layout: layout),
@@ -276,7 +277,22 @@ class _CacheAppState extends State<CacheApp> {
     supportDir: getApplicationSupportDirectory,
     deviceName: Platform.isAndroid ? 'Android device' : (Platform.isIOS ? 'iPhone' : Platform.localHostname),
     kinds: dataKinds,
+    // The search indexes sync whenever sharing is set up, whatever kinds are ticked; each linked device fetches only the indexes
+    // of the sources it has (setOnly, kept in step with the core's sources: _syncIndexesOnly).
+    always: [
+      AlwaysShared(
+        id: kIndexesShareId,
+        name: 'Search indexes',
+        dir: () => _support(kIndexesDirName),
+        exclude: kIndexesNotShared,
+        localDeletes: kIndexesLocalDeletes,
+        last: kIndexesLast,
+      ),
+    ],
   );
+
+  /// Tells sharing which indexes this device fetches: those of the sources the core has open.
+  void _syncIndexesOnly() => unawaited(sharing.setOnly(kIndexesShareId, indexesFetchOnly(sources.statuses)));
   // Regions and downloads: the region catalogue (kept in the support folder so it works offline once seen), the core's road routing
   // tiles and the map layers' area downloads. When the ready regions change, the routing the search core opens with is built again.
   // When a region's places are merged or removed, the search core reads the places again and an open map search runs again.
@@ -551,7 +567,10 @@ class _CacheAppState extends State<CacheApp> {
     // What a device-to-device sync brings into the Library's folders shows in the Library list at once.
     sharing.onShareChanged = (ids) {
       if (ids.contains('library') || ids.contains('libraries')) unawaited(libraries.rescan());
+      // A snapshot that came by sync is attached when the core is given its sources again.
+      if (ids.contains(kIndexesShareId)) unawaited(sources.refresh());
     };
+    sources.addListener(_syncIndexesOnly);
     settingsRead.then((_) => sharing.init());
     settingsRead.then((_) => regions.init());
     layout.init();
