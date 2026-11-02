@@ -4,7 +4,7 @@
 
 use crate::embed::DIMS;
 use crate::error::{Error, Result};
-use crate::pack::{read_pack, Pack, PACK_EXT};
+use crate::pack::{read_pack, valid_doc_id, Pack, PackPiece, PACK_EXT};
 use edge::{Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, PointId, PointInsertOperations, PointOperations, PointStruct, UpdateOperation};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 pub const POINT_NAMESPACE: &str = "c4b95b91-e641-5c16-91a0-13ba2f6f7970";
 /// The settings file, beside the shard and at the root of a `.cache-library`.
 pub const SETTINGS_FILE: &str = "cache-library.json";
+/// The per-document table written beside the shard.
+pub const DOCUMENTS_FILE: &str = "documents.tsv";
+/// The checksums of every other file in the folder.
+pub const SUMS_FILE: &str = "SHA256SUMS";
 /// The `source` payload value of every point (mapped as the library's source type).
 pub const SOURCE_KIND: &str = "book";
 
@@ -29,27 +33,105 @@ fn page_value(label: &str) -> Value {
     }
 }
 
-/// The payload of one piece: the fields today's libraries use (title, text, page, source, link, doc_id, doc_version) plus
-/// extras the settings file does not map, so the model never sees them (heading_path, page_end, pdf_page, source_blake3).
-pub fn payload_of(pack: &Pack, i: usize) -> Value {
-    let h = &pack.header;
-    let p = &pack.pieces[i];
+/// Where a document came from inside a ZIM, recorded in two unmapped payload fields (`zim_id`, `zim_path`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZimRef {
+    /// The ZIM header UUID, lowercase with dashes (8-4-4-4-12), as in the core's `zim:<uuid>/<path>` addresses.
+    pub id: String,
+    /// The entry path within the ZIM, as the core's `zim:` addresses carry it.
+    pub path: String,
+}
+
+/// Whether `s` is a UUID in lowercase 8-4-4-4-12 form.
+pub fn valid_zim_id(s: &str) -> bool {
+    s.len() == 36
+        && s.bytes().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
+        })
+}
+
+/// One document for the library writer: what a pack holds, without the pack. Anything that can make pieces with vectors
+/// (packs, PDFs read from a ZIM, PDFs on disk) feeds the writer through this.
+#[derive(Debug, Clone)]
+pub struct LibDoc {
+    pub title: String,
+    /// Letters, digits, `.`, `_`, `-`; unique across the library.
+    pub doc_id: String,
+    pub doc_version: u32,
+    /// BLAKE3 (hex) of the source PDF.
+    pub source_blake3: String,
+    /// The `link` payload value (empty when the document has no address).
+    pub link: String,
+    /// The `author` payload value (unmapped), when known.
+    pub author: Option<String>,
+    pub zim: Option<ZimRef>,
+    /// Pages in the source PDF (the `pages` column of documents.tsv; empty when unknown).
+    pub pages: Option<usize>,
+    /// Each piece carries its own text, printed page label, PDF pages, heading path and vector.
+    pub pieces: Vec<PackPiece>,
+}
+
+impl LibDoc {
+    /// The adapter from a pack.
+    pub fn from_pack(pack: &Pack) -> LibDoc {
+        let h = &pack.header;
+        LibDoc {
+            title: h.title.clone(),
+            doc_id: h.doc_id.clone(),
+            doc_version: h.doc_version,
+            source_blake3: h.source.blake3.clone(),
+            link: h.source.https.clone().unwrap_or_default(),
+            author: None,
+            zim: None,
+            pages: Some(h.page_count),
+            pieces: pack.pieces.clone(),
+        }
+    }
+}
+
+/// The payload of piece `i` of a document: the fields today's libraries use (`title`, `text`, `page`, `source`, `link`,
+/// `doc_id`, `doc_version`; the settings file maps these) plus fields the settings file does not map, so the model never
+/// sees them and the keyword index does not cover them: `heading_path`, `pdf_page` and `pdf_page_end` (1-based PDF pages),
+/// `page_end` (a page label, only when the piece crosses a page), `source_blake3`, and, when given, `author`, `zim_id` and
+/// `zim_path`.
+pub fn doc_payload(doc: &LibDoc, i: usize) -> Value {
+    let p = &doc.pieces[i];
     let mut v = json!({
-        "title": h.title,
+        "title": doc.title,
         "text": p.text,
         "page": page_value(&p.page),
         "source": SOURCE_KIND,
-        "link": h.source.https.clone().unwrap_or_default(),
-        "doc_id": h.doc_id,
-        "doc_version": h.doc_version,
+        "link": doc.link,
+        "doc_id": doc.doc_id,
+        "doc_version": doc.doc_version,
         "heading_path": p.heading_path,
-        "pdf_page": p.pdf_page,
-        "source_blake3": h.source.blake3,
+        "source_blake3": doc.source_blake3,
     });
+    if let Some(n) = p.pdf_page {
+        v["pdf_page"] = json!(n);
+    }
     if let Some(pe) = &p.page_end {
         v["page_end"] = page_value(pe);
     }
+    if let Some(n) = p.pdf_page_end {
+        v["pdf_page_end"] = json!(n);
+    }
+    if let Some(a) = &doc.author {
+        v["author"] = json!(a);
+    }
+    if let Some(z) = &doc.zim {
+        v["zim_id"] = json!(z.id);
+        v["zim_path"] = json!(z.path);
+    }
     v
+}
+
+/// The payload of piece `i` of a pack.
+pub fn payload_of(pack: &Pack, i: usize) -> Value {
+    let mut d = LibDoc::from_pack(pack);
+    d.pieces = vec![pack.pieces[i].clone()];
+    doc_payload(&d, 0)
 }
 
 pub struct LibraryOptions {
@@ -103,11 +185,202 @@ pub fn library_settings(id: &str, title: &str, version: &str) -> Value {
     s
 }
 
-fn settings_json(o: &LibraryOptions) -> Value {
-    library_settings(&o.id, &o.title, &o.version)
+/// Writes a library one document at a time: `shard/`, then (on [`LibraryWriter::finish`]) `cache-library.json`,
+/// `documents.tsv` and `SHA256SUMS`. Any source of pieces with vectors uses it: packs (through [`LibDoc::from_pack`]), PDFs
+/// read from a ZIM, PDFs on disk. It writes no `index/`: the keyword index is built on the device when the library is
+/// added (`keyword_index` "auto"; the core's `index_library` job makes it in the app's `index_dir`), as for every library.
+pub struct LibraryWriter {
+    out: PathBuf,
+    shard_dir: PathBuf,
+    opts: LibraryOptions,
+    shard: EdgeShard,
+    points: usize,
+    ids: std::collections::HashSet<String>,
+    rows: Vec<String>,
 }
 
-/// Build the library folder `out` (it must not exist, or be empty): `shard/` and `cache-library.json`.
+/// A tab-separated field: tabs and line breaks become spaces.
+fn tsv_field(s: &str) -> String {
+    s.chars().map(|c| if matches!(c, '\t' | '\n' | '\r') { ' ' } else { c }).collect()
+}
+
+impl LibraryWriter {
+    /// Start a library in `out` (it must not exist, or be empty).
+    pub fn create(out: &Path, opts: &LibraryOptions) -> Result<LibraryWriter> {
+        if opts.id.trim().is_empty() {
+            return Err(Error::new("the library needs an id"));
+        }
+        if out.exists() {
+            let empty = std::fs::read_dir(out).map(|mut r| r.next().is_none()).unwrap_or(false);
+            if !out.is_dir() || !empty {
+                return Err(Error::new(format!("{} already exists", out.display())));
+            }
+        }
+        let shard_dir = out.join("shard");
+        std::fs::create_dir_all(&shard_dir).map_err(|e| Error::ctx(&format!("creating {}", shard_dir.display()), e))?;
+        cache_search::library::ensure_init();
+        // As libadd::make_blank_shard: one unnamed dense vector, Cosine, no write-ahead log; here it stays open to be written.
+        let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(DIMS, Distance::Cosine).build()).wal_enabled(false).build();
+        let shard = match EdgeShard::new(&shard_dir, cfg) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(out);
+                return Err(Error::ctx("making the library shard", e));
+            }
+        };
+        let opts = LibraryOptions { id: opts.id.clone(), title: opts.title.clone(), version: opts.version.clone(), archive: opts.archive };
+        Ok(LibraryWriter { out: out.to_path_buf(), shard_dir, opts, shard, points: 0, ids: Default::default(), rows: Vec::new() })
+    }
+
+    /// Add one document's pieces.
+    pub fn add(&mut self, doc: &LibDoc) -> Result<()> {
+        if !valid_doc_id(&doc.doc_id) {
+            return Err(Error::new(format!("invalid doc_id {:?}: use letters, digits, '.', '_' and '-'", doc.doc_id)));
+        }
+        if doc.doc_version == 0 {
+            return Err(Error::new(format!("{}: doc_version starts at 1", doc.doc_id)));
+        }
+        if !self.ids.insert(doc.doc_id.clone()) {
+            return Err(Error::new(format!("doc_id {} is in the library twice", doc.doc_id)));
+        }
+        if let Some(z) = &doc.zim {
+            if !valid_zim_id(&z.id) {
+                return Err(Error::new(format!("{}: zim_id {:?} is not a lowercase 8-4-4-4-12 UUID", doc.doc_id, z.id)));
+            }
+            if z.path.is_empty() {
+                return Err(Error::new(format!("{}: zim_path is empty", doc.doc_id)));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for p in &doc.pieces {
+            if p.vector.len() != DIMS {
+                return Err(Error::new(format!("{} has {}-dimension vectors; a Cache library has {DIMS}", doc.doc_id, p.vector.len())));
+            }
+            if !seen.insert(p.index) {
+                return Err(Error::new(format!("{}: piece index {} is used twice", doc.doc_id, p.index)));
+            }
+        }
+        let up = |pts: Vec<_>| -> Result<()> {
+            self.shard
+                .update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts))))
+                .map_err(|e| Error::ctx("adding points", e))
+        };
+        let mut batch = Vec::new();
+        for (i, p) in doc.pieces.iter().enumerate() {
+            let id = PointId::Uuid(point_uuid(&doc.doc_id, doc.doc_version, p.index));
+            batch.push(PointStruct::new(id, p.vector.clone(), doc_payload(doc, i)).0);
+            if batch.len() >= 256 {
+                up(std::mem::take(&mut batch))?;
+            }
+        }
+        if !batch.is_empty() {
+            up(batch)?;
+        }
+        self.points += doc.pieces.len();
+        self.rows.push(format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            doc.doc_id,
+            doc.doc_version,
+            tsv_field(&doc.title),
+            doc.source_blake3,
+            doc.pieces.len(),
+            doc.pages.map(|n| n.to_string()).unwrap_or_default()
+        ));
+        Ok(())
+    }
+
+    /// Flush the shard and write `cache-library.json`, `documents.tsv` and `SHA256SUMS` (and the archive, when asked).
+    pub fn finish(self) -> Result<LibraryReport> {
+        let LibraryWriter { out, shard_dir, opts, shard, points, rows, .. } = self;
+        shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
+        drop(shard);
+        cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
+        let settings = library_settings(&opts.id, &opts.title, &opts.version);
+        let settings_path = out.join(SETTINGS_FILE);
+        let text = serde_json::to_string_pretty(&settings).map_err(|e| Error::ctx("settings", e))? + "\n";
+        std::fs::write(&settings_path, &text).map_err(|e| Error::ctx(&format!("writing {}", settings_path.display()), e))?;
+        let mut tsv = String::from("doc_id\tversion\ttitle\tsource_blake3\tpieces\tpages\n");
+        for r in &rows {
+            tsv.push_str(r);
+            tsv.push('\n');
+        }
+        let tsv_path = out.join(DOCUMENTS_FILE);
+        std::fs::write(&tsv_path, tsv).map_err(|e| Error::ctx(&format!("writing {}", tsv_path.display()), e))?;
+        write_sha256sums(&out)?;
+        let archive = if opts.archive {
+            let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "library".into());
+            let path = out.with_file_name(format!("{name}.cache-library"));
+            write_archive(&shard_dir, &text, &path)?;
+            Some(path)
+        } else {
+            None
+        };
+        Ok(LibraryReport { points, documents: rows.len(), shard_dir, settings_path, archive })
+    }
+
+    /// Give up: remove what was written.
+    pub fn abandon(self) {
+        let out = self.out.clone();
+        drop(self);
+        let _ = std::fs::remove_dir_all(out);
+    }
+}
+
+/// The general writer: the documents (from packs, a ZIM's PDFs, or anything else that makes pieces with vectors) to the
+/// library folder `out` (it must not exist, or be empty): `shard/`, `cache-library.json`, `documents.tsv`, `SHA256SUMS`.
+pub fn write_library<I: IntoIterator<Item = LibDoc>>(out: &Path, opts: &LibraryOptions, docs: I) -> Result<LibraryReport> {
+    let mut w = LibraryWriter::create(out, opts)?;
+    for d in docs {
+        if let Err(e) = w.add(&d) {
+            w.abandon();
+            return Err(e);
+        }
+    }
+    if w.rows.is_empty() {
+        w.abandon();
+        return Err(Error::new("no documents to write"));
+    }
+    w.finish().inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(out);
+    })
+}
+
+/// `SHA256SUMS` at the root of `dir`: `<sha256 hex>  <relative path>` for every file in the folder (sorted by path, `/`
+/// separators), except itself. Checkable with `sha256sum -c SHA256SUMS`.
+pub fn write_sha256sums(dir: &Path) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
+        for e in std::fs::read_dir(dir).map_err(|e| Error::ctx(&format!("reading {}", dir.display()), e))? {
+            let e = e.map_err(|e| Error::ctx("reading a folder", e))?;
+            let path = e.path();
+            let ft = e.file_type().map_err(|e| Error::ctx("reading a folder", e))?;
+            if ft.is_dir() {
+                walk(base, &path, out)?;
+            } else if ft.is_file() {
+                let rel = path.strip_prefix(base).unwrap_or(&path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                if rel != SUMS_FILE {
+                    out.push(rel);
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(dir, dir, &mut files)?;
+    files.sort();
+    let mut text = String::new();
+    for rel in &files {
+        let mut f = std::fs::File::open(dir.join(rel)).map_err(|e| Error::ctx(&format!("reading {rel}"), e))?;
+        let mut h = Sha256::new();
+        std::io::copy(&mut f, &mut h).map_err(|e| Error::ctx(&format!("reading {rel}"), e))?;
+        let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        text.push_str(&format!("{hex}  {rel}\n"));
+    }
+    std::fs::write(dir.join(SUMS_FILE), text).map_err(|e| Error::ctx("writing SHA256SUMS", e))
+}
+
+/// Build the library folder `out` from the packs in `packs_dir` (the live pack of each document): `shard/`,
+/// `cache-library.json`, `documents.tsv`, `SHA256SUMS`. A thin layer over [`write_library`].
 pub fn build_library(packs_dir: &Path, out: &Path, opts: &LibraryOptions) -> Result<LibraryReport> {
     if opts.id.trim().is_empty() {
         return Err(Error::new("the library needs an id"));
@@ -128,64 +401,7 @@ pub fn build_library(packs_dir: &Path, out: &Path, opts: &LibraryOptions) -> Res
             )));
         }
     }
-    if out.exists() {
-        let empty = std::fs::read_dir(out).map(|mut r| r.next().is_none()).unwrap_or(false);
-        if !out.is_dir() || !empty {
-            return Err(Error::new(format!("{} already exists", out.display())));
-        }
-    }
-    let shard_dir = out.join("shard");
-    std::fs::create_dir_all(&shard_dir).map_err(|e| Error::ctx(&format!("creating {}", shard_dir.display()), e))?;
-    let r = fill_shard(&packs, &shard_dir);
-    if let Err(e) = r {
-        let _ = std::fs::remove_dir_all(out);
-        return Err(e);
-    }
-    let points = r.unwrap_or(0);
-    cache_search::library::write_segments_manifest(&shard_dir).map_err(|e| Error::ctx("writing the segments manifest", e.message))?;
-    let settings = settings_json(opts);
-    let settings_path = out.join(SETTINGS_FILE);
-    let text = serde_json::to_string_pretty(&settings).map_err(|e| Error::ctx("settings", e))? + "\n";
-    std::fs::write(&settings_path, &text).map_err(|e| Error::ctx(&format!("writing {}", settings_path.display()), e))?;
-    let archive = if opts.archive {
-        let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "library".into());
-        let path = out.with_file_name(format!("{name}.cache-library"));
-        write_archive(&shard_dir, &text, &path)?;
-        Some(path)
-    } else {
-        None
-    };
-    Ok(LibraryReport { points, documents: packs.len(), shard_dir, settings_path, archive })
-}
-
-fn fill_shard(packs: &[Pack], shard_dir: &Path) -> Result<usize> {
-    cache_search::library::ensure_init();
-    // As libadd::make_blank_shard: one unnamed dense vector, Cosine, no write-ahead log; here it stays open to be written.
-    let cfg = EdgeConfig::builder().vector("", EdgeVectorParamsBuilder::new(DIMS, Distance::Cosine).build()).wal_enabled(false).build();
-    let shard = EdgeShard::new(shard_dir, cfg).map_err(|e| Error::ctx("making the library shard", e))?;
-    let up = |pts: Vec<_>| -> Result<()> {
-        shard
-            .update(UpdateOperation::PointOperation(PointOperations::UpsertPoints(PointInsertOperations::PointsList(pts))))
-            .map_err(|e| Error::ctx("adding points", e))
-    };
-    let mut total = 0usize;
-    let mut batch = Vec::new();
-    for pack in packs {
-        for (i, p) in pack.pieces.iter().enumerate() {
-            let id = PointId::Uuid(point_uuid(&pack.header.doc_id, pack.header.doc_version, p.index));
-            batch.push(PointStruct::new(id, p.vector.clone(), payload_of(pack, i)).0);
-            total += 1;
-            if batch.len() >= 256 {
-                up(std::mem::take(&mut batch))?;
-            }
-        }
-    }
-    if !batch.is_empty() {
-        up(batch)?;
-    }
-    shard.flush().map_err(|e| Error::ctx("flushing the library shard", e))?;
-    drop(shard);
-    Ok(total)
+    write_library(out, opts, packs.iter().map(LibDoc::from_pack))
 }
 
 /// Pack the shard with the core's `pack_snapshot`, then add `cache-library.json` at the archive's root (the core's
