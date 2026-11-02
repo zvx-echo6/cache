@@ -1,4 +1,4 @@
-//! Off-road legs for directions. Port of navi `directions_offroad.py`: a pure conversion of the router's
+//! Off-road legs for directions. Port of the reference server `directions_offroad.py`: a pure conversion of the router's
 //! path detail into directions steps (Douglas-Peucker simplify, decision-point legs, short-leg folding,
 //! "follow" legs on one trail value).
 use crate::cost::Mode;
@@ -160,7 +160,7 @@ fn fill_elev(elev: &[Option<f64>]) -> Vec<f64> {
         .collect()
 }
 
-/// Cells of one run: navi's `{lat, lon, elev, terrain, step_s[, trail]}` dict.
+/// Cells of one run: the reference server's `{lat, lon, elev, terrain, step_s[, trail]}` dict.
 #[derive(Debug, Clone, Default)]
 pub struct Cells {
     pub lat: Vec<f64>,

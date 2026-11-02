@@ -1,11 +1,11 @@
-//! Grid geometry: a faithful port of navi's `shared/dem.py` (`grid_window` and the metadata
+//! Grid geometry: a faithful port of the reference server's `shared/dem.py` (`grid_window` and the metadata
 //! `DEMReader.get_elevation_grid` builds). The pack stores every layer on the global z12 pixel
 //! grid (512-px tiles, 2^21 pixels around the world); a query grid is a window of it.
 //!
-//! navi assigns the stitched window a *linear* lat/lon georeference (`pixel_size_lat` is the
+//! The reference server assigns the stitched window a *linear* lat/lon georeference (`pixel_size_lat` is the
 //! tile-range span divided by the pixel count, although z12 rows are Web-Mercator). This port keeps
 //! that georeference for all pixel<->lat/lon conversions so output coordinates and endpoint
-//! snapping behave as in navi.
+//! snapping behave as in the reference server.
 
 pub const TILE_SIZE: i64 = 512;
 pub const ZOOM: i32 = 12;

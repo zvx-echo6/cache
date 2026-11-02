@@ -3,7 +3,7 @@ name = "offroad_pack"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "Desktop builder for cache_offroad region packs (offroad.sqlite) from navi's data"
+description = "Desktop builder for cache_offroad region packs (offroad.sqlite) from the reference server's data"
 workspace = "../"
 
 [[bin]]

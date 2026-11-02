@@ -33,7 +33,8 @@
       "kind": "tuned_for_cache",
       "section": "experimental",
       "licence": "Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache",
-      "note": "An uncensored E2B, tuned for Cache."
+      "note": "An uncensored E2B, tuned for Cache.",
+      "uncensored": true
     },
     {
       "name": "Gemma 4 E4B uncensored · Q4_K_M",
@@ -44,7 +45,8 @@
       "sha256": "b2a89ec2df7f13440c723fb3fda2c531696cbe8e20ed2f1122f97a43aaafcb50",
       "kind": "works_not_tuned",
       "section": "experimental",
-      "note": "An uncensored E4B. Larger and slower."
+      "note": "An uncensored E4B. Larger and slower.",
+      "uncensored": true
     },
     {
       "name": "Gemma 4 E2B Q6 · tuned for Cache",

@@ -1,4 +1,4 @@
-//! Surface-change transition candidates. Port of navi `mvum_surface_change.py`: walks the road route
+//! Surface-change transition candidates. Port of the reference server `mvum_surface_change.py`: walks the road route
 //! through `trace_attributes` and emits a candidate wherever the surface category changes.
 use crate::valhalla::{decode_polyline6, encode_polyline6, TraceEdge, Valhalla};
 use crate::grid::haversine_m;

@@ -33,7 +33,7 @@ pub struct ShimValhalla {
 unsafe impl Send for ShimValhalla {}
 unsafe impl Sync for ShimValhalla {}
 
-/// Valhalla config for a local `tile_extract` tar (navi's settings, minus the files a phone does not ship).
+/// Valhalla config for a local `tile_extract` tar (the reference server's settings, minus the files a phone does not ship).
 pub fn config_for_tiles(tile_extract: &Path) -> String {
     let mut c: Value = serde_json::from_str(include_str!("valhalla_config.json")).expect("config template");
     c["mjolnir"]["tile_extract"] = Value::String(tile_extract.to_string_lossy().into_owned());

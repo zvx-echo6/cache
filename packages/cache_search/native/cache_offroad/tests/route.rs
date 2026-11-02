@@ -1,4 +1,4 @@
-//! Ports of navi's Phase-4 `_route_auto` integration tests, the category / spatial-eligibility tests
+//! Ports of the reference server's Phase-4 `_route_auto` integration tests, the category / spatial-eligibility tests
 //! and the Valhalla-bypass tests. Synthetic grids via MemPack + GridMeta::synthetic-like metas.
 use cache_offroad::cost::Mode;
 use cache_offroad::grid::GridMeta;

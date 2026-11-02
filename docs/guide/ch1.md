@@ -40,7 +40,7 @@ When the first model reaches the device, Cache says "Ask is on." Tap "Open" to g
 
 A model is about 3 to 5 GB.
 
-The models under "Recommended" are the default choice. Below them is a section called "Experimental". It says: "These models are uncensored. They are not recommended."
+The models under "Recommended" are the default choice. Below them is a section called "Experimental". It says: "Not part of the standard set. Some are uncensored and not recommended." Each uncensored model there is marked "Uncensored".
 
 - If you're on mobile data, the download waits for Wi-Fi. See Downloads, Wi-Fi and mobile data.
 - If a model says "Not supported: Cache needs a model that can use tools", pick another.

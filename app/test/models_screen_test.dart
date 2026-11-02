@@ -90,6 +90,7 @@ void main() {
         '09694d33cbca622556148e5e56fe97f1ecfeadbbdfbd24c4df6ede0708a6e330',
       ]);
       expect(r.map((m) => m.size), [3427879936, 4977171584, 3427873312, 5335285280, 3845346304]);
+      expect(r.map((m) => m.uncensored), [false, false, true, true, false], reason: 'the E2B Q6 under Experimental is not uncensored');
       expect(r[0].kind, RecommendationKind.tunedForCache);
       expect(r[0].licence, 'Apache-2.0 (Gemma 4 E2B), fine-tuned by Cache');
       expect(r.any((m) => m.file.contains('Qwen')), isFalse);
@@ -160,6 +161,22 @@ void main() {
       await bad.load();
       expect(bad.models.map((m) => m.name), ['built']);
     });
+  });
+
+  testWidgets('Experimental: "Not part of the standard set"; the uncensored entries carry the Uncensored tag, the E2B Q6 none', (tester) async {
+    ModelDownloads.shared = _RecordingDownloads(app: app);
+    final docs = File('../docs/models-recommended.json').readAsStringSync();
+    final recs = RecommendedModels(builtIn: () async => docs, fetch: () async => throw const SocketException('offline'));
+    await show(tester, ModelsScreen(app: app, recommended: recs, memory: 8 * _gb));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('recommended-e2b-stock-cache-1.0-Q6_K.gguf')), 200, scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Not part of the standard set. Some are uncensored and not recommended.'), findsOneWidget);
+    expect(find.text('These models are uncensored. They are not recommended.'), findsNothing);
+    expect(find.byKey(const ValueKey('uncensored-e2b-trevorjs-cache-1.0-Q4_K_M.gguf')), findsOneWidget);
+    expect(find.byKey(const ValueKey('uncensored-gemma-4-E4B-it-uncensored-Q4_K_M.gguf')), findsOneWidget);
+    expect(find.byKey(const ValueKey('uncensored-e2b-stock-cache-1.0-Q6_K.gguf')), findsNothing);
+    expect(find.text('Uncensored'), findsNWidgets(2));
   });
 
   testWidgets('Models leads with Recommended: size, fit, label, then Search Hugging Face and Choose a file; a tap downloads',

@@ -1,6 +1,6 @@
-//! Directions port vs navi: `pieces_from_result`, `_path_detail`, `offroad_steps` and `_assemble_offroad`
+//! Directions port vs the reference server: `pieces_from_result`, `_path_detail`, `offroad_steps` and `_assemble_offroad`
 //! (road pieces through a deterministic fake Valhalla, follow legs through a fake namer) on routes of the
-//! synthetic worlds, recorded from navi's own code by gen_directions.py.
+//! synthetic worlds, recorded from the reference server's own code by gen_directions.py.
 mod common;
 use cache_offroad::cost::Mode;
 use cache_offroad::directions::*;
@@ -61,7 +61,7 @@ fn close(a: &Value, b: &Value, path: &str) {
 }
 
 #[test]
-fn directions_assembly_matches_navi() {
+fn directions_assembly_matches_reference() {
     let worlds = common::load_gz(include_bytes!("fixtures/oracle_cases.json.gz"));
     let cases = common::load_gz(include_bytes!("fixtures/directions_cases.json.gz"));
     let mut n_checked = 0;
@@ -103,7 +103,7 @@ fn directions_assembly_matches_navi() {
         let res = router.search_on_grid(&req, meta, &modes(&s["start_modes"]), &modes(&s["end_modes"]), Instant::now()).unwrap();
         let tag = format!("{} #{} merge {}", c["case"], c["sc_index"], c["merge"]);
 
-        // path detail vs navi's _path_detail
+        // path detail vs the reference server's _path_detail
         let d = res.detail.as_ref().unwrap();
         let ed = &c["detail"];
         let n = d.lat.len();

@@ -8,7 +8,7 @@ use cache_tool::{ToolCtx, ToolError};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// A start or destination as the tool resolved it (AIDA's `_place` fields; what the source does not know is None).
+/// A start or destination as the tool resolved it (the reference assistant's `_place` fields; what the source does not know is None).
 #[derive(Clone, Debug)]
 pub(crate) struct Resolved {
     pub name: String,
@@ -57,7 +57,7 @@ impl Resolved {
             others: vec![],
         }
     }
-    /// AIDA's "sender node position", on the phone: the GPS fix.
+    /// The reference assistant's "sender node position", on the phone: the GPS fix.
     pub fn here(lat: f64, lon: f64) -> Resolved {
         Resolved::point("current location".into(), lat, lon)
     }
@@ -127,7 +127,7 @@ impl Resolver<'_, '_> {
         ans.matches.into_iter().next().map(Resolved::from_match)
     }
 
-    /// A place by name. `which` is "from" or "to" for the error. Nothing found is `geocode_empty` (AIDA's fields: which,
+    /// A place by name. `which` is "from" or "to" for the error. Nothing found is `geocode_empty` (the reference assistant's fields: which,
     /// query, searched_within_km; no detail).
     pub fn named(&self, text: &str, which: &str, near: Option<&str>, bias: Option<(f64, f64)>, with_others: bool) -> Result<Resolved, ToolError> {
         if let Some(r) = self.exact(text) {

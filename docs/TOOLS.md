@@ -157,8 +157,8 @@ followed, and the first ZIM that has it is used. The conversation keeps each num
 ```
 
 `to_type` lists the categories in the installed places pack; the 11 above are the default list while no pack says otherwise.
-Give exactly one of `to` and `to_type`. `mode` is `drive`, `walk` or `bike`, as in AIDA, or one of the two off-road
-modes, `offroad_foot` and `offroad_vehicle` (Cache's additions). `land_access` is the one argument added to AIDA's, and
+Give exactly one of `to` and `to_type`. `mode` is `drive`, `walk` or `bike`, as in the reference assistant, or one of the two off-road
+modes, `offroad_foot` and `offroad_vehicle` (Cache's additions). `land_access` is the one argument added to the reference assistant's, and
 the last: it defaults to `pragmatic` and only matters for off-road legs.
 
 **Off-road legs in drive, walk and bike.** When the start or the destination is away from the road network and the
@@ -177,7 +177,7 @@ rides keep the router's own snapping.
 
 **Off-road modes.** `offroad_foot` and `offroad_vehicle` route the whole trip with the off-road router, with no road
 route first: `offroad_foot` on foot over trails and open ground (the unified search with only foot), `offroad_vehicle`
-with navi's unified Auto search (4x4, ATV and two-wheeler, switching at parking lots, trailheads and road ends, on foot
+with the reference server's unified Auto search (4x4, ATV and two-wheeler, switching at parking lots, trailheads and road ends, on foot
 for the last part where no vehicle can go). Roads the router uses are part of the route. The result has the same fields
 as any route; `offroad_mi` is the off-road part. They need the off-road data covering both ends: without it the call is
 `not_set_up` with the detail "Off-road directions need off-road data for this area (the off-road pack and the elevation
@@ -203,17 +203,17 @@ per core; unknown/evicted IDs return `not_found`, malformed/mixed lookup request
 snapshot as UI metadata outside model context for chat history/restart. Opening it previews the route and does
 not start guidance automatically.
 
-Differences from AIDA: no Meshtastic waypoint or `pins`/`bridge` fields; the start defaults to the phone's GPS
-position instead of the sender's node (`location_bias` is then `sender_node_position`, AIDA's value, for the phone's
+Differences from the reference assistant: no Meshtastic waypoint or `pins`/`bridge` fields; the start defaults to the phone's GPS
+position instead of the sender's node (`location_bias` is then `sender_node_position`, the reference assistant's value, for the phone's
 fix); `water` and `shelter` added to the categories (from the map pack's OSM data); `land_access` added; the result
 adds `map_region` and `map_region_age`.
 
 Result (JSON). The tool writes `"address": "nav:<route_id>"` as the first field; the framework replaces it with `"n"`
 and puts `"ok": true` in front (the example shows `ok`; the app's `n` follows it). The example below is the recorded
-AIDA result `offroad-v24-12-t1-h` (`packages/cache_search/cli/tests/fixtures/aida_navigate/`, request: from "Kuna",
+The reference assistant result `offroad-v24-12-t1-h` (`packages/cache_search/cli/tests/fixtures/recorded_navigate/`, request: from "Kuna",
 to "Swan Falls Dam", near "Kuna, Idaho", mode drive), with its values as recorded, the fields written in the order the
 tool writes them, `pins` taken out (Cache has no pins), and `map_region` and `map_region_age` added as the tool emits
-them, plus `direction_from_start` and the `lat` and `lon` of both matched places (Cache's additions; the coordinates shown are illustrative, not recorded). The recording shows AIDA's geocoder values for `county`, `distance_km` and `near`; see the places-pack note below.
+them, plus `direction_from_start` and the `lat` and `lon` of both matched places (Cache's additions; the coordinates shown are illustrative, not recorded). The recording shows the reference assistant's geocoder values for `county`, `distance_km` and `near`; see the places-pack note below.
 
 ```json
 {
@@ -321,7 +321,7 @@ Fields:
   and the land access when it is not `pragmatic`).
 - `from_matched` and `to_matched` carry `place_name`, `kind`, `street`, `locality`, `county`, `state`, `distance_km`
   (km from the search's bias point), then `near` and `snap_distance_m` (how far the end was moved onto the road
-  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one: an integer 1 to 3 (navi's tiers;
+  network; null when not known). `er_tier` follows `distance_km` for an emergency room, when the places source gives one: an integer 1 to 3 (the reference server's tiers;
   1 is a hospital with an emergency department listing, 3 a hospital without one; the installed places pack gives 1 or 3),
   unlike nearby's string `er_tier`. It is followed by `emergency_department_confirmed` (true only for tier 1). An unconfirmed hospital fallback also has a `note` explaining that its emergency department is not confirmed in the installed data; neither the selected destination nor an alternative may be presented as a confirmed emergency room on that evidence. After `snap_distance_m` come `lat` and `lon`, the matched place's coordinates rounded to 5 decimals.
 - **The user's map layers.** `to` and `from` match a point of the user's own map layers by its exact name (ignoring case
@@ -332,7 +332,7 @@ Fields:
   Only points: a layer's lines and areas are map-only.
 - `other_destination_candidates` has up to 2 other matches (the same place fields, no `near`); empty when none. On a
   nearest-place search each entry also has `drive_min` (the travel time in minutes, for every mode; null when it could not be timed).
-- `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (AIDA passes navi's values through: `navi_places/nearby.py` `_rank`.)
+- `nearest_search` (`{"to_type": ..., "ranked_by": ..., "warnings": []}`) is present only for a `to_type` search, after `other_destination_candidates`. `ranked_by` is `"drive"` when the candidates were ranked by drive time (whatever the travel `mode`: walk and bike searches also say `drive`) and `"distance"` when routing failed for every candidate and the straight-line order stood; it is never the mode name. `warnings` is always a list of strings: `[]` when there are none, and one entry saying that routing failed when `ranked_by` is `"distance"`. (the reference assistant passes the reference server's values through: `ref_places/nearby.py` `_rank`.)
 - `direction_from_start` is the compass direction of the straight-line (initial great-circle) bearing from the start to the destination, one lower-case word of eight: `north`, `northeast`, `east`, `southeast`, `south`, `southwest`, `west`, `northwest` (45 degree sectors centred on each point). It follows `duration_minutes`.
 - `major_roads` is a list of `{"name", "distance_km"}`.
 - `traffic` follows `major_roads` on every route: null when there is no traffic data (no traffic key, offline, or no
@@ -342,8 +342,8 @@ Fields:
   the extra minutes traffic adds to the whole route (already in `duration_minutes`), when the traffic data was read (local
   time, ISO 8601 with offset), where it came from, and the slowed roads with their own delays (empty when none). The
   assistant mentions traffic only when it is not null. Project decision (2026-10-29).
-- `offroad_mi` and `offroad_note` appear only when the route has off-road legs. `offroad_note` is AIDA's text with the grid
-  size corrected to "~15 m" (AIDA says ~30 m; the router's grid is the global z12 pixel grid, 13-15 m across the
+- `offroad_mi` and `offroad_note` appear only when the route has off-road legs. `offroad_note` is the reference assistant's text with the grid
+  size corrected to "~15 m" (the reference assistant says ~30 m; the router's grid is the global z12 pixel grid, 13-15 m across the
   continental US); the example above shows Cache's text.
 - When the destination is a place from the places data (not a town, saved place, address or coordinates), `to_matched`
   has `phone`, `website`, `hours` (null when unknown) and `open_status` after `state`, as in nearby (**Place details**,
@@ -379,7 +379,7 @@ fields below sit at the top level beside `error`, and `detail` is left out when 
 - `geocode_empty`: nothing matched a name. `error` has `which` (`from` or `to`), `query` and `searched_within_km`
   (null when unknown); no `detail`.
 - `origin_unknown`: no `from` was given and the phone's location is not known. (Navigate does not use `no_location`.)
-- `nearby_empty`: no place of that type was found. `error` has `to_type` and `warnings` (a list, `[]` when there are none, never null; AIDA `nav_runtime.py`); no `detail`.
+- `nearby_empty`: no place of that type was found. `error` has `to_type` and `warnings` (a list, `[]` when there are none, never null; the reference assistant `nav_runtime.py`); no `detail`.
 - `same_place`: the start and the destination are the same spot.
 - The router's own code is passed through as `error.type` when the route fails, with its message as `detail`:
   `no_route`, `too_far`, `out_of_coverage`, `route_too_long`, `upstream_timeout`, `internal`.

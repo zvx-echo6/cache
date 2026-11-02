@@ -40,7 +40,7 @@ Map<String, dynamic> buildCoreExtras({
     'live': {'db_path': '${supportDir.path}/live.sqlite', 'sources_dir': '${filesDir.path}/live-defs'},
     'places': {'packs': const <String>[], 'merged_dir': '${supportDir.path}/regions/places'},
     // The map layer engine: its folder (tile stores, cache, user definitions) and the starter definitions. The
-    // catalogue address is the core's default (https://cache.echo6.co/catalogue.json).
+    // catalogue address is the core's default (https://data.cached.info/catalogue.json).
     'layers': {
       'dir': '${supportDir.path}/layers',
       'defs_dirs': [(layerDefsDir ?? Directory('${supportDir.path}/layer-defs')).path],

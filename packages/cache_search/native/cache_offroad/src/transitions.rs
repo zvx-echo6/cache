@@ -1,4 +1,4 @@
-//! Transition-cell sourcing for the unified search. Port of navi `transitions.py`: parking,
+//! Transition-cell sourcing for the unified search. Port of the reference server `transitions.py`: parking,
 //! trailheads, road termini (and surface change via the `Valhalla` trait), the per-type
 //! "closest 15 within 5 km of the endpoint line" cap, and lat/lon -> cell mapping.
 use crate::cost::*;

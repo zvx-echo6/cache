@@ -91,7 +91,7 @@ ends in `.`, `!` or `?`, optionally followed by exactly one closing `"` `'` `”
 records the model, its SHA-256, the server, the sampling settings and the prompt; then one line per model call (the
 answer, the verdict `model_cut` or `dropped`, seconds) and a last line with the counts.
 
-Server (CPU, CT138; 4 threads so a running step keeps the rest):
+Server (CPU, a build server; 4 threads so a running step keeps the rest):
 
 ```
 docker run -d --name s14-llama --network host -v /build/places/s14/models:/models:ro ghcr.io/ggml-org/llama.cpp:server \

@@ -122,7 +122,7 @@ pub fn point_segment_dist_deg(px: f64, py: f64, a: (f64, f64), b: (f64, f64)) ->
     (px - cx).hypot(py - cy)
 }
 
-/// Points of `pts` within the buffer of the (lat, lon) endpoint line: the navi
+/// Points of `pts` within the buffer of the (lat, lon) endpoint line: the reference server
 /// `query_*_near_line` (bbox prefilter of the buffer, then a degree-distance test to the line).
 pub fn near_line(
     cands: Vec<PointRec>, a: (f64, f64), b: (f64, f64), buffer_m: f64,

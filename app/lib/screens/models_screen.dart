@@ -98,7 +98,7 @@ class _ModelsScreenState extends State<ModelsScreen> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
                         child: Text(
-                          'These models are uncensored. They are not recommended.',
+                          'Not part of the standard set. Some are uncensored and not recommended.',
                           key: const ValueKey('experimental-note'),
                           style: TextStyle(fontSize: 13, color: k.secondary),
                         ),
@@ -189,6 +189,16 @@ class _ModelsScreenState extends State<ModelsScreen> {
       extra: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (r.uncensored)
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 2),
+              child: Container(
+                key: ValueKey('uncensored-${r.file}'),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(border: Border.all(color: k.warning), borderRadius: BorderRadius.circular(6)),
+                child: Text('Uncensored', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: k.warning)),
+              ),
+            ),
           // A tuned model's name already says so ("· tuned for Cache"): only the others say how they stand.
           if (r.kind != RecommendationKind.tunedForCache) Text(r.kind.label, style: TextStyle(fontSize: 12, color: k.secondary)),
           if (r.licence != null) Text(r.licence!, style: TextStyle(fontSize: 12, color: k.secondary)),

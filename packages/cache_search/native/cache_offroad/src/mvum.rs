@@ -1,4 +1,4 @@
-//! MVUM legal-access layer. Port of navi `mvum.py`: `parse_date_range`, `is_date_in_range`,
+//! MVUM legal-access layer. Port of the reference server `mvum.py`: `parse_date_range`, `is_date_in_range`,
 //! `check_access`, `symbol_to_access`, `get_mode_field`, `_draw_line`/`_rasterize_feature` and the
 //! all-modes grid builder. Output grids: 0 = no data, 1 = open, 255 = closed.
 use crate::grid::GridMeta;
@@ -156,7 +156,7 @@ fn draw_line(grid: &mut [u8], rows: i64, cols: i64, r1: i64, c1: i64, r2: i64, c
 }
 
 /// Rasterize the features for the three motorized modes (mtb, atv, vehicle) onto the query grid.
-/// `check_date` = None reproduces the cached path navi's Auto uses (no seasonal check).
+/// `check_date` = None reproduces the cached path the reference server's Auto uses (no seasonal check).
 #[allow(clippy::needless_range_loop)] // `mi` is the mode index into the feature's access and the three grids
 pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(u32, u32)>) -> [Vec<u8>; 3] {
     let (rows, cols) = (meta.rows as i64, meta.cols as i64);
@@ -174,7 +174,7 @@ pub fn access_grids(feats: &[MvumFeature], meta: &GridMeta, check_date: Option<(
                 for w in line.windows(2) {
                     let (x1, y1) = w[0];
                     let (x2, y2) = w[1];
-                    // Python int(): truncation toward zero, as navi does
+                    // Python int(): truncation toward zero, as the reference server does
                     let rc = |x: f64, y: f64| (((top - y) / ps_lat) as i64, ((x - left) / ps_lon) as i64);
                     let (ra, ca) = rc(x1, y1);
                     let (rb, cb) = rc(x2, y2);

@@ -4,8 +4,7 @@ How the Cache artwork was made, so more can be made in the same style.
 
 - `reference/branding-board.png` — the GPT branding board everything is matched to (attach it in GPT when making new assets).
 - `reference/asset-sheet-preview.png` — GPT's earlier contact sheet (preview only; its cropped pack was unusable).
-- `gpt-originals/` — the full-size PNGs exactly as GPT named them.
-- `source/` — the same images renamed by asset number (used by the app build).
+- `source/` — the full-size PNGs, named by asset number (used by the app build).
 
 ## How to make a new asset
 

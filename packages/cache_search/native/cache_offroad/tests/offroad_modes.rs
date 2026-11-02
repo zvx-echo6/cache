@@ -127,7 +127,7 @@ fn land_access_other_than_pragmatic_is_part_of_the_route_id() {
         r.boundary = b;
         e.directions(&r).route_id
     };
-    // pragmatic keeps navi's key (sha256 of "42.555800,-114.470100|42.565000,-114.460000|offroad_foot|t")
+    // pragmatic keeps the reference server's key (sha256 of "42.555800,-114.470100|42.565000,-114.460000|offroad_foot|t")
     assert_eq!(id(Boundary::Pragmatic), "61ce886a582d8e20");
     assert_eq!(id(Boundary::Strict), "1e00fd99935a3eb1");
     assert_eq!(id(Boundary::Emergency), "0336559888cf300f");
