@@ -348,7 +348,7 @@ class CoreJob {
   Map<String, dynamic>? set(Map<String, Object?> pace) {
     final n = native;
     if (n is! CsJobNative) return null;
-    final s = n.jobSet(_j, jsonEncode(pace));
+    final s = (n as CsJobNative).jobSet(_j, jsonEncode(pace));
     return s == null ? null : _object(s);
   }
 
