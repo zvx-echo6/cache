@@ -1,0 +1,12 @@
+[package]
+name = "cache_catalog"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Reader for Cache's optional book catalogue file (format 1): ISBN and title lookups by random access, with the Library of Congress class converted to a Cache division"
+# This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
+workspace = "../cache_search/native"
+
+# Pure Rust. The only dependency is the deflate decoder cache_live, cache_search and others already pull in through flate2.
+[dependencies]
+miniz_oxide = "0.8"
