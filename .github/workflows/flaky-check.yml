@@ -22,23 +22,18 @@ jobs:
       - name: Packages
         working-directory: app
         run: flutter pub get
-      - name: Disk and the pop-up's storage
-        working-directory: app
-        run: |
-          df -h / /tmp
-          flutter test --no-pub test/zz_probe/space_probe_test.dart 2>&1 | grep PROBE
-      - name: Repeat 10 times, idle, then 10 times under CPU load
+      - name: The three files 10 times, then the whole app suite 4 times (where the failures happened)
         working-directory: app
         run: |
           FILES="test/regions_test.dart test/models_screen_test.dart test/search_model_ui_test.dart"
           fails=0
-          for mode in idle load; do
-            if [ "$mode" = load ]; then for i in 1 2 3 4 5 6; do (timeout 3000 sh -c 'while :; do :; done' &) ; done; fi
-            for i in $(seq 1 10); do
-              if flutter test --no-pub $FILES > run.log 2>&1; then echo "$mode $i: pass"; else
-                fails=$((fails+1)); echo "$mode $i: FAIL"; grep -E "❌|Expected:|Actual:|\[E\]|FAILED" run.log | head -20; fi
-            done
+          for i in $(seq 1 10); do
+            if flutter test --no-pub $FILES > run.log 2>&1; then echo "files $i: pass"; else
+              fails=$((fails+1)); echo "files $i: FAIL"; grep -E "Expected:|Actual:|\[E\]|FAILED|failed\)" run.log | head -20; fi
           done
-          pkill -f 'while :; do :; done' || true
-          echo "failures: $fails of 20"
+          for i in 1 2 3 4; do
+            if flutter test --no-pub > run.log 2>&1; then echo "suite $i: pass ($(grep -c '✅' run.log || true) passed)"; else
+              fails=$((fails+1)); echo "suite $i: FAIL"; grep -E "Expected:|Actual:|tests passed|failed\)" run.log | head -20; fi
+          done
+          echo "failures: $fails of 14"
           [ "$fails" = 0 ]
