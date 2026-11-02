@@ -773,6 +773,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
+ "cache_chunk",
  "cache_search",
  "edge",
  "flate2",
@@ -794,6 +795,10 @@ dependencies = [
  "fend-core",
  "serde_json",
 ]
+
+[[package]]
+name = "cache_chunk"
+version = "0.1.0"
 
 [[package]]
 name = "cache_embed"

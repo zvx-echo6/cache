@@ -41,6 +41,7 @@ import '../update/update_ui.dart';
 import '../video/video_state.dart';
 import '../weather/alert_notifier.dart';
 import '../weather/alert_watch.dart';
+import 'ask_off.dart';
 import 'ask_screen.dart';
 import 'home_screen.dart';
 import 'maps_screen.dart';
@@ -118,9 +119,54 @@ class _ShellState extends State<Shell> {
   StreamSubscription<NavEvent>? _navEvents;
   StreamSubscription<AlertFocus>? _alertTaps;
 
+  /// Ask is available: a chat model is on this device (AppState.askAvailable). Without one Cache is search only: Ask leaves the bar
+  /// and the rail (its pin is kept and it takes its old place when a model comes), and every way into Ask is closed or explained.
+  late bool _askOn = widget.app.askAvailable;
+
+  /// The models folder has been read and held no chat model: the next one to arrive turns Ask on, and says so.
+  /// Set in initState (a lazy initializer would first run after the model had already arrived).
+  bool _noModelSeen = false;
+
+  void _onApp() {
+    final app = widget.app;
+    final arrived = _noModelSeen && app.started && app.models.isNotEmpty;
+    if (app.started) _noModelSeen = app.models.isEmpty;
+    final on = app.askAvailable;
+    if (on != _askOn && mounted) {
+      setState(() => _askOn = on);
+      askCacheInstead = on ? _askFromGuide : null;
+    }
+    if (arrived && mounted) _askIsOn();
+  }
+
+  /// The first model has arrived: "Ask is on." with Open. Nothing moves by itself.
+  void _askIsOn() {
+    final m = ScaffoldMessenger.of(context);
+    m.hideCurrentSnackBar();
+    m.showSnackBar(SnackBar(
+      key: const ValueKey('ask-is-on'),
+      persist: false,
+      content: const Text('Ask is on.'),
+      action: SnackBarAction(label: 'Open', onPressed: _openAskNow),
+    ));
+  }
+
+  /// "Open" on "Ask is on.": Ask, with the new model loading (nothing else is loaded).
+  void _openAskNow() {
+    final app = widget.app;
+    if (app.active == null && app.loading == null) {
+      final usable = [for (final e in app.models) if (!app.isUnsupported(e)) e];
+      if (usable.isNotEmpty) unawaited(app.activate(usable.first));
+    }
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    _goModule(ModuleId.ask);
+  }
+
   @override
   void initState() {
     super.initState();
+    _noModelSeen = widget.app.started && widget.app.models.isEmpty;
+    widget.app.addListener(_onApp);
     _navEvents = widget.nav.events.listen((e) {
       if (e is AddToHomeRequested && mounted) addToHome(context, widget.layout, Shortcut.place(e.place));
       if (e is MapRequested && mounted) _goModule(ModuleId.maps);
@@ -133,7 +179,7 @@ class _ShellState extends State<Shell> {
     widget.maps.addListener(_onMaps);
     openAppPlace = _goToPlace;
     appPlaceScreen = _placeScreen;
-    askCacheInstead = _askFromGuide;
+    askCacheInstead = _askOn ? _askFromGuide : null;
     // The PDF reader's "Open Library" (its file is gone from a library): the Library, over everything.
     PdfReaderLinks.openLibrary = (context) {
       Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
@@ -187,6 +233,7 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     widget.maps.removeListener(_onMaps);
+    widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
     if (appPlaceScreen == _placeScreen) appPlaceScreen = null;
     if (askCacheInstead == _askFromGuide) askCacheInstead = null;
@@ -257,7 +304,17 @@ class _ShellState extends State<Shell> {
     final d = _settingsDeps;
     return switch (p) {
       AppPlace.home => _home(),
-      AppPlace.ask => _moduleScreen(ModuleId.ask),
+      // With no model, a link to Ask opens the note Modules shows (Choose a model / Close): a tapped link is never silent.
+      AppPlace.ask => _askOn
+          ? _moduleScreen(ModuleId.ask)
+          : Builder(
+              builder: (c) => AskOffPage(
+                app: widget.app,
+                chat: widget.chat,
+                onChooseModel: () => openModels(c, widget.app),
+                onClose: () => Navigator.of(c).pop(),
+              ),
+            ),
       AppPlace.maps => _moduleScreen(ModuleId.maps),
       AppPlace.regions => regions == null ? null : RegionsScreen(regions: regions),
       AppPlace.library => _moduleScreen(ModuleId.library),
@@ -400,6 +457,7 @@ class _ShellState extends State<Shell> {
 
   /// Enter in Home's search: a new chat that asks exactly what was typed.
   void _askFromHome(String text) {
+    if (!_askOn) return;
     widget.chat.newChat();
     _goModule(ModuleId.ask);
     widget.chat.send(text);
@@ -419,6 +477,7 @@ class _ShellState extends State<Shell> {
 
   /// "Ask about this" on the Weather screen: a new chat that asks the question straight away, seeded with the item's live data.
   void _askAbout(AskAbout about) {
+    if (!_askOn) return;
     widget.chat.newChat();
     _goModule(ModuleId.ask);
     widget.chat.send(about.question, seed: about);
@@ -564,11 +623,18 @@ class _ShellState extends State<Shell> {
   );
 
   Widget _moduleScreen(ModuleId m) => switch (m) {
-        ModuleId.ask => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout),
+        ModuleId.ask => AskGate(
+            app: widget.app,
+            chat: widget.chat,
+            onChooseModel: () => openModels(context, widget.app),
+            onLeave: _goHome,
+            ask: ({required bool readOnly, VoidCallback? onBack}) => AskScreen(app: widget.app, chat: widget.chat, location: widget.location, chatLocation: widget.chatLocation, onOpenSource: _openSource, onOpenPassage: _openSource, onOpenVideo: _openVideo, onOpenNavigation: _openNavigation, layout: widget.layout, readOnly: readOnly, onBack: onBack),
+          ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
         ModuleId.videos => VideosScreen(video: widget.video),
-        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askAbout, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
+        // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
+        ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
         ModuleId.settings => SettingsScreen(deps: _settingsDeps),
       };
@@ -581,6 +647,8 @@ class _ShellState extends State<Shell> {
     setup: _setup,
     search: _search,
     onAsk: _askFromHome,
+    askOn: _askOn,
+    onChooseModel: () => openModels(context, widget.app),
     onOpenSettings: _openSettings,
     onOpenShortcut: _openShortcut,
     updates: _updates,
@@ -594,7 +662,8 @@ class _ShellState extends State<Shell> {
     return ListenableBuilder(
       listenable: layout,
       builder: (context, _) {
-        final pinned = layout.pinned;
+        // With no model Ask is left out of the bar and the rail (its pin is kept), with no gap.
+        final pinned = [for (final m in layout.pinned) if (m != ModuleId.ask || _askOn) m];
         // The bar: Home, the pinned modules, Modules. A module that is open but not pinned shows under Modules.
         final int selected;
         if (_onModules) {

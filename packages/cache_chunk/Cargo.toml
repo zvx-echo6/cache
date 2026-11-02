@@ -1,0 +1,11 @@
+[package]
+name = "cache_chunk"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cache's passage chunker: verbatim pieces of about 200 words from whole sentences. One implementation, shared by the library builder and the core"
+# This crate lives outside the workspace root's directory (packages/cache_search/native), so it names it.
+workspace = "../cache_search/native"
+
+# Pure Rust, std only: no PDF engine, no I/O, no dependencies.
+[dependencies]
