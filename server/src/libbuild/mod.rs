@@ -344,6 +344,8 @@ pub struct BuildService {
     rt: Mutex<Option<tokio::runtime::Handle>>,
     pub(crate) drop: dropdir::DropState,
     stopping: AtomicBool,
+    /// How PDFs are read: in a child process, so a PDF that crashes MuPDF fails its own book and never the service.
+    extractor: Mutex<ChildExtractor>,
 }
 
 fn write_json(path: &Path, v: &impl Serialize) -> std::io::Result<()> {
