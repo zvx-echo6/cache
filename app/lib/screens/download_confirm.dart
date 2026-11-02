@@ -96,6 +96,7 @@ Future<bool> confirmDelete(
   required int bytes,
   int? free,
   String again = 'You can download it again later.',
+  String? warning,
 }) async {
   final yes = await showDialog<bool>(
     context: context,
@@ -114,6 +115,10 @@ Future<bool> confirmDelete(
             ],
             const SizedBox(height: 8),
             Text(again, style: TextStyle(fontSize: 13, color: k.secondary)),
+            if (warning != null) ...[
+              const SizedBox(height: 8),
+              Text(warning, key: const ValueKey('confirm-delete-warning'), style: TextStyle(fontSize: 13, color: k.text)),
+            ],
           ],
         ),
         actions: [

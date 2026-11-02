@@ -714,6 +714,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache_chunk"
+version = "0.1.0"
+
+[[package]]
 name = "cache_embed"
 version = "0.1.0"
 dependencies = [

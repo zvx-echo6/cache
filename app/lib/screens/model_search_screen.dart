@@ -165,7 +165,8 @@ Future<void> downloadModel(BuildContext context, ModelDownloads d, HfFile f) asy
   if (choice == DownloadChoice.cancel || !context.mounted) return;
   await d.start(f, anyway: choice == DownloadChoice.now);
   if (!context.mounted) return;
-  if (d.finished != null) {
+  // The first chat model on this device: the app says "Ask is on." itself (Shell), so this one says nothing over it.
+  if (d.finished != null && d.app.models.length > 1) {
     final finished = d.finished!;
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
