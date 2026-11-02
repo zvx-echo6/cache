@@ -823,6 +823,7 @@ version = "0.1.0"
 dependencies = [
  "cache_places",
  "cache_snapshot",
+ "cache_sync",
  "flate2",
  "fs4 1.1.0",
  "rusqlite",

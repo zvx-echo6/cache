@@ -26,3 +26,5 @@ cache_snapshot = { path = "../cache_snapshot" }
 [dev-dependencies]
 # The tests' routing server.
 tiny_http = "0.12"
+# Two devices: a tile index snapshot travels from one to the other (tests/peer_index.rs).
+cache_sync = { path = "../cache_sync" }

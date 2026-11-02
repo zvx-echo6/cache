@@ -31,6 +31,11 @@ const Map<String, List<String>> kIndexKindsOfSource = {
   'library': ['library'],
 };
 
+/// Index kinds every device fetches whole, whatever sources it has: the regions' tile indexes (routing and places), one small
+/// snapshot per server build. A device fetches them before it has any region: with a peer's copy it plans and adds regions
+/// with no network, and a device with no network knows no build name to ask for (the core takes the newest snapshot here).
+const List<String> kIndexKindsAlways = ['places-index', 'region-index'];
+
 /// A source id as one folder name, as the core writes it (cache_search snapshot.rs `encode_source_id`): every byte except
 /// letters, digits and `_@-`, and `.` after the first byte, is written `%XX`.
 String encodeSourceId(String id) {
@@ -44,9 +49,11 @@ String encodeSourceId(String id) {
   return out.toString();
 }
 
-/// What this device fetches of the indexes folder: the index folders of the sources the core has open (their `source_id` in
-/// cs_status), every kind each of them has. A source the core could not open (no source id) fetches nothing.
+/// What this device fetches of the indexes folder: the regions' tile indexes ([kIndexKindsAlways]), and the index folders of the
+/// sources the core has open (their `source_id` in cs_status), every kind each of them has. A source the core could not open
+/// (no source id) fetches nothing.
 List<String> indexesFetchOnly(Iterable<SourceStatus> sources) => {
+  ...kIndexKindsAlways,
   for (final s in sources)
     if (s.sourceId != null && s.sourceId!.isNotEmpty)
       for (final kind in kIndexKindsOfSource[s.kind] ?? const <String>[]) '$kind/${encodeSourceId(s.sourceId!)}',
