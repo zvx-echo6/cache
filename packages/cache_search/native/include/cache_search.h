@@ -185,6 +185,8 @@ void cs_close(cs_handle *h);
  * The vector is used only for libraries whose settings embedding.model matches this model id; other sources
  * are keyword-only.
  * Returns {"results":[{"address","title","snippet","source_id","source_kind","source_title","page"}],
+ *          (a result from a ZIM's PDF index, address "zimpdf:...", also has "pdf_page": the real 1-based PDF page, next to
+ *          "page", the printed label; no other result has that key)
  *          "total_estimate":N, "vector_sources":["<id>",...], "keyword_only_sources":["<id>",...]} */
 char *cs_search(cs_handle *h, const char *query, const char *options_json);
 

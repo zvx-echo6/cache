@@ -764,6 +764,7 @@ impl Handle {
                         "source_kind": "zim",
                         "source_title": k.zim_title,
                         "page": page_value(&h.label),
+                        "pdf_page": h.pdf_page,
                     }));
                     continue;
                 }

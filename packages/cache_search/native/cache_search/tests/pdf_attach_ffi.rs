@@ -358,6 +358,19 @@ fn the_snapshot_is_attached_and_its_hits_cite_the_page() {
         s["results"].as_array().unwrap().iter().any(|r| r["address"].as_str().unwrap().starts_with("zimpdf:")),
         "{s}"
     );
+    // a PDF result carries the real 1-based page ("pdf_page") next to the printed label ("page"); other results get no new key
+    for r in s["results"].as_array().unwrap() {
+        if r["address"].as_str().unwrap().starts_with("zimpdf:") {
+            let t = r["title"].as_str().unwrap();
+            let want = if t.starts_with("Manual A") { 2 } else { 7 };
+            assert_eq!(r["pdf_page"], want, "{r}");
+            assert_eq!(r["page"], want, "{r}");
+        } else {
+            assert!(r.get("pdf_page").is_none(), "{r}");
+        }
+    }
+    let s = call(unsafe { cs_search(h, cstr("flood").as_ptr(), o.as_ptr()) });
+    assert!(s["results"].as_array().unwrap().iter().all(|r| r.get("pdf_page").is_none()), "{s}");
     let o = cstr(&json!({"k": 5, "sources": [OTHER]}).to_string());
     let s = call(unsafe { cs_search(h, cstr("torque").as_ptr(), o.as_ptr()) });
     assert!(s["results"].as_array().unwrap().is_empty());
