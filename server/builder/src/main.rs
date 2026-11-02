@@ -1,13 +1,14 @@
 //! `cache-build`: the library builder's command line.
 //!
-//!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
+//!   cache-build pdf <in.pdf...> --out packs/ [--fake-embedder | --embed-url URL] [--doc-id ID] [--doc-version N] [--title T] [--https URL]
 //!                                            [--created-at TEXT] [--pieces-out FILE]
 //!   cache-build library --packs <packs dir> --out <libdir> --id ID --title TITLE [--version V] [--archive]
 //!       (the packs dir may also be given as the first argument) writes shard/, cache-library.json, documents.tsv, SHA256SUMS
 //!   cache-build dump <in.pdf> <page>     (the blocks and lines MuPDF reports for a 1-based page; for debugging)
 
 use cache_builder::build::{build_pack, BuildOptions};
-use cache_builder::embed::FakeEmbedder;
+use cache_builder::embed::{Embedder, FakeEmbedder};
+use cache_builder::embed_http::HttpEmbedder;
 use cache_builder::library::{build_library, check_library_dir, LibraryOptions};
 use cache_builder::pack::write_pack;
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use std::time::Instant;
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> --fake-embedder [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
+        "usage:\n  cache-build pdf <in.pdf...> --out <packs dir> (--fake-embedder | --embed-url http://host:port) [--doc-id ID] [--doc-version N] [--title T] [--https URL] [--created-at TEXT] [--pieces-out FILE]\n  cache-build library --packs <packs dir> --out <library dir> --id ID --title TITLE [--version V] [--archive]\n  cache-build dump <in.pdf> <page>"
     );
     std::process::exit(2);
 }
@@ -97,10 +98,29 @@ fn cmd_pdf(a: &Args) -> i32 {
     if a.pos.is_empty() {
         usage();
     }
-    if !a.has("--fake-embedder") {
-        eprintln!("error: there is no real embedder in this build yet; pass --fake-embedder (stand-in vectors for testing the pipeline)");
+    let http: Option<HttpEmbedder> = match a.get("--embed-url") {
+        Some(u) => match HttpEmbedder::new(&u) {
+            Ok(e) => Some(e),
+            Err(e) => {
+                eprintln!("error: --embed-url: {e}");
+                return 2;
+            }
+        },
+        None => None,
+    };
+    if http.is_none() && !a.has("--fake-embedder") {
+        eprintln!("error: pass --embed-url (a llama-server running bge-m3 Q8_0) or --fake-embedder (stand-in vectors for testing the pipeline)");
         return 2;
     }
+    if http.is_some() && a.has("--fake-embedder") {
+        eprintln!("error: --embed-url and --fake-embedder cannot be used together");
+        return 2;
+    }
+    let fake = FakeEmbedder;
+    let embedder: &dyn Embedder = match &http {
+        Some(h) => h,
+        None => &fake,
+    };
     if a.pos.len() > 1 && (a.get("--doc-id").is_some() || a.get("--title").is_some() || a.get("--https").is_some()) {
         eprintln!("error: --doc-id, --title and --https apply to a single PDF");
         return 2;
@@ -126,7 +146,7 @@ fn cmd_pdf(a: &Args) -> i32 {
         if let Some(v) = a.get("--doc-version") {
             o.doc_version = v.parse().unwrap_or(0);
         }
-        match build_pack(&bytes, &o, &FakeEmbedder) {
+        match build_pack(&bytes, &o, embedder) {
             Ok((pack, r)) => {
                 let path = match write_pack(&pack, &PathBuf::from(&out)) {
                     Ok(p) => p,
@@ -165,7 +185,7 @@ fn cmd_pdf(a: &Args) -> i32 {
                 }
             }
             Err(e) => {
-                eprintln!("{f}: FAILED: {e}");
+                eprintln!("{f}: FAILED: {e}{}", http.as_ref().and_then(|h| h.last_error()).map(|m| format!(" ({m})")).unwrap_or_default());
                 failed += 1;
             }
         }
