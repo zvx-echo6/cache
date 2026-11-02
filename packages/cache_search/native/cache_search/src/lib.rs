@@ -24,6 +24,7 @@ pub mod search;
 pub mod snapshot;
 pub mod suggest;
 pub mod tools;
+pub mod vtt;
 pub mod web;
 pub mod zimsrc;
 pub mod zimx;
