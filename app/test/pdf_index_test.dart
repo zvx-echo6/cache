@@ -8,6 +8,7 @@ import 'package:cache/pdf/index/pdf_index_state.dart';
 import 'package:cache/pdf/index/pdf_index_ui.dart';
 import 'package:cache/pdf/index/pdf_timing.dart';
 import 'package:cache/settings/space.dart';
+import 'package:cache/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -186,6 +187,7 @@ void main() {
     );
 
     Future<PdfPart?> settled(PdfZimRef z) async {
+      await state.listOf(z);
       for (var i = 0; i < 100; i++) {
         final p = state.partOf(z);
         if (p != null) return p;
@@ -234,6 +236,7 @@ void main() {
       // A new start of the app reads the same from its record.
       final later = make();
       await later.init();
+      state.dispose();
       state = later;
       expect((await settled(z))?.fromOtherDevice, isFalse);
     });
@@ -250,6 +253,7 @@ void main() {
       PdfIndexPaths(otherZim).index.renameSync(PdfIndexPaths(zimPath).index.path);
       final fresh = make();
       await fresh.init();
+      state.dispose();
       state = fresh;
       final p = (await settled(z))!;
       expect(p.phase, PdfPartPhase.done);
@@ -279,6 +283,7 @@ void main() {
       File('${idx.path}/SHA256SUMS').writeAsStringSync('x\n');
       final fresh = make();
       await fresh.init();
+      state.dispose();
       state = fresh;
       final p = (await settled(z))!;
       expect(p.phase, PdfPartPhase.newVersion);
@@ -360,7 +365,7 @@ void main() {
   });
 
   group('the part and the pop-up', () {
-    Widget host(Widget child) => MaterialApp(home: Scaffold(body: child));
+    Widget host(Widget child) => MaterialApp(theme: buildTheme(CacheThemeId.light), home: Scaffold(body: child));
 
     testWidgets('one control a state: Make searchable, Pause, Resume with Remove, Free space, none when done', (tester) async {
       var started = 0, paused = 0;

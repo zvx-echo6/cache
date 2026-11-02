@@ -188,8 +188,17 @@ class PdfIndexState extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _disposed = false;
+
+  /// Work that finishes after dispose (a listing, a run) tells no one.
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     changes?.removeListener(_onZims);
     _watch?.cancel();
     _run?.stop(PdfRunStop.person);
