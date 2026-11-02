@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 
 import '../pdf_source.dart' show isNoSpace;
@@ -69,6 +70,8 @@ class PdfIndexRun extends ChangeNotifier {
     required this.core,
     required this.paths,
     required this.zimName,
+    this.previousZimUuid,
+    this.spaceOk,
     required this.list,
     this.readPages = readPdfPagesFromBytes,
     this.battery,
@@ -84,8 +87,18 @@ class PdfIndexRun extends ChangeNotifier {
   /// Where the ZIM's index is built and published (its uuid's folder in the device's indexes folder).
   final PdfIndexPaths paths;
 
-  /// The ZIM's name, given to cs_pdfindex_open.
+  /// The ZIM's metadata Name, given to cs_pdfindex_open.
   final String zimName;
+
+  /// An older edition of this ZIM with a snapshot: its unchanged PDFs are reused, not read again.
+  final String? previousZimUuid;
+
+  /// False when the device is low on storage (under the reserve): the run stops with "this device is full" (checked with the
+  /// battery).
+  final bool Function()? spaceOk;
+
+  /// PDFs taken from the previous edition.
+  int reused = 0;
   final ZimPdfList list;
   final PdfBytesReader readPages;
   final BatteryReader? battery;
@@ -106,8 +119,11 @@ class PdfIndexRun extends ChangeNotifier {
   int skipped = 0;
   int pieces = 0;
 
-  /// PDFs the core has committed (cs_pdfindex_add's "committed"): what a kill keeps.
+  /// PDFs the core has committed, added and skipped (cs_pdfindex_add's "committed"): what a kill keeps.
   int committed = 0;
+
+  /// The previous edition's PDFs by path, with their size (cs_pdfindex_open's "reusable").
+  final Map<String, int> reusable = {};
   int bytesDone = 0;
 
   /// What this run did itself (a resume counts from where it starts), for the speed.
@@ -172,6 +188,10 @@ class PdfIndexRun extends ChangeNotifier {
     if (r != null && r.low) stop(PdfRunStop.battery);
   }
 
+  void _checkSpace() {
+    if (spaceOk != null && !spaceOk!()) throw const _Failed(PdfRunFailure(PdfRunFailureKind.full));
+  }
+
   void _checkStop() {
     if (_stop != PdfRunStop.none) throw const _Stopped();
   }
@@ -183,11 +203,14 @@ class PdfIndexRun extends ChangeNotifier {
     try {
       var doneSet = <String>{};
       if (stage) {
-        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName);
+        final s = await core.open(indexesDir: paths.indexesDir, zimUuid: paths.zimUuid, zimName: zimName, previousZimUuid: previousZimUuid);
+        for (final r in s.reusable) {
+          reusable[r.path] = r.size;
+        }
         session = s.session;
         doneSet = {...s.done, ...s.skipped};
         pieces = s.pieces;
-        committed = s.done.length;
+        committed = s.done.length + s.skipped.length;
         for (final p in list.pdfs) {
           if (s.done.contains(p.path)) {
             done++;
@@ -207,8 +230,30 @@ class PdfIndexRun extends ChangeNotifier {
         count++;
         await _checkBattery();
         _checkStop();
+        _checkSpace();
         final row = PdfTimingRow(pdf.path, pdf.size);
-        final one = await _indexOne(pdf, row);
+        // The previous edition has this PDF at this size: when its bytes are the same, its pieces are taken as they are.
+        Uint8List? read;
+        if (session != null && reusable[pdf.path] == pdf.size && pdf.size > 0) {
+          try {
+            read = await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
+            final r = await core.reuse(session, path: pdf.path, sha256: crypto.sha256.convert(read).toString());
+            if (r.reused) {
+              done++;
+              reused++;
+              pieces += r.pieces;
+              bytesDone += pdf.size;
+              _bytesThisRun += pdf.size;
+              _pdfsThisRun++;
+              notifyListeners();
+              continue;
+            }
+          } catch (e) {
+            if (_isFull(e)) rethrow;
+            read = null;
+          }
+        }
+        final one = await _indexOne(pdf, row, bytes: read);
         if (one.skip == PdfSkipReason.damaged && row.readMs < 0) {
           // The entry read itself failed. One is a damaged entry; several in a row mean the core cannot read the ZIM now.
           failedReads++;
@@ -316,11 +361,11 @@ class PdfIndexRun extends ChangeNotifier {
     }
   }
 
-  Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row) async {
+  Future<_OnePdf> _indexOne(ZimPdf pdf, PdfTimingRow row, {Uint8List? bytes}) async {
     final sw = Stopwatch()..start();
-    final Uint8List bytes;
+    final Uint8List data;
     try {
-      bytes = await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
+      data = bytes ?? await core.readEntry('zim:${list.zimUuid}/${pdf.path}');
     } catch (e) {
       if (_isFull(e)) rethrow;
       row.readMs = -1;
@@ -330,7 +375,7 @@ class PdfIndexRun extends ChangeNotifier {
     row.readMs = sw.elapsedMilliseconds;
     _checkStop();
     sw.reset();
-    final pages = await readPages(bytes, pdf.path);
+    final pages = await readPages(data, pdf.path);
     row.extractMs = sw.elapsedMilliseconds;
     row.pages = pages.pages.length;
     row.textPages = pages.pages.where((p) => p.trim().isNotEmpty).length;

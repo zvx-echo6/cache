@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-/// The search core's calls for making a ZIM's PDFs searchable on this device (interface v2, 2026-11-02): a keyword index, like
+/// The search core's calls for making a ZIM's PDFs searchable on this device (interface v2.1, 2026-11-02): a keyword index, like
 /// all other ZIM content (no vectors, no search model). The app drives the loop (it has pdfrx); the core lists the PDFs, chunks
 /// the pages (the one cache_chunk the server and the builder share), owns the resumable build in
 /// `<indexes_dir>/zim-pdf/<zim uuid>/.build/` and publishes each finished index as an immutable snapshot,
@@ -26,8 +26,13 @@ abstract class PdfIndexCore {
   Future<PdfChunks> chunk(List<PdfPageText> pages);
 
   /// Opens or creates the ZIM's build, `zim-pdf/<zim uuid>/.build/` (cs_pdfindex_open). A build for another format or chunker is
-  /// discarded by the core and started again.
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName});
+  /// discarded by the core and started again. [previousZimUuid] is an older edition of the same ZIM (the same zim_name) whose
+  /// snapshot's PDFs may be reused: the answer lists them ([PdfStaging.reusable]).
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid});
+
+  /// Takes a PDF's pieces from the previous edition's snapshot when its bytes are the same (cs_pdfindex_reuse, with the sha256 of
+  /// the bytes read): reused, or not (then it is extracted as usual).
+  Future<PdfReused> reuse(int session, {required String path, required String sha256});
 
   /// Adds one PDF's text pieces, replacing any it had (cs_pdfindex_add). Durable in batches: the core commits about every 20
   /// PDFs or 30 seconds and lists a path as done only after the commit that holds it.
@@ -47,7 +52,30 @@ abstract class PdfIndexCore {
   Future<PdfFinishJob> finish({required String indexesDir, required String zimUuid});
 }
 
-/// What cs_pdfindex_add answers: pieces in the build so far, and PDFs committed (a kill redoes the ones after that).
+/// What cs_pdfindex_reuse answers.
+class PdfReused {
+  const PdfReused({required this.reused, this.pieces = 0});
+
+  factory PdfReused.fromJson(Map<String, dynamic> j) => PdfReused(reused: j['reused'] == true, pieces: (j['pieces'] as num?)?.toInt() ?? 0);
+
+  final bool reused;
+  final int pieces;
+}
+
+/// A PDF the previous edition's snapshot holds (cs_pdfindex_open's "reusable").
+class PdfReusable {
+  const PdfReusable({required this.path, required this.size, required this.sha256});
+
+  factory PdfReusable.fromJson(Map<String, dynamic> j) =>
+      PdfReusable(path: j['path'] as String, size: (j['size'] as num?)?.toInt() ?? -1, sha256: (j['sha256'] as String?) ?? '');
+
+  final String path;
+  final int size;
+  final String sha256;
+}
+
+/// What cs_pdfindex_add answers: pieces in the build so far, and PDFs committed, added and skipped (a kill redoes the ones after
+/// that).
 class PdfAdded {
   const PdfAdded({required this.pieces, required this.committed});
 
@@ -128,19 +156,23 @@ class PdfChunks {
 
 /// What cs_pdfindex_open answers: the session and what an earlier run already finished.
 class PdfStaging {
-  const PdfStaging({required this.session, this.done = const {}, this.skipped = const {}, this.pieces = 0});
+  const PdfStaging({required this.session, this.done = const {}, this.skipped = const {}, this.pieces = 0, this.reusable = const []});
 
   factory PdfStaging.fromJson(Map<String, dynamic> j) => PdfStaging(
     session: (j['session'] as num).toInt(),
     done: {for (final p in (j['done'] as List? ?? const [])) p as String},
     skipped: {for (final p in (j['skipped'] as List? ?? const [])) p as String},
     pieces: (j['pieces'] as num?)?.toInt() ?? 0,
+    reusable: [for (final r in (j['reusable'] as List? ?? const [])) PdfReusable.fromJson((r as Map).cast<String, dynamic>())],
   );
 
   final int session;
   final Set<String> done;
   final Set<String> skipped;
   final int pieces;
+
+  /// The previous edition's PDFs that may be reused (asked for with "previous").
+  final List<PdfReusable> reusable;
 }
 
 /// Why a PDF has nothing to index. Not an error: it is counted ("12 could not be read") and the run moves on.
@@ -195,7 +227,9 @@ class PdfIndexCoreMissing implements PdfIndexCore {
   @override
   Future<PdfChunks> chunk(List<PdfPageText> pages) async => _no();
   @override
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName}) async => _no();
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid}) async => _no();
+  @override
+  Future<PdfReused> reuse(int session, {required String path, required String sha256}) async => _no();
   @override
   Future<PdfAdded> add(int session, {required String path, required String title, required List<Map<String, dynamic>> pieces}) async => _no();
   @override
@@ -254,9 +288,20 @@ class PdfIndexPaths {
   }
 }
 
+/// Every ZIM uuid with a PDF index folder in [indexesDir].
+List<String> pdfIndexUuids(String indexesDir) {
+  try {
+    final d = Directory('$indexesDir${Platform.pathSeparator}zim-pdf');
+    if (!d.existsSync()) return const [];
+    return [for (final e in d.listSync().whereType<Directory>()) e.path.split(RegExp(r'[\\/]')).last];
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// One published snapshot as this device finds it (its manifest.json).
 class PdfSnapshot {
-  const PdfSnapshot({required this.id, required this.zimUuid, required this.created, required this.pdfs, required this.skipped, this.pieces = 0});
+  const PdfSnapshot({required this.id, required this.zimUuid, required this.created, required this.pdfs, required this.skipped, this.pieces = 0, this.zimName});
 
   /// The build id (the folder's name).
   final String id;
@@ -265,6 +310,9 @@ class PdfSnapshot {
   final int pdfs;
   final int skipped;
   final int pieces;
+
+  /// The ZIM's metadata Name, the same for every edition (a new edition reuses an older one's PDFs).
+  final String? zimName;
 
   static PdfSnapshot? read(Directory dir) {
     try {
@@ -283,6 +331,7 @@ class PdfSnapshot {
         pdfs: (j['pdfs'] as num?)?.toInt() ?? 0,
         skipped: (j['skipped'] as num?)?.toInt() ?? 0,
         pieces: (j['pieces'] as num?)?.toInt() ?? 0,
+        zimName: j['zim_name'] as String?,
       );
     } catch (_) {
       return null;

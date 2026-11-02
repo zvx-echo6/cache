@@ -659,13 +659,7 @@ class _ShellState extends State<Shell> {
         ? null
         : PdfSearchNote(
             state: pdfIndexShared!,
-            open: (z) {
-              if (z == null) {
-                _goModule(ModuleId.library);
-              } else {
-                unawaited(showPdfPartSheet(context, pdfIndexShared!, z));
-              }
-            },
+            open: (z) => unawaited(showPdfPartSheet(context, pdfIndexShared!, z)),
           ),
     onAsk: _askFromHome,
     askOn: _askOn,

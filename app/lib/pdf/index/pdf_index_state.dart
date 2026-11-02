@@ -23,8 +23,9 @@ class PdfZimRef {
   String get fileName => path.split(RegExp(r'[\\/]')).last;
 }
 
-/// Where a library's PDFs part stands (UX-pdf-index-30, section 2).
-enum PdfPartPhase { idle, measuring, waiting, starting, running, pausing, finishing, paused, failed, done, newVersion }
+/// Where a library's PDFs stand. Making them searchable is always on (owner, 2026-11-02): there is nothing to start, only a
+/// status, Pause and Resume, and the fix when there is no room.
+enum PdfPartPhase { waiting, starting, running, pausing, finishing, paused, needsSpace, failed, done }
 
 /// Who paused it.
 enum PdfPause { person, battery, closed }
@@ -36,13 +37,11 @@ class PdfPart {
     required this.total,
     this.handled = 0,
     this.unreadable = 0,
-    this.newCount = 0,
-    this.timeLeft,
-    this.range,
     this.pause,
     this.failure,
     this.fromOtherDevice = false,
     this.finishFraction,
+    this.needBytes = 0,
   });
 
   final PdfPartPhase phase;
@@ -55,24 +54,21 @@ class PdfPart {
 
   /// Skipped PDFs (no text, locked, damaged): "12 could not be read".
   final int unreadable;
-
-  /// For a new ZIM version: PDFs the old index does not have.
-  final int newCount;
-
-  /// The live figure, after about 2 minutes of this run.
-  final Duration? timeLeft;
-
-  /// Before that: the start pop-up's range.
-  final (Duration, Duration)? range;
   final PdfPause? pause;
   final PdfRunFailure? failure;
   final bool fromOtherDevice;
   final double? finishFraction;
 
+  /// The room the run needs when there is not enough ([PdfPartPhase.needsSpace]).
+  final int needBytes;
+
   double? get fraction => total > 0 ? (handled / total).clamp(0.0, 1.0) : null;
+
+  /// Still being made searchable (or waiting to be): what the line under search results is about.
+  bool get inProgress => phase != PdfPartPhase.done;
 }
 
-/// What the start pop-up says (measured on this device before any work).
+/// What a run is expected to take, measured on this device before it starts.
 class PdfEstimate {
   const PdfEstimate({required this.pdfs, required this.low, required this.high, required this.indexBytes, required this.needBytes, required this.usable});
 
@@ -84,28 +80,37 @@ class PdfEstimate {
   /// The finished index, about.
   final int indexBytes;
 
-  /// The room the run needs: the staging and the publish's copy of it.
+  /// The room the run needs: the build and the publish's copy of it.
   final int needBytes;
 
   /// Free space less the device reserve; null when the device cannot say.
   final int? usable;
 
   bool get fits => usable == null || needBytes <= usable!;
+
+  /// A long job: it starts only while charging or above 50% battery.
+  bool get long => high > kPdfLongJob;
 }
 
-/// Decides whether a library starts by itself when it arrives. Null (the default) never does: the owner has not decided
-/// (UX-pdf-index-30 section 4 proposes "only under about 10 minutes and 100 MB").
-typedef PdfAutoStart = bool Function(PdfEstimate estimate);
+/// Decides whether a library's PDFs are made searchable by themselves. On by default (owner, 2026-11-02: everything inside a ZIM
+/// is searchable); [pdfAutoStartAlways] is the default.
+typedef PdfAutoStart = bool Function(PdfZimRef zim);
+
+bool pdfAutoStartAlways(PdfZimRef zim) => true;
 
 /// Bytes the finished index takes for one piece: its stored text (about 200 words), title and page, and the keyword postings.
 const int kPdfIndexBytesPerPiece = 2 * 1024;
 
-/// The time a run must have had before its own speed replaces the start pop-up's range.
-const Duration kPdfLiveEstimateAfter = Duration(minutes: 2);
+/// A job longer than this starts only while charging or above [kPdfLongJobBattery]% battery.
+const Duration kPdfLongJob = Duration(minutes: 10);
+const int kPdfLongJobBattery = 50;
 
-/// Making the libraries' PDFs searchable on this device: one run at a time (others wait), pause and resume, remove, the battery
-/// pause, the estimate and space check, an index arriving from another device, and the progress kept across a kill. What this
-/// device built and what the person paused is kept in a small file of its own (never synced).
+/// Making the libraries' PDFs searchable on this device, by itself: every ZIM with PDFs and no snapshot for its edition is
+/// queued (on download, at start and on a new edition, which reuses the old edition's unchanged PDFs) and run one at a time
+/// while the app is open. A long job waits for charging or 50% battery; a run pauses on low battery and stops on low storage;
+/// the space is checked against the reserve first, and when there is not enough that is the state, with Free space. A snapshot
+/// that is here or arrives from a linked device means nothing to do. What this device built and what the person paused is kept
+/// in a small file of its own (never synced).
 class PdfIndexState extends ChangeNotifier {
   PdfIndexState({
     required this.core,
@@ -117,7 +122,7 @@ class PdfIndexState extends ChangeNotifier {
     this.battery = readBattery,
     Space Function(String dir)? space,
     this.onIndexReady,
-    this.autoStart,
+    this.autoStart = pdfAutoStartAlways,
     this.watchEvery = const Duration(seconds: 30),
     DateTime Function()? clock,
   }) : space = space ?? ((d) => Space.of(d)),
@@ -141,7 +146,7 @@ class PdfIndexState extends ChangeNotifier {
   /// The core should look at a new snapshot (built here or arrived): the app gives it the sources again.
   final Future<void> Function()? onIndexReady;
 
-  /// The single setting hook for starting by itself; null is off.
+  /// The one setting hook for starting by itself: on for every ZIM by default; null never starts by itself.
   PdfAutoStart? autoStart;
   final Duration watchEvery;
   final DateTime Function() clock;
@@ -155,14 +160,16 @@ class PdfIndexState extends ChangeNotifier {
   bool _loaded = false;
   final Map<String, ZimPdfList> _lists = {};
   final Set<String> _listing = {};
-  final Map<String, String> _listFailed = {};
-  final Map<String, (DateTime, PdfSnapshot?, bool)> _manifests = {};
-  final Set<String> _measuring = {};
-  final Map<String, (Duration, Duration)> _ranges = {};
+  final Map<String, (DateTime, PdfSnapshot?)> _snaps = {};
+  final Map<String, PdfEstimate> _estimates = {};
   final Map<String, PdfRunFailure> _failures = {};
+
+  /// Libraries held back before they start: no room (with the room needed), or a long job on a low battery.
+  final Map<String, (PdfPartPhase, int)> _blocked = {};
   final List<String> _queue = [];
   PdfIndexRun? _run;
   String? _runPath;
+  bool _picking = false;
   Timer? _watch;
   Set<String>? _known;
 
@@ -213,6 +220,7 @@ class PdfIndexState extends ChangeNotifier {
 
   /// Writes the record, one write at a time (a new file renamed over the old).
   Future<void> _save() => _saving = _saving.then((_) async {
+    if (_disposed) return;
     try {
       final f = await recordFile();
       await f.parent.create(recursive: true);
@@ -224,8 +232,7 @@ class PdfIndexState extends ChangeNotifier {
 
   PdfZimRef? _zim(String path) => zims().where((z) => z.path == path).firstOrNull;
 
-  /// The ZIMs changed: list the new ones' PDFs, stop a run whose ZIM went, and offer the start-by-itself hook a ZIM that has
-  /// just arrived.
+  /// The ZIMs changed: list the new ones' PDFs, stop a run whose ZIM went (and remove its index), and queue what needs doing.
   void _onZims() {
     if (!_loaded || !available) return;
     final now = zims();
@@ -234,15 +241,13 @@ class PdfIndexState extends ChangeNotifier {
     _queue.removeWhere((p) => !paths.contains(p));
     final known = _known;
     _known = paths;
-    // A ZIM that went (deleted here or by sync, or replaced by an update): its index goes from this device.
     for (final gone in known?.difference(paths) ?? const <String>{}) {
       unawaited(forget(gone));
     }
     for (final z in now) {
-      if (z.uuid == null) continue;
-      _ensureList(z);
-      if (known != null && !known.contains(z.path)) unawaited(_maybeAutoStart(z));
+      if (z.uuid != null) _ensureList(z);
     }
+    _schedule();
     notifyListeners();
   }
 
@@ -254,12 +259,11 @@ class PdfIndexState extends ChangeNotifier {
       try {
         final l = await core.zimPdfs(z.uuid!);
         _lists[z.path] = l;
-        _listFailed.remove(z.path);
-        await _put(z.fileName, {'count': l.pdfs.length, 'count_uuid': l.zimUuid});
-      } catch (e) {
-        _listFailed[z.path] = '$e';
+        await _put(z.fileName, {'count': l.pdfs.length, 'count_uuid': l.zimUuid, 'zim_name': l.zimName});
+      } catch (_) {
       } finally {
         _listing.remove(z.path);
+        _schedule();
         notifyListeners();
       }
     }());
@@ -282,110 +286,136 @@ class PdfIndexState extends ChangeNotifier {
   /// [z]'s folders in the indexes folder; null until its uuid is known.
   PdfIndexPaths? pathsOf(PdfZimRef z) => _paths(z);
 
-  /// The name cs_pdfindex_open is given for [z].
+  /// The name cs_pdfindex_open is given for [z]: the ZIM's metadata Name (the same for every edition).
   String zimNameOf(PdfZimRef z, ZimPdfList? list) => _zimName(z, list);
 
   PdfIndexPaths? _paths(PdfZimRef z) => z.uuid == null || _indexes == null ? null : PdfIndexPaths(_indexes!, z.uuid!);
 
-  /// The ZIM's name for cs_pdfindex_open: its own, else the file name without ".zim".
   String _zimName(PdfZimRef z, ZimPdfList? list) {
     final n = list?.zimName ?? '';
     return n.isNotEmpty ? n : z.fileName.replaceFirst(RegExp(r'\.zim$', caseSensitive: false), '');
   }
 
-  /// The snapshot every device uses for [z]'s ZIM version (null when none is complete here), and whether the version this file
-  /// had before has one (a new ZIM version: that index is not this ZIM's). Read again after 10 seconds.
-  (PdfSnapshot?, bool) _snapshot(PdfZimRef z, {bool fresh = false}) {
-    final m = _manifests[z.path];
+  /// The snapshot every device uses for [z]'s edition, or null. Read again after 10 seconds.
+  PdfSnapshot? _snapshot(PdfZimRef z, {bool fresh = false}) {
+    final m = _snaps[z.path];
     final now = clock();
-    if (!fresh && m != null && now.difference(m.$1) < const Duration(seconds: 10)) return (m.$2, m.$3);
-    final paths = _paths(z);
-    final mine = paths?.current();
-    final before = _rec(z.fileName)['index_uuid'];
-    if (mine != null && before != z.uuid) unawaited(_put(z.fileName, {'index_uuid': z.uuid}));
-    final other = mine == null && before is String && before != z.uuid && _indexes != null && PdfIndexPaths(_indexes!, before).current() != null;
-    _manifests[z.path] = (now, mine, other);
-    return (mine, other);
+    if (!fresh && m != null && now.difference(m.$1) < const Duration(seconds: 10)) return m.$2;
+    final s = _paths(z)?.current();
+    _snaps[z.path] = (now, s);
+    return s;
   }
 
-  /// Every [watchEvery]: an index that arrived from another device (sync) is noticed, and a run of the same version gives way.
+  /// An older edition of [z] (the same metadata Name, another uuid) with a snapshot on this device: its PDFs are reused.
+  String? _previous(PdfZimRef z, ZimPdfList list) {
+    final root = _indexes;
+    if (root == null || list.zimName.isEmpty) return null;
+    PdfSnapshot? best;
+    String? uuid;
+    for (final u in pdfIndexUuids(root)) {
+      if (u == z.uuid) continue;
+      final s = PdfIndexPaths(root, u).current();
+      if (s == null || s.zimName != list.zimName) continue;
+      if (best == null || s.created.compareTo(best.created) > 0) {
+        best = s;
+        uuid = u;
+      }
+    }
+    return uuid;
+  }
+
+  /// Every [watchEvery]: a snapshot that arrived from another device is noticed (a run of the same edition gives way), and what
+  /// was held back (battery, space) is tried again.
   void _rewatch() {
     if (!available) return;
     var changed = false;
     for (final z in zims()) {
-      final before = _manifests[z.path]?.$2?.id;
-      final m = _snapshot(z, fresh: true).$1;
+      final before = _snaps[z.path]?.$2?.id;
+      final m = _snapshot(z, fresh: true);
       if (m?.id != before) changed = true;
       if (m != null && z.path == _runPath && m.id != _rec(z.fileName)['built'] && !(_run?.finishing ?? false)) {
         _run?.stop(PdfRunStop.superseded);
       }
     }
+    _blocked.clear();
+    _sweep();
+    // "Device is full" is tried again (the space is checked first, so it only starts when there is room).
+    _failures.removeWhere((_, f) => f.kind == PdfRunFailureKind.full);
     if (changed) {
       notifyListeners();
       unawaited(onIndexReady?.call());
     }
+    unawaited(() async {
+      // A run paused by a low battery goes on by itself once charging or above 50%.
+      final paused = [for (final e in _record.entries) if (e.value is Map && (e.value as Map)['pause'] == 'battery') e.key];
+      if (paused.isNotEmpty && await _batteryAllows()) {
+        for (final name in paused) {
+          await _put(name, {'pause': null});
+        }
+      }
+      _schedule();
+    }());
+  }
+
+  int? _total(PdfZimRef z) {
+    final list = _lists[z.path];
+    if (list != null && list.zimUuid == z.uuid) return list.pdfs.length;
+    final rec = _rec(z.fileName);
+    return rec['count_uuid'] == z.uuid ? (rec['count'] as num?)?.toInt() : null;
   }
 
   /// The PDFs part of [z]; null when there is nothing to show (no PDFs, not listed yet, the core cannot index).
   PdfPart? partOf(PdfZimRef z) {
     if (!available || !_loaded || z.uuid == null || _indexes == null) return null;
-    final rec = _rec(z.fileName);
-    final list = _lists[z.path];
-    final total = list?.zimUuid == z.uuid ? list!.pdfs.length : (rec['count_uuid'] == z.uuid ? (rec['count'] as num?)?.toInt() : null);
+    final total = _total(z);
     if (total == null) {
       _ensureList(z);
       return null;
     }
     if (total == 0) return null;
+    final rec = _rec(z.fileName);
     final run = _runPath == z.path ? _run : null;
     if (run != null) {
       if (run.finishing) return PdfPart(phase: PdfPartPhase.finishing, total: total, handled: run.handled, unreadable: run.skipped, finishFraction: run.finishFraction);
-      if (run.stopped == PdfRunStop.person || run.stopped == PdfRunStop.battery || run.stopped == PdfRunStop.cancel) {
-        return PdfPart(phase: PdfPartPhase.pausing, total: total, handled: run.handled);
-      }
+      if (run.stopped != PdfRunStop.none) return PdfPart(phase: PdfPartPhase.pausing, total: total, handled: run.handled);
       if (run.starting) return PdfPart(phase: PdfPartPhase.starting, total: total, handled: run.handled);
-      final live = run.elapsed >= kPdfLiveEstimateAfter ? run.timeLeft : null;
-      final range = live == null && run.timeLeft != null ? _ranges[z.path] : null;
-      return PdfPart(phase: PdfPartPhase.running, total: total, handled: run.handled, unreadable: run.skipped, timeLeft: live ?? (range == null ? run.timeLeft : null), range: range);
+      return PdfPart(phase: PdfPartPhase.running, total: total, handled: run.handled, unreadable: run.skipped);
     }
-    if (_queue.contains(z.path)) return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: (rec['handled'] as num?)?.toInt() ?? 0);
-    if (_measuring.contains(z.path)) return PdfPart(phase: PdfPartPhase.measuring, total: total);
-    final (m, otherVersion) = _snapshot(z);
-    final paths = _paths(z)!;
-    final handled = (rec['handled'] as num?)?.toInt() ?? 0;
+    final m = _snapshot(z);
+    if (m != null) {
+      return PdfPart(phase: PdfPartPhase.done, total: total, handled: m.pdfs + m.skipped, unreadable: m.skipped, fromOtherDevice: rec['built'] != m.id);
+    }
+    final handled = _paths(z)!.build.existsSync() ? (rec['handled'] as num?)?.toInt() ?? 0 : 0;
     final failure = _failures[z.path];
-    if (failure != null && paths.build.existsSync()) {
+    if (failure != null) {
+      if (failure.kind == PdfRunFailureKind.full) {
+        return PdfPart(phase: PdfPartPhase.needsSpace, total: total, handled: handled, needBytes: _estimates[z.path]?.needBytes ?? 0);
+      }
       return PdfPart(phase: PdfPartPhase.failed, total: total, handled: handled, failure: failure);
     }
-    if (m != null) {
-      return PdfPart(
-        phase: PdfPartPhase.done,
-        total: total,
-        handled: m.pdfs + m.skipped,
-        unreadable: m.skipped,
-        fromOtherDevice: rec['built'] != m.id,
-      );
+    final blocked = _blocked[z.path];
+    if (blocked?.$1 == PdfPartPhase.needsSpace) return PdfPart(phase: PdfPartPhase.needsSpace, total: total, handled: handled, needBytes: blocked!.$2);
+    if (blocked?.$1 == PdfPartPhase.paused) return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.battery);
+    switch (rec['pause']) {
+      case 'person':
+        return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.person);
+      case 'battery':
+        return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.battery);
     }
-    if (paths.build.existsSync()) {
-      final pause = switch (rec['pause']) {
-        'person' => PdfPause.person,
-        'battery' => PdfPause.battery,
-        _ => PdfPause.closed,
-      };
-      return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: pause);
-    }
-    // Snapshots for another version only: a new ZIM version (v2 snapshots do not list their PDFs, so no "new" count).
-    if (otherVersion) return PdfPart(phase: PdfPartPhase.newVersion, total: total);
-    return PdfPart(phase: PdfPartPhase.idle, total: total);
+    if (_queue.contains(z.path) || _picking) return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: handled);
+    // Nothing queued it (start-by-itself off): a build left by an earlier run is a pause.
+    if (handled > 0 || _paths(z)!.build.existsSync()) return PdfPart(phase: PdfPartPhase.paused, total: total, handled: handled, pause: PdfPause.closed);
+    return PdfPart(phase: PdfPartPhase.waiting, total: total, handled: handled);
   }
 
-  /// Libraries whose PDFs are not all searchable, for the line under search results: (library, part), hidden ones left out.
+  /// Libraries whose PDFs are still being made searchable, for the line under search results: (library, part), hidden ones left
+  /// out.
   List<(PdfZimRef, PdfPart)> pending() => [
     for (final z in zims())
-      if (partOf(z) case final p? when p.phase != PdfPartPhase.done && _rec(z.fileName)['note_hidden'] != true) (z, p),
+      if (partOf(z) case final p? when p.inProgress && _rec(z.fileName)['note_hidden'] != true) (z, p),
   ];
 
-  /// The close mark on that line: hides it for these libraries (the library still offers the action).
+  /// The close mark on that line: hides it for these libraries.
   Future<void> hideNote(Iterable<PdfZimRef> libs) async {
     for (final z in libs) {
       await _put(z.fileName, {'note_hidden': true});
@@ -393,85 +423,147 @@ class PdfIndexState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Times a short sample on this device (up to 3 PDFs, about 20 seconds) and checks the space: what the start pop-up shows.
+  /// Times a short sample on this device (up to 3 PDFs, about 20 seconds) and checks the space: whether the run fits and is long.
   Future<PdfEstimate?> measure(PdfZimRef z, {Duration budget = const Duration(seconds: 20)}) async {
     if (z.uuid == null) return null;
-    _measuring.add(z.path);
-    notifyListeners();
+    final list = await listOf(z);
+    if (list == null) return null;
+    final paths = _paths(z)!;
+    final doneHere = paths.build.existsSync() ? ((_rec(z.fileName)['handled'] as num?)?.toInt() ?? 0) : 0;
+    final todo = (list.pdfs.length - doneHere).clamp(0, list.pdfs.length);
+    final bytes = list.bytes;
+    final sp = space(File(z.path).parent.path);
+    final sorted = [...list.pdfs]..sort((a, b) => a.size.compareTo(b.size));
+    final picks = <ZimPdf>{
+      if (sorted.isNotEmpty) sorted[sorted.length ~/ 2],
+      if (sorted.length > 3) sorted[sorted.length ~/ 4],
+      if (sorted.length > 3) sorted[(sorted.length * 3) ~/ 4],
+    }.toList();
+    final rows = <PdfTimingRow>[];
+    final clockStart = clock();
+    for (final p in picks) {
+      final run = PdfIndexRun(
+        core: core,
+        paths: paths,
+        zimName: _zimName(z, list),
+        list: ZimPdfList(zimUuid: list.zimUuid, zimName: list.zimName, pdfs: [p]),
+        readPages: readPages,
+        stage: false,
+        onTiming: rows.add,
+      );
+      await run.run();
+      if (clock().difference(clockStart) > budget) break;
+    }
+    final ms = rows.fold(0, (s, r) => s + r.totalMs);
+    final sampleBytes = rows.fold(0, (s, r) => s + r.bytes);
+    final samplePieces = rows.fold(0, (s, r) => s + r.pieces);
+    final double perPdfMs = rows.isEmpty ? 2000 : ms / rows.length;
+    final remainingBytes = (bytes * (todo / (list.pdfs.isEmpty ? 1 : list.pdfs.length))).round();
+    final estMs = sampleBytes > 0 && bytes > 0 ? ms / sampleBytes * remainingBytes : perPdfMs * todo;
+    final pieces = sampleBytes > 0 && bytes > 0 ? samplePieces / sampleBytes * bytes : (rows.isEmpty ? 0 : samplePieces / rows.length * list.pdfs.length);
+    final indexBytes = (pieces * kPdfIndexBytesPerPiece).round();
+    final e = PdfEstimate(
+      pdfs: todo,
+      low: Duration(milliseconds: (estMs * 0.7).round()),
+      high: Duration(milliseconds: (estMs * 1.5).round()),
+      indexBytes: indexBytes,
+      needBytes: indexBytes * 2,
+      usable: sp.usable,
+    );
+    _estimates[z.path] = e;
+    return e;
+  }
+
+  /// Queues every library that needs doing and starts the next one when nothing runs: each ZIM with PDFs and no snapshot for its
+  /// edition, not paused by the person, not held back.
+  void _schedule() {
+    if (!_loaded || !available || _disposed) return;
+    final hook = autoStart;
+    for (final z in zims()) {
+      if (z.uuid == null || z.path == _runPath || _queue.contains(z.path) || _blocked.containsKey(z.path) || _failures.containsKey(z.path)) continue;
+      final total = _total(z);
+      if (total == null || total == 0 || _snapshot(z) != null) continue;
+      final pause = _rec(z.fileName)['pause'];
+      if (pause == 'person' || pause == 'battery') continue;
+      if (hook == null || !hook(z)) continue;
+      _queue.add(z.path);
+    }
+    unawaited(_next());
+  }
+
+  /// Starts the next queued library that may run now: the space checked against the reserve first, a long job only while
+  /// charging or above 50% battery (unless the person pressed Resume). One run at a time: [_picking] holds until the run has
+  /// begun.
+  Future<void> _next({String? forced}) async {
+    if (_run != null || _picking) return;
+    _picking = true;
+    var handedOff = false;
     try {
-      final list = await listOf(z);
-      if (list == null) return null;
-      final build = _paths(z)!.build;
-      final doneHere = build.existsSync() ? ((_rec(z.fileName)['handled'] as num?)?.toInt() ?? 0) : 0;
-      final todo = list.pdfs.length - doneHere;
-      final bytes = list.bytes;
-      final sp = space(File(z.path).parent.path);
-      final sorted = [...list.pdfs]..sort((a, b) => a.size.compareTo(b.size));
-      final picks = <ZimPdf>{
-        if (sorted.isNotEmpty) sorted[sorted.length ~/ 2],
-        if (sorted.length > 3) sorted[sorted.length ~/ 4],
-        if (sorted.length > 3) sorted[(sorted.length * 3) ~/ 4],
-      }.toList();
-      final rows = <PdfTimingRow>[];
-      final clockStart = clock();
-      for (final p in picks) {
-        final run = PdfIndexRun(
-          core: core,
-          paths: _paths(z)!,
-          zimName: _zimName(z, list),
-          list: ZimPdfList(zimUuid: list.zimUuid, zimName: list.zimName, pdfs: [p]),
-          readPages: readPages,
-          stage: false,
-          onTiming: rows.add,
-        );
-        await run.run();
-        if (clock().difference(clockStart) > budget) break;
+      while (_queue.isNotEmpty && _run == null && !_disposed) {
+        final path = forced != null && _queue.contains(forced) ? forced : _queue.first;
+        _queue.remove(path);
+        final z = _zim(path);
+        if (z == null || z.uuid == null) continue;
+        final e = _estimates[path] ?? await measure(z);
+        if (e == null) continue;
+        final usable = space(File(z.path).parent.path).usable;
+        if (usable != null && e.needBytes > usable) {
+          _blocked[path] = (PdfPartPhase.needsSpace, e.needBytes);
+          notifyListeners();
+          continue;
+        }
+        if (e.long && path != forced && !await _batteryAllows()) {
+          _blocked[path] = (PdfPartPhase.paused, 0);
+          notifyListeners();
+          continue;
+        }
+        handedOff = true;
+        unawaited(_go(z));
+        return;
       }
-      final ms = rows.fold(0, (s, r) => s + r.totalMs);
-      final sampleBytes = rows.fold(0, (s, r) => s + r.bytes);
-      final samplePieces = rows.fold(0, (s, r) => s + r.pieces);
-      final double perPdfMs = rows.isEmpty ? 2000 : ms / rows.length;
-      final remainingBytes = (bytes * (todo / (list.pdfs.isEmpty ? 1 : list.pdfs.length))).round();
-      final estMs = sampleBytes > 0 && bytes > 0 ? ms / sampleBytes * remainingBytes : perPdfMs * todo;
-      final pieces = sampleBytes > 0 && bytes > 0 ? samplePieces / sampleBytes * bytes : (rows.isEmpty ? 0 : samplePieces / rows.length * list.pdfs.length);
-      final indexBytes = (pieces * kPdfIndexBytesPerPiece).round();
-      final low = Duration(milliseconds: (estMs * 0.7).round());
-      final high = Duration(milliseconds: (estMs * 1.5).round());
-      _ranges[z.path] = (low, high);
-      return PdfEstimate(pdfs: todo, low: low, high: high, indexBytes: indexBytes, needBytes: indexBytes * 2, usable: sp.usable);
     } finally {
-      _measuring.remove(z.path);
+      if (!handedOff) _picking = false;
       notifyListeners();
     }
   }
 
-  /// Starts (or resumes) [z]; it waits when another library is running.
-  Future<void> start(PdfZimRef z) async {
-    _failures.remove(z.path);
-    if (_run != null) {
-      if (_runPath != z.path && !_queue.contains(z.path)) _queue.add(z.path);
-      notifyListeners();
-      return;
-    }
-    await _put(z.fileName, {'pause': null});
-    unawaited(_go(z));
+  Future<bool> _batteryAllows() async {
+    final b = battery;
+    if (b == null) return true;
+    final r = await b();
+    return r == null || r.charging || r.percent > kPdfLongJobBattery;
   }
 
   Future<void> _go(PdfZimRef z) async {
     final list = await listOf(z);
-    if (list == null) {
+    final paths = _paths(z);
+    if (list == null || paths == null) {
+      _picking = false;
       _failures[z.path] = const PdfRunFailure(PdfRunFailureKind.other, 'The library could not be read.');
       notifyListeners();
+      _schedule();
       return;
     }
-    final run = _run = PdfIndexRun(core: core, paths: _paths(z)!, zimName: _zimName(z, list), list: list, readPages: readPages, battery: battery, clock: clock);
+    await _put(z.fileName, {'pause': null});
+    final run = _run = PdfIndexRun(
+      core: core,
+      paths: paths,
+      zimName: _zimName(z, list),
+      previousZimUuid: _previous(z, list),
+      list: list,
+      readPages: readPages,
+      battery: battery,
+      spaceOk: () => (space(File(z.path).parent.path).usable ?? 1) > 0,
+      clock: clock,
+    );
     _runPath = z.path;
+    _picking = false;
     var lastSaved = -1;
     void onRun() {
-      if (run.handled != lastSaved && !run.starting) {
-        lastSaved = run.handled;
-        // What a kill keeps: the committed PDFs (the core commits in batches) and the skipped ones.
-        unawaited(_put(z.fileName, {'handled': run.committed + run.skipped, 'skipped': run.skipped, 'uuid': z.uuid}));
+      if (run.committed != lastSaved && !run.starting) {
+        lastSaved = run.committed;
+        // What a kill keeps: the committed PDFs (the core commits in batches), added and skipped.
+        unawaited(_put(z.fileName, {'handled': run.committed, 'uuid': z.uuid}));
       }
       notifyListeners();
     }
@@ -484,7 +576,8 @@ class PdfIndexState extends ChangeNotifier {
     _runPath = null;
     switch (end) {
       case PdfRunEnd.finished:
-        await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true).$1?.id, 'built_uuid': z.uuid});
+        await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true)?.id, 'built_uuid': z.uuid});
+        _cleanOldEditions(z, list);
         await onIndexReady?.call();
       case PdfRunEnd.paused:
         await _put(z.fileName, {'pause': run.stopped == PdfRunStop.battery ? 'battery' : 'person', 'handled': run.handled});
@@ -496,33 +589,49 @@ class PdfIndexState extends ChangeNotifier {
         await onIndexReady?.call();
       case PdfRunEnd.failed:
         _failures[z.path] = run.failure ?? const PdfRunFailure(PdfRunFailureKind.other);
-        await _put(z.fileName, {'pause': 'person', 'handled': run.handled});
+        await _put(z.fileName, {'handled': run.handled});
     }
-    _manifests.remove(z.path);
+    _snaps.remove(z.path);
     notifyListeners();
-    _next();
+    _schedule();
   }
 
-  void _next() {
-    while (_queue.isNotEmpty && _run == null) {
-      final z = _zim(_queue.removeAt(0));
-      if (z != null) {
-        unawaited(start(z));
-        return;
-      }
+  /// A new edition is searchable: the index of an older edition (the same metadata Name) that no ZIM here uses goes from this
+  /// device.
+  void _cleanOldEditions(PdfZimRef z, ZimPdfList list) {
+    final root = _indexes;
+    if (root == null || list.zimName.isEmpty) return;
+    final kept = {for (final x in zims()) ?x.uuid};
+    for (final u in pdfIndexUuids(root)) {
+      if (kept.contains(u)) continue;
+      final p = PdfIndexPaths(root, u);
+      if (p.current()?.zimName == list.zimName) p.deleteAll();
     }
   }
 
-  /// Pause (the person's): the build stays; Resume continues from the last committed PDF.
-  void pause(PdfZimRef z) {
+  /// Pause (the person's): the build stays; it does not start again by itself until Resume.
+  Future<void> pause(PdfZimRef z) async {
     if (_runPath == z.path) {
       _run?.stop(PdfRunStop.person);
-    } else if (_queue.remove(z.path)) {
-      notifyListeners();
+      return;
     }
+    _queue.remove(z.path);
+    _blocked.remove(z.path);
+    await _put(z.fileName, {'pause': 'person'});
+    notifyListeners();
   }
 
-  /// Remove under a paused line: the build is deleted (a run is cancelled).
+  /// Resume (or Free space done, or Try again): starts now, ahead of the queue, on any battery; the space is checked again.
+  Future<void> resume(PdfZimRef z) async {
+    _failures.remove(z.path);
+    _blocked.remove(z.path);
+    await _put(z.fileName, {'pause': null});
+    if (!_queue.contains(z.path) && z.path != _runPath) _queue.insert(0, z.path);
+    notifyListeners();
+    unawaited(_next(forced: z.path));
+  }
+
+  /// Deletes [z]'s build (a run is cancelled); used when its ZIM goes.
   Future<void> remove(PdfZimRef z) async {
     _queue.remove(z.path);
     _failures.remove(z.path);
@@ -538,36 +647,52 @@ class PdfIndexState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A library that has just arrived starts by itself when the hook says so (off by default).
-  Future<void> _maybeAutoStart(PdfZimRef z) async {
-    final hook = autoStart;
-    if (hook == null || _run != null) return;
-    final e = await measure(z);
-    if (e == null || !e.fits || !hook(e)) return;
-    await start(z);
-    say?.call('Making ${e.pdfs} PDFs searchable.');
-  }
-
-  /// The ZIM at [zimPath] is gone: its index (every snapshot and the build) and record go from this device. The delete of a
-  /// snapshot never syncs, so other devices keep theirs.
+  /// The ZIM at [zimPath] is gone: its build and record go. Its snapshots are left to [_sweep], which keeps them while a ZIM
+  /// here is the same ZIM or a newer edition of it that may still reuse them.
   Future<void> forget(String zimPath) async {
     if (_runPath == zimPath) _run?.stop(PdfRunStop.cancel);
     _queue.remove(zimPath);
+    _blocked.remove(zimPath);
+    _failures.remove(zimPath);
     final name = zimPath.split(RegExp(r'[\\/]')).last;
     final rec = _rec(name);
-    final uuids = {rec['count_uuid'], rec['index_uuid'], rec['built_uuid'], rec['uuid']}.whereType<String>();
+    final uuids = {rec['count_uuid'], rec['built_uuid'], rec['uuid']}.whereType<String>();
     _record.remove(name);
     await _save();
-    // Only an index no ZIM still here uses (two files may be the same ZIM).
     final kept = {for (final z in zims()) ?z.uuid};
     final root = _indexes;
     if (root != null) {
       for (final u in uuids) {
-        if (!kept.contains(u)) PdfIndexPaths(root, u).deleteAll();
+        if (kept.contains(u)) continue;
+        try {
+          final b = PdfIndexPaths(root, u).build;
+          if (b.existsSync()) b.deleteSync(recursive: true);
+        } catch (_) {}
       }
     }
     _lists.remove(zimPath);
-    _manifests.remove(zimPath);
+    _snaps.remove(zimPath);
     notifyListeners();
+    _sweep(afterRemove: true);
+  }
+
+  /// Removes from this device the indexes no ZIM here uses: neither the same ZIM nor an edition with the same metadata Name
+  /// (which may still reuse it until its own is published). Only once every ZIM here has been listed (its Name known). A delete
+  /// under snap/ never syncs, so other devices keep theirs.
+  void _sweep({bool afterRemove = false}) {
+    final root = _indexes;
+    if (root == null) return;
+    final present = zims();
+    // No ZIM listed at all is a library not read yet (unless one was just removed): nothing is swept on it.
+    if (present.isEmpty && !afterRemove) return;
+    if (present.any((z) => z.uuid == null || _lists[z.path]?.zimUuid != z.uuid)) return;
+    final uuids = {for (final z in present) z.uuid!};
+    final names = {for (final z in present) _lists[z.path]!.zimName}..remove('');
+    for (final u in pdfIndexUuids(root)) {
+      if (uuids.contains(u)) continue;
+      final p = PdfIndexPaths(root, u);
+      final n = p.current()?.zimName;
+      if (n == null || !names.contains(n)) p.deleteAll();
+    }
   }
 }

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
+
 import 'pdf_index_core.dart';
 import 'pdf_pages.dart';
 
@@ -36,11 +38,12 @@ Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name) async {
   return PdfPagesOutcome.read(s.substring(8).split('\f'));
 }
 
-/// A stand-in for the core's PDF calls that behaves as interface v2 says, on real folders: the build is
+/// A stand-in for the core's PDF calls that behaves as interface v2.1 says, on real folders: the build is
 /// `<indexes_dir>/zim-pdf/<uuid>/.build/`
 /// (meta.json, done.tsv and skipped.tsv), adds are committed in batches of [batch] PDFs (and at close), a path is done only
-/// after its commit, and the publish writes a dot-named temporary folder with manifest.json last and renames it to
-/// `snap/<build-id>/`. Used by the tests and the renders until the core has the calls; never by a release build.
+/// after its commit (committed counts added and skipped), the publish writes `.build/publish-<id>/` with pdfs.tsv and
+/// manifest.json last and renames it to `snap/<build-id>/`, and a new edition reuses the PDFs of the previous one's snapshot
+/// whose bytes are the same. Used by the tests and the renders until the core has the calls; never by a release build.
 class FakePdfIndexCore implements PdfIndexCore {
   FakePdfIndexCore({this.zims = const {}, this.finishSteps = 3, this.stepDelay = Duration.zero, this.failAddWith, this.batch = 20});
 
@@ -102,7 +105,7 @@ class FakePdfIndexCore implements PdfIndexCore {
   }
 
   @override
-  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName}) async {
+  Future<PdfStaging> open({required String indexesDir, required String zimUuid, required String zimName, String? previousZimUuid}) async {
     calls.add('open');
     final paths = PdfIndexPaths(indexesDir, zimUuid);
     final dir = paths.build;
@@ -118,10 +121,31 @@ class FakePdfIndexCore implements PdfIndexCore {
     dir.createSync(recursive: true);
     if (!meta.existsSync()) meta.writeAsStringSync(jsonEncode({'zim_uuid': zimUuid, 'zim_name': zimName}));
     final id = _next++;
-    _sessions[id] = _Session(paths);
+    final session = _Session(paths);
+    _sessions[id] = session;
+    final reusable = <PdfReusable>[];
+    if (previousZimUuid != null) {
+      final prev = PdfIndexPaths(indexesDir, previousZimUuid);
+      final snap = prev.current();
+      if (snap != null) {
+        for (final l in _lines(File('${prev.snaps.path}/${snap.id}/pdfs.tsv'))) {
+          final c = l.split('\t');
+          if (c.length >= 5 && c[4] == 'added') {
+            reusable.add(PdfReusable(path: c[0], size: int.parse(c[1]), sha256: c[2]));
+            session.previous[c[0]] = (c[2], int.parse(c[3]));
+          }
+        }
+      }
+    }
     final done = _lines(File('${dir.path}/done.tsv'));
     final skipped = _lines(File('${dir.path}/skipped.tsv'));
-    return PdfStaging(session: id, done: {for (final l in done) l.split('\t').first}, skipped: {for (final l in skipped) l.split('\t').first}, pieces: _pieces(dir));
+    return PdfStaging(
+      session: id,
+      done: {for (final l in done) l.split('\t').first},
+      skipped: {for (final l in skipped) l.split('\t').first},
+      pieces: _pieces(dir),
+      reusable: reusable,
+    );
   }
 
   static List<String> _lines(File f) => f.existsSync() ? [for (final l in f.readAsLinesSync()) if (l.isNotEmpty) l] : const [];
@@ -155,9 +179,39 @@ class FakePdfIndexCore implements PdfIndexCore {
       s.since = 0;
       _commit(s);
     }
+    return _added(s);
+  }
+
+  PdfAdded _added(_Session s) {
     final dir = s.paths.build;
     final pending = s.pending.fold(0, (n, l) => n + (int.tryParse(l.split('\t').last) ?? 0));
-    return PdfAdded(pieces: _pieces(dir) + pending, committed: _lines(File('${dir.path}/done.tsv')).length);
+    return PdfAdded(pieces: _pieces(dir) + pending, committed: _lines(File('${dir.path}/done.tsv')).length + _lines(File('${dir.path}/skipped.tsv')).length);
+  }
+
+  @override
+  Future<PdfReused> reuse(int session, {required String path, required String sha256}) async {
+    calls.add('reuse:$path');
+    final s = _session(session);
+    final prev = s.previous[path];
+    if (prev == null || prev.$1 != sha256) return const PdfReused(reused: false);
+    s.pending.add('$path\t${prev.$2}');
+    s.since++;
+    if (s.since >= batch) {
+      s.since = 0;
+      _commit(s);
+    }
+    return PdfReused(reused: true, pieces: prev.$2);
+  }
+
+  /// The size and sha256 of a PDF of the ZIM [uuid], for pdfs.tsv.
+  (int, String)? _fileOf(String uuid, String path) {
+    for (final z in zims.values) {
+      if (z.uuid != uuid) continue;
+      for (final p in z.pdfs) {
+        if (p.path == path) return (p.bytes.length, sha256.convert(p.bytes).toString());
+      }
+    }
+    return null;
   }
 
   @override
@@ -197,6 +251,9 @@ class _Session {
   final List<String> pending = [];
   final List<String> pendingSkips = [];
   int since = 0;
+
+  /// The previous edition's PDFs: path to (sha256, pieces).
+  final Map<String, (String, int)> previous = {};
 }
 
 class _FakeFinish implements PdfFinishJob {
@@ -226,7 +283,19 @@ class _FakeFinish implements PdfFinishJob {
       final done = FakePdfIndexCore._lines(File('${build.path}/done.tsv'));
       final skipped = FakePdfIndexCore._lines(File('${build.path}/skipped.tsv'));
       final pieces = done.fold(0, (s, l) => s + (int.tryParse(l.split('\t').last) ?? 0));
-      final tmp = Directory('${paths.root.path}/.publish-$buildId')..createSync(recursive: true);
+      final tmp = Directory('${build.path}/publish-$buildId')..createSync(recursive: true);
+      final rows = StringBuffer();
+      for (final l in done) {
+        final c = l.split('\t');
+        final f = core._fileOf(paths.zimUuid, c[0]);
+        rows.writeln([c[0], f?.$1 ?? 0, f?.$2 ?? '', c.last, 'added'].join('\t'));
+      }
+      for (final l in skipped) {
+        final c = l.split('\t');
+        final f = core._fileOf(paths.zimUuid, c[0]);
+        rows.writeln([c[0], f?.$1 ?? 0, f?.$2 ?? '', 0, c.last].join('\t'));
+      }
+      File('${tmp.path}/pdfs.tsv').writeAsStringSync(rows.toString());
       final seg = File('${tmp.path}/segment.bin')..writeAsStringSync(done.join('\n'));
       final segBytes = seg.lengthSync();
       File('${tmp.path}/manifest.json').writeAsStringSync(jsonEncode({
@@ -241,6 +310,7 @@ class _FakeFinish implements PdfFinishJob {
         'skipped': skipped.length,
         'files': [
           {'path': 'segment.bin', 'size': segBytes, 'sha256': 'fake'},
+          {'path': 'pdfs.tsv', 'size': File('${tmp.path}/pdfs.tsv').lengthSync(), 'sha256': 'fake'},
         ],
       }));
       paths.snaps.createSync(recursive: true);
