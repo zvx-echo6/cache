@@ -158,6 +158,10 @@ class PdfIndexState extends ChangeNotifier {
   final Duration watchEvery;
   final DateTime Function() clock;
 
+  /// The index scheduler's throttle (its permit call), awaited before each PDF and between pages; null never waits. Set by the
+  /// app where the scheduler is made.
+  PdfPermit? permit;
+
   /// Shows a short message (a snackbar): set by the app shell.
   void Function(String text)? say;
 
@@ -594,6 +598,7 @@ class PdfIndexState extends ChangeNotifier {
       battery: battery,
       spaceOk: () => (space(File(z.path).parent.path).usable ?? 1) > 0,
       // This device's note of the PDF being extracted (never synced), beside its record.
+      permit: permit,
       attemptFile: File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-index-attempt-${z.uuid}.json'),
       clock: clock,
     );

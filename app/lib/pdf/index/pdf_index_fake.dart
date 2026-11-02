@@ -31,11 +31,16 @@ class FakeZim {
 }
 
 /// Reads the pages of a [FakePdf]'s bytes, as readPdfPagesFromBytes reads a real PDF.
-Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name) async {
+Future<PdfPagesOutcome> readFakePdfPages(Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
   final s = utf8.decode(bytes, allowMalformed: true);
   if (s == 'LOCKED') return const PdfPagesOutcome.locked();
   if (!s.startsWith('FAKEPDF\n')) return const PdfPagesOutcome.damaged();
-  return PdfPagesOutcome.read(s.substring(8).split('\f'));
+  final pages = s.substring(8).split('\f');
+  // Page by page, as PDFium reads them, waiting for the throttle between pages.
+  for (var i = 1; i < pages.length; i++) {
+    await betweenPages?.call();
+  }
+  return PdfPagesOutcome.read(pages);
 }
 
 /// A stand-in for the core's PDF calls that behaves as interface v2.1 says, on real folders: the build is

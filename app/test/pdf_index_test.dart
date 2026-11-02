@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -31,10 +32,10 @@ FakeZim _zim({String uuid = 'u1'}) => FakeZim(
 /// Reads pages as the fake does, and calls [onRead] with the count of PDFs read so far (to pause or cancel mid-run).
 PdfBytesReader _reader(void Function(int n) onRead) {
   var n = 0;
-  return (Uint8List bytes, String name) async {
+  return (Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
     n++;
     onRead(n);
-    return readFakePdfPages(bytes, name);
+    return readFakePdfPages(bytes, name, betweenPages: betweenPages);
   };
 }
 
@@ -162,6 +163,29 @@ void main() {
       }));
       expect(await run.run(), PdfRunEnd.paused);
       expect(note.existsSync(), isFalse);
+    });
+
+    test('the throttle is asked before each PDF and between the pages of one, and a pause during a wait stops at once', () async {
+      final core = FakePdfIndexCore(zims: {'u1': _zim()});
+      var asks = 0;
+      final run = PdfIndexRun(core: core, paths: paths, zimName: 'guide', list: await list(core), readPages: readFakePdfPages, permit: () async => asks++);
+      expect(await run.run(), PdfRunEnd.finished);
+      // Five PDFs, and one more between the two pages of each two-page PDF read (one.pdf, scan.pdf).
+      expect(asks, 7);
+      final waiting = Completer<void>();
+      late PdfIndexRun held;
+      var calls = 0;
+      held = PdfIndexRun(core: FakePdfIndexCore(zims: {'u1': _zim()}), paths: PdfIndexPaths(indexes, 'u9'), zimName: 'guide', list: await list(core), readPages: readFakePdfPages, permit: () {
+        calls++;
+        // Held between one.pdf's pages: the person pauses during the wait.
+        if (calls == 2) {
+          held.stop(PdfRunStop.person);
+          waiting.complete();
+        }
+        return Future<void>.value();
+      });
+      expect(await held.run(), PdfRunEnd.paused);
+      expect(waiting.isCompleted, isTrue);
     });
 
     test('cancel discards the build', () async {

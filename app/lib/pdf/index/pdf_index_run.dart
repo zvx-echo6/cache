@@ -78,6 +78,7 @@ class PdfIndexRun extends ChangeNotifier {
     this.previousZimUuid,
     this.language,
     this.attemptFile,
+    this.permit,
     this.spaceOk,
     required this.list,
     this.readPages = readPdfPagesFromBytes,
@@ -107,6 +108,10 @@ class PdfIndexRun extends ChangeNotifier {
   /// can crash PDFium natively, which ends the whole app; the next run finds the note and skips that PDF as damaged instead of
   /// crashing on it again. Null keeps no note (the timing run, the estimate's sample).
   final File? attemptFile;
+
+  /// The index scheduler's throttle, awaited before each PDF and between the pages of one (bursts with rests, a warm phone, the
+  /// person using the app, the model answering). Null never waits.
+  final PdfPermit? permit;
 
   /// Notes [path] as being extracted, durably.
   void _noteAttempt(String path) {
@@ -279,6 +284,7 @@ class PdfIndexRun extends ChangeNotifier {
         if (doneSet.contains(pdf.path)) continue;
         if (limit != null && count >= limit!) break;
         count++;
+        await permit?.call();
         await _checkBattery();
         _checkStop();
         _checkSpace();
@@ -431,7 +437,10 @@ class PdfIndexRun extends ChangeNotifier {
     _noteAttempt(pdf.path);
     final PdfPagesOutcome pages;
     try {
-      pages = await readPages(data, pdf.path);
+      pages = await readPages(data, pdf.path, betweenPages: permit == null ? null : () async {
+        await permit!();
+        _checkStop();
+      });
     } finally {
       // Extraction returned (or threw): no native crash on this PDF, whatever comes next.
       _clearAttempt();
