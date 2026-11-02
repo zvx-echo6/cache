@@ -20,6 +20,8 @@ serde_json.workspace = true
 # The places part: the merged places database is written through cache_places::merged (cache_places does not depend on
 # this crate, so there is no cycle).
 cache_places = { path = "../cache_places" }
+# The fetched tile indexes are syncable snapshots (kinds region-index and places-index).
+cache_snapshot = { path = "../cache_snapshot" }
 
 [dev-dependencies]
 # The tests' routing server.

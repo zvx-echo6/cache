@@ -1070,7 +1070,10 @@ typedef struct cs_regions cs_regions;
 
 /* Opens the regions engine. config_json: {"dir": "<private folder>", optional "base_url" (default
  * "https://data.cached.info/routing/"), "stream_cap_bytes" (default 2147483648), "user_agent" (default "Cache/<version>"),
- * "reserve_bytes" (default 1 GiB: downloads pause rather than leave less free)}. One engine per folder in the process: a
+ * "reserve_bytes" (default 1 GiB: downloads pause rather than leave less free), optional "indexes_dir" (the device's indexes
+ * folder: each fetched tile index is then kept as a syncable snapshot, <indexes_dir>/region-index/<build>/snap/<id>/ and
+ * places-index/..., a snapshot synced in from a peer is used before anything is fetched, and an index kept in "dir" by an
+ * earlier version is sealed into one; without it the indexes stay in <dir>/index/)}. One engine per folder in the process: a
  * second open of the same folder, or a cs_open config whose "regions" section names it, shares it (its own config is not
  * used). NULL on failure (reason in cs_last_error(NULL)). Downloads run on its own thread and carry on after a restart. */
 cs_regions *cs_regions_open(const char *config_json);
@@ -1081,7 +1084,9 @@ cs_regions *cs_regions_open(const char *config_json);
  *                  "regions": [{"id","name","state":"downloading"|"ready"|"paused"|"failed","tiles","bytes","done_tiles",
  *                               "done_bytes","error"}],
  *                  "stream": {"tiles","bytes","cap"}, "update": null|{"build","download_bytes","downloading"},
- *                  "paused": null|"<reason>"}
+ *                  "paused": null|"<reason>",
+ *                  "indexes"?: {"routing"|"places": [{"kind":"region-index"|"places-index","source_id":"<build>",
+ *                               "location":"snapshot"|"legacy"|"none","snapshots":["<id>"]}]}}  (once a build is known)
  *   plan          {"id"?, "name"?, "geometry": <GeoJSON Feature, Polygon or MultiPolygon>}
  *                 -> {"tiles","bytes","download_bytes","shared_tiles"}; "offline" when the index is not on the device and
  *                    cannot be fetched
