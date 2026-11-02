@@ -485,7 +485,8 @@ fn the_core_only_ever_sees_a_whole_shard() {
     assert_eq!(*lock(&seen), vec![(false, None), (true, Some(all as usize))]);
     // nothing of the swap is left behind
     let names: Vec<String> = std::fs::read_dir(svc.live_dir(&lib)).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    for n in &names {
+    // `.local/` is the local view (made on purpose, never synced); any other dot name would be a swap leftover
+    for n in names.iter().filter(|n| *n != ".local") {
         assert!(!n.starts_with('.'), "left behind: {names:?}");
     }
 }
