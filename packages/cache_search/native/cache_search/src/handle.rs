@@ -276,7 +276,7 @@ impl PdfSlot {
                     let opened = PdfIndex::open(&pk.name, &pk.dir, pk.manifest.clone()).ok();
                     if opened.is_some() {
                         // local clean-up: usable duplicates and older ones go, the one in use and a rollback stay
-                        crate::snapshot::gc(&p, &pk);
+                        crate::snapshot::gc_local(&p, pdfindex::KIND, &id, pdfindex::compat, &pk);
                     }
                     opened
                 })
@@ -1031,7 +1031,12 @@ impl Handle {
                 }
             }
         }
-        json!({ "sources": list }).to_string()
+        // snapshots this device removed or rejected (a device-local list): the app adds them to its receiver exclude list
+        let mut out = json!({ "sources": list });
+        if let Some(root) = &self.indexes_dir {
+            out["rejected_snapshots"] = Value::Array(crate::snapshot::read_rejected(root));
+        }
+        out.to_string()
     }
 
     /// `cs_zim_pdfs`: the PDFs inside a ZIM (entries whose mime type is application/pdf), by path:

@@ -308,7 +308,7 @@ impl<T: Send + 'static> SnapSlot<T> {
                 snapshot::pick(&sd, kind, &source_id, compat_of(kind)).and_then(|pk| {
                     let index = opener(&pk.dir, &pk.manifest).ok()?;
                     // local clean-up: usable duplicates and older ones go, the one in use and a rollback stay
-                    snapshot::gc(&sd, &pk);
+                    snapshot::gc_local(&sd, kind, &source_id, compat_of(kind), &pk);
                     Some(Box::new(SnapOpen { name: pk.name, manifest: pk.manifest, dir: pk.dir, index }))
                 })
             }))
