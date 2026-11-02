@@ -1,7 +1,7 @@
 import 'dart:io';
 import '../platform.dart' as plat;
 
-import 'indexes_share.dart' show kIndexesDirName;
+import 'indexes_dir.dart' show kIndexesDirName;
 
 /// Where Cache's published data lives (road routing, places, the region catalogue). `https://cache.echo6.co` serves the same
 /// bucket with the same paths: build with `--dart-define=CACHE_DATA_BASE=https://cache.echo6.co` to use it. No trailing slash.
