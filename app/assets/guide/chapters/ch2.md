@@ -7,7 +7,7 @@
 ![The Home screen](shot:home)
 
 From the top it shows:
-- the search box, "Search Cache or ask anything";
+- the search box, "Search Cache or ask anything". With no model on the device it says "Search Cache";
 - the "Set up Cache" card, on a fresh install until it is done;
 - the "Weather and alerts" card;
 - your "Shortcuts".
@@ -41,9 +41,15 @@ The search box finds things on your device, or starts a chat.
 2. Read the list. It searches your Library, Notebooks, Places and addresses, and Maps layers. Best match is first.
 3. Tap a row to open it. Each row shows where it comes from.
 
-The first row is always "Ask Cache:" and what you typed. Tap it, or press the send key, to start a chat with that text.
+A match inside a PDF shows its page, for example `p. 47`, and opens the PDF at that page.
+
+The first row is "Ask Cache:" and what you typed. Tap it, or press the send key, to start a chat with that text.
 
 If nothing matches, "Nothing found" shows under that row. Cache doesn't guess or autocomplete.
+
+With no model on the device, the box says "Search Cache". There is no "Ask Cache:" row. If nothing matches, Cache says "Nothing found on this device." and, small under it, "For an answer in words, choose a model." Tap "Choose a model" to get one.
+
+At the foot of the results, a small grey line can say `Still making [library]'s PDFs searchable (340 of 5,768)`. Tap it for that library's status. Tap the close mark ("Hide") to hide it.
 
 ## Edit Home
 
@@ -81,6 +87,8 @@ A shortcut puts something you use often on "Home". Use "Add to Home" on:
 
 The bar at the bottom starts with "Home" and ends with "Modules". Between them are up to three modules you pin. At first they are "Ask", "Maps" and "Library".
 
+With no model on the device, "Ask" leaves the bar. In "Modules" it is greyed, with the line "Needs a model". While a model downloads, the line reads "Model downloading 40%". Your pin is kept, so "Ask" comes back to the bar when a model arrives.
+
 ![The Modules screen](shot:modules)
 
 "Modules" lists every module: "Ask", "Library", "Maps", "Videos", "Weather", "Notebooks" and "Settings". A dot under a name means it is on the bar.
@@ -106,6 +114,20 @@ Settings, Regions, Notebooks, Library and the guide contents show a list beside 
 2. Tap the button left of the page's title to show it again. It reads "Show Settings", "Show Regions", "Show Notebooks", "Show Library" or "Show contents".
 
 - Before you choose anything, the page says "Choose an item" ("Choose a section" in the guide). The list can't be hidden then.
+
+## Computers and wide windows
+
+From a window 1280 wide, Cache uses its wide layout. That is a computer's window, or a 12.9-inch iPad Pro held sideways. The screens are the same. The layout fills the room.
+
+1. The list beside a page is wider, so a title and detail fit.
+2. A page uses the whole window instead of a narrow strip in the middle.
+3. Long text, such as an article or an answer, keeps to a line length that is easy to read.
+4. "Library" opens on "Add to Library" while nothing is chosen, instead of "Choose an item".
+5. On "Videos" from 1400 wide, saved videos sit two across.
+
+Under 1280 wide the layout is the one in Tablets. Settings, Regions, Notebooks, Library and the guide contents still show a list beside the open page, and you can hide the list.
+
+On a computer the video player shows its keys, such as `Play (Space)`. See The video player.
 
 ## Select several items, and press and hold
 
@@ -133,7 +155,7 @@ Delete always asks first. The pop-up shows what it frees and says "You can downl
 ![The Ask screen](shot:ask)
 
 1. Open "Ask" from the bar. You can also type in the Home search box and tap "Ask Cache:".
-2. If the title says "No model", tap it and choose a model first.
+2. If "Ask" says "Ask needs a model on this device.", tap "Choose a model" first. If the title says "No model", tap it and choose a model.
 3. Type in "Ask anything" and tap "Send".
 4. Wait. You see "Thinking…" or "Searching your sources…". Tap "Stop" to stop it.
 
@@ -183,6 +205,38 @@ The model name at the top of "Ask" is a menu.
 The menu also shows how much memory the model uses.
 
 - If no model is loaded, the title says "No model". Tap it to choose one.
+- If a model is on the device but did not load, see When a model does not load.
+
+## Use Cache with no model
+
+A model is optional. With none on the device, Cache is search only. Everything that searches still works: Library, Notebooks, Places, Maps and the guide. What goes is "Ask", the part that answers in words.
+
+You are in this mode when you never added a model, when you tap "Not now" on the model row of the "Set up Cache" card, or when you delete your last chat model.
+
+What you see:
+1. "Ask" leaves the bar. In "Modules" it is greyed, with the line "Needs a model".
+2. Open "Ask" from "Modules". It says "Ask needs a model on this device." with "Choose a model". Under it, "Saved chats" lists your old chats.
+3. Tap a saved chat to read it. It opens read-only, with the title "Ask" and a back arrow. Where you type it says "Ask is off. Choose a model to carry on." with "Choose a model".
+4. Home search says "Search Cache" and has no "Ask Cache:" row. See Search Cache from Home.
+5. "Ask about this" on a weather item and "Ask Cache instead" under a guide search are not shown.
+
+If a model is downloading, the note reads "A model is downloading. Ask turns on when it is ready." and its button is "See download". The "Modules" line reads "Model downloading 40%".
+
+To turn "Ask" on again, tap "Choose a model" in any of those places and download or copy in a model. See Choose a model in chapter 1.
+
+When the first model is on the device, Cache says "Ask is on." Tap "Open" to go to "Ask". Nothing opens by itself.
+
+- If you open a link to "Ask" from the guide, the same note shows, with "Close".
+- To delete your last model, see Unload or delete a model in chapter 1. The pop-up warns "Ask will turn off. Saved chats stay readable."
+
+## When a model does not load
+
+This is for a model that is on the device but "Ask" can't use. "Ask" shows one red line at the top and one button.
+
+- `[model] did not load. It is too big for this device.` Tap "Choose a smaller model".
+- `[model] did not load. The file may be damaged.` Tap "Delete and download again". A recommended model downloads again after its pop-up. For any other model, Cache opens the Models screen.
+- `[model] did not load.` Tap "Choose a model".
+- "No model is loaded." Tap the button, which reads `Load [model]`. If no model on the device can be used, it reads "Choose a model".
 
 ## Sources and citations
 
@@ -194,6 +248,9 @@ Answers show where they came from.
 - A line under the answer says how many sources, for example "1 source". Tap it for the list.
 - Each source shows its number, title and a short passage.
 - A Library source has "Open the article". Tap it to read the page.
+- A source in a PDF opens the PDF at that page, with the passage highlighted. See Open a cited passage in a PDF.
+- A source in an EPUB opens the book at that chapter, with the first words of the passage marked.
+- A source from a video's captions opens the video at that moment, with the line marked "Match". See Captions and the transcript.
 
 "Not from your sources" means the answer came from nothing on your device or a search. Check it before you rely on it.
 
@@ -359,10 +416,12 @@ Each row has an icon, name, description and size. A badge shows only when someth
 - "Update ready";
 - "Getting ready", while Cache opens a library.
 
+After the size, a row can add a few words about its PDFs: "Making PDFs searchable", "PDFs paused", "PDFs need more space" or "PDFs stopped". Nothing shows when they are ready.
+
 The guide that comes with Cache shows "Built in". Your own libraries show "Your own".
 
 - Tap a row to open it full screen.
-- Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete".
+- Press and hold a row, or tap "..." in the opened item, for "Check for update", "Change icon", "Add to Home" and "Delete". For a library with PDFs or EPUBs, the menu starts with their search status. See Search inside PDFs, EPUBs and captions.
 - Tap "Add to Library" for more. See Add to your Library in chapter 1.
 
 "Change icon" picks a picture from your device.
@@ -373,62 +432,283 @@ The built-in guide has no "Delete". Anything else asks first and shows what it f
 
 The reader opens a Library item.
 
-- "Search this ZIM" searches inside the open work.
+- "Search this ZIM" searches inside the open work. Matches can be pages, PDFs, EPUB chapters and video captions in it.
 - "Find in page" finds words, with "Previous" and "Next".
 - "Back", "Forward" and "Main page" are at the bottom. "Back" and "Forward" move through the pages you read.
 - The arrow at the top left leaves the reader. Its label reads "Close [library name]".
 - "More" > "Add to Home" puts the page on "Home".
+- A link to a PDF opens the PDF reader over the whole window. See The PDF reader.
+- A link to an EPUB opens its first chapter in the reader.
+- A link to a video in the work plays in the video player, with its captions. See The video player.
 
 - If you see "This ZIM is still being indexed. Text search works when that is done.", you can still read pages.
 - If you see "That link is on the web. It is not available offline.", the link goes outside the work.
 
+## Search inside PDFs, EPUBs and captions
+
+Search in a library reaches more than its pages. It finds words inside the PDFs and EPUB books in a ZIM, and in the captions of its videos. Nothing to switch on and nothing to start. It is always on.
+
+1. Add a Library item that holds PDFs, EPUBs or videos with captions. See Add to your Library in chapter 1.
+2. Leave Cache open. It makes them searchable in the background, a little at a time, so your device stays cool.
+3. Search as usual: the Home search box, "Search this ZIM" in the reader, or a question in "Ask".
+4. Tap a result. A PDF opens at the page, an EPUB at the chapter, and a video at the moment. The passage is highlighted or marked.
+
+To see the progress, press and hold the item in "Library", or tap "..." in the opened item. The menu starts with lines such as:
+- "Making PDFs searchable: 340 of 5,768", with a bar and "Pause";
+- "Waiting to make PDFs searchable";
+- "PDFs: searching ready";
+- "Making EPUBs searchable: 40 of 85";
+- "EPUBs: searching ready".
+
+While it runs, Cache pauses and says why:
+- "Waits for charging": a long job starts only on charge, or with the battery above half. Once it runs, it goes on until the battery is low;
+- "Paused, battery low": under 20% and not plugged in;
+- "Slowed down, phone is warm": the work eases off when the device is warm;
+- "Paused, not enough space": it needs room. Tap "Free space";
+- `Paused: Cache was closed · 340 of 5,768`: work runs only while Cache is open. Open it again and tap "Resume".
+
+Tap "Resume" on a paused line. Tap "Pause" to stop it yourself.
+
+If a few PDFs can't be read, a small line says so, for example `12 could not be read`. A scanned PDF is pictures with no text, so search can't read it.
+
+You can search before it finishes. Results from the finished part show. Under the results, a small line says `Still making [library]'s PDFs searchable (340 of 5,768)`.
+
+An index built on one device can reach your others. See Search indexes on linked devices in chapter 3. When another device finished first, Cache says "Another device finished this. Using its index."
+
+To change how fast Cache builds in the background, see Background indexing speed in chapter 3. The one quiet line at the foot of "Settings" shows the overall progress.
+
+- If a video's captions are not indexed yet, a caption search finds nothing in it. Wait and search again.
+- For indexing that seems stuck, see An index still building in chapter 6.
+
+## The PDF reader
+
+PDFs open in their own reader. It takes the whole window.
+
+You can open a PDF from:
+- a link in a Library page, or a search result;
+- a source in "Ask";
+- a file attached to a notebook entry.
+
+1. At the top, the arrow leaves the reader. Its label reads "Close [title]".
+2. Beside the title, the page count reads `12 of 340`. Tap it to go to a page.
+3. In "Go to page", type the page number and tap "Go". If it is out of range, it says "Pages 1 to 340".
+4. Use "Previous page" and "Next page" at the bottom.
+5. Tap "Fit width" or "Fit page" at the bottom. The button is named for the mode it switches to.
+6. Pinch to zoom, or double tap. If you can't zoom more, a note says "Zoom limited on this device."
+7. Tap the page to hide the bars or show them again.
+8. Tap a link in the PDF. For a web link, Cache asks "Open this link in your browser? It needs a connection." Tap "Open" or "Cancel".
+
+While it opens:
+- "Opening..." shows first.
+- "Still opening. This file is 312 MB." has "Cancel".
+- "Getting the PDF ready..." has "Cancel".
+
+For a night screen, turn on "Dark pages" in ["Settings" > "Appearance"](cache://settings/appearance). See Appearance in chapter 3.
+
+- If you see "This PDF is locked. Enter its password.", type it in "Password" and tap "Open". "That password is not right." means try again.
+- If you see "Not enough space to open this PDF on this device. It needs 340 MB.", tap "Open Storage" and free space.
+- If you see "This PDF can't be opened. The file may be damaged.", tap "Try again". For a file from Storage, "Show in Storage" is there too.
+- If you see "This file is no longer on this device.", tap "Open Storage", or "Open Library" for a PDF in a library.
+- A screen reader says `Page 12 of 340` and then the page's text. A page that is only a picture says `Page 12 of 340. Picture, no text.`
+
+## Find in a PDF
+
+1. In the PDF reader, tap "Find in this PDF" at the top right. On a computer, press Ctrl+F.
+2. Type in the field "Find in this PDF". The search runs a page at a time.
+3. Read the count: "Searching...", `12 found so far`, `3 of 17` or "No matches".
+4. Tap "Next match" or "Previous match" to move.
+5. Tap "Close find" when you are done.
+
+Matches are highlighted and the page scrolls to the current one. A new search replaces the old one.
+
+- If the PDF is mixed, a small line says "Scanned pages skipped".
+- If the PDF is only scanned pictures, the field says "No searchable text in this PDF."
+
+## Open a cited passage in a PDF
+
+When you open a PDF from a search result or from a source in "Ask", it opens at the cited page. The cited passage is highlighted, and a strip under the title says "Cited passage".
+
+1. Read the highlighted passage.
+2. Tap the page, or tap "Close" on the strip, to clear the highlight.
+
+If Cache can't place it, the strip says why:
+- "Page 47. The exact passage was not found on this page." Tap "Find on other pages" to search the PDF for its opening words.
+- "This PDF has 340 pages. Cited page 400 is not here."
+- "Page 12. Scanned page, nothing to highlight."
+- "This PDF is scanned pictures. Search can't read it."
+
+A cited EPUB opens at its chapter, with the first words of the passage marked.
+
 ## Videos
 
-"Videos" plays videos from PeerTube sites. Open it from "Modules".
+"Videos" lists the videos on this device and the video sites where you find more. Open it from "Modules". Saved videos are in this list now. There is no separate "Saved" tile.
 
-![The Videos screen](shot:videos-list)
+From the top it shows:
+- "Downloading": videos on their way, each with "Pause" or "Resume";
+- "On this device": how many videos and how much space, for example `3 videos · 410 MB`. A row has a picture with its length, the title, and a line such as `480p · 230 MB · Captions`. With videos from two or more channels, they are grouped by channel;
+- "Video sites": your sites, under the line "Find videos on a site".
 
-To add a site:
-1. Tap "Add an instance".
-2. Type the address, for example tube.example.org.
-3. Tap "Add".
+If nothing is saved, it says "Nothing on this device yet. Find a video on a site and choose Download."
 
-To watch:
-1. Tap the instance.
-2. Choose "Latest" or "Channels", or search.
-3. Tap a video, then "Play".
+Tap a saved video to open its page. See The video page.
+
+From 8 saved videos a search field shows. See Search saved videos.
+
+To see only the saved videos, go to ["Settings" > "Storage"](cache://settings/storage) and open "Videos and weather". That list is called "Saved videos". It has no sites.
+
+On a window 1400 wide or more, saved videos sit two across.
+
+## Add a video site
+
+A video site is a PeerTube site. Anyone can run one.
+
+1. Open "Videos".
+2. Tap "Add a video site". When a site is already listed, tap "Add" at the right of "Video sites" instead.
+3. In the pop-up "Add a video site", type the address, for example tube.example.org. It says "The address of a PeerTube site."
+4. Tap "Add". The site opens.
+
+- If you see "That address doesn't look like a PeerTube site.", check the address.
+- If you see "Can't reach the video site. Check the connection and try again.", connect and try again.
+
+## Find a video on a site
+
+1. In "Videos", tap the site under "Video sites".
+2. Choose "Latest" or "Channels". Or type in "Search this site" and press the search key.
+3. Tap a video to open its page.
+
+A result that you already saved says "Saved". One that is downloading says `Downloading 40%`.
+
+- If you see "This site has no videos", the site has none to show.
+- If you see `Nothing found for "water"`, try other words.
+
+## The video page
+
+This page is for one video. A video you saved opens with no connection.
+
+1. Tap the picture to play. There is no Play button. The picture plays the saved copy if you have one, and streams it if you don't.
+2. Under the picture, read the title and the line with the channel, length and date, for example `Camp Skills · 12:40 · 14 Mar 2026`.
+3. Read where the video is: "Not on this device", or `On this device · 480p · 230 MB`, or the download's progress.
+4. If it has captions, a line says "Captions: English, Spanish".
+5. Tap "More" under a long description to read it all. Tap "Less" to fold it.
+
+The page has "Download" for a video that is not here. A video that is here has "Delete from this device".
+
+If the picture can't play, a line under it says why:
+- "A live stream can't be played here."
+- "This video has no stream to play yet."
+- For a private video, a lock shows on the picture. See Private videos.
+
+- If you see "This video site is not on your list.", the site was removed and you have nothing saved from it.
+- If you see "This video has no file to download yet.", try later.
 
 ## The video player
 
-In the player:
-- Tap the speed button (it shows 1x) to pick 0.5x to 2x. "Normal" is 1x.
-- Tap "Full screen" for the video alone. Wide video turns landscape and the system bars hide.
-- Tap the screen to show the controls.
-- Back, or "Leave full screen", leaves full screen.
+The player opens when you tap the picture on the video page.
+
+1. Tap the picture to show or hide the controls. While it plays they hide after 3 seconds. When it is paused they stay.
+2. Use "Play" or "Pause", "Back 10 seconds" and "Forward 10 seconds". You can also double tap the left or right half of the picture to skip 10 seconds. It flashes "−10 s" or "+10 s".
+3. Drag the bar to move through the video. The time shows as the time so far and the length.
+4. Tap "Full screen" for the video alone. A wide video turns landscape and the system bars hide. Tap "Leave full screen" or press Back to come out.
+5. Tap the gear ("Settings") for "Speed", "Quality" and "Captions".
+
+Under the title the player shows the channel, the length, and "On this device" or "Streaming".
+
+In "Speed" you choose "Normal" or 0.5x up to 2x. In "Quality" a streamed video offers "Auto" and each size the site has. A saved copy shows `Quality: 480p (saved)`. Cache starts a stream at the quality you last chose on this device.
+
+On a computer, the buttons show their keys: `Play (Space)`, `Captions (C)`, `Full screen (F)` and `Leave full screen (Esc)`. The arrow keys skip 5 seconds.
+
+- If you see "This video can't be played.", tap "Try again". If you have a saved copy, tap "Saved copy".
+- If you see "This file can't be played.", tap "Delete it and download again".
+
+## Resume a video
+
+Cache remembers where you stopped in each video, on this device only.
+
+1. Open the video and play it again.
+2. It starts where you left it. A line says `Resumed at 3:42` for 5 seconds.
+3. Tap "Start over" in that line to go back to the start.
+
+A video watched to near its end starts from the beginning next time.
+
+## Captions and the transcript
+
+A video can have captions: ones the site gives, ones saved with it, or ones inside a ZIM's video.
+
+1. Tap the captions button on the picture (it looks like CC). Its tooltip reads "Captions: Off" or "Captions: English". Captions show across the bottom of the picture.
+2. To pick a language, long press the captions button (with two or more languages), or tap the gear and "Captions". Choose "Off" or a language, for example `Spanish (automatic)`. Automatic means the site's speech recognition made them.
+
+Cache remembers your choice on this device.
+
+On a wide, tall window (at least 900 wide and 600 high, such as a computer's window), the transcript sits beside the video:
+- the heading is "Transcript". With two or more languages it adds the language;
+- each line has its time. The line being said is highlighted and kept in view;
+- tap a line to jump there.
+
+On a wide window that is too short, tap the gear and "Transcript". It opens as a sheet. On a phone there is no transcript pane.
+
+## Search saved videos
+
+You can search the words said in your saved videos.
+
+1. Open "Videos". From 8 saved videos a field shows: "Search saved videos".
+2. Type some words. Cache matches titles, channels and the words said in the captions.
+3. Tap a caption match. The player opens at that moment with the line marked "Match".
+
+A caption match shows the time and the matching words under the video, for example `1:04  It makes a loop`. A video inside a ZIM shows "In [ZIM title] (on this device)".
+
+If nothing matches, it says `No saved video matches "water".`
+
+Cache builds the caption index in the background. A video whose captions are not indexed yet has no matches.
 
 ## Save a video for offline
 
-1. On the video, tap "Download".
-2. Pick a size. Smaller sizes save space.
-3. When it says "Saved on this device", tap "Play saved copy" to watch with no connection.
+1. Open the video page and tap "Download".
+2. In the sheet "Download", choose a size: "Best 720p", "Smaller 360p" or "Audio only". The size shows on the right. Cache starts on the smallest video size. "Smaller sizes use less space on this device."
+3. Read the captions line: "Captions come with it: English, Spanish." or "This video has no captions."
+4. Tap the button, for example `Download 360p · 120 MB`.
 
-![Saving a video](shot:video-download)
+The video shows under "Downloading" in "Videos" with "Pause" and "Resume". When it is done, the page says "On this device".
 
-Saved videos are under "Saved on this device" at the top of "Videos".
+- If the sheet says "Not enough room on this device.", tap "Open Storage" and free space. See Storage full in chapter 6.
+- If a site doesn't allow it, the page says "[site] doesn't allow downloading this video. You can still watch it online."
+- If a caption did not save, the page says "Spanish captions did not save." Tap "Try again". It fetches only the missing captions.
+- If the download stopped, tap "Resume".
 
-To remove them, delete them in "Videos", or go to ["Settings" > "Storage" > "Videos and weather"](cache://settings/storage).
+To delete a video, tap "Delete from this device". The pop-up asks "Delete this video?" and says `It is deleted from this device (230 MB).` Tap "Delete" or "Keep". You can download it again later.
 
-- If a download stopped, tap "Continue".
+## Sign in to a video site
 
-## Log in to a video site
+You only need this for videos a site keeps behind a sign-in.
 
-You only need this for videos a site keeps behind a login.
+1. Open the site and tap the account button at the top right. Its tooltip is "Account and details", or your user name once you are signed in.
+2. Under "Sign in (optional)", look at what the site offers.
+3. If it has its own ways in, tap "Sign in with [name]". The site's page opens inside Cache. Finish there.
+4. Or use "Or with your user name and password". Type "User name" and "Password". Add the "Two-factor code" if asked.
+5. Tap "Sign in".
 
-1. Open the instance and tap "Account and details".
-2. Under "Log in (optional)", enter "User name" and "Password". Add the "Two-factor code" if asked.
-3. Tap "Log in".
+The sheet then says "Signed in as [user name]". Tap "Sign out" to sign out.
 
-The same sheet has "Log out" and "Remove this instance".
+- If you see "Sign-in with [name] was cancelled.", you closed the page. Tap it again.
+- If you see "That sign-in took too long or was already used. Try again.", tap it again.
+- If you see "The video site needs you to sign in again.", sign in again.
+
+## Private videos
+
+A private video has a lock on its picture.
+
+1. Open the video page. It says "Sign in to [site] to play this video".
+2. Tap "Sign in" and sign in. See Sign in to a video site.
+3. Tap the picture to play.
+
+Once you sign in, private videos play at any size the site has.
+
+## Remove a video site
+
+1. Open the site and tap the account button.
+2. Tap "Remove this video site".
+3. If you saved videos from it, choose "Keep videos" or "Remove and delete videos". Or tap "Cancel".
+
+Without saved videos, tap "Remove".
 
 ## Weather
 
