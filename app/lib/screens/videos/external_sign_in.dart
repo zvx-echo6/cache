@@ -87,7 +87,7 @@ class _ExternalSignInPageState extends State<_ExternalSignInPage> {
       ),
       body: InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.auth.url)),
-        initialSettings: InAppWebViewSettings(useShouldOverrideUrlLoading: true, incognito: true, clearCache: true),
+        initialSettings: InAppWebViewSettings(useShouldOverrideUrlLoading: true, incognito: true),
         shouldOverrideUrlLoading: (controller, action) async =>
             _check(action.request.url?.uriValue) ? NavigationActionPolicy.CANCEL : NavigationActionPolicy.ALLOW,
         onLoadStart: (controller, url) => _check(url?.uriValue),
