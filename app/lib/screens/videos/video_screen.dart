@@ -75,6 +75,7 @@ class _VideoScreenState extends State<VideoScreen> {
         video: widget.uuid,
         instance: widget.instanceId,
         captionUrls: _d?.captions ?? const [],
+        qualities: _d?.qualities ?? const [],
         channel: _d?.channel.displayName,
       );
     } catch (e) {

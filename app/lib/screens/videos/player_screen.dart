@@ -22,6 +22,9 @@ const double kTranscriptPaneWidth = 320;
 /// A window shorter than this has no room for the transcript beside the video: it opens from the Captions sheet instead.
 const double kTranscriptMinHeight = 600;
 
+/// The soft shadow behind every icon and word on the picture, so white stays readable over a bright frame.
+const List<Shadow> kOverlayShadows = [Shadow(color: Color(0xA6000000), blurRadius: 6, offset: Offset(0, 1))];
+
 /// The controls on the picture hide after this much playback with no touch.
 const Duration kControlsHide = Duration(seconds: 3);
 
@@ -48,6 +51,8 @@ class PlayerScreen extends StatefulWidget {
     this.onRedownload,
     this.mobileOverride,
     this.frame,
+    this.qualities = const [],
+    this.savedQuality,
   });
 
   final VideoTarget target;
@@ -85,6 +90,12 @@ class PlayerScreen extends StatefulWidget {
 
   /// Test hook for pictures: drawn in place of the video's frames.
   final Widget? frame;
+
+  /// For a stream: the qualities it can be switched to (Auto is the stream [target] resolves to).
+  final List<VideoQuality> qualities;
+
+  /// For a saved copy: its quality ("480p"), shown in the settings as which copy this is.
+  final String? savedQuality;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -131,6 +142,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   static const List<double> speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   VideoTarget get t => widget.target;
+
+  /// What is playing: [t], or the quality chosen for a stream.
+  late VideoTarget _src = t;
+
+  /// The stream quality chosen (a key of [PlayerScreen.qualities]); null: Auto.
+  String? _quality;
   String get _key => VideoPrefs.keyOf(instance: t.instance, uuid: t.uuid);
 
   List<CaptionTrack> _tracksOf() => t.isLocal
@@ -150,12 +167,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    // A stream starts at the quality last chosen on this device, when this video has it (else Auto).
+    final kept = widget.prefs?.quality;
+    if (!t.isLocal && kept != null && kept != 'auto') {
+      for (final q in widget.qualities) {
+        if (q.key == kept) {
+          _quality = q.key;
+          _src = _sourceOf(q);
+        }
+      }
+    }
     _start();
   }
 
   VideoPlayerController _make() {
-    if (widget.controllerFactory != null) return widget.controllerFactory!(t);
-    return t.isLocal ? VideoPlayerController.file(File(t.location)) : VideoPlayerController.networkUrl(Uri.parse(t.location));
+    if (widget.controllerFactory != null) return widget.controllerFactory!(_src);
+    return _src.isLocal ? VideoPlayerController.file(File(_src.location)) : VideoPlayerController.networkUrl(Uri.parse(_src.location));
   }
 
   Future<void> _start() async {
@@ -368,6 +395,100 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (mounted) setState(() {});
   }
 
+  String get _qualityLabel {
+    for (final q in widget.qualities) {
+      if (q.key == _quality) return q.label;
+    }
+    return 'Auto';
+  }
+
+  /// The stream of one quality, as a target the player opens.
+  VideoTarget _sourceOf(VideoQuality q) => VideoTarget(
+        isLocal: false,
+        uuid: t.uuid,
+        title: t.title,
+        offsetS: t.offsetS,
+        durationS: t.durationS,
+        location: q.url,
+        isHls: q.isHls,
+        needsAuth: t.needsAuth,
+        instance: t.instance,
+      );
+
+  /// The quality sheet (a stream): Auto and each quality; the choice is kept on this device.
+  Future<void> _pickQuality() async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                key: const ValueKey('quality-auto'),
+                minTileHeight: 48,
+                title: const Text('Auto'),
+                trailing: _quality == null ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(ctx, 'auto'),
+              ),
+              for (final q in widget.qualities)
+                ListTile(
+                  key: ValueKey('quality-${q.key}'),
+                  minTileHeight: 48,
+                  title: Text(q.label),
+                  trailing: _quality == q.key ? const Icon(Icons.check) : null,
+                  onTap: () => Navigator.pop(ctx, q.key),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null) return;
+    final key = picked == 'auto' ? null : picked;
+    widget.prefs?.quality = picked;
+    if (key == _quality) return;
+    VideoQuality? q;
+    for (final x in widget.qualities) {
+      if (x.key == key) q = x;
+    }
+    await _switchTo(q == null ? t : _sourceOf(q), quality: key);
+  }
+
+  /// Plays [src] in place of what plays now, at the same moment, playing or paused as it was.
+  Future<void> _switchTo(VideoTarget src, {String? quality}) async {
+    final old = _c;
+    if (old == null) return;
+    final at = old.value.position;
+    final playing = old.value.isPlaying;
+    final speed = old.value.playbackSpeed;
+    old.removeListener(_tick);
+    _keep?.cancel();
+    setState(() {
+      _quality = quality;
+      _src = src;
+      _c = null;
+      _started = false;
+    });
+    await old.dispose();
+    final c = _make();
+    _c = c;
+    c.addListener(_tick);
+    try {
+      await c.initialize();
+      if (!mounted) return;
+      if (at > Duration.zero) await c.seekTo(at);
+      if (speed != 1) await c.setPlaybackSpeed(speed);
+      if (playing) await c.play();
+      _started = true;
+      _keep = Timer.periodic(const Duration(seconds: 5), (_) => _remember());
+    } catch (e) {
+      if (mounted) setState(() => _error = "This video can't be played.");
+    }
+    if (mounted) setState(() {});
+  }
+
   static String _speedText(double sp) => sp == sp.roundToDouble() ? sp.toInt().toString() : '$sp';
 
   /// Turns captions to [track] (null: off) and keeps the choice on this device.
@@ -412,6 +533,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
               trailing: Text(c.value.playbackSpeed == 1 ? 'Normal' : '${_speedText(c.value.playbackSpeed)}x'),
               onTap: () => Navigator.pop(ctx, 'speed'),
             ),
+            if (!t.isLocal && widget.qualities.isNotEmpty)
+              ListTile(
+                key: const ValueKey('settings-quality'),
+                minTileHeight: 48,
+                leading: const Icon(Icons.high_quality_outlined),
+                title: const Text('Quality'),
+                trailing: Text(_qualityLabel),
+                onTap: () => Navigator.pop(ctx, 'quality'),
+              )
+            else if (t.isLocal && widget.savedQuality != null)
+              ListTile(
+                key: const ValueKey('settings-quality-saved'),
+                minTileHeight: 48,
+                leading: const Icon(Icons.high_quality_outlined),
+                title: Text('Quality: ${widget.savedQuality} (saved)'),
+              ),
             if (_hasCaptions)
               ListTile(
                 key: const ValueKey('settings-captions'),
@@ -436,6 +573,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     switch (picked) {
       case 'speed':
         await _pickSpeed();
+      case 'quality':
+        await _pickQuality();
       case 'captions':
         await _captionSheet();
       case 'transcript':
@@ -908,10 +1047,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  /// An icon button for the dark scrim: white icon, the tooltip as its screen-reader label.
-  Widget _iconButton({required Key key, required IconData icon, required String tooltip, required VoidCallback onPressed, VoidCallback? onLongPress, double size = 26, Color? color}) {
+  /// An icon button for the dark scrim: a white icon with a soft shadow (readable over a bright picture), the tooltip as its
+  /// screen-reader label; [bar] draws a short accent bar under it (captions on).
+  Widget _iconButton({required Key key, required IconData icon, required String tooltip, required VoidCallback onPressed, VoidCallback? onLongPress, double size = 26, bool bar = false}) {
+    final k = context.t;
+    final Widget glyph = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: size, color: Colors.white, shadows: kOverlayShadows),
+        if (bar) Container(key: const ValueKey('player-captions-on'), width: size * 0.75, height: 3, margin: const EdgeInsets.only(top: 1), decoration: BoxDecoration(color: k.accent, borderRadius: BorderRadius.circular(2))),
+      ],
+    );
     if (onLongPress == null) {
-      return IconButton(key: key, tooltip: tooltip, iconSize: size, color: color ?? Colors.white, onPressed: onPressed, icon: Icon(icon));
+      return IconButton(key: key, tooltip: tooltip, iconSize: size, onPressed: onPressed, icon: glyph);
     }
     // A long press has its own job here, so the tooltip does not take it (it still names the button to a screen reader).
     return Tooltip(
@@ -919,13 +1067,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       triggerMode: TooltipTriggerMode.manual,
       child: GestureDetector(
         onLongPress: onLongPress,
-        child: IconButton(key: key, iconSize: size, color: color ?? Colors.white, onPressed: onPressed, icon: Icon(icon)),
+        child: IconButton(key: key, iconSize: size, onPressed: onPressed, icon: glyph),
       ),
     );
   }
 
   Widget _topBar(BuildContext context, {required bool full, required bool big}) {
-    final k = context.t;
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
       child: Row(
@@ -938,7 +1085,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 t.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white, shadows: kOverlayShadows),
               ),
             ),
           ] else
@@ -946,8 +1093,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (_hasCaptions)
             _iconButton(
               key: const ValueKey('player-captions'),
-              icon: _on == null ? Icons.closed_caption_off_outlined : Icons.closed_caption,
-              color: _on == null ? Colors.white : k.accent,
+              icon: _on == null ? Icons.closed_caption_off : Icons.closed_caption,
+              bar: _on != null,
               tooltip: _tip(context, _on == null ? 'Captions: Off' : 'Captions: ${_tracks[_on!].name}', 'C'),
               onPressed: _toggleCaptions,
               onLongPress: _tracks.length > 1 ? _captionSheet : null,
@@ -1037,7 +1184,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Text(
               '${formatDuration(pos / 1000)} / ${formatDuration(dur / 1000)}',
               key: const ValueKey('player-time'),
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white, shadows: kOverlayShadows),
             ),
             const Spacer(),
             if (!t.isAudio)

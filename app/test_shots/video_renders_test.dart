@@ -158,6 +158,7 @@ PlayerScreen _player(
       where: where,
       onRedownload: onRedownload,
       mobileOverride: false,
+      savedQuality: instance == null ? null : '480p',
       frame: Image.file(File(_frame), fit: BoxFit.cover),
       controllerFactory: (_) => c,
     );
@@ -224,6 +225,35 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('settings-speed')));
       await tester.pumpAndSettle();
       await _snap(tester, '2c-speed-sheet', theme);
+      await tester.pumpWidget(const SizedBox());
+
+      // a stream from a video site: the gear's Quality, then its choices
+      c = RecordingController(duration: const Duration(seconds: 730), size: const Size(1280, 720));
+      await _show(
+        tester,
+        PlayerScreen(
+          target: playerTarget(local: false, title: 'Knots every camper should know'),
+          qualities: const [
+            VideoQuality(key: '1080', label: '1080p', url: 'https://tube.example.org/v-1080.mp4'),
+            VideoQuality(key: '720', label: '720p', url: 'https://tube.example.org/v-720.mp4'),
+            VideoQuality(key: '480', label: '480p', url: 'https://tube.example.org/v-480.mp4'),
+            VideoQuality(key: '360', label: '360p', url: 'https://tube.example.org/v-360.mp4'),
+          ],
+          captionUrls: const [],
+          prefs: VideoPrefs(),
+          channel: 'Field Skills',
+          mobileOverride: false,
+          frame: Image.file(File(_frame), fit: BoxFit.cover),
+          controllerFactory: (_) => c,
+        ),
+        theme,
+      );
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      await _snap(tester, '2e-settings-quality-stream', theme);
+      await tester.tap(find.byKey(const ValueKey('settings-quality')));
+      await tester.pumpAndSettle();
+      await _snap(tester, '2f-quality-sheet-stream', theme);
       await tester.pumpWidget(const SizedBox());
 
       c = RecordingController(duration: const Duration(seconds: 730), size: const Size(1280, 720));

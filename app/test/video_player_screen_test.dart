@@ -345,6 +345,96 @@ void main() {
     });
   });
 
+  group('quality', () {
+    const qualities = [
+      VideoQuality(key: '720', label: '720p', url: 'https://video.example.test/v-720.mp4'),
+      VideoQuality(key: '360', label: '360p', url: 'https://video.example.test/v-360.mp4'),
+    ];
+
+    Future<List<(String, RecordingController)>> openStream(WidgetTester tester, VideoPrefs prefs) async {
+      final made = <(String, RecordingController)>[];
+      _size(tester, _phone);
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(
+          target: playerTarget(local: false),
+          qualities: qualities,
+          prefs: prefs,
+          mobileOverride: false,
+          controllerFactory: (t) {
+            final c = RecordingController();
+            made.add((t.location, c));
+            return c;
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      return made;
+    }
+
+    testWidgets('A stream: the gear has Quality (Auto first); a choice switches in place at the same moment and is kept', (tester) async {
+      final prefs = VideoPrefs();
+      final made = await openStream(tester, prefs);
+      expect(made.single.$1, 'https://video.example.test/video.mp4', reason: 'Auto: the stream the link resolves to');
+      made.single.$2.at(const Duration(seconds: 33));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.text('Quality'), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const ValueKey('settings-quality')), matching: find.text('Auto')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('settings-quality')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('quality-auto')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('quality-360')));
+      await tester.pumpAndSettle();
+      expect(made.length, 2);
+      expect(made.last.$1, 'https://video.example.test/v-360.mp4');
+      expect(made.last.$2.calls, ['initialize', 'seek:33000', 'play'], reason: 'the same moment, still playing');
+      expect(made.first.$2.disposed, isTrue);
+      expect(prefs.quality, '360');
+      await close(tester);
+
+      // the next stream starts at the kept quality
+      final again = await openStream(tester, prefs);
+      expect(again.single.$1, 'https://video.example.test/v-360.mp4');
+      await close(tester);
+    });
+
+    testWidgets('A saved copy: the gear says which quality it is, not a choice', (tester) async {
+      _size(tester, _phone);
+      final c = RecordingController();
+      await tester.pumpWidget(MaterialApp(
+        theme: buildTheme(CacheThemeId.dark),
+        home: PlayerScreen(target: playerTarget(), savedQuality: '480p', mobileOverride: false, controllerFactory: (_) => c),
+      ));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('player-settings')));
+      await tester.pumpAndSettle();
+      expect(find.text('Quality: 480p (saved)'), findsOneWidget);
+      expect(find.byKey(const ValueKey('settings-quality')), findsNothing);
+      await tester.tap(find.text('Quality: 480p (saved)'));
+      await tester.pumpAndSettle();
+      expect(find.text('Quality: 480p (saved)'), findsOneWidget, reason: 'not selectable: the sheet stays');
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      await close(tester);
+    });
+
+    testWidgets('CC is the white caption icon with an accent bar while captions are on', (tester) async {
+      final c = RecordingController();
+      await open(tester, c, playerTarget(captions: english()));
+      expect(find.byIcon(Icons.closed_caption_off), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-captions-on')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('player-captions')));
+      await tester.pump();
+      expect(find.byIcon(Icons.closed_caption), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-captions-on')), findsOneWidget);
+      await close(tester);
+    });
+  });
+
   group('captions', () {
     testWidgets('One language: Captions turns on and off (no sheet); the caption is on the picture; the choice is kept, and the next video starts with it', (tester) async {
       final network = NoNetwork();

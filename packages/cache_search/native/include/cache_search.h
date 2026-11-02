@@ -825,8 +825,10 @@ char *cs_video_search(cs_handle *h, const char *request_json);
  *  "nsfw","tags","channel":<channel>,"thumbnail","preview","download_enabled":bool,
  *  "captions":[{"language","label","automatic","url"}],
  *  "options":[{"key","label","kind":"video"|"audio","size":null|bytes,"source":"web"|"hls"|"hls+audio"}],
- *  "stream":{"hls":null|url,"mp4":null|url,"needs_auth":bool},
+ *  "stream":{"hls":null|url,"mp4":null|url,"needs_auth":bool,"qualities":[{"key":"720","label","url","format":"mp4"|"hls"}]},
  *  "downloaded":null|{"kind","resolution","size","downloaded_at"}}
+ * "qualities" are the stream's resolutions with sound, high to low: the web video MP4, else the HLS file's own playlist of
+ * that resolution when the instance gives one; empty when the files need a token (needs_auth).
  * "options" are the download choices, resolutions high to low then "audio" (audio only, only when the instance has an
  * audio-only file), with the size to show before downloading. For one resolution the file is chosen like this: a web-video
  * MP4 if there is one; else the HLS playlist's fragmented MP4 (a downloadable file) when it has sound; else, on

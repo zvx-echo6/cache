@@ -40,6 +40,8 @@ class VideoPrefs {
       }
       final c = j['captions'];
       _captions = c is String ? c : null;
+      final q = j['quality'];
+      _qualityChoice = q is String ? q : null;
     } catch (_) {}
   }
 
@@ -70,6 +72,16 @@ class VideoPrefs {
     if (_positions.remove(key) != null) _save();
   }
 
+  /// The last stream quality chosen: null when never chosen, "auto", or a resolution ("720").
+  String? get quality => _qualityChoice;
+  String? _qualityChoice;
+
+  set quality(String? choice) {
+    if (_qualityChoice == choice) return;
+    _qualityChoice = choice;
+    _save();
+  }
+
   /// The last captions choice: null when never chosen (captions start off), "off", or a language code.
   String? get captions => _captions;
 
@@ -92,6 +104,7 @@ class VideoPrefs {
         final body = jsonEncode({
           'version': 1,
           'captions': _captions,
+          'quality': _qualityChoice,
           'positions': {for (final e in _positions.entries) e.key: {'ms': e.value.ms, 'at': e.value.at}},
         });
         final f = file!;

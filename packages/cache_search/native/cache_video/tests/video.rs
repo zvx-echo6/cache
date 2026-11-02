@@ -399,3 +399,13 @@ fn a_caption_that_did_not_save_is_fetched_again_alone() {
     assert_eq!(r["captions"].as_array().unwrap().len(), 1);
     assert_eq!(v.captions_fetch(&json!({"instance": id, "video": HLS_UUID}).to_string()).unwrap_err().code, "not_found");
 }
+
+#[test]
+fn the_video_page_lists_the_stream_qualities() {
+    let (_t, _m, v, id) = setup("qualities");
+    let d = j(v.get(&json!({"instance": id, "video": WEB_UUID}).to_string()));
+    let q = d["stream"]["qualities"].as_array().unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0]["key"].as_str().unwrap(), q[0]["format"].as_str().unwrap()), ("608", "mp4"));
+    assert!(q[0]["url"].as_str().unwrap().ends_with("-608.mp4"));
+}

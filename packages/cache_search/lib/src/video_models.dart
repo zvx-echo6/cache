@@ -143,6 +143,20 @@ class VideoOption {
   final String source;
 }
 
+/// A quality a stream can be switched to (cs_video_get "stream"."qualities").
+class VideoQuality {
+  const VideoQuality({required this.key, required this.label, required this.url, this.isHls = false});
+
+  factory VideoQuality.fromJson(Map<String, dynamic> j) =>
+      VideoQuality(key: (j['key'] ?? '') as String, label: (j['label'] ?? j['key'] ?? '') as String, url: (j['url'] ?? '') as String, isHls: j['format'] == 'hls');
+
+  /// The resolution ("720").
+  final String key;
+  final String label;
+  final String url;
+  final bool isHls;
+}
+
 class VideoCaptionInfo {
   const VideoCaptionInfo({required this.language, required this.label, required this.url, this.automatic = false});
 
@@ -180,6 +194,7 @@ class VideoDetails {
     this.mp4Url,
     this.needsAuth = false,
     this.downloadedResolution,
+    this.qualities = const [],
   });
 
   factory VideoDetails.fromJson(Map<String, dynamic> j) {
@@ -204,6 +219,7 @@ class VideoDetails {
       mp4Url: stream['mp4'] as String?,
       needsAuth: (stream['needs_auth'] ?? false) as bool,
       downloadedResolution: dl is Map ? dl['resolution'] as String? : null,
+      qualities: [for (final q in _list(stream['qualities'])) VideoQuality.fromJson(q)],
     );
   }
 
@@ -227,6 +243,9 @@ class VideoDetails {
 
   /// The resolution key already on this phone ("480", "audio"), or null.
   final String? downloadedResolution;
+
+  /// The qualities the stream can be switched to, high to low (none for a video whose files need a token).
+  final List<VideoQuality> qualities;
 
   bool get canStream => !isLive && (hlsUrl != null || mp4Url != null);
 }
