@@ -203,7 +203,7 @@ Kiwix publishes free offline copies of Wikipedia, medical guides and how-to site
 
 Every download asks first, with its size. Large files can be several gigabytes. Wikipedia comes with pictures (maxi) or without (nopic). The versions without pictures are much smaller.
 
-Each new ZIM is indexed in the background, which can take a while.
+Each new ZIM is indexed in the background, which can take a while. Its PDFs, EPUBs and video captions are made searchable too, a little at a time.
 
 - If you're on mobile data, it waits for Wi-Fi unless you allow mobile data.
 
@@ -223,7 +223,7 @@ Cache shows each file's size and whether it fits this device. It lists single-fi
 
 Cache's Videos module plays videos from PeerTube sites, which anyone can run.
 
-1. Open "Videos" and tap "Add an instance".
+1. Open "Videos" and tap "Add a video site".
 2. Type the site's address, for example tube.example.org.
 
-Logging in is optional. You only need it for videos the site keeps for members. You can save videos for offline viewing. Smaller sizes save space.
+Signing in is optional. You only need it for videos the site keeps behind a sign-in. You can save videos for offline viewing. Smaller sizes save space. See Videos in chapter 2.

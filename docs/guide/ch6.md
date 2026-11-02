@@ -27,6 +27,8 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 ## Home search and shortcut messages
 
 - "Nothing found" under "Ask Cache:": nothing on your device matches. Tap the "Ask Cache:" row to ask instead.
+- "Nothing found on this device." with "For an answer in words, choose a model.": you have no model, so Home searches only. Tap "Choose a model" to get answers in words.
+- `Still making [library]'s PDFs searchable (340 of 5,768)`: at the foot of the results. That library's PDFs are not all searchable yet. Tap it for the status, or tap "Hide".
 - "That chat is gone": the chat was deleted. Tap and hold the shortcut, then "Remove from Home".
 - "Wikipedia is not on this device.": tap "Get Wikipedia" on the place card.
 - "That article is not in your Wikipedia. Update Wikipedia in Library.": tap "Open Library".
@@ -43,6 +45,16 @@ If one keeps coming back, note the exact words for whoever supports your copy.
 - "Not from your sources": the answer isn't from your device or a search. Check it.
 - "Navigation unavailable: this route snapshot is no longer available.": ask for directions again.
 - "Report saved on this device. Find it in Settings > Assistant.": saved. That page is now "Cache model and web search".
+- "Ask needs a model on this device.": you have no model. Tap "Choose a model". See Use Cache with no model in chapter 2.
+- "A model is downloading. Ask turns on when it is ready.": wait, or tap "See download".
+- "Ask is off. Choose a model to carry on.": you opened a saved chat and have no model. It is read-only. Tap "Choose a model".
+- "Ask is off. You can add a model any time.": you tapped "Not now" on "Set up Cache". Tap "Undo" to take it back.
+- "Ask is on.": the first model arrived. Tap "Open".
+- "Ask will turn off. Saved chats stay readable.": in the pop-up to delete your last chat model.
+- `[model] did not load. It is too big for this device.`: tap "Choose a smaller model".
+- `[model] did not load. The file may be damaged.`: tap "Delete and download again".
+- `[model] did not load.`: tap "Choose a model".
+- "No model is loaded.": tap the button, which reads `Load [model]`, or "Choose a model".
 
 ## Location messages in Ask
 
@@ -81,6 +93,52 @@ The search model (605 MB) lets Cache search by meaning.
 - "Meaning search needs the model [name].": shown under search results in the reader when a library wants a different model. It has no button. Cache can't download that model and searches by keywords.
 - "Matching words only: the meaning search is not available": places search by words only.
 
+## Search indexing messages
+
+Cache makes PDFs, EPUBs and captions searchable in the background, only while Cache is open. See Search inside PDFs, EPUBs and captions in chapter 2.
+
+On a library's menu (press and hold it in "Library"):
+- "PDFs: searching ready": done. Nothing to do.
+- `PDFs: searching ready` with a small line `12 could not be read`: a few files could not be read. The rest work.
+- "Waiting to make PDFs searchable": another library goes first. It starts by itself.
+- "Making PDFs searchable…": starting.
+- "Making PDFs searchable: 340 of 5,768": working. Tap "Pause" to stop it yourself.
+- "Making PDFs searchable: finishing": nearly done.
+- "Pausing…": stopping because you asked.
+- "Paused · 340 of 5,768": you paused it. Tap "Resume".
+- "Paused: Cache was closed · 340 of 5,768": Cache was closed while it worked. Tap "Resume".
+- `Waits for charging · 340 of 5,768`: a long job waits for charge or more than half a battery.
+- "Paused, battery low": under 20% and not plugged in. It goes on when you charge.
+- `Slowed down, phone is warm · 340 of 5,768`: it eases off until the device cools.
+- `Paused, not enough space · 340 of 5,768`: free space in ["Settings" > "Storage"](cache://settings/storage).
+- "Needs 1.2 GB free" or "Needs more free space": tap "Free space".
+- "Stopped: the library could not be read": tap "Resume". If it repeats, delete the library and add it again.
+- "Making EPUBs searchable: 40 of 85", "Waiting to make EPUBs searchable" or "EPUBs: searching ready": the same, for EPUB books.
+
+On a library's row, after its size: "Making PDFs searchable", "PDFs paused", "PDFs need more space" or "PDFs stopped".
+
+At the foot of "Settings": "Getting search ready: 3 of 12", then maybe `waits for charging`, `paused, battery low`, `paused, not enough space` or `slowed down, phone is warm`. It goes away by itself.
+
+"Another device finished this. Using its index.": a linked device built the index first, and this device took it. See Search indexes on linked devices in chapter 3.
+
+## PDF reader messages
+
+- "Opening..." or "Getting the PDF ready...": wait. "Still opening. This file is 312 MB." has "Cancel".
+- "This PDF is locked. Enter its password.": type it in "Password" and tap "Open". "That password is not right.": try again.
+- "Not enough space to open this PDF on this device. It needs 340 MB.": tap "Open Storage" and free space.
+- "This PDF can't be opened. The file may be damaged.": tap "Try again". For a file from Storage, "Show in Storage".
+- "This file is no longer on this device.": tap "Open Storage", or "Open Library" for a PDF in a library.
+- "Zoom limited on this device.": the page can't be drawn larger.
+- "Pages 1 to 340": the page number is out of range.
+- "No matches": the words are not in the PDF. "No searchable text in this PDF." means it is scanned pictures.
+- "Scanned pages skipped": some pages are pictures, so search skipped them.
+- "Cited passage": the highlight is the passage that was cited.
+- "Page 47. The exact passage was not found on this page.": tap "Find on other pages".
+- "This PDF has 340 pages. Cited page 400 is not here.": the citation names a page the PDF doesn't have.
+- "Page 12. Scanned page, nothing to highlight.": the page is a picture.
+- "This PDF is scanned pictures. Search can't read it.": find can't search it. You can still read it.
+- "Open this link in your browser? It needs a connection.": tap "Open" or "Cancel".
+
 ## Download pop-up messages
 
 Every download asks first. See Downloads, Wi-Fi and mobile data in chapter 1.
@@ -99,6 +157,7 @@ Delete pop-ups say "Frees" and a size, and "You can download it again later." Ta
 - "Update ready": press and hold the item, then "Check for update".
 - "That source is not on this device any more.": download it again.
 - "Indexing", "Waiting to index" or "Building index": see An index still building.
+- "Making PDFs searchable: 340 of 5,768", "Waiting to make PDFs searchable" or "PDFs: searching ready": see Search indexing messages.
 - "Nothing found. Try another word, language or category.": change the search or chips.
 
 ## Kiwix catalogue messages
@@ -385,25 +444,40 @@ Location isn't set in Notifications. Use "Use my location" in "Settings" > "Cach
 ## Video messages
 
 In "Videos":
-- "Can't reach the instance. Check the connection and try again."
-- "That address doesn't look like a PeerTube instance.": check it, for example tube.example.org.
-- "The instance asked us to slow down. Try again in a minute."
-- "The instance needs you to log in again.": tap "Log in" in the account sheet.
-- "This account needs its two-factor code." or "Enter the two-factor code.": type the code from your authenticator.
+- "Can't reach the video site. Check the connection and try again."
+- "That address doesn't look like a PeerTube site.": check it, for example tube.example.org.
+- "The video site asked us to slow down. Try again in a minute."
+- "The video site needs you to sign in again.": tap the account button on the site, then "Sign in".
+- "This account needs its two-factor code." or "Enter the two-factor code.": type the code from your authenticator in "Two-factor code".
 - "The user name or password is wrong."
-- "That instance is not in the list." or "Not found on the instance.": the video or channel was removed.
-- "No instances yet. Add the address of a PeerTube site to browse and watch its videos.": tap "Add an instance".
+- "That video site is not in the list." or "Not found on the video site.": the site, video or channel was removed.
+- "This video site is not on your list.": the site was removed, and nothing is saved from it.
+- "Nothing on this device yet. Find a video on a site and choose Download.": open a site and find a video.
+- "This site has no videos": the site has none to show.
+
+## Video sign-in messages
+
+In the sheet from the account button on a site:
+- "Sign-in with [name] was cancelled.": you closed the site's page. Tap the button again.
+- "[site] couldn't sign you in with [name]. Try again."
+- "That sign-in took too long or was already used. Try again.": start the sign-in again.
+- "Sign in to [site] to play this video": a private video. Tap "Sign in".
 
 ## Video download and play messages
 
 - "Not enough free space on this device.": free space.
+- "Not enough room on this device.": in the "Download" sheet. Tap "Open Storage".
 - "The file did not arrive intact. Try again."
-- "Download stopped.": tap "Resume" (on the video or in "Saved videos").
+- "Download stopped.": tap "Resume" (on the video or in "Videos").
 - "Wait for Wi-Fi": you're on mobile data and "Mobile data downloads" is off.
 - "This video has no file to download yet.": try later.
-- "This file can't be played.": try another size, or play it online.
-- "Can't play this video right now. Check the connection.": play the saved copy, or connect.
-- "Nothing saved yet. Open a video and choose Download to watch it without a connection."
+- "A live stream can't be played here." or "A live stream can't be saved.": live streams are not supported.
+- "This video has no stream to play yet.": try later.
+- "[site] doesn't allow downloading this video. You can still watch it online.": watch it online.
+- "Spanish captions did not save.": tap "Try again". If it says "Check the connection and try again.", connect first.
+- "This video can't be played.": tap "Try again". If you have a saved copy, tap "Saved copy".
+- "This file can't be played.": tap "Delete it and download again".
+- "This video isn't saved on this device and can't be reached right now.": connect, or save it first.
 
 ## Sharing and sync messages
 
@@ -458,7 +532,7 @@ With no connection, these work:
 - "Maps" for downloaded regions, place search, and road directions (GPS works offline);
 - "Library" and the reader;
 - "Notebooks";
-- saved "Videos" ("Play saved copy");
+- saved "Videos" (tap the picture on its page);
 - "Weather", showing the last data with its age (old data is marked expired);
 - your chats, saved places and settings.
 
@@ -514,7 +588,7 @@ Most downloads continue where they stopped. Fix the cause first: the connection 
 
 ## An index still building
 
-After you add a ZIM or library, Cache builds a search index in the background. Large ones take a long time.
+After you add a ZIM or library, Cache builds a search index in the background. Large ones take a long time. Its PDFs, EPUBs and video captions are made searchable after the pages, a little at a time. It works only while Cache is open.
 
 While it builds:
 - the Library row says "Indexing" with a percentage, or "Waiting to index";
@@ -522,7 +596,11 @@ While it builds:
 - a ZIM opens, but search inside it says "This ZIM is still being indexed. Text search works when that is done.";
 - the assistant may say sources are still being indexed.
 
-Leave Cache open and keep the device charged for big ones.
+Leave Cache open and keep the device charged for big ones. Long jobs wait for charging when the battery is at half or less. See Search indexing messages for each line you may see.
+
+If it is slow, go to ["Settings" > "Storage"](cache://settings/storage) > "Advanced" and choose "Normal". See Background indexing speed in chapter 3.
+
+If you have linked devices with the same library, one may finish first. The others then use its index. See Search indexes on linked devices in chapter 3.
 
 - If indexing fails ("Indexing failed" or "The search index could not be built"), delete the item and add it again.
 - An updated ZIM keeps the old copy working until the new one is indexed.

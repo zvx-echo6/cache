@@ -9,6 +9,8 @@ These stay on your device:
 - your chats, and your reports from "Report this answer";
 - your notebooks, places, Home layout and settings;
 - your Library, libraries, maps, regions, models and saved videos;
+- the search indexes Cache makes for your PDFs, EPUBs, captions and libraries, built on the device;
+- where you stopped in each video, and your captions and video quality choices. These never leave the device, not even to your other devices;
 - your keys, in the device's secure storage.
 
 Cache has no sign-in. The device's own encryption and screen lock protect the data. Keep a screen lock on.
@@ -27,7 +29,9 @@ Cache goes online only for these, each talking directly to the service named:
 - Web search, if you set up a Kagi key and turned on "Search the web when online": Kagi gets the assistant's searches.
 - Map layers that stream: the tile provider gets requests for the areas you view.
 - Place search for an area you haven't downloaded: Cache's data server.
-- Downloads you start: models from Hugging Face, ZIMs from Kiwix, regions from Cache's data server, videos from your PeerTube sites, libraries from the link you gave.
+- Downloads you start: models from Hugging Face, ZIMs from Kiwix, regions from Cache's data server, videos and their captions from your video sites, libraries from the link you gave.
+- Video sites: each site you add gets requests for its list, its videos and the video you play. If you sign in, the site gets your sign-in. If the site offers its own way in, its page opens inside Cache and the site sees what you type there.
+- A web link in a PDF: only if you tap it and then tap "Open" on "Open this link in your browser? It needs a connection."
 - Lists Cache reads itself: regions, data sources, map layers and recommended models.
 - Sharing and sync, if you set it up: your own linked devices.
 
@@ -63,7 +67,7 @@ Keys and logins are stored in the device's secure storage (Android Keystore or i
 
 - Kagi key: entered in ["Settings" > "Cache model and web search"](cache://settings/assistant).
 - Data source keys: entered on the source's row in ["Settings" > "Weather and alerts"](cache://settings/weather).
-- PeerTube logins: Cache doesn't keep your password. It keeps only the login the site returns.
+- Video site sign-ins: Cache doesn't keep your password. It keeps only the sign-in the site returns. A sign-in through the site's own page happens in a private browser view that keeps nothing.
 
 When you save a key, Cache checks it once with a real search or download. The provider sees that one request. Each key goes only to its own provider.
 
@@ -73,7 +77,7 @@ Keys aren't shared between devices. Add them on each device.
 
 1. Kagi: go to "Settings" > "Cache model and web search", tap "Change" next to "Search service", then "Remove the key".
 2. Data sources: tap the source's row in "Settings" > "Weather and alerts", then "Remove the key". Its sources turn off.
-3. PeerTube: open the instance in "Videos", tap "Account and details", then "Log out".
+3. Video sites: open the site in "Videos", tap the account button, then "Sign out". To drop the site too, tap "Remove this video site".
 
 ## The assistant and web search
 
@@ -112,9 +116,12 @@ When it's on:
 - If a direct link isn't possible, they use a relay ("Connected through a relay"). What they send is encrypted end to end, so the relay can't read it.
 - Devices look for each other on the local network and on the internet.
 - Only the kinds you tick under "Shared with linked devices" are shared: "Library", "Maps", "Models", "Videos", "Notebooks" and "Shared folder".
-- Chats, settings and keys aren't shared.
+- Chats, settings and keys aren't shared. Where you stopped in a video isn't shared either.
+- Search indexes are shared whatever kinds you tick, once sharing is set up. They hold words from your libraries, PDFs, EPUBs and video captions, and only your own linked devices get them. A device fetches only the indexes of what it has.
 - Files and folders whose names start with a dot are never shared.
 - Private notebooks are left out by default.
+
+Nothing about indexes is set separately. See Search indexes on linked devices in chapter 3.
 
 Sharing follows "Mobile data downloads" in ["Settings" > "Storage"](cache://settings/storage).
 
