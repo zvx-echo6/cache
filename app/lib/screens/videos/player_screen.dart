@@ -846,7 +846,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
               top: full ? pad.top : 0,
               child: _topBar(context, full: full, big: big),
             ),
-            Center(child: _centre(context, c, big: big)),
+            // centred on the video; in a phone's small picture, above the caption's place so the two never meet
+            Positioned(left: 0, right: 0, top: 0, bottom: big ? 0 : bottomBar + 30, child: Center(child: _centre(context, c, big: big))),
             Positioned(
               left: full ? pad.left : 0,
               right: full ? pad.right : 0,
@@ -885,10 +886,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (cue.$2)
             Container(
               key: const ValueKey('caption-match'),
-              margin: const EdgeInsets.only(bottom: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              margin: const EdgeInsets.only(bottom: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
               decoration: BoxDecoration(color: k.accent, borderRadius: BorderRadius.circular(6)),
-              child: Text('Match', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: k.onPrimary)),
+              child: Text('Match', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: k.onPrimary)),
             ),
           DecoratedBox(
             key: const ValueKey('caption-band'),
@@ -899,7 +900,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              child: Text(cue.$1.text, textAlign: TextAlign.center, style: TextStyle(fontSize: big ? 20 : 17, height: 1.3, color: Colors.white)),
+              child: Text(cue.$1.text, textAlign: TextAlign.center, style: TextStyle(fontSize: big ? 20 : 15, height: 1.3, color: Colors.white)),
             ),
           ),
         ],
@@ -959,7 +960,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Widget _centre(BuildContext context, VideoPlayerController c, {required bool big}) {
     final k = context.t;
-    final icon = big ? 40.0 : 32.0;
+    final icon = big ? 40.0 : 28.0;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -973,7 +974,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           shape: const CircleBorder(),
           child: IconButton(
             key: const ValueKey('player-play'),
-            iconSize: big ? 52 : 40,
+            iconSize: big ? 52 : 34,
             color: k.onPrimary,
             tooltip: _tip(context, c.value.isPlaying ? 'Pause' : 'Play', 'Space'),
             onPressed: _playPause,
