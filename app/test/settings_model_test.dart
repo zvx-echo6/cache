@@ -7,6 +7,7 @@ import 'package:cache/settings/data_kinds.dart';
 import 'package:cache/settings/data_policy.dart';
 import 'package:cache/settings/space.dart';
 import 'package:cache/settings/storage_usage.dart';
+import 'package:cache/update/update_ui.dart' show installedBuild;
 import 'package:cache/version.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart' show sha256;
@@ -291,13 +292,15 @@ void main() {
     expect(kAppLicenceId, 'AGPL-3.0-or-later');
   });
 
-  test('the version is 1.0.<build>, the same build number on both phones, and shown whole', () {
+  test('the version is <major>.<minor>.<patch>+<build>, the build number its own counter, and the version shown alone', () {
     final line = File('pubspec.yaml').readAsLinesSync().firstWhere((l) => l.startsWith('version:'));
-    final m = RegExp(r'^version:\s*(\d+\.\d+\.(\d+))\+(\d+)\s*$').firstMatch(line);
+    final m = RegExp(r'^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$').firstMatch(line);
     expect(m, isNotNull, reason: line);
-    expect(m!.group(2), m.group(3), reason: 'version 1.0.27 is build 27 (the iOS workflow checks the same)');
+    expect(m!.group(1), kAppVersion);
+    expect(int.parse(m.group(2)!), kAppBuild, reason: 'the update check compares kAppBuild (the workflows read the same number)');
+    expect(installedBuild, kAppBuild);
+    expect(versionLabel('1.0.30', '31'), '1.0.30', reason: 'a test build shows its version, not its build number');
     expect(versionLabel('1.0.27', '27'), '1.0.27');
-    expect(versionLabel('1.0.0', '26'), '1.0.0 (build 26)', reason: 'an older build keeps its number');
     expect(versionLabel('1.0.27', ''), '1.0.27');
     expect(versionLabel('', ''), kAppVersion);
   });
