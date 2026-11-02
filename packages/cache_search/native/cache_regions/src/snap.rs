@@ -149,7 +149,7 @@ impl IndexStore {
                 match parsed {
                     Some(v) => {
                         // Two devices that built at once: every device keeps the same one, this one deletes the other.
-                        let _ = snapshot::gc(&sd, &p);
+                        let _ = snapshot::gc_local(&sd, self.kind, build, self.compat(), &p);
                         return Some(v);
                     }
                     None => {
