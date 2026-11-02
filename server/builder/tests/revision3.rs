@@ -402,8 +402,8 @@ fn f16_vs_f32(tmp: &Path) -> (u64, u64) {
         for q in [&v, &near] {
             let ha = sa.dense_search(q, 1, 1, 200).unwrap();
             let hb = sb.dense_search(q, 1, 1, 200).unwrap();
-            // the test books repeat their sentences, so equal pieces tie exactly: compare what the hit says, not its point id
-            assert_eq!((&ha[0].title, &ha[0].snippet), (&hb[0].title, &hb[0].snippet), "top-1 differs for {t:.40}");
+            // the test books repeat their sentences, so equal pieces tie exactly: compare what the hit says, not its point id or page
+            assert_eq!(ha[0].snippet, hb[0].snippet, "top-1 differs for {t:.40}");
         }
     }
     (dir_bytes(&a.join("shard")), dir_bytes(&b.join("shard")))
