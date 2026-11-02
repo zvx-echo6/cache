@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:cache/search/core_index_calls.dart';
 import 'package:cache/search/epub_index_row.dart';
 import 'package:cache/search/index_scheduler.dart';
