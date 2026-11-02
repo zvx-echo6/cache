@@ -14,14 +14,8 @@
 use crate::extract::{Block, Extracted, Line, RawPage};
 use crate::text::{ends_sentence, join_lines, normalize_ws};
 
-/// A heading or paragraph in reading order, with the PDF page (0-based) it starts on.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Element {
-    Heading { level: u8, text: String, page: usize },
-    /// `aside` marks a paragraph that was moved to the end of its page (a pull-quote, epigraph, caption or note); the
-    /// chunker keeps it from interrupting a sentence that runs on to the next page.
-    Para { text: String, page: usize, bullet: bool, aside: bool },
-}
+/// A heading or paragraph in reading order (defined in `cache_chunk`, which chunks them).
+pub use cache_chunk::Element;
 
 /// The result of laying a document out.
 #[derive(Debug, Clone, PartialEq)]
