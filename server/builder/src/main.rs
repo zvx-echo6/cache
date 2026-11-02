@@ -383,8 +383,11 @@ fn cmd_dump(a: &Args) -> i32 {
             println!("   [{:.0},{:.0} {:.0},{:.0}] sz {:.1}{}{} {:?}", l.x0, l.y0, l.x1, l.y1, l.size, if l.bold { " B" } else { "" }, if l.italic { " I" } else { "" }, l.text);
         }
     }
-    let order = cache_builder::layout::reading_order(&pg.blocks, cache_builder::layout::body_size(&ext.pages));
-    println!("reading order: {order:?}");
+    println!("reading order:");
+    for (i, b) in cache_builder::layout::reading_blocks(&pg.blocks, cache_builder::layout::body_size(&ext.pages)).iter().enumerate() {
+        let first: String = b.lines.first().map(|l| l.text.chars().take(50).collect()).unwrap_or_default();
+        println!("   {i}: x {:.0}-{:.0} y {:.0}-{:.0} lines {} {:?}", b.x0, b.x1, b.y0, b.y1, b.lines.len(), first);
+    }
     0
 }
 
