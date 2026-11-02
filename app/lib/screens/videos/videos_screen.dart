@@ -127,26 +127,13 @@ class _VideosScreenState extends State<VideosScreen> {
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: twoAcross ? kVideoListMaxWidth * 2 : kVideoListMaxWidth),
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + MediaQuery.paddingOf(context).bottom),
                 children: _searched.isNotEmpty ? [_searchField(context), ..._results(context)] : _list(context, twoAcross),
               ),
             ),
           );
         },
       ),
-      floatingActionButton: !widget.showSites
-          ? null
-          : ListenableBuilder(
-              listenable: video,
-              builder: (context, _) => video.unavailable != null
-                  ? const SizedBox.shrink()
-                  : FloatingActionButton.extended(
-                      key: const ValueKey('videos-add-site'),
-                      onPressed: _add,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add a video site'),
-                    ),
-            ),
     );
   }
 
@@ -203,6 +190,10 @@ class _VideosScreenState extends State<VideosScreen> {
       ],
       if (widget.showSites) ...[
         const SectionHeading('Video sites', top: 24),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+          child: Text('Find videos on a site', style: TextStyle(fontSize: 15, color: k.secondary)),
+        ),
         for (final i in video.instances)
           VideoTile(
             onTap: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => InstanceScreen(video: video, instance: i))),
@@ -226,8 +217,16 @@ class _VideosScreenState extends State<VideosScreen> {
             ),
           ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
-          child: Text('Find videos on a site', style: TextStyle(fontSize: 15, color: k.secondary)),
+          padding: const EdgeInsets.only(top: 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const ValueKey('videos-add-site'),
+              onPressed: _add,
+              icon: const Icon(Icons.add),
+              label: const Text('Add a video site'),
+            ),
+          ),
         ),
       ],
     ];

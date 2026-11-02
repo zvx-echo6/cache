@@ -467,7 +467,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       page = _fullScreen(context, c);
     } else {
       page = Scaffold(
-        appBar: AppBar(title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
+        // The title is under the controls with its channel, length and where it plays; the bar has only Back.
+        appBar: AppBar(),
         body: error != null ? _errorView(context, error) : _body(context, c, ready),
       );
     }
@@ -498,6 +499,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Text(t.title, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: k.text)),
+            const SizedBox(height: 12),
             Text(error, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: k.emergency)),
             const SizedBox(height: 16),
             if (t.isLocal && widget.onRedownload != null)
