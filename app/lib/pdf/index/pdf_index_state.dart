@@ -158,6 +158,10 @@ class PdfIndexState extends ChangeNotifier {
   final Duration watchEvery;
   final DateTime Function() clock;
 
+  /// The index scheduler's throttle (its permit call), awaited before each PDF and between pages; null never waits. Set by the
+  /// app where the scheduler is made.
+  PdfPermit? permit;
+
   /// Shows a short message (a snackbar): set by the app shell.
   void Function(String text)? say;
 
@@ -593,6 +597,9 @@ class PdfIndexState extends ChangeNotifier {
       readPages: readPages,
       battery: battery,
       spaceOk: () => (space(File(z.path).parent.path).usable ?? 1) > 0,
+      // This device's note of the PDF being extracted (never synced), beside its record.
+      permit: permit,
+      attemptFile: File('${(await recordFile()).parent.path}${Platform.pathSeparator}pdf-index-attempt-${z.uuid}.json'),
       clock: clock,
     );
     _runPath = z.path;
@@ -611,11 +618,15 @@ class PdfIndexState extends ChangeNotifier {
     notifyListeners();
     final end = await run.run();
     run.removeListener(onRun);
+    // This device built it: recorded before the run lets go, so the snapshot never shows as one from another device (a kill
+    // right after the publish would otherwise leave it so).
+    if (end == PdfRunEnd.finished) {
+      await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true)?.id, 'built_uuid': z.uuid});
+    }
     _run = null;
     _runPath = null;
     switch (end) {
       case PdfRunEnd.finished:
-        await _put(z.fileName, {'pause': null, 'handled': null, 'built': run.result?['snapshot'] ?? _snapshot(z, fresh: true)?.id, 'built_uuid': z.uuid});
         _cleanOldEditions(z, list);
         await onIndexReady?.call();
       case PdfRunEnd.paused:

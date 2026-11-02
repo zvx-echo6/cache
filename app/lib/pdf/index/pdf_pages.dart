@@ -18,12 +18,16 @@ class PdfPagesOutcome {
   bool get noText => !locked && !damaged && pages.every((p) => p.trim().isEmpty);
 }
 
-/// Reads a PDF's pages from its bytes; [name] identifies it to the engine.
-typedef PdfBytesReader = Future<PdfPagesOutcome> Function(Uint8List bytes, String name);
+/// Waits until the work may go on (the index scheduler's throttle: rests, a warm phone, the person using the app).
+typedef PdfPermit = Future<void> Function();
+
+/// Reads a PDF's pages from its bytes; [name] identifies it to the engine; [betweenPages] is awaited before each page after the
+/// first, so a long PDF is throttled like the rest.
+typedef PdfBytesReader = Future<PdfPagesOutcome> Function(Uint8List bytes, String name, {PdfPermit? betweenPages});
 
 /// Reads every page's text with PDFium (pdfrx), one page at a time. A PDF that needs a password is locked (the indexer has no
 /// password to give); one PDFium cannot open is damaged.
-Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name) async {
+Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name, {PdfPermit? betweenPages}) async {
   await pdfrxFlutterInitialize();
   final PdfDocument doc;
   try {
@@ -36,6 +40,7 @@ Future<PdfPagesOutcome> readPdfPagesFromBytes(Uint8List bytes, String name) asyn
   try {
     final pages = <String>[];
     for (final page in doc.pages) {
+      if (pages.isNotEmpty) await betweenPages?.call();
       try {
         final p = await page.ensureLoaded();
         final t = await p.loadStructuredText();
