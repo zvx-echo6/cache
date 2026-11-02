@@ -968,7 +968,7 @@ fn the_snippet_shows_the_part_of_the_piece_that_matches_not_its_start() {
         .unwrap();
     let snip = r["snippet"].as_str().unwrap();
     assert!(snip.contains("$250,000"), "{snip}");
-    assert!(snip.chars().count() <= 400, "same length as before: {}", snip.chars().count());
+    assert!(snip.chars().count() <= 800, "at most the long length: {}", snip.chars().count());
     assert!(!snip.starts_with("Homeowners insurance does not cover"), "{snip}");
     // a query that matches nothing of the piece's body keeps the start (the title matches)
     let s = call(unsafe { cs_search(h, cstr("flood money").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) });
@@ -978,7 +978,7 @@ fn the_snippet_shows_the_part_of_the_piece_that_matches_not_its_start() {
         .iter()
         .find(|x| x["address"].as_str().unwrap().starts_with("zimpdf:"))
         .unwrap();
-    assert!(r["snippet"].as_str().unwrap().chars().count() <= 400);
+    assert!(r["snippet"].as_str().unwrap().chars().count() <= 800);
     unsafe { cs_close(h) };
 }
 
@@ -1016,5 +1016,61 @@ fn results_with_the_same_title_and_snippet_are_one_and_paging_continues() {
     let second = search(r#"{"k":1,"offset":1}"#);
     assert_eq!(first, vec![all[0].clone()]);
     assert_eq!(second, vec![all[1].clone()]);
+    unsafe { cs_close(h) };
+}
+
+#[test]
+fn the_first_two_pdf_results_get_a_longer_snippet_and_the_third_stays_short() {
+    let e = env("long-snippet");
+    let s = open_session(&e.idx, UUID, None);
+    let id = s["session"].as_u64().unwrap();
+    // the matching sentences fill the first ~470 characters; the sentence with the amount comes after them
+    let body = |who: &str| {
+        let first = format!("{who} explains that federal flood insurance covers your home and belongings.");
+        let filler = " Federal flood insurance covers your home and belongings against flood damage.".repeat(5);
+        format!("{first} {filler}Coverage is up to $250,000 for your residential property and $100,000 for belongings. Policies start after thirty days.")
+    };
+    let texts: Vec<String> = ["Alpha", "Bravo", "Charlie"].iter().map(|w| body(w)).collect();
+    for (k, t) in texts.iter().enumerate() {
+        assert!(
+            t.find("$250,000").unwrap() > 400 && t.chars().count() < 800,
+            "the answer is past the normal length"
+        );
+        add_raw(
+            id,
+            json!({"path": format!("Guides/flood_{k}.pdf"), "title": format!("Flood Guide {}", ["One", "Two", "Three"][k]),
+                   "pieces": [piece(0, t, 1, None)]}),
+        );
+    }
+    close(id);
+    finish(&e.idx, UUID);
+    let h = open_handle(&e.zim, Some(&e.idx), Some(&e.zim_idx));
+    settle(h);
+    let q = "federal flood insurance home and belongings coverage";
+    let s = call(unsafe { cs_search(h, cstr(q).as_ptr(), cstr(r#"{"k":6}"#).as_ptr()) });
+    let pdfs: Vec<&Value> = s["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["address"].as_str().unwrap().starts_with("zimpdf:"))
+        .collect();
+    assert_eq!(pdfs.len(), 3, "{s}");
+    for r in &pdfs[..2] {
+        let t = r["snippet"].as_str().unwrap();
+        assert!(t.contains("$250,000 for your residential property"), "{t}");
+        assert!(t.chars().count() <= 800, "{}", t.chars().count());
+    }
+    let third = pdfs[2]["snippet"].as_str().unwrap();
+    assert!(third.chars().count() <= 400, "the third stays at the normal length: {}", third.chars().count());
+    assert!(!third.contains("$250,000"), "{third}");
+    // a piece shorter than the long length is shown whole
+    let s = call(unsafe { cs_search(h, cstr("torque").as_ptr(), cstr(r#"{"k":3}"#).as_ptr()) });
+    assert!(s["results"].as_array().unwrap().iter().all(|x| x["snippet"].as_str().unwrap().chars().count() <= 800));
+    // the next page has its own first two
+    let s2 = call(unsafe { cs_search(h, cstr(q).as_ptr(), cstr(r#"{"k":1,"offset":2}"#).as_ptr()) });
+    let r = &s2["results"][0];
+    if r["address"].as_str().unwrap().starts_with("zimpdf:") {
+        assert!(r["snippet"].as_str().unwrap().chars().count() > 0);
+    }
     unsafe { cs_close(h) };
 }

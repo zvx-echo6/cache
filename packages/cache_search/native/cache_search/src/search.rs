@@ -102,6 +102,11 @@ struct PdfKw {
     count: usize,
 }
 
+/// The longest snippet (characters) of the first `LONG_SNIPPET_RESULTS` results of a page that come from a PDF, caption or EPUB
+/// index; every other result keeps the configured `snippet_chars`. A piece shorter than this is shown whole.
+pub const LONG_SNIPPET_CHARS: usize = 800;
+/// How many results of a page get the longer snippet (the first ones, by final rank).
+pub const LONG_SNIPPET_RESULTS: usize = 2;
 /// The most pieces of one PDF a result list shows (so a long document does not fill it).
 const PDF_HITS_PER_DOCUMENT: usize = 2;
 
@@ -865,12 +870,19 @@ impl Handle {
         let mut fitters: HashMap<usize, (TextAnalyzer, HashSet<String>)> = HashMap::new();
         let mut results: Vec<Value> = Vec::new();
         let mut kept = 0usize;
+        // for each result of the page: where its piece is, when it comes from a PDF (true) or caption/EPUB (false) index
+        let mut longable: Vec<Option<(bool, usize, usize)>> = Vec::new();
         let mut seen_text: HashSet<(String, String)> = HashSet::new();
         for e in shown {
             if kept >= opts.offset + opts.k {
                 break;
             }
             let (mark, n0) = (self.last_cites.len(), results.len());
+            let lk = match &e {
+                Shown::Pdf(pi, hi) => Some((true, *pi, *hi)),
+                Shown::Kw(ki, hi) => Some((false, *ki, *hi)),
+                _ => None,
+            };
             'item: {
                 let (m_si, hi) = match e {
                     Shown::Lib(src_i, h) => {
@@ -1009,7 +1021,25 @@ impl Handle {
                 if kept <= opts.offset {
                     results.pop();
                     self.last_cites.truncate(mark);
+                } else {
+                    longable.push(lk);
                 }
+            }
+        }
+        // The first LONG_SNIPPET_RESULTS results of the page from a PDF, caption or EPUB index get the longer snippet. It is
+        // made after the duplicate check above, which compared the normal-length snippets.
+        let long_chars = LONG_SNIPPET_CHARS.max(snippet_chars);
+        for (r, lk) in results.iter_mut().zip(&longable).filter(|(_, lk)| lk.is_some()).take(LONG_SNIPPET_RESULTS) {
+            let Some((is_pdf, i, j)) = *lk else { continue };
+            let longer = if is_pdf {
+                let (k, h) = (&pdf_kw[i], &pdf_kw[i].hits[j]);
+                self.pdf_index(&k.zim_id).map(|ix| ix.snippet(query, &h.text, long_chars))
+            } else {
+                let (k, h) = (&kw_kw[i], &kw_kw[i].hits[j]);
+                self.kw_index(k.kind, &k.source_id).map(|ix| ix.snippet(query, &h.piece.text, long_chars))
+            };
+            if let Some(t) = longer {
+                r["snippet"] = json!(t);
             }
         }
         Ok(json!({
