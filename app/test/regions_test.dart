@@ -204,7 +204,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Delete Twin Falls County?'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('confirm-delete')));
-    await r.settle(tester);
+    // The delete ends by writing the regions file and reading the core's status again (real file work) before the list
+    // changes; a fixed settle raced that on a busy runner, so wait for the end itself (bounded).
+    for (var i = 0; i < 100 && find.text('Nothing downloaded yet').evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
     expect(r.core.regions, isEmpty);
     expect(r.core.calls, contains('remove'));
     expect(r.s.engine.storageTotal, 0, reason: 'its map area is deleted too');
