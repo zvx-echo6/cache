@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../settings/app_settings.dart';
 import '../../settings/data_kinds.dart';
 import '../../settings/storage_usage.dart';
 import '../../theme.dart';
@@ -113,6 +114,11 @@ class _StoragePageState extends State<StoragePage> {
                 for (var i = 0; i < kinds.length; i++) _kind(kinds[i], colors[i % colors.length]),
               ],
             ),
+            AdvancedRow(
+              key: const ValueKey('storage-advanced'),
+              status: 'Background indexing: ${s.indexingNormal ? 'Normal' : 'Gentle'}',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => IndexingSpeedPage(settings: s))),
+            ),
           ],
         );
       },
@@ -169,6 +175,44 @@ class _Bar extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Settings > Storage > Advanced: how fast search indexes are made in the background. Either way the work eases off when the
+/// device warms up, the battery is low or the person is using Cache, and stops while the model writes an answer.
+class IndexingSpeedPage extends StatelessWidget {
+  const IndexingSpeedPage({super.key, required this.settings});
+
+  final AppSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final k = context.t;
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) {
+        Widget choice(String key, String title, String status, bool normal) => SettingsRow(
+              key: ValueKey(key),
+              title: title,
+              status: [Part(status)],
+              trailing: settings.indexingNormal == normal ? Icon(Icons.check, color: k.accent) : null,
+              chevron: false,
+              onTap: () => settings.setIndexingNormal(normal),
+            );
+        return SettingsPage(
+          title: 'Advanced',
+          children: [
+            SettingsGroup(
+              label: 'Background indexing speed',
+              rows: [
+                choice('indexing-gentle', 'Gentle', 'Keeps the device cool and the battery longer', false),
+                choice('indexing-normal', 'Normal', 'Finishes sooner, uses more battery', true),
+              ],
+            ),
+          ],
+        );
+      },
     );
   }
 }

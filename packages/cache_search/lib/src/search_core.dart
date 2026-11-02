@@ -86,10 +86,17 @@ class SearchCore {
   Future<Map<String, dynamic>> version() async => (await _call('version') as Map).cast<String, dynamic>();
 
   /// Replaces the source list (a ZIM was added or removed).
-  Future<void> setSources(List<SourceConfig> sources) => _call('setSources', {'sources': jsonSources(sources)});
+  /// Replaces the source list; [extra] are the config fields cs_set_sources takes again each time (`indexes_dir`).
+  Future<void> setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) =>
+      _call('setSources', {'sources': jsonSources(sources), 'extra': extra});
 
   Future<List<SourceStatus>> status() async => [
         for (final s in await _call('status') as List) SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
+      ];
+
+  /// Snapshots the core found unusable and removed on this device ([SearchEngine.rejectedSnapshots]).
+  Future<List<RejectedSnapshot>> rejectedSnapshots() async => [
+        for (final r in await _call('rejected') as List) RejectedSnapshot.fromJson((r as Map).cast<String, dynamic>()),
       ];
 
   Future<SearchResponse> search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) async =>
@@ -212,6 +219,24 @@ class SearchCore {
   /// One op of the Notebook (cs_notebook; cache_search.h lists the ops and their answers).
   Future<Map<String, dynamic>> notebook(String op, [Map<String, dynamic> args = const {}]) => _map('notebook', {'op': op, 'args': args});
 
+  /// True when the core has the PDF index calls (cs_zim_pdfs, cs_pdfindex_*).
+  Future<bool> hasPdfIndex() async => (await _call('hasPdfIndex')) as bool;
+
+  /// The ZIM's PDF entries (cs_zim_pdfs).
+  Future<Map<String, dynamic>> zimPdfs(String zimId) => _map('zimPdfs', {'zimId': zimId});
+
+  /// One handle-less PDF call: the build session (`open`, `add`, `reuse`, `skip`, `close`, `discard`) or `chunk` (cs_pdf_chunk);
+  /// see cache_search.h.
+  Future<Map<String, dynamic>> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) =>
+      _map('pdfIndex', {'op': op, 'session': session, 'args': args});
+
+  /// True when the core has cs_captions_search.
+  Future<bool> hasCaptionsSearch() async => (await _call('hasCaptionsSearch')) as bool;
+
+  /// Saved videos and ZIM videos matched by caption text (cs_captions_search): {"videos":[...]}.
+  Future<Map<String, dynamic>> captionsSearch(String query, {int? k, String? lang}) =>
+      _map('captionsSearch', {'request': {'query': query, 'k': ?k, 'lang': ?lang}});
+
   /// One of the user's map layer and repeater list calls (cs_userlayer*; see [SearchEngine.userLayers]).
   Future<Map<String, dynamic>> userLayers(String call, [String? arg]) => _map('userLayers', {'call': call, 'arg': arg});
 
@@ -323,6 +348,10 @@ class CoreJobHandle {
 
   Future<void> cancel() => _core._call('jobCancel', {'job': _id});
 
+  /// Changes the job's pace now (cs_job_set; see [CoreJob.set]); null when the core has no cs_job_set.
+  Future<Map<String, dynamic>?> set(Map<String, Object?> pace) async =>
+      ((await _core._call('jobSet', {'job': _id, 'pace': pace})) as Map?)?.cast<String, dynamic>();
+
   /// Frees a job that is done, cancelled or failed.
   Future<void> free() async {
     if (_freed) return;
@@ -385,7 +414,9 @@ void _workerMain(List<dynamic> init) {
         case 'deleteSavedPlace':
           eng().deleteSavedPlace(a['key'] as String);
         case 'setSources':
-          eng().setSources(_sourcesFrom(a['sources'] as List));
+          eng().setSources(_sourcesFrom(a['sources'] as List), extra: (a['extra'] as Map?)?.cast<String, dynamic>());
+        case 'rejected':
+          result = [for (final r in eng().rejectedSnapshots()) r.toJson()];
         case 'status':
           result = [
             for (final s in eng().status())
@@ -403,6 +434,11 @@ void _workerMain(List<dynamic> init) {
                 'keyword_source': s.keywordSource,
                 'embedding_model': s.embeddingModel,
                 'whole_library_only': s.wholeLibraryOnly,
+                'source_id': s.sourceId,
+                'index': s.index?.toJson(),
+                'captionsindex': s.captionsIndex?.toJson(),
+                'epubindex': s.epubIndex?.toJson(),
+                'pdfindex': s.pdfIndex?.toJson(),
                 'error': s.error == null ? null : {'code': s.error!.code, 'message': s.error!.message},
               }
           ];
@@ -427,6 +463,8 @@ void _workerMain(List<dynamic> init) {
                   'source_kind': h.sourceKind,
                   'source_title': h.sourceTitle,
                   'page': h.page,
+                  // The worker passes on every field the app reads (a PDF passage's real page).
+                  if (h.pdfPage != null) 'pdf_page': h.pdfPage,
                 }
             ],
             'total_estimate': r.totalEstimate,
@@ -500,6 +538,16 @@ void _workerMain(List<dynamic> init) {
           result = eng().actOutcome(convs[a['conv']]!, (a['outcome'] as Map).cast<String, dynamic>());
         case 'notebook':
           result = eng().notebook(a['op'] as String, (a['args'] as Map).cast<String, dynamic>());
+        case 'hasPdfIndex':
+          result = eng().hasPdfIndex;
+        case 'zimPdfs':
+          result = eng().zimPdfs(a['zimId'] as String);
+        case 'pdfIndex':
+          result = eng().pdfIndex(a['op'] as String, session: (a['session'] as int?) ?? 0, args: (a['args'] as Map?)?.cast<String, dynamic>());
+        case 'hasCaptionsSearch':
+          result = eng().hasCaptionsSearch;
+        case 'captionsSearch':
+          result = eng().captionsSearch((a['request'] as Map).cast<String, dynamic>());
         case 'userLayers':
           result = eng().userLayers(a['call'] as String, a['arg'] as String?);
         case 'placesList':
@@ -537,9 +585,15 @@ void _workerMain(List<dynamic> init) {
             'total': p.total,
             'error': p.errorCode == null ? null : {'code': p.errorCode, 'message': p.errorMessage},
             if (p.detail != null) 'detail': p.detail,
+            if (p.phase != null) 'phase': p.phase,
+            if (p.result != null) 'result': p.result,
+            if (p.paused != null) 'paused': p.paused,
+            if (p.effective != null) 'effective': p.effective,
           };
         case 'jobCancel':
           jobs[a['job']]!.cancel();
+        case 'jobSet':
+          result = jobs[a['job']]!.set((a['pace'] as Map).cast<String, Object?>());
         case 'jobFree':
           jobs.remove(a['job'])?.free();
         case 'close':

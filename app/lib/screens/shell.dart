@@ -20,6 +20,8 @@ import '../guide/guide_book.dart';
 import '../actions/setup_status.dart' show setupGuideTitle;
 import '../guide/guide_reader.dart';
 import '../regions/ui/region_actions.dart';
+import '../pdf/index/pdf_index_app.dart';
+import '../pdf/index/pdf_index_ui.dart' show PdfSearchNote, showPdfPartSheet;
 import '../pdf/pdf_settings.dart' show PdfReaderLinks;
 import '../layout/adaptive.dart';
 import '../layout/layout_state.dart';
@@ -40,6 +42,7 @@ import '../sources/sources_state.dart';
 import '../update/app_update.dart' show ReleaseFileSource;
 import '../update/update_ui.dart';
 import '../video/video_state.dart';
+import '../video/zim_video.dart' show openZimMediaInPlayer;
 import '../weather/alert_notifier.dart';
 import '../weather/alert_watch.dart';
 import 'ask_off.dart';
@@ -165,6 +168,8 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    // PDF indexing's messages ("Another device finished this. Using its index.").
+    pdfIndexShared?.say = _sayIfMounted;
     _noModelSeen = widget.app.started && widget.app.models.isEmpty;
     widget.app.addListener(_onApp);
     _navEvents = widget.nav.events.listen((e) {
@@ -184,6 +189,11 @@ class _ShellState extends State<Shell> {
     PdfReaderLinks.openLibrary = (context) {
       Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
       _goModule(ModuleId.library);
+    };
+    // A link to a ZIM's video entry in the reader plays in the app's player.
+    openZimMediaInPlayer = (address) {
+      if (!mounted) return;
+      unawaited(playZimVideo(context, widget.video, _zimVideos, address: address).catchError((Object _) => _say("This video can't be played.")));
     };
     // "Free up space" in any download pop-up opens Settings > Storage.
     openStorageForSpace = (context) =>
@@ -232,6 +242,7 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    if (pdfIndexShared?.say == _sayIfMounted) pdfIndexShared?.say = null;
     widget.maps.removeListener(_onMaps);
     widget.app.removeListener(_onApp);
     if (openAppPlace == _goToPlace) openAppPlace = null;
@@ -346,7 +357,17 @@ class _ShellState extends State<Shell> {
   }
 
   /// A video citation: the player at the cited moment (the saved copy when there is one).
-  void _openVideo(String link, double time) => openVideoCitation(context, widget.video, video: link, offsetS: time);
+  void _openVideo(String link, double time, String? lang) =>
+      openVideoCitation(context, widget.video, video: link, offsetS: time, lang: lang, zims: _zimVideos, openInReader: _openSource);
+
+  /// A ZIM's videos for the player: read with the reader's own entry read; named by the ZIM's title.
+  late final ZimVideoReader _zimVideos = ZimVideoReader(
+    read: widget.sources.zimGet,
+    titleOf: (id) {
+      final z = widget.sources.zimById(id);
+      return z == null ? 'the Library' : widget.sources.titleOf(z);
+    },
+  );
 
   SettingsDeps get _settingsDeps => SettingsDeps(
     app: widget.app,
@@ -485,6 +506,10 @@ class _ShellState extends State<Shell> {
 
   void _openWeatherSettings() {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => WeatherPage(deps: _settingsDeps)));
+  }
+
+  void _sayIfMounted(String text) {
+    if (mounted) _say(text);
   }
 
   void _say(String text) {
@@ -632,7 +657,7 @@ class _ShellState extends State<Shell> {
           ),
         ModuleId.library => BrowseScreen(browse: widget.browse, active: _module == ModuleId.library, layout: widget.layout),
         ModuleId.maps => MapsScreen(location: widget.location, maps: widget.maps, nav: widget.nav, themeId: widget.app.theme, regions: widget.hub.regions, notebooks: widget.notebooks?.notebook, onOpenEntry: _openEntry, onNewEntryAt: _newEntryAt, userLayers: widget.notebooks?.userLayers, onOpenRepeaterList: _openRepeaterList, about: _about),
-        ModuleId.videos => VideosScreen(video: widget.video),
+        ModuleId.videos => VideosScreen(video: widget.video, zims: _zimVideos),
         // "Ask about this" is not drawn with no model (hidden, not greyed: Modules is the one place that explains).
         ModuleId.weather => WeatherScreen(weather: widget.hub.weather, onAsk: _askOn ? _askAbout : null, onOpenSettings: _openWeatherSettings, turnOn: _weatherTurnOn),
         ModuleId.notebooks => widget.notebooks == null ? const Scaffold(body: Center(child: Text('Notebooks are not available on this device'))) : NotebooksScreen(deps: _notebookDeps!),
@@ -646,6 +671,12 @@ class _ShellState extends State<Shell> {
     turnOn: _weatherTurnOn,
     setup: _setup,
     search: _search,
+    searchFootnote: pdfIndexShared == null
+        ? null
+        : PdfSearchNote(
+            state: pdfIndexShared!,
+            open: (z) => unawaited(showPdfPartSheet(context, pdfIndexShared!, z)),
+          ),
     onAsk: _askFromHome,
     askOn: _askOn,
     onChooseModel: () => openModels(context, widget.app),

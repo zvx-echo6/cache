@@ -114,6 +114,29 @@ pub struct Config {
     /// device loses its own copy.
     #[serde(default)]
     pub exclude: BTreeMap<String, Vec<String>>,
+    /// Paths whose deletion stays on this device, by share id (patterns as for `exclude`): when such a file goes here, the other
+    /// devices are not told (they keep theirs), and a delete of one from another device is not done here. This device remembers
+    /// what it deleted, so it does not fetch it back. For things each device replaces on its own (sealed search index snapshots).
+    #[serde(default)]
+    pub local_deletes: BTreeMap<String, Vec<String>>,
+    /// What this device fetches from the others, by share id (patterns as for `exclude`): a share listed here takes only the paths
+    /// its patterns cover (an empty list: nothing), until `set_only` replaces the list. Its own files are offered to the others
+    /// all the same. A share not listed fetches everything.
+    #[serde(default)]
+    pub only: BTreeMap<String, Vec<String>>,
+    /// Fetched after everything else that comes in the same round, by share id (patterns as for `exclude`): a file whose arrival
+    /// says the rest is there (a snapshot's manifest).
+    #[serde(default)]
+    pub last: BTreeMap<String, Vec<String>>,
+    /// What this device never fetches, by share id (patterns as for `exclude`), on top of `only`: snapshots its own core found
+    /// unusable and removed. `set_never_fetch` replaces a share's list later. Its own files are offered all the same.
+    #[serde(default)]
+    pub never_fetch: BTreeMap<String, Vec<String>>,
+    /// Hidden files that do sync, by share id (patterns as for `exclude`, naming the hidden part): a name starting with "." is
+    /// otherwise never listed, sent or fetched (the folders' own working files). Tantivy keeps `.managed.json` in every index
+    /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
+    #[serde(default)]
+    pub hidden: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -273,6 +296,19 @@ struct Inner {
     recovered: AtomicBool,
     /// What never syncs, by share id ([`Config::exclude`]).
     exclude: BTreeMap<String, Vec<String>>,
+    /// [`Config::local_deletes`].
+    local_deletes: BTreeMap<String, Vec<String>>,
+    /// [`Config::only`], as `set_only` last left it.
+    only: Mutex<BTreeMap<String, Vec<String>>>,
+    /// [`Config::last`].
+    last: BTreeMap<String, Vec<String>>,
+    /// [`Config::hidden`].
+    hidden: BTreeMap<String, Vec<String>>,
+    /// [`Config::never_fetch`], as `set_never_fetch` last left it.
+    never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
+    /// round, so a round already running cannot write them back (set_only does not wait for the round).
+    refetch: Mutex<HashMap<String, Vec<String>>>,
 }
 
 pub struct SyncEngine {
@@ -309,19 +345,31 @@ fn token() -> String {
 }
 
 fn rel_path(root: &Path, p: &Path) -> Option<String> {
+    rel_path_with(root, p, &[])
+}
+
+/// [`rel_path`], where a hidden path that `hidden` covers ([`Config::hidden`]) counts too.
+fn rel_path_with(root: &Path, p: &Path, hidden: &[String]) -> Option<String> {
     let r = p.strip_prefix(root).ok()?;
     let parts: Vec<String> = r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
-    if parts.iter().any(|c| c.starts_with('.')) {
+    let rel = parts.join("/");
+    if parts.iter().any(|c| c.starts_with('.')) && !excluded(hidden, &rel) {
         return None;
     }
-    Some(parts.join("/"))
+    Some(rel)
 }
 
 /// A path from a peer, made safe to join under a shared folder (no parent steps, no absolute paths, no hidden parts).
 fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
+    safe_join_with(root, rel, &[])
+}
+
+/// [`safe_join`], where a hidden path that `hidden` covers ([`Config::hidden`]) is allowed.
+fn safe_join_with(root: &Path, rel: &str, hidden: &[String]) -> Option<PathBuf> {
     let mut p = root.to_path_buf();
+    let hidden_ok = excluded(hidden, rel);
     for c in rel.split('/') {
-        if c.is_empty() || c == "." || c == ".." || c.starts_with('.') || c.contains('\\') || c.contains(':') {
+        if c.is_empty() || c == "." || c == ".." || (c.starts_with('.') && !hidden_ok) || c.contains('\\') || c.contains(':') {
             return None;
         }
         p.push(c);
@@ -333,7 +381,7 @@ fn mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn walk(root: &Path, dir: &Path, skip: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
+fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
@@ -341,12 +389,12 @@ fn walk(root: &Path, dir: &Path, skip: &[String], out: &mut Vec<(String, PathBuf
         if m.file_type().is_symlink() {
             continue;
         }
-        let Some(rel) = rel_path(root, &p) else { continue };
+        let Some(rel) = rel_path_with(root, &p, hidden) else { continue };
         if excluded(skip, &rel) {
             continue;
         }
         if m.is_dir() {
-            walk(root, &p, skip, out);
+            walk(root, &p, skip, hidden, out);
         } else if m.is_file() {
             out.push((rel, p, m));
         }
@@ -447,6 +495,11 @@ impl Inner {
         write_json(&self.saved_path(), &s)
     }
 
+    /// Hidden paths that do sync in `share` ([`Config::hidden`]).
+    fn hidden_ok(&self, share: &str) -> &[String] {
+        self.hidden.get(share).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
     /// The patterns that never sync in `share`.
     fn skip(&self, share: &str) -> &[String] {
         self.exclude.get(share).map(|v| v.as_slice()).unwrap_or(&[])
@@ -459,6 +512,44 @@ impl Inner {
             return idx.clone();
         }
         Index { files: idx.files.iter().filter(|(p, _)| !excluded(skip, p)).map(|(p, e)| (p.clone(), e.clone())).collect() }
+    }
+
+    /// A deletion of `rel` in `share` stays on this device ([`Config::local_deletes`]).
+    fn delete_stays_here(&self, share: &str, rel: &str) -> bool {
+        self.local_deletes.get(share).map(|p| excluded(p, rel)).unwrap_or(false)
+    }
+
+    /// This device fetches `rel` in `share` from the others ([`Config::only`], [`Config::never_fetch`]).
+    fn wants(&self, share: &str, rel: &str) -> bool {
+        let only = self.only.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(true);
+        only && !self.never_fetch.lock().unwrap().get(share).map(|p| excluded(p, rel)).unwrap_or(false)
+    }
+
+    /// What this device takes from a peer's list of `share`: not what never syncs, not what it does not fetch, and not a delete
+    /// that stays on the device it was made on.
+    fn remote_view(&self, share: &str, remote: &Index) -> Index {
+        let skip = self.skip(share);
+        Index {
+            files: remote
+                .files
+                .iter()
+                .filter(|(p, e)| !excluded(skip, p) && self.wants(share, p) && !(e.deleted && self.delete_stays_here(share, p)))
+                .map(|(p, e)| (p.clone(), e.clone()))
+                .collect(),
+        }
+    }
+
+    /// What this device offers the others of `share`: not what never syncs, and not its deletes that stay here.
+    fn offered(&self, share: &str, idx: &Index) -> Index {
+        let skip = self.skip(share);
+        Index {
+            files: idx
+                .files
+                .iter()
+                .filter(|(p, e)| !excluded(skip, p) && !(e.deleted && self.delete_stays_here(share, p)))
+                .map(|(p, e)| (p.clone(), e.clone()))
+                .collect(),
+        }
     }
 
     fn load_index(&self, share: &str) -> Index {
@@ -560,7 +651,7 @@ impl Inner {
                 let _ = self.unmark_writing(&sh.id, &path);
                 continue;
             }
-            let Some(full) = safe_join(&sh.path, &path) else {
+            let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else {
                 let _ = self.unmark_writing(&sh.id, &path);
                 continue;
             };
@@ -628,7 +719,7 @@ impl Inner {
         for sh in shares {
             for (rel, e) in self.load_index(&sh.id).files {
                 if !e.deleted && e.hash == hash {
-                    if let Some(p) = safe_join(&sh.path, &rel) {
+                    if let Some(p) = safe_join_with(&sh.path, &rel, self.hidden_ok(&sh.id)) {
                         if p.is_file() {
                             out.push(p);
                         }
@@ -688,18 +779,42 @@ impl Inner {
     async fn rescan(&self, share: &Share) -> Result<bool> {
         let mut idx = self.load_index(&share.id);
         let mut seen = self.load_seen(&share.id);
+        // Deletes made fetchable again since the last round ([`Inner::refetch`]): forgotten, so the merge below fetches them.
+        let again = self.refetch.lock().unwrap().remove(&share.id).unwrap_or_default();
+        let mut refetched = false;
+        for p in again {
+            if idx.files.get(&p).map(|e| e.deleted).unwrap_or(false) {
+                idx.files.remove(&p);
+                seen.remove(&p);
+                refetched = true;
+            }
+        }
         if !share.path.is_dir() {
             bail!("{} is missing", share.path.display());
         }
         let root = share.path.clone();
         let skip = self.skip(&share.id).to_vec();
+        let hidden = self.hidden_ok(&share.id).to_vec();
         let files = tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
-            walk(&root, &root, &skip, &mut v);
+            walk(&root, &root, &skip, &hidden, &mut v);
             v
         })
         .await?;
-        let mut changed = false;
+        #[cfg(feature = "test-hooks")]
+        {
+            // A rescan caught between reading the index and storing it: held while `<dir>/hold-rescan` exists (it says so with
+            // `<dir>/hold-rescan.held`), so a test can call in meanwhile.
+            let hold = self.dir.join("hold-rescan");
+            if hold.exists() {
+                let _ = std::fs::write(self.dir.join("hold-rescan.held"), b"");
+                while hold.exists() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                let _ = std::fs::remove_file(self.dir.join("hold-rescan.held"));
+            }
+        }
+        let mut changed = refetched;
         // What an earlier version listed under a path that never syncs now is forgotten, not marked deleted: a delete would go to
         // the other devices and remove their own copies.
         let forget: Vec<String> = idx.files.keys().filter(|p| excluded(self.skip(&share.id), p)).cloned().collect();
@@ -784,7 +899,7 @@ impl Inner {
             shares: s
                 .shares
                 .iter()
-                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.without_excluded(&sh.id, &self.load_index(&sh.id)) })
+                .map(|sh| RemoteShare { id: sh.id.clone(), name: sh.name.clone(), index: self.offered(&sh.id, &self.load_index(&sh.id)) })
                 .collect(),
         }
     }
@@ -914,8 +1029,12 @@ impl Inner {
     }
 
     async fn apply(self: &Arc<Self>, sh: &Share, remote: &Index, from: &str) -> Result<()> {
-        let remote = &self.without_excluded(&sh.id, remote);
-        let actions = index::merge(&self.load_index(&sh.id), remote);
+        let remote = &self.remote_view(&sh.id, remote);
+        let mut actions = index::merge(&self.load_index(&sh.id), remote);
+        // What says the rest has come comes after the rest ([`Config::last`]); the sort keeps the order otherwise.
+        if let Some(last) = self.last.get(&sh.id) {
+            actions.sort_by_key(|a| matches!(a, Action::Fetch { path, .. } if excluded(last, path)));
+        }
         for a in actions {
             if self.stop.load(Ordering::Relaxed) {
                 break;
@@ -940,7 +1059,7 @@ impl Inner {
                     }
                 }
                 Action::Delete { path, entry } => {
-                    let Some(full) = safe_join(&sh.path, &path) else { continue };
+                    let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else { continue };
                     let mut idx = self.load_index(&sh.id);
                     let mut seen = self.load_seen(&sh.id);
                     // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
@@ -965,7 +1084,7 @@ impl Inner {
     }
 
     async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<()> {
-        let Some(full) = safe_join(&sh.path, path) else {
+        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
             self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
             return Ok(());
         };
@@ -1332,6 +1451,12 @@ impl SyncEngine {
             settle_again: Arc::default(),
             recovered: AtomicBool::new(false),
             exclude: cfg.exclude.clone(),
+            local_deletes: cfg.local_deletes.clone(),
+            only: Mutex::new(cfg.only.clone()),
+            last: cfg.last.clone(),
+            never_fetch: Mutex::new(cfg.never_fetch.clone()),
+            hidden: cfg.hidden.clone(),
+            refetch: Mutex::new(HashMap::new()),
         });
         inner.save()?;
         let blobs = BlobsProtocol::new(&store, None);
@@ -1458,6 +1583,59 @@ impl SyncEngine {
                 inner.wake.notify_one();
                 Ok(json!({"ok": true}))
             }
+            "set_only" => {
+                // What this device fetches of a share from now on (null: everything). Deletes kept here under paths it starts
+                // fetching again are forgotten, so what it lists comes back (a source added again gets its snapshots again).
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let new: Option<Vec<String>> = match args.get("only") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Array(a)) => Some(a.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
+                    Some(_) => bail!("only must be a list of patterns or null"),
+                };
+                let was = inner.only.lock().unwrap().get(&id).cloned();
+                let now_wanted = |p: &str| new.as_ref().map(|n| excluded(n, p)).unwrap_or(true);
+                let was_wanted = |p: &str| was.as_ref().map(|n| excluded(n, p)).unwrap_or(true);
+                // The index is only read here: the next round forgets these deletes inside its own rescan, so a round that is
+                // running now cannot store its copy of the index over the change (it did, now and then, and they never came back).
+                let idx = inner.load_index(&id);
+                let back: Vec<String> = idx
+                    .files
+                    .iter()
+                    .filter(|(p, e)| e.deleted && inner.delete_stays_here(&id, p) && now_wanted(p) && !was_wanted(p))
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                if !back.is_empty() {
+                    inner.refetch.lock().unwrap().entry(id.clone()).or_default().extend(back.iter().cloned());
+                }
+                {
+                    let mut only = inner.only.lock().unwrap();
+                    match new {
+                        Some(n) => only.insert(id.clone(), n),
+                        None => only.remove(&id),
+                    };
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true, "fetchable_again": back.len()}))
+            }
+            "set_never_fetch" => {
+                // What this device never fetches of a share from now on, on top of what it fetches (null or []: nothing more).
+                let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
+                let list: Vec<String> = match args.get("never_fetch") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                    Some(_) => bail!("never_fetch must be a list of patterns or null"),
+                };
+                {
+                    let mut nf = inner.never_fetch.lock().unwrap();
+                    if list.is_empty() {
+                        nf.remove(&id);
+                    } else {
+                        nf.insert(id.clone(), list);
+                    }
+                }
+                inner.wake.notify_one();
+                Ok(json!({"ok": true}))
+            }
             "share_remove" => {
                 // Stops sharing; the files stay where they are.
                 let id = s("id").ok_or_else(|| anyhow!("id is required"))?;
@@ -1540,7 +1718,7 @@ impl SyncEngine {
                 let mut pending_bytes = 0u64;
                 for st in run.peers.values() {
                     if let Some(rs) = st.index.as_ref().and_then(|i| i.shares.iter().find(|x| x.id == sh.id)) {
-                        for a in index::merge(&idx, &inner.without_excluded(&sh.id, &rs.index)) {
+                        for a in index::merge(&idx, &inner.remote_view(&sh.id, &rs.index)) {
                             if let Action::Fetch { entry, .. } = a {
                                 pending += 1;
                                 pending_bytes += entry.size;
@@ -1552,6 +1730,8 @@ impl SyncEngine {
                     "id": sh.id, "name": sh.name, "path": sh.path,
                     "files": live.len(), "bytes": live.iter().map(|e| e.size).sum::<u64>(),
                     "pending_files": pending, "pending_bytes": pending_bytes,
+                    "only": inner.only.lock().unwrap().get(&sh.id).cloned(),
+                    "never_fetch": inner.never_fetch.lock().unwrap().get(&sh.id).cloned(),
                 })
             })
             .collect();
@@ -1574,6 +1754,12 @@ impl SyncEngine {
             "last_round": run.last_round,
             "log": run.log.iter().rev().take(50).map(|(t, m)| json!({"at": t, "text": m})).collect::<Vec<_>>(),
         })
+    }
+
+    /// The UDP port this device listens on (IPv4): the one `port` named, or the one the system gave when `port` was 0 or
+    /// absent. A device found again only by its address (no lookup service) is opened again on it.
+    pub fn port(&self) -> Option<u16> {
+        self.inner.endpoint.bound_sockets().into_iter().find(|a| a.is_ipv4()).map(|a| a.port())
     }
 
     /// Stops the rounds, closes connections and flushes the store.

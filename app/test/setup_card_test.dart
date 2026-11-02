@@ -133,11 +133,14 @@ void main() {
     expect(count(1), findsOneWidget);
     expect(find.byKey(const ValueKey('setup-not-now')), findsNothing);
     expect(r.app.modelDeclined, isTrue);
-    for (var i = 0; i < 5; i++) {
+    // The settings are written in the background (a new file renamed over the old): wait for the write, bounded, rather than a
+    // fixed number of turns (5 x 20 ms was too short on a busy runner, run 41411094494).
+    final settings = File('${r.dir.path}/settings.json');
+    for (var i = 0; i < 150 && !(settings.existsSync() && settings.readAsStringSync().contains('"modelDeclined":true')); i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
     }
-    expect(jsonDecode(File('${r.dir.path}/settings.json').readAsStringSync())['modelDeclined'], isTrue, reason: 'kept on this device');
+    expect(jsonDecode(settings.readAsStringSync())['modelDeclined'], isTrue, reason: 'kept on this device');
     // A done row is never dead: it opens Models, where the person can change their mind.
     await tester.tap(row('setup-model'));
     await tester.pump();

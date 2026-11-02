@@ -100,4 +100,56 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await r.dispose(tester);
   });
+
+  testWidgets('the search indexes are always shared once sharing is set up, and fetch only what this device holds', (tester) async {
+    final r = await SettingsRig.create(tester);
+    final configs = <Map<String, Object?>>[];
+    SharingState make() => SharingState(
+      policy: r.policy,
+      supportDir: () async => r.dir,
+      kinds: const [],
+      always: [
+        AlwaysShared(
+          id: 'indexes',
+          name: 'Search indexes',
+          dir: () => Directory('${r.dir.path}/search-indexes'),
+          exclude: const ['**/.build', '**/*-shm'],
+          localDeletes: const ['*/*/snap'],
+          last: const ['*/*/snap/*/manifest.json'],
+        ),
+      ],
+      opener: (c) async {
+        configs.add(c);
+        return r.sync;
+      },
+    );
+    final sharing = make();
+    await tester.runAsync(sharing.setUp);
+    final c = configs.single;
+    expect((c['exclude'] as Map)['indexes'], ['**/.build', '**/*-shm']);
+    expect((c['local_deletes'] as Map)['indexes'], ['*/*/snap']);
+    expect((c['last'] as Map)['indexes'], ['*/*/snap/*/manifest.json']);
+    expect((c['only'] as Map)['indexes'], isEmpty, reason: 'nothing is fetched before the app says what this device holds');
+    // Shared without any box ticked, its folder made.
+    expect(r.sync.argsOf['share_add']!.single, {'id': 'indexes', 'name': 'Search indexes', 'path': '${r.dir.path}/search-indexes'});
+    expect(Directory('${r.dir.path}/search-indexes').existsSync(), isTrue);
+
+    await tester.runAsync(() => sharing.setOnly('indexes', ['zim/B', 'zim/A']));
+    expect(r.sync.argsOf['set_only']!.single, {'id': 'indexes', 'only': ['zim/A', 'zim/B']});
+    await tester.runAsync(() => sharing.setOnly('indexes', ['zim/A', 'zim/B']));
+    expect(r.sync.argsOf['set_only'], hasLength(1), reason: 'the same list again is not sent');
+    await tester.runAsync(() => sharing.setNeverFetch('indexes', ['zim/A/snap/bad']));
+    expect(r.sync.argsOf['set_never_fetch']!.single, {'id': 'indexes', 'never_fetch': ['zim/A/snap/bad']});
+    sharing.dispose();
+
+    // A restart: already shared, so not added again; the engine starts with what was last set.
+    final again = make();
+    await tester.runAsync(() => again.setOnly('indexes', ['zim/A']));
+    await tester.runAsync(again.init);
+    expect((configs.last['only'] as Map)['indexes'], ['zim/A']);
+    expect(r.sync.argsOf['share_add'], hasLength(1));
+    again.dispose();
+    await tester.pumpWidget(const SizedBox());
+    await r.dispose(tester);
+  });
 }

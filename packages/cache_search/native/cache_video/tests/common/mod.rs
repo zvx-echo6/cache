@@ -41,6 +41,8 @@ pub struct Knobs {
     pub bad_sha: bool,
     /// The HLS video is private (needs a login and a file token).
     pub private_hls: bool,
+    /// `/api/v1/config`'s `plugin` and `client` sections (the sign-in methods), merged into the recorded config.
+    pub auth_config: Option<Value>,
 }
 
 pub struct Mock {
@@ -224,7 +226,19 @@ fn serve(mut s: TcpStream, port: u16, hits: Arc<Mutex<Vec<Hit>>>, knobs: Arc<Mut
         (k.download_disabled, k.private_hls)
     };
     match (hit.method.as_str(), path.as_str()) {
-        ("GET", "/api/v1/config") => send(&mut s, 200, "application/json", fixture("config.json", port).as_bytes()),
+        ("GET", "/api/v1/config") => {
+            let extra = knobs.lock().unwrap().auth_config.clone();
+            match extra {
+                Some(x) => {
+                    let mut c: Value = serde_json::from_str(&fixture("config.json", port)).unwrap();
+                    for (k, v) in x.as_object().unwrap() {
+                        c[k] = v.clone();
+                    }
+                    send_json(&mut s, 200, &c)
+                }
+                None => send(&mut s, 200, "application/json", fixture("config.json", port).as_bytes()),
+            }
+        }
         ("GET", "/api/v1/oauth-clients/local") => send_json(&mut s, 200, &json!({"client_id": "cid", "client_secret": "csecret"})),
         ("POST", "/api/v1/users/token") => {
             let form: Vec<(String, String)> = url::form_urlencoded::parse(hit.body.as_bytes()).into_owned().collect();
@@ -236,6 +250,13 @@ fn serve(mut s: TcpStream, port: u16, hits: Arc<Mutex<Vec<Hit>>>, knobs: Arc<Mut
                     send_json(&mut s, 200, &json!({"token_type": "Bearer", "access_token": "A2", "refresh_token": "R2", "expires_in": 14399, "refresh_token_expires_in": 1209600}));
                 } else {
                     send_json(&mut s, 400, &json!({"code": "invalid_grant"}));
+                }
+            } else if !g("externalAuthToken").is_empty() {
+                // PeerTube's external auth: the one-time token from the plugin's redirect, for that username
+                if g("externalAuthToken") == "EXT1" && g("username") == "bob" && g("grant_type") == "password" {
+                    send_json(&mut s, 200, &json!({"token_type": "Bearer", "access_token": "A1", "refresh_token": "R1", "expires_in": 14399, "refresh_token_expires_in": 1209600}));
+                } else {
+                    send_json(&mut s, 400, &json!({"code": "invalid_grant", "error": "Cannot authenticate user with an expired external auth token"}));
                 }
             } else if g("username") == "twofa" && hit.header("x-peertube-otp") != Some("123456") {
                 send_json(&mut s, 401, &json!({"code": "missing_two_factor"}));

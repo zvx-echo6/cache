@@ -81,7 +81,7 @@ void main() {
     String? article;
     await tester.pumpWidget(MaterialApp(
       theme: buildTheme(CacheThemeId.dark),
-      home: AskScreen(app: app, chat: chat, onOpenSource: (a) => article = a, onOpenVideo: (l, t) => video = (l, t)),
+      home: AskScreen(app: app, chat: chat, onOpenSource: (a) => article = a, onOpenVideo: (l, t, _) => video = (l, t)),
     ));
     await tester.tap(find.text('2 sources'));
     await tester.pumpAndSettle();

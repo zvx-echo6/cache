@@ -28,7 +28,7 @@ rand = "0.9"
 url = "2"
 
 [features]
-# Lets the tests cut a write off half way, as if the app were stopped.
+# Lets the tests cut a write off half way, as if the app were stopped, and hold a rescan part way.
 test-hooks = []
 
 [dev-dependencies]

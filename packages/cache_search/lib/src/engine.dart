@@ -36,9 +36,10 @@ class SearchEngine {
   /// {"version":..,"index_format":..}
   Map<String, dynamic> version() => _object(native.version() ?? '{}');
 
-  /// Replaces the source list (a ZIM was added or removed).
-  void setSources(List<SourceConfig> sources) {
-    if (native.setSources(_h, jsonEncode(openConfigJson(sources))) < 0) {
+  /// Replaces the source list (a ZIM was added or removed). [extra] are the config's other fields cs_set_sources takes again
+  /// each time (`indexes_dir`).
+  void setSources(List<SourceConfig> sources, {Map<String, dynamic>? extra}) {
+    if (native.setSources(_h, jsonEncode(openConfigJson(sources, extra: extra))) < 0) {
       throw CacheSearchException.fromJson(native.lastError(_h));
     }
   }
@@ -46,6 +47,12 @@ class SearchEngine {
   List<SourceStatus> status() => [
         for (final s in (_object(_ok(native.status(_h)))['sources'] as List? ?? const []))
           SourceStatus.fromJson((s as Map).cast<String, dynamic>()),
+      ];
+
+  /// cs_status's "rejected_snapshots": snapshots the core found unusable and removed on this device (none from an older core).
+  List<RejectedSnapshot> rejectedSnapshots() => [
+        for (final r in (_object(_ok(native.status(_h)))['rejected_snapshots'] as List? ?? const []))
+          if (r is Map) RejectedSnapshot.fromJson(r.cast<String, dynamic>()),
       ];
 
   SearchResponse search(String query, {int k = 5, int offset = 0, List<String>? sources, QueryVector? queryVector}) {
@@ -207,6 +214,38 @@ class SearchEngine {
     return _object(_ok(n.notebook(_h, op, jsonEncode(args))));
   }
 
+  // ---- PDF indexes of ZIMs (cs_zim_pdfs, cs_pdfindex_*) ----
+
+  CsPdfNative _pdf() {
+    final n = native is CsPdfNative ? native as CsPdfNative : null;
+    if (n == null || !n.hasPdfIndex) throw const CacheSearchException('unsupported', 'This build of the core cannot index PDFs yet');
+    return n;
+  }
+
+  /// True when the loaded core has the PDF index calls.
+  bool get hasPdfIndex => native is CsPdfNative && (native as CsPdfNative).hasPdfIndex;
+
+  /// cs_zim_pdfs of the ZIM [zimId].
+  Map<String, dynamic> zimPdfs(String zimId) => _object(_ok(_pdf().zimPdfs(_h, zimId)));
+
+  /// One handle-less PDF call ([CsPdfNative.pdfIndex]): the build session, or `chunk` (cs_pdf_chunk).
+  Map<String, dynamic> pdfIndex(String op, {int session = 0, Map<String, dynamic>? args}) {
+    final s = _pdf().pdfIndex(op, session: session, json: jsonEncode(args ?? const {}));
+    return _object(s ?? (throw CacheSearchException.fromJson(native.lastError(0))));
+  }
+
+  // ---- caption search (cs_captions_search) ----
+
+  /// True when the core has cs_captions_search.
+  bool get hasCaptionsSearch => native is CsCaptionsNative && (native as CsCaptionsNative).hasCaptionsSearch;
+
+  /// cs_captions_search: {"query","k"?,"lang"?} -> {"videos":[...]} (cache_search.h).
+  Map<String, dynamic> captionsSearch(Map<String, dynamic> request) {
+    final n = native is CsCaptionsNative ? native as CsCaptionsNative : null;
+    if (n == null || !n.hasCaptionsSearch) throw const CacheSearchException('unsupported', 'This build of the core cannot search captions yet');
+    return _object(_ok(n.captionsSearch(_h, jsonEncode(request))));
+  }
+
   // ---- the user's map layers and repeater lists (cs_userlayer*) ----
 
   /// One of the user-layer calls: `import` ([arg] = import JSON), `list`, `get` (id), `set_visible` (JSON), `delete` (id),
@@ -320,6 +359,15 @@ class CoreJob {
   /// Asks the job to stop at its next checkpoint; poll [progress] until it says cancelled.
   void cancel() {
     if (native.jobCancel(_j) < 0) throw CacheSearchException.fromJson(native.lastError(0));
+  }
+
+  /// Changes the job's pace now (cs_job_set): {"work_ms","idle_ms","threads"?,"paused"?,"auto"?}, what is left out stays. Answers
+  /// {"duty","effective","auto","paused"}, or null when this core has no cs_job_set.
+  Map<String, dynamic>? set(Map<String, Object?> pace) {
+    final n = native;
+    if (n is! CsJobNative) return null;
+    final s = (n as CsJobNative).jobSet(_j, jsonEncode(pace));
+    return s == null ? null : _object(s);
   }
 
   /// Frees a job that is done, cancelled or failed.

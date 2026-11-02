@@ -3,6 +3,7 @@ import 'package:cache_search/cache_search.dart';
 
 import '../../theme.dart';
 import '../../video/video_state.dart';
+import 'external_sign_in.dart';
 
 /// The instance's own details: its address, the account, and removing it. Returns true if the instance was removed.
 Future<bool?> showInstanceSheet(BuildContext context, {required VideoState video, required VideoInstance instance}) {
@@ -35,6 +36,51 @@ class _InstanceSheetState extends State<_InstanceSheet> {
   bool _needOtp = false;
   bool _busy = false;
   String? _error;
+
+  /// How the site lets people sign in (read when the sheet opens); null while it is read.
+  VideoAuthMethods? _methods;
+
+  /// The external method signing in now.
+  String? _signingIn;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMethods();
+  }
+
+  Future<void> _loadMethods() async {
+    final m = await widget.video.authMethods(widget.instance.id);
+    if (mounted) setState(() => _methods = m);
+  }
+
+  /// Sign in with an external method: the site's own page in an in-app browser, then the one-time token traded for the
+  /// login. Cancel, a failure and a token that ran out each say so; the buttons stay for another try.
+  Future<void> _external(VideoExternalAuth auth) async {
+    setState(() {
+      _error = null;
+      _signingIn = auth.authName;
+    });
+    try {
+      final r = await openExternalSignIn(context, auth, _methods!.returnPrefix);
+      if (!mounted) return;
+      switch (r) {
+        case null:
+          _error = 'Sign-in with ${auth.displayName} was cancelled.';
+        case ExternalSignInFailed():
+          _error = "${widget.instance.name} couldn't sign you in with ${auth.displayName}. Try again.";
+        case ExternalSignInDone(:final username, :final token):
+          try {
+            await widget.video.loginExternal(widget.instance.id, username, token);
+          } on CacheSearchException catch (e) {
+            _error = e.code == 'auth_failed' ? 'That sign-in took too long or was already used. Try again.' : videoErrorText(e);
+          }
+      }
+    } catch (e) {
+      _error = videoErrorText(e);
+    }
+    if (mounted) setState(() => _signingIn = null);
+  }
 
   @override
   void dispose() {
@@ -111,14 +157,35 @@ class _InstanceSheetState extends State<_InstanceSheet> {
               Text(i.host + (i.version.isEmpty ? '' : ' · PeerTube ${i.version}'), style: TextStyle(fontSize: 15, color: k.secondary)),
               const SizedBox(height: 20),
               if (user != null) ...[
-                Text('Logged in as $user', style: TextStyle(fontSize: 17, color: k.text)),
+                Text('Signed in as $user', style: TextStyle(fontSize: 17, color: k.text)),
                 const SizedBox(height: 10),
-                OutlinedButton(onPressed: () => widget.video.logout(i.id), child: const Text('Log out')),
+                OutlinedButton(onPressed: () => widget.video.logout(i.id), child: const Text('Sign out')),
+              ] else if (_methods == null) ...[
+                const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator())),
               ] else ...[
-                Text('Log in (optional)', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
+                Text('Sign in (optional)', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: k.text)),
                 const SizedBox(height: 4),
-                Text('Only needed for videos the instance keeps behind a login.', style: TextStyle(fontSize: 14, color: k.secondary)),
+                Text('Only needed for videos the site keeps behind a sign-in.', style: TextStyle(fontSize: 14, color: k.secondary)),
                 const SizedBox(height: 10),
+                // the site's own sign-in methods (its auth plugins), each under the site's own name for it
+                for (final a in _methods!.external) ...[
+                  OutlinedButton.icon(
+                    key: ValueKey('signin-${a.authName}'),
+                    onPressed: _signingIn != null || _busy ? null : () => _external(a),
+                    icon: _signingIn == a.authName
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.open_in_new, size: 18),
+                    label: Text('Sign in with ${a.displayName}'),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (_methods!.password && _methods!.external.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Text('Or with your user name and password', style: TextStyle(fontSize: 14, color: k.secondary)),
+                  ),
+              ],
+              if (user == null && _methods != null && _methods!.password) ...[
                 TextField(controller: _user, autocorrect: false, decoration: const InputDecoration(hintText: 'User name')),
                 const SizedBox(height: 8),
                 TextField(controller: _pass, obscureText: true, decoration: const InputDecoration(hintText: 'Password')),
@@ -127,14 +194,14 @@ class _InstanceSheetState extends State<_InstanceSheet> {
                   TextField(controller: _otp, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Two-factor code')),
                 ],
                 const SizedBox(height: 10),
-                FilledButton(onPressed: _busy ? null : _login, child: Text(_busy ? 'Logging in…' : 'Log in')),
+                FilledButton(onPressed: _busy ? null : _login, child: Text(_busy ? 'Signing in…' : 'Sign in')),
               ],
               if (_error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_error!, style: TextStyle(fontSize: 15, color: k.emergency))),
               const SizedBox(height: 20),
               TextButton.icon(
                 onPressed: _remove,
                 icon: Icon(Icons.delete_outline, color: k.emergency),
-                label: Text('Remove this instance', style: TextStyle(color: k.emergency)),
+                label: Text('Remove this video site', style: TextStyle(color: k.emergency)),
               ),
             ],
           ),

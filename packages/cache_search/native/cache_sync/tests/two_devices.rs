@@ -45,8 +45,9 @@ fn two_devices_link_share_and_stay_the_same() {
     std::fs::write(fa.join(".hidden"), "never shared").unwrap();
 
     let a = engine(&da, "Desk");
-    let b_port = std::net::UdpSocket::bind("0.0.0.0:0").unwrap().local_addr().unwrap().port();
-    let b = engine_on(&db, "Phone", Some(b_port));
+    // B takes any free port and keeps it for its restart below (a port picked beforehand could be taken meanwhile).
+    let b = engine(&db, "Phone");
+    let b_port = b.port().expect("B listens on a port");
 
     // A stranger's key is refused: B tries to read A's file list before linking.
     let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();

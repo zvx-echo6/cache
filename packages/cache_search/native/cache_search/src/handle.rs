@@ -2,10 +2,13 @@
 
 use crate::budget::{self, ZimBudget};
 use crate::error::{Error, Result};
+use crate::idxsnap::{self, SnapSlot};
 use crate::index::{self, IndexState, OpenIndex};
 use crate::libreg::{self, ShardCell};
 use crate::tools::QueryEmbedder;
 use crate::library::{self, LibSlot, LibrarySettings, OpenCell};
+use crate::kwslot::KwSlot;
+use crate::pdfindex::{self, PdfIndex};
 use crate::web::{WebSearchTool, WebState};
 use crate::zimsrc::{self, ZimSource};
 use cache_tool::{Location, NoSavedPlaces, SavedPlaces, Tool};
@@ -81,6 +84,10 @@ struct Config {
     /// of `zim_budget_mb` (`budget::reserved_cost`).
     #[serde(default)]
     zim_cluster_cache_mb: Option<u64>,
+    /// The folder the app keeps its syncable indexes in (`<indexes_dir>/zim-pdf/<zim uuid>/snap/...`). Without it ZIMs have no
+    /// PDF index attached. Each `set_sources` replaces it.
+    #[serde(default)]
+    indexes_dir: Option<String>,
     /// Not in the header: a test hook that makes each library's background open sleep first.
     #[serde(default)]
     open_delay_ms: u64,
@@ -113,6 +120,10 @@ pub struct ZimSlot {
     pub src: ZimSource,
     pub index_dir: Option<PathBuf>,
     pub open: Option<OpenIndex>,
+    /// The `indexes_dir` of the sources config (set by the handle): where this ZIM's snapshot lives.
+    pub indexes_dir: Option<PathBuf>,
+    /// The ZIM's keyword index snapshot (kind `zim`), once one is published and verified.
+    pub snap: SnapSlot<OpenIndex>,
     /// Use the ZIM's built-in Xapian index when it has one (the source's `builtin_index`, default true).
     pub builtin: bool,
 }
@@ -133,13 +144,57 @@ impl ZimSlot {
         if self.builtin { self.src.title_index() } else { None }
     }
 
+    pub fn new(src: ZimSource, index_dir: Option<PathBuf>, builtin: bool) -> ZimSlot {
+        ZimSlot {
+            src,
+            index_dir,
+            open: None,
+            indexes_dir: None,
+            snap: SnapSlot::new(idxsnap::KIND_ZIM, |dir, m| {
+                OpenIndex::open(dir, m.tokenizer.as_ref().map(|t| t.name.as_str()).unwrap_or("en_stem"))
+            }),
+            builtin,
+        }
+    }
+
+    /// Look at the snapshot folder again (a pick runs on a background thread). When a snapshot has just become the one in use,
+    /// the old index it was sealed from is removed.
+    pub fn refresh_snapshot(&mut self) {
+        if let Some(name) = self.snap.refresh(self.indexes_dir.as_deref(), &self.src.id) {
+            self.open = None;
+            if let Some(root) = &self.indexes_dir {
+                idxsnap::finish_seal(&idxsnap::dir_for(root, idxsnap::KIND_ZIM, &self.src.id), &name);
+            }
+        }
+    }
+
+    /// State of the keyword index: a snapshot in use is `Done`; else a build in `.build/`; else the index in `index_dir`.
     pub fn state(&self) -> IndexState {
+        if let Some(s) = self.snap.ready() {
+            return IndexState::Done(idxsnap::meta_of(&s.manifest, &self.src.id));
+        }
+        if let Some(root) = &self.indexes_dir {
+            if idxsnap::build_live(root, idxsnap::KIND_ZIM, &self.src.id) {
+                return IndexState::Building;
+            }
+        }
+        self.legacy_state()
+    }
+
+    /// State of the index in `index_dir` alone.
+    pub fn legacy_state(&self) -> IndexState {
         index::index_state(self.index_dir.as_deref(), &self.src.id)
     }
 
-    /// The opened index if (and only if) it is `done`. `None` when missing, stale, incomplete or building.
+    /// The opened index if (and only if) it is `done`: the snapshot when one is in use, else the one in `index_dir`. `None` when
+    /// missing, stale, incomplete or building.
     pub fn searchable(&mut self) -> Result<Option<&OpenIndex>> {
-        let IndexState::Done(meta) = self.state() else {
+        self.refresh_snapshot();
+        if self.snap.ready().is_some() {
+            self.open = None;
+            return Ok(self.snap.ready().map(|s| &s.index));
+        }
+        let IndexState::Done(meta) = self.legacy_state() else {
             self.open = None;
             return Ok(None);
         };
@@ -150,10 +205,130 @@ impl ZimSlot {
         }
         Ok(self.open.as_ref())
     }
+
+    /// `cs_status`'s `index` for this ZIM: where its keyword index is (`location` "snapshot", "legacy" or "none"), the snapshot in
+    /// use, the format, and `needs_seal` (only present, true) when only an index in the old location exists.
+    pub fn index_info(&self) -> Value {
+        index_info_json(
+            idxsnap::KIND_ZIM,
+            index::INDEX_FORMAT,
+            self.snap.ready().map(|s| (s.name.as_str(), s.dir.as_path())),
+            self.snap.opening(),
+            &self.legacy_state(),
+            self.index_dir.as_deref(),
+            self.indexes_dir.is_some(),
+        )
+    }
 }
 
+/// The `index` object of `cs_status` (see `ZimSlot::index_info`).
+pub fn index_info_json(
+    kind: &str,
+    format: u32,
+    snapshot: Option<(&str, &std::path::Path)>,
+    opening: bool,
+    legacy: &IndexState,
+    legacy_dir: Option<&std::path::Path>,
+    has_indexes_dir: bool,
+) -> Value {
+    let path = |p: &std::path::Path| json!(p.to_string_lossy());
+    if let Some((name, dir)) = snapshot {
+        return json!({"kind": kind, "location": "snapshot", "snapshot": name, "format": format, "dir": path(dir)});
+    }
+    if matches!(legacy, IndexState::Done(_)) {
+        let mut v = json!({"kind": kind, "location": "legacy", "snapshot": Value::Null, "format": format,
+            "dir": legacy_dir.map(path).unwrap_or(Value::Null)});
+        if has_indexes_dir && !opening {
+            v["needs_seal"] = json!(true);
+        }
+        return v;
+    }
+    json!({"kind": kind, "location": "none", "snapshot": Value::Null, "format": format, "dir": Value::Null})
+}
+
+/// The PDF index of one loaded ZIM (`<zim name>.pdfindex/`, see pdfindex.rs): its newest usable snapshot, verified and opened
+/// on a background thread. Searched with the ZIM; not a source of its own (`cs_status` shows it on the ZIM's entry).
+pub struct PdfSlot {
+    pub zim_id: String,
+    pub zim_title: String,
+    /// `<indexes_dir>/zim-pdf/<zim uuid>`.
+    pub dir: PathBuf,
+    /// The folders under `snap/` when the snapshot was chosen: another listing means another choice.
+    listing: Vec<String>,
+    pub state: PdfState,
+}
+
+pub enum PdfState {
+    /// Verifying and opening on a background thread; the thread leaves its result (`None`: no usable snapshot) here.
+    Opening(Arc<std::sync::Mutex<Option<Option<PdfIndex>>>>),
+    Ready(Box<PdfIndex>),
+    /// No usable snapshot (none published, or none matches this ZIM and core).
+    None,
+}
+
+impl PdfSlot {
+    fn start(zim_id: String, zim_title: String, dir: PathBuf, listing: Vec<String>) -> PdfSlot {
+        let cell: Arc<std::sync::Mutex<Option<Option<PdfIndex>>>> = Arc::new(std::sync::Mutex::new(None));
+        let (c, p, id) = (cell.clone(), dir.clone(), zim_id.clone());
+        let spawned = std::thread::Builder::new().name("cs-open-pdfindex".into()).spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pdfindex::pick(&p, &id).and_then(|pk| {
+                    let opened = PdfIndex::open(&pk.name, &pk.dir, pk.manifest.clone()).ok();
+                    if opened.is_some() {
+                        // local clean-up: usable duplicates and older ones go, the one in use and a rollback stay
+                        crate::snapshot::gc_local(&p, pdfindex::KIND, &id, pdfindex::compat, &pk);
+                    }
+                    opened
+                })
+            }))
+            .unwrap_or(None);
+            if let Ok(mut g) = c.lock() {
+                *g = Some(r);
+            }
+        });
+        let state = if spawned.is_ok() { PdfState::Opening(cell) } else { PdfState::None };
+        PdfSlot { zim_id, zim_title, dir, listing, state }
+    }
+
+    pub fn index(&self) -> Option<&PdfIndex> {
+        match &self.state {
+            PdfState::Ready(i) => Some(i),
+            _ => None,
+        }
+    }
+
+    fn poll(&mut self) {
+        if let PdfState::Opening(cell) = &self.state {
+            let got = cell.lock().ok().and_then(|mut g| g.take());
+            match got {
+                Some(Some(i)) => self.state = PdfState::Ready(Box::new(i)),
+                Some(None) => self.state = PdfState::None,
+                None => {}
+            }
+        }
+    }
+
+    fn status(&self) -> Value {
+        match &self.state {
+            PdfState::Ready(i) => {
+                let mut v = pdfindex::status_json(&i.snapshot, &i.manifest, i.docs);
+                v["state"] = json!("ready");
+                v
+            }
+            PdfState::Opening(_) => json!({"state": "opening"}),
+            PdfState::None => json!({"state": "none"}),
+        }
+    }
+}
+
+#[allow(clippy::large_enum_variant)] // a library slot holds its two index slots inline; sources are few
 pub enum Source {
     Zim(ZimSlot),
+    /// The PDF index of a loaded ZIM (never in the `sources` list `set_sources` is given; found beside the ZIM).
+    Pdf(PdfSlot),
+    /// The caption index of a saved video, or the caption or EPUB index of a loaded ZIM (never in the `sources` list; found
+    /// under `indexes_dir`, see kwslot.rs).
+    Kw(KwSlot),
     /// A ZIM that could not be opened (missing file, SD card out, bad format). Retried on every
     /// `set_sources`; reported by `cs_status`; skipped by search.
     Failed { kind: &'static str, path: PathBuf, title: String, error: Error },
@@ -262,6 +437,8 @@ pub struct Handle {
     /// Where the citations of the last search's library results open (address, link and time), for `cs_tool` to keep in
     /// the conversation beside the numbering. Replaced by every search.
     pub last_cites: Vec<(String, crate::conv::Cite)>,
+    /// `indexes_dir` of the sources config (see `Config`).
+    pub indexes_dir: Option<PathBuf>,
 }
 
 impl Drop for Handle {
@@ -293,6 +470,7 @@ impl Handle {
             fetcher: Arc::new(cache_tool::fetcher::PolicyFetcher::new()),
             act: Arc::new(cache_act::ActState::new()),
             last_cites: Vec::new(),
+            indexes_dir: None,
         };
         h.register_tool(Box::new(cache_calc::CalculateTool));
         h.register_tool(Box::new(cache_act::ActTool(h.act.clone())));
@@ -317,6 +495,7 @@ impl Handle {
     /// leave the old list. A ZIM that cannot be opened does not: it becomes a `Failed` source. ZIMs already open
     /// (same path) are reused rather than reopened.
     pub fn set_sources(&mut self, config_json: &str) -> Result<()> {
+        #[allow(clippy::large_enum_variant)]
         enum Plan {
             Reuse(usize, Option<PathBuf>, bool),
             ReuseLib(usize, Option<PathBuf>, LibrarySettings, Option<Value>),
@@ -347,7 +526,7 @@ impl Handle {
                         None => match ZimSource::open(&path) {
                             Ok(z) => {
                                 let id = z.id.clone();
-                                (Some(id), Plan::New(Source::Zim(ZimSlot { src: z, index_dir, open: None, builtin })))
+                                (Some(id), Plan::New(Source::Zim(ZimSlot::new(z, index_dir, builtin))))
                             }
                             Err(error) => {
                                 let title = stem_title(&path);
@@ -452,6 +631,24 @@ impl Handle {
                 Plan::New(s) => s,
             })
             .collect();
+        self.indexes_dir = cfg.indexes_dir.as_ref().filter(|d| !d.is_empty()).map(PathBuf::from);
+        let (mut old_pdfs, mut old_kw): (Vec<PdfSlot>, Vec<KwSlot>) = (Vec::new(), Vec::new());
+        for s in old.into_iter().flatten() {
+            match s {
+                Source::Pdf(p) => old_pdfs.push(p),
+                Source::Kw(k) => old_kw.push(k),
+                _ => {}
+            }
+        }
+        self.attach_pdf_indexes(old_pdfs);
+        self.sync_indexes();
+        // where jobs find the saved videos and the ZIM files (kwbuild.rs)
+        let zim_places: Vec<(String, PathBuf)> = self
+            .sources
+            .iter()
+            .filter_map(|s| if let Source::Zim(z) = s { Some((z.src.id.clone(), z.src.path.clone())) } else { None })
+            .collect();
+        crate::kwbuild::register_locations(cfg.video.as_ref().map(|v| std::path::Path::new(&v.dir)), &zim_places);
         self.snippet_chars = cfg.snippet_chars;
         self.web.set_snippet_chars(cfg.snippet_chars as usize);
         self.candidates_per_list = cfg.candidates_per_list;
@@ -475,11 +672,62 @@ impl Handle {
         }
         self.ext.configure_regions(cfg.regions)?;
         self.configure_ext(cfg.user, cfg.live, cfg.routing, cfg.video, cfg.places);
+        self.attach_kw_indexes(old_kw);
         self.ext.plug_regions();
         self.ext.configure_layers(cfg.layers)?;
         self.ext.configure_notebook(cfg.notebook);
         self.ext.plug_elevation();
         Ok(())
+    }
+
+    /// Give every ZIM and library the `indexes_dir` (where their snapshots live) and let `index_seal` find their old index folders.
+    fn sync_indexes(&mut self) {
+        let root = self.indexes_dir.clone();
+        for s in self.sources.iter_mut() {
+            match s {
+                Source::Zim(z) => {
+                    z.indexes_dir = root.clone();
+                    if let (Some(root), Some(d)) = (&root, &z.index_dir) {
+                        idxsnap::note_legacy(root, idxsnap::KIND_ZIM, &z.src.id, d);
+                    }
+                }
+                Source::Library(l) => {
+                    l.indexes_dir = root.clone();
+                    if let (Some(root), Some(d)) = (&root, &l.index_dir) {
+                        idxsnap::note_legacy(root, idxsnap::KIND_LIBRARY, &l.source_id(), d);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The PDF index beside each loaded ZIM (`<zim name>.pdfindex/`): a slot that verifies and opens its newest usable
+    /// snapshot on a background thread. A slot whose `snap/` listing has not changed is kept as it is.
+    fn attach_pdf_indexes(&mut self, mut old: Vec<PdfSlot>) {
+        let zims: Vec<(String, String)> = self
+            .sources
+            .iter()
+            .filter_map(|s| match s {
+                Source::Zim(z) => Some((z.src.id.clone(), z.src.title.clone())),
+                _ => None,
+            })
+            .collect();
+        self.sources.retain(|s| !matches!(s, Source::Pdf(_)));
+        // without an indexes_dir there is no PDF attach
+        let Some(root) = self.indexes_dir.clone() else { return };
+        for (id, title) in zims {
+            let dir = pdfindex::dir_for(&root, &id);
+            if !dir.join(crate::snapshot::SNAP_DIR).is_dir() {
+                continue;
+            }
+            let listing = crate::snapshot::list(&dir);
+            let slot = match old.iter().position(|o| o.zim_id == id && o.dir == dir && o.listing == listing) {
+                Some(k) => old.remove(k),
+                None => PdfSlot::start(id, title, dir, listing),
+            };
+            self.sources.push(Source::Pdf(slot));
+        }
     }
 
     /// Open libzim on the ZIM sources that use their built-in index and build their searchers, on up to
@@ -519,6 +767,18 @@ impl Handle {
     /// a library whose update has ended, or that an update changed while it was opening, is opened again.
     pub fn poll_opening(&mut self) {
         for s in self.sources.iter_mut() {
+            if let Source::Pdf(p) = s {
+                p.poll();
+                // a snapshot published or removed since it was chosen (or a sync that finished): choose again
+                let listing = crate::snapshot::list(&p.dir);
+                if listing != p.listing {
+                    *p = PdfSlot::start(p.zim_id.clone(), p.zim_title.clone(), p.dir.clone(), listing);
+                }
+                continue;
+            }
+            if let Source::Kw(_) = s {
+                continue;
+            }
             let next: Option<Source> = match s {
                 Source::Opening(o) => {
                     let entry = libreg::entry_for(&o.path);
@@ -600,6 +860,9 @@ impl Handle {
                 *s = n;
             }
         }
+        self.sync_indexes();
+        // caption and EPUB snapshots published (or synced) since the last look are searched without another cs_set_sources
+        self.refresh_kw_indexes();
     }
 
     pub fn zim(&self, id: &str) -> Result<&ZimSource> {
@@ -627,7 +890,9 @@ impl Handle {
 
     pub fn status_json(&mut self) -> String {
         self.poll_opening();
-        let list: Vec<Value> = self
+        let pdf: std::collections::HashMap<String, Value> =
+            self.sources.iter().filter_map(|s| if let Source::Pdf(p) = s { Some((p.zim_id.clone(), p.status())) } else { None }).collect();
+        let mut list: Vec<Value> = self
             .sources
             .iter_mut()
             .map(|s| match s {
@@ -643,6 +908,7 @@ impl Handle {
                             "error": Value::Null,
                         });
                     }
+                    z.refresh_snapshot();
                     let st = z.state();
                     let (mut indexed, building, stale) = (
                         matches!(st, IndexState::Done(_)),
@@ -668,6 +934,7 @@ impl Handle {
                         "docs": docs, "embedding_model": Value::Null, "error": error,
                     })
                 }
+                Source::Pdf(_) | Source::Kw(_) => Value::Null,
                 Source::Failed { kind, path, title, error } => json!({
                     "id": Value::Null, "kind": kind, "path": path.to_string_lossy(),
                     "title": title, "language": Value::Null,
@@ -680,6 +947,7 @@ impl Handle {
                 Source::Opening(o) => o.status(false),
                 Source::Updating(o) => o.status(true),
                 Source::Library(l) => {
+                    l.refresh_snapshot();
                     let st = l.device_state();
                     let wanted = l.keyword_wanted();
                     let source = l.keyword_source();
@@ -696,13 +964,146 @@ impl Handle {
                     })
                 }
             })
+            .filter(|v| !v.is_null())
             .collect();
-        json!({ "sources": list }).to_string()
+        // every source says which source it is for sync (`source_id`) and where its keyword index is (`index`)
+        let metas: Vec<(Value, Value)> = self
+            .sources
+            .iter()
+            .filter(|s| !matches!(s, Source::Pdf(_) | Source::Kw(_)))
+            .map(|s| {
+                let lib_id = |id: &str, version: Option<&String>| match version {
+                    Some(v) => format!("{id}@{v}"),
+                    None => id.to_string(),
+                };
+                match s {
+                    Source::Zim(z) => (
+                        json!(z.src.id),
+                        z.index_info(),
+                    ),
+                    Source::Library(l) => (
+                        json!(lib_id(&l.settings.library_id, l.settings.version.as_ref())),
+                        index_info_json(
+                            idxsnap::KIND_LIBRARY,
+                            index::LIB_INDEX_FORMAT,
+                            l.snap.ready().map(|s| (s.name.as_str(), s.dir.as_path())),
+                            l.snap.opening(),
+                            &l.legacy_state(),
+                            l.index_dir.as_deref(),
+                            l.indexes_dir.is_some(),
+                        ),
+                    ),
+                    Source::Opening(o) | Source::Updating(o) => (
+                        json!(lib_id(&o.id, o.settings.as_ref().and_then(|st| st.version.as_ref()))),
+                        index_info_json(
+                            idxsnap::KIND_LIBRARY,
+                            index::LIB_INDEX_FORMAT,
+                            None,
+                            true,
+                            &index::index_state_for(
+                                o.index_dir.as_deref(),
+                                &crate::libindex::source_key(&o.id),
+                                index::LIB_INDEX_FORMAT,
+                            ),
+                            o.index_dir.as_deref(),
+                            false,
+                        ),
+                    ),
+                    Source::Failed { .. } | Source::Pdf(_) | Source::Kw(_) => (Value::Null, Value::Null),
+                }
+            })
+            .collect();
+        for (v, (id, idx)) in list.iter_mut().zip(metas) {
+            v["source_id"] = id;
+            v["index"] = idx;
+        }
+        // a ZIM with a PDF index says so (only then does its entry have this key)
+        for v in list.iter_mut() {
+            if v["kind"] == "zim" {
+                if let Some(p) = v["id"].as_str().and_then(|id| pdf.get(id)) {
+                    v["pdfindex"] = p.clone();
+                }
+                // the caption and EPUB indexes of the ZIM, with whether they still need building
+                if let (Some(id), Some(path)) = (v["id"].as_str().map(str::to_string), v["path"].as_str().map(PathBuf::from)) {
+                    for (key, val) in self.kw_status_for_zim(&id, &path) {
+                        v[key] = val;
+                    }
+                }
+            }
+        }
+        // snapshots this device removed or rejected (a device-local list): the app adds them to its receiver exclude list
+        let mut out = json!({ "sources": list });
+        if let Some(root) = &self.indexes_dir {
+            out["rejected_snapshots"] = Value::Array(crate::snapshot::read_rejected(root));
+        }
+        out.to_string()
+    }
+
+    /// `cs_zim_pdfs`: the PDFs inside a ZIM (entries whose mime type is application/pdf), by path:
+    /// `{"zim_uuid","zim_name","pdfs":[{"path","title","size"}]}`.
+    pub fn zim_pdfs(&self, zim_id: &str) -> Result<String> {
+        let src = self.zim(zim_id)?;
+        let czim = src.zim()?;
+        let mut cands: Vec<(u32, u32, String, String)> = Vec::new();
+        for idx in 0..src.entry_count() as u32 {
+            let Ok(e) = czim.get_by_url_index(idx) else { continue };
+            if !matches!(e.namespace, zim::Namespace::UserContent | zim::Namespace::Articles) {
+                continue;
+            }
+            let zim::MimeType::Type(m) = &e.mime_type else { continue };
+            if !m.to_ascii_lowercase().starts_with("application/pdf") {
+                continue;
+            }
+            let Some(zim::Target::Cluster(cluster, blob)) = e.target else { continue };
+            let title = if e.title.is_empty() { e.url.clone() } else { e.title.clone() };
+            cands.push((cluster, blob, e.url, title));
+        }
+        // sizes by cluster, so each cluster is read once
+        cands.sort_by_key(|c| (c.0, c.1));
+        let mut pdfs: Vec<(String, String, u64)> = Vec::with_capacity(cands.len());
+        let mut i = 0;
+        while i < cands.len() {
+            let c0 = cands[i].0;
+            let mut j = i;
+            while j < cands.len() && cands[j].0 == c0 {
+                j += 1;
+            }
+            let cluster = czim.get_cluster(c0).ok();
+            let guard = cluster.as_ref().and_then(|c| c.read().ok());
+            for c in &cands[i..j] {
+                let size = guard.as_ref().and_then(|g| g.blob(c.1).ok()).map(|b| b.len() as u64).unwrap_or(0);
+                pdfs.push((c.2.clone(), c.3.clone(), size));
+            }
+            i = j;
+        }
+        pdfs.sort();
+        Ok(json!({
+            "zim_uuid": src.id,
+            "zim_name": src.name.clone().unwrap_or_else(|| src.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
+            "pdfs": pdfs.into_iter().map(|(path, title, size)| json!({"path": path, "title": title, "size": size})).collect::<Vec<_>>(),
+        })
+        .to_string())
+    }
+
+    /// The opened PDF index of the ZIM `zim_id`, when it has one ready.
+    pub fn pdf_index(&self, zim_id: &str) -> Option<&PdfIndex> {
+        self.sources.iter().find_map(|s| match s {
+            Source::Pdf(p) if p.zim_id == zim_id => p.index(),
+            _ => None,
+        })
     }
 
     pub fn zim_get(&self, address: &str) -> Result<zimsrc::RawEntry> {
         let a = zimsrc::parse_address(address)?;
-        self.zim(&a.id)?.get(&a.path)
+        let z = self.zim(&a.id)?;
+        match z.get(&a.path) {
+            // an address with `!/` also names a file inside an EPUB (kwslot.rs); the entry itself is tried first
+            Err(e) if e.code == crate::ErrorCode::NotFound && a.path.contains("!/") => match self.zim_get_in_epub(&a.id, &a.path)? {
+                Some(entry) => Ok(entry),
+                None => Err(e),
+            },
+            other => other,
+        }
     }
 
     pub fn zim_main_page(&self, zim_id: &str) -> Result<String> {

@@ -254,8 +254,13 @@ fn videos_are_identical_through_cli_serve_and_the_c_abi() {
     assert!(!shared[15].to_string().contains("hunter2-secret"));
     assert_eq!(shared[20], json!({"downloads": [], "total_bytes": 0}));
     assert_eq!(shared[21]["code"], "unsupported");
-    assert_eq!(shared[22], json!({"state": "done", "done": WEB_SIZE, "total": WEB_SIZE, "error": null}));
-    assert_eq!(shared[23], json!({"state": "done", "done": 120_000, "total": 120_000, "error": null}));
+    // a job's progress also carries its pacing (duty, effective, auto, paused); a download is unthrottled
+    for (k, size) in [(22, WEB_SIZE as u64), (23, 120_000)] {
+        let p = &shared[k];
+        assert_eq!((&p["state"], &p["done"], &p["total"], &p["error"]), (&json!("done"), &json!(size), &json!(size), &json!(null)));
+        assert_eq!(p["duty"], json!({"work_ms": 0, "idle_ms": 0, "threads": null}));
+        assert_eq!((&p["auto"], &p["paused"]), (&json!(true), &json!(false)));
+    }
     assert_eq!(shared[24]["downloads"].as_array().unwrap().len(), 2);
     assert_eq!(shared[24]["downloads"][0]["path"].as_str().unwrap().starts_with("<DIR>/downloads/"), true);
     assert_eq!(shared[25]["videos"].as_array().unwrap().iter().filter(|v| v["downloaded"] == true).count(), 1);

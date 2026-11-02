@@ -6,6 +6,38 @@ import 'package:cache_search/cache_search.dart';
 /// one account, shows a video as saved once its download job has finished. Top-level so it can run in the worker isolate.
 CsNative fakeVideoNative() => VideoFakeNative();
 
+/// A factory of [VideoFakeNative]s with [saved] already on the device (the manifests as cs_video_downloads lists them; the
+/// closure is copied to the worker isolate). [captionFetchFails]: captions_fetch fetches nothing.
+CsNative Function() seededVideoNative(List<Map<String, dynamic>> saved, {bool captionFetchFails = false, bool noCaptions = false, bool private = false, String auth = 'local'}) =>
+    () => VideoFakeNative()
+      .._saved.addAll([for (final m in saved) {...m}])
+      ..captionFetchFails = captionFetchFails
+      ..noCaptions = noCaptions
+      ..private = private
+      ..auth = auth;
+
+/// A saved video's manifest for [seededVideos].
+Map<String, dynamic> savedManifest({
+  required String uuid,
+  required String title,
+  String channel = 'Field Skills',
+  String at = '2026-10-01T10:00:00Z',
+  int size = 230 * 1024 * 1024,
+  int durationS = 252,
+  String label = '480p',
+  List<Map<String, dynamic>> captions = const [],
+  List<Map<String, dynamic>> missing = const [],
+  String instance = 'example.org',
+  String? thumb,
+}) =>
+    {
+      'instance': instance, 'uuid': uuid, 'title': title, 'channel': {'display_name': channel}, 'duration_s': durationS, 'kind': 'video',
+      'resolution': label.replaceAll('p', ''), 'resolution_label': label, 'size': size, 'path': '/data/$uuid/video.mp4', 'thumbnail_path': thumb,
+      'downloaded_at': at, 'captions': captions, 'missing_captions': missing,
+      'warnings': [for (final m in missing) 'caption ${m['language']} not saved: the instance did not answer'],
+      'description': 'How to tie it, step by step.', 'published_at': '2026-03-14T09:00:00Z',
+    };
+
 class VideoFakeNative implements CsNative {
   // The tool, location, places and live calls are not used by these tests.
   @override
@@ -51,7 +83,26 @@ class VideoFakeNative implements CsNative {
       case 'instance_remove':
         _instances.removeWhere((i) => i['id'] == r['instance']);
         return jsonEncode({'removed': r['instance'], 'downloads_deleted': false});
+      case 'auth_methods':
+        final ext = [
+          {'name': 'auth-openid-connect', 'version': '1.2.0', 'auth_name': 'openid-connect', 'display_name': 'GitLab', 'url': 'https://tube.example.org/plugins/auth-openid-connect/1.2.0/auth/openid-connect'},
+          if (auth == 'both') {'name': 'auth-saml2', 'version': '0.4.1', 'auth_name': 'saml2', 'display_name': 'University login', 'url': 'https://tube.example.org/plugins/auth-saml2/0.4.1/auth/saml2'},
+        ];
+        return jsonEncode({
+          'instance': r['instance'],
+          'password': auth != 'external',
+          'external': auth == 'local' ? [] : ext,
+          'return_prefix': 'https://tube.example.org/login',
+        });
       case 'login':
+        if (r['external_auth_token'] != null) {
+          if (r['external_auth_token'] != 'EXT1' || r['username'] != 'bob') {
+            _error = jsonEncode({'code': 'auth_failed', 'message': 'Cannot authenticate user with an expired external auth token'});
+            return null;
+          }
+          _accessValid = true;
+          return jsonEncode({'instance': r['instance'], 'token_type': 'Bearer', 'access_token': 'A1', 'refresh_token': 'R1', 'expires_in': 100});
+        }
         if (r['password'] != 'right') {
           _error = jsonEncode({'code': 'auth_failed', 'message': 'wrong'});
           return null;
@@ -84,21 +135,46 @@ class VideoFakeNative implements CsNative {
           'description': 'A short video',
           'download_enabled': true,
           'captions': [
-            {'language': 'en', 'label': 'English', 'automatic': true, 'url': 'https://example.org/c.vtt'}
+            if (!noCaptions) {'language': 'en', 'label': 'English', 'automatic': true, 'url': 'https://example.org/c.vtt'}
           ],
           'options': [
             {'key': '720', 'label': '720p', 'kind': 'video', 'size': 9000000, 'source': 'web'},
             {'key': '360', 'label': '360p', 'kind': 'video', 'size': 3000000, 'source': 'web'},
             {'key': 'audio', 'label': 'Audio only', 'kind': 'audio', 'size': 500000, 'source': 'hls'},
           ],
-          'stream': {'hls': null, 'mp4': 'https://example.org/v.mp4', 'needs_auth': false},
+          'stream': {
+            'hls': null,
+            'mp4': 'https://example.org/v.mp4',
+            'needs_auth': private,
+            'qualities': [
+              if (!private || r['token'] != null) ...[
+                {'key': '720', 'label': '720p', 'url': 'https://example.org/v-720.mp4${private ? '?videoFileToken=FT1' : ''}', 'format': 'mp4'},
+                {'key': '360', 'label': '360p', 'url': 'https://example.org/v-360.mp4${private ? '?videoFileToken=FT1' : ''}', 'format': 'mp4'},
+              ],
+            ],
+            'qualities_expire': private && r['token'] != null ? '2026-11-02T12:00:00Z' : null,
+          },
           'downloaded': _saved.isEmpty ? null : {'kind': 'video', 'resolution': '360', 'size': 3000000, 'downloaded_at': 'x'},
         });
       case 'downloads':
         return jsonEncode({'downloads': _saved, 'total_bytes': _saved.fold<int>(0, (a, d) => a + (d['size'] as int))});
       case 'delete':
-        _saved.clear();
-        return jsonEncode({'deleted': uuid});
+        _saved.removeWhere((d) => d['uuid'] == r['video']);
+        return jsonEncode({'deleted': r['video']});
+      case 'captions_fetch':
+        final d = _saved.firstWhere((d) => d['uuid'] == r['video'], orElse: () => <String, dynamic>{});
+        if (d.isEmpty) {
+          _error = jsonEncode({'code': 'not_found', 'message': 'no downloaded video'});
+          return null;
+        }
+        if (captionFetchFails) return jsonEncode(d);
+        d['captions'] = [
+          ...(d['captions'] as List),
+          for (final m in (d['missing_captions'] as List? ?? const [])) {...(m as Map), 'path': '/data/${d['uuid']}/captions-${m['language']}.vtt'},
+        ];
+        d['missing_captions'] = <Map<String, dynamic>>[];
+        d['warnings'] = <String>[];
+        return jsonEncode(d);
       case 'resolve':
         if (_saved.isNotEmpty) {
           return jsonEncode({
@@ -168,6 +244,18 @@ class VideoFakeNative implements CsNative {
   String? conversationIds(int conv) => null;
   @override
   void conversationFree(int conv) {}
+
+  /// captions_fetch fetches nothing (the site still does not answer).
+  bool captionFetchFails = false;
+
+  /// The site's video has no captions.
+  bool noCaptions = false;
+
+  /// The site's video is private: it needs a login, and its qualities come only with one (with the file token).
+  bool private = false;
+
+  /// How the site lets people sign in: "local" (its own accounts), "external" (only an auth plugin) or "both".
+  String auth = 'local';
 
   /// Makes the next token-carrying list call fail once, as an expired token does.
   void expireToken() => _accessValid = false;

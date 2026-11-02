@@ -64,6 +64,34 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
+    // Battery level and whether the iPhone is plugged in (lib/platform/battery.dart), for long automatic work (search indexes).
+    let battery = FlutterMethodChannel(name: "co.cache/battery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    battery.setMethodCallHandler { call, result in
+      guard call.method == "read" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let device = UIDevice.current
+      device.isBatteryMonitoringEnabled = true
+      let level = device.batteryLevel
+      let charging = device.batteryState == .charging || device.batteryState == .full
+      let percent: Int = level < 0 ? -1 : Int((level * 100).rounded())
+      // How warm the iPhone is: background index work eases off as it warms and pauses when severe (serious is "severe").
+      let thermal: String
+      switch ProcessInfo.processInfo.thermalState {
+      case .nominal: thermal = "nominal"
+      case .fair: thermal = "light"
+      case .serious: thermal = "severe"
+      case .critical: thermal = "critical"
+      @unknown default: thermal = "unknown"
+      }
+      let answer: [String: Any] = ["percent": percent, "charging": charging, "thermal": thermal]
+      result(answer)
+    }
+    // The thermal state changed: the app reads it again at once (background index work eases off or pauses).
+    NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { _ in
+      battery.invokeMethod("changed", arguments: nil)
+    }
   }
 }
 

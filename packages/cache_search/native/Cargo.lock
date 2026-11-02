@@ -718,6 +718,10 @@ name = "cache_chunk"
 version = "0.1.0"
 
 [[package]]
+name = "cache_classify"
+version = "0.1.0"
+
+[[package]]
 name = "cache_embed"
 version = "0.1.0"
 dependencies = [
@@ -822,6 +826,8 @@ name = "cache_regions"
 version = "0.1.0"
 dependencies = [
  "cache_places",
+ "cache_snapshot",
+ "cache_sync",
  "flate2",
  "fs4 1.1.0",
  "rusqlite",
@@ -838,12 +844,14 @@ version = "0.1.0"
 dependencies = [
  "cache_act",
  "cache_calc",
+ "cache_chunk",
  "cache_layers",
  "cache_live",
  "cache_navigate",
  "cache_notebook",
  "cache_places",
  "cache_regions",
+ "cache_snapshot",
  "cache_sync",
  "cache_tool",
  "cache_user",
@@ -857,6 +865,7 @@ dependencies = [
  "segment",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "shard",
  "tantivy",
  "tar",
@@ -883,6 +892,16 @@ dependencies = [
  "sha2 0.10.9",
  "tiny_http",
  "url",
+]
+
+[[package]]
+name = "cache_snapshot"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

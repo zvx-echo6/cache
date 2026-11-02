@@ -77,6 +77,10 @@ dependencies:
   # (published 2026-08-26): the newest release at least two weeks old that runs on the app's Flutter 3.44 (2.5 and later need
   # Flutter 3.47). Approved 2026-11-01.
   pdfrx: 2.4.8
+  # PDFium's own calls pdfrx does not wrap: a PDF's metadata Title (FPDF_GetMetaText) and each page's printed label
+  # (FPDF_GetPageLabel), for making a ZIM's PDFs searchable. MIT. Pinned to exactly the version pdfrx already resolves (in the
+  # lockfile before as a dependency of pdfrx): no new code ships, the same PDFium is used. Approved 2026-11-02.
+  pdfium_dart: 0.2.5
 
 dev_dependencies:
   flutter_test:

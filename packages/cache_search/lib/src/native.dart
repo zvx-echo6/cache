@@ -85,6 +85,13 @@ abstract class CsNative {
   void jobFree(int job);
 }
 
+/// cs_job_set: changes a running job's pace ({"work_ms","idle_ms","threads","paused","auto"}, what is left out stays) and answers
+/// {"duty","effective","auto","paused"}; null when the core is older than the call (or on bad input). Kept apart from
+/// [CsNative] so its fakes do not change.
+abstract class CsJobNative {
+  String? jobSet(int job, String json);
+}
+
 /// The map calls (cs_map_search, cs_map_route, cs_map_progress) and saved places (cs_place_*). Kept apart from [CsNative] so
 /// the fakes of the older seam do not change. [FfiCsNative] implements it; [hasMap] is false when the loaded core is older
 /// than the map calls (the symbols are looked up when first used, never at load).
@@ -169,6 +176,29 @@ abstract class CsUserLayersNative {
   String? userLayers(int handle, String call, String? arg);
 }
 
+/// The PDF indexes of ZIMs (cs_zim_pdfs, cs_pdfindex_open/add/skip/close/discard; cache_search.h). Kept apart from [CsNative]
+/// like the Notebook; [hasPdfIndex] is false when the loaded core is older than these calls (looked up when first used).
+abstract class CsPdfNative {
+  bool get hasPdfIndex;
+
+  /// cs_zim_pdfs: {"zim_uuid","zim_name","pdfs":[{"path","title","size"}]}, or null on error (ask [CsNative.lastError]).
+  String? zimPdfs(int handle, String zimId);
+
+  /// The handle-less calls: [op] is `open`, `add`, `reuse`, `skip`, `close`, `discard` (the build session; [session] is open's
+  /// session for add, reuse, skip and close) or `chunk` (cs_pdf_chunk, pure); [json] the call's JSON (none for close). The
+  /// answer, or null on error or when the core lacks that call (ask [CsNative.lastError] with 0).
+  String? pdfIndex(String op, {int session = 0, String json = '{}'});
+}
+
+/// Search saved videos and ZIM videos by caption text (cs_captions_search; cache_search.h). Kept apart from [CsNative] like
+/// the PDF indexes; [hasCaptionsSearch] is false when the loaded core is older than the call (looked up when first used).
+abstract class CsCaptionsNative {
+  bool get hasCaptionsSearch;
+
+  /// cs_captions_search: {"videos":[...]}, or null on error (ask [CsNative.lastError]).
+  String? captionsSearch(int handle, String requestJson);
+}
+
 typedef _StrC = Pointer<Utf8> Function();
 typedef _Str = Pointer<Utf8> Function();
 typedef _OpenC = Pointer<Void> Function(Pointer<Utf8>);
@@ -209,7 +239,7 @@ typedef _FreeBytesC = Void Function(Pointer<Uint8>, Int64);
 typedef _FreeBytes = void Function(Pointer<Uint8>, int);
 
 /// The real library, loaded with dart:ffi. Every method is a direct call.
-class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative {
+class FfiCsNative implements CsNative, CsJobNative, CsMapNative, CsLiveNative, CsPlacesNative, CsActNative, CsNotebookNative, CsUserLayersNative, CsPdfNative, CsCaptionsNative {
   FfiCsNative(DynamicLibrary lib)
       : _lib = lib,
         _version = lib.lookupFunction<_StrC, _Str>('cs_version'),
@@ -252,6 +282,8 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
         _videoGet = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_get'),
         _videoDownloads = lib.lookupFunction<_HStrC, _HStr>('cs_video_downloads'),
         _videoDelete = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_delete'),
+        _videoAuthMethods = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_auth_methods'),
+        _videoCaptionsFetch = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_captions_fetch'),
         _videoResolve = lib.lookupFunction<_HStrStrC, _HStrStr>('cs_video_resolve'),
         _layersList = lib.lookupFunction<_HStrC, _HStr>('cs_layers_list'),
         _layersRefresh = lib.lookupFunction<_HStrC, _HStr>('cs_layers_refresh'),
@@ -324,6 +356,8 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
   final _HStrStr _videoGet;
   final _HStr _videoDownloads;
   final _HStrStr _videoDelete;
+  final _HStrStr _videoAuthMethods;
+  final _HStrStr _videoCaptionsFetch;
   final _HStrStr _videoResolve;
   final _HStr _layersList;
   final _HStr _layersRefresh;
@@ -475,6 +509,8 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
       'get' => _take(_videoGet(_p(handle), req)),
       'downloads' => _take(_videoDownloads(_p(handle))),
       'delete' => _take(_videoDelete(_p(handle), req)),
+      'auth_methods' => _take(_videoAuthMethods(_p(handle), req)),
+      'captions_fetch' => _take(_videoCaptionsFetch(_p(handle), req)),
       'resolve' => _take(_videoResolve(_p(handle), req)),
       _ => throw ArgumentError('Unknown video call $op'),
         };
@@ -519,6 +555,11 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
       return null;
     }
   }
+
+  late final _HStrStr? _jobSet = _lookupHS('cs_job_set');
+
+  @override
+  String? jobSet(int job, String json) => _callHS(_jobSet, job, json);
 
   late final _HStrStr? _mapSearch = _lookupHS('cs_map_search');
   late final _HStrStr? _mapRoute = _lookupHS('cs_map_route');
@@ -698,6 +739,73 @@ class FfiCsNative implements CsNative, CsMapNative, CsLiveNative, CsPlacesNative
     };
     return _callHS(f, handle, arg ?? '');
   }
+
+  // ---- caption search: looked up on first use ----
+
+  late final _HStrStr? _captionsSearch = _lookupHS('cs_captions_search');
+
+  @override
+  bool get hasCaptionsSearch => _captionsSearch != null;
+
+  @override
+  String? captionsSearch(int handle, String requestJson) => _callHS(_captionsSearch, handle, requestJson);
+
+  // ---- PDF indexes of ZIMs: looked up on first use ----
+
+  late final _HStrStr? _zimPdfs = _lookupHS('cs_zim_pdfs');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfOpen = _lookupStr1('cs_pdfindex_open');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfDiscard = _lookupStr1('cs_pdfindex_discard');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfAdd = _lookupSessionStr('cs_pdfindex_add');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfSkip = _lookupSessionStr('cs_pdfindex_skip');
+  late final Pointer<Utf8> Function(int)? _pdfClose = _lookupSession('cs_pdfindex_close');
+  late final Pointer<Utf8> Function(int, Pointer<Utf8>)? _pdfReuse = _lookupSessionStr('cs_pdfindex_reuse');
+  late final Pointer<Utf8> Function(Pointer<Utf8>)? _pdfChunk = _lookupStr1('cs_pdf_chunk');
+
+  Pointer<Utf8> Function(Pointer<Utf8>)? _lookupStr1(String name) {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Pointer<Utf8>), Pointer<Utf8> Function(Pointer<Utf8>)>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  Pointer<Utf8> Function(int, Pointer<Utf8>)? _lookupSessionStr(String name) {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Uint64, Pointer<Utf8>), Pointer<Utf8> Function(int, Pointer<Utf8>)>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  Pointer<Utf8> Function(int)? _lookupSession(String name) {
+    try {
+      return _lib.lookupFunction<Pointer<Utf8> Function(Uint64), Pointer<Utf8> Function(int)>(name);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  @override
+  bool get hasPdfIndex => _zimPdfs != null && _pdfOpen != null && _pdfAdd != null && _pdfSkip != null && _pdfClose != null && _pdfDiscard != null;
+
+  @override
+  String? zimPdfs(int handle, String zimId) => _callHS(_zimPdfs, handle, zimId);
+
+  @override
+  String? pdfIndex(String op, {int session = 0, String json = '{}'}) => using((a) {
+    final j = json.toNativeUtf8(allocator: a);
+    final open = _pdfOpen, discard = _pdfDiscard, add = _pdfAdd, skip = _pdfSkip, close = _pdfClose, reuse = _pdfReuse, chunk = _pdfChunk;
+    return switch (op) {
+      'reuse' when reuse != null => _take(reuse(session, j)),
+      'chunk' when chunk != null => _take(chunk(j)),
+      'open' when open != null => _take(open(j)),
+      'discard' when discard != null => _take(discard(j)),
+      'add' when add != null => _take(add(session, j)),
+      'skip' when skip != null => _take(skip(session, j)),
+      'close' when close != null => _take(close(session)),
+      _ => null,
+    };
+  });
 
   // The saved-places calls are bound with the rest of the core's calls above (cs_places_list, cs_place_save, cs_place_delete).
   @override

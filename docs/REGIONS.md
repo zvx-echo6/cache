@@ -72,6 +72,12 @@ reserve (`reserve_bytes`, 1 GiB by default); if it is short the download pauses 
  "paused": null}
 ```
 
+Once a build is known, status also has `indexes`: for routing and places, each build's index source (`kind`
+`region-index` / `places-index`, `source_id` = the build, `location` `snapshot` | `legacy` | `none`, and the `snapshots`
+ids). With `indexes_dir` in the config, a fetched index is a syncable snapshot there
+(`<indexes_dir>/region-index/<build>/snap/<id>/index.tsv` + `manifest.json`, written last); a verified snapshot synced in
+from a peer is used before anything is fetched, and an index kept in `dir` by an earlier version is moved into one.
+
 `state` is `downloading`, `ready`, `paused` or `failed`. `update`, after `check_update` found a newer build, is
 `{"build", "download_bytes", "downloading"}` (`downloading` once `update` has started it). `build` and `tile_dir` are
 null until the device has a build.

@@ -69,7 +69,7 @@ impl Builtin {
 fn shown_kind(address: &str) -> Option<&'static str> {
     let prefix = address.split(':').next().unwrap_or("");
     Some(match prefix {
-        "lib" | "zim" | "web" => return None,
+        "lib" | "zim" | "zimpdf" | "cap" | "zimcap" | "zimepub" | "web" => return None,
         "place" | "town" | "addr" | "layer" | "pack" => "a place",
         "nav" => "a route",
         "live" => "a live-data",
@@ -400,7 +400,17 @@ impl Handle {
                 self.tools[i.expect("checked above")].run_in(&ctx, args, &mut conv.tool_state)
             }
         }));
-        run.unwrap_or_else(|_| Err(ToolError::new(ToolError::INTERNAL, format!("{name} failed"))))
+        run.unwrap_or_else(|p| {
+            // a panic in a tool is a bug; say what it was (in the detail, and on stderr for whoever runs the core) instead of
+            // only that the tool failed
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_string());
+            eprintln!("cache_search: tool {name} panicked: {msg}");
+            Err(ToolError::new(ToolError::INTERNAL, format!("{name} failed: {msg}")))
+        })
     }
 
     /// Built-in `search`: the top 5 as `{{addr:<address>}} <title> — <snippet>` lines (the same title and snippet
@@ -450,6 +460,10 @@ impl Handle {
             self.read_wikipedia(title)?
         } else if let Some(kind) = shown_kind(address) {
             return Err(bad_arguments(format!("[{n}] is {kind} result; everything about it is already shown above")));
+        } else if address.starts_with("zimpdf:") {
+            // a PDF result reads the page its citation opened
+            let page = conv.cite_pdf_page(address);
+            self.read_pdf_cited(&address.clone(), READ_MAX_CHARS, page).map_err(tool_error)?
         } else {
             self.read(&address.clone(), READ_MAX_CHARS).map_err(tool_error)?
         };
@@ -836,7 +850,7 @@ mod tests {
         let mut c = Conversation::new();
         h.register_tool(dummy("locate", Box::new(|_, _| panic!("boom"))));
         let v = call(&mut h, &mut c, "locate", "{}");
-        assert_eq!(v["content"], r#"{"ok":false,"error":{"type":"internal","detail":"locate failed"}}"#);
+        assert_eq!(v["content"], r#"{"ok":false,"error":{"type":"internal","detail":"locate failed: boom"}}"#, "the panic text is carried");
         // the handle still works
         assert!(h.tool_schemas_json().starts_with('['));
     }

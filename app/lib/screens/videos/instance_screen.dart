@@ -66,7 +66,7 @@ class _InstanceScreenState extends State<InstanceScreen> {
               textInputAction: TextInputAction.search,
               onSubmitted: _submit,
               decoration: InputDecoration(
-                hintText: 'Search ${i.name}',
+                hintText: 'Search this site',
                 prefixIcon: Icon(Icons.search, color: k.secondary),
                 suffixIcon: _searched.isEmpty
                     ? null
@@ -110,7 +110,7 @@ class _InstanceScreenState extends State<InstanceScreen> {
       );
     }
     if (_tab == _Tab.latest) {
-      return VideoList(key: const ValueKey('latest'), video: v, instance: i, load: (start) => v.list(i.id, start: start), empty: 'This instance has no videos');
+      return VideoList(key: const ValueKey('latest'), video: v, instance: i, load: (start) => v.list(i.id, start: start), empty: 'This site has no videos');
     }
     return _Channels(video: v, instance: i);
   }

@@ -19,7 +19,7 @@ class VideoCore {
 
   /// Starts the worker and opens a handle whose `video` folder is [dir] (instances.json and downloads live
   /// there). Throws a [CacheSearchException] if the native library is missing or cs_open fails.
-  static Future<VideoCore> open(String dir, {CsNativeFactory native = _openNative}) async {
+  static Future<VideoCore> open(String dir, {String? indexesDir, CsNativeFactory native = _openNative}) async {
     final rp = ReceivePort();
     final errors = ReceivePort();
     final isolate = await Isolate.spawn(_workerMain, [rp.sendPort, native], debugName: 'cache_video', onError: errors.sendPort);
@@ -34,7 +34,7 @@ class VideoCore {
       }
     }());
     try {
-      await core._call('open', {'dir': dir});
+      await core._call('open', {'dir': dir, 'indexes_dir': indexesDir});
     } catch (_) {
       await core.close();
       rethrow;
@@ -99,6 +99,13 @@ class VideoCore {
   Future<VideoTokens> login(String instance, String username, String password, {String? otp}) async =>
       VideoTokens.fromJson(await _video('login', _req({'instance': instance, 'username': username, 'password': password, 'otp': otp})));
 
+  /// The second half of a sign-in with the site's external auth plugin: the one-time token and username its /login page got.
+  Future<VideoTokens> loginExternal(String instance, String username, String externalAuthToken) async =>
+      VideoTokens.fromJson(await _video('login', {'instance': instance, 'username': username, 'external_auth_token': externalAuthToken}));
+
+  /// How the site lets people sign in (cs_video_auth_methods).
+  Future<VideoAuthMethods> authMethods(String instance) async => VideoAuthMethods.fromJson(await _video('auth_methods', {'instance': instance}));
+
   Future<VideoTokens> refresh(String instance, String refreshToken) async =>
       VideoTokens.fromJson(await _video('refresh', {'instance': instance, 'refresh_token': refreshToken}));
 
@@ -122,6 +129,10 @@ class VideoCore {
       ];
 
   Future<void> delete(String instance, String video) => _video('delete', {'instance': instance, 'video': video});
+
+  /// Fetches again only the captions a saved video is missing (cs_video_captions_fetch); the video file stays as it is.
+  Future<DownloadedVideo> fetchMissingCaptions(String instance, String video, {String? token}) async =>
+      DownloadedVideo.fromJson(await _video('captions_fetch', _req({'instance': instance, 'video': video, 'token': token})));
 
   /// Where to open [video] (a link, uuid or short uuid) at [offsetS]: the saved file, else a stream.
   Future<VideoTarget> resolve(String video, {String? instance, double? offsetS, String? token}) async =>
@@ -190,7 +201,7 @@ void _workerMain(List<dynamic> init) {
       switch (msg['op']) {
         case 'open':
           native = factory();
-          handle = native!.open(jsonEncode({'sources': <Object>[], 'video': {'dir': a['dir']}}));
+          handle = native!.open(jsonEncode({'sources': <Object>[], 'video': {'dir': a['dir']}, if (a['indexes_dir'] != null) 'indexes_dir': a['indexes_dir']}));
           if (handle == 0) throw CacheSearchException.fromJson(native!.lastError(0));
         case 'video':
           if (handle == 0) throw const CacheSearchException('internal', 'The video core is not open');

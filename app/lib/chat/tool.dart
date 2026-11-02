@@ -3,7 +3,7 @@ import 'navigation_action.dart';
 
 /// One thing a tool found.
 class SourceResult {
-  const SourceResult({required this.title, required this.snippet, required this.address, this.link, this.time, this.pdfPage, this.quote});
+  const SourceResult({required this.title, required this.snippet, required this.address, this.link, this.time, this.pdfPage, this.quote, this.timeEnd, this.lang});
 
   final String title;
   final String snippet;
@@ -20,11 +20,21 @@ class SourceResult {
   final int? pdfPage;
   final String? quote;
 
+  /// A caption passage's end (seconds) and language code, when the core gives them (a caption citation opens the player at
+  /// [time] with that language's cue marked). Never part of what the model reads.
+  final double? timeEnd;
+  final String? lang;
+
   /// A video moment: tapping it opens the player at [time].
   bool get isVideoMoment => link != null && time != null;
 
-  /// Where tapping the citation opens: [address], at [pdfPage] when the address names no page itself.
-  String get openAddress => pdfPage != null && pdfPageOfAddress(address) == null ? withPdfPage(address, pdfPage!) : address;
+  /// Where tapping the citation opens: a ZIM PDF passage's link (`zim:<uuid>/<pdf>#page=N`, its search address being the
+  /// index's own), else [address], at [pdfPage] when the address names no page itself.
+  String get openAddress {
+    final l = link;
+    if (l != null && time == null && l.startsWith('zim:')) return l;
+    return pdfPage != null && pdfPageOfAddress(address) == null ? withPdfPage(address, pdfPage!) : address;
+  }
 }
 
 /// A tool result with its conversation-wide number.
@@ -72,7 +82,7 @@ abstract class ResultNumbering {
 }
 
 class NumberedAddress {
-  const NumberedAddress({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote});
+  const NumberedAddress({required this.n, required this.address, required this.title, this.link, this.time, this.pdfPage, this.quote, this.timeEnd, this.lang});
 
   final int n;
   final String address;
@@ -85,6 +95,10 @@ class NumberedAddress {
   /// See [SourceResult.pdfPage].
   final int? pdfPage;
   final String? quote;
+
+  /// See [SourceResult.timeEnd].
+  final double? timeEnd;
+  final String? lang;
 }
 
 /// The tools run by the search core (cs_tool_schemas, cs_tool): every installed tool is offered to the model and

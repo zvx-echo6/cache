@@ -79,7 +79,7 @@ fn status_of_a_missing_zim_and_library() {
     let h = unsafe { cs_open(cfg.as_ptr()) };
     let v: Value = serde_json::from_str(&take(unsafe { cs_status(h) }).unwrap()).unwrap();
     assert_eq!(keys(&v), ["sources"]);
-    let want = ["id", "kind", "path", "title", "language", "indexed", "building", "stale", "opening", "updating", "docs", "embedding_model", "error"];
+    let want = ["id", "kind", "path", "title", "language", "indexed", "building", "stale", "opening", "updating", "docs", "embedding_model", "error", "source_id", "index"];
     for s in v["sources"].as_array().unwrap() {
         assert_eq!(keys(s), want, "{s}");
         assert_eq!(keys(&s["error"]), ["code", "message"]);
@@ -139,7 +139,7 @@ fn search_read_and_library_status_order() {
     assert_eq!(
         keys(s),
         ["id", "kind", "path", "title", "language", "indexed", "building", "stale", "opening", "updating", "docs", "embedding_model",
-         "library_id", "keyword_source", "whole_library_only", "settings", "error"]
+         "library_id", "keyword_source", "whole_library_only", "settings", "error", "source_id", "index"]
     );
     assert_eq!(
         keys(&s["settings"]),
@@ -184,7 +184,7 @@ fn job_progress_order() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     let v: Value = serde_json::from_str(&p).unwrap();
-    assert_eq!(keys(&v), ["state", "done", "total", "error"], "{p}");
+    assert_eq!(keys(&v), ["state", "done", "total", "error", "duty", "effective", "auto", "paused"], "{p}");
     assert_eq!(v["state"], "done");
     unsafe { cs_job_free(j) };
 }
