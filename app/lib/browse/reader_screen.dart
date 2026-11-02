@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../layout/adaptive.dart' show ReadingWidth, paneShowButton;
+import '../layout/adaptive.dart' show ReadingWidth, paneClose, paneShowButton;
 import '../platform.dart' as plat;
 import '../layout/layout_state.dart';
 import '../layout/modules_screen.dart' show addToHome;
@@ -452,6 +452,8 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     openZimPdf(context, widget.sources, address);
   }
 
+  Widget _withShow(Widget? show, Widget arrow) => show == null ? arrow : Row(mainAxisSize: MainAxisSize.min, children: [arrow, show]);
+
   @override
   Widget build(BuildContext context) {
     final pdf = _pdf;
@@ -459,6 +461,9 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
     final k = context.t;
     final title = widget.sources.titleOf(widget.zim);
     final nav = Navigator.of(context);
+    // In a browser the reader is the pane's own page on a desktop window: the same arrow closes it and shows the list again.
+    final VoidCallback? close = nav.canPop() ? nav.pop : (_isWeb ? paneClose(context) : null);
+    final show = nav.canPop() ? null : paneShowButton(context);
     // The system back (Android): closes search or find, then a page back while there is history, then leaves the reader
     // (readerBackStep). The top-left arrow always leaves; the bottom bar's arrows are the page history.
     return PopScope(
@@ -482,19 +487,20 @@ class _ZimReaderScreenState extends State<ZimReaderScreen> {
           // Leaves the reader for where it was opened from (Library, a citation, a search result), whatever the page history.
           // Beside a list on a tablet the reader is the pane's own page: there is nothing to leave to.
           // A screen reader says "Close <library>", and can press it (the label's node carries the tap).
-          leading: nav.canPop()
-              ? Semantics(
+          leadingWidth: close != null && show != null ? 104 : null,
+          leading: close != null
+              ? _withShow(show, Semantics(
                   label: 'Close $title',
                   button: true,
-                  onTap: () => nav.pop(),
+                  onTap: close,
                   excludeSemantics: true,
                   child: IconButton(
                     key: const ValueKey('reader-close'),
                     tooltip: 'Close $title',
                     icon: const BackButtonIcon(),
-                    onPressed: () => nav.pop(),
+                    onPressed: close,
                   ),
-                )
+                ))
               : paneShowButton(context),
           title: _searching
               ? TextField(
