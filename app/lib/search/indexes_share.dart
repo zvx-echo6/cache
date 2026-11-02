@@ -18,6 +18,11 @@ const String kIndexesDirName = 'shared-indexes';
 /// the device that opened the database.
 const List<String> kIndexesNotShared = ['*/*/.build', '.local', '**/*-shm', '**/*-wal', '**/*-journal'];
 
+/// Hidden files that do sync from it (a name starting with "." otherwise never does): Tantivy's `.managed.json`, which every
+/// Tantivy snapshot's manifest lists (without it the snapshot is incomplete on the other device and not used), and the empty
+/// `.tantivy-meta.lock` the core puts beside it so that opening a snapshot never writes into it.
+const List<String> kIndexesHidden = ['*/*/snap/*/.managed.json', '*/*/snap/*/.tantivy-meta.lock'];
+
 /// Where a delete stays on the device that made it: each device clears out the snapshots it no longer uses on its own, and
 /// never fetches back one it deleted.
 const List<String> kIndexesLocalDeletes = ['*/*/snap'];

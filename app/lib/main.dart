@@ -299,6 +299,7 @@ class _CacheAppState extends State<CacheApp> {
         exclude: kIndexesNotShared,
         localDeletes: kIndexesLocalDeletes,
         last: kIndexesLast,
+        hidden: kIndexesHidden,
       ),
     ],
   );

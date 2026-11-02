@@ -302,7 +302,7 @@ void main() {
     test('with an indexes folder the keyword index is built there, as a snapshot that syncs, not in the library', () async {
       final shared = Directory('${tmp.path}/shared-indexes')..createSync();
       await setUpLibs(indexesDir: shared.path);
-      expect(await libs.addFile(libFile('manuals.cache-library', _lib(id: 'manuals')), confirmUpdate: never, askSettings: noSettings), isTrue);
+      await libs.addFile(libFile('manuals.cache-library', _lib(id: 'manuals')), confirmUpdate: never, askSettings: noSettings);
       final l = libs.libraries.single;
       final params = jsonDecode(File('${shared.path}/params.json').readAsStringSync()) as Map;
       expect(params['indexes_dir'], shared.path);

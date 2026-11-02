@@ -1256,6 +1256,7 @@ fn a_library_index_built_on_one_device_is_used_on_another() {
             "local_deletes": {"indexes": ["*/*/snap"]},
             "last": {"indexes": ["*/*/snap/*/manifest.json"]},
             "only": {"indexes": ["library/t"]},
+            "hidden": {"indexes": ["*/*/snap/*/.managed.json", "*/*/snap/*/.tantivy-meta.lock"]},
         }))
         .unwrap();
         cache_sync::SyncEngine::open(cfg).unwrap()

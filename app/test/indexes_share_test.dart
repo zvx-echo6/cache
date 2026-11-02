@@ -59,4 +59,8 @@ void main() {
       ['library/guide@2/snap/b-1', 'zim-pdf/6ba7b810-9dad-11d1-80b4-00c04fd430c8/snap/b-7'],
     );
   });
+
+  test("Tantivy's hidden files in a snapshot travel (its manifest lists .managed.json)", () {
+    expect(kIndexesHidden, ['*/*/snap/*/.managed.json', '*/*/snap/*/.tantivy-meta.lock']);
+  });
 }

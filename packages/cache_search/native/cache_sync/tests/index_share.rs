@@ -185,3 +185,44 @@ fn a_snapshot_the_core_removed_is_not_fetched_back() {
     a.close();
     b.close();
 }
+
+/// A name starting with "." never travels, except the hidden files the share lets through (Tantivy's `.managed.json`, which a
+/// snapshot's manifest lists, and the empty `.tantivy-meta.lock`).
+#[test]
+fn the_hidden_files_a_snapshot_needs_travel_and_no_others() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ia, ib) = (tmp.path().join("idx-a"), tmp.path().join("idx-b"));
+    let d = ia.join("library/t/snap/b1");
+    write(&d.join("seg"), "segment");
+    write(&d.join(".managed.json"), "[\"seg\"]");
+    write(&d.join(".tantivy-meta.lock"), "");
+    write(&d.join(".other"), "stays");
+    write(&ia.join("library/t/.hidden-dir/x"), "stays");
+    std::fs::create_dir_all(&ib).unwrap();
+    let open = |dir: &Path, name: &str| {
+        SyncEngine::open(
+            serde_json::from_value::<Config>(json!({
+                "dir": dir, "name": name, "relay": false, "dht": false, "mdns": false, "lookup": false, "interval_secs": 5,
+                "reserve_bytes": 0,
+                "hidden": {"indexes": ["*/*/snap/*/.managed.json", "*/*/snap/*/.tantivy-meta.lock"]},
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let a = open(&tmp.path().join("a"), "Desk");
+    let b = open(&tmp.path().join("b"), "Phone");
+    let code = call(&a, "link_code", json!({}))["code"].as_str().unwrap().to_string();
+    call(&b, "link", json!({"code": code}));
+    call(&a, "share_add", json!({"id": "indexes", "name": "Search indexes", "path": ia}));
+    call(&b, "share_add", json!({"id": "indexes", "name": "Search indexes", "path": ib}));
+    std::thread::sleep(Duration::from_secs(6));
+    let got = ib.join("library/t/snap/b1");
+    until("the snapshot on B", 60, &a, &b, || got.join("seg").exists() && got.join(".managed.json").exists() && got.join(".tantivy-meta.lock").exists());
+    assert_eq!(std::fs::read_to_string(got.join(".managed.json")).unwrap(), "[\"seg\"]");
+    rounds(&a, &b);
+    assert!(!got.join(".other").exists(), "other hidden files stay");
+    assert!(!ib.join("library/t/.hidden-dir").exists());
+    a.close();
+    b.close();
+}

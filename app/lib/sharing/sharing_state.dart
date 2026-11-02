@@ -83,6 +83,7 @@ class SharingState extends ChangeNotifier {
         'exclude': {for (final k in kinds) ...k.notShared, for (final a in always) a.id: a.exclude},
         'local_deletes': {for (final a in always) a.id: a.localDeletes},
         'last': {for (final a in always) a.id: a.last},
+        'hidden': {for (final a in always) a.id: a.hidden},
         // An always-shared folder fetches nothing until the app says what it may fetch (setOnly).
         'only': {for (final a in always) a.id: _only[a.id] ?? const <String>[]},
         'never_fetch': {for (final e in _neverFetch.entries) e.key: e.value},
@@ -274,7 +275,15 @@ class SharingState extends ChangeNotifier {
 /// cache_sync's Config): [exclude] never travels, a delete under [localDeletes] stays on the device that made it, a file under
 /// [last] comes after the rest of what arrives with it. What it fetches is set with [SharingState.setOnly].
 class AlwaysShared {
-  const AlwaysShared({required this.id, required this.name, required this.dir, this.exclude = const [], this.localDeletes = const [], this.last = const []});
+  const AlwaysShared({
+    required this.id,
+    required this.name,
+    required this.dir,
+    this.exclude = const [],
+    this.localDeletes = const [],
+    this.last = const [],
+    this.hidden = const [],
+  });
 
   final String id;
   final String name;
@@ -282,6 +291,9 @@ class AlwaysShared {
   final List<String> exclude;
   final List<String> localDeletes;
   final List<String> last;
+
+  /// Hidden files that do travel (a name starting with "." otherwise never does).
+  final List<String> hidden;
 }
 
 /// What the state needs from the engine (the real one is [SyncCore]; tests give a fake).

@@ -132,6 +132,11 @@ pub struct Config {
     /// unusable and removed. `set_never_fetch` replaces a share's list later. Its own files are offered all the same.
     #[serde(default)]
     pub never_fetch: BTreeMap<String, Vec<String>>,
+    /// Hidden files that do sync, by share id (patterns as for `exclude`, naming the hidden part): a name starting with "." is
+    /// otherwise never listed, sent or fetched (the folders' own working files). Tantivy keeps `.managed.json` in every index
+    /// and a snapshot's manifest lists it, so the indexes folder lets it, and the empty `.tantivy-meta.lock` beside it, travel.
+    #[serde(default)]
+    pub hidden: BTreeMap<String, Vec<String>>,
 }
 
 /// Whether `rel` (a path in a shared folder) is one of `patterns` or inside one (see [`Config::exclude`]).
@@ -297,6 +302,8 @@ struct Inner {
     only: Mutex<BTreeMap<String, Vec<String>>>,
     /// [`Config::last`].
     last: BTreeMap<String, Vec<String>>,
+    /// [`Config::hidden`].
+    hidden: BTreeMap<String, Vec<String>>,
     /// [`Config::never_fetch`], as `set_never_fetch` last left it.
     never_fetch: Mutex<BTreeMap<String, Vec<String>>>,
     /// Deletes kept here that `set_only` made fetchable again, by share: forgotten by the next rescan of the share, inside its
@@ -338,19 +345,31 @@ fn token() -> String {
 }
 
 fn rel_path(root: &Path, p: &Path) -> Option<String> {
+    rel_path_with(root, p, &[])
+}
+
+/// [`rel_path`], where a hidden path that `hidden` covers ([`Config::hidden`]) counts too.
+fn rel_path_with(root: &Path, p: &Path, hidden: &[String]) -> Option<String> {
     let r = p.strip_prefix(root).ok()?;
     let parts: Vec<String> = r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
-    if parts.iter().any(|c| c.starts_with('.')) {
+    let rel = parts.join("/");
+    if parts.iter().any(|c| c.starts_with('.')) && !excluded(hidden, &rel) {
         return None;
     }
-    Some(parts.join("/"))
+    Some(rel)
 }
 
 /// A path from a peer, made safe to join under a shared folder (no parent steps, no absolute paths, no hidden parts).
 fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
+    safe_join_with(root, rel, &[])
+}
+
+/// [`safe_join`], where a hidden path that `hidden` covers ([`Config::hidden`]) is allowed.
+fn safe_join_with(root: &Path, rel: &str, hidden: &[String]) -> Option<PathBuf> {
     let mut p = root.to_path_buf();
+    let hidden_ok = excluded(hidden, rel);
     for c in rel.split('/') {
-        if c.is_empty() || c == "." || c == ".." || c.starts_with('.') || c.contains('\\') || c.contains(':') {
+        if c.is_empty() || c == "." || c == ".." || (c.starts_with('.') && !hidden_ok) || c.contains('\\') || c.contains(':') {
             return None;
         }
         p.push(c);
@@ -362,7 +381,7 @@ fn mtime_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn walk(root: &Path, dir: &Path, skip: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
+fn walk(root: &Path, dir: &Path, skip: &[String], hidden: &[String], out: &mut Vec<(String, PathBuf, std::fs::Metadata)>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
@@ -370,12 +389,12 @@ fn walk(root: &Path, dir: &Path, skip: &[String], out: &mut Vec<(String, PathBuf
         if m.file_type().is_symlink() {
             continue;
         }
-        let Some(rel) = rel_path(root, &p) else { continue };
+        let Some(rel) = rel_path_with(root, &p, hidden) else { continue };
         if excluded(skip, &rel) {
             continue;
         }
         if m.is_dir() {
-            walk(root, &p, skip, out);
+            walk(root, &p, skip, hidden, out);
         } else if m.is_file() {
             out.push((rel, p, m));
         }
@@ -474,6 +493,11 @@ impl Inner {
     fn save(&self) -> Result<()> {
         let s = self.saved.lock().unwrap().clone();
         write_json(&self.saved_path(), &s)
+    }
+
+    /// Hidden paths that do sync in `share` ([`Config::hidden`]).
+    fn hidden_ok(&self, share: &str) -> &[String] {
+        self.hidden.get(share).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// The patterns that never sync in `share`.
@@ -627,7 +651,7 @@ impl Inner {
                 let _ = self.unmark_writing(&sh.id, &path);
                 continue;
             }
-            let Some(full) = safe_join(&sh.path, &path) else {
+            let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else {
                 let _ = self.unmark_writing(&sh.id, &path);
                 continue;
             };
@@ -695,7 +719,7 @@ impl Inner {
         for sh in shares {
             for (rel, e) in self.load_index(&sh.id).files {
                 if !e.deleted && e.hash == hash {
-                    if let Some(p) = safe_join(&sh.path, &rel) {
+                    if let Some(p) = safe_join_with(&sh.path, &rel, self.hidden_ok(&sh.id)) {
                         if p.is_file() {
                             out.push(p);
                         }
@@ -770,9 +794,10 @@ impl Inner {
         }
         let root = share.path.clone();
         let skip = self.skip(&share.id).to_vec();
+        let hidden = self.hidden_ok(&share.id).to_vec();
         let files = tokio::task::spawn_blocking(move || {
             let mut v = Vec::new();
-            walk(&root, &root, &skip, &mut v);
+            walk(&root, &root, &skip, &hidden, &mut v);
             v
         })
         .await?;
@@ -1034,7 +1059,7 @@ impl Inner {
                     }
                 }
                 Action::Delete { path, entry } => {
-                    let Some(full) = safe_join(&sh.path, &path) else { continue };
+                    let Some(full) = safe_join_with(&sh.path, &path, self.hidden_ok(&sh.id)) else { continue };
                     let mut idx = self.load_index(&sh.id);
                     let mut seen = self.load_seen(&sh.id);
                     // Only what is still exactly the version the peer deleted (a newer local change shows up as a newer version).
@@ -1059,7 +1084,7 @@ impl Inner {
     }
 
     async fn fetch(self: &Arc<Self>, sh: &Share, path: &str, entry: Entry, conflict: bool, from: &str) -> Result<()> {
-        let Some(full) = safe_join(&sh.path, path) else {
+        let Some(full) = safe_join_with(&sh.path, path, self.hidden_ok(&sh.id)) else {
             self.note(format!("{}: skipped an unsafe name from {}", sh.name, self.peer_name(from)));
             return Ok(());
         };
@@ -1430,6 +1455,7 @@ impl SyncEngine {
             only: Mutex::new(cfg.only.clone()),
             last: cfg.last.clone(),
             never_fetch: Mutex::new(cfg.never_fetch.clone()),
+            hidden: cfg.hidden.clone(),
             refetch: Mutex::new(HashMap::new()),
         });
         inner.save()?;
